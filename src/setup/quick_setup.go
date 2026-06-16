@@ -68,9 +68,18 @@ func RenderWizardEntryPage(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
   </div>
 </div>
 <div class="guided-banner %s" style="margin-bottom:18px">%s</div>
+<div class="section-card glass" style="margin-bottom:16px;border-color:rgba(255,141,72,.32)">
+  <div class="guided-head">
+    <div>
+      <h3>%s</h3>
+      <p class="guided-note">%s</p>
+    </div>
+    <div class="guided-pill" style="background:rgba(255,141,72,.16);color:#ffb27f">%s</div>
+  </div>
+</div>
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
 
-  <div class="guided-overview" style="display:flex;flex-direction:column;gap:14px">
+  <div class="guided-overview" style="display:flex;flex-direction:column;gap:14px;border:1px solid rgba(255,141,72,.32);background:linear-gradient(180deg, rgba(255,141,72,.08), rgba(255,255,255,.03))">
     <div class="guided-head"><h3>%s</h3></div>
     <p class="guided-note">%s</p>
     <ul class="guided-note" style="padding-left:18px;margin:0">
@@ -96,30 +105,53 @@ func RenderWizardEntryPage(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
     </div>
   </div>
 
+</div>
+<div class="section-card glass" style="margin-top:16px">
+  <div class="guided-head">
+    <div>
+      <h3>%s</h3>
+      <p class="guided-note">%s</p>
+    </div>
+    <div class="guided-pill">%s</div>
+  </div>
+  <div class="guided-actions" style="margin-top:12px">
+    <a class="btn-ghost" href="%s">%s</a>
+    <a class="btn-ghost" href="%s">%s</a>
+  </div>
 </div>`,
 		html.EscapeString(t(lang, "KitsuSync セットアップ", "KitsuSync Setup")),
-		html.EscapeString(t(lang, "まずは Guided Setup から始めるのがおすすめです。", "We recommend starting with Guided Setup for first-time setup.")),
-		html.EscapeString(t(lang, "初回セットアップ", "First-time setup")),
+		html.EscapeString(t(lang, "初回の運用者は Guided Setup から始めてください。再開時は Setup Status で現在の準備状態を確認できます。", "First-time operators should start with Guided Setup. Returning operators can review the current readiness in Setup Status.")),
+		html.EscapeString(t(lang, "Start here", "Start here")),
 		summaryClass,
 		html.EscapeString(summaryText),
+		html.EscapeString(t(lang, "最初にクリックする場所", "First click for first-time setup")),
+		html.EscapeString(t(lang, "初回セットアップでは Guided Setup を最優先にしてください。Setup Status は別フローではなく、現在の状態確認と再開前の見直し用です。", "For first-time setup, Guided Setup is the primary path. Setup Status is not a separate flow; use it to review the current state before resuming.")),
+		html.EscapeString(t(lang, "Primary path", "Primary path")),
 
 		// Guided Setup card
-		html.EscapeString(t(lang, "Guided Setup（おすすめ）", "Guided Setup (Recommended)")),
-		html.EscapeString(t(lang, "初回導入ではこちらがおすすめです。1画面1ステップで順番に進み、各ステップに『なぜ必要か』の説明があります。", "Recommended for first-time setup. Move step by step, one screen at a time, with an explanation of why each step matters.")),
-		html.EscapeString(t(lang, "Kitsu 接続 → Discord Bot → Project Setup の順に進む", "Kitsu → Discord Bot → Project Setup in order")),
-		html.EscapeString(t(lang, "次に何をすればいいか常に表示される", "Always shows what to do next")),
-		html.EscapeString(t(lang, "前のステップが完了しないと次に進めない", "Can't skip ahead until previous step is done")),
+		html.EscapeString(t(lang, "Guided Setup（最初はこちら）", "Guided Setup (Start here)")),
+		html.EscapeString(t(lang, "初回セットアップで最もわかりやすい進み方です。何から始めるべきか迷ったら、このカードから進めてください。", "This is the clearest path for first-time setup. If you are unsure where to begin, start from this card.")),
+		html.EscapeString(t(lang, "Kitsu 接続 → Discord Bot → Project Setup の順に進む", "Follows Kitsu → Discord Bot → Project Setup in order")),
+		html.EscapeString(t(lang, "各ステップで次にやることが表示される", "Each step shows what to do next")),
+		html.EscapeString(t(lang, "前のステップが完了してから次に進める", "You move forward after the previous step is complete")),
 		withLang("/bot/setup-wizard?mode=guided", r),
-		html.EscapeString(t(lang, "Guided Setup を開始 →", "Start Guided Setup →")),
+		html.EscapeString(t(lang, "Guided Setup を開始", "Start Guided Setup")),
 
 		// Setup Status card
-		html.EscapeString(t(lang, "Setup Status（準備状態の確認）", "Setup Status (Readiness overview)")),
-		html.EscapeString(t(lang, "現在のセットアップ状況と準備状態を確認する画面です。別のセットアップ手順ではなく、Guided Setup の前後に状態確認や見直しを行うための画面です。", "Use this screen to review current setup status and readiness. It is not a separate setup flow, and it does not replace Guided Setup.")),
-		html.EscapeString(t(lang, "8つの完了条件をカードで確認", "View all 8 completion conditions as cards")),
-		html.EscapeString(t(lang, "現在どこが未完了かを確認できる", "Shows what is still incomplete right now")),
-		html.EscapeString(t(lang, "自動セットアップは行わず、必要に応じて Guided Setup や Manual Setup へ進む", "Does not perform automatic setup actions; continue to Guided Setup or Manual Setup when needed")),
+		html.EscapeString(t(lang, "Setup Status（状態確認・見直し用）", "Setup Status (Review readiness)")),
+		html.EscapeString(t(lang, "現在のセットアップ状況と準備状態を確認する画面です。初回導入の開始場所ではなく、状態確認や再開前の見直しに使います。", "Use this page to review current setup status and readiness. It is not the starting point for first-time setup.")),
+		html.EscapeString(t(lang, "8つの完了条件を一覧で確認できる", "Review all 8 completion conditions at a glance")),
+		html.EscapeString(t(lang, "どこまで完了していて何が未完了かを見直せる", "Shows what is already ready and what is still incomplete")),
+		html.EscapeString(t(lang, "セットアップ処理は行わず、必要なら Guided Setup や Manual Setup に進む", "Does not perform setup actions; continue to Guided Setup or Manual Setup if needed")),
 		withLang("/bot/setup-wizard?mode=quick", r),
-		html.EscapeString(t(lang, "Setup Status を確認 →", "Check Setup Status →")),
+		html.EscapeString(t(lang, "Setup Status を確認", "Review Setup Status")),
+		html.EscapeString(t(lang, "Advanced / Troubleshooting", "Advanced / Troubleshooting")),
+		html.EscapeString(t(lang, "初回セットアップの標準導線ではありません。手動修正や深い診断が必要な場合だけ使ってください。", "These are not the default first-time setup paths. Use them only when you need manual fixes or deeper diagnostics.")),
+		html.EscapeString(t(lang, "Optional", "Optional")),
+		withLang("/bot/admin/setup", r),
+		html.EscapeString(t(lang, "Manual Setup を開く", "Open Manual Setup")),
+		withLang("/bot/admin/diagnostics", r),
+		html.EscapeString(t(lang, "Diagnostics を開く", "Open Diagnostics")),
 	)
 	return adminPage(lang, t(lang, "KitsuSync セットアップ", "KitsuSync Setup"), r, body)
 }
