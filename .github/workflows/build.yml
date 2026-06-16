@@ -6,9 +6,17 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -27,35 +35,45 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pattern='窶・|繧|笏|竊|隱|譁|譌|蜿|縺'
+          pattern=$'\u7AB6\u30FB|\u7E67|\u7B0F|\u7ACA|\u96B1|\u8B41|\u8B4C|\u873F|\u7E3A'
+
+          tmp="$(mktemp)"
+          cleanup() { rm -f "$tmp"; }
+          trap cleanup EXIT
+
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base_ref="${{ github.base_ref }}"
             git fetch --no-tags --depth=1 origin "$base_ref"
-            files="$(git diff --name-only "origin/$base_ref...HEAD")"
+            git diff --name-only -z "origin/$base_ref...HEAD" > "$tmp" || true
           else
-            files="$(git diff --name-only HEAD~1 HEAD || true)"
-            if [[ -z "$files" ]]; then
-              files="$(git ls-files)"
+            before="${{ github.event.before }}"
+            sha="${{ github.sha }}"
+            if [[ -n "$before" && "$before" != "0000000000000000000000000000000000000000" ]]; then
+              git diff --name-only -z "$before...$sha" > "$tmp" || true
             fi
           fi
 
+          if [[ ! -s "$tmp" ]]; then
+            git ls-files -z > "$tmp"
+          fi
+
           bad=0
-          for f in $files; do
+          while IFS= read -r -d '' f; do
             [[ -f "$f" ]] || continue
             [[ "$f" == ".github/workflows/build.yml" ]] && continue
             if command -v rg >/dev/null 2>&1; then
-              if rg -n "$pattern" "$f"; then
+              if rg -n -I "$pattern" "$f"; then
                 bad=1
               fi
             else
-              if grep -n -E "$pattern" "$f"; then
+              if grep -Iq . "$f" && grep -n -E "$pattern" "$f"; then
                 bad=1
               fi
             fi
-          done
+          done < "$tmp"
 
           if [[ "$bad" -ne 0 ]]; then
-            echo "Mojibake-like text detected in changed files."
+            echo "Mojibake-like text detected in checked files."
             exit 1
           fi
 
