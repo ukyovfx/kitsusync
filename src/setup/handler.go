@@ -827,7 +827,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 
 	var projectCards strings.Builder
 	if len(projects) == 0 {
-		projectCards.WriteString(emptyState("🎬", t(lang, "まだ設定済みプロジェクトがありません", "No configured projects yet"), t(lang, "下のフォームから最初のプロジェクトを設定してください。", "Use the form below to configure the first project.")))
+		projectCards.WriteString(emptyState("🎬", t(lang, "まだ設定済みプロジェクトがありません", "No configured projects yet"), t(lang, "このページ下部のフォームから最初のプロジェクト routing を設定してください。", "Use the form on this page to configure the first project routing.")))
 	} else {
 		for _, project := range projects {
 			projectLang := project.Language
@@ -899,14 +899,14 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 
 	var botCard strings.Builder
 	if step1Done {
-		botCard.WriteString(`<div class="section-card glass">` + stepIndicator + `<h3>` + t(lang, "✅ 共有Bot / Runtime 設定は完了しています", "✅ Shared bot / runtime setup complete") + `</h3><p class="hint">` + t(lang, "共有Bot / runtime 設定は準備済みです。メールアドレスは非表示です。", "Shared bot / runtime setup is already prepared. The email is intentionally hidden.") + `</p><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div></div>`)
+		botCard.WriteString(`<div class="section-card glass">` + stepIndicator + `<h3>` + t(lang, "✅ 共有Bot / Runtime の前提設定は完了しています", "✅ Shared bot / runtime prerequisites are ready") + `</h3><p class="hint">` + t(lang, "Project Management に必要な共有 Bot / runtime 設定は準備済みです。メールアドレスは非表示です。", "The shared bot / runtime settings required for Project Management are already prepared. The email is intentionally hidden.") + `</p><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div><div class="button-row"><a class="btn-ghost" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
 	} else {
-		botCard.WriteString(`<div class="section-card glass">` + stepIndicator + `<h3>` + t(lang, "Step 1: 共有Bot / Runtime 設定", "Step 1: Shared bot / runtime setup") + `</h3>` +
+		botCard.WriteString(`<div class="section-card glass">` + stepIndicator + `<h3>` + t(lang, "共有Bot / Runtime の前提確認", "Shared bot / runtime prerequisites") + `</h3>` +
 			`<div class="notice-box">💡 ` + t(lang, "あなたの管理者アカウント: <strong>初回確認のみに使用</strong>、保存されません。", "Your admin account: used <strong>only for initial verification</strong>, not saved.") + `</div>` +
-			`<p class="hint">` + t(lang, "この画面は first-time wizard の代わりではなく、手動サポート用の setup surface です。Kitsu hostname は現在の公開ホストから自動設定され、ここでは共有Bot / runtime 用の初期準備を行います。", "This screen is a manual support/setup surface, not a replacement for the first-time wizard. The Kitsu hostname is detected from the current public host, and this section prepares the shared bot / runtime setup.") + `</p>` +
+			`<p class="hint">` + t(lang, "Project Management を使う前に共有 Bot / runtime の前提をここで確認します。Kitsu hostname は現在の公開ホストから自動設定され、必要に応じて Bot Settings から後で見直せます。", "Review the shared bot / runtime prerequisites here before using Project Management. The Kitsu hostname is detected from the current public host, and you can revisit these settings later in Bot Settings.") + `</p>` +
 			`<p class="hint">` + t(lang, "共有Bot / Runtime を準備します", "Prepare shared bot / runtime setup") + `<br><small>` + t(lang, "✓ Kitsu のタスク更新を監視\n✓ Discord へ通知を送信\n✗ Kitsu を変更しません\n✗ Discord を管理しません", "✓ Monitor Kitsu task updates\n✓ Send Discord notifications\n✗ Does not modify Kitsu\n✗ Does not manage Discord") + `</small></p>` +
 			`<div class="metric-grid"><div class="metric-card"><div class="metric-label">Detected host</div><div class="metric-value metric-value-host"><code>` + esc(detectedHost) + `</code></div></div></div>` +
-			`<form method="POST" class="section-stack" onsubmit="startBotSetup(this)"><input type="hidden" name="action" value="bot_setup"><div class="form-grid"><div><label>` + t(lang, "スタジオ管理者メール", "Studio admin email") + `</label><input type="email" name="bot_admin_email" placeholder="admin@studio.local" required></div><div><label>` + t(lang, "スタジオ管理者パスワード", "Studio admin password") + `</label><input type="password" name="bot_admin_password" placeholder="Password" required></div></div><div class="button-row"><button type="submit" class="btn" id="botSetupBtn">` + t(lang, "Botアカウントを作成", "Create bot account") + `</button></div></form></div>`)
+			`<form method="POST" class="section-stack" onsubmit="startBotSetup(this)"><input type="hidden" name="action" value="bot_setup"><div class="form-grid"><div><label>` + t(lang, "スタジオ管理者メール", "Studio admin email") + `</label><input type="email" name="bot_admin_email" placeholder="admin@studio.local" required></div><div><label>` + t(lang, "スタジオ管理者パスワード", "Studio admin password") + `</label><input type="password" name="bot_admin_password" placeholder="Password" required></div></div><div class="button-row"><button type="submit" class="btn" id="botSetupBtn">` + t(lang, "Botアカウントを作成", "Create bot account") + `</button><a class="btn-ghost" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></form></div>`)
 	}
 
 	// Build template JSON for channel preview JS
@@ -1037,7 +1037,7 @@ document.addEventListener('DOMContentLoaded', function(){
 		t(lang, "設定済みプロジェクト / チャンネル管理", "Configured Projects / Channel Management"),
 		projectCards.String(),
 		t(lang, "新規プロジェクトのルーティング作成", "Create New Project Routing"),
-		t(lang, "ここでは project ごとの Discord category / channels / webhooks を管理します。初回導入では Setup Wizard を先に進めるのがおすすめです。", "Manage Discord category / channels / webhooks per project here. For first-time setup, we recommend going through the Setup Wizard first."),
+		t(lang, "このページが project ごとの Discord category / channels / webhooks routing を管理するメイン画面です。最初の project routing もここから作成します。Guided Setup は補助的な案内が必要な場合のみ使ってください。", "This page is the main operator surface for managing Discord category / channels / webhooks routing per project. Create your first project routing here as well. Use Guided Setup only if you want a helper walkthrough."),
 		t(lang, "Kitsuプロジェクト", "Kitsu project"),
 		projectOptions.String(),
 		t(lang, "プロジェクトタイプ", "Project type"),

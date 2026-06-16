@@ -140,8 +140,8 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
   <p class="hint" style="margin-top:12px">%s</p>
 </div>`,
 				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
-				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u672a\u8a2d\u5b9a", "No projects configured"), t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u30a6\u30a3\u30b6\u30fc\u30c9\u3092\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Run the setup wizard.")),
-				esc(t(lang, "\u6b21\u306e\u30a2\u30af\u30b7\u30e7\u30f3\u306f Next \u30bb\u30af\u30b7\u30e7\u30f3\u306e Guided Setup \u3067\u3059\u3002", "Use the Guided Setup action in the Next section.")),
+				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u672a\u8a2d\u5b9a", "No projects configured"), t(lang, "Project Management \u304b\u3089\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7d4c\u8def\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Use Project Management to configure your first project routing.")),
+				esc(t(lang, "Next \u30bb\u30af\u30b7\u30e7\u30f3\u304b\u3089 Project Management \u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002Guided Setup \u306f\u88dc\u52a9\u7684\u306a\u6848\u5185\u3068\u3057\u3066\u5229\u7528\u3067\u304d\u307e\u3059\u3002", "Open Project Management from the Next section. Guided Setup remains available as a helper walkthrough.")),
 			)
 		} else {
 			var projectRows strings.Builder
@@ -287,10 +287,10 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		nextSecondaryLabel := t(lang, "Diagnostics \u3092\u958b\u304f", "Open Diagnostics")
 		nextBadge := `<span class="status-pill bad">` + esc(t(lang, "\u512a\u5148", "Priority")) + `</span>`
 		if !hasIssues && projectCount == 0 {
-			nextCardTitle = t(lang, "Guided Setup \u3092\u59cb\u3081\u308b", "Start Guided Setup")
-			nextCardBody = t(lang, "\u6700\u521d\u306e1\u4ef6\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068 Discord \u9023\u643a\u3092\u6bb5\u968e\u7684\u306b\u6574\u3048\u308b\u306b\u306f\u3001Guided Setup \u304b\u3089\u59cb\u3081\u308b\u306e\u304c\u6700\u77ed\u3067\u3059\u3002", "Guided Setup is the clearest way to configure your first project and Discord routing step by step.")
-			nextPrimaryHref = withLang("/bot/setup-wizard", r)
-			nextPrimaryLabel = t(lang, "Guided Setup \u3092\u958b\u304f", "Open Guided Setup")
+			nextCardTitle = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
+			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f Project Management \u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot Settings\u3001\u88dc\u52a9\u7684\u306a\u624b\u9806\u6848\u5185\u304c\u5fc5\u8981\u306a\u5834\u5408\u306e\u307f Guided Setup \u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites, and use Guided Setup only if you want a helper walkthrough.")
+			nextPrimaryHref = withLang("/bot/setup", r)
+			nextPrimaryLabel = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
 			nextSecondaryHref = withLang("/bot/admin/bot", r)
 			nextSecondaryLabel = t(lang, "Bot Settings \u3092\u78ba\u8a8d", "Review Bot Settings")
 			nextBadge = `<span class="status-pill warn">` + esc(t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7", "Setup")) + `</span>`
@@ -381,7 +381,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc 
 			))
 		}
 		if blocks.Len() == 0 {
-			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだプロジェクトがありません", "No projects configured yet."), t(lang, "先に Setup Wizard を進め、その後 Project Management を開いてください。", "Run Project Management after the Setup Wizard first.")))
+			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだプロジェクトがありません", "No projects configured yet."), t(lang, "先に Project Management で routing を作成し、その後 Guild 割り当てを確認してください。", "Create routing in Project Management first, then review guild assignment here.")))
 		}
 		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "1つのBotを複数Guildへ招待し、productionごとに Guild ID を割り当てます。", "Invite one bot to multiple guilds, then assign a guild ID per production.")) + `</p></div>` + blocks.String() + `</div>`
 		fmt.Fprint(w, adminPage(lang, t(lang, "Projects & Guilds", "Projects & Guilds"), r, body))
@@ -851,7 +851,7 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 				esc(project.Name), esc(project.KitsuProjectID), t(lang, "補助リンク", "Helper link"), esc(project.StorageURL), t(lang, "保存", "Save")))
 		}
 		if blocks.Len() == 0 {
-			blocks.WriteString(emptyState("📁", t(lang, "まだプロジェクトがありません", "No projects yet"), t(lang, "先に Setup Wizard を進め、その後 Project Management を開いてください。", "Run Project Management after the Setup Wizard first.")))
+			blocks.WriteString(emptyState("📁", t(lang, "まだプロジェクトがありません", "No projects yet"), t(lang, "先に Project Management で project routing を作成してから補助リンクを設定してください。", "Create project routing in Project Management first, then add helper links here.")))
 		}
 		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + t(lang, "プロジェクトごとの補助リンク（Drive など）を設定します。", "Set helper links per project (Drive, etc.).") + `</p></div>` + blocks.String() + `</div>`
 		fmt.Fprint(w, adminPage(lang, t(lang, "ストレージリンク", "Storage Links"), r, body))
