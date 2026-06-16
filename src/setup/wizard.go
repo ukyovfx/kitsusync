@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// WizardHandler routes to entry, guided, or quick setup based on ?mode=.
+// WizardHandler routes to entry, guided setup, or setup status based on ?mode=.
 func WizardHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, guildID, webhookURL string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -10,7 +10,7 @@ import (
 )
 
 // RenderWizardEntryPage renders the /bot/setup-wizard entry screen.
-// Shows "Guided Setup / Quick Setup" choice cards, or a completion banner if setup is done.
+// Shows "Guided Setup / Setup Status" choice cards, or a completion banner if setup is done.
 func RenderWizardEntryPage(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, guildID, webhookURL string), r *http.Request) string {
 	lang := currentLang(r)
 	diag := localizeSetupDiagnostics(lang, BuildSetupDiagnostics(db, refreshCreds))
@@ -112,9 +112,9 @@ func RenderWizardEntryPage(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 		withLang("/bot/setup-wizard?mode=guided", r),
 		html.EscapeString(t(lang, "Guided Setup を開始 →", "Start Guided Setup →")),
 
-		// Quick Setup card
-		html.EscapeString(t(lang, "Setup Status（状態確認用）", "Setup Status (Secondary status overview)")),
-		html.EscapeString(t(lang, "現在のセットアップ状況と準備状態を確認する画面です。Guided Setup の代わりではなく、状態確認や見直し向けの補助画面です。", "Use this screen to check current setup status and readiness. It does not replace Guided Setup; it is a secondary screen for status checks and review.")),
+		// Setup Status card
+		html.EscapeString(t(lang, "Setup Status（準備状態の確認）", "Setup Status (Readiness overview)")),
+		html.EscapeString(t(lang, "現在のセットアップ状況と準備状態を確認する画面です。別のセットアップ手順ではなく、Guided Setup の前後に状態確認や見直しを行うための画面です。", "Use this screen to review current setup status and readiness. It is not a separate setup flow, and it does not replace Guided Setup.")),
 		html.EscapeString(t(lang, "8つの完了条件をカードで確認", "View all 8 completion conditions as cards")),
 		html.EscapeString(t(lang, "現在どこが未完了かを確認できる", "Shows what is still incomplete right now")),
 		html.EscapeString(t(lang, "自動セットアップは行わず、必要に応じて Guided Setup や Manual Setup へ進む", "Does not perform automatic setup actions; continue to Guided Setup or Manual Setup when needed")),
@@ -194,7 +194,7 @@ func RenderQuickSetupPage(db *gorm.DB, refreshCreds func() (kitsuHost, botToken,
   <div class="setup-grid">%s</div>
 </div>`,
 		html.EscapeString(t(lang, "Setup Status", "Setup Status")),
-		html.EscapeString(t(lang, "現在のセットアップ状況と準備状態を一覧で確認できます。", "Check current setup status and readiness at a glance.")),
+		html.EscapeString(t(lang, "現在のセットアップ状況と準備状態を一覧で確認できます。ここではセットアップ処理は行いません。", "Check current setup status and readiness at a glance. This page does not perform setup actions.")),
 		withLang("/bot/setup-wizard", r),
 		html.EscapeString(t(lang, "← Entry", "← Entry")),
 		withLang("/bot/admin/setup", r),
