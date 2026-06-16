@@ -893,6 +893,10 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 		}
 		return "pending"
 	}
+	step1Class := stepClass(step1Done, !step1Done)
+	step2Class := stepClass(projectRoutingDone, step1Done && !projectRoutingDone)
+	step3Class := stepClass(guildStepDone, projectRoutingDone && !guildStepDone)
+	step4Class := stepClass(false, guildStepDone)
 	stepIndicator := fmt.Sprintf(`<div class="setup-steps">
   <div class="setup-step %s"><span class="step-num">1</span><span class="step-label">%s</span></div>
   <div class="step-connector"></div>
@@ -902,29 +906,93 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
   <div class="step-connector"></div>
   <div class="setup-step %s"><span class="step-num">4</span><span class="step-label">%s</span></div>
 </div>`,
-		stepClass(step1Done, !step1Done),
+		step1Class,
 		t(lang, "Bot / Runtime", "Bot / Runtime"),
-		stepClass(projectRoutingDone, step1Done && !projectRoutingDone),
+		step2Class,
 		t(lang, "プロジェクトルーティング", "Project Routing"),
-		stepClass(guildStepDone, projectRoutingDone && !guildStepDone),
+		step3Class,
 		t(lang, "Discord Server / Guild", "Discord Server / Guild"),
-		stepClass(false, guildStepDone),
+		step4Class,
 		t(lang, "テスト通知", "Test Notification"),
 	)
 
+	workflowCard := func(stepNum int, stateClass, title, body, status, href, cta string, emphasized bool) string {
+		emphasisClass := ""
+		if emphasized {
+			emphasisClass = " workflow-card-emphasis"
+		}
+		ctaHTML := ""
+		if href != "" && cta != "" {
+			ctaHTML = `<div class="workflow-card-actions"><a class="btn-ghost" href="` + href + `">` + cta + `</a></div>`
+		}
+		return `<div class="workflow-card workflow-card-` + stateClass + emphasisClass + `">` +
+			`<div class="workflow-card-head"><span class="workflow-step-badge">` + fmt.Sprintf("%d", stepNum) + `</span><span class="status-pill ` + map[string]string{"done": "ok", "active": "warn", "pending": "bad"}[stateClass] + `">` + status + `</span></div>` +
+			`<h3>` + title + `</h3>` +
+			`<p class="hint">` + body + `</p>` +
+			ctaHTML +
+			`</div>`
+	}
+
+	workflowOverview := `<div class="section-card glass workflow-overview">` +
+		`<div class="page-heading workflow-overview-head"><div><div class="eyebrow">PROJECT MANAGEMENT</div><h2 style="margin:6px 0 0">` + t(lang, "運用フロー", "Operator workflow") + `</h2><p class="hint" style="margin:8px 0 0">` + t(lang, "このページは Bot / Runtime の確認から Project Routing、Guild、通知確認までを順番に進める運用画面です。", "Use this page to move in order from Bot / Runtime review to Project Routing, Guild assignment, and notification verification.") + `</p></div></div>` +
+		stepIndicator +
+		`<div class="workflow-grid">` +
+		workflowCard(
+			1,
+			step1Class,
+			t(lang, "Bot / Runtime", "Bot / Runtime"),
+			t(lang, "通知に使う共有設定の状態を確認します。変更や見直しは Bot Settings で行います。", "Review the shared settings used for notifications. Make changes in Bot Settings."),
+			map[string]string{"done": t(lang, "準備完了", "Ready"), "active": t(lang, "現在の手順", "Current"), "pending": t(lang, "待機中", "Pending")}[step1Class],
+			appendLang("/bot/admin/bot", lang),
+			t(lang, "Bot Settings", "Bot Settings"),
+			step1Class == "active",
+		) +
+		workflowCard(
+			2,
+			step2Class,
+			t(lang, "Project Routing", "Project Routing"),
+			t(lang, "Kitsu project ごとの Discord category / channel / webhook routing をここで作成します。", "Create Discord category / channel / webhook routing for each Kitsu project here."),
+			map[string]string{"done": t(lang, "作成済み", "Configured"), "active": t(lang, "主作業", "Main task"), "pending": t(lang, "次の手順", "Next")}[step2Class],
+			"",
+			"",
+			step2Class == "active",
+		) +
+		workflowCard(
+			3,
+			step3Class,
+			t(lang, "Discord Server / Guild", "Discord Server / Guild"),
+			t(lang, "Routing 作成後に、各 project を送信先の Discord Server / Guild に割り当てます。", "After routing is created, assign each project to its destination Discord Server / Guild."),
+			map[string]string{"done": t(lang, "割り当て済み", "Assigned"), "active": t(lang, "次の手順", "Next"), "pending": t(lang, "待機中", "Pending")}[step3Class],
+			appendLang("/bot/admin/projects", lang),
+			t(lang, "Projects & Guilds", "Projects & Guilds"),
+			step3Class == "active",
+		) +
+		workflowCard(
+			4,
+			step4Class,
+			t(lang, "Test Notification", "Test Notification"),
+			t(lang, "最後に通知の送信先と webhook 動作を確認します。現在の slice では Health / Diagnostics を使います。", "Finally, verify the notification destination and webhook behavior. In this slice, use Health / Diagnostics."),
+			map[string]string{"done": t(lang, "確認済み", "Checked"), "active": t(lang, "確認へ", "Review"), "pending": t(lang, "最後に確認", "Final step")}[step4Class],
+			appendLang("/bot/admin/health", lang),
+			t(lang, "Health / Diagnostics", "Health / Diagnostics"),
+			step4Class == "active",
+		) +
+		`</div></div>`
+
 	var botCard strings.Builder
+	var fallbackBotCard string
 	if step1Done {
-		botCard.WriteString(`<div class="section-card glass">` + stepIndicator + `<div class="page-heading" style="margin-top:16px"><div><h3 style="margin:0">` + t(lang, "Step 1: Bot / Runtime の状態確認", "Step 1: Review Bot / Runtime status") + `</h3><p class="hint" style="margin:6px 0 0">` + t(lang, "通知に使う共有 Bot / Runtime は準備済みです。変更や見直しは Bot Settings で行います。", "The shared bot / runtime used for notifications is ready. Review or change it in Bot Settings.") + `</p></div><span class="status-pill ok">` + t(lang, "準備完了", "Ready") + `</span></div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div><div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a><a class="btn-ghost" href="` + appendLang("/bot/admin/projects", lang) + `">` + t(lang, "Projects & Guilds を開く", "Open Projects & Guilds") + `</a></div></div>`)
+		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime の状態確認", "Bot / Runtime status") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "通知に使う共有 Bot / Runtime は準備済みです。Project Routing を進める前提は整っています。", "The shared Bot / Runtime used for notifications is ready. The prerequisite for Project Routing is in place.") + `</p></div><span class="status-pill ok">` + t(lang, "準備完了", "Ready") + `</span></div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div><div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
 	} else {
-		botCard.WriteString(`<div class="section-card glass">` + stepIndicator + `<div class="page-heading" style="margin-top:16px"><div><h3 style="margin:0">` + t(lang, "Step 1: Bot / Runtime の状態確認", "Step 1: Review Bot / Runtime status") + `</h3><p class="hint" style="margin:6px 0 0">` + t(lang, "Project Routing を始める前に共有 Bot / Runtime の前提を確認します。設定や編集は Bot Settings で行います。", "Review the shared bot / runtime prerequisites before starting Project Routing. Use Bot Settings to configure or edit them.") + `</p></div><span class="status-pill bad">` + t(lang, "未準備", "Not ready") + `</span></div>` +
+		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime の状態確認", "Bot / Runtime status") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "Project Routing を始める前に、共有 Bot / Runtime を Bot Settings で確認してください。", "Before starting Project Routing, review the shared Bot / Runtime in Bot Settings.") + `</p></div><span class="status-pill bad">` + t(lang, "未準備", "Not ready") + `</span></div>` +
 			`<div class="notice-box">💡 ` + t(lang, "Kitsu hostname は現在の公開ホストから自動設定されます。共有設定を整えたら、このページに戻って次の step を進めます。", "The Kitsu hostname is detected from the current public host. After updating the shared settings, return here for the next step.") + `</div>` +
 			`<div class="metric-grid"><div class="metric-card"><div class="metric-label">Detected host</div><div class="metric-value metric-value-host"><code>` + esc(detectedHost) + `</code></div></div></div>` +
-			`<div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a><a class="btn-ghost" href="` + appendLang("/bot/admin/projects", lang) + `">` + t(lang, "Projects & Guilds を確認", "Review Projects & Guilds") + `</a></div>` +
-			`<details class="accordion" style="margin-top:16px"><summary><div class="accordion-summary-main"><div class="tile-title">` + t(lang, "補助 / フォールバック設定", "Support / fallback setup") + `</div><div class="tile-sub">` + t(lang, "必要な場合のみ、このページ内の補助フォームで初期確認を行います。", "Use this inline helper form only if you need a fallback path for the initial check.") + `</div></div><div class="accordion-summary-side"><span class="accordion-caret">⌄</span></div></summary><div class="accordion-body section-stack" style="padding-top:16px">` +
+			`<div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
+		fallbackBotCard = `<div class="section-card glass workflow-support-card"><details class="accordion"><summary><div class="accordion-summary-main"><div class="eyebrow">ADVANCED</div><div class="tile-title">` + t(lang, "補助 / フォールバック設定", "Support / fallback setup") + `</div><div class="tile-sub">` + t(lang, "必要な場合のみ、このページ内の補助フォームで初期確認を行います。通常の導線は Bot Settings です。", "Use this inline helper form only if you need a fallback path for the initial check. Bot Settings is the normal path.") + `</div></div><div class="accordion-summary-side"><span class="accordion-caret">⌄</span></div></summary><div class="accordion-body section-stack" style="padding-top:16px">` +
 			`<div class="notice-box">💡 ` + t(lang, "あなたの管理者アカウント: <strong>初回確認のみに使用</strong>、保存されません。", "Your admin account: used <strong>only for initial verification</strong>, not saved.") + `</div>` +
 			`<p class="hint">` + t(lang, "この補助フォームは advanced / fallback 用です。通常は Bot Settings から共有 Bot / Runtime を確認してください。", "This inline helper is an advanced / fallback path. In normal operation, review shared Bot / Runtime settings in Bot Settings.") + `</p>` +
 			`<p class="hint">` + t(lang, "共有Bot / Runtime を準備します", "Prepare shared bot / runtime setup") + `<br><small>` + t(lang, "✓ Kitsu のタスク更新を監視\n✓ Discord へ通知を送信\n✗ Kitsu を変更しません\n✗ Discord を管理しません", "✓ Monitor Kitsu task updates\n✓ Send Discord notifications\n✗ Does not modify Kitsu\n✗ Does not manage Discord") + `</small></p>` +
-			`<form method="POST" class="section-stack" onsubmit="startBotSetup(this)"><input type="hidden" name="action" value="bot_setup"><div class="form-grid"><div><label>` + t(lang, "スタジオ管理者メール", "Studio admin email") + `</label><input type="email" name="bot_admin_email" placeholder="admin@studio.local" required></div><div><label>` + t(lang, "スタジオ管理者パスワード", "Studio admin password") + `</label><input type="password" name="bot_admin_password" placeholder="Password" required></div></div><div class="button-row"><button type="submit" class="btn-ghost" id="botSetupBtn">` + t(lang, "補助フォームで Bot アカウントを作成", "Create bot account with fallback form") + `</button></div></form></div></details></div>`)
+			`<form method="POST" class="section-stack" onsubmit="startBotSetup(this)"><input type="hidden" name="action" value="bot_setup"><div class="form-grid"><div><label>` + t(lang, "スタジオ管理者メール", "Studio admin email") + `</label><input type="email" name="bot_admin_email" placeholder="admin@studio.local" required></div><div><label>` + t(lang, "スタジオ管理者パスワード", "Studio admin password") + `</label><input type="password" name="bot_admin_password" placeholder="Password" required></div></div><div class="button-row"><button type="submit" class="btn-ghost" id="botSetupBtn">` + t(lang, "補助フォームで Bot アカウントを作成", "Create bot account with fallback form") + `</button></div></form></div></details></div>`
 	}
 
 	// Build template JSON for channel preview JS
@@ -963,17 +1031,30 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	}
 	testNextStatus := `<span class="status-pill warn">` + t(lang, "確認待ち", "Review") + `</span>`
 
+	projectRoutingStatus := `<span class="status-pill warn">` + t(lang, "主作業", "Main task") + `</span>`
+	if !step1Done {
+		projectRoutingStatus = `<span class="status-pill bad">` + t(lang, "Step 1 の後", "After Step 1") + `</span>`
+	} else if projectRoutingDone {
+		projectRoutingStatus = `<span class="status-pill ok">` + t(lang, "作成済み", "Configured") + `</span>`
+	}
+
 	body := fmt.Sprintf(`
 <div class="section-stack">
   %s
   %s
-  <div class="section-card glass">
-    <h3>%s</h3>
+  %s
+  <div class="section-card glass workflow-primary">
+    <div class="page-heading" style="margin-bottom:14px">
+      <div><div class="eyebrow">STEP 2</div><h3 style="margin:6px 0 0">%s</h3><p class="hint" style="margin:8px 0 0">%s</p></div>
+      %s
+    </div>
     <div class="section-stack">%s</div>
   </div>
-  <div class="section-card glass">
-    <h3>%s</h3>
-    <p class="hint">%s</p>
+  <div class="section-card glass workflow-routing-form">
+    <div class="page-heading" style="margin-bottom:14px">
+      <div><div class="eyebrow">STEP 2</div><h3 style="margin:6px 0 0">%s</h3><p class="hint" style="margin:8px 0 0">%s</p></div>
+      <span class="status-pill warn">%s</span>
+    </div>
     <form method="POST" onsubmit="startSetup(this)">
       <input type="hidden" name="project_name" id="projectNameInput">
       <div class="form-grid">
@@ -1020,6 +1101,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
       <a class="btn-ghost" href="%s">%s</a>
     </div>
   </div>
+  %s
 </div>
 <script>
 var CHANNEL_TEMPLATES = %s;
@@ -1074,12 +1156,16 @@ document.addEventListener('DOMContentLoaded', function(){
   if(sel){ syncProjectName(sel); }
 });
 </script>`,
+		workflowOverview,
 		botCard.String(),
 		sotBadge,
-		t(lang, "設定済みプロジェクト / チャンネル管理", "Configured Projects / Channel Management"),
+		t(lang, "Step 2: 既存の Routing を確認", "Step 2: Review existing routing"),
+		t(lang, "すでに作成済みの project routing を見直すときはここを使います。日常運用ではまず次の作成フォームから必要な routing を追加します。", "Use this section to review project routing that already exists. In normal operation, start with the creation form below when you need to add routing."),
+		projectRoutingStatus,
 		projectCards.String(),
 		t(lang, "新規プロジェクトのルーティング作成", "Create New Project Routing"),
-		t(lang, "Step 2 として、このページで project ごとの Discord category / channels / webhooks routing を設定します。最初の project routing もここから作成します。Guided Setup は補助的な案内が必要な場合のみ使ってください。", "As Step 2, use this page to configure Discord category / channels / webhooks routing per project. Create your first project routing here as well. Use Guided Setup only if you want a helper walkthrough."),
+		t(lang, "ここが Project Management の主作業です。project ごとの Discord category / channels / webhooks routing をここで設定します。最初の routing もここから作成します。", "This is the main Project Management task. Configure Discord category / channels / webhooks routing per project here, including the first routing."),
+		t(lang, "主作業", "Main task"),
 		t(lang, "Kitsuプロジェクト", "Kitsu project"),
 		projectOptions.String(),
 		t(lang, "プロジェクトタイプ", "Project type"),
@@ -1097,6 +1183,7 @@ document.addEventListener('DOMContentLoaded', function(){
 		testNextStatus,
 		appendLang("/bot/admin/health", lang),
 		t(lang, "Health を開く", "Open Health"),
+		fallbackBotCard,
 		templateJSON.String(),
 		previewLabelsJSON,
 		t(lang, "Botアカウント設定中...", "Bot account setup..."),
