@@ -924,10 +924,10 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
       <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%s</div></div>
       <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%s</div></div>
     </div>
-    <div class="button-row"><a class="btn" data-edit-lock-link="1" href="%s">%s</a></div>
+    <div class="button-row"><a class="btn" data-edit-lock-link="1" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
   </div>
 </div>`,
-			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "共有Botトークンと runtime credential の保護された設定を確認・更新できます。", "Review and update protected shared bot token and runtime credential settings."), statusClass, statusLabel, esc(effectiveHost), t(lang, "サーバーID", "Server ID"), valueStatus(guildID, lang), t(lang, "Bot Token", "Bot Token"), secretStatus(os.Getenv("DISCORD_BOT_TOKEN"), lang), withLang("/bot/admin/bot?edit=1", r), t(lang, "再認証して編集する", "Re-authenticate to edit"))
+			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "Project Management で使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by Project Management."), statusClass, statusLabel, esc(effectiveHost), t(lang, "サーバーID", "Server ID"), valueStatus(guildID, lang), t(lang, "Bot Token", "Bot Token"), secretStatus(os.Getenv("DISCORD_BOT_TOKEN"), lang), withLang("/bot/admin/bot?edit=1", r), t(lang, "再認証して編集する", "Re-authenticate to edit"), withLang("/bot/setup", r), t(lang, "Project Managementへ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "次は Projects & Guilds", "Next: Projects & Guilds"))
 		if !editMode {
 			fmt.Fprint(w, adminPage(lang, t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), r, view))
 			return
@@ -945,10 +945,10 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
       <div><label>%s</label><input type="email" name="kitsu_runtime_email" value="%s" placeholder="kitsusync-bot@local.invalid"></div>
       <div><label>%s</label><input type="password" name="kitsu_runtime_password" autocomplete="new-password" placeholder="%s"></div>
     </div></div>
-    <div class="button-row"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a></div>
+    <div class="button-row"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
   </form>
 </div>`,
-				authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスにのみ反映されます。", "Token changes apply only to the currently running process."), t(lang, "再起動時は .env.local / 環境変数の値が再読み込みされます。永続ローテーションは .env.local も更新してください。", "On restart, the token is reloaded from .env.local / environment. Update .env.local for durable rotation."), t(lang, "サーバーID", "Server ID"), esc(guildID), t(lang, "Guild ID は通常設定として保存され、再起動後も維持されます。", "Guild ID is saved as a regular setting and persists across restart."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), t(lang, "保存", "Save"), withLang("/bot/admin/bot", r), t(lang, "キャンセル", "Cancel"))
+				authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスにのみ反映されます。", "Token changes apply only to the currently running process."), t(lang, "再起動時は .env.local / 環境変数の値が再読み込みされます。永続ローテーションは .env.local も更新してください。", "On restart, the token is reloaded from .env.local / environment. Update .env.local for durable rotation."), t(lang, "サーバーID", "Server ID"), esc(guildID), t(lang, "Guild ID は通常設定として保存され、再起動後も維持されます。", "Guild ID is saved as a regular setting and persists across restart."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "Project Managementへ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "次は Projects & Guilds", "Next: Projects & Guilds"))
 		fmt.Fprint(w, adminPage(lang, t(lang, "Bot設定", "Bot Settings"), r, edit))
 	}
 }
