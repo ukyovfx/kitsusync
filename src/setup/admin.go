@@ -44,7 +44,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		hasIssues := hasBrokenWebhook || hasPollErr || !pollingActive
 		isHealthy := pollingActive && !hasBrokenWebhook && !hasPollErr
 
-		statusPill := `<span class="status-pill ok">\u2713 ` + esc(t(lang, "\u6b63\u5e38", "Healthy")) + `</span>`
+		statusPill := `<span class="status-pill ok">` + esc(t(lang, "\u6b63\u5e38", "Healthy")) + `</span>`
 		if !isHealthy {
 			statusPill = `<span class="status-pill bad">\u2717 ` + esc(t(lang, "\u554f\u984c\u3042\u308a", "Issues detected")) + `</span>`
 		}
@@ -455,7 +455,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 
 		overallBadge := func() string {
 			if isHealthy {
-				return `<span class="status-pill ok" style="font-size:1rem;padding:10px 18px">\u2713 ` + esc(t(lang, "\u6b63\u5e38", "Healthy")) + `</span>`
+				return `<span class="status-pill ok" style="font-size:1rem;padding:10px 18px">` + esc(t(lang, "\u6b63\u5e38", "Healthy")) + `</span>`
 			}
 			return `<span class="status-pill bad" style="font-size:1rem;padding:10px 18px">\u2717 ` + esc(t(lang, "\u554f\u984c\u3042\u308a", "Issues detected")) + `</span>`
 		}
