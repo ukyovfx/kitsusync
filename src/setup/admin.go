@@ -41,6 +41,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		pollingActive := !snap.LastPollTime.IsZero()
 		hasBrokenWebhook := len(unhealthy) > 0
 		hasPollErr := pollErr != ""
+		hasIssues := hasBrokenWebhook || hasPollErr || !pollingActive
 		isHealthy := pollingActive && !hasBrokenWebhook && !hasPollErr
 
 		statusPill := `<span class="status-pill ok">\u2713 ` + esc(t(lang, "\u6b63\u5e38", "Healthy")) + `</span>`
@@ -128,18 +129,19 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			pStats[wh.KitsuProjectID] = ps
 		}
 
+		projectCount := len(projects)
+
 		var projectsCard string
-		if len(projects) == 0 {
+		if projectCount == 0 {
 			projectsCard = fmt.Sprintf(`
 <div class="section-card glass">
   <h3>%s</h3>
   %s
-  <div class="button-row"><a class="btn" href="%s">%s</a></div>
+  <p class="hint" style="margin-top:12px">%s</p>
 </div>`,
 				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
 				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u672a\u8a2d\u5b9a", "No projects configured"), t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u30a6\u30a3\u30b6\u30fc\u30c9\u3092\u5b9f\u884c\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Run the setup wizard.")),
-				withLang("/bot/setup-wizard", r),
-				esc(t(lang, "\u30a6\u30a3\u30b6\u30fc\u30c9\u3092\u8d77\u52d5", "Launch Wizard")),
+				esc(t(lang, "\u6b21\u306e\u30a2\u30af\u30b7\u30e7\u30f3\u306f Next \u30bb\u30af\u30b7\u30e7\u30f3\u306e Guided Setup \u3067\u3059\u3002", "Use the Guided Setup action in the Next section.")),
 			)
 		} else {
 			var projectRows strings.Builder
@@ -230,7 +232,6 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			icon, href, titleJA, titleEN string
 		}
 		links := []navLink{
-			{"\U0001F3AC", "/bot/setup", "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u8a2d\u5b9a", "Project Setup"},
 			{"\U0001F5C2", "/bot/admin/projects", "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068Guild", "Projects & Guilds"},
 			{"\u2764", "/bot/admin/health", "\u30d8\u30eb\u30b9", "Health"},
 			{"\U0001F50D", "/bot/admin/diagnostics", "\u74b0\u5883\u8a3a\u65ad", "Diagnostics"},
@@ -250,17 +251,87 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		}
 		navGrid.WriteString(`</div>`)
 
-		initialSetupCard := `<div class="section-card glass"><h3>` + esc(t(lang, "Initial Setup", "Initial Setup")) + `</h3><ol class="hint" style="margin:8px 0 0 18px;line-height:1.6">` +
-			`<li>` + esc(t(lang, "Bot設定で共有Botトークンを登録", "Register shared bot token in Bot Settings")) + `</li>` +
-			`<li>` + esc(t(lang, "Projects & Guilds で production ごとに Guild ID を割り当て", "Assign a Guild ID per production in Projects & Guilds")) + `</li>` +
-			`<li>` + esc(t(lang, "Project Management でチャンネルとWebhookを管理", "Manage channels and webhooks from Project Management")) + `</li>` +
-			`<li>` + esc(t(lang, "Health/Diagnostics で権限と接続を確認", "Validate permissions and connectivity in Health/Diagnostics")) + `</li>` +
-			`</ol></div>`
+		setupSummaryTitle := t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u72b6\u614b", "Setup / Project State")
+		setupSummaryText := t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3092\u8ffd\u52a0\u3059\u308b\u3068\u3001\u3053\u3053\u304b\u3089 Discord \u3078\u306e\u7d4c\u8def\u8a2d\u5b9a\u3092\u958b\u59cb\u3067\u304d\u307e\u3059\u3002", "Add your first project to begin Discord routing from here.")
+		setupSummaryState := `<span class="status-pill warn">` + esc(t(lang, "\u672a\u8a2d\u5b9a", "Not started")) + `</span>`
+		if projectCount > 0 {
+			setupSummaryText = fmt.Sprintf(
+				t(lang, "%d \u4ef6\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u304c\u8a2d\u5b9a\u6e08\u307f\u3067\u3059\u3002\u5fc5\u8981\u306b\u5fdc\u3058\u3066 Project Management \u3067\u30c1\u30e3\u30f3\u30cd\u30eb / Webhook \u3092\u898b\u76f4\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "%d project(s) are configured. Use Project Management when you need to review channels or webhooks."),
+				projectCount,
+			)
+			setupSummaryState = `<span class="status-pill ok">` + esc(t(lang, "\u8a2d\u5b9a\u6e08\u307f", "Configured")) + `</span>`
+		}
+		if hasIssues {
+			setupSummaryText = t(lang, "\u73fe\u5728\u306e\u72b6\u614b\u306b\u554f\u984c\u304c\u3042\u308a\u307e\u3059\u3002\u307e\u305a\u306f Health / Diagnostics \u3067\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "There are issues in the current state. Check Health / Diagnostics first before moving on.")
+			setupSummaryState = `<span class="status-pill bad">` + esc(t(lang, "\u8981\u78ba\u8a8d", "Needs attention")) + `</span>`
+		}
+		setupSummaryCard := fmt.Sprintf(`
+<div class="section-card glass">
+  <div class="page-heading" style="margin-bottom:10px">
+    <h3 style="margin:0">%s</h3>
+    %s
+  </div>
+  <p class="hint" style="margin:0">%s</p>
+</div>`,
+			esc(setupSummaryTitle),
+			setupSummaryState,
+			esc(setupSummaryText),
+		)
+
+		nextTitle := t(lang, "\u6b21\u306b\u3084\u308b\u3053\u3068", "Next")
+		nextCardTitle := t(lang, "\u72b6\u614b\u3092\u898b\u76f4\u3059", "Review system status")
+		nextCardBody := t(lang, "\u307e\u305a\u306f Health \u3068 Diagnostics \u3067\u554f\u984c\u306e\u3042\u308b\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3001\u540c\u671f\u3084 webhook \u306e\u72b6\u614b\u3092\u6574\u7406\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Start with Health and Diagnostics to review runtime issues, sync status, and webhook health.")
+		nextPrimaryHref := withLang("/bot/admin/health", r)
+		nextPrimaryLabel := t(lang, "Health \u3092\u958b\u304f", "Open Health")
+		nextSecondaryHref := withLang("/bot/admin/diagnostics", r)
+		nextSecondaryLabel := t(lang, "Diagnostics \u3092\u958b\u304f", "Open Diagnostics")
+		nextBadge := `<span class="status-pill bad">` + esc(t(lang, "\u512a\u5148", "Priority")) + `</span>`
+		if !hasIssues && projectCount == 0 {
+			nextCardTitle = t(lang, "Guided Setup \u3092\u59cb\u3081\u308b", "Start Guided Setup")
+			nextCardBody = t(lang, "\u6700\u521d\u306e1\u4ef6\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068 Discord \u9023\u643a\u3092\u6bb5\u968e\u7684\u306b\u6574\u3048\u308b\u306b\u306f\u3001Guided Setup \u304b\u3089\u59cb\u3081\u308b\u306e\u304c\u6700\u77ed\u3067\u3059\u3002", "Guided Setup is the clearest way to configure your first project and Discord routing step by step.")
+			nextPrimaryHref = withLang("/bot/setup-wizard", r)
+			nextPrimaryLabel = t(lang, "Guided Setup \u3092\u958b\u304f", "Open Guided Setup")
+			nextSecondaryHref = withLang("/bot/admin/bot", r)
+			nextSecondaryLabel = t(lang, "Bot Settings \u3092\u78ba\u8a8d", "Review Bot Settings")
+			nextBadge = `<span class="status-pill warn">` + esc(t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7", "Setup")) + `</span>`
+		} else if !hasIssues && projectCount > 0 {
+			nextCardTitle = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3092\u7ba1\u7406\u3059\u308b", "Manage project routing")
+			nextCardBody = t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u3001Webhook\u3001\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3054\u3068\u306e Discord \u7d4c\u8def\u306e\u78ba\u8a8d\u306f Project Management \u304b\u3089\u884c\u3048\u307e\u3059\u3002", "Use Project Management to review channels, webhooks, and project-specific Discord routing.")
+			nextPrimaryHref = withLang("/bot/setup", r)
+			nextPrimaryLabel = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
+			nextSecondaryHref = withLang("/bot/admin/projects", r)
+			nextSecondaryLabel = t(lang, "Projects & Guilds \u3092\u78ba\u8a8d", "Review Projects & Guilds")
+			nextBadge = `<span class="status-pill ok">` + esc(t(lang, "\u6e96\u5099\u6e08\u307f", "Ready")) + `</span>`
+		}
+		nextActionCard := fmt.Sprintf(`
+<div class="section-card glass" style="border-color:rgba(255,141,72,.35);box-shadow:0 0 0 1px rgba(255,141,72,.14) inset">
+  <div class="page-heading" style="margin-bottom:12px">
+    <div>
+      <h3 style="margin:0">%s</h3>
+      <p class="hint" style="margin:6px 0 0">%s</p>
+    </div>
+    %s
+  </div>
+  <div class="button-row" style="margin-top:14px">
+    <a class="btn" href="%s">%s</a>
+    <a class="btn-ghost" href="%s">%s</a>
+  </div>
+</div>`,
+			esc(nextCardTitle),
+			esc(nextCardBody),
+			nextBadge,
+			nextPrimaryHref,
+			esc(nextPrimaryLabel),
+			nextSecondaryHref,
+			esc(nextSecondaryLabel),
+		)
 
 		body := `<div class="section-stack">` +
-			initialSetupCard +
-			statusBar + pollerCard + projectsCard + warningsCard +
-			`<div class="section-card glass"><h3>` + esc(t(lang, "\u7ba1\u7406\u30e1\u30cb\u30e5\u30fc", "Management")) + `</h3>` + navGrid.String() + `</div>` +
+			`<div><div class="eyebrow">NOW</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u73fe\u5728\u306e\u72b6\u614b", "Now")) + `</h2></div>` +
+			statusBar + pollerCard + warningsCard + setupSummaryCard + projectsCard +
+			`<div><div class="eyebrow">NEXT</div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
+			nextActionCard +
+			`<div class="section-card glass"><div class="page-heading" style="margin-bottom:14px"><div><div class="eyebrow">LATER</div><h3 style="margin:0">` + esc(t(lang, "\u5f8c\u3067\u4f7f\u3046\u7ba1\u7406\u6a5f\u80fd", "Later / Advanced")) + `</h3><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "\u3053\u308c\u3089\u306f\u521d\u56de\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u5b8c\u4e86\u5f8c\u3084\u500b\u5225\u8abf\u6574\u306e\u3068\u304d\u306b\u4f7f\u3046\u7ba1\u7406\u30da\u30fc\u30b8\u3067\u3059\u3002", "These are secondary admin pages for follow-up setup, maintenance, and detailed adjustments.")) + `</p></div></div>` + navGrid.String() + `</div>` +
 			`</div>`
 
 		fmt.Fprint(w, adminPage(lang, t(lang, "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9", "Dashboard"), r, body))
