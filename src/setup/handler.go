@@ -876,14 +876,16 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 
 	// Determine setup step for progress indicator using only existing lightweight signals.
 	step1Done := kitsuHostStored != "" && kitsuEmailStored != ""
-	projectRoutingDone := len(projects) > 0
-	guildStepDone := false
+	projectRoutingCount := len(projects)
+	projectRoutingDone := projectRoutingCount > 0
+	guildAssignedCount := 0
 	for _, project := range projects {
 		if strings.TrimSpace(project.DiscordGuildID) != "" {
-			guildStepDone = true
-			break
+			guildAssignedCount++
 		}
 	}
+	guildMissingCount := projectRoutingCount - guildAssignedCount
+	guildStepDone := projectRoutingDone && guildAssignedCount == projectRoutingCount
 	stepClass := func(done, active bool) string {
 		if done {
 			return "done"
@@ -897,6 +899,17 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	step2Class := stepClass(projectRoutingDone, step1Done && !projectRoutingDone)
 	step3Class := stepClass(guildStepDone, projectRoutingDone && !guildStepDone)
 	step4Class := stepClass(false, guildStepDone)
+	step3Body := t(lang, "Routing 作成後に、各 project を送信先の Discord Server / Guild に割り当てます。", "After routing is created, assign each project to its destination Discord Server / Guild.")
+	if projectRoutingDone {
+		step3Body = fmt.Sprintf(t(lang, "%d 件中 %d 件の project に Guild 割り当てがあります。残りを Projects & Guilds で確認します。", "%d of %d routed project(s) have a guild assignment. Review the rest in Projects & Guilds."), guildAssignedCount, projectRoutingCount)
+		if guildStepDone {
+			step3Body = fmt.Sprintf(t(lang, "%d 件の routed project すべてに Guild 割り当てがあります。", "All %d routed project(s) have a guild assignment."), projectRoutingCount)
+		}
+	}
+	step4Body := t(lang, "最後に通知の送信先と webhook 動作を確認します。現在の slice では Health / Diagnostics を使います。", "Finally, verify the notification destination and webhook behavior. In this slice, use Health / Diagnostics.")
+	if !guildStepDone {
+		step4Body = t(lang, "Guild 割り当てが揃ったあとに、最後の確認として通知先と webhook 動作を見ます。", "After guild assignment is complete, use this as the final confirmation of destination and webhook behavior.")
+	}
 	stepIndicator := fmt.Sprintf(`<div class="setup-steps">
   <div class="setup-step %s"><span class="step-num">1</span><span class="step-label">%s</span></div>
   <div class="step-connector"></div>
@@ -961,7 +974,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 			3,
 			step3Class,
 			t(lang, "Discord Server / Guild", "Discord Server / Guild"),
-			t(lang, "Routing 作成後に、各 project を送信先の Discord Server / Guild に割り当てます。", "After routing is created, assign each project to its destination Discord Server / Guild."),
+			step3Body,
 			map[string]string{"done": t(lang, "割り当て済み", "Assigned"), "active": t(lang, "次の手順", "Next"), "pending": t(lang, "待機中", "Pending")}[step3Class],
 			appendLang("/bot/admin/projects", lang),
 			t(lang, "Projects & Guilds", "Projects & Guilds"),
@@ -971,7 +984,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 			4,
 			step4Class,
 			t(lang, "Test Notification", "Test Notification"),
-			t(lang, "最後に通知の送信先と webhook 動作を確認します。現在の slice では Health / Diagnostics を使います。", "Finally, verify the notification destination and webhook behavior. In this slice, use Health / Diagnostics."),
+			step4Body,
 			map[string]string{"done": t(lang, "確認済み", "Checked"), "active": t(lang, "確認へ", "Review"), "pending": t(lang, "最後に確認", "Final step")}[step4Class],
 			appendLang("/bot/admin/health", lang),
 			t(lang, "Health / Diagnostics", "Health / Diagnostics"),
@@ -1028,8 +1041,13 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	guildNextStatus := `<span class="status-pill bad">` + t(lang, "次の手順", "Next step") + `</span>`
 	if guildStepDone {
 		guildNextStatus = `<span class="status-pill ok">` + t(lang, "割り当て済み", "Assigned") + `</span>`
+	} else if projectRoutingDone {
+		guildNextStatus = `<span class="status-pill warn">` + t(lang, "確認中", "In progress") + `</span>`
 	}
-	testNextStatus := `<span class="status-pill warn">` + t(lang, "確認待ち", "Review") + `</span>`
+	testNextStatus := `<span class="status-pill bad">` + t(lang, "Step 3 の後", "After Step 3") + `</span>`
+	if guildStepDone {
+		testNextStatus = `<span class="status-pill warn">` + t(lang, "最終確認", "Final check") + `</span>`
+	}
 
 	projectRoutingStatus := `<span class="status-pill warn">` + t(lang, "主作業", "Main task") + `</span>`
 	if !step1Done {
@@ -1174,15 +1192,23 @@ document.addEventListener('DOMContentLoaded', function(){
 		t(lang, "日本語", "Japanese"),
 		t(lang, "セットアップ実行", "Run Setup"),
 		t(lang, "Step 3: Discord Server / Guild の割り当て", "Step 3: Assign Discord Server / Guild"),
-		t(lang, "Project Routing を作成したら、各 project を送信先の Discord Server / Guild に割り当てます。この slice では既存の Projects & Guilds ページを使います。", "After Project Routing is created, assign each project to its destination Discord Server / Guild. In this slice, use the existing Projects & Guilds page."),
+		func() string {
+			if !projectRoutingDone {
+				return t(lang, "Project Routing を作成したあとに、各 project の送信先 Guild を確認します。", "After creating project routing, confirm the destination guild for each project.")
+			}
+			if guildStepDone {
+				return fmt.Sprintf(t(lang, "%d 件の routed project はすべて Guild 割り当て済みです。必要な見直しがある場合のみ Projects & Guilds を開きます。", "All %d routed project(s) already have a guild assignment. Open Projects & Guilds only when you need to review them."), projectRoutingCount)
+			}
+			return fmt.Sprintf(t(lang, "%d 件中 %d 件の routed project に Guild 割り当てがあります。残り %d 件を Projects & Guilds で確認してください。", "%d of %d routed project(s) have a guild assignment. Review the remaining %d in Projects & Guilds."), guildAssignedCount, projectRoutingCount, guildMissingCount)
+		}(),
 		guildNextStatus,
 		appendLang("/bot/admin/projects", lang),
 		t(lang, "Projects & Guilds を開く", "Open Projects & Guilds"),
 		t(lang, "Step 4: テスト通知の確認", "Step 4: Review test notification behavior"),
-		t(lang, "Guild 割り当て後は、通知の送信先と webhook 動作を確認します。現在の slice では Health / Diagnostics から確認します。", "After guild assignment, verify the notification destination and webhook behavior. In this slice, review it from Health / Diagnostics."),
+		t(lang, "Guild 割り当てが揃ったら、最後の確認として通知の送信先と webhook 動作を見ます。現在の slice では Health / Diagnostics を最終確認に使います。", "Once guild assignment is in place, use this as the final confirmation of notification destination and webhook behavior. In this slice, Health / Diagnostics is the final check."),
 		testNextStatus,
 		appendLang("/bot/admin/health", lang),
-		t(lang, "Health を開く", "Open Health"),
+		t(lang, "最終確認へ進む", "Continue to final check"),
 		fallbackBotCard,
 		templateJSON.String(),
 		previewLabelsJSON,
