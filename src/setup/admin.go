@@ -46,7 +46,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 
 		statusPill := `<span class="status-pill ok">` + esc(t(lang, "\u6b63\u5e38", "Healthy")) + `</span>`
 		if !isHealthy {
-			statusPill = `<span class="status-pill bad">\u2717 ` + esc(t(lang, "\u554f\u984c\u3042\u308a", "Issues detected")) + `</span>`
+			statusPill = `<span class="status-pill bad">✗ ` + esc(t(lang, "\u554f\u984c\u3042\u308a", "Issues detected")) + `</span>`
 		}
 
 		lastSyncText := t(lang, "\u672a\u540c\u671f", "No sync yet")
@@ -90,7 +90,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		))
 		if hasPollErr {
 			pollerDetails.WriteString(fmt.Sprintf(
-				`<div class="status-pill bad" style="margin-top:10px;font-size:.82rem;display:inline-flex;max-width:100%%;white-space:normal;align-items:flex-start">\u26a0 %s</div>`,
+				`<div class="status-pill bad" style="margin-top:10px;font-size:.82rem;display:inline-flex;max-width:100%%;white-space:normal;align-items:flex-start">⚠ %s</div>`,
 				esc(pollErr),
 			))
 		}
@@ -197,7 +197,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		if hasBrokenWebhook || hasPollErr {
 			var warns strings.Builder
 			warns.WriteString(`<div class="section-card glass" style="border-color:rgba(255,106,80,.35)">`)
-			warns.WriteString(`<h3 style="color:var(--danger)">\u26a0 ` + esc(t(lang, "\u8b66\u544a", "Warnings")) + `</h3>`)
+			warns.WriteString(`<h3 style="color:var(--danger)">⚠ ` + esc(t(lang, "\u8b66\u544a", "Warnings")) + `</h3>`)
 			warns.WriteString(`<div class="section-stack" style="gap:8px">`)
 			if hasPollErr {
 				warns.WriteString(fmt.Sprintf(
@@ -457,7 +457,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			if isHealthy {
 				return `<span class="status-pill ok" style="font-size:1rem;padding:10px 18px">` + esc(t(lang, "\u6b63\u5e38", "Healthy")) + `</span>`
 			}
-			return `<span class="status-pill bad" style="font-size:1rem;padding:10px 18px">\u2717 ` + esc(t(lang, "\u554f\u984c\u3042\u308a", "Issues detected")) + `</span>`
+			return `<span class="status-pill bad" style="font-size:1rem;padding:10px 18px">✗ ` + esc(t(lang, "\u554f\u984c\u3042\u308a", "Issues detected")) + `</span>`
 		}
 
 		lastSyncText := func() string {
@@ -582,9 +582,9 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 						"Some webhooks are failing. If the channel still exists, use Reconnect to repair.")) + `</p>`
 			}
 			if reconnectMsg == "reconnect_ok" {
-				webhookTableHTML += `<p class="hint" style="color:#8ecf8b;margin-top:10px">\u2713 ` + esc(t(lang, "Webhook\u3092\u518d\u63a5\u7d9a\u3057\u307e\u3057\u305f\u3002", "Webhook reconnected successfully.")) + `</p>`
+				webhookTableHTML += `<p class="hint" style="color:#8ecf8b;margin-top:10px">✓ ` + esc(t(lang, "Webhook\u3092\u518d\u63a5\u7d9a\u3057\u307e\u3057\u305f\u3002", "Webhook reconnected successfully.")) + `</p>`
 			} else if reconnectMsg == "reconnect_fail" {
-				webhookTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">\u2717 ` + esc(t(lang, "\u518d\u63a5\u7d9a\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u30c1\u30e3\u30f3\u30cd\u30eb\u304c\u524a\u9664\u3055\u308c\u3066\u3044\u308b\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002", "Reconnect failed. The channel may have been deleted.")) + `</p>`
+				webhookTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">✗ ` + esc(t(lang, "\u518d\u63a5\u7d9a\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u30c1\u30e3\u30f3\u30cd\u30eb\u304c\u524a\u9664\u3055\u308c\u3066\u3044\u308b\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002", "Reconnect failed. The channel may have been deleted.")) + `</p>`
 			}
 		}
 
@@ -611,7 +611,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
       <div class="tile-title">%s</div>
     </div>
     <div class="accordion-summary-side">
-      <span class="accordion-caret">\u2304</span>
+      <span class="accordion-caret">⌄</span>
     </div>
   </summary>
   <div class="accordion-body section-stack" style="padding-top:16px">
