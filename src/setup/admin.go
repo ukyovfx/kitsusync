@@ -251,36 +251,9 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		}
 		navGrid.WriteString(`</div>`)
 
-		setupSummaryTitle := t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u72b6\u614b", "Setup / Project State")
-		setupSummaryText := t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3092\u8ffd\u52a0\u3059\u308b\u3068\u3001\u3053\u3053\u304b\u3089 Discord \u3078\u306e\u7d4c\u8def\u8a2d\u5b9a\u3092\u958b\u59cb\u3067\u304d\u307e\u3059\u3002", "Add your first project to begin Discord routing from here.")
-		setupSummaryState := `<span class="status-pill warn">` + esc(t(lang, "\u672a\u8a2d\u5b9a", "Not started")) + `</span>`
-		if projectCount > 0 {
-			setupSummaryText = fmt.Sprintf(
-				t(lang, "%d \u4ef6\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u304c\u8a2d\u5b9a\u6e08\u307f\u3067\u3059\u3002\u5fc5\u8981\u306b\u5fdc\u3058\u3066 Project Management \u3067\u30c1\u30e3\u30f3\u30cd\u30eb / Webhook \u3092\u898b\u76f4\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "%d project(s) are configured. Use Project Management when you need to review channels or webhooks."),
-				projectCount,
-			)
-			setupSummaryState = `<span class="status-pill ok">` + esc(t(lang, "\u8a2d\u5b9a\u6e08\u307f", "Configured")) + `</span>`
-		}
-		if hasIssues {
-			setupSummaryText = t(lang, "\u73fe\u5728\u306e\u72b6\u614b\u306b\u554f\u984c\u304c\u3042\u308a\u307e\u3059\u3002\u307e\u305a\u306f Health / Diagnostics \u3067\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "There are issues in the current state. Check Health / Diagnostics first before moving on.")
-			setupSummaryState = `<span class="status-pill bad">` + esc(t(lang, "\u8981\u78ba\u8a8d", "Needs attention")) + `</span>`
-		}
-		setupSummaryCard := fmt.Sprintf(`
-<div class="section-card glass">
-  <div class="page-heading" style="margin-bottom:10px">
-    <h3 style="margin:0">%s</h3>
-    %s
-  </div>
-  <p class="hint" style="margin:0">%s</p>
-</div>`,
-			esc(setupSummaryTitle),
-			setupSummaryState,
-			esc(setupSummaryText),
-		)
-
 		nextTitle := t(lang, "\u6b21\u306b\u3084\u308b\u3053\u3068", "Next")
 		nextCardTitle := t(lang, "\u72b6\u614b\u3092\u898b\u76f4\u3059", "Review system status")
-		nextCardBody := t(lang, "\u307e\u305a\u306f Health \u3068 Diagnostics \u3067\u554f\u984c\u306e\u3042\u308b\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3001\u540c\u671f\u3084 webhook \u306e\u72b6\u614b\u3092\u6574\u7406\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Start with Health and Diagnostics to review runtime issues, sync status, and webhook health.")
+		nextCardBody := t(lang, "\u307e\u305a\u306f Health \u3067\u554f\u984c\u306e\u3042\u308b\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3001\u5fc5\u8981\u306a\u5834\u5408\u3060\u3051 Diagnostics \u3067\u8a73\u3057\u304f\u898b\u3066\u304f\u3060\u3055\u3044\u3002", "Start with Health to review runtime issues, then use Diagnostics only when you need deeper inspection.")
 		nextPrimaryHref := withLang("/bot/admin/health", r)
 		nextPrimaryLabel := t(lang, "Health \u3092\u958b\u304f", "Open Health")
 		nextSecondaryHref := withLang("/bot/admin/diagnostics", r)
@@ -288,7 +261,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		nextBadge := `<span class="status-pill bad">` + esc(t(lang, "\u512a\u5148", "Priority")) + `</span>`
 		if !hasIssues && projectCount == 0 {
 			nextCardTitle = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
-			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f Project Management \u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot Settings \u304b\u3089\u884c\u3044\u3001\u8a73\u3057\u3044\u78ba\u8a8d\u304c\u5fc5\u8981\u306a\u5834\u5408\u306f Manual Setup / Diagnostics \u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites, and use Manual Setup / Diagnostics only when you need deeper checks.")
+			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f Project Management \u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot Settings \u304b\u3089\u884c\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites.")
 			nextPrimaryHref = withLang("/bot/setup", r)
 			nextPrimaryLabel = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
 			nextSecondaryHref = withLang("/bot/admin/bot", r)
@@ -328,7 +301,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 
 		body := `<div class="section-stack">` +
 			`<div><div class="eyebrow">NOW</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u73fe\u5728\u306e\u72b6\u614b", "Now")) + `</h2></div>` +
-			statusBar + pollerCard + warningsCard + setupSummaryCard + projectsCard +
+			statusBar + pollerCard + warningsCard + projectsCard +
 			`<div><div class="eyebrow">NEXT</div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
 			nextActionCard +
 			`<div class="section-card glass"><div class="page-heading" style="margin-bottom:14px"><div><div class="eyebrow">LATER</div><h3 style="margin:0">` + esc(t(lang, "\u5f8c\u3067\u4f7f\u3046\u7ba1\u7406\u6a5f\u80fd", "Later / Advanced")) + `</h3><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "\u3053\u308c\u3089\u306f\u521d\u56de\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u5b8c\u4e86\u5f8c\u3084\u500b\u5225\u8abf\u6574\u306e\u3068\u304d\u306b\u4f7f\u3046\u7ba1\u7406\u30da\u30fc\u30b8\u3067\u3059\u3002", "These are secondary admin pages for follow-up setup, maintenance, and detailed adjustments.")) + `</p></div></div>` + navGrid.String() + `</div>` +

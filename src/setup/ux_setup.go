@@ -338,7 +338,7 @@ func buildTestNotificationCheck(db *gorm.DB) SetupCheck {
 		Label:   "Test notification",
 		Summary: "Not sent yet",
 		Detail:  "Run the test notification once to confirm the project webhook can receive messages.",
-		Fix:     "Use the Test Notification button in Guided Setup or Manual Setup.",
+		Fix:     "Use Health or diagnostics to verify test notification delivery.",
 	}
 	if verified {
 		check.Status = SetupOK
@@ -638,6 +638,15 @@ func SetupManualHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		if r.URL.Path != "" {
+			fmt.Fprint(w, renderSetupCompatHandoffPage(
+				lang,
+				r,
+				t(lang, "Manual Setup has moved", "Manual Setup has moved"),
+				t(lang, "/bot/admin/setup は互換用の案内ページです。Setup flow has moved to Project Management.", "/bot/admin/setup is now a compatibility handoff page. Setup flow has moved to Project Management."),
+			))
+			return
+		}
 		diag := localizeSetupDiagnostics(lang, BuildSetupDiagnostics(db, refreshCreds))
 
 		var envCards strings.Builder

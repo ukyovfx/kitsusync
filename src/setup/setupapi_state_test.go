@@ -215,11 +215,42 @@ func TestWizardHandler_ShowsProjectManagementHandoff(t *testing.T) {
 	if !strings.Contains(body, "Setup entry has moved") {
 		t.Fatalf("expected setup handoff heading")
 	}
+	if !strings.Contains(body, "Setup flow has moved to Project Management.") {
+		t.Fatalf("expected project management handoff copy")
+	}
 	if !strings.Contains(body, "/bot/setup") {
 		t.Fatalf("expected handoff link to /bot/setup")
 	}
-	if !strings.Contains(body, "Manual Setup") {
-		t.Fatalf("expected manual setup troubleshooting link")
+	if !strings.Contains(body, "Diagnostics") {
+		t.Fatalf("expected diagnostics troubleshooting link")
+	}
+	if strings.Contains(body, "Manual Setup") {
+		t.Fatalf("did not expect manual setup link on wizard handoff page")
+	}
+}
+
+func TestSetupManualHandler_ShowsProjectManagementHandoff(t *testing.T) {
+	db := newSetupStateTestDB(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin/setup?lang=en", nil)
+	rr := httptest.NewRecorder()
+
+	SetupManualHandler(db, func() (string, string, string, string) {
+		return "http://kitsu.local/", "bot-token", "111111111111111111", ""
+	})(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for manual setup handoff page, got %d", rr.Code)
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, "Manual Setup has moved") {
+		t.Fatalf("expected manual setup handoff heading")
+	}
+	if !strings.Contains(body, "Setup flow has moved to Project Management.") {
+		t.Fatalf("expected project management handoff copy")
+	}
+	if !strings.Contains(body, "/bot/setup") {
+		t.Fatalf("expected handoff link to /bot/setup")
 	}
 	if !strings.Contains(body, "Diagnostics") {
 		t.Fatalf("expected diagnostics troubleshooting link")
