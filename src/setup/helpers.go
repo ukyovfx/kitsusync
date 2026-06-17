@@ -28,6 +28,7 @@ const (
 	RuntimeKitsuEmailSettingKey = "kitsu.runtime_email"
 	RuntimeKitsuEmailEnv        = "KITSU_RUNTIME_EMAIL"
 	RuntimeKitsuPasswordEnv     = "KITSU_RUNTIME_PASSWORD"
+	RuntimeDiscordBotTokenKey   = "discord.runtime_bot_token"
 	runtimeBotEmail             = "kitsusync-bot@local.invalid"
 	runtimeBotFirstName         = "KitsuSync"
 	runtimeBotLastName          = "Bot"
@@ -227,6 +228,26 @@ func setRuntimeKitsuPassword(password string) {
 	}
 	os.Setenv(RuntimeKitsuPasswordEnv, password)
 	os.Unsetenv("KITSU_PASSWORD")
+}
+
+func storedRuntimeDiscordBotToken(db *gorm.DB) string {
+	if db != nil {
+		if value := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenKey)); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+}
+
+func setRuntimeDiscordBotToken(db *gorm.DB, token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	if db != nil {
+		model.SetSecretSetting(db, RuntimeDiscordBotTokenKey, token)
+	}
+	os.Setenv("DISCORD_BOT_TOKEN", token)
 }
 
 func runtimeBotFullName() string {
