@@ -16,7 +16,7 @@ Older GitHub web and clone URLs may redirect for a time, but current docs should
 
 ## Historical notes
 Historical notes and release-era policy documents remain historical records and should not be rewritten to hide the previous repository state. This includes:
-- `RELEASE_NOTES_v0.1.1.md`
+- the v0.1.1 release notes
 - `docs/notes/branding-policy-v0.1.1.md`
 - `docs/notes/v0.1.1-release-readiness.md`
 

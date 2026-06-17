@@ -5,7 +5,7 @@ Use this as the v0.1.0 release gate. Any unchecked item in the `Must Pass` secti
 ## Must Pass
 
 - [ ] release tag/version matches the intended release (for example `v0.1.0`)
-- [ ] `RELEASE_NOTES_v0.1.0.md` is ready
+- [ ] the current release notes are ready
 - [ ] README matches the current setup flow, scope, limitations, and roadmap
 - [ ] `.env.example` and `conf.toml.example` are up to date
 - [ ] tracked secrets are absent from the branch diff

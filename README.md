@@ -48,7 +48,7 @@ Browser admin UI
 - v0.3.1: Discord notification message UX refinement
 - v0.4.0: setup/admin flow redesign around Project Management, project-level Guild ID, and durable Bot Settings token persistence
 
-For the latest public state, see `RELEASE_NOTES_v0.4.0.md`. Older release notes remain in this repository for historical context.
+For release history, see `CHANGELOG.md`. Per-version release notes should live in GitHub Releases going forward. The latest local release note is `RELEASE_NOTES_v0.4.0.md`.
 
 ## Limitations (Current)
 
@@ -64,7 +64,7 @@ Current limitations are intentionally conservative:
 For production use, see `docs/SETUP_FOR_STUDIOS.md` and verify routing and operational load against your expected notification volume.
 
 ## Roadmap
-The following items are tracked as ongoing/post-v0.3.x improvement areas:
+The following items are tracked as future improvement areas:
 
 - Project-scoped multi-project admin management
 - Admin audit surface in the browser (`/bot/admin/audit`)
@@ -351,8 +351,8 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 - Security reporting: `SECURITY.md`
 - Changelog: `CHANGELOG.md`
 - Latest release notes: `RELEASE_NOTES_v0.4.0.md`
-- Historical release notes: `RELEASE_NOTES_v0.1.0.md` to `RELEASE_NOTES_v0.3.1.md`
 - Screenshot guidance: `screenshots/CAPTURE_GUIDE.md`
+- Future per-version release notes: GitHub Releases
 
 ## License
 
