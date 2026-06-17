@@ -23,8 +23,8 @@ The current flow is organized as:
 | Step | Purpose |
 |------|---------|
 | Step 1: Bot Settings | Review shared bot/runtime prerequisites |
-| Step 2: Project Routing | Select a Kitsu project and routing template |
-| Step 3: Guild Assignment | Set the Discord Server / Guild ID for that project |
+| Step 2: Project Routing | Select a Kitsu project, routing template, and project-level Discord Server / Guild ID |
+| Step 3: Resource Creation | Create the Discord categories, channels, and webhooks for that project |
 | Step 4: Test Notification | Confirm delivery after Discord resources are created |
 
 This is the only normal first-time setup path operators should follow.
@@ -53,7 +53,7 @@ Use `/bot/setup` for project destination setup:
 - notification language
 - Discord Server / Guild ID
 
-Guild ID is now treated as a project-level destination setting for new project routing.
+Guild ID is now treated as a project-level destination setting for new project routing and is handled in `/bot/setup` Step 2.
 
 ---
 
