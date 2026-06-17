@@ -31,7 +31,7 @@ All notable changes to this project should be recorded here.
 - OSS onboarding files: `.env.example`, `conf.toml.example`, `CONTRIBUTING.md`, `SECURITY.md`
 - GitHub issue templates for bug reports, feature requests, and security redirect guidance
 - Pull request template, CODEOWNERS, label guidance, and release checklist
-- First public-ready release notes in `RELEASE_NOTES_v0.1.0.md`
+- First public-ready release notes for the v0.1.0 release
 - Screenshot guidance in `screenshots/README.md`
 
 ### Changed
