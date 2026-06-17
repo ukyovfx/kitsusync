@@ -26,7 +26,7 @@ release: v0.4.0
 - temporary GCP stack has been deployed and smoke-tested through PR #100 and PR #101
 - latest tested deployed commit: `01e5c823f54febe490c21264e2ce0e39d175b92a`
 - PR #101 records the PR #100 deploy QA result in this file
-- `diagrams/` remains in the repo as legacy source fragments, but is no longer runtime-served or mounted
+- `docs/archive/diagrams/` retains the legacy source fragments, and they are no longer runtime-served or mounted
 
 ## Known Caveats
 
@@ -37,7 +37,7 @@ release: v0.4.0
 ## Next Gate
 
 - keep future work focused on small cleanup and hardening PRs
-- do not move, delete, or archive `diagrams/` until the runtime removal has remained stable
+- keep `docs/archive/diagrams/` as retained legacy source fragments unless a later cleanup explicitly decides otherwise
 
 ## 2026-06-17 Maintenance Update
 

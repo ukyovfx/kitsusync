@@ -7,6 +7,8 @@ release_gate: pending-verification
 
 # KitsuSync Technical Spec
 
+Historical note: this document preserves the v0.1.0 release-candidate technical scope. For the current v0.4.0 operator-facing setup flow, use `docs/SETUP_WIZARD.md` and `docs/notes/KitsuSync-CURRENT-STATE.md`.
+
 ## v0.1.0 Scope Vocabulary
 
 - `done`: in scope and implemented
