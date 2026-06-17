@@ -1,14 +1,16 @@
 ---
 title: "KitsuSync Release Notes Sync"
-status: release-candidate
+status: historical
 updated: 2026-05-19
 ---
 
 # KitsuSync Release Notes Sync
 
-This directory keeps repo-local copies of release-critical notes that were originally tracked in Obsidian.
+This directory keeps repo-local historical background notes that were originally tracked in Obsidian.
 
-For v0.1.0, the canonical repo-facing set is:
+These notes describe the old v0.1.0 release-candidate phase. They are not the current source of truth for the v0.4.0 maintenance state.
+
+For v0.1.0, the canonical repo-facing set was:
 
 - `KitsuSync-CURRENT-STATE.md`
 - `KitsuSync-Technical-Spec.md`
