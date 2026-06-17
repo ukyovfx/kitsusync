@@ -53,7 +53,7 @@ The `editor` service (FileBrowser) is disabled by default. Start it explicitly o
 docker compose --profile debug up -d editor
 ```
 
-FileBrowser mounts only the docs/template/diagram directories. It does not have access to `.env`, `conf.toml`, or the database.
+FileBrowser mounts only the active docs/template files. It does not have access to `.env`, `conf.toml`, or the database.
 
 ## Production: deploy/docker-compose.yml
 
@@ -80,7 +80,6 @@ docker compose up -d
 ├── conf.toml                ← required
 ├── docs.html
 ├── site.jsx
-├── diagrams/
 ├── tpl/
 ├── data/
 │   └── sqlite.db
