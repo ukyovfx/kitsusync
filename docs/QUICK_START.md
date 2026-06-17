@@ -39,7 +39,7 @@ DISCORD_BOT_TOKEN=your-bot-token
 DISCORD_GUILD_ID=optional-fallback-server-id
 ```
 
-Leave `DISCORD_WEBHOOK_URL` empty for now — the wizard sets up routing in the browser.
+Leave `DISCORD_WEBHOOK_URL` empty for now — Project Management sets up routing in the browser.
 
 ---
 
@@ -73,25 +73,24 @@ If you get a 502 or connection refused, the app is still starting — wait a mom
 
 ---
 
-## Step 3 — Open the Setup Wizard
+## Step 3 — Open Project Management
 
 1. Open `http://YOUR_SERVER:8090/bot/login` in a browser.
 2. Sign in with your **personal** Kitsu manager or admin account.
-3. Open `/bot/setup-wizard`. The first screen may show a setup mode chooser before Guided Setup begins.
-4. If required values are still missing, the wizard may stop at **System Check** before Kitsu/Discord/project setup.
-5. Save shared bot/runtime credentials in `/bot/admin/bot`, then assign project -> guild in `/bot/admin/projects` if the wizard asks for it.
+3. Review shared bot/runtime prerequisites in `/bot/admin/bot` if needed.
+4. Open `/bot/setup`.
+5. Use the Project Management flow to create routing for one project at a time.
 
-If you choose **Guided Setup**, the flow then moves through these stages:
+The normal operator flow now moves through these stages:
 
 | Stage | What it does |
 |------|-------------|
-| System Check | Verifies that required env/config values exist before setup continues |
-| Kitsu | Tests Kitsu reachability and authentication |
-| Discord | Tests bot token, server membership, and permissions |
-| Project | Previews Discord changes, then creates channels/webhooks only after confirmation |
-| Mapping | (Optional) Adds user/reviewer mention mappings after the first notification works |
+| Bot Settings | Reviews shared bot/runtime prerequisites |
+| Project Routing | Selects the Kitsu project and routing template |
+| Guild Assignment | Sets the Discord Server / Guild ID for that project |
+| Test Notification | Confirms delivery after channel/webhook creation |
 
-Connection tests do not create Discord resources. Project Setup creates Discord categories, channels, and webhooks only after the confirm step.
+Connection tests do not create Discord resources. Project setup creates Discord categories, channels, and webhooks only after the confirmation step.
 
 ---
 
@@ -112,11 +111,11 @@ If Project Setup fails after partial Discord provisioning, rollback is best-effo
 | Task | Where |
 |------|-------|
 | Monitor system health | `/bot/admin` (dashboard) |
-| Assign guild per project | `/bot/admin/projects` |
-| Edit channel routing | `/bot/setup` |
+| Create/manage project routing | `/bot/setup` |
+| Review/edit guild per project | `/bot/admin/projects` |
 | Add more user/checker mappings | `/bot/admin/users`, `/bot/admin/checkers` |
 | Set per-project storage links | `/bot/admin/drive` |
-| Detailed setup reference | `docs/SETUP_WIZARD.md` |
+| Detailed setup flow reference | `docs/SETUP_WIZARD.md` |
 | Troubleshooting | `docs/TROUBLESHOOTING.md` |
 
 ---
