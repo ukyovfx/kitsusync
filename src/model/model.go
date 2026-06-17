@@ -741,13 +741,23 @@ func SetSetting(db *gorm.DB, key, value string) {
 	db.Save(&s)
 }
 
+func SetSecretSetting(db *gorm.DB, key, value string) {
+	var s Setting
+	if err := db.Where("key = ?", key).First(&s).Error; err != nil {
+		db.Create(&Setting{Key: key, Value: value})
+		return
+	}
+	s.Value = value
+	db.Save(&s)
+}
+
 func DeleteSetting(db *gorm.DB, key string) {
 	db.Where("key = ?", key).Delete(&Setting{})
 }
 
 func IsSecretSettingKey(key string) bool {
 	switch key {
-	case "kitsu.password", "discord.botToken", "discord.webhookURL":
+	case "kitsu.password", "discord.botToken", "discord.webhookURL", "discord.runtime_bot_token":
 		return true
 	default:
 		return false

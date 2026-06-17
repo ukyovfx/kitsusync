@@ -100,7 +100,7 @@ func TestTestDiscordHandler_DoesNotMutateRuntimeOrSettings(t *testing.T) {
 	}
 }
 
-func TestBotHandler_PostUpdatesRuntimeTokenAndPersistsGuildID(t *testing.T) {
+func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
 	t.Setenv("DISCORD_BOT_TOKEN", "before-token")
@@ -120,12 +120,15 @@ func TestBotHandler_PostUpdatesRuntimeTokenAndPersistsGuildID(t *testing.T) {
 	if got := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")); got != "rotated-token" {
 		t.Fatalf("expected runtime token update, got %q", got)
 	}
+	if got := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenKey)); got != "rotated-token" {
+		t.Fatalf("expected persisted runtime token, got %q", got)
+	}
 	if got := strings.TrimSpace(model.GetSetting(db, "discord.guildID")); got != "999999999999999999" {
 		t.Fatalf("expected persisted guild ID, got %q", got)
 	}
 }
 
-func TestBotHandler_EditFormShowsPersistenceWarningCopy(t *testing.T) {
+func TestBotHandler_EditFormShowsDurablePersistenceCopy(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
 
@@ -140,11 +143,11 @@ func TestBotHandler_EditFormShowsPersistenceWarningCopy(t *testing.T) {
 		t.Fatalf("expected 200 for edit form, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, ".env.local") {
-		t.Fatalf("expected .env.local warning in bot settings form")
+	if !strings.Contains(body, "Token changes take effect immediately for the running process and are also saved in app settings.") {
+		t.Fatalf("expected durable token persistence copy in bot settings form")
 	}
-	if !strings.Contains(body, "Token changes apply only to the currently running process.") {
-		t.Fatalf("expected runtime-only token warning in bot settings form")
+	if !strings.Contains(body, "After restart, the saved token is used first.") {
+		t.Fatalf("expected restart persistence copy in bot settings form")
 	}
 	if strings.Contains(body, "Compatibility fallback Guild setting") {
 		t.Fatalf("did not expect guild fallback section in bot settings form")

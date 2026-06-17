@@ -589,7 +589,10 @@ func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password s
 }
 
 func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, webhookURL string) {
-	botToken = os.Getenv("DISCORD_BOT_TOKEN")
+	botToken = strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey))
+	if botToken == "" {
+		botToken = os.Getenv("DISCORD_BOT_TOKEN")
+	}
 	if botToken == "" {
 		botToken = conf.Discord.BotToken
 	}
@@ -759,6 +762,9 @@ func main() {
 	model.PurgeLegacySensitiveData(db)
 
 	setup.SeedFromConfig(db, conf)
+	if persistedDiscordToken := strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey)); persistedDiscordToken != "" {
+		os.Setenv("DISCORD_BOT_TOKEN", persistedDiscordToken)
+	}
 	_, seedGuildID, _ := getDiscordSettings(db, conf)
 	model.SeedProjectGuildFallback(db, seedGuildID)
 
