@@ -190,6 +190,62 @@ func TestRunProjectSetup_DoesNotCleanupOnSuccess(t *testing.T) {
 	}
 }
 
+func TestRunProjectSetup_PersistsRequestedGuildIDOnProjectRecord(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	installSetupDiscordProvisioningStub(t)
+
+	res := RunProjectSetup(
+		"kitsu-proj-requested-guild",
+		"Project Requested Guild",
+		"cg",
+		"en",
+		"http://kitsu.local/",
+		"fallback-guild",
+		"requested-guild",
+		"bot-token",
+		db,
+	)
+
+	if !res.OK {
+		t.Fatalf("expected setup success, got lines: %v", res.Lines)
+	}
+	project := model.FindProjectByKitsuID(db, "kitsu-proj-requested-guild")
+	if project == nil {
+		t.Fatalf("expected project to persist on success")
+	}
+	if got := strings.TrimSpace(project.DiscordGuildID); got != "requested-guild" {
+		t.Fatalf("expected requested guild to persist, got %q", got)
+	}
+}
+
+func TestRunProjectSetup_UsesFallbackGuildIDWhenProjectInputIsBlank(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	installSetupDiscordProvisioningStub(t)
+
+	res := RunProjectSetup(
+		"kitsu-proj-fallback-guild",
+		"Project Fallback Guild",
+		"cg",
+		"en",
+		"http://kitsu.local/",
+		"fallback-guild",
+		"",
+		"bot-token",
+		db,
+	)
+
+	if !res.OK {
+		t.Fatalf("expected setup success, got lines: %v", res.Lines)
+	}
+	project := model.FindProjectByKitsuID(db, "kitsu-proj-fallback-guild")
+	if project == nil {
+		t.Fatalf("expected project to persist on success")
+	}
+	if got := strings.TrimSpace(project.DiscordGuildID); got != "fallback-guild" {
+		t.Fatalf("expected fallback guild to persist, got %q", got)
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

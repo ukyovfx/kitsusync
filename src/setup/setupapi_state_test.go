@@ -128,10 +128,11 @@ func TestBotHandler_PostUpdatesRuntimeTokenAndPersistsGuildID(t *testing.T) {
 func TestBotHandler_EditFormShowsPersistenceWarningCopy(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
+	model.SetSetting(db, "discord.guildID", "999999999999999999")
 
 	resetSessions()
-	token := newSessionToken("manager@example.com", "jwt", "manager", "/bot/admin/bot?edit=1")
-	req := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1", nil)
+	token := newSessionToken("manager@example.com", "jwt", "manager", "/bot/admin/bot?edit=1&lang=en")
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
 	rr := httptest.NewRecorder()
 
@@ -143,10 +144,38 @@ func TestBotHandler_EditFormShowsPersistenceWarningCopy(t *testing.T) {
 	if !strings.Contains(body, ".env.local") {
 		t.Fatalf("expected .env.local warning in bot settings form")
 	}
-	if !strings.Contains(body, "このトークン変更は現在実行中のプロセスにのみ反映されます。") {
+	if !strings.Contains(body, "Token changes apply only to the currently running process.") {
 		t.Fatalf("expected runtime-only token warning in bot settings form")
 	}
-	if !strings.Contains(body, "Guild ID は通常設定として保存され、再起動後も維持されます。") {
-		t.Fatalf("expected guild persistence warning in bot settings form")
+	if !strings.Contains(body, "Compatibility fallback Guild setting") {
+		t.Fatalf("expected compatibility fallback section in bot settings form")
+	}
+	if !strings.Contains(body, "Used only when an existing project does not yet have its own saved guild.") {
+		t.Fatalf("expected guild fallback warning in bot settings form")
+	}
+}
+
+func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
+	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "kitsusync-bot@local.invalid")
+
+	req := httptest.NewRequest(http.MethodGet, "/bot/setup?lang=en", nil)
+	rr := httptest.NewRecorder()
+
+	Handler("http://kitsu.local/", "111111111111111111", "runtime-bot-token", db)(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for setup page, got %d", rr.Code)
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, `name="guild_id"`) {
+		t.Fatalf("expected project-level guild_id field on classic setup form")
+	}
+	if !strings.Contains(body, "Enter the destination Discord Server / Guild ID for this project here.") {
+		t.Fatalf("expected project-level guild helper copy on classic setup form")
+	}
+	if !strings.Contains(body, "compatibility fallback Guild ID will be used") {
+		t.Fatalf("expected fallback compatibility hint on classic setup form")
 	}
 }
