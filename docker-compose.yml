@@ -10,6 +10,7 @@ services:
       - ./site.jsx:/app/site.jsx
       - ./tpl:/app/tpl
       - ./data:/app/data
+      - ./data/sqlite.db:/app/sqlite.db
     environment:
       - APP_ENV=development
       - TZ=Asia/Tokyo
