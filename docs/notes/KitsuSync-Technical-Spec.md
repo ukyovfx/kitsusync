@@ -1,13 +1,13 @@
 ---
 title: "KitsuSync Technical Spec"
-status: release-candidate
+status: historical
 updated: 2026-05-19
-release_gate: pending-verification
+release_phase: v0.1.0-release-candidate
 ---
 
 # KitsuSync Technical Spec
 
-Historical note: this document preserves the v0.1.0 release-candidate technical scope. For the current v0.4.0 operator-facing setup flow, use `docs/SETUP_WIZARD.md` and `docs/notes/KitsuSync-CURRENT-STATE.md`.
+Historical note: this document preserves the v0.1.0 release-candidate technical scope. It is background material, not the current source of truth for the v0.4.0 maintenance state. For the current operator-facing setup flow, use `docs/SETUP_WIZARD.md` and `docs/notes/KitsuSync-CURRENT-STATE.md`.
 
 ## v0.1.0 Scope Vocabulary
 
