@@ -104,7 +104,7 @@ conf.toml.example         App configuration template
 docs.html / site.jsx      Browser docs page content
 src/                      Go application source
 tpl/                      Discord message templates
-diagrams/                 Legacy docs source fragments retained in-repo
+docs/archive/diagrams/    Archived legacy docs source fragments retained in-repo
 ```
 
 ## Requirements
