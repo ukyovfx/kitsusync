@@ -141,7 +141,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 </div>`,
 				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
 				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u672a\u8a2d\u5b9a", "No projects configured"), t(lang, "Project Management \u304b\u3089\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7d4c\u8def\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Use Project Management to configure your first project routing.")),
-				esc(t(lang, "Next \u30bb\u30af\u30b7\u30e7\u30f3\u304b\u3089 Project Management \u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002Guided Setup \u306f\u88dc\u52a9\u7684\u306a\u6848\u5185\u3068\u3057\u3066\u5229\u7528\u3067\u304d\u307e\u3059\u3002", "Open Project Management from the Next section. Guided Setup remains available as a helper walkthrough.")),
+				esc(t(lang, "Next \u30bb\u30af\u30b7\u30e7\u30f3\u304b\u3089 Project Management \u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002", "Open Project Management from the Next section.")),
 			)
 		} else {
 			var projectRows strings.Builder
@@ -182,8 +182,8 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
   </div>
 </div>`,
 				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
-				withLang("/bot/setup-wizard", r),
-				esc(t(lang, "\u30a6\u30a3\u30b6\u30fc\u30c9 \u2192", "Wizard \u2192")),
+				withLang("/bot/setup", r),
+				esc(t(lang, "Project Management \u2192", "Project Management \u2192")),
 				esc(t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u540d", "Project")),
 				esc(t(lang, "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8", "Template")),
 				esc(t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u6570", "Channels")),
@@ -288,7 +288,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		nextBadge := `<span class="status-pill bad">` + esc(t(lang, "\u512a\u5148", "Priority")) + `</span>`
 		if !hasIssues && projectCount == 0 {
 			nextCardTitle = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
-			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f Project Management \u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot Settings\u3001\u88dc\u52a9\u7684\u306a\u624b\u9806\u6848\u5185\u304c\u5fc5\u8981\u306a\u5834\u5408\u306e\u307f Guided Setup \u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites, and use Guided Setup only if you want a helper walkthrough.")
+			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f Project Management \u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot Settings \u304b\u3089\u884c\u3044\u3001\u8a73\u3057\u3044\u78ba\u8a8d\u304c\u5fc5\u8981\u306a\u5834\u5408\u306f Manual Setup / Diagnostics \u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites, and use Manual Setup / Diagnostics only when you need deeper checks.")
 			nextPrimaryHref = withLang("/bot/setup", r)
 			nextPrimaryLabel = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
 			nextSecondaryHref = withLang("/bot/admin/bot", r)

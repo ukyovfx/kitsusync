@@ -179,3 +179,31 @@ func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
 		t.Fatalf("expected fallback compatibility hint on classic setup form")
 	}
 }
+
+func TestWizardHandler_ShowsProjectManagementHandoff(t *testing.T) {
+	db := newSetupStateTestDB(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/bot/setup-wizard?mode=guided&lang=en", nil)
+	rr := httptest.NewRecorder()
+
+	WizardHandler(db, func() (string, string, string, string) {
+		return "http://kitsu.local/", "bot-token", "111111111111111111", ""
+	})(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for wizard handoff page, got %d", rr.Code)
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, "Setup entry has moved") {
+		t.Fatalf("expected setup handoff heading")
+	}
+	if !strings.Contains(body, "/bot/setup") {
+		t.Fatalf("expected handoff link to /bot/setup")
+	}
+	if !strings.Contains(body, "Manual Setup") {
+		t.Fatalf("expected manual setup troubleshooting link")
+	}
+	if !strings.Contains(body, "Diagnostics") {
+		t.Fatalf("expected diagnostics troubleshooting link")
+	}
+}
