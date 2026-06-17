@@ -740,8 +740,8 @@ func SetupManualHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
 			projectCards.String(),
 			esc(t(lang, "高度設定 / 任意", "Advanced / Optional")),
 			esc(t(lang, "Channel Mapping、Forum Channel Setup、Checker Mapping、Role Mention、Event Mapping は v0.1.0 では高度設定扱いです。", "Channel Mapping, Forum Channel Setup, Checker Mapping, Role Mention, and Event Mapping remain advanced for v0.1.0.")),
-			withLang("/bot/setup-wizard", r),
-			esc(t(lang, "Guided Setup を開く", "Open Guided Setup")),
+			withLang("/bot/setup", r),
+			esc(t(lang, "Project Management を開く", "Open Project Management")),
 			withLang("/bot/admin/diagnostics", r),
 			esc(t(lang, "Diagnostics を開く", "Open Diagnostics")),
 		)
