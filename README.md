@@ -88,7 +88,7 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 - `/bot/admin/checkers` — map task types to reviewer Discord IDs
 - `/bot/docs/` — operator-facing pipeline documentation
 
-Screenshot placeholders and capture guidance live in `screenshots/README.md`.
+Screenshot placeholders live in `screenshots/README.md`. Capture guidance lives in `screenshots/CAPTURE_GUIDE.md`.
 
 ## Getting Started
 
@@ -352,7 +352,7 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 - Changelog: `CHANGELOG.md`
 - Latest release notes: `RELEASE_NOTES_v0.4.0.md`
 - Historical release notes: `RELEASE_NOTES_v0.1.0.md` to `RELEASE_NOTES_v0.3.1.md`
-- Screenshot guidance: `screenshots/README.md`
+- Screenshot guidance: `screenshots/CAPTURE_GUIDE.md`
 
 ## License
 
