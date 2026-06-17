@@ -72,6 +72,24 @@ docker compose up -d
 2. Set `PUBLIC_HOST` and `ALIAS` in `.env.production`.
 3. Ensure Traefik is running with the `proxy` network.
 
+### Temporary GCP deploy note
+
+For the current temporary GCP stack used during maintenance validation, treat container recreation as a backup-first operation.
+
+- Live stack path: `/home/ukyovfx/kitsu-discord-custom/app/docker-compose.yml`
+- Workdir: `/home/ukyovfx/kitsu-discord-custom/app`
+- Live container: `app-app-1`
+- Live DB is inside the container at `/app/sqlite.db`
+- Host `data/sqlite.db` is not necessarily the live DB and should not be treated as the primary backup target
+
+Before recreating the container, back up these paths from the live container when present:
+
+- `/app/sqlite.db`
+- `/app/logs`
+- `/app/dump`
+
+`/app/logs/all-levels.log` can now be recreated automatically by the app if missing, but logs backup is still useful for rollback and deploy evidence.
+
 ### Path layout expected by deploy/docker-compose.yml
 
 ```text
