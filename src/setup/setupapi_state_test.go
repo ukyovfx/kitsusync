@@ -128,7 +128,6 @@ func TestBotHandler_PostUpdatesRuntimeTokenAndPersistsGuildID(t *testing.T) {
 func TestBotHandler_EditFormShowsPersistenceWarningCopy(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
-	model.SetSetting(db, "discord.guildID", "999999999999999999")
 
 	resetSessions()
 	token := newSessionToken("manager@example.com", "jwt", "manager", "/bot/admin/bot?edit=1&lang=en")
@@ -147,11 +146,8 @@ func TestBotHandler_EditFormShowsPersistenceWarningCopy(t *testing.T) {
 	if !strings.Contains(body, "Token changes apply only to the currently running process.") {
 		t.Fatalf("expected runtime-only token warning in bot settings form")
 	}
-	if !strings.Contains(body, "Compatibility fallback Guild setting") {
-		t.Fatalf("expected compatibility fallback section in bot settings form")
-	}
-	if !strings.Contains(body, "Used only when an existing project does not yet have its own saved guild.") {
-		t.Fatalf("expected guild fallback warning in bot settings form")
+	if strings.Contains(body, "Compatibility fallback Guild setting") {
+		t.Fatalf("did not expect guild fallback section in bot settings form")
 	}
 }
 
@@ -172,11 +168,33 @@ func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
 	if !strings.Contains(body, `name="guild_id"`) {
 		t.Fatalf("expected project-level guild_id field on classic setup form")
 	}
-	if !strings.Contains(body, "Enter the destination Discord Server / Guild ID for this project here.") {
+	if !strings.Contains(body, "Enter the Discord Server / Guild ID used as this project's notification destination.") {
 		t.Fatalf("expected project-level guild helper copy on classic setup form")
 	}
-	if !strings.Contains(body, "compatibility fallback Guild ID will be used") {
-		t.Fatalf("expected fallback compatibility hint on classic setup form")
+	if !strings.Contains(body, `name="guild_id" placeholder="123456789012345678" required`) {
+		t.Fatalf("expected project-level guild_id field to be required")
+	}
+}
+
+func TestHandler_PostSetupRequiresProjectLevelGuildID(t *testing.T) {
+	db := newSetupStateTestDB(t)
+
+	form := url.Values{}
+	form.Set("kitsu_project_id", "proj-1")
+	form.Set("project_name", "Project One")
+	form.Set("project_type", "cg")
+	form.Set("language", "en")
+
+	req := httptest.NewRequest(http.MethodPost, "/bot/setup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+
+	Handler("http://kitsu.local/", "111111111111111111", "runtime-bot-token", db)(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when guild_id is missing, got %d", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "project-level guild_id is required") {
+		t.Fatalf("expected missing guild_id error, got %q", rr.Body.String())
 	}
 }
 
