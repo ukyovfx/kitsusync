@@ -976,10 +976,10 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 			4,
 			step4Class,
 			t(lang, "Test Notification", "Test Notification"),
-			t(lang, "最後に通知の送信先と webhook 動作を確認します。現在の slice では Health / Diagnostics を使います。", "Finally, verify the notification destination and webhook behavior. In this slice, use Health / Diagnostics."),
+			t(lang, "最後に通知の送信先と webhook 動作を確認します。完了確認は Health から進めます。", "Finally, verify the notification destination and webhook behavior. Use Health as the final confirmation step."),
 			map[string]string{"done": t(lang, "確認済み", "Checked"), "active": t(lang, "確認へ", "Review"), "pending": t(lang, "最後に確認", "Final step")}[step4Class],
 			appendLang("/bot/admin/health", lang),
-			t(lang, "Health / Diagnostics", "Health / Diagnostics"),
+			t(lang, "Health を開く", "Open Health"),
 			step4Class == "active",
 		) +
 		`</div></div>`
@@ -987,9 +987,9 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	var botCard strings.Builder
 	var fallbackBotCard string
 	if step1Done {
-		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime の状態確認", "Bot / Runtime status") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "通知に使う共有 Bot / Runtime は準備済みです。Project Routing を進める前提は整っています。", "The shared Bot / Runtime used for notifications is ready. The prerequisite for Project Routing is in place.") + `</p></div><span class="status-pill ok">` + t(lang, "準備完了", "Ready") + `</span></div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div><div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
+		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime", "Bot / Runtime") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "通知に使う共有 Bot / Runtime は準備済みです。Project Routing を進める前提は整っています。", "The shared Bot / Runtime used for notifications is ready. The prerequisite for Project Routing is in place.") + `</p></div><span class="status-pill ok">` + t(lang, "準備完了", "Ready") + `</span></div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div><div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
 	} else {
-		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime の状態確認", "Bot / Runtime status") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "Project Routing を始める前に、共有 Bot / Runtime を Bot Settings で確認してください。", "Before starting Project Routing, review the shared Bot / Runtime in Bot Settings.") + `</p></div><span class="status-pill bad">` + t(lang, "未準備", "Not ready") + `</span></div>` +
+		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime", "Bot / Runtime") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "Project Routing を始める前に、共有 Bot / Runtime を Bot Settings で確認してください。", "Before starting Project Routing, review the shared Bot / Runtime in Bot Settings.") + `</p></div><span class="status-pill bad">` + t(lang, "未準備", "Not ready") + `</span></div>` +
 			`<div class="notice-box">💡 ` + t(lang, "Kitsu hostname は現在の公開ホストから自動設定されます。共有設定を整えたら、このページに戻って次の step を進めます。", "The Kitsu hostname is detected from the current public host. After updating the shared settings, return here for the next step.") + `</div>` +
 			`<div class="metric-grid"><div class="metric-card"><div class="metric-label">Detected host</div><div class="metric-value metric-value-host"><code>` + esc(detectedHost) + `</code></div></div></div>` +
 			`<div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
@@ -1196,7 +1196,7 @@ document.addEventListener('DOMContentLoaded', function(){
 		appendLang("/bot/admin/projects", lang),
 		t(lang, "Projects & Guilds を確認", "Review Projects & Guilds"),
 		t(lang, "Step 4: テスト通知の確認", "Step 4: Review test notification behavior"),
-		t(lang, "Guild 割り当て後は、通知の送信先と webhook 動作を確認します。現在の slice では Health / Diagnostics から確認します。", "After guild assignment, verify the notification destination and webhook behavior. In this slice, review it from Health / Diagnostics."),
+		t(lang, "Guild 割り当て後は、通知の送信先と webhook 動作を確認します。最終確認は Health から進めます。", "After guild assignment, verify the notification destination and webhook behavior. Use Health for the final confirmation step."),
 		testNextStatus,
 		appendLang("/bot/admin/health", lang),
 		t(lang, "Health を開く", "Open Health"),
