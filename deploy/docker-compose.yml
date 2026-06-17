@@ -11,7 +11,6 @@ services:
       - "../conf.toml:/app/conf.toml"
       - "../docs.html:/app/docs.html"
       - "../site.jsx:/app/site.jsx"
-      - "../diagrams:/app/diagrams"
       - "../tpl:/app/tpl"
       - "../data:/app/data"
       - "../data/sqlite.db:/app/sqlite.db"

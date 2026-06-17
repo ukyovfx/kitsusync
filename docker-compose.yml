@@ -8,7 +8,6 @@ services:
       - ./conf.toml:/app/conf.toml
       - ./docs.html:/app/docs.html
       - ./site.jsx:/app/site.jsx
-      - ./diagrams:/app/diagrams
       - ./tpl:/app/tpl
       - ./data:/app/data
     environment:
@@ -35,7 +34,6 @@ services:
       - ./README.md:/srv/README.md:ro
       - ./docs.html:/srv/docs.html:ro
       - ./site.jsx:/srv/site.jsx:ro
-      - ./diagrams:/srv/diagrams:ro
       - ./tpl:/srv/tpl:ro
     environment:
       - PUID=1000

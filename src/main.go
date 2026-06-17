@@ -949,7 +949,6 @@ func main() {
 	mux.HandleFunc("/bot/docs/", serveDocsHTML)
 	mux.HandleFunc("/site.jsx", serveDocsJSX)
 	mux.HandleFunc("/bot/docs/site.jsx", serveDocsJSX)
-	mux.Handle("/diagrams/", http.StripPrefix("/diagrams/", http.FileServer(http.Dir("./diagrams/"))))
 
 	server := &http.Server{
 		Addr:    ":8090",
