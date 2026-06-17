@@ -1,7 +1,7 @@
 ---
 title: "KitsuSync Current State"
 status: release-candidate
-updated: 2026-05-19
+updated: 2026-06-17
 release_gate: pending-verification
 ---
 
@@ -34,3 +34,25 @@ release_gate: pending-verification
 ## Next Gate
 
 Release passes only after `docs/notes/KitsuSync-v0.1.0-Release-Gate.md` is marked pass for all must-pass items.
+
+## 2026-06-17 Maintenance Update
+
+- PR #98 was merged and deployed to the temporary GCP stack.
+- deployed `master` commit: `e17843b26581cb6d3986989e2e443352bb80371d`
+- previous live commit: `2fd9ba9296564facaa812a64486a0098800225b4`
+- smoke QA passed:
+  - `/health` -> `{"status":"ok"}`
+  - anonymous `/bot/admin` -> `303 See Other` to `/bot/login?lang=ja&next=%2Fbot%2Fadmin`
+  - `/bot/docs` -> `200 OK`
+  - `/diagrams/` -> `404 Not Found`
+- DB backup/restore matched before and after:
+  - hash: `039d708304812740b688e1fd97ea29a018f0abb06c731a5eea21c8670a070972`
+  - size: `163840` bytes
+- backups:
+  - `/home/ukyovfx/kitsu-discord-custom/backups/20260617-105124/sqlite.db`
+  - `/home/ukyovfx/kitsu-discord-custom/backups/20260617-105124/logs`
+  - `/home/ukyovfx/kitsu-discord-custom/backups/20260617-105124/dump`
+- known temporary GCP deploy caveat:
+  - after container recreation, missing `/app/logs/all-levels.log` caused a restart loop
+  - restoring the backed-up runtime logs fixed the live stack
+- authenticated visual QA was not performed
