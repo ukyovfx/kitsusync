@@ -80,7 +80,7 @@ func localizeSetupDiagnostics(lang string, diag SetupDiagnostics) SetupDiagnosti
 		case "discord":
 			c.Label = t(lang, "Discord 接続", "Discord connection")
 		case "test_notification":
-			c.Label = t(lang, "テスト通知", "Test notification")
+			c.Label = t(lang, "最終 Health 確認", "Final Health Check")
 		}
 		switch c.Summary {
 		case "Configured":
@@ -334,15 +334,15 @@ func buildTestNotificationCheck(db *gorm.DB) SetupCheck {
 	verifiedAt := strings.TrimSpace(model.GetSetting(db, setupTestNotificationAtKey))
 	check := SetupCheck{
 		Key:     "test_notification",
-		Label:   "Test notification",
-		Summary: "Not sent yet",
-		Detail:  "Run the test notification once to confirm the project webhook can receive messages.",
-		Fix:     "Use Health or diagnostics to verify test notification delivery.",
+		Label:   "Final Health Check",
+		Summary: "Not confirmed yet",
+		Detail:  "Review Health to confirm the notification destination and runtime status before treating setup as complete.",
+		Fix:     "Open Health and confirm the runtime is healthy and project webhook status looks correct.",
 	}
 	if verified {
 		check.Status = SetupOK
-		check.Summary = "Delivered"
-		check.Detail = "A test notification was delivered successfully."
+		check.Summary = "Confirmed"
+		check.Detail = "The final Health confirmation was recorded successfully."
 		if projectID != "" {
 			check.Detail += " Project: " + projectID
 		}
@@ -432,7 +432,7 @@ func incompleteReasons(diag SetupDiagnostics) []string {
 		reasons = append(reasons, "Project: Assign a guild and make sure the bot can create channels and webhooks.")
 	}
 	if diag.TestNotification.Status != SetupOK {
-		reasons = append(reasons, "Test notification: "+firstNonEmpty(diag.TestNotification.Fix, "Send a test notification to verify delivery."))
+		reasons = append(reasons, "Final health check: "+firstNonEmpty(diag.TestNotification.Fix, "Review Health to confirm the runtime and notification destination."))
 	}
 	return reasons
 }
@@ -545,7 +545,7 @@ func projectOverallStatus(p ProjectSetupStatus) SetupStatus {
 
 func projectSummary(lang string, p ProjectSetupStatus) string {
 	if p.GuildStatus == SetupOK && p.PermissionStatus == SetupOK && p.WebhookStatus == SetupOK {
-		return t(lang, "このプロジェクトはテスト通知の準備ができています。", "This project is ready for test notification.")
+		return t(lang, "このプロジェクトは最終 Health 確認に進めます。", "This project is ready for the final Health check.")
 	}
 	if p.GuildStatus != SetupOK {
 		return t(lang, "このプロジェクトに Discord Guild を割り当ててください。", "Assign a Discord guild to this project.")

@@ -918,7 +918,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 		step3Class,
 		t(lang, "Discord Server / Guild", "Discord Server / Guild"),
 		step4Class,
-		t(lang, "テスト通知", "Test Notification"),
+		t(lang, "最終 Health 確認", "Final Health Check"),
 	)
 
 	workflowCard := func(stepNum int, stateClass, title, body, status, href, cta string, emphasized bool) string {
@@ -975,11 +975,11 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 		workflowCard(
 			4,
 			step4Class,
-			t(lang, "Test Notification", "Test Notification"),
-			t(lang, "最後に通知の送信先と webhook 動作を確認します。完了確認は Health から進めます。", "Finally, verify the notification destination and webhook behavior. Use Health as the final confirmation step."),
-			map[string]string{"done": t(lang, "確認済み", "Checked"), "active": t(lang, "確認へ", "Review"), "pending": t(lang, "最後に確認", "Final step")}[step4Class],
+			t(lang, "最終 Health 確認", "Final Health Check"),
+			t(lang, "最後に Health で通知先と runtime の状態を確認します。正常であれば、このセットアップは完了です。", "Finally, use Health to confirm the notification destination and runtime status. If everything is healthy, setup is complete."),
+			map[string]string{"done": t(lang, "確認完了", "Confirmed"), "active": t(lang, "最終確認", "Final check"), "pending": t(lang, "最後のステップ", "Last step")}[step4Class],
 			appendLang("/bot/admin/health", lang),
-			t(lang, "Health を開く", "Open Health"),
+			t(lang, "Health で最終確認", "Review Health"),
 			step4Class == "active",
 		) +
 		`</div></div>`
@@ -1195,11 +1195,11 @@ document.addEventListener('DOMContentLoaded', function(){
 		guildNextStatus,
 		appendLang("/bot/admin/projects", lang),
 		t(lang, "Projects & Guilds を確認", "Review Projects & Guilds"),
-		t(lang, "Step 4: テスト通知の確認", "Step 4: Review test notification behavior"),
-		t(lang, "Guild 割り当て後は、通知の送信先と webhook 動作を確認します。最終確認は Health から進めます。", "After guild assignment, verify the notification destination and webhook behavior. Use Health for the final confirmation step."),
+		t(lang, "Step 4: 最終 Health 確認", "Step 4: Final Health Check"),
+		t(lang, "Guild 割り当て後は、Health で通知先と runtime の状態を確認します。正常であれば、このセットアップは完了です。", "After guild assignment, use Health to confirm the notification destination and runtime status. If everything is healthy, setup is complete."),
 		testNextStatus,
 		appendLang("/bot/admin/health", lang),
-		t(lang, "Health を開く", "Open Health"),
+		t(lang, "Health で最終確認", "Review Health"),
 		fallbackBotCard,
 		templateJSON.String(),
 		previewLabelsJSON,
