@@ -515,6 +515,10 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 				return
 			}
 			requestedGuildID := strings.TrimSpace(r.FormValue("guild_id"))
+			if requestedGuildID == "" {
+				http.Error(w, "project-level guild_id is required", http.StatusBadRequest)
+				return
+			}
 			result := RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHost, fallbackGuildID, requestedGuildID, botToken, db)
 			fmt.Fprint(w, renderResult(lang, projectName, result, r))
 			return
@@ -531,7 +535,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 		kitsuHostStored := model.GetSetting(db, "kitsu.hostname")
 		kitsuEmailStored := storedRuntimeKitsuEmail(db)
 		detectedHost := publicKitsuHostnameFromRequest(r, kitsuHostStored)
-		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID))
+		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost))
 	}
 }
 
@@ -823,7 +827,7 @@ func displayProjectLang(lang string) string {
 	return lang
 }
 
-func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID string) string {
+func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost string) string {
 	lang := currentLang(r)
 
 	var projectCards strings.Builder
@@ -1043,6 +1047,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 		guildInputHelp = t(lang, "この project の送信先 Discord Server / Guild ID をここで指定します。空欄のまま実行すると、互換用の fallback Guild ID が使われます。", "Enter the destination Discord Server / Guild ID for this project here. If you leave this blank, the compatibility fallback Guild ID will be used.")
 	}
 
+	guildInputHelp = t(lang, "この project の通知先 Discord Server / Guild ID をここで指定します。", "Enter the Discord Server / Guild ID used as this project's notification destination.")
 	body := fmt.Sprintf(`
 <div class="section-stack">
   %s
@@ -1083,7 +1088,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
         </div>
         <div class="form-span-2">
           <label>%s</label>
-          <input type="text" name="guild_id" placeholder="123456789012345678">
+          <input type="text" name="guild_id" placeholder="123456789012345678" required>
           <p class="field-help">%s</p>
         </div>
       </div>
