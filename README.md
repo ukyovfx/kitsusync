@@ -212,8 +212,8 @@ Use the public `/bot/*` paths exposed by your proxy, for example:
 
 1. Open `/bot/login` and sign in with your Kitsu manager or admin account.
 2. Review shared bot/runtime prerequisites in `/bot/admin/bot`.
-3. Open `/bot/setup` and use the 4-step Project Management flow: Step 1 `Bot Settings`, Step 2 `Project Routing`, Step 3 `Guild Assignment`, Step 4 `Test Notification`.
-4. Enter a Discord Server / Guild ID per project during classic project setup. This is required for new project routing.
+3. Open `/bot/setup` and use the 4-step Project Management flow: Step 1 `Bot Settings`, Step 2 `Project Routing` (including the project-level Discord Server / Guild ID), Step 3 `Resource Creation`, Step 4 `Test Notification`.
+4. Enter a Discord Server / Guild ID per project during `/bot/setup` Step 2. This is required for new project routing.
 5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment.
 6. If setup fails after partial Discord provisioning, rollback is best-effort and manual cleanup may still be required before retrying.
 7. Review routing and user mappings in `/bot/admin`, then watch polling logs such as `Connected to Kitsu`, `Got tasks`, and `Done FilterTasks`.
