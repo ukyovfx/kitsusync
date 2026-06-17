@@ -120,13 +120,19 @@ ignoreMessagesDaysOld = 14
 
 ---
 
-## Setup Wizard Failures (/bot/setup-wizard)
+## Setup Flow Issues
 
-### Wizard opens at System Check first
+### Shared prerequisites are not ready
 
-This is the Guided Setup preflight, not a broken wizard state. KitsuSync pauses here intentionally when required environment or shared setup values are still missing.
+If `/bot/setup` shows Bot / Runtime as not ready, fix the shared prerequisites first.
 
-Start with the blocking items shown in the UI. Depending on the item, the fix may live in `.env.local`, `/bot/admin/bot`, or `/bot/admin/setup`. If you changed `.env.local`, restart the app container before reloading the wizard.
+Start with:
+
+- `.env.local`
+- `/bot/admin/bot`
+- `/bot/admin/diagnostics` when you need more detail
+
+If you changed `.env.local`, restart the app container before reloading the setup page.
 
 ### Step 1 (Kitsu) reports "server not reachable"
 
@@ -149,9 +155,9 @@ The bot is not in the server, or the Guild ID is wrong.
 ### Step 2 note: test action vs saved settings
 
 - /api/setup/test-discord only validates the submitted token/guild pair and does not save token or guild settings.
-- Entering a token in /bot/admin/bot updates only the current running process and is not written to .env.local.
-- After restart, DISCORD_BOT_TOKEN is reloaded from .env.local / environment variables.
-- If you rotate the token, update .env.local (or your deployment environment) before restart.
+- Entering a token in /bot/admin/bot updates the current running process and is also saved in app settings.
+- After restart, the saved Bot Settings token is used first.
+- `.env.local` / environment variables remain fallback sources.
 - Guild ID entered in admin settings is stored as a normal setting (discord.guildID) and persists across restart.
 
 ### Step 3 (Project) shows "FAIL:" lines
@@ -168,9 +174,9 @@ If the output shows `✅ Safe to retry`, fix the reported error and click Create
 
 Step 3 did not complete successfully. Return to Step 3 and confirm channels were created before proceeding to Step 4.
 
-### Wizard shows the wrong current step on page load
+### Setup page state looks stale after credential changes
 
-The wizard auto-detects state from `/api/setup/status`. If the state is stale (e.g. you changed credentials outside the wizard), reload the page to re-check.
+The setup surfaces read from `/api/setup/status`. If state looks stale after changing credentials or environment values, reload the page to re-check.
 
 ---
 

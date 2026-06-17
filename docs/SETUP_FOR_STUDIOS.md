@@ -122,21 +122,21 @@ Sign in with your **personal** Kitsu manager or admin account. This is not the r
 
 Sessions expire after 15 minutes.
 
-### Step 2: Start from the Setup Wizard (`/bot/setup-wizard`)
+### Step 2: Review Bot Settings and open Project Management
 
-For first-time setup, start at `/bot/setup-wizard` after login. The first screen may show a mode chooser before Guided Setup begins.
+For first-time setup, use `/bot/admin/bot` for shared prerequisites, then continue into `/bot/setup` for project routing.
 
-1. Open `/bot/setup-wizard`.
-2. If the wizard stops at **System Check**, fill the missing required values first.
-3. Use `/bot/admin/bot` to save shared bot/runtime credentials when prompted.
-4. Use `/bot/admin/projects` to assign a Discord Guild ID per Kitsu project.
+1. Open `/bot/admin/bot`.
+2. Save or review shared bot/runtime credentials if needed.
+3. Open `/bot/setup`.
+4. Keep `/bot/admin/projects` for later review/edit of existing project guild assignment.
 
-### Step 3: Project Setup (`/bot/setup-wizard` recommended, `/bot/setup` for project/channel management)
+### Step 3: Project Setup (`/bot/setup`)
 
-This stage handles Discord resource creation for one Kitsu project. `/bot/setup-wizard` is the recommended first-time path; `/bot/setup` remains available for direct project/channel management and manual follow-up work.
+This stage handles Discord resource creation for one Kitsu project and is now the main operator setup path.
 
 1. Select a Kitsu project from the dropdown.
-2. Confirm the target Discord Server / Guild assignment.
+2. Enter and confirm the target Discord Server / Guild ID for that project.
 3. Review the preview before creation.
 4. Confirm creation only after the preview looks correct.
 5. Send one test notification before treating the project as complete.
@@ -145,7 +145,7 @@ Connection testing happens before this stage. This is the point where Discord ca
 
 If setup fails partway through, read the `FAIL:` / `WARN:` lines in the output carefully. Rollback is best-effort, and manual Discord cleanup may still be required before retrying.
 
-### Step 4: Optional Post-setup Routing Review (`/bot/admin`)
+### Step 4: Optional Post-setup Review (`/bot/admin`)
 
 After project setup, open `/bot/admin` to verify:
 

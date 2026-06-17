@@ -6,6 +6,24 @@ All notable changes to this project should be recorded here.
 
 - No unreleased changes yet.
 
+## v0.4.0
+
+### Changed
+
+- `/bot/setup` is now the main operator setup and project routing surface
+- Guided Setup, Manual Setup, and Setup Status were removed from the normal operator flow
+- Discord Guild ID became project-level and is required for new classic project setup
+- Bot Settings now focuses on shared bot/runtime prerequisites instead of project destination setup
+- Discord Bot Token updates from Bot Settings now persist across restarts instead of applying only to the current process
+
+### Added
+
+- Release notes for the setup/admin redesign in `RELEASE_NOTES_v0.4.0.md`
+
+### Fixed
+
+- Bot Settings token rotation no longer appears lost after normal container recreate/redeploy when the live DB is preserved
+
 ## v0.1.0
 
 ### Added

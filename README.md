@@ -4,11 +4,11 @@
 [![Docker](https://img.shields.io/badge/runtime-Docker-2496ED)](#quick-start)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](#license)
 [![Security Policy](https://img.shields.io/badge/security-policy-important)](#contributing-and-security)
-[![Release](https://img.shields.io/badge/release-v0.3.1-orange)](#current-baseline-v031)
+[![Release](https://img.shields.io/badge/release-v0.4.0-orange)](#current-baseline-v040)
 
 KitsuSync is a Kitsu x Discord pipeline bridge for VFX and animation teams. It polls Kitsu, detects task changes, and posts structured Discord notifications with setup and admin tools in the browser.
 
-**Current baseline: v0.3.1.** KitsuSync is currently focused on small/mid-size CG/VFX and indie animation team workflows. It is not intended to replace enterprise production tracking systems.
+**Current baseline: v0.4.0.** KitsuSync is currently focused on small/mid-size CG/VFX and indie animation team workflows. It is not intended to replace enterprise production tracking systems.
 
 ## Why This Repo Exists
 
@@ -36,19 +36,19 @@ Kitsu API
 
 Browser admin UI
   -> /bot/login
-  -> /bot/setup-wizard
   -> /bot/setup
   -> /bot/admin
 ```
 
-## Current Baseline (v0.3.1)
+## Current Baseline (v0.4.0)
 
 - v0.2.0: Setup Wizard/operator clarity and setup-surface role consistency
 - v0.2.1: repository rename/public URL alignment to `ukyovfx/kitsusync`
 - v0.3.0: operational hardening (log redaction, side-effect-free Discord test endpoint, partial-failure cleanup hardening)
 - v0.3.1: Discord notification message UX refinement
+- v0.4.0: setup/admin flow redesign around Project Management, project-level Guild ID, and durable Bot Settings token persistence
 
-For the latest public state, see `RELEASE_NOTES_v0.3.1.md`. Older release notes remain in this repository for historical context.
+For the latest public state, see `RELEASE_NOTES_v0.4.0.md`. Older release notes remain in this repository for historical context.
 
 ## Limitations (Current)
 
@@ -56,7 +56,7 @@ Current limitations are intentionally conservative:
 
 - Not an enterprise pipeline platform or ShotGrid replacement.
 - Discord resource rollback during setup is best-effort, not full orchestration.
-- Manual repair/admin surfaces are still required for some recovery paths.
+- Admin review and diagnostics surfaces are still required for some recovery paths.
 - Setup depends on correct Discord bot permissions and Kitsu reachability.
 - Notification routing remains webhook-based.
 - SQLite is suitable for lightweight/small deployments, not large multi-node scale-out.
@@ -79,11 +79,10 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 ## UI Surfaces
 
 - `/bot/login` — admin sign-in
-- `/bot/setup-wizard` — recommended first-time entry point; may first show a setup mode chooser and System Check
-- `/bot/setup` — project/channel management after initial setup or for advanced/manual edits
-- `/bot/admin/setup` — manual setup / diagnostics / repair surface
-- `/bot/admin/bot` — shared bot/runtime credentials
-- `/bot/admin/projects` — project-to-guild assignment
+- `/bot/setup` — primary setup and project routing surface
+- `/bot/admin/bot` — shared bot/runtime prerequisites and token rotation
+- `/bot/admin/projects` — review/edit for existing project-to-guild assignment
+- `/bot/admin/diagnostics` — secondary troubleshooting surface
 - `/bot/admin` — operational dashboard: system health, active projects, warnings
 - `/bot/admin/users` — map Kitsu users to Discord IDs for @mentions
 - `/bot/admin/checkers` — map task types to reviewer Discord IDs
@@ -94,7 +93,7 @@ Screenshot placeholders and capture guidance live in `screenshots/README.md`.
 ## Getting Started
 
 See `docs/QUICK_START.md` for a 5-minute startup guide.
-See `docs/SETUP_WIZARD.md` for the current setup entry flow, guided steps, and manual diagnostics path.
+See `docs/SETUP_WIZARD.md` for the current Project Management-first setup flow reference.
 
 ## Repository Layout
 
@@ -133,7 +132,6 @@ mkdir -p data
 At minimum, set:
 
 - `DISCORD_BOT_TOKEN`
-- `DISCORD_GUILD_ID`
 
 You have two ways to provide Kitsu runtime credentials:
 
@@ -144,7 +142,7 @@ You have two ways to provide Kitsu runtime credentials:
 2. Guided browser setup
    - Fill only `KITSU_HOSTNAME`
    - Start the app
-   - Open `/bot/login` and create/apply the runtime bot account from `/bot/admin/bot` or the manual setup surfaces when needed
+   - Open `/bot/login` and create/apply the runtime bot account from `/bot/admin/bot` when needed
 
 If you want a default catch-all Discord route before project setup, also set:
 
@@ -194,8 +192,9 @@ curl http://localhost:8090/health
 
 - Login page: `http://localhost:8090/bot/login`
 - Docs: `http://localhost:8090/bot/docs/`
-- Setup Wizard: `http://localhost:8090/bot/setup-wizard`
 - Project Management: `http://localhost:8090/bot/setup`
+- Bot Settings: `http://localhost:8090/bot/admin/bot`
+- Diagnostics: `http://localhost:8090/bot/admin/diagnostics`
 - Admin: `http://localhost:8090/bot/admin`
 
 ### Behind a reverse proxy
@@ -204,19 +203,20 @@ Use the public `/bot/*` paths exposed by your proxy, for example:
 
 - `/bot/login`
 - `/bot/docs/`
-- `/bot/setup-wizard`
 - `/bot/setup`
+- `/bot/admin/bot`
+- `/bot/admin/diagnostics`
 - `/bot/admin`
 
 ### Operator checklist
 
 1. Open `/bot/login` and sign in with your Kitsu manager or admin account.
-2. Open `/bot/setup-wizard` first. The first screen may show a mode chooser before step-by-step setup begins.
-3. If required values are still missing, complete System Check first, then save shared bot/runtime credentials in `/bot/admin/bot`.
-4. Open `/bot/admin/projects` and assign a Discord Guild ID for each Kitsu project.
-5. In Guided Setup, connection checks test access first. Discord categories, channels, and webhooks are only created after the Project Setup confirmation step.
+2. Review shared bot/runtime prerequisites in `/bot/admin/bot`.
+3. Open `/bot/setup` and use the 4-step Project Management flow: Step 1 `Bot Settings`, Step 2 `Project Routing`, Step 3 `Guild Assignment`, Step 4 `Test Notification`.
+4. Enter a Discord Server / Guild ID per project during classic project setup. This is required for new project routing.
+5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment.
 6. If setup fails after partial Discord provisioning, rollback is best-effort and manual cleanup may still be required before retrying.
-7. Review routing and user mappings in `/bot/admin`. Use `/bot/setup` for project/channel management follow-up, then watch polling logs such as `Connected to Kitsu`, `Got tasks`, and `Done FilterTasks`.
+7. Review routing and user mappings in `/bot/admin`, then watch polling logs such as `Connected to Kitsu`, `Got tasks`, and `Done FilterTasks`.
 
 ## Environment Variables
 
@@ -226,7 +226,6 @@ See `.env.example` for the full template. Copy it to `.env.local` (development) 
 
 - `KITSU_HOSTNAME`
 - `DISCORD_BOT_TOKEN`
-- `DISCORD_GUILD_ID`
 
 ### Required if you want polling to work immediately on first boot
 
@@ -235,6 +234,7 @@ See `.env.example` for the full template. Copy it to `.env.local` (development) 
 
 ### Optional
 
+- `DISCORD_GUILD_ID` (legacy/shared fallback only; new project setup uses project-level Guild ID)
 - `DISCORD_WEBHOOK_URL`
 - `FB_USERNAME` (debug profile only)
 - `FB_PASSWORD` (debug profile only — generate with: `openssl rand -base64 20`)
@@ -318,7 +318,7 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 - Check `KITSU_HOSTNAME`
 - Check `KITSU_RUNTIME_EMAIL`
 - Check `KITSU_RUNTIME_PASSWORD`
-- Or complete shared bot/runtime setup from `/bot/admin/bot` or the manual setup surfaces
+- Or complete shared bot/runtime setup from `/bot/admin/bot`
 
 ### Notifications are not arriving
 
@@ -350,8 +350,8 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 - Contributor guide: `CONTRIBUTING.md`
 - Security reporting: `SECURITY.md`
 - Changelog: `CHANGELOG.md`
-- Latest release notes: `RELEASE_NOTES_v0.3.1.md`
-- Historical release notes: `RELEASE_NOTES_v0.1.0.md` to `RELEASE_NOTES_v0.3.0.md`
+- Latest release notes: `RELEASE_NOTES_v0.4.0.md`
+- Historical release notes: `RELEASE_NOTES_v0.1.0.md` to `RELEASE_NOTES_v0.3.1.md`
 - Screenshot guidance: `screenshots/README.md`
 
 ## License
