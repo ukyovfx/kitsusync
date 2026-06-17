@@ -401,6 +401,11 @@ func envOr(key, fallback string) string {
 
 // botDo executes a Discord Bot API request and retries once on HTTP 429 (rate limit).
 func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, error) {
+	trimmedToken := strings.TrimSpace(botToken)
+	if trimmedToken == "" {
+		return nil, 0, errors.New("discord bot token is missing")
+	}
+
 	var rawPayload []byte
 	if payload != nil {
 		var err error
@@ -421,7 +426,7 @@ func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, 
 		if err != nil {
 			return nil, 0, err
 		}
-		req.Header.Set("Authorization", "Bot "+strings.TrimSpace(botToken))
+		req.Header.Set("Authorization", "Bot "+trimmedToken)
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := client.Do(req)
@@ -464,6 +469,35 @@ func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, 
 	return nil, http.StatusTooManyRequests, fmt.Errorf("discord API rate limited after %d retries: %s", maxRetries, endpoint)
 }
 
+func discordBotAPIError(action string, status int, respBody []byte) error {
+	bodyText := strings.TrimSpace(string(respBody))
+	message := bodyText
+	if message == "" {
+		message = http.StatusText(status)
+	}
+
+	var discordErr struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}
+	if len(respBody) > 0 && json.Unmarshal(respBody, &discordErr) == nil && strings.TrimSpace(discordErr.Message) != "" {
+		message = strings.TrimSpace(discordErr.Message)
+	}
+
+	switch status {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("%s: Discord bot token is missing or invalid (HTTP 401 Unauthorized)", action)
+	case http.StatusForbidden:
+		return fmt.Errorf("%s: Discord bot is authenticated but lacks permission for this request (HTTP 403 Forbidden)", action)
+	case http.StatusNotFound:
+		return fmt.Errorf("%s: Discord resource was not found for this request (HTTP 404 Not Found): %s", action, message)
+	case http.StatusBadRequest:
+		return fmt.Errorf("%s: Discord rejected the request payload (HTTP 400 Bad Request): %s", action, message)
+	default:
+		return fmt.Errorf("%s: Discord API returned HTTP %d: %s", action, status, message)
+	}
+}
+
 func CreateCategory(guildID, name, botToken string) (string, error) {
 	respBody, status, err := botDo(http.MethodPost, fmt.Sprintf("%s/guilds/%s/channels", discordAPI, guildID), map[string]any{
 		"name": strings.TrimSpace(name),
@@ -473,7 +507,7 @@ func CreateCategory(guildID, name, botToken string) (string, error) {
 		return "", err
 	}
 	if status >= 400 {
-		return "", fmt.Errorf("discord category create failed: %s", strings.TrimSpace(string(respBody)))
+		return "", discordBotAPIError("discord category create failed", status, respBody)
 	}
 	var result struct {
 		ID string `json:"id"`
@@ -497,7 +531,7 @@ func CreateTextChannel(guildID, categoryID, name, botToken string) (string, erro
 		return "", err
 	}
 	if status >= 400 {
-		return "", fmt.Errorf("discord channel create failed: %s", strings.TrimSpace(string(respBody)))
+		return "", discordBotAPIError("discord channel create failed", status, respBody)
 	}
 	var result struct {
 		ID string `json:"id"`
@@ -519,7 +553,7 @@ func CreateWebhook(channelID, name, botToken string) (string, error) {
 		return "", err
 	}
 	if status >= 400 {
-		return "", fmt.Errorf("discord webhook create failed: %s", strings.TrimSpace(string(respBody)))
+		return "", discordBotAPIError("discord webhook create failed", status, respBody)
 	}
 	var result struct {
 		ID    string `json:"id"`
@@ -540,7 +574,7 @@ func DeleteChannel(channelID, botToken string) error {
 		return err
 	}
 	if status >= 400 {
-		return fmt.Errorf("discord channel delete failed: %s", strings.TrimSpace(string(respBody)))
+		return discordBotAPIError("discord channel delete failed", status, respBody)
 	}
 	return nil
 }
