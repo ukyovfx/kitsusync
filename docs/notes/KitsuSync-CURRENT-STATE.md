@@ -1,39 +1,43 @@
 ---
 title: "KitsuSync Current State"
-status: release-candidate
+status: maintenance
 updated: 2026-06-17
-release_gate: pending-verification
+release: v0.4.0
 ---
 
 # KitsuSync Current State
 
 ## Release Focus
 
-- target release: `v0.1.0`
-- current mode: release candidate hardening
-- scope rule: do not expand beyond the existing setup, routing, and operator surfaces
+- current release: `v0.4.0`
+- current mode: maintenance with small cleanup and hardening PRs
+- scope rule: keep changes small, focused, and easy to verify
 
-## Implemented Surface
+## Active Setup Surface
 
-- `/bot/login`: `done`
-- `/bot/setup-wizard`: `partial`
-- `/bot/setup`: `partial`
-- `/bot/admin`: `partial`
-- `/bot/admin/users`: `partial`
-- `/bot/admin/checkers`: `partial`
-- `/api/setup/status`: `partial`
-- `/bot/admin/audit`: `v0.2.0`
+- `/bot/setup`: the only normal setup path
+- Bot Settings: shared bot/runtime prerequisites
+- Guild ID: project-level and required in classic `/bot/setup` Step 2
+- Diagnostics: kept for troubleshooting
+- legacy setup wizard, Manual Setup, Setup Status, and Guided Setup are removed from the normal setup path
 
-## Main Risks
+## Current Deployment State
 
-- release evidence still needs manual infrastructure checks
-- clean-clone bring-up cannot be fully proven without real Kitsu and Discord credentials
-- screenshot assets are still manual TODO items
-- `sanitized_kitsu_schema.sql` and `sanitized_kitsu_sample.json` were not present in this repo-local review copy
+- temporary GCP stack has been deployed and smoke-tested through PR #100 and PR #101
+- latest tested deployed commit: `01e5c823f54febe490c21264e2ce0e39d175b92a`
+- PR #101 records the PR #100 deploy QA result in this file
+- `diagrams/` remains in the repo as legacy source fragments, but is no longer runtime-served or mounted
+
+## Known Caveats
+
+- authenticated visual QA has not been performed
+- temporary GCP deploys require careful DB, logs, and dump backup before container recreation
+- `docker compose build` showed a `buildx isn't installed` warning during the latest temporary deploy, but the deploy still succeeded
 
 ## Next Gate
 
-Release passes only after `docs/notes/KitsuSync-v0.1.0-Release-Gate.md` is marked pass for all must-pass items.
+- keep future work focused on small cleanup and hardening PRs
+- do not move, delete, or archive `diagrams/` until the runtime removal has remained stable
 
 ## 2026-06-17 Maintenance Update
 
