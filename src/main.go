@@ -694,8 +694,8 @@ func main() {
 		logger.Output = logutil.NewRedactingWriter(os.Stdout)
 	})
 
-	// Open log file and wrap with redacting writer to prevent secret exposure
-	logFile, err := os.OpenFile("./logs/all-levels.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	// Ensure file logging survives fresh containers where ./logs may not exist yet.
+	logFile, err := logutil.OpenAppendFile("./logs/all-levels.log")
 	if err != nil {
 		log.Fatalf("failed to open log file: %v", err)
 	}
