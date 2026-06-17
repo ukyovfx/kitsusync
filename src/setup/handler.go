@@ -514,7 +514,8 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 				http.Error(w, "project name and type are required", http.StatusBadRequest)
 				return
 			}
-			result := RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHost, fallbackGuildID, "", botToken, db)
+			requestedGuildID := strings.TrimSpace(r.FormValue("guild_id"))
+			result := RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHost, fallbackGuildID, requestedGuildID, botToken, db)
 			fmt.Fprint(w, renderResult(lang, projectName, result, r))
 			return
 		}
@@ -530,7 +531,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 		kitsuHostStored := model.GetSetting(db, "kitsu.hostname")
 		kitsuEmailStored := storedRuntimeKitsuEmail(db)
 		detectedHost := publicKitsuHostnameFromRequest(r, kitsuHostStored)
-		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost))
+		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID))
 	}
 }
 
@@ -822,7 +823,7 @@ func displayProjectLang(lang string) string {
 	return lang
 }
 
-func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost string) string {
+func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID string) string {
 	lang := currentLang(r)
 
 	var projectCards strings.Builder
@@ -1037,6 +1038,10 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	} else if projectRoutingDone {
 		projectRoutingStatus = `<span class="status-pill ok">` + t(lang, "作成済み", "Configured") + `</span>`
 	}
+	guildInputHelp := t(lang, "この project の送信先 Discord Server / Guild ID をここで指定します。", "Enter the destination Discord Server / Guild ID for this project here.")
+	if strings.TrimSpace(fallbackGuildID) != "" {
+		guildInputHelp = t(lang, "この project の送信先 Discord Server / Guild ID をここで指定します。空欄のまま実行すると、互換用の fallback Guild ID が使われます。", "Enter the destination Discord Server / Guild ID for this project here. If you leave this blank, the compatibility fallback Guild ID will be used.")
+	}
 
 	body := fmt.Sprintf(`
 <div class="section-stack">
@@ -1075,6 +1080,11 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
             <option value="ja">%s</option>
             <option value="en">English</option>
           </select>
+        </div>
+        <div class="form-span-2">
+          <label>%s</label>
+          <input type="text" name="guild_id" placeholder="123456789012345678">
+          <p class="field-help">%s</p>
         </div>
       </div>
       <div id="channelPreview" style="display:none;margin-top:16px;"></div>
@@ -1172,12 +1182,14 @@ document.addEventListener('DOMContentLoaded', function(){
 		t(lang, "プロジェクトタイプを選択", "Select project type"),
 		t(lang, "言語", "Language"),
 		t(lang, "日本語", "Japanese"),
+		t(lang, "Discord Server / Guild ID", "Discord Server / Guild ID"),
+		guildInputHelp,
 		t(lang, "セットアップ実行", "Run Setup"),
 		t(lang, "Step 3: Discord Server / Guild の割り当て", "Step 3: Assign Discord Server / Guild"),
-		t(lang, "Project Routing を作成したら、各 project を送信先の Discord Server / Guild に割り当てます。この slice では既存の Projects & Guilds ページを使います。", "After Project Routing is created, assign each project to its destination Discord Server / Guild. In this slice, use the existing Projects & Guilds page."),
+		t(lang, "Project setup 時に保存した Guild 割り当てを見直すときは、Projects & Guilds を review / edit 用に使います。", "Use Projects & Guilds as a review / edit page when you need to revisit the guild assignment saved during project setup."),
 		guildNextStatus,
 		appendLang("/bot/admin/projects", lang),
-		t(lang, "Projects & Guilds を開く", "Open Projects & Guilds"),
+		t(lang, "Projects & Guilds を確認", "Review Projects & Guilds"),
 		t(lang, "Step 4: テスト通知の確認", "Step 4: Review test notification behavior"),
 		t(lang, "Guild 割り当て後は、通知の送信先と webhook 動作を確認します。現在の slice では Health / Diagnostics から確認します。", "After guild assignment, verify the notification destination and webhook behavior. In this slice, review it from Health / Diagnostics."),
 		testNextStatus,
