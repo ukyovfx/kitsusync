@@ -56,3 +56,30 @@ Release passes only after `docs/notes/KitsuSync-v0.1.0-Release-Gate.md` is marke
   - after container recreation, missing `/app/logs/all-levels.log` caused a restart loop
   - restoring the backed-up runtime logs fixed the live stack
 - authenticated visual QA was not performed
+
+## 2026-06-17 Maintenance Update (PR #100)
+
+- PR #100 was merged and deployed to the temporary GCP stack.
+- deployed `master` commit: `01e5c823f54febe490c21264e2ce0e39d175b92a`
+- previous live commit: `e17843b26581cb6d3986989e2e443352bb80371d`
+- expected latest `master` matched the deployed commit
+- DB hash/size stayed unchanged before and after deploy:
+  - hash: `039d708304812740b688e1fd97ea29a018f0abb06c731a5eea21c8670a070972`
+  - size: `163840` bytes
+- smoke QA passed:
+  - `/health` -> `{"status":"ok"}`
+  - anonymous `/bot/admin` -> `303 See Other`
+  - `Location` -> `/bot/login?lang=ja&next=%2Fbot%2Fadmin`
+  - `/bot/docs` -> `200 OK`
+  - `/diagrams/` -> `404 Not Found`
+- missing-log startup hardening verified:
+  - recreated the container with the new image
+  - restored live DB and dump before startup, but did not restore logs
+  - container did not restart-loop
+  - `/app/logs` and `/app/logs/all-levels.log` were automatically created
+  - file status: `LOG_DIR=present`, `LOG_FILE=present`
+  - container status: `running|0|healthy`
+- warnings:
+  - `docker compose build` printed a `buildx isn't installed` warning, but build/deploy succeeded
+  - dump backup directory permissions required checking the backup artifact side for size
+- authenticated visual QA was not performed
