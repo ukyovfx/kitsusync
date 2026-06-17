@@ -87,3 +87,10 @@ release: v0.4.0
   - `docker compose build` printed a `buildx isn't installed` warning, but build/deploy succeeded
   - dump backup directory permissions required checking the backup artifact side for size
 - authenticated visual QA was not performed
+
+## 2026-06-17 Maintenance Update (PR #107 / #108)
+
+- docs maintenance cleanup continued without changing runtime behavior
+- `docs/ENVIRONMENTS.md` now documents the temporary GCP backup-first deploy behavior, including the live container DB/logs/dump backup caveat
+- `docs/notes` historical metadata is now clearly marked as historical background rather than active release-state guidance
+- current user-facing setup and deploy docs are now broadly aligned with the v0.4.0 maintenance state
