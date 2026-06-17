@@ -398,7 +398,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 				effectiveGuildID = strings.TrimSpace(fallbackGuildID)
 			}
 			if effectiveGuildID == "" {
-				fmt.Fprint(w, page(lang, t(lang, "Discord Guild が未設定です", "Discord guild is not configured"), "#ff6a50", channelName, `<li>`+t(lang, "Admin > Projects & Guilds で Guild ID を設定してください。", "Set a guild ID in Admin > Projects & Guilds.")+`</li>`, `<a href="`+withLang("/bot/admin/projects", r)+`">`+t(lang, "Projects & Guilds", "Projects & Guilds")+`</a>`))
+				fmt.Fprint(w, page(lang, t(lang, "Discord Guild が未設定です", "Discord guild is not configured"), "#ff6a50", channelName, `<li>`+t(lang, "Admin > プロジェクトとDiscord ID で Guild ID を設定してください。", "Set a guild ID in Admin > Projects & Discord IDs.")+`</li>`, `<a href="`+withLang("/bot/admin/projects", r)+`">`+t(lang, "プロジェクトとDiscord ID", "Projects & Discord IDs")+`</a>`))
 				return
 			}
 			channelID, err := CreateTextChannel(effectiveGuildID, project.DiscordCategoryID, channelName, botToken)
@@ -918,7 +918,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 		step3Class,
 		t(lang, "Discord Server / Guild", "Discord Server / Guild"),
 		step4Class,
-		t(lang, "最終 Health 確認", "Final Health Check"),
+		t(lang, "最終ヘルス確認", "Final Health Check"),
 	)
 
 	workflowCard := func(stepNum int, stateClass, title, body, status, href, cta string, emphasized bool) string {
@@ -946,10 +946,10 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 			1,
 			step1Class,
 			t(lang, "Bot / Runtime", "Bot / Runtime"),
-			t(lang, "通知に使う共有設定の状態を確認します。変更や見直しは Bot Settings で行います。", "Review the shared settings used for notifications. Make changes in Bot Settings."),
+			t(lang, "通知に使う共有設定の状態を確認します。変更や見直しは Bot設定で行います。", "Review the shared settings used for notifications. Make changes in Bot Settings."),
 			map[string]string{"done": t(lang, "準備完了", "Ready"), "active": t(lang, "現在の手順", "Current"), "pending": t(lang, "待機中", "Pending")}[step1Class],
 			appendLang("/bot/admin/bot", lang),
-			t(lang, "Bot Settings", "Bot Settings"),
+			t(lang, "Bot設定", "Bot Settings"),
 			step1Class == "active",
 		) +
 		workflowCard(
@@ -969,17 +969,17 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 			t(lang, "Routing 作成後に、各 project を送信先の Discord Server / Guild に割り当てます。", "After routing is created, assign each project to its destination Discord Server / Guild."),
 			map[string]string{"done": t(lang, "割り当て済み", "Assigned"), "active": t(lang, "次の手順", "Next"), "pending": t(lang, "待機中", "Pending")}[step3Class],
 			appendLang("/bot/admin/projects", lang),
-			t(lang, "Projects & Guilds", "Projects & Guilds"),
+			t(lang, "プロジェクトとDiscord ID", "Projects & Discord IDs"),
 			step3Class == "active",
 		) +
 		workflowCard(
 			4,
 			step4Class,
-			t(lang, "最終 Health 確認", "Final Health Check"),
-			t(lang, "最後に Health で通知先と runtime の状態を確認します。正常であれば、このセットアップは完了です。", "Finally, use Health to confirm the notification destination and runtime status. If everything is healthy, setup is complete."),
+			t(lang, "最終ヘルス確認", "Final Health Check"),
+			t(lang, "最後にヘルスで通知先と runtime の状態を確認します。正常であれば、このセットアップは完了です。", "Finally, use Health to confirm the notification destination and runtime status. If everything is healthy, setup is complete."),
 			map[string]string{"done": t(lang, "確認完了", "Confirmed"), "active": t(lang, "最終確認", "Final check"), "pending": t(lang, "最後のステップ", "Last step")}[step4Class],
 			appendLang("/bot/admin/health", lang),
-			t(lang, "Health で最終確認", "Review Health"),
+			t(lang, "ヘルスで最終確認", "Review Health"),
 			step4Class == "active",
 		) +
 		`</div></div>`
@@ -987,17 +987,12 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	var botCard strings.Builder
 	var fallbackBotCard string
 	if step1Done {
-		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime", "Bot / Runtime") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "通知に使う共有 Bot / Runtime は準備済みです。Project Routing を進める前提は整っています。", "The shared Bot / Runtime used for notifications is ready. The prerequisite for Project Routing is in place.") + `</p></div><span class="status-pill ok">` + t(lang, "準備完了", "Ready") + `</span></div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div><div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
+		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime", "Bot / Runtime") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "通知に使う共有 Bot / Runtime は準備済みです。Project Routing を進める前提は整っています。", "The shared Bot / Runtime used for notifications is ready. The prerequisite for Project Routing is in place.") + `</p></div><span class="status-pill ok">` + t(lang, "準備完了", "Ready") + `</span></div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Kitsu hostname</div><div class="metric-value metric-value-host"><code>` + esc(kitsuHostStored) + `</code></div></div></div><div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot設定を開く", "Open Bot Settings") + `</a></div></div>`)
 	} else {
-		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime", "Bot / Runtime") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "Project Routing を始める前に、共有 Bot / Runtime を Bot Settings で確認してください。", "Before starting Project Routing, review the shared Bot / Runtime in Bot Settings.") + `</p></div><span class="status-pill bad">` + t(lang, "未準備", "Not ready") + `</span></div>` +
+		botCard.WriteString(`<div class="section-card glass workflow-status-card">` + `<div class="page-heading"><div><div class="eyebrow">STEP 1</div><h3 style="margin:6px 0 0">` + t(lang, "Bot / Runtime", "Bot / Runtime") + `</h3><p class="hint" style="margin:8px 0 0">` + t(lang, "Project Routing を始める前に、共有 Bot / Runtime を Bot設定で確認してください。", "Before starting Project Routing, review the shared Bot / Runtime in Bot Settings.") + `</p></div><span class="status-pill bad">` + t(lang, "未準備", "Not ready") + `</span></div>` +
 			`<div class="notice-box">💡 ` + t(lang, "Kitsu hostname は現在の公開ホストから自動設定されます。共有設定を整えたら、このページに戻って次の step を進めます。", "The Kitsu hostname is detected from the current public host. After updating the shared settings, return here for the next step.") + `</div>` +
 			`<div class="metric-grid"><div class="metric-card"><div class="metric-label">Detected host</div><div class="metric-value metric-value-host"><code>` + esc(detectedHost) + `</code></div></div></div>` +
-			`<div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot Settings を開く", "Open Bot Settings") + `</a></div></div>`)
-		fallbackBotCard = `<div class="section-card glass workflow-support-card"><details class="accordion"><summary><div class="accordion-summary-main"><div class="eyebrow">ADVANCED</div><div class="tile-title">` + t(lang, "補助 / フォールバック設定", "Support / fallback setup") + `</div><div class="tile-sub">` + t(lang, "必要な場合のみ、このページ内の補助フォームで初期確認を行います。通常の導線は Bot Settings です。", "Use this inline helper form only if you need a fallback path for the initial check. Bot Settings is the normal path.") + `</div></div><div class="accordion-summary-side"><span class="accordion-caret">⌄</span></div></summary><div class="accordion-body section-stack" style="padding-top:16px">` +
-			`<div class="notice-box">💡 ` + t(lang, "あなたの管理者アカウント: <strong>初回確認のみに使用</strong>、保存されません。", "Your admin account: used <strong>only for initial verification</strong>, not saved.") + `</div>` +
-			`<p class="hint">` + t(lang, "この補助フォームは advanced / fallback 用です。通常は Bot Settings から共有 Bot / Runtime を確認してください。", "This inline helper is an advanced / fallback path. In normal operation, review shared Bot / Runtime settings in Bot Settings.") + `</p>` +
-			`<p class="hint">` + t(lang, "共有Bot / Runtime を準備します", "Prepare shared bot / runtime setup") + `<br><small>` + t(lang, "✓ Kitsu のタスク更新を監視\n✓ Discord へ通知を送信\n✗ Kitsu を変更しません\n✗ Discord を管理しません", "✓ Monitor Kitsu task updates\n✓ Send Discord notifications\n✗ Does not modify Kitsu\n✗ Does not manage Discord") + `</small></p>` +
-			`<form method="POST" class="section-stack" onsubmit="startBotSetup(this)"><input type="hidden" name="action" value="bot_setup"><div class="form-grid"><div><label>` + t(lang, "スタジオ管理者メール", "Studio admin email") + `</label><input type="email" name="bot_admin_email" placeholder="admin@studio.local" required></div><div><label>` + t(lang, "スタジオ管理者パスワード", "Studio admin password") + `</label><input type="password" name="bot_admin_password" placeholder="Password" required></div></div><div class="button-row"><button type="submit" class="btn-ghost" id="botSetupBtn">` + t(lang, "補助フォームで Bot アカウントを作成", "Create bot account with fallback form") + `</button></div></form></div></details></div>`
+			`<div class="button-row"><a class="btn" href="` + appendLang("/bot/admin/bot", lang) + `">` + t(lang, "Bot設定を開く", "Open Bot Settings") + `</a></div></div>`)
 	}
 
 	// Build template JSON for channel preview JS
@@ -1179,7 +1174,7 @@ document.addEventListener('DOMContentLoaded', function(){
 		projectRoutingStatus,
 		projectCards.String(),
 		t(lang, "新規プロジェクトのルーティング作成", "Create New Project Routing"),
-		t(lang, "ここが Project Management の主作業です。project ごとの Discord category / channels / webhooks routing をここで設定します。最初の routing もここから作成します。", "This is the main Project Management task. Configure Discord category / channels / webhooks routing per project here, including the first routing."),
+		t(lang, "ここがプロジェクト管理の主作業です。project ごとの Discord category / channels / webhooks routing をここで設定します。最初の routing もここから作成します。", "This is the main Project Management task. Configure Discord category / channels / webhooks routing per project here, including the first routing."),
 		t(lang, "主作業", "Main task"),
 		t(lang, "Kitsuプロジェクト", "Kitsu project"),
 		projectOptions.String(),
@@ -1191,15 +1186,15 @@ document.addEventListener('DOMContentLoaded', function(){
 		guildInputHelp,
 		t(lang, "セットアップ実行", "Run Setup"),
 		t(lang, "Step 3: Discord Server / Guild の割り当て", "Step 3: Assign Discord Server / Guild"),
-		t(lang, "Project setup 時に保存した Guild 割り当てを見直すときは、Projects & Guilds を review / edit 用に使います。", "Use Projects & Guilds as a review / edit page when you need to revisit the guild assignment saved during project setup."),
+		t(lang, "Project setup 時に保存した Guild 割り当てを見直すときは、プロジェクトとDiscord ID を review / edit 用に使います。", "Use Projects & Discord IDs as a review / edit page when you need to revisit the guild assignment saved during project setup."),
 		guildNextStatus,
 		appendLang("/bot/admin/projects", lang),
-		t(lang, "Projects & Guilds を確認", "Review Projects & Guilds"),
-		t(lang, "Step 4: 最終 Health 確認", "Step 4: Final Health Check"),
-		t(lang, "Guild 割り当て後は、Health で通知先と runtime の状態を確認します。正常であれば、このセットアップは完了です。", "After guild assignment, use Health to confirm the notification destination and runtime status. If everything is healthy, setup is complete."),
+		t(lang, "プロジェクトとDiscord IDを確認", "Review Projects & Discord IDs"),
+		t(lang, "Step 4: 最終ヘルス確認", "Step 4: Final Health Check"),
+		t(lang, "Guild 割り当て後は、ヘルスで通知先と runtime の状態を確認します。正常であれば、このセットアップは完了です。", "After guild assignment, use Health to confirm the notification destination and runtime status. If everything is healthy, setup is complete."),
 		testNextStatus,
 		appendLang("/bot/admin/health", lang),
-		t(lang, "Health で最終確認", "Review Health"),
+		t(lang, "ヘルスで最終確認", "Review Health"),
 		fallbackBotCard,
 		templateJSON.String(),
 		previewLabelsJSON,
@@ -1237,9 +1232,9 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 		footer = `<p style="text-align:center;color:var(--muted);font-size:.84rem;margin-bottom:6px">` +
 			esc(t(lang, "✅ KitsuSync の接続のみ削除します（Discord channel はそのまま残ります）", "✅ Only KitsuSync connection is deleted (Discord channels will remain)")) + `</p>` +
 			`<p style="text-align:center;color:#b8b5ae;font-size:.9rem;margin-bottom:12px">` +
-			esc(t(lang, "5秒後にProject Managementへ戻ります。", "Returning to Project Management in 5 seconds.")) + `</p>` +
+			esc(t(lang, "5秒後にプロジェクト管理へ戻ります。", "Returning to Project Management in 5 seconds.")) + `</p>` +
 			`<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">` +
-			`<a href="` + backURL + `" class="btn">` + esc(t(lang, "Project Managementへ", "Back to Project Management")) + `</a>` +
+			`<a href="` + backURL + `" class="btn">` + esc(t(lang, "プロジェクト管理へ", "Back to Project Management")) + `</a>` +
 			deleteForm + `</div>` +
 			`<script>setTimeout(function(){location.href=` + strconv.Quote(backURL) + `;},5000);</script>`
 	} else {
@@ -1320,7 +1315,7 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 	}
 
 	sub := projectName + durationNote
-	body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">Project Management</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass">%s<div class="setup-inventory">%s</div></div><div class="button-row">%s</div></div>`,
+body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">`+t(lang, "プロジェクト管理", "Project Management")+`</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass">%s<div class="setup-inventory">%s</div></div><div class="button-row">%s</div></div>`,
 		color, esc(title), sub, retryBadge, inventoryHTML.String(), footer)
 	return appShell("KitsuSync", "", lang, nil, "", body)
 }
@@ -1350,7 +1345,7 @@ func renderDeleteReauthPage(lang, pid, projectName string, r *http.Request) stri
 		`</div></form>`
 	body := fmt.Sprintf(
 		`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0">`+
-			`<div class="page-heading"><div><div class="eyebrow">Project Management</div>`+
+			`<div class="page-heading"><div><div class="eyebrow">`+t(lang, "プロジェクト管理", "Project Management")+`</div>`+
 			`<h1 style="color:#ff6a50">%s</h1></div></div>`+
 			`<div class="section-card glass">%s%s</div></div>`,
 		esc(t(lang, "プロジェクト削除の確認", "Confirm project deletion")),
@@ -1373,7 +1368,7 @@ func page(lang, title, color, sub, listItems, footer string) string {
 }
 
 func renderBotSetupSuccess(lang string) string {
-	return page(lang, t(lang, "Bot設定完了", "Bot Setup Complete"), "#8ecf8b", t(lang, "Botアカウントを作成し、実行環境へ適用しました。", "The bot account was created and applied to the running environment."), `<li>`+esc(t(lang, "次は Project Management で project routing を設定してください。", "Continue in Project Management to configure project routing."))+`</li>`, `<a href="`+appendLang("/bot/setup", lang)+`">`+t(lang, "Project Managementへ戻る", "Back to Project Management")+`</a>`)
+	return page(lang, t(lang, "Bot設定完了", "Bot Setup Complete"), "#8ecf8b", t(lang, "Botアカウントを作成し、実行環境へ適用しました。", "The bot account was created and applied to the running environment."), `<li>`+esc(t(lang, "次はプロジェクト管理で project routing を設定してください。", "Continue in Project Management to configure project routing."))+`</li>`, `<a href="`+appendLang("/bot/setup", lang)+`">`+t(lang, "プロジェクト管理へ戻る", "Back to Project Management")+`</a>`)
 }
 
 func renderBotSetupError(lang, errMsg string) string {

@@ -140,8 +140,8 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
   <p class="hint" style="margin-top:12px">%s</p>
 </div>`,
 				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
-				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u672a\u8a2d\u5b9a", "No projects configured"), t(lang, "Project Management \u304b\u3089\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7d4c\u8def\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Use Project Management to configure your first project routing.")),
-				esc(t(lang, "Next \u30bb\u30af\u30b7\u30e7\u30f3\u304b\u3089 Project Management \u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002", "Open Project Management from the Next section.")),
+				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u672a\u8a2d\u5b9a", "No projects configured"), t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u304b\u3089\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7d4c\u8def\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Use Project Management to configure your first project routing.")),
+				esc(t(lang, "Next \u30bb\u30af\u30b7\u30e7\u30f3\u304b\u3089\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002", "Open Project Management from the Next section.")),
 			)
 		} else {
 			var projectRows strings.Builder
@@ -183,7 +183,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 </div>`,
 				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
 				withLang("/bot/setup", r),
-				esc(t(lang, "Project Management \u2192", "Project Management \u2192")),
+				esc(t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406 \u2192", "Project Management \u2192")),
 				esc(t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u540d", "Project")),
 				esc(t(lang, "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8", "Template")),
 				esc(t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u6570", "Channels")),
@@ -232,14 +232,14 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			icon, href, titleJA, titleEN string
 		}
 		links := []navLink{
-			{"\U0001F5C2", "/bot/admin/projects", "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068Guild", "Projects & Guilds"},
+			{"\U0001F5C2", "/bot/admin/projects", "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068Discord ID", "Projects & Discord IDs"},
 			{"\u2764", "/bot/admin/health", "\u30d8\u30eb\u30b9", "Health"},
 			{"\U0001F50D", "/bot/admin/diagnostics", "\u74b0\u5883\u8a3a\u65ad", "Diagnostics"},
 			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users"},
 			{"\u2705", "/bot/admin/checkers", "\u30ec\u30d3\u30e5\u30a2\u30fc\u5272\u308a\u5f53\u3066", "Reviewers"},
 			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings"},
 			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage"},
-			{"\U0001F9FE", "/bot/admin/audit", "\u76e3\u67fb\u30ed\u30b0 (v0.2+)", "Audit Log (v0.2+)"},
+			{"\U0001F9FE", "/bot/admin/audit", "\u76e3\u67fb\u30ed\u30b0", "Audit Log"},
 		}
 		var navGrid strings.Builder
 		navGrid.WriteString(`<div class="dashboard-grid">`)
@@ -253,27 +253,27 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 
 		nextTitle := t(lang, "\u6b21\u306b\u3084\u308b\u3053\u3068", "Next")
 		nextCardTitle := t(lang, "\u72b6\u614b\u3092\u898b\u76f4\u3059", "Review system status")
-		nextCardBody := t(lang, "\u307e\u305a\u306f Health \u3067\u554f\u984c\u306e\u3042\u308b\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3001\u5fc5\u8981\u306a\u5834\u5408\u3060\u3051 Diagnostics \u3067\u8a73\u3057\u304f\u898b\u3066\u304f\u3060\u3055\u3044\u3002", "Start with Health to review runtime issues, then use Diagnostics only when you need deeper inspection.")
+		nextCardBody := t(lang, "\u307e\u305a\u306f\u30d8\u30eb\u30b9\u3067\u554f\u984c\u306e\u3042\u308b\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3001\u5fc5\u8981\u306a\u5834\u5408\u3060\u3051 Diagnostics \u3067\u8a73\u3057\u304f\u898b\u3066\u304f\u3060\u3055\u3044\u3002", "Start with Health to review runtime issues, then use Diagnostics only when you need deeper inspection.")
 		nextPrimaryHref := withLang("/bot/admin/health", r)
-		nextPrimaryLabel := t(lang, "Health \u3092\u958b\u304f", "Open Health")
+		nextPrimaryLabel := t(lang, "\u30d8\u30eb\u30b9\u3092\u958b\u304f", "Open Health")
 		nextSecondaryHref := withLang("/bot/admin/diagnostics", r)
 		nextSecondaryLabel := t(lang, "Diagnostics \u3092\u958b\u304f", "Open Diagnostics")
 		nextBadge := `<span class="status-pill bad">` + esc(t(lang, "\u512a\u5148", "Priority")) + `</span>`
 		if !hasIssues && projectCount == 0 {
-			nextCardTitle = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
-			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f Project Management \u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot Settings \u304b\u3089\u884c\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites.")
+			nextCardTitle = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u3092\u958b\u304f", "Open Project Management")
+			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot\u8a2d\u5b9a\u304b\u3089\u884c\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites.")
 			nextPrimaryHref = withLang("/bot/setup", r)
-			nextPrimaryLabel = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
+			nextPrimaryLabel = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u3092\u958b\u304f", "Open Project Management")
 			nextSecondaryHref = withLang("/bot/admin/bot", r)
-			nextSecondaryLabel = t(lang, "Bot Settings \u3092\u78ba\u8a8d", "Review Bot Settings")
+			nextSecondaryLabel = t(lang, "Bot\u8a2d\u5b9a\u3092\u78ba\u8a8d", "Review Bot Settings")
 			nextBadge = `<span class="status-pill warn">` + esc(t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7", "Setup")) + `</span>`
 		} else if !hasIssues && projectCount > 0 {
 			nextCardTitle = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3092\u7ba1\u7406\u3059\u308b", "Manage project routing")
-			nextCardBody = t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u3001Webhook\u3001\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3054\u3068\u306e Discord \u7d4c\u8def\u306e\u78ba\u8a8d\u306f Project Management \u304b\u3089\u884c\u3048\u307e\u3059\u3002", "Use Project Management to review channels, webhooks, and project-specific Discord routing.")
+			nextCardBody = t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u3001Webhook\u3001\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3054\u3068\u306e Discord \u7d4c\u8def\u306e\u78ba\u8a8d\u306f\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u304b\u3089\u884c\u3048\u307e\u3059\u3002", "Use Project Management to review channels, webhooks, and project-specific Discord routing.")
 			nextPrimaryHref = withLang("/bot/setup", r)
-			nextPrimaryLabel = t(lang, "Project Management \u3092\u958b\u304f", "Open Project Management")
+			nextPrimaryLabel = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u3092\u958b\u304f", "Open Project Management")
 			nextSecondaryHref = withLang("/bot/admin/projects", r)
-			nextSecondaryLabel = t(lang, "Projects & Guilds \u3092\u78ba\u8a8d", "Review Projects & Guilds")
+			nextSecondaryLabel = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068Discord ID\u3092\u78ba\u8a8d", "Review Projects & Discord IDs")
 			nextBadge = `<span class="status-pill ok">` + esc(t(lang, "\u6e96\u5099\u6e08\u307f", "Ready")) + `</span>`
 		}
 		nextActionCard := fmt.Sprintf(`
@@ -354,10 +354,10 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc 
 			))
 		}
 		if blocks.Len() == 0 {
-			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだプロジェクトがありません", "No projects configured yet."), t(lang, "先に Project Management で routing と Guild ID を設定してから、ここで review / edit を行ってください。", "Set routing and Guild ID in Project Management first, then use this page for review / edit.")))
+			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだプロジェクトがありません", "No projects configured yet."), t(lang, "先にプロジェクト管理で routing と Discord ID を設定してから、ここで review / edit を行ってください。", "Set routing and Guild ID in Project Management first, then use this page for review / edit.")))
 		}
-		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "このページは既存 project の Discord Server / Guild 割り当てを review / edit するための管理画面です。新しい project の Guild ID は Project Management setup 側で入力してください。", "Use this page to review or edit Discord Server / Guild assignment for existing projects. Enter the Guild ID for new projects in Project Management setup.")) + `</p></div>` + blocks.String() + `</div>`
-		fmt.Fprint(w, adminPage(lang, t(lang, "Projects & Guilds", "Projects & Guilds"), r, body))
+		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "このページは既存 project の Discord Server / Guild 割り当てを review / edit するための管理画面です。新しい project の Discord ID はプロジェクト管理側で入力してください。", "Use this page to review or edit Discord Server / Guild assignment for existing projects. Enter the Discord ID for new projects in Project Management.")) + `</p></div>` + blocks.String() + `</div>`
+		fmt.Fprint(w, adminPage(lang, t(lang, "プロジェクトとDiscord ID", "Projects & Discord IDs"), r, body))
 	}
 }
 
@@ -824,7 +824,7 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 				esc(project.Name), esc(project.KitsuProjectID), t(lang, "補助リンク", "Helper link"), esc(project.StorageURL), t(lang, "保存", "Save")))
 		}
 		if blocks.Len() == 0 {
-			blocks.WriteString(emptyState("📁", t(lang, "まだプロジェクトがありません", "No projects yet"), t(lang, "先に Project Management で project routing を作成してから補助リンクを設定してください。", "Create project routing in Project Management first, then add helper links here.")))
+			blocks.WriteString(emptyState("📁", t(lang, "まだプロジェクトがありません", "No projects yet"), t(lang, "先にプロジェクト管理で project routing を作成してから補助リンクを設定してください。", "Create project routing in Project Management first, then add helper links here.")))
 		}
 		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + t(lang, "プロジェクトごとの補助リンク（Drive など）を設定します。", "Set helper links per project (Drive, etc.).") + `</p></div>` + blocks.String() + `</div>`
 		fmt.Fprint(w, adminPage(lang, t(lang, "ストレージリンク", "Storage Links"), r, body))
@@ -896,7 +896,7 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
     <div class="button-row"><a class="btn" data-edit-lock-link="1" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
   </div>
 </div>`,
-			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "Project Management で使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by Project Management."), statusClass, statusLabel, esc(effectiveHost), t(lang, "Bot Token", "Bot Token"), secretStatus(storedRuntimeDiscordBotToken(db), lang), withLang("/bot/admin/bot?edit=1", r), t(lang, "再認証して編集する", "Re-authenticate to edit"), withLang("/bot/setup", r), t(lang, "Project Managementへ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "Projects & Guilds を見直す", "Review Projects & Guilds"))
+			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "プロジェクト管理で使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by Project Management."), statusClass, statusLabel, esc(effectiveHost), t(lang, "Bot Token", "Bot Token"), secretStatus(storedRuntimeDiscordBotToken(db), lang), withLang("/bot/admin/bot?edit=1", r), t(lang, "再認証して編集する", "Re-authenticate to edit"), withLang("/bot/setup", r), t(lang, "プロジェクト管理へ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "プロジェクトとDiscord IDを見直す", "Review Projects & Discord IDs"))
 		if !editMode {
 			fmt.Fprint(w, adminPage(lang, t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), r, view))
 			return
@@ -916,7 +916,7 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
     <div class="button-row"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
   </form>
 </div>`,
-				authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスに即時反映され、アプリ設定にも保存されます。", "Token changes take effect immediately for the running process and are also saved in app settings."), t(lang, "再起動後は保存済み token が優先されます。.env.local / 環境変数は fallback としてのみ使われます。", "After restart, the saved token is used first. .env.local / environment variables remain fallback sources only."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "Project Managementへ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "Projects & Guilds を見直す", "Review Projects & Guilds"))
+				authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスに即時反映され、アプリ設定にも保存されます。", "Token changes take effect immediately for the running process and are also saved in app settings."), t(lang, "再起動後は保存済み token が優先されます。.env.local / 環境変数は fallback としてのみ使われます。", "After restart, the saved token is used first. .env.local / environment variables remain fallback sources only."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "プロジェクト管理へ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "プロジェクトとDiscord IDを見直す", "Review Projects & Discord IDs"))
 		fmt.Fprint(w, adminPage(lang, t(lang, "Bot設定", "Bot Settings"), r, edit))
 	}
 }
@@ -1157,7 +1157,7 @@ func adminPage(lang, title string, r *http.Request, body string) string {
 	}
 	nav := `<div class="nav-card glass">` +
 		`<a class="nav-chip" href="` + withLang("/bot/admin", r) + `">` + t(lang, "管理", "Admin") + `</a>` +
-		`<a class="nav-chip" href="` + withLang("/bot/setup", r) + `">` + t(lang, "Project Management", "Project Management") + `</a>` +
+		`<a class="nav-chip" href="` + withLang("/bot/setup", r) + `">` + t(lang, "プロジェクト管理", "Project Management") + `</a>` +
 		`<a class="nav-chip" href="` + withLang("/bot/docs/", r) + `">` + t(lang, "ドキュメント", "Docs") + `</a>` +
 		`<a class="nav-chip" href="` + withLang("/bot/logout", r) + `">` + t(lang, "ログアウト", "Logout") + `</a>` +
 		`</div>`

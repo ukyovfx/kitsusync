@@ -80,7 +80,7 @@ func localizeSetupDiagnostics(lang string, diag SetupDiagnostics) SetupDiagnosti
 		case "discord":
 			c.Label = t(lang, "Discord 接続", "Discord connection")
 		case "test_notification":
-			c.Label = t(lang, "最終 Health 確認", "Final Health Check")
+			c.Label = t(lang, "最終ヘルス確認", "Final Health Check")
 		}
 		switch c.Summary {
 		case "Configured":
@@ -545,7 +545,7 @@ func projectOverallStatus(p ProjectSetupStatus) SetupStatus {
 
 func projectSummary(lang string, p ProjectSetupStatus) string {
 	if p.GuildStatus == SetupOK && p.PermissionStatus == SetupOK && p.WebhookStatus == SetupOK {
-		return t(lang, "このプロジェクトは最終 Health 確認に進めます。", "This project is ready for the final Health check.")
+		return t(lang, "このプロジェクトは最終ヘルス確認に進めます。", "This project is ready for the final Health check.")
 	}
 	if p.GuildStatus != SetupOK {
 		return t(lang, "このプロジェクトに Discord Guild を割り当ててください。", "Assign a Discord guild to this project.")
