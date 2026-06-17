@@ -79,14 +79,17 @@ For the current temporary GCP stack used during maintenance validation, treat co
 - Live stack path: `/home/ukyovfx/kitsu-discord-custom/app/docker-compose.yml`
 - Workdir: `/home/ukyovfx/kitsu-discord-custom/app`
 - Live container: `app-app-1`
-- Live DB is inside the container at `/app/sqlite.db`
-- Host `data/sqlite.db` is not necessarily the live DB and should not be treated as the primary backup target
+- After the explicit sqlite bind-mount change is deployed, the live DB is expected to be host-backed at `./data/sqlite.db` -> `/app/sqlite.db`
+- During migration, treat the current live container `/app/sqlite.db` as authoritative
+- Do not assume any pre-existing host `data/sqlite.db` is already authoritative
 
 Before recreating the container, back up these paths from the live container when present:
 
 - `/app/sqlite.db`
 - `/app/logs`
 - `/app/dump`
+
+Before the first recreate after adding the explicit sqlite bind mount, export the current live `/app/sqlite.db` from the running container and copy that exact file to the host-side `./data/sqlite.db`.
 
 `/app/logs/all-levels.log` can now be recreated automatically by the app if missing, but logs backup is still useful for rollback and deploy evidence.
 
