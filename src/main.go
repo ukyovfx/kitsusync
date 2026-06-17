@@ -874,9 +874,6 @@ func main() {
 	mux.HandleFunc("/setup", setup.RequireSession(setupHandler))
 	mux.HandleFunc("/bot/setup", setup.RequireSession(setupHandler))
 
-	mux.HandleFunc("/setup-wizard", setup.RequireSession(setup.WizardHandler(db, setupCredsFunc)))
-	mux.HandleFunc("/bot/setup-wizard", setup.RequireSession(setup.WizardHandler(db, setupCredsFunc)))
-
 	// Setup diagnostic JSON API — registered under both root and /bot prefix.
 	setupAPIRoutes := func(prefix string) {
 		mux.HandleFunc(prefix+"/api/setup/status", setup.RequireSession(setup.SetupStatusHandler(
@@ -919,7 +916,6 @@ func main() {
 			}
 		}
 		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.BotHandler(db, kitsuReconnect)))
-		mux.HandleFunc(prefix+"/admin/setup", setup.RequireSession(setup.SetupManualHandler(db, setupCredsFunc)))
 		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
 			_, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID)(w, r)
