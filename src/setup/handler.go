@@ -535,7 +535,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 		kitsuHostStored := model.GetSetting(db, "kitsu.hostname")
 		kitsuEmailStored := storedRuntimeKitsuEmail(db)
 		detectedHost := publicKitsuHostnameFromRequest(r, kitsuHostStored)
-		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost))
+		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID))
 	}
 }
 
@@ -827,7 +827,7 @@ func displayProjectLang(lang string) string {
 	return lang
 }
 
-func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost string) string {
+func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID string) string {
 	lang := currentLang(r)
 
 	var projectCards strings.Builder
