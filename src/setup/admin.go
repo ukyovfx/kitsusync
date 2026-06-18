@@ -1271,7 +1271,7 @@ func buildUnifiedAssignments(projectUsers []model.ProjectUserMap, legacyUsers []
 		if current.DiscordID == "" {
 			current.DiscordID = strings.TrimSpace(discordID)
 		}
-		if strings.TrimSpace(taskType) != "" && !containsString(current.CheckerTaskTypes, taskType) {
+		if strings.TrimSpace(taskType) != "" && !containsAssignmentTaskType(current.CheckerTaskTypes, taskType) {
 			current.CheckerTaskTypes = append(current.CheckerTaskTypes, taskType)
 			sort.Strings(current.CheckerTaskTypes)
 		}
@@ -1457,7 +1457,7 @@ func assignmentTaskTypes(db *gorm.DB, project *model.Project) []string {
 	return taskTypes
 }
 
-func containsString(items []string, value string) bool {
+func containsAssignmentTaskType(items []string, value string) bool {
 	for _, item := range items {
 		if item == value {
 			return true
