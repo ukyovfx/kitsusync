@@ -627,6 +627,8 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		project := configuredAssignmentProject(db)
+		useProjectScoped := project != nil
 		if r.Method == http.MethodPost {
 			id := parseUint(r.FormValue("user_id"))
 			name := strings.TrimSpace(r.FormValue("kitsu_name"))
@@ -634,13 +636,25 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			discordID := strings.TrimSpace(r.FormValue("discord_id"))
 			switch r.FormValue("action") {
 			case "delete":
-				model.DeleteUserMapByID(db, id)
+				if useProjectScoped {
+					model.DeleteProjectUserMapByID(db, id)
+				} else {
+					model.DeleteUserMapByID(db, id)
+				}
 			default:
 				if name != "" && (discordID == "" || discordIDRegexp.MatchString(discordID)) {
-					if id > 0 {
-						model.UpdateUserMap(db, id, name, email, discordID)
+					if useProjectScoped {
+						if id > 0 {
+							model.UpdateProjectUserMap(db, id, name, email, discordID)
+						} else {
+							model.UpsertProjectUserMap(db, project.ID, name, email, discordID)
+						}
 					} else {
-						model.UpsertUserMapWithEmail(db, name, email, discordID)
+						if id > 0 {
+							model.UpdateUserMap(db, id, name, email, discordID)
+						} else {
+							model.UpsertUserMapWithEmail(db, name, email, discordID)
+						}
 					}
 				}
 			}
@@ -649,21 +663,38 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		}
 
 		editID := parseUint(r.URL.Query().Get("edit"))
-		var editUser *model.UserMap
+		selectedName, selectedEmail, selectedDiscordID := "", "", ""
 		if editID > 0 {
-			editUser = model.FindUserMapByID(db, editID)
+			if useProjectScoped {
+				if editUser := model.FindProjectUserMapByID(db, editID); editUser != nil {
+					selectedName = editUser.KitsuName
+					selectedEmail = editUser.KitsuEmail
+					selectedDiscordID = editUser.DiscordUserID
+				}
+			} else {
+				if editUser := model.FindUserMapByID(db, editID); editUser != nil {
+					selectedName = editUser.KitsuName
+					selectedEmail = editUser.KitsuEmail
+					selectedDiscordID = editUser.DiscordID
+				}
+			}
 		}
-		people := filterAssignablePersons(ListKitsuPersons(kitsuHostname), botAccountEmail(db))
-		personOptions := buildPersonOptions(people, editUser, lang)
+		botEmail := botAccountEmail(db)
+		people := filterAssignablePersons(ListKitsuPersons(kitsuHostname), botEmail)
+		personOptions := buildPersonOptions(people, selectedName, selectedEmail, lang)
 
 		var rows strings.Builder
-		for _, user := range filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)) {
+		assignableUsers := buildLegacyAssignableUsers(model.ListUserMap(db), botEmail)
+		if useProjectScoped {
+			assignableUsers = buildProjectAssignableUsers(model.ListProjectUserMaps(db, project.ID), botEmail)
+		}
+		for _, user := range assignableUsers {
 			discordID := `<span class="status-pill bad">` + t(lang, "ID未設定", "No ID") + `</span>`
 			if strings.TrimSpace(user.DiscordID) != "" {
 				discordID = `<code>` + esc(user.DiscordID) + `</code>`
 			}
 			rows.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>%s</td><td><div class="inline-actions"><a class="btn-ghost" href="%s">%s</a><form method="POST" class="delete-form" data-confirm="%s" data-require-text="%s"><input type="hidden" name="action" value="delete"><input type="hidden" name="user_id" value="%d"><button class="btn-danger" type="submit">%s</button></form></div></td></tr>`,
-				esc(user.KitsuName), discordID, withLang("/bot/admin/users", r)+"&edit="+strconv.FormatUint(uint64(user.ID), 10), t(lang, "編集", "Edit"), esc(user.KitsuName), t(lang, "削除", "delete"), user.ID, t(lang, "削除", "Delete")))
+				esc(user.KitsuName), discordID, withLang("/bot/admin/users", r)+"&edit="+strconv.FormatUint(uint64(user.RowID), 10), t(lang, "編集", "Edit"), esc(user.KitsuName), t(lang, "削除", "delete"), user.RowID, t(lang, "削除", "Delete")))
 		}
 		if rows.Len() == 0 {
 			rows.WriteString(`<tr><td colspan="3" class="muted">` + t(lang, "まだユーザー割り当てがありません。", "No user assignments yet.") + `</td></tr>`)
@@ -671,19 +702,20 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 
 		formTitle := t(lang, "新規割り当て", "New Assignment")
 		userID := uint(0)
-		selectedName, selectedEmail, selectedDiscordID := "", "", ""
-		if editUser != nil {
+		if editID > 0 && (selectedName != "" || selectedEmail != "" || selectedDiscordID != "") {
 			formTitle = t(lang, "ユーザー割り当てを編集", "Edit Assignment")
-			userID = editUser.ID
-			selectedName = editUser.KitsuName
-			selectedEmail = editUser.KitsuEmail
-			selectedDiscordID = editUser.DiscordID
+			userID = editID
+		}
+		scopeHint := ""
+		if useProjectScoped {
+			scopeHint = `<p class="field-help">` + t(lang, "現在は最初の設定済み project の割り当てを表示しています: ", "Showing assignments for the first configured project: ") + `<strong>` + esc(project.Name) + `</strong></p>`
 		}
 		body := fmt.Sprintf(`
 <div class="section-stack">
   <div class="section-card glass">
     <h3>%s</h3>
     <p class="hint">%s</p>
+    %s
     <form method="POST">
       <input type="hidden" name="user_id" value="%d">
       <input type="hidden" id="kitsuNameInput" name="kitsu_name" value="%s">
@@ -706,7 +738,7 @@ function syncPersonSelect(){
 }
 document.addEventListener('DOMContentLoaded', syncPersonSelect);
 </script>`,
-			formTitle, t(lang, "User = タスク割り当て時に @mention します", "User = @mentioned when task is assigned"), userID, esc(selectedName), esc(selectedEmail), t(lang, "Kitsuユーザー", "Kitsu user"), personOptions, t(lang, "DiscordユーザーID", "Discord user ID"), esc(selectedDiscordID), t(lang, "未入力の場合は ID未設定 と表示されます。", "If empty, the UI will show No ID."), t(lang, "保存", "Save"), withLang("/bot/admin/users", r), t(lang, "キャンセル", "Cancel"), t(lang, "現在の割り当て", "Current assignments"), t(lang, "名前", "Name"), t(lang, "操作", "Actions"), rows.String())
+			formTitle, t(lang, "User = タスク割り当て時に @mention します", "User = @mentioned when task is assigned"), scopeHint, userID, esc(selectedName), esc(selectedEmail), t(lang, "Kitsuユーザー", "Kitsu user"), personOptions, t(lang, "DiscordユーザーID", "Discord user ID"), esc(selectedDiscordID), t(lang, "未入力の場合は ID未設定 と表示されます。", "If empty, the UI will show No ID."), t(lang, "保存", "Save"), withLang("/bot/admin/users", r), t(lang, "キャンセル", "Cancel"), t(lang, "現在の割り当て", "Current assignments"), t(lang, "名前", "Name"), t(lang, "操作", "Actions"), rows.String())
 		fmt.Fprint(w, adminPage(lang, t(lang, "ユーザー割り当て", "User Assignment"), r, body))
 	}
 }
@@ -715,20 +747,49 @@ func CheckersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		project := configuredAssignmentProject(db)
+		useProjectScoped := project != nil
+		botEmail := botAccountEmail(db)
+		assignableUsers := buildLegacyAssignableUsers(model.ListUserMap(db), botEmail)
+		if useProjectScoped {
+			assignableUsers = buildProjectAssignableUsers(model.ListProjectUserMaps(db, project.ID), botEmail)
+		}
 		if r.Method == http.MethodPost {
 			id := parseUint(r.FormValue("checker_id"))
 			taskType := strings.TrimSpace(r.FormValue("task_type"))
 			kitsuName := strings.TrimSpace(r.FormValue("kitsu_name"))
 			kitsuEmail := strings.TrimSpace(r.FormValue("kitsu_email"))
 			overrideDiscordID := strings.TrimSpace(r.FormValue("resolved_discord_id"))
+			if selectedUser := findAssignmentUser(assignableUsers, kitsuEmail, kitsuName); selectedUser != nil {
+				kitsuName = selectedUser.KitsuName
+				kitsuEmail = selectedUser.KitsuEmail
+			}
+			resolvedDiscordID := strings.TrimSpace(overrideDiscordID)
+			if resolvedDiscordID == "" {
+				if selectedUser := findAssignmentUser(assignableUsers, kitsuEmail, kitsuName); selectedUser != nil {
+					resolvedDiscordID = strings.TrimSpace(selectedUser.DiscordID)
+				}
+			}
 			switch r.FormValue("action") {
 			case "delete":
-				model.DeleteCheckerEntryByID(db, id)
-			default:
-				if id > 0 {
-					model.UpdateCheckerMapWithOverride(db, id, taskType, kitsuName, kitsuEmail, overrideDiscordID)
+				if useProjectScoped {
+					model.DeleteProjectCheckerMapByID(db, id)
 				} else {
-					model.AddCheckerMapByUserWithOverride(db, taskType, kitsuName, kitsuEmail, overrideDiscordID)
+					model.DeleteCheckerEntryByID(db, id)
+				}
+			default:
+				if useProjectScoped {
+					if id > 0 {
+						model.UpdateProjectCheckerMapWithUser(db, id, taskType, kitsuName, kitsuEmail, resolvedDiscordID, overrideDiscordID)
+					} else {
+						model.UpsertProjectCheckerMapWithUser(db, project.ID, taskType, kitsuName, kitsuEmail, resolvedDiscordID, overrideDiscordID)
+					}
+				} else {
+					if id > 0 {
+						model.UpdateCheckerMapWithOverride(db, id, taskType, kitsuName, kitsuEmail, overrideDiscordID)
+					} else {
+						model.AddCheckerMapByUserWithOverride(db, taskType, kitsuName, kitsuEmail, overrideDiscordID)
+					}
 				}
 			}
 			http.Redirect(w, r, withLang("/bot/admin/checkers", r)+"&msg=saved", http.StatusSeeOther)
@@ -736,28 +797,58 @@ func CheckersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		}
 
 		editID := parseUint(r.URL.Query().Get("edit"))
-		var editChecker *model.CheckerMap
+		selectedTaskType, selectedName, selectedEmail, selectedResolvedID := "", "", "", ""
 		if editID > 0 {
-			for _, row := range model.ListCheckerMap(db) {
-				if row.ID == editID {
-					copyRow := row
-					editChecker = &copyRow
-					break
+			if useProjectScoped {
+				if editChecker := model.FindProjectCheckerMapByID(db, editID); editChecker != nil {
+					selectedTaskType = editChecker.TaskType
+					selectedName = projectCheckerDisplayName(*editChecker, assignableUsers)
+					selectedEmail = editChecker.KitsuEmail
+					selectedResolvedID = projectCheckerResolvedID(*editChecker)
+				}
+			} else {
+				for _, row := range model.ListCheckerMap(db) {
+					if row.ID == editID {
+						selectedTaskType = row.TaskType
+						selectedName = row.KitsuName
+						selectedEmail = row.KitsuEmail
+						selectedResolvedID = row.OverrideDiscordID
+						if selectedResolvedID == "" {
+							selectedResolvedID = model.ResolveCheckerDiscordID(db, row)
+						}
+						break
+					}
 				}
 			}
 		}
-		taskOptions := buildTaskOptions(AllTaskTypeNames(), selectedTask(editChecker), lang)
-		userOptions := buildAssignedUserOptions(filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)), selectedCheckerEmail(editChecker), selectedCheckerName(editChecker), lang)
+		taskOptions := buildTaskOptions(AllTaskTypeNames(), selectedTaskType, lang)
+		userOptions := buildAssignedUserOptions(assignableUsers, selectedEmail, selectedName, lang)
 
 		var rows strings.Builder
-		for _, checker := range model.ListCheckerMap(db) {
-			resolvedID := model.ResolveCheckerDiscordID(db, checker)
-			status := `<span class="status-pill bad">` + t(lang, "ID未設定", "No ID") + `</span>`
-			if resolvedID != "" {
-				status = `<code>` + esc(resolvedID) + `</code>`
+		if useProjectScoped {
+			for _, checker := range model.ListProjectCheckerMaps(db, project.ID) {
+				resolvedID := projectCheckerResolvedID(checker)
+				status := `<span class="status-pill bad">` + t(lang, "ID未設定", "No ID") + `</span>`
+				if resolvedID != "" {
+					status = `<code>` + esc(resolvedID) + `</code>`
+				}
+				displayName := projectCheckerDisplayName(checker, assignableUsers)
+				if displayName == "" {
+					displayName = t(lang, "未解決", "Unresolved")
+				}
+				rows.WriteString(fmt.Sprintf(`<tr><td>%s %s</td><td>%s</td><td>%s</td><td><div class="inline-actions"><a class="btn-ghost" href="%s">%s</a><form method="POST" class="delete-form" data-confirm="%s / %s" data-require-text="%s"><input type="hidden" name="action" value="delete"><input type="hidden" name="checker_id" value="%d"><button class="btn-danger" type="submit">%s</button></form></div></td></tr>`,
+					taskTypeIcon(checker.TaskType), esc(checker.TaskType), esc(displayName), status, withLang("/bot/admin/checkers", r)+"&edit="+strconv.FormatUint(uint64(checker.ID), 10), t(lang, "編集", "Edit"), esc(checker.TaskType), esc(displayName), t(lang, "削除", "delete"), checker.ID, t(lang, "削除", "Delete")))
 			}
-			rows.WriteString(fmt.Sprintf(`<tr><td>%s %s</td><td>%s</td><td>%s</td><td><div class="inline-actions"><a class="btn-ghost" href="%s">%s</a><form method="POST" class="delete-form" data-confirm="%s / %s" data-require-text="%s"><input type="hidden" name="action" value="delete"><input type="hidden" name="checker_id" value="%d"><button class="btn-danger" type="submit">%s</button></form></div></td></tr>`,
-				taskTypeIcon(checker.TaskType), esc(checker.TaskType), esc(checker.KitsuName), status, withLang("/bot/admin/checkers", r)+"&edit="+strconv.FormatUint(uint64(checker.ID), 10), t(lang, "編集", "Edit"), esc(checker.TaskType), esc(checker.KitsuName), t(lang, "削除", "delete"), checker.ID, t(lang, "削除", "Delete")))
+		} else {
+			for _, checker := range model.ListCheckerMap(db) {
+				resolvedID := model.ResolveCheckerDiscordID(db, checker)
+				status := `<span class="status-pill bad">` + t(lang, "ID未設定", "No ID") + `</span>`
+				if resolvedID != "" {
+					status = `<code>` + esc(resolvedID) + `</code>`
+				}
+				rows.WriteString(fmt.Sprintf(`<tr><td>%s %s</td><td>%s</td><td>%s</td><td><div class="inline-actions"><a class="btn-ghost" href="%s">%s</a><form method="POST" class="delete-form" data-confirm="%s / %s" data-require-text="%s"><input type="hidden" name="action" value="delete"><input type="hidden" name="checker_id" value="%d"><button class="btn-danger" type="submit">%s</button></form></div></td></tr>`,
+					taskTypeIcon(checker.TaskType), esc(checker.TaskType), esc(checker.KitsuName), status, withLang("/bot/admin/checkers", r)+"&edit="+strconv.FormatUint(uint64(checker.ID), 10), t(lang, "編集", "Edit"), esc(checker.TaskType), esc(checker.KitsuName), t(lang, "削除", "delete"), checker.ID, t(lang, "削除", "Delete")))
+			}
 		}
 		if rows.Len() == 0 {
 			rows.WriteString(`<tr><td colspan="4" class="muted">` + t(lang, "まだレビュアー割り当てがありません。", "No reviewer assignments yet.") + `</td></tr>`)
@@ -765,18 +856,20 @@ func CheckersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 
 		formTitle := t(lang, "新規割り当て", "New Assignment")
 		checkerID := uint(0)
-		selectedName, selectedEmail := "", ""
-		if editChecker != nil {
+		if editID > 0 && (selectedTaskType != "" || selectedName != "" || selectedEmail != "" || selectedResolvedID != "") {
 			formTitle = t(lang, "レビュアー割り当てを編集", "Edit Reviewer Assignment")
-			checkerID = editChecker.ID
-			selectedName = editChecker.KitsuName
-			selectedEmail = editChecker.KitsuEmail
+			checkerID = editID
+		}
+		scopeHint := ""
+		if useProjectScoped {
+			scopeHint = `<p class="field-help">` + t(lang, "現在は最初の設定済み project のレビュアー割り当てを表示しています: ", "Showing reviewer assignments for the first configured project: ") + `<strong>` + esc(project.Name) + `</strong></p>`
 		}
 		body := fmt.Sprintf(`
 <div class="section-stack">
   <div class="section-card glass">
     <h3>%s</h3>
     <p class="hint">%s</p>
+    %s
     <form method="POST">
       <input type="hidden" name="checker_id" value="%d">
       <input type="hidden" id="checkerNameInput" name="kitsu_name" value="%s">
@@ -800,7 +893,7 @@ function syncCheckerUser(){
 }
 document.addEventListener('DOMContentLoaded', syncCheckerUser);
 </script>`,
-			formTitle, t(lang, "Reviewer = ステータス変更時に @mention します", "Reviewer = @mentioned when status changes"), checkerID, esc(selectedName), esc(selectedEmail), t(lang, "タスクタイプ", "Task type"), taskOptions, t(lang, "ユーザー", "User"), userOptions, checkerResolvedInput(lang, db, editChecker), t(lang, "保存", "Save"), withLang("/bot/admin/checkers", r), t(lang, "キャンセル", "Cancel"), t(lang, "現在の割り当て", "Current assignments"), t(lang, "タスクタイプ", "Task type"), t(lang, "ユーザー", "User"), t(lang, "操作", "Actions"), rows.String())
+			formTitle, t(lang, "Reviewer = ステータス変更時に @mention します", "Reviewer = @mentioned when status changes"), scopeHint, checkerID, esc(selectedName), esc(selectedEmail), t(lang, "タスクタイプ", "Task type"), taskOptions, t(lang, "ユーザー", "User"), userOptions, checkerResolvedInput(lang, selectedResolvedID), t(lang, "保存", "Save"), withLang("/bot/admin/checkers", r), t(lang, "キャンセル", "Cancel"), t(lang, "現在の割り当て", "Current assignments"), t(lang, "タスクタイプ", "Task type"), t(lang, "ユーザー", "User"), t(lang, "操作", "Actions"), rows.String())
 		fmt.Fprint(w, adminPage(lang, t(lang, "レビュアー割り当て", "Reviewer Assignment"), r, body))
 	}
 }
@@ -958,12 +1051,14 @@ func AuditLogHandler(db *gorm.DB) http.HandlerFunc {
 	}
 }
 
-func buildPersonOptions(persons []KitsuPerson, selected *model.UserMap, lang string) string {
-	selectedEmail, selectedName := "", ""
-	if selected != nil {
-		selectedEmail = selected.KitsuEmail
-		selectedName = selected.KitsuName
-	}
+type assignmentUserOption struct {
+	RowID uint
+	KitsuName string
+	KitsuEmail string
+	DiscordID string
+}
+
+func buildPersonOptions(persons []KitsuPerson, selectedName, selectedEmail, lang string) string {
 	var out strings.Builder
 	out.WriteString(`<option value="">` + t(lang, "選択してください", "Select user") + `</option>`)
 	found := false
@@ -974,8 +1069,8 @@ func buildPersonOptions(persons []KitsuPerson, selected *model.UserMap, lang str
 		}
 		out.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" data-email="%s" %s>%s</option>`, esc(person.Email), esc(person.FullName), esc(person.Email), selectedAttr(isSelected), esc(person.FullName)))
 	}
-	if selected != nil && !found {
-		out.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" data-email="%s" selected>%s</option>`, esc(selected.KitsuEmail), esc(selected.KitsuName), esc(selected.KitsuEmail), esc(selected.KitsuName)))
+	if (selectedEmail != "" || selectedName != "") && !found {
+		out.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" data-email="%s" selected>%s</option>`, esc(selectedEmail), esc(selectedName), esc(selectedEmail), esc(selectedName)))
 	}
 	return out.String()
 }
@@ -1010,12 +1105,41 @@ func filterAssignableUsers(users []model.UserMap, botEmail string) []model.UserM
 	return filtered
 }
 
-func buildAssignedUserOptions(users []model.UserMap, selectedEmail, selectedName, lang string) string {
+func buildProjectAssignableUsers(rows []model.ProjectUserMap, botEmail string) []assignmentUserOption {
+	filtered := make([]assignmentUserOption, 0, len(rows))
+	for _, row := range rows {
+		if botEmail != "" && strings.EqualFold(strings.TrimSpace(row.KitsuEmail), botEmail) {
+			continue
+		}
+		filtered = append(filtered, assignmentUserOption{
+			RowID: row.ID,
+			KitsuName: row.KitsuName,
+			KitsuEmail: row.KitsuEmail,
+			DiscordID: row.DiscordUserID,
+		})
+	}
+	return filtered
+}
+
+func buildLegacyAssignableUsers(rows []model.UserMap, botEmail string) []assignmentUserOption {
+	filtered := make([]assignmentUserOption, 0, len(rows))
+	for _, row := range filterAssignableUsers(rows, botEmail) {
+		filtered = append(filtered, assignmentUserOption{
+			RowID: row.ID,
+			KitsuName: row.KitsuName,
+			KitsuEmail: row.KitsuEmail,
+			DiscordID: row.DiscordID,
+		})
+	}
+	return filtered
+}
+
+func buildAssignedUserOptions(users []assignmentUserOption, selectedEmail, selectedName, lang string) string {
 	var out strings.Builder
 	out.WriteString(`<option value="">` + t(lang, "選択してください", "Select user") + `</option>`)
 	for _, user := range users {
 		isSelected := (selectedEmail != "" && user.KitsuEmail == selectedEmail) || (selectedEmail == "" && selectedName != "" && user.KitsuName == selectedName)
-		out.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" data-email="%s" %s>%s</option>`, esc(user.KitsuEmail), esc(user.KitsuName), esc(user.KitsuEmail), selectedAttr(isSelected), esc(user.KitsuName)))
+		out.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" data-email="%s" data-discord-id="%s" %s>%s</option>`, esc(user.KitsuEmail), esc(user.KitsuName), esc(user.KitsuEmail), esc(user.DiscordID), selectedAttr(isSelected), esc(user.KitsuName)))
 	}
 	return out.String()
 }
@@ -1079,43 +1203,54 @@ func taskTypeIcon(taskType string) string {
 	}
 }
 
-func selectedTask(row *model.CheckerMap) string {
-	if row == nil {
-		return ""
+func configuredAssignmentProject(db *gorm.DB) *model.Project {
+	projects := model.ListProjects(db)
+	if len(projects) == 0 {
+		return nil
 	}
-	return row.TaskType
+	return &projects[0]
 }
 
-func selectedCheckerName(row *model.CheckerMap) string {
-	if row == nil {
-		return ""
+func findAssignmentUser(users []assignmentUserOption, email, name string) *assignmentUserOption {
+	for _, user := range users {
+		if email != "" && strings.EqualFold(strings.TrimSpace(user.KitsuEmail), strings.TrimSpace(email)) {
+			copyUser := user
+			return &copyUser
+		}
 	}
-	return row.KitsuName
+	for _, user := range users {
+		if name != "" && strings.EqualFold(strings.TrimSpace(user.KitsuName), strings.TrimSpace(name)) {
+			copyUser := user
+			return &copyUser
+		}
+	}
+	return nil
 }
 
-func selectedCheckerEmail(row *model.CheckerMap) string {
-	if row == nil {
-		return ""
-	}
-	return row.KitsuEmail
+func checkerResolvedInput(lang, value string) string {
+	return `<label>Resolved ID</label><input type="text" name="resolved_discord_id" value="` + esc(value) + `" placeholder="123456789012345678"><div class="field-help">` + t(lang, "通常はユーザー割り当ての Discord ID を自動参照します。必要なときだけ直接上書きしてください。", "Discord IDs are normally resolved from User Assignment. Only override this when needed.") + `</div>`
 }
 
-func selectedCheckerOverride(row *model.CheckerMap) string {
-	if row == nil {
-		return ""
+func projectCheckerResolvedID(row model.ProjectCheckerMap) string {
+	if strings.TrimSpace(row.OverrideDiscordID) != "" {
+		return strings.TrimSpace(row.OverrideDiscordID)
 	}
-	return row.OverrideDiscordID
+	return strings.TrimSpace(row.DiscordUserID)
 }
 
-func checkerResolvedInput(lang string, db *gorm.DB, row *model.CheckerMap) string {
-	if row == nil {
-		return `<div class="field-help">` + t(lang, "通常はユーザー割り当ての Discord ID を自動参照します。", "Discord IDs are normally resolved from User Assignment.") + `</div>`
+func projectCheckerDisplayName(row model.ProjectCheckerMap, users []assignmentUserOption) string {
+	if strings.TrimSpace(row.KitsuName) != "" {
+		return strings.TrimSpace(row.KitsuName)
 	}
-	value := selectedCheckerOverride(row)
-	if value == "" {
-		value = model.ResolveCheckerDiscordID(db, *row)
+	if user := findAssignmentUser(users, row.KitsuEmail, row.KitsuName); user != nil {
+		return user.KitsuName
 	}
-	return `<label>Resolved ID</label><input type="text" name="resolved_discord_id" value="` + esc(value) + `" placeholder="123456789012345678">`
+	for _, user := range users {
+		if row.DiscordUserID != "" && strings.TrimSpace(user.DiscordID) == strings.TrimSpace(row.DiscordUserID) {
+			return user.KitsuName
+		}
+	}
+	return ""
 }
 
 func parseUint(value string) uint {
