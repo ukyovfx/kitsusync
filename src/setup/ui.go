@@ -95,45 +95,6 @@ button,input,select{font:inherit}
   text-decoration:none;
   min-width:0;
 }
-.brand-mark{
-  width:60px;
-  height:60px;
-  border-radius:22px;
-  position:relative;
-  overflow:hidden;
-  background:linear-gradient(150deg, rgba(255,138,73,.22), rgba(255,255,255,.04));
-  border:1px solid rgba(255,255,255,.12);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.12), 0 14px 40px rgba(0,0,0,.34);
-  backdrop-filter:blur(18px);
-}
-.brand-mark::before{
-  content:"";
-  position:absolute;
-  left:14px;
-  right:14px;
-  bottom:13px;
-  height:16px;
-  border-radius:999px;
-  background:linear-gradient(90deg, var(--accent), var(--accent-2));
-}
-.brand-mark::after{
-  content:"";
-  position:absolute;
-  left:16px;
-  right:16px;
-  top:10px;
-  margin:auto;
-  width:0;
-  height:0;
-  border-left:14px solid transparent;
-  border-right:14px solid transparent;
-  border-bottom:30px solid rgba(255,255,255,.84);
-  filter:drop-shadow(0 10px 18px rgba(232,90,26,.22));
-}
-.brand-block:hover .brand-mark{
-  border-color:rgba(255,141,72,.4);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.14), 0 16px 44px rgba(232,90,26,.16);
-}
 .eyebrow{
   color:var(--accent-2);
   text-transform:uppercase;
@@ -581,7 +542,6 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
 <div class="shell">
   <div class="topbar">
     <a class="brand-block" href="%s" aria-label="KitsuSync home">
-      <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <div class="eyebrow">Kitsu x Discord</div>
         <div class="brand-title">%s</div>
