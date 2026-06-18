@@ -639,7 +639,6 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			projectUserRows = model.ListProjectUserMaps(db, project.ID)
 			projectCheckerRows = model.ListProjectCheckerMaps(db, project.ID)
 		}
-		candidates := buildAssignmentCandidates(kitsuPeople, projectUserRows, legacyUserRows, projectCheckerRows, legacyCheckerRows, botEmail)
 		taskTypes := assignmentTaskTypes(db, project)
 
 		if r.Method == http.MethodPost {
@@ -720,7 +719,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 				}
 			}
 		}
-		personOptions := buildAssignmentPersonOptions(candidates, selectedName, selectedEmail, lang)
+		personOptions := buildAssignmentPersonOptions(kitsuAssignmentOptions(kitsuPeople), selectedName, selectedEmail, lang)
 
 		var rows strings.Builder
 		assignments := buildUnifiedAssignments(projectUserRows, legacyUserRows, projectCheckerRows, legacyCheckerRows, useProjectScoped)
@@ -784,13 +783,15 @@ function syncPersonSelect(){
   document.getElementById('kitsuEmailInput').value = opt ? (opt.getAttribute('data-email') || '') : '';
 }
 var checkerTaskTypes = [];
+var checkerTaskTypeIcons = {};
 function escapeAttr(value){
   return String(value).replace(/&/g, '&amp;').replace(/\"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 function initCheckerTaskTypes(){
   var allEl = document.getElementById('checkerTaskTypeAll');
+  var iconsEl = document.getElementById('checkerTaskTypeIcons');
   var selectedEl = document.getElementById('checkerTaskTypeSelected');
-  if(!allEl || !selectedEl){
+  if(!allEl || !iconsEl || !selectedEl){
     return;
   }
   try {
@@ -798,7 +799,15 @@ function initCheckerTaskTypes(){
   } catch (err) {
     checkerTaskTypes = [];
   }
+  try {
+    checkerTaskTypeIcons = JSON.parse(iconsEl.textContent || '{}');
+  } catch (err) {
+    checkerTaskTypeIcons = {};
+  }
   renderCheckerTaskTypes();
+}
+function checkerTaskTypeIcon(taskType){
+  return checkerTaskTypeIcons[taskType] || '🏷️';
 }
 function renderCheckerTaskTypes(){
   var allEl = document.getElementById('checkerTaskTypeAll');
@@ -825,7 +834,7 @@ function renderCheckerTaskTypes(){
     }
     var option = document.createElement('option');
     option.value = taskType;
-    option.textContent = taskType;
+    option.textContent = checkerTaskTypeIcon(taskType) + ' ' + taskType;
     select.appendChild(option);
   });
   hidden.innerHTML = checkerTaskTypes.map(function(taskType){
@@ -836,7 +845,7 @@ function renderCheckerTaskTypes(){
     return;
   }
   chips.innerHTML = checkerTaskTypes.map(function(taskType){
-    return '<span class=\"status-pill warn\">%s ' + escapeAttr(taskType) + ' <button type=\"button\" class=\"btn-ghost\" style=\"padding:2px 8px;min-height:auto\" onclick=\"removeCheckerTaskType(' + JSON.stringify(taskType) + ')\">%s</button></span>';
+    return '<span class=\"status-pill warn\">' + checkerTaskTypeIcon(taskType) + ' ' + escapeAttr(taskType) + ' <button type=\"button\" class=\"btn-ghost\" data-task-type=\"' + escapeAttr(taskType) + '\" style=\"padding:2px 8px;min-height:auto\" onclick=\"removeCheckerTaskType(this.getAttribute(&quot;data-task-type&quot;))\">%s</button></span>';
   }).join('');
 }
 function addCheckerTaskType(){
@@ -875,7 +884,6 @@ document.addEventListener('DOMContentLoaded', function(){
 			orphanReviewers,
 			t(lang, "task type を選択", "Select task type"),
 			t(lang, "未設定", "Not set"),
-			taskTypeIcon("tag"),
 			esc(t(lang, "外す", "Remove")),
 		)
 		fmt.Fprint(w, adminPage(lang, t(lang, "ユーザー割り当て", "User Assignment"), r, body))
@@ -1271,79 +1279,22 @@ func assignmentIdentityKey(name, email string) string {
 func buildAssignmentPersonOptions(users []assignmentUserOption, selectedName, selectedEmail, lang string) string {
 	var out strings.Builder
 	out.WriteString(`<option value="">` + t(lang, "選択してください", "Select user") + `</option>`)
-	found := false
 	for _, user := range users {
 		isSelected := (selectedEmail != "" && user.KitsuEmail == selectedEmail) || (selectedEmail == "" && selectedName != "" && user.KitsuName == selectedName)
-		if isSelected {
-			found = true
-		}
 		out.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" data-email="%s" %s>%s</option>`, esc(user.KitsuEmail), esc(user.KitsuName), esc(user.KitsuEmail), selectedAttr(isSelected), esc(user.KitsuName)))
-	}
-	if (selectedEmail != "" || selectedName != "") && !found {
-		out.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" data-email="%s" selected>%s</option>`, esc(selectedEmail), esc(selectedName), esc(selectedEmail), esc(selectedName)))
 	}
 	return out.String()
 }
 
-func buildAssignmentCandidates(kitsuPeople []KitsuPerson, projectUsers []model.ProjectUserMap, legacyUsers []model.UserMap, projectCheckers []model.ProjectCheckerMap, legacyCheckers []model.CheckerMap, botEmail string) []assignmentUserOption {
-	candidates := map[string]assignmentUserOption{}
-	add := func(rowID uint, name, email, discordID string) {
-		name = strings.TrimSpace(name)
-		email = strings.TrimSpace(email)
-		if name == "" {
-			return
-		}
-		if shouldExcludeBotIdentity(name, email, botEmail) {
-			return
-		}
-		key := assignmentIdentityKey(name, email)
-		current, ok := candidates[key]
-		if !ok {
-			candidates[key] = assignmentUserOption{RowID: rowID, KitsuName: name, KitsuEmail: email, DiscordID: strings.TrimSpace(discordID)}
-			return
-		}
-		if current.RowID == 0 && rowID > 0 {
-			current.RowID = rowID
-		}
-		if current.KitsuEmail == "" && email != "" {
-			current.KitsuEmail = email
-		}
-		if current.DiscordID == "" && strings.TrimSpace(discordID) != "" {
-			current.DiscordID = strings.TrimSpace(discordID)
-		}
-		candidates[key] = current
+func kitsuAssignmentOptions(persons []KitsuPerson) []assignmentUserOption {
+	options := make([]assignmentUserOption, 0, len(persons))
+	for _, person := range persons {
+		options = append(options, assignmentUserOption{
+			KitsuName:  strings.TrimSpace(person.FullName),
+			KitsuEmail: strings.TrimSpace(person.Email),
+		})
 	}
-	for _, person := range kitsuPeople {
-		add(0, person.FullName, person.Email, "")
-	}
-	for _, row := range projectUsers {
-		add(row.ID, row.KitsuName, row.KitsuEmail, row.DiscordUserID)
-	}
-	for _, row := range legacyUsers {
-		add(row.ID, row.KitsuName, row.KitsuEmail, row.DiscordID)
-	}
-	for _, row := range projectCheckers {
-		add(0, row.KitsuName, row.KitsuEmail, row.DiscordUserID)
-	}
-	for _, row := range legacyCheckers {
-		add(0, row.KitsuName, row.KitsuEmail, row.DiscordID)
-	}
-	out := make([]assignmentUserOption, 0, len(candidates))
-	for _, row := range candidates {
-		out = append(out, row)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.ToLower(out[i].KitsuName) < strings.ToLower(out[j].KitsuName)
-	})
-	return out
-}
-
-func shouldExcludeBotIdentity(name, email, botEmail string) bool {
-	if !strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(botEmail)) {
-		return false
-	}
-	normalizedName := strings.ToLower(strings.TrimSpace(name))
-	return normalizedName == "bot" || normalizedName == strings.ToLower(runtimeBotFirstName+" "+runtimeBotLastName)
+	return options
 }
 
 func buildUnifiedAssignments(projectUsers []model.ProjectUserMap, legacyUsers []model.UserMap, projectCheckers []model.ProjectCheckerMap, legacyCheckers []model.CheckerMap, useProjectScoped bool) []unifiedAssignmentRow {
@@ -1401,6 +1352,7 @@ func buildUnifiedAssignments(projectUsers []model.ProjectUserMap, legacyUsers []
 func reviewerTaskTypePicker(taskTypes, selected []string, lang string) string {
 	taskTypesJSON, _ := json.Marshal(taskTypes)
 	selectedJSON, _ := json.Marshal(selected)
+	iconsJSON, _ := json.Marshal(taskTypeIconMap(taskTypes))
 	return fmt.Sprintf(`
 <div class="checker-task-picker">
   <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
@@ -1410,12 +1362,22 @@ func reviewerTaskTypePicker(taskTypes, selected []string, lang string) string {
   <div id="checkerTaskTypeHiddenInputs"></div>
   <div id="checkerTaskTypeChips" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"></div>
   <script type="application/json" id="checkerTaskTypeAll">%s</script>
+  <script type="application/json" id="checkerTaskTypeIcons">%s</script>
   <script type="application/json" id="checkerTaskTypeSelected">%s</script>
 </div>`,
 		esc(t(lang, "追加", "Add")),
 		string(taskTypesJSON),
+		string(iconsJSON),
 		string(selectedJSON),
 	)
+}
+
+func taskTypeIconMap(taskTypes []string) map[string]string {
+	icons := make(map[string]string, len(taskTypes))
+	for _, taskType := range taskTypes {
+		icons[taskType] = taskTypeIcon(taskType)
+	}
+	return icons
 }
 
 func reviewerTaskTypeBadges(taskTypes []string, lang string) string {
