@@ -30,14 +30,13 @@ type projectDeliveryState struct {
 }
 
 type projectDeliveryItem struct {
-	ProjectID     string
-	ProjectName   string
-	Status        string
-	Summary       string
-	Detail        string
-	LastVerified  string
-	CanSend       bool
-	WebhookReady  bool
+	ProjectID    string
+	ProjectName  string
+	Status       string
+	Summary      string
+	Detail       string
+	LastVerified string
+	CanSend      bool
 }
 
 // DiagnosticsHandler runs environment and delivery-readiness checks on demand.
@@ -164,9 +163,8 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		"Discord Bot Token が設定されるまでこの確認は保留されます。",
 		"This check is blocked until a Discord bot token is configured.",
 	)
-
 	projectWebhookFix := t(lang,
-		"Project Management 縺ｧ project routing 縺ｨ webhook 險ｭ螳壹ｒ隕狗峩縺励∝・蠎ｦ Diagnostics 繧貞ｮ溯｡後＠縺ｦ縺上□縺輔＞縲・,
+		"まず Project Management で project routing と webhook を確認してください。",
 		"Review the project routing and webhook setup in Project Management, then rerun Diagnostics.",
 	)
 
@@ -399,11 +397,11 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 						}
 					} else {
 						webhookPermissionDetail = "Could not read permission bits from the Discord member response."
-						webhookPermissionFix = t(lang, "Bot\u8a2d\u5b9a\u3068 Discord \u30b5\u30fc\u30d0\u30fc\u6a29\u9650\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Review Bot Settings and confirm the Discord server permissions manually.")
+						webhookPermissionFix = t(lang, "permission bits が読めなくても、必要なら Bot設定と Discord 権限を確認してください。", "Review Bot Settings and confirm the Discord server permissions manually.")
 					}
 				} else {
 					webhookPermissionDetail = "Could not retrieve Discord bot member info to verify permissions."
-					webhookPermissionFix = t(lang, "Bot\u8a2d\u5b9a\u3068 Discord \u30b5\u30fc\u30d0\u30fc\u6a29\u9650\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Review Bot Settings and confirm the Discord server permissions manually.")
+					webhookPermissionFix = t(lang, "permission bits を取得できなくても、必要なら Bot設定と Discord 権限を確認してください。", "Review Bot Settings and confirm the Discord server permissions manually.")
 				}
 			}
 		}
@@ -488,15 +486,13 @@ func buildProjectWebhookCheck(
 		return diagCheck{
 			Label:  label,
 			Status: "warn",
-			Detail: t(lang, "Project webhook 縺ｮ遒ｺ隱阪∪縺ｧ縺ｫ蟇ｾ雎｡ project 縺後∪縺縺ゅｊ縺ｾ縺帙ｓ縲・, "Project webhook readiness cannot be confirmed yet because no project is configured."),
+			Detail: t(lang, "project がまだないため、project-level webhook の準備状態は確認できません。", "Project webhook readiness cannot be confirmed yet because no project is configured."),
 			Fix:    projectWebhookFix,
 		}
 	}
 
-	readyProjects := make([]string, 0, len(projects))
 	incompleteProjects := []string{}
 	missingProjects := []string{}
-
 	for _, project := range projects {
 		webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
 		if len(webhooks) == 0 {
@@ -518,7 +514,6 @@ func buildProjectWebhookCheck(
 
 		switch {
 		case hasReady:
-			readyProjects = append(readyProjects, project.Name)
 		case hasIncomplete:
 			incompleteProjects = append(incompleteProjects, project.Name)
 		default:
@@ -527,20 +522,17 @@ func buildProjectWebhookCheck(
 	}
 
 	if len(incompleteProjects) > 0 || len(missingProjects) > 0 {
-		detail := t(lang, "Project webhook 縺ｮ險ｭ螳壹′譛ｪ螳溯｡後・ project 縺後≠繧翫∪縺吶・, "Some projects still need project webhook setup.")
+		detail := t(lang, "project webhook の設定が不足している project があります。", "Some projects still need project webhook setup.")
 		if len(incompleteProjects) > 0 {
-			detail += " " + fmt.Sprintf(t(lang, "荳榊燕縺ｪ project: %s", "Incomplete projects: %s"), strings.Join(incompleteProjects, ", "))
+			detail += " " + fmt.Sprintf(t(lang, "不完全な project: %s", "Incomplete projects: %s"), strings.Join(incompleteProjects, ", "))
 		}
 		if len(missingProjects) > 0 {
-			detail += " " + fmt.Sprintf(t(lang, "譛ｪ險ｭ螳壹・ project: %s", "Projects without webhooks: %s"), strings.Join(missingProjects, ", "))
+			detail += " " + fmt.Sprintf(t(lang, "webhook 未設定の project: %s", "Projects without webhooks: %s"), strings.Join(missingProjects, ", "))
 		}
 		return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: projectWebhookFix}
 	}
 
-	detail := t(lang,
-		"Project webhook 縺ｯ菴懈・貂医∩縺ｧ縺吶ら｢ｺ隱阪・ project-level webhook 繧剃ｽｿ逕ｨ縺励∪縺吶・,
-		"Project webhooks are configured. Delivery uses project-level webhooks.",
-	)
+	detail := t(lang, "Project webhook は作成済みです。通知配信は project-level webhook を使用します。", "Project webhooks are configured. Delivery uses project-level webhooks.")
 	if webhookPermissionDetail != "" {
 		detail += " " + webhookPermissionDetail
 	}
@@ -669,15 +661,15 @@ func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSe
 func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) projectDeliveryState {
 	state := projectDeliveryState{
 		SummaryStatus: "warn",
-		Summary:       t(lang, "\u672a\u78ba\u8a8d", "Not verified"),
-		Detail:        t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3054\u3068\u306b\u901a\u77e5\u78ba\u8a8d\u3092\u884c\u3046\u3068\u3001\u5b9f\u969b\u306e\u901a\u77e5\u5148\u307e\u3067\u542b\u3081\u3066\u78ba\u8a8d\u3067\u304d\u307e\u3059\u3002", "Verify notification delivery per project so the actual delivery path is confirmed."),
-		Fix:           t(lang, "\u5fc5\u8981\u306b\u5fdc\u3058\u3066\u5404 project \u3067\u30c6\u30b9\u30c8\u901a\u77e5\u30921\u56de\u3060\u3051\u9001\u4fe1\u3057\u3001Discord \u5074\u306e\u7740\u4fe1\u3082\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "When ready, send one test notification per project and confirm that it arrived in Discord."),
+		Summary:       t(lang, "未確認", "Not verified"),
+		Detail:        t(lang, "プロジェクトごとに通知確認を行うと、実際の通知先まで含めて確認できます。", "Verify notification delivery per project so the actual delivery path is confirmed."),
+		Fix:           t(lang, "必要に応じて各 project でテスト通知を 1 回だけ送信し、Discord 側の着信も確認してください。", "When ready, send one test notification per project and confirm that it arrived in Discord."),
 		APIPath:       apiPath,
 	}
 
 	projects := model.ListProjects(db)
 	if len(projects) == 0 {
-		state.Fix = t(lang, "\u307e\u305a Project Management \u3067 project routing \u3068 webhook \u3092\u4f5c\u6210\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Create the project routing and webhook in Project Management first.")
+		state.Fix = t(lang, "まず Project Management で project routing と webhook を作成してください。", "Create the project routing and webhook in Project Management first.")
 		return state
 	}
 
@@ -696,31 +688,29 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 			ProjectID:   project.KitsuProjectID,
 			ProjectName: project.Name,
 			Status:      "warn",
-			Summary:     t(lang, "\u672a\u78ba\u8a8d", "Not verified"),
-			Detail:      t(lang, "\u307e\u3060\u3053\u306e project \u306e\u30c6\u30b9\u30c8\u901a\u77e5\u78ba\u8a8d\u306f\u8a18\u9332\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002", "No successful test notification has been recorded for this project yet."),
+			Summary:     t(lang, "未確認", "Not verified"),
+			Detail:      t(lang, "まだこの project のテスト通知確認は記録されていません。", "No successful test notification has been recorded for this project yet."),
 			CanSend:     true,
 		}
 
 		for _, webhook := range model.ListProjectWebhooks(db, project.KitsuProjectID) {
 			if strings.TrimSpace(webhook.WebhookURL) != "" && strings.TrimSpace(webhook.DiscordChannelID) != "" {
-				item.WebhookReady = true
+				item.Detail = t(lang, "Project webhook は作成済みです。通知配信は project-level webhook を使用します。", "Project webhooks are configured. Delivery uses project-level webhooks.")
 				break
 			}
 		}
 
-		if item.WebhookReady {
-			item.Detail = t(lang, "Project webhook \u306f\u4f5c\u6210\u6e08\u307f\u3067\u3059\u3002\u901a\u77e5\u914d\u4fe1\u306f project-level webhook \u3092\u4f7f\u7528\u3057\u307e\u3059\u3002", "Project webhooks are configured. Delivery uses project-level webhooks.")
-		} else {
+		if item.Detail == t(lang, "まだこの project のテスト通知確認は記録されていません。", "No successful test notification has been recorded for this project yet.") {
 			item.Status = "fail"
-			item.Summary = t(lang, "Webhook\u672a\u8a2d\u5b9a", "Webhook missing")
-			item.Detail = t(lang, "\u3053\u306e project \u306f webhook URL \u307e\u305f\u306f Discord channel ID \u304c\u4e0d\u8db3\u3057\u3066\u3044\u307e\u3059\u3002", "This project is missing a webhook URL or Discord channel ID.")
+			item.Summary = t(lang, "Webhook未設定", "Webhook missing")
+			item.Detail = t(lang, "この project は webhook URL または Discord channel ID が不足しています。", "This project is missing a webhook URL or Discord channel ID.")
 			allReady = false
 		}
 
 		if verified && verifiedProjectID == project.KitsuProjectID {
 			item.Status = "ok"
-			item.Summary = t(lang, "\u78ba\u8a8d\u6e08\u307f", "Verified")
-			item.Detail = t(lang, "\u3053\u306e project \u306e\u30c6\u30b9\u30c8\u901a\u77e5\u6210\u529f\u304c\u8a18\u9332\u3055\u308c\u3066\u3044\u307e\u3059\u3002", "A successful test notification has been recorded for this project.")
+			item.Summary = t(lang, "確認済み", "Verified")
+			item.Detail = t(lang, "この project のテスト通知成功が記録されています。", "A successful test notification has been recorded for this project.")
 			item.LastVerified = verifiedAtLabel
 			anyVerified = true
 		}
@@ -731,15 +721,13 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 	switch {
 	case !allReady:
 		state.SummaryStatus = "fail"
-		state.Summary = t(lang, "\u8981\u4fee\u6b63", "Needs setup")
-		state.Detail = t(lang, "project-level webhook \u304c\u672a\u8a2d\u5b9a\u307e\u305f\u306f\u4e0d\u5b8c\u5168\u306a project \u304c\u3042\u308a\u307e\u3059\u3002", "At least one project is missing complete project-level webhook configuration.")
-		state.Fix = t(lang, "Project Management \u3067\u4e0d\u8db3\u3057\u3066\u3044\u308b project webhook \u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Review the incomplete project webhook setup in Project Management.")
+		state.Summary = t(lang, "要修正", "Needs setup")
+		state.Detail = t(lang, "project-level webhook が未設定または不完全な project があります。", "At least one project is missing complete project-level webhook configuration.")
+		state.Fix = t(lang, "Project Management で不足している project webhook を確認してください。", "Review the incomplete project webhook setup in Project Management.")
 	case anyVerified:
 		state.SummaryStatus = "ok"
-		state.Summary = t(lang, "\u78ba\u8a8d\u6e08\u307f", "Verified")
-		state.Detail = t(lang, "\u5c11\u306a\u304f\u3068\u30821\u3064\u306e project \u3067\u30c6\u30b9\u30c8\u901a\u77e5\u6210\u529f\u304c\u8a18\u9332\u3055\u308c\u3066\u3044\u307e\u3059\u3002", "At least one project has a recorded successful test notification.")
-	default:
-		state.Summary = t(lang, "\u672a\u78ba\u8a8d", "Not verified")
+		state.Summary = t(lang, "確認済み", "Verified")
+		state.Detail = t(lang, "少なくとも 1 つの project でテスト通知成功が記録されています。", "At least one project has a recorded successful test notification.")
 	}
 
 	return state
@@ -792,7 +780,7 @@ func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
 
 		meta := esc(item.Detail)
 		if item.LastVerified != "" {
-			meta += `<br>` + esc(fmt.Sprintf(t(lang, "\u6700\u7d42\u78ba\u8a8d: %s", "Last verified: %s"), item.LastVerified))
+			meta += `<br>` + esc(fmt.Sprintf(t(lang, "最終確認: %s", "Last verified: %s"), item.LastVerified))
 		}
 
 		items.WriteString(fmt.Sprintf(`
@@ -805,7 +793,7 @@ func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
     <span class="status-pill %s" id="diagProjectBadge-%s">%s</span>
   </div>
   <div class="diag-project-actions">
-    <button class="btn" type="button" data-diag-project-test data-project-id="%s" data-project-name="%s" data-badge-id="diagProjectBadge-%s" data-detail-id="diagProjectDetail-%s" data-feedback-id="diagProjectFeedback-%s">%s</button>
+    <button class="btn" type="button" data-diag-project-test data-project-id="%s" data-badge-id="diagProjectBadge-%s" data-detail-id="diagProjectDetail-%s" data-feedback-id="diagProjectFeedback-%s">%s</button>
   </div>
   <div class="diag-state-note" id="diagProjectFeedback-%s" hidden></div>
 </div>`,
@@ -816,11 +804,10 @@ func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
 			esc(item.ProjectID),
 			esc(item.Summary),
 			esc(item.ProjectID),
-			esc(item.ProjectName),
 			esc(item.ProjectID),
 			esc(item.ProjectID),
 			esc(item.ProjectID),
-			esc(t(lang, "\u30c6\u30b9\u30c8\u901a\u77e5\u3092\u9001\u4fe1", "Send test notification")),
+			esc(t(lang, "テスト通知を送信", "Send test notification")),
 			esc(item.ProjectID),
 		))
 	}
@@ -897,20 +884,20 @@ func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
   });
 })();
 </script>`,
-		esc(t(lang, "\u901a\u77e5\u78ba\u8a8d", "Notification delivery verification")),
+		esc(t(lang, "通知配信の確認", "Notification delivery verification")),
 		esc(state.Detail),
 		fixHTML,
 		pillClass,
 		esc(state.Summary),
 		items.String(),
-		t(lang, "\u9001\u4fe1\u4e2d...", "Sending..."),
+		t(lang, "送信中...", "Sending..."),
 		state.APIPath,
-		t(lang, "\u78ba\u8a8d\u6e08\u307f", "Verified"),
-		t(lang, "\u3053\u306e project \u306e\u30c6\u30b9\u30c8\u901a\u77e5\u6210\u529f\u304c\u8a18\u9332\u3055\u308c\u307e\u3057\u305f\u3002", "A successful test notification was recorded for this project."),
-		t(lang, "\u6700\u7d42\u78ba\u8a8d: ", "Last verified: "),
-		t(lang, "\u30c6\u30b9\u30c8\u901a\u77e5\u3092\u9001\u4fe1\u3057\u307e\u3057\u305f\u3002Discord \u5074\u306e\u7740\u4fe1\u3082\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "A test notification was sent. Confirm that it arrived in Discord as well."),
-		t(lang, "\u672a\u78ba\u8a8d", "Not verified"),
-		t(lang, "\u30c6\u30b9\u30c8\u901a\u77e5\u3092\u9001\u4fe1\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f: ", "The test notification could not be sent: "),
+		t(lang, "確認済み", "Verified"),
+		t(lang, "この project のテスト通知成功が記録されました。", "A successful test notification was recorded for this project."),
+		t(lang, "最終確認: ", "Last verified: "),
+		t(lang, "テスト通知を送信しました。Discord 側の着弾も確認してください。", "A test notification was sent. Confirm that it arrived in Discord as well."),
+		t(lang, "未確認", "Not verified"),
+		t(lang, "テスト通知を送信できませんでした: ", "The test notification could not be sent: "),
 	)
 }
 
