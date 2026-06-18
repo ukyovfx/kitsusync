@@ -171,7 +171,7 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 	}
 
 	if strings.TrimSpace(webhookURL) != "" {
-		diag.Warnings = append(diag.Warnings, "Fallback webhook is configured; it is only used for unrouted notifications.")
+		diag.Warnings = append(diag.Warnings, "Legacy fallback webhook is configured; it is only used for unrouted notifications.")
 	}
 
 	diag.SetupComplete = isSetupComplete(diag)
@@ -186,22 +186,22 @@ func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID string) []SetupChe
 	if email != "" {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupOK, Summary: "Configured", Detail: email})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupError, Summary: "Missing", Fix: "Set KITSU_RUNTIME_EMAIL or use /bot/admin/bot."})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the runtime email there."})
 	}
 	if password != "" {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupError, Summary: "Missing", Fix: "Set KITSU_RUNTIME_PASSWORD or use /bot/admin/bot."})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the runtime password there."})
 	}
 	if strings.TrimSpace(kitsuHost) != "" {
 		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupOK, Summary: "Configured", Detail: strings.TrimSpace(kitsuHost)})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupError, Summary: "Missing", Fix: "Set KITSU_HOSTNAME in .env."})
+		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupError, Summary: "Missing", Fix: "Review the Kitsu hostname in Bot Settings."})
 	}
 	if strings.TrimSpace(botToken) != "" {
 		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
 	} else {
-		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupError, Summary: "Missing", Fix: "Set DISCORD_BOT_TOKEN in .env."})
+		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the shared bot token there."})
 	}
 	if strings.TrimSpace(guildID) != "" {
 		checks = append(checks, SetupCheck{Key: "discord_guild_id", Label: "Discord guild fallback", Status: SetupWarn, Summary: "Configured", Detail: strings.TrimSpace(guildID), Fix: "Per-project guilds are preferred; fallback guild is only a compatibility default."})
