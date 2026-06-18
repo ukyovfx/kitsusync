@@ -2,6 +2,7 @@
 
 import (
 	"app/src/model"
+	"encoding/json"
 	"fmt"
 	"html"
 	"log/slog"
@@ -782,7 +783,81 @@ function syncPersonSelect(){
   document.getElementById('kitsuNameInput').value = opt ? (opt.getAttribute('data-name') || '') : '';
   document.getElementById('kitsuEmailInput').value = opt ? (opt.getAttribute('data-email') || '') : '';
 }
-document.addEventListener('DOMContentLoaded', syncPersonSelect);
+var checkerTaskTypes = [];
+function escapeAttr(value){
+  return String(value).replace(/&/g, '&amp;').replace(/\"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function initCheckerTaskTypes(){
+  var allEl = document.getElementById('checkerTaskTypeAll');
+  var selectedEl = document.getElementById('checkerTaskTypeSelected');
+  if(!allEl || !selectedEl){
+    return;
+  }
+  try {
+    checkerTaskTypes = JSON.parse(selectedEl.textContent || '[]');
+  } catch (err) {
+    checkerTaskTypes = [];
+  }
+  renderCheckerTaskTypes();
+}
+function renderCheckerTaskTypes(){
+  var allEl = document.getElementById('checkerTaskTypeAll');
+  var select = document.getElementById('checkerTaskTypeSelect');
+  var chips = document.getElementById('checkerTaskTypeChips');
+  var hidden = document.getElementById('checkerTaskTypeHiddenInputs');
+  if(!allEl || !select || !chips || !hidden){
+    return;
+  }
+  var allTaskTypes = [];
+  try {
+    allTaskTypes = JSON.parse(allEl.textContent || '[]');
+  } catch (err) {
+    allTaskTypes = [];
+  }
+  select.innerHTML = '';
+  var placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = %q;
+  select.appendChild(placeholder);
+  allTaskTypes.forEach(function(taskType){
+    if(checkerTaskTypes.indexOf(taskType) !== -1){
+      return;
+    }
+    var option = document.createElement('option');
+    option.value = taskType;
+    option.textContent = taskType;
+    select.appendChild(option);
+  });
+  hidden.innerHTML = checkerTaskTypes.map(function(taskType){
+    return '<input type=\"hidden\" name=\"checker_task_type\" value=\"' + escapeAttr(taskType) + '\">';
+  }).join('');
+  if(checkerTaskTypes.length === 0){
+    chips.innerHTML = '<span class=\"status-pill ok\">' + %q + '</span>';
+    return;
+  }
+  chips.innerHTML = checkerTaskTypes.map(function(taskType){
+    return '<span class=\"status-pill warn\">%s ' + escapeAttr(taskType) + ' <button type=\"button\" class=\"btn-ghost\" style=\"padding:2px 8px;min-height:auto\" onclick=\"removeCheckerTaskType(' + JSON.stringify(taskType) + ')\">%s</button></span>';
+  }).join('');
+}
+function addCheckerTaskType(){
+  var select = document.getElementById('checkerTaskTypeSelect');
+  if(!select || !select.value){
+    return;
+  }
+  if(checkerTaskTypes.indexOf(select.value) === -1){
+    checkerTaskTypes.push(select.value);
+    checkerTaskTypes.sort();
+  }
+  renderCheckerTaskTypes();
+}
+function removeCheckerTaskType(taskType){
+  checkerTaskTypes = checkerTaskTypes.filter(function(value){ return value !== taskType; });
+  renderCheckerTaskTypes();
+}
+document.addEventListener('DOMContentLoaded', function(){
+  syncPersonSelect();
+  initCheckerTaskTypes();
+});
 </script>`,
 			formTitle,
 			t(lang, "User = タスク割り当て時に @mention します。Reviewer / Checker は必要な人だけ追加で設定します。", "User = @mentioned when a task is assigned. Reviewer / Checker is optional and only needed for specific people."),
@@ -793,11 +868,15 @@ document.addEventListener('DOMContentLoaded', syncPersonSelect);
 			t(lang, "Kitsuユーザー", "Kitsu user"), personOptions,
 			t(lang, "DiscordユーザーID", "Discord user ID"), esc(selectedDiscordID), t(lang, "未入力の場合は ID未設定 と表示されます。", "If empty, the UI will show No ID."),
 			t(lang, "レビュアー / チェッカー task type", "Reviewer / Checker task types"),
-			reviewerTaskTypeInputs(taskTypes, selectedCheckerTaskTypes),
-			t(lang, "必要な人だけ複数選択してください。未選択なら reviewer/checker にはなりません。", "Select one or more task types only for people who need reviewer/checker duties. Leave empty to keep this person out of reviewer/checker assignments."),
+			reviewerTaskTypePicker(taskTypes, selectedCheckerTaskTypes, lang),
+			t(lang, "task type を 1 つずつ追加してください。追加済みの task type は下に表示され、不要なら外せます。", "Add task types one by one. Selected task types appear below and can be removed if not needed."),
 			t(lang, "保存", "Save"), withLang("/bot/admin/users", r), t(lang, "キャンセル", "Cancel"),
 			t(lang, "現在の割り当て", "Current assignments"), t(lang, "名前", "Name"), t(lang, "レビュアー / チェッカー", "Reviewer / Checker"), t(lang, "操作", "Actions"), rows.String(),
 			orphanReviewers,
+			t(lang, "task type を選択", "Select task type"),
+			t(lang, "未設定", "Not set"),
+			taskTypeIcon("tag"),
+			esc(t(lang, "外す", "Remove")),
 		)
 		fmt.Fprint(w, adminPage(lang, t(lang, "ユーザー割り当て", "User Assignment"), r, body))
 	}
@@ -991,16 +1070,25 @@ func botAccountEmail(db *gorm.DB) string {
 }
 
 func filterAssignablePersons(persons []KitsuPerson, botEmail string) []KitsuPerson {
-	if botEmail == "" {
-		return persons
-	}
 	filtered := make([]KitsuPerson, 0, len(persons))
 	for _, person := range persons {
-		if !strings.EqualFold(strings.TrimSpace(person.Email), botEmail) {
-			filtered = append(filtered, person)
+		if shouldExcludeBotPerson(person, botEmail) {
+			continue
 		}
+		filtered = append(filtered, person)
 	}
 	return filtered
+}
+
+func shouldExcludeBotPerson(person KitsuPerson, botEmail string) bool {
+	if !strings.EqualFold(strings.TrimSpace(person.Email), strings.TrimSpace(botEmail)) {
+		return false
+	}
+	if !person.Active {
+		return true
+	}
+	name := strings.ToLower(strings.TrimSpace(person.FullName))
+	return name == "bot" || name == strings.ToLower(runtimeBotFirstName+" "+runtimeBotLastName)
 }
 
 func filterAssignableUsers(users []model.UserMap, botEmail string) []model.UserMap {
@@ -1205,7 +1293,7 @@ func buildAssignmentCandidates(kitsuPeople []KitsuPerson, projectUsers []model.P
 		if name == "" {
 			return
 		}
-		if botEmail != "" && strings.EqualFold(email, botEmail) {
+		if shouldExcludeBotIdentity(name, email, botEmail) {
 			return
 		}
 		key := assignmentIdentityKey(name, email)
@@ -1248,6 +1336,14 @@ func buildAssignmentCandidates(kitsuPeople []KitsuPerson, projectUsers []model.P
 		return strings.ToLower(out[i].KitsuName) < strings.ToLower(out[j].KitsuName)
 	})
 	return out
+}
+
+func shouldExcludeBotIdentity(name, email, botEmail string) bool {
+	if !strings.EqualFold(strings.TrimSpace(email), strings.TrimSpace(botEmail)) {
+		return false
+	}
+	normalizedName := strings.ToLower(strings.TrimSpace(name))
+	return normalizedName == "bot" || normalizedName == strings.ToLower(runtimeBotFirstName+" "+runtimeBotLastName)
 }
 
 func buildUnifiedAssignments(projectUsers []model.ProjectUserMap, legacyUsers []model.UserMap, projectCheckers []model.ProjectCheckerMap, legacyCheckers []model.CheckerMap, useProjectScoped bool) []unifiedAssignmentRow {
@@ -1302,18 +1398,24 @@ func buildUnifiedAssignments(projectUsers []model.ProjectUserMap, legacyUsers []
 	return out
 }
 
-func reviewerTaskTypeInputs(taskTypes, selected []string) string {
-	selectedSet := make(map[string]bool, len(selected))
-	for _, taskType := range selected {
-		selectedSet[taskType] = true
-	}
-	var out strings.Builder
-	out.WriteString(`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px 14px">`)
-	for _, taskType := range taskTypes {
-		out.WriteString(fmt.Sprintf(`<label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" name="checker_task_type" value="%s" %s><span>%s %s</span></label>`, esc(taskType), checkedAttr(selectedSet[taskType]), taskTypeIcon(taskType), esc(taskType)))
-	}
-	out.WriteString(`</div>`)
-	return out.String()
+func reviewerTaskTypePicker(taskTypes, selected []string, lang string) string {
+	taskTypesJSON, _ := json.Marshal(taskTypes)
+	selectedJSON, _ := json.Marshal(selected)
+	return fmt.Sprintf(`
+<div class="checker-task-picker">
+  <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+    <select id="checkerTaskTypeSelect" style="min-width:220px"></select>
+    <button type="button" class="btn-ghost" onclick="addCheckerTaskType()">%s</button>
+  </div>
+  <div id="checkerTaskTypeHiddenInputs"></div>
+  <div id="checkerTaskTypeChips" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"></div>
+  <script type="application/json" id="checkerTaskTypeAll">%s</script>
+  <script type="application/json" id="checkerTaskTypeSelected">%s</script>
+</div>`,
+		esc(t(lang, "追加", "Add")),
+		string(taskTypesJSON),
+		string(selectedJSON),
+	)
 }
 
 func reviewerTaskTypeBadges(taskTypes []string, lang string) string {
@@ -1464,13 +1566,6 @@ func containsAssignmentTaskType(items []string, value string) bool {
 		}
 	}
 	return false
-}
-
-func checkedAttr(checked bool) string {
-	if checked {
-		return "checked"
-	}
-	return ""
 }
 
 func parseUint(value string) uint {

@@ -38,6 +38,8 @@ type KitsuPerson struct {
 	ID       string
 	FullName string
 	Email    string
+	Active   bool
+	Role     string
 }
 
 type KitsuProject struct {
@@ -144,6 +146,8 @@ func ListKitsuPersons(_ string) []KitsuPerson {
 			ID:       person.ID,
 			FullName: strings.TrimSpace(fullName),
 			Email:    strings.TrimSpace(person.Email),
+			Active:   person.Active,
+			Role:     strings.TrimSpace(person.Role),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].FullName) < strings.ToLower(out[j].FullName) })
