@@ -20,14 +20,23 @@ type diagCheck struct {
 	Fix    string
 }
 
-type testNotificationState struct {
-	Status        string
+type projectDeliveryState struct {
+	SummaryStatus string
 	Summary       string
 	Detail        string
 	Fix           string
-	CanSend       bool
-	TargetProject string
 	APIPath       string
+	Projects      []projectDeliveryItem
+}
+
+type projectDeliveryItem struct {
+	ProjectID    string
+	ProjectName  string
+	Status       string
+	Summary      string
+	Detail       string
+	LastVerified string
+	CanSend      bool
 }
 
 // DiagnosticsHandler runs environment and delivery-readiness checks on demand.
@@ -38,10 +47,10 @@ func DiagnosticsHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
 
 		kitsuHost, botToken, guildID, webhookURL := refreshCreds()
 		checks := runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL, db)
-		testState := buildTestNotificationState(lang, db, diagnosticsAPIBase(r)+"/api/setup/test-notification")
+		deliveryState := buildProjectDeliveryState(lang, db, diagnosticsAPIBase(r)+"/api/setup/test-notification")
 
-		allOK := testState.Status == "ok"
-		anyFail := testState.Status == "fail"
+		allOK := deliveryState.SummaryStatus == "ok"
+		anyFail := deliveryState.SummaryStatus == "fail"
 		for _, c := range checks {
 			if c.Status != "ok" {
 				allOK = false
@@ -99,6 +108,12 @@ func DiagnosticsHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
 .diag-state-body{color:var(--muted);line-height:1.65}
 .diag-state-body p{margin:10px 0 0}
 .diag-state-note{margin-top:8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);font-size:.82rem;color:var(--muted-2)}
+.diag-project-list{display:grid;gap:12px;margin-top:16px}
+.diag-project-item{padding:14px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);display:grid;gap:10px}
+.diag-project-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.diag-project-head strong{display:block}
+.diag-project-meta{color:var(--muted);font-size:.88rem;line-height:1.6}
+.diag-project-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 </style>
 %s
 <div class="diag-card">
@@ -114,7 +129,7 @@ func DiagnosticsHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
   <a class="btn-ghost" href="%s">%s</a>
 </div>`,
 			summary,
-			renderTestNotificationCard(lang, testState),
+			renderProjectDeliveryCard(lang, deliveryState),
 			rows.String(),
 			rerunURL, esc(t(lang, "再確認", "Re-run checks")),
 			withLang("/bot/admin", r), esc(t(lang, "管理画面へ", "Back to Admin")),
@@ -147,6 +162,10 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 	blockedByMissingBotToken := t(lang,
 		"Discord Bot Token が設定されるまでこの確認は保留されます。",
 		"This check is blocked until a Discord bot token is configured.",
+	)
+	projectWebhookFix := t(lang,
+		"まず Project Management で project routing と webhook を確認してください。",
+		"Review the project routing and webhook setup in Project Management, then rerun Diagnostics.",
 	)
 
 	if kitsuHost == "" {
@@ -213,6 +232,9 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 	}
 
 	botUserID := ""
+	webhookPermissionDetail := ""
+	webhookPermissionFix := ""
+	webhookPermissionMissing := false
 	if !botTokenMissing {
 		body, status, err := botDo("GET", discordAPI+"/users/@me", nil, botToken)
 		if err != nil {
@@ -277,11 +299,13 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		if botTokenBlocked {
 			checks = append(checks, diagCheck{Label: "Discord guild accessible", Status: "warn", Detail: blockedByBotToken, Fix: botSettingsFix})
 			checks = append(checks, diagCheck{Label: "Discord permissions (channels)", Status: "warn", Detail: blockedByBotToken, Fix: botSettingsFix})
-			checks = append(checks, diagCheck{Label: "Discord permissions (webhooks)", Status: "warn", Detail: blockedByBotToken, Fix: botSettingsFix})
+			webhookPermissionDetail = blockedByBotToken
+			webhookPermissionFix = botSettingsFix
 		} else if botTokenMissing {
 			checks = append(checks, diagCheck{Label: "Discord guild accessible", Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix})
 			checks = append(checks, diagCheck{Label: "Discord permissions (channels)", Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix})
-			checks = append(checks, diagCheck{Label: "Discord permissions (webhooks)", Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix})
+			webhookPermissionDetail = blockedByMissingBotToken
+			webhookPermissionFix = configureBotSettingsFix
 		} else {
 			_, status, err := botDo("GET", discordAPI+"/guilds/"+guildID, nil, botToken)
 			if err != nil {
@@ -358,11 +382,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 						const manageWebhooks = uint64(1 << 29)
 						const manageChannels = uint64(1 << 4)
 						if perms&manageWebhooks != 0 && perms&manageChannels != 0 {
-							checks = append(checks, diagCheck{
-								Label:  "Discord permissions (webhooks)",
-								Status: "ok",
-								Detail: "MANAGE_CHANNELS and MANAGE_WEBHOOKS confirmed.",
-							})
+							webhookPermissionDetail = "Discord member permissions include MANAGE_CHANNELS and MANAGE_WEBHOOKS."
 						} else {
 							missing := []string{}
 							if perms&manageChannels == 0 {
@@ -371,32 +391,36 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 							if perms&manageWebhooks == 0 {
 								missing = append(missing, "MANAGE_WEBHOOKS")
 							}
-							checks = append(checks, diagCheck{
-								Label:  "Discord permissions (webhooks)",
-								Status: "fail",
-								Detail: "Missing permissions: " + strings.Join(missing, ", "),
-								Fix:    "In Discord Developer Portal -> Bot, grant these permissions and re-invite the bot.",
-							})
+							webhookPermissionMissing = true
+							webhookPermissionDetail = "Discord member permissions are missing: " + strings.Join(missing, ", ")
+							webhookPermissionFix = "In Discord Developer Portal -> Bot, grant these permissions and re-invite the bot."
 						}
 					} else {
-						checks = append(checks, diagCheck{
-							Label:  "Discord permissions (webhooks)",
-							Status: "warn",
-							Detail: "Could not read permission bits from member response.",
-							Fix:    t(lang, "Bot設定と Discord サーバー側の権限を見直してください。", "Review Bot Settings and confirm the Discord server permissions manually."),
-						})
+						webhookPermissionDetail = "Could not read permission bits from the Discord member response."
+						webhookPermissionFix = t(lang, "permission bits が読めなくても、必要なら Bot設定と Discord 権限を確認してください。", "Review Bot Settings and confirm the Discord server permissions manually.")
 					}
 				} else {
-					checks = append(checks, diagCheck{
-						Label:  "Discord permissions (webhooks)",
-						Status: "warn",
-						Detail: "Could not retrieve bot member info to verify permissions.",
-						Fix:    t(lang, "Bot設定と Discord サーバー側の権限を見直してください。", "Review Bot Settings and confirm the Discord server permissions manually."),
-					})
+					webhookPermissionDetail = "Could not retrieve Discord bot member info to verify permissions."
+					webhookPermissionFix = t(lang, "permission bits を取得できなくても、必要なら Bot設定と Discord 権限を確認してください。", "Review Bot Settings and confirm the Discord server permissions manually.")
 				}
 			}
 		}
 	}
+
+	checks = append(checks, buildProjectWebhookCheck(
+		lang,
+		db,
+		botTokenMissing,
+		botTokenBlocked,
+		blockedByMissingBotToken,
+		blockedByBotToken,
+		configureBotSettingsFix,
+		botSettingsFix,
+		projectWebhookFix,
+		webhookPermissionDetail,
+		webhookPermissionFix,
+		webhookPermissionMissing,
+	))
 
 	var count int64
 	if err := db.Raw("SELECT COUNT(*) FROM sqlite_master").Scan(&count).Error; err != nil {
@@ -432,6 +456,95 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 	}
 
 	return checks
+}
+
+func buildProjectWebhookCheck(
+	lang string,
+	db *gorm.DB,
+	botTokenMissing bool,
+	botTokenBlocked bool,
+	blockedByMissingBotToken string,
+	blockedByBotToken string,
+	configureBotSettingsFix string,
+	botSettingsFix string,
+	projectWebhookFix string,
+	webhookPermissionDetail string,
+	webhookPermissionFix string,
+	webhookPermissionMissing bool,
+) diagCheck {
+	label := t(lang, "Discord project webhook", "Discord project webhooks")
+
+	if botTokenBlocked {
+		return diagCheck{Label: label, Status: "warn", Detail: blockedByBotToken, Fix: botSettingsFix}
+	}
+	if botTokenMissing {
+		return diagCheck{Label: label, Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix}
+	}
+
+	projects := model.ListProjects(db)
+	if len(projects) == 0 {
+		return diagCheck{
+			Label:  label,
+			Status: "warn",
+			Detail: t(lang, "project がまだないため、project-level webhook の準備状態は確認できません。", "Project webhook readiness cannot be confirmed yet because no project is configured."),
+			Fix:    projectWebhookFix,
+		}
+	}
+
+	incompleteProjects := []string{}
+	missingProjects := []string{}
+	for _, project := range projects {
+		webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+		if len(webhooks) == 0 {
+			missingProjects = append(missingProjects, project.Name)
+			continue
+		}
+
+		hasReady := false
+		hasIncomplete := false
+		for _, webhook := range webhooks {
+			if strings.TrimSpace(webhook.WebhookURL) != "" && strings.TrimSpace(webhook.DiscordChannelID) != "" {
+				hasReady = true
+				break
+			}
+			if strings.TrimSpace(webhook.WebhookURL) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" {
+				hasIncomplete = true
+			}
+		}
+
+		switch {
+		case hasReady:
+		case hasIncomplete:
+			incompleteProjects = append(incompleteProjects, project.Name)
+		default:
+			missingProjects = append(missingProjects, project.Name)
+		}
+	}
+
+	if len(incompleteProjects) > 0 || len(missingProjects) > 0 {
+		detail := t(lang, "project webhook の設定が不足している project があります。", "Some projects still need project webhook setup.")
+		if len(incompleteProjects) > 0 {
+			detail += " " + fmt.Sprintf(t(lang, "不完全な project: %s", "Incomplete projects: %s"), strings.Join(incompleteProjects, ", "))
+		}
+		if len(missingProjects) > 0 {
+			detail += " " + fmt.Sprintf(t(lang, "webhook 未設定の project: %s", "Projects without webhooks: %s"), strings.Join(missingProjects, ", "))
+		}
+		return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: projectWebhookFix}
+	}
+
+	detail := t(lang, "Project webhook は作成済みです。通知配信は project-level webhook を使用します。", "Project webhooks are configured. Delivery uses project-level webhooks.")
+	if webhookPermissionDetail != "" {
+		detail += " " + webhookPermissionDetail
+	}
+
+	status := "ok"
+	fix := ""
+	if webhookPermissionMissing {
+		status = "warn"
+		fix = webhookPermissionFix
+	}
+
+	return diagCheck{Label: label, Status: status, Detail: detail, Fix: fix}
 }
 
 func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSettingsFix string) diagCheck {
@@ -545,43 +658,76 @@ func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSe
 	}
 }
 
-func buildTestNotificationState(lang string, db *gorm.DB, apiPath string) testNotificationState {
-	state := testNotificationState{
-		Status:  "warn",
-		Summary: t(lang, "未確認", "Not verified"),
-		Detail:  t(lang, "実際の Discord 通知配信はまだ確認されていません。", "Actual Discord notification delivery has not been verified yet."),
-		Fix:     t(lang, "準備ができたら 1 回だけテスト通知を送信して、Discord 側の着弾を確認してください。", "When ready, send one test notification and confirm that it arrives in Discord."),
-		APIPath: apiPath,
+func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) projectDeliveryState {
+	state := projectDeliveryState{
+		SummaryStatus: "warn",
+		Summary:       t(lang, "未確認", "Not verified"),
+		Detail:        t(lang, "プロジェクトごとに通知確認を行うと、実際の通知先まで含めて確認できます。", "Verify notification delivery per project so the actual delivery path is confirmed."),
+		Fix:           t(lang, "必要に応じて各 project でテスト通知を 1 回だけ送信し、Discord 側の着信も確認してください。", "When ready, send one test notification per project and confirm that it arrived in Discord."),
+		APIPath:       apiPath,
 	}
 
 	projects := model.ListProjects(db)
-	if len(projects) == 1 {
-		state.CanSend = true
-		state.TargetProject = projects[0].KitsuProjectID
-		state.Detail += " " + fmt.Sprintf(t(lang, "対象プロジェクト: %s", "Target project: %s"), projects[0].Name)
-	} else if len(projects) > 1 {
-		state.Fix = t(lang, "複数プロジェクトがあるため、この画面からは送信先を自動選択しません。必要なら project ごとの確認フローを使ってください。", "There are multiple projects, so this page does not auto-select one for a test send. Use a project-specific verification flow when needed.")
-	} else {
+	if len(projects) == 0 {
 		state.Fix = t(lang, "まず Project Management で project routing と webhook を作成してください。", "Create the project routing and webhook in Project Management first.")
+		return state
 	}
 
 	verified := strings.EqualFold(strings.TrimSpace(model.GetSetting(db, setupTestNotificationVerifiedKey)), "true")
-	projectID := strings.TrimSpace(model.GetSetting(db, setupTestNotificationProjectKey))
+	verifiedProjectID := strings.TrimSpace(model.GetSetting(db, setupTestNotificationProjectKey))
 	verifiedAt := strings.TrimSpace(model.GetSetting(db, setupTestNotificationAtKey))
-	if verified {
-		state.Status = "ok"
-		state.Summary = t(lang, "確認済み", "Verified")
-		state.Detail = t(lang, "テスト通知の成功が記録されています。", "A successful test notification has been recorded.")
-		if projectID != "" {
-			if project := model.FindProjectByKitsuID(db, projectID); project != nil {
-				state.Detail += " " + fmt.Sprintf(t(lang, "プロジェクト: %s", "Project: %s"), project.Name)
-			} else {
-				state.Detail += " " + fmt.Sprintf(t(lang, "プロジェクト ID: %s", "Project ID: %s"), projectID)
+	verifiedAtLabel := ""
+	if ts, err := time.Parse(time.RFC3339, verifiedAt); err == nil {
+		verifiedAtLabel = ts.Format("2006-01-02 15:04")
+	}
+
+	allReady := true
+	anyVerified := false
+	for _, project := range projects {
+		item := projectDeliveryItem{
+			ProjectID:   project.KitsuProjectID,
+			ProjectName: project.Name,
+			Status:      "warn",
+			Summary:     t(lang, "未確認", "Not verified"),
+			Detail:      t(lang, "まだこの project のテスト通知確認は記録されていません。", "No successful test notification has been recorded for this project yet."),
+			CanSend:     true,
+		}
+
+		for _, webhook := range model.ListProjectWebhooks(db, project.KitsuProjectID) {
+			if strings.TrimSpace(webhook.WebhookURL) != "" && strings.TrimSpace(webhook.DiscordChannelID) != "" {
+				item.Detail = t(lang, "Project webhook は作成済みです。通知配信は project-level webhook を使用します。", "Project webhooks are configured. Delivery uses project-level webhooks.")
+				break
 			}
 		}
-		if ts, err := time.Parse(time.RFC3339, verifiedAt); err == nil {
-			state.Detail += " " + fmt.Sprintf(t(lang, "最終確認: %s", "Last verified: %s"), ts.Format("2006-01-02 15:04"))
+
+		if item.Detail == t(lang, "まだこの project のテスト通知確認は記録されていません。", "No successful test notification has been recorded for this project yet.") {
+			item.Status = "fail"
+			item.Summary = t(lang, "Webhook未設定", "Webhook missing")
+			item.Detail = t(lang, "この project は webhook URL または Discord channel ID が不足しています。", "This project is missing a webhook URL or Discord channel ID.")
+			allReady = false
 		}
+
+		if verified && verifiedProjectID == project.KitsuProjectID {
+			item.Status = "ok"
+			item.Summary = t(lang, "確認済み", "Verified")
+			item.Detail = t(lang, "この project のテスト通知成功が記録されています。", "A successful test notification has been recorded for this project.")
+			item.LastVerified = verifiedAtLabel
+			anyVerified = true
+		}
+
+		state.Projects = append(state.Projects, item)
+	}
+
+	switch {
+	case !allReady:
+		state.SummaryStatus = "fail"
+		state.Summary = t(lang, "要修正", "Needs setup")
+		state.Detail = t(lang, "project-level webhook が未設定または不完全な project があります。", "At least one project is missing complete project-level webhook configuration.")
+		state.Fix = t(lang, "Project Management で不足している project webhook を確認してください。", "Review the incomplete project webhook setup in Project Management.")
+	case anyVerified:
+		state.SummaryStatus = "ok"
+		state.Summary = t(lang, "確認済み", "Verified")
+		state.Detail = t(lang, "少なくとも 1 つの project でテスト通知成功が記録されています。", "At least one project has a recorded successful test notification.")
 	}
 
 	return state
@@ -610,26 +756,60 @@ func renderDiagRow(lang string, c diagCheck) string {
 	)
 }
 
-func renderTestNotificationCard(lang string, state testNotificationState) string {
+func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
 	pillClass := "warn"
-	if state.Status == "ok" {
+	if state.SummaryStatus == "ok" {
 		pillClass = "ok"
-	} else if state.Status == "fail" {
+	} else if state.SummaryStatus == "fail" {
 		pillClass = "bad"
-	}
-
-	buttonHTML := ""
-	if state.CanSend {
-		buttonHTML = fmt.Sprintf(
-			`<div class="button-row"><button class="btn" id="diagTestNotificationBtn" type="button" data-project-id="%s">%s</button></div>`,
-			esc(state.TargetProject),
-			esc(t(lang, "テスト通知を送信", "Send test notification")),
-		)
 	}
 
 	fixHTML := ""
 	if state.Fix != "" {
 		fixHTML = `<div class="diag-state-note">` + esc(state.Fix) + `</div>`
+	}
+
+	var items strings.Builder
+	for _, item := range state.Projects {
+		itemPillClass := "warn"
+		if item.Status == "ok" {
+			itemPillClass = "ok"
+		} else if item.Status == "fail" {
+			itemPillClass = "bad"
+		}
+
+		meta := esc(item.Detail)
+		if item.LastVerified != "" {
+			meta += `<br>` + esc(fmt.Sprintf(t(lang, "最終確認: %s", "Last verified: %s"), item.LastVerified))
+		}
+
+		items.WriteString(fmt.Sprintf(`
+<div class="diag-project-item">
+  <div class="diag-project-head">
+    <div>
+      <strong>%s</strong>
+      <div class="diag-project-meta" id="diagProjectDetail-%s">%s</div>
+    </div>
+    <span class="status-pill %s" id="diagProjectBadge-%s">%s</span>
+  </div>
+  <div class="diag-project-actions">
+    <button class="btn" type="button" data-diag-project-test data-project-id="%s" data-badge-id="diagProjectBadge-%s" data-detail-id="diagProjectDetail-%s" data-feedback-id="diagProjectFeedback-%s">%s</button>
+  </div>
+  <div class="diag-state-note" id="diagProjectFeedback-%s" hidden></div>
+</div>`,
+			esc(item.ProjectName),
+			esc(item.ProjectID),
+			meta,
+			itemPillClass,
+			esc(item.ProjectID),
+			esc(item.Summary),
+			esc(item.ProjectID),
+			esc(item.ProjectID),
+			esc(item.ProjectID),
+			esc(item.ProjectID),
+			esc(t(lang, "テスト通知を送信", "Send test notification")),
+			esc(item.ProjectID),
+		))
 	}
 
 	return fmt.Sprintf(`
@@ -638,70 +818,69 @@ func renderTestNotificationCard(lang string, state testNotificationState) string
     <div>
       <h3>%s</h3>
       <div class="diag-state-body">
-        <p id="diagTestNotificationDetail">%s</p>
+        <p>%s</p>
         %s
       </div>
     </div>
-    <span class="status-pill %s" id="diagTestNotificationBadge">%s</span>
+    <span class="status-pill %s">%s</span>
   </div>
-  %s
-  <div class="diag-state-note" id="diagTestNotificationFeedback" hidden></div>
+  <div class="diag-project-list">%s</div>
 </div>
 <script>
 (function(){
-  var btn = document.getElementById('diagTestNotificationBtn');
-  if (!btn) { return; }
-  var badge = document.getElementById('diagTestNotificationBadge');
-  var detail = document.getElementById('diagTestNotificationDetail');
-  var feedback = document.getElementById('diagTestNotificationFeedback');
-  var original = btn.textContent;
-  btn.addEventListener('click', async function(){
-    if (btn.disabled) { return; }
-    btn.disabled = true;
-    btn.textContent = %q;
-    if (feedback) {
-      feedback.hidden = true;
-      feedback.textContent = '';
-    }
-    try {
-      var resp = await fetch(%q, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: btn.getAttribute('data-project-id') })
-      });
-      var data = await resp.json();
-      if (!resp.ok || data.error) {
-        throw new Error(data.error || ('HTTP ' + resp.status));
+  var buttons = document.querySelectorAll('[data-diag-project-test]');
+  if (!buttons.length) { return; }
+  buttons.forEach(function(btn){
+    var badge = document.getElementById(btn.getAttribute('data-badge-id'));
+    var detail = document.getElementById(btn.getAttribute('data-detail-id'));
+    var feedback = document.getElementById(btn.getAttribute('data-feedback-id'));
+    var original = btn.textContent;
+    btn.addEventListener('click', async function(){
+      if (btn.disabled) { return; }
+      btn.disabled = true;
+      btn.textContent = %q;
+      if (feedback) {
+        feedback.hidden = true;
+        feedback.textContent = '';
       }
-      if (badge) {
-        badge.className = 'status-pill ok';
-        badge.textContent = %q;
-      }
-      if (detail) {
-        var msg = %q;
-        if (data.project_name) {
-          msg += ' ' + (%q + data.project_name);
+      try {
+        var resp = await fetch(%q, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project_id: btn.getAttribute('data-project-id') })
+        });
+        var data = await resp.json();
+        if (!resp.ok || data.error) {
+          throw new Error(data.error || ('HTTP ' + resp.status));
         }
-        detail.textContent = msg;
+        if (badge) {
+          badge.className = 'status-pill ok';
+          badge.textContent = %q;
+        }
+        if (detail) {
+          var message = %q;
+          var ts = new Date().toLocaleString();
+          detail.innerHTML = message + '<br>' + (%q + ts);
+        }
+        if (feedback) {
+          feedback.hidden = false;
+          feedback.textContent = %q;
+        }
+      } catch (err) {
+        if (badge) {
+          badge.className = 'status-pill warn';
+          badge.textContent = %q;
+        }
+        if (feedback) {
+          feedback.hidden = false;
+          feedback.textContent = %q + (err && err.message ? err.message : 'unknown error');
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
       }
-      if (feedback) {
-        feedback.hidden = false;
-        feedback.textContent = %q;
-      }
-    } catch (err) {
-      if (badge) {
-        badge.className = 'status-pill warn';
-        badge.textContent = %q;
-      }
-      if (feedback) {
-        feedback.hidden = false;
-        feedback.textContent = %q + (err && err.message ? err.message : 'unknown error');
-      }
-    } finally {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    });
   });
 })();
 </script>`,
@@ -710,12 +889,12 @@ func renderTestNotificationCard(lang string, state testNotificationState) string
 		fixHTML,
 		pillClass,
 		esc(state.Summary),
-		buttonHTML,
+		items.String(),
 		t(lang, "送信中...", "Sending..."),
 		state.APIPath,
 		t(lang, "確認済み", "Verified"),
-		t(lang, "テスト通知の成功が記録されました。", "A successful test notification was recorded."),
-		t(lang, "プロジェクト: ", "Project: "),
+		t(lang, "この project のテスト通知成功が記録されました。", "A successful test notification was recorded for this project."),
+		t(lang, "最終確認: ", "Last verified: "),
 		t(lang, "テスト通知を送信しました。Discord 側の着弾も確認してください。", "A test notification was sent. Confirm that it arrived in Discord as well."),
 		t(lang, "未確認", "Not verified"),
 		t(lang, "テスト通知を送信できませんでした: ", "The test notification could not be sent: "),
