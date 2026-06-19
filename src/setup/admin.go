@@ -1,6 +1,7 @@
 ﻿package setup
 
 import (
+	"app/src/api/kitsu"
 	"app/src/model"
 	"encoding/json"
 	"fmt"
@@ -259,6 +260,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		nextSecondaryHref := withLang("/bot/admin/diagnostics", r)
 		nextSecondaryLabel := t(lang, "Diagnostics \u3092\u958b\u304f", "Open Diagnostics")
 		nextBadge := `<span class="status-pill bad">` + esc(t(lang, "\u512a\u5148", "Priority")) + `</span>`
+		nextProjectList := ""
 		if !hasIssues && projectCount == 0 {
 			nextCardTitle = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u3092\u958b\u304f", "Open Project Management")
 			nextCardBody = t(lang, "\u6700\u521d\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8 routing \u306f\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u304b\u3089\u59cb\u3081\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot\u8a2d\u5b9a\u304b\u3089\u884c\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start your first project routing in Project Management. Use Bot Settings to review shared bot / runtime prerequisites.")
@@ -275,6 +277,11 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			nextSecondaryHref = withLang("/bot/admin/projects", r)
 			nextSecondaryLabel = t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u9023\u643a\u7ba1\u7406\u3092\u958b\u304f", "Open Production Connection Management")
 			nextBadge = `<span class="status-pill ok">` + esc(t(lang, "\u6e96\u5099\u6e08\u307f", "Ready")) + `</span>`
+			var projectNameTags strings.Builder
+			for _, proj := range projects {
+				projectNameTags.WriteString(`<span class="tag">` + esc(proj.Name) + `</span>`)
+			}
+			nextProjectList = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><span class="hint" style="width:100%">` + esc(t(lang, "連携済みプロダクション", "Connected productions")) + `</span>` + projectNameTags.String() + `</div>`
 		}
 		nextActionCard := fmt.Sprintf(`
 <div class="section-card glass" style="border-color:rgba(255,141,72,.35);box-shadow:0 0 0 1px rgba(255,141,72,.14) inset">
@@ -285,6 +292,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
     </div>
     %s
   </div>
+  %s
   <div class="button-row" style="margin-top:14px">
     <a class="btn" href="%s">%s</a>
     <a class="btn-ghost" href="%s">%s</a>
@@ -293,6 +301,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			esc(nextCardTitle),
 			esc(nextCardBody),
 			nextBadge,
+			nextProjectList,
 			nextPrimaryHref,
 			esc(nextPrimaryLabel),
 			nextSecondaryHref,
@@ -311,11 +320,15 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 	}
 }
 
-func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc {
+func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
 		fallbackGuildID = strings.TrimSpace(fallbackGuildID)
+
+		if handleProjectRoutingMutation(w, r, lang, fallbackGuildID, botToken, db) {
+			return
+		}
 
 		if r.Method == http.MethodPost {
 			projectID := strings.TrimSpace(r.FormValue("project_id"))
@@ -330,6 +343,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc 
 			return
 		}
 
+		allTaskTypes := kitsu.GetTaskTypes().Each
 		var blocks strings.Builder
 		for _, p := range model.ListProjects(db) {
 			effectiveGuildID := strings.TrimSpace(p.DiscordGuildID)
@@ -338,13 +352,32 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc 
 			}
 			webhooks := model.ListProjectWebhooks(db, p.KitsuProjectID)
 			webhookCount := len(webhooks)
+			assignedCount := 0
+			assignedTaskTypes := map[string]bool{}
+			channelNames := map[string]bool{}
+			for _, wh := range webhooks {
+				if wh.TaskType != "" {
+					assignedTaskTypes[wh.TaskType] = true
+					assignedCount++
+				}
+				if strings.TrimSpace(wh.ChannelName) != "" {
+					channelNames[wh.ChannelName] = true
+				}
+			}
+			unassignedCount := 0
+			for _, tt := range allTaskTypes {
+				if !assignedTaskTypes[tt.Name] {
+					unassignedCount++
+				}
+			}
+			channelCount := len(channelNames)
 			statusClass := "bad"
 			statusLabel := t(lang, "要確認", "Needs review")
 			switch {
-			case effectiveGuildID != "" && webhookCount > 0:
+			case effectiveGuildID != "" && assignedCount > 0 && unassignedCount == 0:
 				statusClass = "ok"
 				statusLabel = t(lang, "接続済み", "Connected")
-			case effectiveGuildID != "":
+			case effectiveGuildID != "" && (assignedCount > 0 || channelCount > 0):
 				statusClass = "warn"
 				statusLabel = t(lang, "確認中", "Review")
 			}
@@ -374,16 +407,17 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc 
       <div class="page-heading" style="margin-bottom:14px">
         <div>
           <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s: <code>%s</code></p>
+          <p class="hint" style="margin:6px 0 0">%s</p>
         </div>
         <span class="status-pill %s">%s</span>
       </div>
       <div class="metric-grid">
         <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
         <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
         <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%s</div></div>
       </div>
+      <p class="hint" style="margin:12px 0 0">%s <code>%s</code> ・ %s <code>%s</code></p>
     </div>
     <form method="POST" class="section-card glass">
       <input type="hidden" name="project_id" value="%s">
@@ -402,33 +436,38 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc 
       </div>
       <div class="button-row"><button type="submit" class="btn">%s</button></div>
     </form>
+    %s
   </div>
 </details>`,
 				esc(t(lang, "CONNECTED PRODUCTION", "CONNECTED PRODUCTION")),
 				esc(p.Name),
-				esc(t(lang, "Discord 側の接続状況と保存済みの production 情報をここで管理します。", "Manage saved production connection details and Discord readiness here.")),
+				esc(fmt.Sprintf("%s%d / %s%d / %s%d", t(lang, "割り当て済み ", "Assigned "), assignedCount, t(lang, "未割り当て ", "Unassigned "), unassignedCount, t(lang, "チャンネル ", "Channels "), channelCount)),
 				statusClass,
 				esc(statusLabel),
 				esc(t(lang, "詳細を見る", "Open details")),
 				esc(p.Name),
-				esc(t(lang, "Project ID", "Project ID")),
-				esc(p.KitsuProjectID),
+				esc(t(lang, "この production の Discord 側 routing をここで確認・修正します。未割り当ての task type があれば、ここから channel 作成や割り当てを続けられます。", "Review and fix this production's Discord routing here. If task types are still unassigned, continue channel creation and assignment from here.")),
 				statusClass,
 				esc(statusLabel),
 				esc(t(lang, "Discord Guild ID", "Discord Guild ID")),
 				esc(fallbackText(effectiveGuildID, "—")),
-				esc(t(lang, "Discord Category ID", "Discord Category ID")),
-				esc(categoryID),
-				esc(t(lang, "Project webhooks", "Project webhooks")),
-				webhookCount,
+				esc(t(lang, "Assigned task types", "Assigned task types")),
+				assignedCount,
+				esc(t(lang, "Unassigned task types", "Unassigned task types")),
+				unassignedCount,
 				esc(t(lang, "Language", "Language")),
 				esc(strings.ToUpper(projectLang)),
+				esc(t(lang, "Project ID", "Project ID")),
+				esc(p.KitsuProjectID),
+				esc(t(lang, "Discord Category ID", "Discord Category ID")),
+				esc(categoryID),
 				esc(p.KitsuProjectID),
 				esc(t(lang, "Discord ID を編集", "Edit Discord ID")),
 				esc(t(lang, "この production が使う Discord Server / Guild ID をここで確認・更新します。", "Review or update the Discord Server / Guild ID used by this production here.")),
 				esc(effectiveGuildID),
 				esc(t(lang, "この保存は Discord ID のみを更新します。", "This save action updates only the Discord ID.")),
 				esc(t(lang, "保存", "Save")),
+				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 			))
 		}
 		if blocks.Len() == 0 {

@@ -552,6 +552,133 @@ func DeleteProjectChannel(db *gorm.DB, botToken string, webhookID uint) error {
 	return model.DeleteProjectWebhooksByChannelName(db, webhook.KitsuProjectID, webhook.ChannelName)
 }
 
+func adminProjectsPathFor(r *http.Request) string {
+	if strings.HasPrefix(r.URL.Path, "/bot/") {
+		return "/bot/admin/projects"
+	}
+	return "/admin/projects"
+}
+
+func handleProjectRoutingMutation(w http.ResponseWriter, r *http.Request, lang, fallbackGuildID, botToken string, db *gorm.DB) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+	action := strings.TrimSpace(r.FormValue("action"))
+	if action == "" {
+		return false
+	}
+
+	backURL := withLang(r.URL.Path, r)
+	adminProjectsURL := withLang(adminProjectsPathFor(r), r)
+
+	switch action {
+	case "channel_delete":
+		_ = r.ParseForm()
+		channelName := r.FormValue("channel_name")
+		id, _ := strconv.ParseUint(r.FormValue("webhook_id"), 10, 64)
+		expected := t(lang, "蜑企勁", "delete")
+		if strings.TrimSpace(r.FormValue("confirm_text")) != expected {
+			fmt.Fprint(w, page(lang, t(lang, "蜑企勁遒ｺ隱阪・蜈･蜉帙′荳閾ｴ縺励∪縺帙ｓ縺ｧ縺励◆", "Deletion confirmation did not match"), "#ff6a50", channelName, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		if err := DeleteProjectChannel(db, botToken, uint(id)); err != nil {
+			fmt.Fprint(w, page(lang, t(lang, "繝√Ε繝ｳ繝阪Ν蜑企勁縺ｫ螟ｱ謨励＠縺ｾ縺励◆", "Channel delete failed"), "#ff6a50", "", `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		return true
+	case "task_type_delete":
+		_ = r.ParseForm()
+		id, _ := strconv.ParseUint(r.FormValue("webhook_id"), 10, 64)
+		taskType := r.FormValue("task_type")
+		expected := t(lang, "蜑企勁", "delete")
+		if strings.TrimSpace(r.FormValue("confirm_text")) != expected {
+			fmt.Fprint(w, page(lang, t(lang, "蜑企勁遒ｺ隱阪・蜈･蜉帙′荳閾ｴ縺励∪縺帙ｓ縺ｧ縺励◆", "Deletion confirmation did not match"), "#ff6a50", taskType, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		model.DeleteProjectWebhookByID(db, uint(id))
+		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		return true
+	case "create_channel":
+		_ = r.ParseForm()
+		projectID := r.FormValue("kitsu_project_id")
+		channelName := strings.TrimSpace(r.FormValue("channel_name_custom"))
+		if channelName == "" {
+			channelName = strings.TrimSpace(r.FormValue("channel_preset"))
+		}
+		if channelName == "" || projectID == "" {
+			fmt.Fprint(w, page(lang, t(lang, "蜈･蜉帛､縺御ｸ肴ｭ｣縺ｧ縺・, "Invalid input"), "#ff6a50", "", `<li>`+t(lang, "繝√Ε繝ｳ繝阪Ν蜷阪ｒ蜈･蜉帙＠縺ｦ縺上□縺輔＞縲・, "Please enter a channel name.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		project := model.FindProjectByKitsuID(db, projectID)
+		if project == nil {
+			fmt.Fprint(w, page(lang, t(lang, "繝励Ο繧ｸ繧ｧ繧ｯ繝医′隕九▽縺九ｊ縺ｾ縺帙ｓ", "Project not found"), "#ff6a50", "", `<li>`+t(lang, "繝励Ο繧ｸ繧ｧ繧ｯ繝域ュ蝣ｱ繧貞叙蠕励〒縺阪∪縺帙ｓ縺ｧ縺励◆縲・, "Could not load project info.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		effectiveGuildID := strings.TrimSpace(project.DiscordGuildID)
+		if effectiveGuildID == "" {
+			effectiveGuildID = strings.TrimSpace(fallbackGuildID)
+		}
+		if effectiveGuildID == "" {
+			fmt.Fprint(w, page(lang, t(lang, "Discord Guild 縺梧悴險ｭ螳壹〒縺・, "Discord guild is not configured"), "#ff6a50", channelName, `<li>`+t(lang, "Admin > 繝励Ο繝繧ｯ繧ｷ繝ｧ繝ｳ騾｣謳ｺ邂｡逅・縺ｧ Guild ID 繧定ｨｭ螳壹＠縺ｦ縺上□縺輔＞縲・, "Set a guild ID in Admin > Production Connection Management.")+`</li>`, `<a href="`+adminProjectsURL+`">`+t(lang, "繝励Ο繝繧ｯ繧ｷ繝ｧ繝ｳ騾｣謳ｺ邂｡逅・, "Production Connection Management")+`</a>`))
+			return true
+		}
+		channelID, err := CreateTextChannel(effectiveGuildID, project.DiscordCategoryID, channelName, botToken)
+		if err != nil {
+			fmt.Fprint(w, page(lang, t(lang, "繝√Ε繝ｳ繝阪Ν菴懈・縺ｫ螟ｱ謨励＠縺ｾ縺励◆", "Channel creation failed"), "#ff6a50", channelName, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		webhookURL, err := CreateWebhook(channelID, channelName, botToken)
+		if err != nil {
+			fmt.Fprint(w, page(lang, t(lang, "Webhook 菴懈・縺ｫ螟ｱ謨励＠縺ｾ縺励◆", "Webhook creation failed"), "#ff6a50", channelName, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		if err := model.CreateProjectWebhook(db, projectID, channelName, "", webhookURL, channelID); err != nil {
+			fmt.Fprint(w, page(lang, t(lang, "DB 縺ｸ縺ｮ菫晏ｭ倥↓螟ｱ謨励＠縺ｾ縺励◆", "Failed to save to database"), "#ff6a50", channelName, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		return true
+	case "task_assign":
+		_ = r.ParseForm()
+		projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
+		taskType := strings.TrimSpace(r.FormValue("task_type"))
+		channelName := strings.TrimSpace(r.FormValue("channel_name"))
+		if projectID == "" || taskType == "" || channelName == "" {
+			fmt.Fprint(w, page(lang, t(lang, "蜈･蜉帛､縺御ｸ肴ｭ｣縺ｧ縺・, "Invalid input"), "#ff6a50", taskType, `<li>`+t(lang, "繝励Ο繧ｸ繧ｧ繧ｯ繝医√ち繧ｹ繧ｯ繧ｿ繧､繝励√メ繝｣繝ｳ繝阪Ν縺ｯ縺吶∋縺ｦ蠢・医〒縺吶・, "Project, task type, and channel are all required.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		if pending := model.FindPendingChannel(db, projectID, channelName); pending != nil {
+			if err := db.Model(pending).Update("task_type", taskType).Error; err != nil {
+				fmt.Fprint(w, page(lang, t(lang, "蜑ｲ繧雁ｽ薙※縺ｫ螟ｱ謨励＠縺ｾ縺励◆", "Assignment failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+				return true
+			}
+			http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+			return true
+		}
+		existing := model.FindChannelRecord(db, projectID, channelName)
+		if existing == nil {
+			fmt.Fprint(w, page(lang, t(lang, "繝√Ε繝ｳ繝阪Ν諠・ｱ縺瑚ｦ九▽縺九ｊ縺ｾ縺帙ｓ", "Channel not found"), "#ff6a50", channelName, `<li>`+t(lang, "謖・ｮ壹＆繧後◆繝√Ε繝ｳ繝阪Ν縺ｫ蟇ｾ蠢懊☆繧・webhook 縺悟ｭ伜惠縺励∪縺帙ｓ縲・, "No webhook exists for the specified channel.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		webhook := model.ProjectWebhook{
+			KitsuProjectID:   projectID,
+			TaskType:         taskType,
+			ChannelName:      channelName,
+			WebhookURL:       existing.WebhookURL,
+			DiscordChannelID: existing.DiscordChannelID,
+		}
+		if err := db.Create(&webhook).Error; err != nil {
+			fmt.Fprint(w, page(lang, t(lang, "蜑ｲ繧雁ｽ薙※縺ｫ螟ｱ謨励＠縺ｾ縺励◆", "Assignment failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "謌ｻ繧・, "Back")+`</a>`))
+			return true
+		}
+		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		return true
+	default:
+		return false
+	}
+}
+
 func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhook, allTaskTypes []kitsu.TaskType, lang string, r *http.Request) string {
 	projectLang := project.Language
 	if projectLang == "" {
@@ -773,8 +900,7 @@ func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhoo
 	}
 
 	return fmt.Sprintf(`
-<div class="accordion-body">
-  <div class="section-stack">
+<div class="section-stack">
     <div class="project-panel-head">
       <div>
         <div class="eyebrow">%s</div>
@@ -783,12 +909,7 @@ func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhoo
       <div class="project-panel-meta">
         <span class="tag">%s</span>
         <span class="tag">%s: %s</span>
-        <form method="POST" class="delete-form" data-confirm="%s" data-require-text="%s">
-          <input type="hidden" name="action" value="delete">
-          <input type="hidden" name="kitsu_project_id" value="%s">
-          <input type="hidden" name="project_name" value="%s">
-          <button type="submit" class="btn-danger">%s</button>
-        </form>
+        <span class="tile-sub" style="display:none" data-delete-confirm="%s" data-delete-word="%s" data-project-id="%s" data-project-name="%s">%s</span>
       </div>
     </div>
     <div class="section-card glass">
@@ -797,7 +918,6 @@ func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhoo
     </div>
     %s
     %s
-  </div>
 </div>`,
 		t(lang, "プロジェクト管理", "Project controls"),
 		t(lang, "展開後にチャンネルと通知導線を編集できます。", "Manage channels and notification routing after expanding."),

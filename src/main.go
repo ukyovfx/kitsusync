@@ -923,8 +923,8 @@ func main() {
 		}
 		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.BotHandler(db, kitsuReconnect)))
 		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-			_, fallbackGuildID, _ := getDiscordSettings(db, conf)
-			setup.AdminProjectsHandler(db, fallbackGuildID)(w, r)
+			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
+			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		}))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
