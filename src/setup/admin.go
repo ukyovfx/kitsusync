@@ -351,7 +351,6 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				effectiveGuildID = fallbackGuildID
 			}
 			webhooks := model.ListProjectWebhooks(db, p.KitsuProjectID)
-			webhookCount := len(webhooks)
 			assignedCount := 0
 			assignedTaskTypes := map[string]bool{}
 			channelNames := map[string]bool{}
