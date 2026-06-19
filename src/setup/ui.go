@@ -223,6 +223,7 @@ input[readonly],input[disabled],select[disabled]{opacity:.72;cursor:not-allowed;
 .btn-ghost{color:var(--text);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);}
 .btn-danger{color:#fff5f2;background:rgba(255,106,80,.18);border:1px solid rgba(255,106,80,.3);}
 .status-pill,.tag{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:12px;}
+.status-pill{white-space:nowrap;}
 .status-pill.ok{color:#d7f4d4;border-color:rgba(142,207,139,.28);background:rgba(142,207,139,.08)}
 .status-pill.warn{color:#fff1c4;border-color:rgba(255,200,80,.3);background:rgba(255,200,80,.1)}
 .status-pill.bad{color:#ffd3ca;border-color:rgba(255,106,80,.28);background:rgba(255,106,80,.08)}

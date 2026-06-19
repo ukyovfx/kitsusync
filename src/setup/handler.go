@@ -1121,6 +1121,16 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	}
 
 	guildInputHelp = t(lang, "この project の通知先 Discord Server / Guild ID をここで指定します。", "Enter the Discord Server / Guild ID used as this project's notification destination.")
+	projectOverviewHTML := `<p class="hint" style="margin:0 0 12px">` + esc(t(lang, "連携済み production の管理先はこの Step から確認できます。詳細な routing の見直しや編集は連携済みプロダクション管理で行ってください。", "Use this step to confirm which productions are already connected. Review and edit detailed routing in Connected Productions.")) + `</p>`
+	if len(projects) == 0 {
+		projectOverviewHTML += `<div class="status-pill warn">` + esc(t(lang, "連携済み production はまだありません", "No connected productions yet")) + `</div>`
+	} else {
+		var projectTags strings.Builder
+		for _, project := range projects {
+			projectTags.WriteString(`<span class="tag">` + esc(project.Name) + `</span>`)
+		}
+		projectOverviewHTML += `<div style="display:flex;gap:8px;flex-wrap:wrap"><span class="hint" style="width:100%">` + esc(t(lang, "連携済みプロダクション", "Connected productions")) + `</span>` + projectTags.String() + `</div>`
+	}
 	body := fmt.Sprintf(`
 <div class="section-stack">
   %s
@@ -1131,6 +1141,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
       <div><div class="eyebrow">STEP 2</div><h3 style="margin:6px 0 0">%s</h3><p class="hint" style="margin:8px 0 0">%s</p></div>
       %s
     </div>
+    %s
     <div class="button-row">
       <a class="btn" href="%s">%s</a>
     </div>
@@ -1252,6 +1263,7 @@ document.addEventListener('DOMContentLoaded', function(){
 		t(lang, "Step 2: 連携済み production を管理", "Step 2: Manage connected productions"),
 		t(lang, "既存の production connection 一覧はこのページに埋め込まず、専用の管理ページで見直します。新しい routing の追加は次のフォームから進めてください。", "Review existing production connections in the dedicated management page instead of inside this step. Use the next form when you need to add new routing."),
 		projectRoutingStatus,
+		projectOverviewHTML,
 		appendLang("/bot/admin/projects", lang),
 		t(lang, "連携済みプロダクション管理を開く", "Open Connected Productions"),
 		t(lang, "新規連携セットアップ", "New Connection Setup"),

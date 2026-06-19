@@ -161,7 +161,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 					esc(strings.ToUpper(proj.ProjectType)),
 					ps.channelCount,
 					ps.webhookCount,
-					withLang("/bot/setup", r)+"&project="+url.QueryEscape(proj.KitsuProjectID),
+					withLang("/bot/admin/projects?project="+url.QueryEscape(proj.KitsuProjectID), r),
 					esc(t(lang, "\u7ba1\u7406", "Manage")),
 				))
 			}
@@ -272,10 +272,10 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		} else if !hasIssues && projectCount > 0 {
 			nextCardTitle = t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u3092\u78ba\u8a8d\u3059\u308b", "Review connected productions")
 			nextCardBody = t(lang, "\u65e2\u5b58\u306e production \u306e routing\u3001channel\u3001webhook \u306e\u78ba\u8a8d\u30fb\u4fee\u6b63\u306f\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406\u304b\u3089\u884c\u3048\u307e\u3059\u3002\u65b0\u3057\u3044\u9023\u643a\u3092\u8db3\u3059\u5834\u5408\u306f\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Use Connected Productions to review and fix routing, channels, and webhooks for existing productions. Use New Connection Setup when you need to add another connection.")
-			nextPrimaryHref = withLang("/bot/admin/projects", r)
-			nextPrimaryLabel = t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406\u3092\u958b\u304f", "Open Connected Productions")
-			nextSecondaryHref = withLang("/bot/setup", r)
-			nextSecondaryLabel = t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
+			nextPrimaryHref = withLang("/bot/setup", r)
+			nextPrimaryLabel = t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
+			nextSecondaryHref = withLang("/bot/admin/projects", r)
+			nextSecondaryLabel = t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406\u3092\u958b\u304f", "Open Connected Productions")
 			nextBadge = `<span class="status-pill ok">` + esc(t(lang, "\u6e96\u5099\u6e08\u307f", "Ready")) + `</span>`
 			var projectNameTags strings.Builder
 			for _, proj := range projects {
@@ -344,6 +344,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		}
 
 		allTaskTypes := kitsu.GetTaskTypes().Each
+		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
 		var blocks strings.Builder
 		for _, p := range model.ListProjects(db) {
 			effectiveGuildID := strings.TrimSpace(p.DiscordGuildID)
@@ -388,8 +389,12 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			if projectLang == "" {
 				projectLang = "ja"
 			}
+			openAttr := ""
+			if selectedProjectID != "" && p.KitsuProjectID == selectedProjectID {
+				openAttr = " open"
+			}
 			blocks.WriteString(fmt.Sprintf(`
-<details class="accordion">
+<details class="accordion"%s>
   <summary>
     <div class="accordion-summary-main">
       <div class="eyebrow">%s</div>
@@ -438,6 +443,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
     %s
   </div>
 </details>`,
+				openAttr,
 				esc(t(lang, "CONNECTED PRODUCTION", "CONNECTED PRODUCTION")),
 				esc(p.Name),
 				esc(fmt.Sprintf("%s%d / %s%d / %s%d", t(lang, "割り当て済み ", "Assigned "), assignedCount, t(lang, "未割り当て ", "Unassigned "), unassignedCount, t(lang, "チャンネル ", "Channels "), channelCount)),
