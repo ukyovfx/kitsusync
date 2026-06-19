@@ -1017,7 +1017,9 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
       <div><div class="eyebrow">STEP 2</div><h3 style="margin:6px 0 0">%s</h3><p class="hint" style="margin:8px 0 0">%s</p></div>
       %s
     </div>
-    <div class="section-stack">%s</div>
+    <div class="button-row">
+      <a class="btn" href="%s">%s</a>
+    </div>
   </div>
   <div class="section-card glass workflow-routing-form">
     <div class="page-heading" style="margin-bottom:14px">
