@@ -233,7 +233,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			icon, href, titleJA, titleEN string
 		}
 		links := []navLink{
-			{"\U0001F5C2", "/bot/admin/projects", "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068Discord ID", "Projects & Discord IDs"},
+			{"\U0001F5C2", "/bot/admin/projects", "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u9023\u643a\u7ba1\u7406", "Production Connection Management"},
 			{"\u2764", "/bot/admin/health", "\u30d8\u30eb\u30b9", "Health"},
 			{"\U0001F50D", "/bot/admin/diagnostics", "\u74b0\u5883\u8a3a\u65ad", "Diagnostics"},
 			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users"},
@@ -273,7 +273,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			nextPrimaryHref = withLang("/bot/setup", r)
 			nextPrimaryLabel = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u7ba1\u7406\u3092\u958b\u304f", "Open Project Management")
 			nextSecondaryHref = withLang("/bot/admin/projects", r)
-			nextSecondaryLabel = t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3068Discord ID\u3092\u78ba\u8a8d", "Review Projects & Discord IDs")
+			nextSecondaryLabel = t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u9023\u643a\u7ba1\u7406\u3092\u958b\u304f", "Open Production Connection Management")
 			nextBadge = `<span class="status-pill ok">` + esc(t(lang, "\u6e96\u5099\u6e08\u307f", "Ready")) + `</span>`
 		}
 		nextActionCard := fmt.Sprintf(`
@@ -336,28 +336,106 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID string) http.HandlerFunc 
 			if effectiveGuildID == "" {
 				effectiveGuildID = fallbackGuildID
 			}
+			webhooks := model.ListProjectWebhooks(db, p.KitsuProjectID)
+			webhookCount := len(webhooks)
+			statusClass := "bad"
+			statusLabel := t(lang, "要確認", "Needs review")
+			switch {
+			case effectiveGuildID != "" && webhookCount > 0:
+				statusClass = "ok"
+				statusLabel = t(lang, "接続済み", "Connected")
+			case effectiveGuildID != "":
+				statusClass = "warn"
+				statusLabel = t(lang, "確認中", "Review")
+			}
+			categoryID := strings.TrimSpace(p.DiscordCategoryID)
+			if categoryID == "" {
+				categoryID = "—"
+			}
+			projectLang := strings.TrimSpace(p.Language)
+			if projectLang == "" {
+				projectLang = "ja"
+			}
 			blocks.WriteString(fmt.Sprintf(`
-<form method="POST" class="section-card glass">
-  <input type="hidden" name="project_id" value="%s">
-  <div class="page-heading"><div><h3 style="margin:0">%s</h3><p class="hint">%s: <code>%s</code></p></div></div>
-  <div class="form-grid">
-    <div><label>Discord Guild ID</label><input type="text" name="guild_id" value="%s" placeholder="123456789012345678"></div>
+<details class="accordion">
+  <summary>
+    <div class="accordion-summary-main">
+      <div class="eyebrow">%s</div>
+      <div class="tile-title">%s</div>
+      <div class="tile-sub">%s</div>
+    </div>
+    <div class="accordion-summary-side">
+      <span class="status-pill %s">%s</span>
+      <span class="accordion-trigger"><span>%s</span><span class="accordion-caret">⌄</span></span>
+    </div>
+  </summary>
+  <div class="accordion-body section-stack" style="padding-top:16px">
+    <div class="section-card glass">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s: <code>%s</code></p>
+        </div>
+        <span class="status-pill %s">%s</span>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%s</div></div>
+      </div>
+    </div>
+    <form method="POST" class="section-card glass">
+      <input type="hidden" name="project_id" value="%s">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div>
+          <label>Discord Guild ID</label>
+          <input type="text" name="guild_id" value="%s" placeholder="123456789012345678">
+          <p class="field-help">%s</p>
+        </div>
+      </div>
+      <div class="button-row"><button type="submit" class="btn">%s</button></div>
+    </form>
   </div>
-  <div class="button-row"><button type="submit" class="btn">%s</button></div>
-</form>`,
-				esc(p.KitsuProjectID),
+</details>`,
+				esc(t(lang, "CONNECTED PRODUCTION", "CONNECTED PRODUCTION")),
+				esc(p.Name),
+				esc(t(lang, "Discord 側の接続状況と保存済みの production 情報をここで管理します。", "Manage saved production connection details and Discord readiness here.")),
+				statusClass,
+				esc(statusLabel),
+				esc(t(lang, "詳細を見る", "Open details")),
 				esc(p.Name),
 				esc(t(lang, "Project ID", "Project ID")),
 				esc(p.KitsuProjectID),
+				statusClass,
+				esc(statusLabel),
+				esc(t(lang, "Discord Guild ID", "Discord Guild ID")),
+				esc(fallbackText(effectiveGuildID, "—")),
+				esc(t(lang, "Discord Category ID", "Discord Category ID")),
+				esc(categoryID),
+				esc(t(lang, "Project webhooks", "Project webhooks")),
+				webhookCount,
+				esc(t(lang, "Language", "Language")),
+				esc(strings.ToUpper(projectLang)),
+				esc(p.KitsuProjectID),
+				esc(t(lang, "Discord ID を編集", "Edit Discord ID")),
+				esc(t(lang, "この production が使う Discord Server / Guild ID をここで確認・更新します。", "Review or update the Discord Server / Guild ID used by this production here.")),
 				esc(effectiveGuildID),
+				esc(t(lang, "この保存は Discord ID のみを更新します。", "This save action updates only the Discord ID.")),
 				esc(t(lang, "保存", "Save")),
 			))
 		}
 		if blocks.Len() == 0 {
-			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだプロジェクトがありません", "No projects configured yet."), t(lang, "先にプロジェクト管理で routing と Discord ID を設定してから、ここで review / edit を行ってください。", "Set routing and Guild ID in Project Management first, then use this page for review / edit.")))
+			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだ連携済みプロダクションがありません", "No connected productions yet."), t(lang, "先にプロジェクト管理で production connection を作成してから、ここで確認・編集してください。", "Create the first production connection in Project Management, then review it here.")))
 		}
-		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "このページは既存 project の Discord Server / Guild 割り当てを review / edit するための管理画面です。新しい project の Discord ID はプロジェクト管理側で入力してください。", "Use this page to review or edit Discord Server / Guild assignment for existing projects. Enter the Discord ID for new projects in Project Management.")) + `</p></div>` + blocks.String() + `</div>`
-		fmt.Fprint(w, adminPage(lang, t(lang, "プロジェクトとDiscord ID", "Projects & Discord IDs"), r, body))
+		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "このページでは連携済み production ごとに Discord 側の接続情報を管理します。新しい接続はプロジェクト管理から作成し、既存の見直しはここで行います。", "Use this page to manage Discord connection details for each connected production. Create new connections in Project Management, then review existing ones here.")) + `</p></div>` + blocks.String() + `</div>`
+		fmt.Fprint(w, adminPage(lang, t(lang, "プロダクション連携管理", "Production Connection Management"), r, body))
 	}
 }
 
@@ -987,7 +1065,7 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
     <div class="button-row"><a class="btn" data-edit-lock-link="1" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
   </div>
 </div>`,
-			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "プロジェクト管理で使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by Project Management."), statusClass, statusLabel, esc(effectiveHost), t(lang, "Bot Token", "Bot Token"), secretStatus(storedRuntimeDiscordBotToken(db), lang), withLang("/bot/admin/bot?edit=1", r), t(lang, "再認証して編集する", "Re-authenticate to edit"), withLang("/bot/setup", r), t(lang, "プロジェクト管理へ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "プロジェクトとDiscord IDを見直す", "Review Projects & Discord IDs"))
+			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "プロジェクト管理で使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by Project Management."), statusClass, statusLabel, esc(effectiveHost), t(lang, "Bot Token", "Bot Token"), secretStatus(storedRuntimeDiscordBotToken(db), lang), withLang("/bot/admin/bot?edit=1", r), t(lang, "再認証して編集する", "Re-authenticate to edit"), withLang("/bot/setup", r), t(lang, "プロジェクト管理へ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "プロダクション連携管理を開く", "Open Production Connection Management"))
 		if !editMode {
 			fmt.Fprint(w, adminPage(lang, t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), r, view))
 			return
@@ -1007,7 +1085,7 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
     <div class="button-row"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
   </form>
 </div>`,
-				authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスに即時反映され、アプリ設定にも保存されます。", "Token changes take effect immediately for the running process and are also saved in app settings."), t(lang, "再起動後は保存済み token が優先されます。.env.local / 環境変数は fallback としてのみ使われます。", "After restart, the saved token is used first. .env.local / environment variables remain fallback sources only."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "プロジェクト管理へ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "プロジェクトとDiscord IDを見直す", "Review Projects & Discord IDs"))
+				authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスに即時反映され、アプリ設定にも保存されます。", "Token changes take effect immediately for the running process and are also saved in app settings."), t(lang, "再起動後は保存済み token が優先されます。.env.local / 環境変数は fallback としてのみ使われます。", "After restart, the saved token is used first. .env.local / environment variables remain fallback sources only."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "プロジェクト管理へ戻る", "Back to Project Management"), withLang("/bot/admin/projects", r), t(lang, "プロダクション連携管理を開く", "Open Production Connection Management"))
 		fmt.Fprint(w, adminPage(lang, t(lang, "Bot設定", "Bot Settings"), r, edit))
 	}
 }

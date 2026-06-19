@@ -398,7 +398,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 				effectiveGuildID = strings.TrimSpace(fallbackGuildID)
 			}
 			if effectiveGuildID == "" {
-				fmt.Fprint(w, page(lang, t(lang, "Discord Guild が未設定です", "Discord guild is not configured"), "#ff6a50", channelName, `<li>`+t(lang, "Admin > プロジェクトとDiscord ID で Guild ID を設定してください。", "Set a guild ID in Admin > Projects & Discord IDs.")+`</li>`, `<a href="`+withLang("/bot/admin/projects", r)+`">`+t(lang, "プロジェクトとDiscord ID", "Projects & Discord IDs")+`</a>`))
+				fmt.Fprint(w, page(lang, t(lang, "Discord Guild が未設定です", "Discord guild is not configured"), "#ff6a50", channelName, `<li>`+t(lang, "Admin > プロダクション連携管理 で Guild ID を設定してください。", "Set a guild ID in Admin > Production Connection Management.")+`</li>`, `<a href="`+withLang("/bot/admin/projects", r)+`">`+t(lang, "プロダクション連携管理", "Production Connection Management")+`</a>`))
 				return
 			}
 			channelID, err := CreateTextChannel(effectiveGuildID, project.DiscordCategoryID, channelName, botToken)
@@ -830,42 +830,6 @@ func displayProjectLang(lang string) string {
 func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID string) string {
 	lang := currentLang(r)
 
-	var projectCards strings.Builder
-	if len(projects) == 0 {
-		projectCards.WriteString(emptyState("🎬", t(lang, "まだ設定済みプロジェクトがありません", "No configured projects yet"), t(lang, "このページ下部のフォームから最初のプロジェクト routing を設定してください。", "Use the form on this page to configure the first project routing.")))
-	} else {
-		for _, project := range projects {
-			projectLang := project.Language
-			if projectLang == "" {
-				projectLang = "ja"
-			}
-			projectCards.WriteString(fmt.Sprintf(`
-<details id="project-%d" class="accordion">
-  <summary>
-    <div class="accordion-summary-main">
-      <div class="eyebrow">%s</div>
-      <div class="tile-title">%s</div>
-      <div class="tile-sub">%s</div>
-    </div>
-    <div class="accordion-summary-side">
-      <span class="tag">%s / %s</span>
-      <span class="accordion-trigger"><span>%s</span><span class="accordion-caret">⌄</span></span>
-    </div>
-  </summary>
-  %s
-</details>`,
-				project.ID,
-				t(lang, "設定済みプロジェクト", "Configured project"),
-				esc(project.Name),
-				t(lang, "チャンネルと通知導線をここで管理します。", "Manage channels and notification routing here."),
-				esc(project.ProjectType),
-				esc(displayProjectLang(projectLang)),
-				t(lang, "チャンネルを開く", "Open channels"),
-				renderProjectChannels(project, model.ListProjectWebhooks(db, project.KitsuProjectID), kitsu.GetTaskTypes().Each, lang, r),
-			))
-		}
-	}
-
 	var projectOptions strings.Builder
 	projectOptions.WriteString(`<option value="">` + t(lang, "プロジェクトを選択", "Select project") + `</option>`)
 	if len(kitsuProjects) == 0 {
@@ -969,7 +933,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 			t(lang, "Routing 作成後に、各 project を送信先の Discord Server / Guild に割り当てます。", "After routing is created, assign each project to its destination Discord Server / Guild."),
 			map[string]string{"done": t(lang, "割り当て済み", "Assigned"), "active": t(lang, "次の手順", "Next"), "pending": t(lang, "待機中", "Pending")}[step3Class],
 			appendLang("/bot/admin/projects", lang),
-			t(lang, "プロジェクトとDiscord ID", "Projects & Discord IDs"),
+			t(lang, "プロダクション連携管理", "Production Connection Management"),
 			step3Class == "active",
 		) +
 		workflowCard(
@@ -1053,7 +1017,9 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
       <div><div class="eyebrow">STEP 2</div><h3 style="margin:6px 0 0">%s</h3><p class="hint" style="margin:8px 0 0">%s</p></div>
       %s
     </div>
-    <div class="section-stack">%s</div>
+    <div class="button-row">
+      <a class="btn" href="%s">%s</a>
+    </div>
   </div>
   <div class="section-card glass workflow-routing-form">
     <div class="page-heading" style="margin-bottom:14px">
@@ -1169,10 +1135,11 @@ document.addEventListener('DOMContentLoaded', function(){
 		workflowOverview,
 		botCard.String(),
 		sotBadge,
-		t(lang, "Step 2: 既存の Routing を確認", "Step 2: Review existing routing"),
-		t(lang, "すでに作成済みの project routing を見直すときはここを使います。日常運用ではまず次の作成フォームから必要な routing を追加します。", "Use this section to review project routing that already exists. In normal operation, start with the creation form below when you need to add routing."),
+		t(lang, "Step 2: 連携済み production を管理", "Step 2: Manage connected productions"),
+		t(lang, "既存の production connection 一覧はこのページに埋め込まず、専用の管理ページで見直します。新しい routing の追加は次のフォームから進めてください。", "Review existing production connections in the dedicated management page instead of inside this step. Use the next form when you need to add new routing."),
 		projectRoutingStatus,
-		projectCards.String(),
+		appendLang("/bot/admin/projects", lang),
+		t(lang, "プロダクション連携管理を開く", "Open Production Connection Management"),
 		t(lang, "新規プロジェクトのルーティング作成", "Create New Project Routing"),
 		t(lang, "ここがプロジェクト管理の主作業です。project ごとの Discord category / channels / webhooks routing をここで設定します。最初の routing もここから作成します。", "This is the main Project Management task. Configure Discord category / channels / webhooks routing per project here, including the first routing."),
 		t(lang, "主作業", "Main task"),
@@ -1186,10 +1153,10 @@ document.addEventListener('DOMContentLoaded', function(){
 		guildInputHelp,
 		t(lang, "セットアップ実行", "Run Setup"),
 		t(lang, "Step 3: Discord Server / Guild の割り当て", "Step 3: Assign Discord Server / Guild"),
-		t(lang, "Project setup 時に保存した Guild 割り当てを見直すときは、プロジェクトとDiscord ID を review / edit 用に使います。", "Use Projects & Discord IDs as a review / edit page when you need to revisit the guild assignment saved during project setup."),
+		t(lang, "Project setup 時に保存した Guild 割り当てや接続情報を見直すときは、プロダクション連携管理 を review / edit 用に使います。", "Use Production Connection Management as the review / edit page when you need to revisit guild assignment or saved connection details from project setup."),
 		guildNextStatus,
 		appendLang("/bot/admin/projects", lang),
-		t(lang, "プロジェクトとDiscord IDを確認", "Review Projects & Discord IDs"),
+		t(lang, "プロダクション連携管理を開く", "Open Production Connection Management"),
 		t(lang, "Step 4: 最終ヘルス確認", "Step 4: Final Health Check"),
 		t(lang, "Guild 割り当て後は、ヘルスで通知先と runtime の状態を確認します。正常であれば、このセットアップは完了です。", "After guild assignment, use Health to confirm the notification destination and runtime status. If everything is healthy, setup is complete."),
 		testNextStatus,
