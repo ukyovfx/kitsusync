@@ -132,6 +132,35 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		}
 
 		projectCount := len(projects)
+		allTaskTypes := kitsu.GetTaskTypes().Each
+		projectsWithUnassigned := 0
+		for _, proj := range projects {
+			assigned := map[string]bool{}
+			for _, wh := range allWebhooks {
+				if wh.KitsuProjectID == proj.KitsuProjectID && strings.TrimSpace(wh.TaskType) != "" {
+					assigned[wh.TaskType] = true
+				}
+			}
+			if len(assigned) < len(allTaskTypes) {
+				projectsWithUnassigned++
+			}
+		}
+
+		statusChip := func(class, text string) string {
+			return `<span class="status-pill ` + class + `">` + esc(text) + `</span>`
+		}
+		tileStatus := func(items ...string) string {
+			var out strings.Builder
+			out.WriteString(`<div class="tile-sub" style="display:flex;flex-wrap:wrap;gap:8px">`)
+			for _, item := range items {
+				if strings.TrimSpace(item) == "" {
+					continue
+				}
+				out.WriteString(item)
+			}
+			out.WriteString(`</div>`)
+			return out.String()
+		}
 
 		var projectsCard string
 		if projectCount == 0 {
@@ -230,28 +259,129 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		}
 
 		// ---- Quick navigation ----
+		var connectedStatus string
+		switch {
+		case projectCount == 0:
+			connectedStatus = tileStatus(
+				statusChip("bad", t(lang, "連携済み: 0", "Connected: 0")),
+				statusChip("warn", t(lang, "未設定", "Unset")),
+			)
+		case projectsWithUnassigned > 0:
+			connectedStatus = tileStatus(
+				statusChip("ok", fmt.Sprintf(t(lang, "連携済み: %d", "Connected: %d"), projectCount)),
+				statusChip("warn", fmt.Sprintf(t(lang, "未割当あり: %d", "Unassigned: %d"), projectsWithUnassigned)),
+			)
+		default:
+			connectedStatus = tileStatus(
+				statusChip("ok", fmt.Sprintf(t(lang, "連携済み: %d", "Connected: %d"), projectCount)),
+				statusChip("ok", t(lang, "割当済み", "Assigned")),
+			)
+		}
+
+		assignmentProject := configuredAssignmentProject(db)
+		userAssignmentCount := 0
+		checkerAssignmentCount := 0
+		if assignmentProject != nil {
+			userAssignmentCount = len(model.ListProjectUserMaps(db, assignmentProject.ID))
+			checkerAssignmentCount = len(model.ListProjectCheckerMaps(db, assignmentProject.ID))
+		}
+		usersStatus := tileStatus(
+			statusChip(map[bool]string{true: "ok", false: "bad"}[userAssignmentCount > 0], fmt.Sprintf(t(lang, "割り当て済み: %d", "Assigned: %d"), userAssignmentCount)),
+		)
+		if assignmentProject == nil {
+			usersStatus = tileStatus(
+				statusChip("bad", t(lang, "対象なし", "No target")),
+				statusChip("warn", t(lang, "未設定", "Unset")),
+			)
+		} else if checkerAssignmentCount == 0 {
+			usersStatus = tileStatus(
+				statusChip(map[bool]string{true: "ok", false: "bad"}[userAssignmentCount > 0], fmt.Sprintf(t(lang, "割り当て済み: %d", "Assigned: %d"), userAssignmentCount)),
+				statusChip("warn", t(lang, "レビュアー未設定", "No reviewers")),
+			)
+		} else {
+			usersStatus = tileStatus(
+				statusChip(map[bool]string{true: "ok", false: "bad"}[userAssignmentCount > 0], fmt.Sprintf(t(lang, "割り当て済み: %d", "Assigned: %d"), userAssignmentCount)),
+				statusChip("ok", fmt.Sprintf(t(lang, "レビュアー設定: %d", "Reviewers: %d"), checkerAssignmentCount)),
+			)
+		}
+
+		storedHost := model.GetSetting(db, "kitsu.hostname")
+		autoHost := publicKitsuHostnameFromRequest(r, storedHost)
+		effectiveHost := autoHost
+		if storedHost != "" {
+			effectiveHost = normalizeKitsuHostname(storedHost)
+		}
+		botTokenConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
+		runtimeConfigured := effectiveHost != "" && strings.TrimSpace(storedRuntimeKitsuEmail(db)) != ""
+		botStatus := tileStatus(
+			statusChip(map[bool]string{true: "ok", false: "bad"}[botTokenConfigured], t(lang, map[bool]string{true: "Bot設定済み", false: "Bot未設定"}[botTokenConfigured], map[bool]string{true: "Bot set", false: "Bot unset"}[botTokenConfigured])),
+			statusChip(map[bool]string{true: "ok", false: "bad"}[runtimeConfigured], t(lang, map[bool]string{true: "Runtime設定済み", false: "Runtime未設定"}[runtimeConfigured], map[bool]string{true: "Runtime set", false: "Runtime unset"}[runtimeConfigured])),
+		)
+
+		storageConfiguredCount := 0
+		for _, project := range projects {
+			if strings.TrimSpace(project.StorageURL) != "" {
+				storageConfiguredCount++
+			}
+		}
+		storageStatus := tileStatus(
+			statusChip(map[bool]string{true: "ok", false: "bad"}[storageConfiguredCount > 0], fmt.Sprintf(t(lang, "保存先設定: %d", "Storage set: %d"), storageConfiguredCount)),
+		)
+		if projectCount > storageConfiguredCount {
+			storageStatus = tileStatus(
+				statusChip(map[bool]string{true: "ok", false: "bad"}[storageConfiguredCount > 0], fmt.Sprintf(t(lang, "保存先設定: %d", "Storage set: %d"), storageConfiguredCount)),
+				statusChip("warn", fmt.Sprintf(t(lang, "未設定: %d", "Unset: %d"), projectCount-storageConfiguredCount)),
+			)
+		}
+
+		systemStatus := tileStatus(
+			statusChip(map[bool]string{true: "ok", false: "bad"}[pollingActive], t(lang, map[bool]string{true: "稼働中", false: "未ポーリング"}[pollingActive], map[bool]string{true: "Running", false: "No polls"}[pollingActive])),
+		)
+		switch {
+		case hasBrokenWebhook:
+			systemStatus = tileStatus(
+				statusChip(map[bool]string{true: "ok", false: "bad"}[pollingActive], t(lang, map[bool]string{true: "稼働中", false: "未ポーリング"}[pollingActive], map[bool]string{true: "Running", false: "No polls"}[pollingActive])),
+				statusChip("warn", fmt.Sprintf(t(lang, "警告あり: %d", "Warnings: %d"), len(unhealthy))),
+			)
+		case hasPollErr:
+			systemStatus = tileStatus(
+				statusChip("warn", t(lang, "警告あり", "Warning")),
+				statusChip("bad", t(lang, "ポーラー要確認", "Poller issue")),
+			)
+		case isHealthy:
+			systemStatus = tileStatus(
+				statusChip("ok", t(lang, "稼働中", "Running")),
+				statusChip("ok", t(lang, "正常", "Healthy")),
+			)
+		}
+
+		auditCount := len(model.ListAuditLogs(db, 1))
+		auditStatus := tileStatus(
+			statusChip(map[bool]string{true: "ok", false: "bad"}[auditCount > 0], t(lang, map[bool]string{true: "履歴あり", false: "未記録"}[auditCount > 0], map[bool]string{true: "History present", false: "No history"}[auditCount > 0])),
+		)
+
 		type navLink struct {
-			icon, href, titleJA, titleEN, subJA, subEN string
+			icon, href, titleJA, titleEN, statusHTML string
 		}
 		links := []navLink{
-			{"\U0001F5C2", "/bot/admin/projects", "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions", "\u65e2\u5b58\u306e routing \u3068 Discord \u9023\u643a\u3092\u898b\u76f4\u3057\u307e\u3059\u3002", "Review existing routing and Discord connections."},
-			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users", "\u5272\u308a\u5f53\u3066\u3068 reviewer / checker \u8a2d\u5b9a\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002", "Review assignments and reviewer / checker settings."},
-			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings", "\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u8a2d\u5b9a\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002", "Review shared Bot / Runtime prerequisites."},
-			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage", "\u88dc\u52a9\u30ea\u30f3\u30af\u3084\u4fdd\u5b58\u5148\u3092\u7ba1\u7406\u3057\u307e\u3059\u3002", "Manage helper links and saved destinations."},
-			{"\u2764", "/bot/admin/health", "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "System Status", "\u7a3c\u50cd\u72b6\u614b\u3068 webhook health \u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002", "Check runtime status and webhook health."},
-			{"\U0001F9FE", "/bot/admin/audit", "\u76e3\u67fb\u30ed\u30b0", "Audit Log", "\u6700\u8fd1\u306e\u5909\u66f4\u5c65\u6b74\u3092\u305f\u3069\u308c\u307e\u3059\u3002", "Review recent change history."},
+			{"\U0001F5C2", "/bot/admin/projects", "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions", connectedStatus},
+			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users", usersStatus},
+			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings", botStatus},
+			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage", storageStatus},
+			{"\u2764", "/bot/admin/health", "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "System Status", systemStatus},
+			{"\U0001F9FE", "/bot/admin/audit", "\u76e3\u67fb\u30ed\u30b0", "Audit Log", auditStatus},
 		}
 		var navGrid strings.Builder
 		navGrid.WriteString(`<div class="dashboard-grid">`)
 		for _, lnk := range links {
 			navGrid.WriteString(fmt.Sprintf(
-				`<a class="tile glass" href="%s"><div class="tile-icon">%s</div><div class="tile-title">%s</div><div class="tile-sub">%s</div></a>`,
-				withLang(lnk.href, r), lnk.icon, t(lang, lnk.titleJA, lnk.titleEN), esc(t(lang, lnk.subJA, lnk.subEN)),
+				`<a class="tile glass" href="%s"><div class="tile-icon">%s</div><div class="tile-title">%s</div>%s</a>`,
+				withLang(lnk.href, r), lnk.icon, t(lang, lnk.titleJA, lnk.titleEN), lnk.statusHTML,
 			))
 		}
 		navGrid.WriteString(`</div>`)
 
-		nextTitle := t(lang, "\u6b21\u306e\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7", "Next Setup")
+		nextTitle := t(lang, "\u65b0\u898f\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7", "New Setup")
 		nextCardTitle := t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
 		nextCardBody := t(lang, "\u65b0\u3057\u3044 production connection \u306e\u8ffd\u52a0\u306f\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u304b\u3089\u9032\u3081\u307e\u3059\u3002\u65e2\u5b58\u306e\u9023\u643a\u72b6\u6cc1\u306f Step 2 \u3068 \u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406 \u3067\u78ba\u8a8d\u3067\u304d\u307e\u3059\u3002", "Add new production connections from New Connection Setup. Existing connected productions remain visible in Step 2 and in Connected Productions.")
 		nextPrimaryHref := withLang("/bot/setup", r)
@@ -293,11 +423,12 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		)
 
 		body := `<div class="section-stack">` +
-			`<div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u6982\u8981", "Overview")) + `</h2></div>` +
+			`<div><div class="eyebrow">OVERVIEW</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u6982\u8981", "Overview")) + `</h2></div>` +
 			statusBar + pollerCard + warningsCard + projectsCard +
-			`<div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
+			`<div><div class="eyebrow">NEW SETUP</div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
 			nextActionCard +
-			`<div class="section-card glass"><div class="page-heading" style="margin-bottom:14px"><div><h3 style="margin:0">` + esc(t(lang, "\u8a73\u7d30\u8a2d\u5b9a", "Advanced Settings")) + `</h3><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "\u521d\u56de\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u5b8c\u4e86\u5f8c\u306e\u898b\u76f4\u3057\u3001\u7ba1\u7406\u3001\u78ba\u8a8d\u306b\u4f7f\u3046\u30da\u30fc\u30b8\u3067\u3059\u3002", "Use these pages for review, management, and status checks after initial setup.")) + `</p></div></div>` + navGrid.String() + `</div>` +
+			`<div><div class="eyebrow">ADVANCED SETTINGS</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u8a73\u7d30\u8a2d\u5b9a", "Advanced Settings")) + `</h2></div>` +
+			navGrid.String() +
 			`</div>`
 
 		fmt.Fprint(w, adminPage(lang, t(lang, "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9", "Dashboard"), r, body))
