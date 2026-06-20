@@ -181,10 +181,7 @@ func renderDiagnosticsPanel(
 		)) + `</div>`
 	}
 
-	var rows strings.Builder
-	for _, c := range checks {
-		rows.WriteString(renderDiagRow(lang, c))
-	}
+	groupHTML := renderDiagGroups(lang, checks)
 
 	actions := fmt.Sprintf(`<div class="button-row"><a class="btn" href="%s">%s</a>`,
 		rerunURL, esc(t(lang, "再確認", "Re-run checks")))
@@ -227,16 +224,12 @@ func renderDiagnosticsPanel(
 %s
 <div class="diag-card">
   %s
-  <div class="section-card glass">
-    <div class="table-wrap">
-      <table><tbody>%s</tbody></table>
-    </div>
-  </div>
+  %s
 </div>
 %s`,
 		summary,
-		renderProjectDeliveryCard(lang, deliveryState),
-		rows.String(),
+		renderProjectDeliverySelectorCard(lang, deliveryState),
+		groupHTML,
 		actions,
 	)
 }
@@ -858,7 +851,53 @@ func renderDiagRow(lang string, c diagCheck) string {
 	)
 }
 
-func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
+func renderDiagGroups(lang string, checks []diagCheck) string {
+	var kitsuChecks []diagCheck
+	var discordChecks []diagCheck
+	var storageChecks []diagCheck
+
+	for _, c := range checks {
+		switch c.Label {
+		case "Kitsu hostname", "Kitsu server reachable", "Kitsu runtime check":
+			kitsuChecks = append(kitsuChecks, c)
+		case "Database (SQLite)", "data/ directory writable":
+			storageChecks = append(storageChecks, c)
+		default:
+			discordChecks = append(discordChecks, c)
+		}
+	}
+
+	type diagGroup struct {
+		Title string
+		Rows  []diagCheck
+	}
+	groups := []diagGroup{
+		{Title: "Kitsu", Rows: kitsuChecks},
+		{Title: "Discord", Rows: discordChecks},
+		{Title: t(lang, "Storage / DB", "Storage / DB"), Rows: storageChecks},
+	}
+
+	var out strings.Builder
+	for _, group := range groups {
+		if len(group.Rows) == 0 {
+			continue
+		}
+		var rows strings.Builder
+		for _, item := range group.Rows {
+			rows.WriteString(renderDiagRow(lang, item))
+		}
+		out.WriteString(fmt.Sprintf(`
+<div class="section-card glass">
+  <h3>%s</h3>
+  <div class="table-wrap">
+    <table><tbody>%s</tbody></table>
+  </div>
+</div>`, esc(group.Title), rows.String()))
+	}
+	return out.String()
+}
+
+func renderProjectDeliveryCardLegacy(lang string, state projectDeliveryState) string {
 	pillClass := "warn"
 	if state.SummaryStatus == "ok" {
 		pillClass = "ok"
@@ -998,6 +1037,218 @@ func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
 		t(lang, "この project のテスト通知成功が記録されました。", "A successful test notification was recorded for this project."),
 		t(lang, "最終確認: ", "Last verified: "),
 		t(lang, "テスト通知を送信しました。Discord 側の着弾も確認してください。", "A test notification was sent. Confirm that it arrived in Discord as well."),
+		t(lang, "未確認", "Not verified"),
+		t(lang, "テスト通知を送信できませんでした: ", "The test notification could not be sent: "),
+	)
+}
+
+func renderProjectDeliveryCard(lang string, state projectDeliveryState) string {
+	return renderProjectDeliverySelectorCard(lang, state)
+}
+
+func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) string {
+	pillClass := "warn"
+	if state.SummaryStatus == "ok" {
+		pillClass = "ok"
+	} else if state.SummaryStatus == "fail" {
+		pillClass = "bad"
+	}
+
+	fixHTML := ""
+	if state.Fix != "" {
+		fixHTML = `<div class="diag-state-note">` + esc(state.Fix) + `</div>`
+	}
+
+	verifiedCount := 0
+	unverifiedCount := 0
+	selectedProjectID := ""
+	selectedProjectName := ""
+	selectedSummary := ""
+	selectedDetail := ""
+	selectedLastVerified := "-"
+	selectedPillClass := "warn"
+	selectedCanSend := false
+	options := make([]string, 0, len(state.Projects))
+
+	for _, item := range state.Projects {
+		if item.Status == "ok" {
+			verifiedCount++
+		} else {
+			unverifiedCount++
+		}
+
+		itemPillClass := "warn"
+		if item.Status == "ok" {
+			itemPillClass = "ok"
+		} else if item.Status == "fail" {
+			itemPillClass = "bad"
+		}
+
+		lastVerified := item.LastVerified
+		if lastVerified == "" {
+			lastVerified = "-"
+		}
+
+		if selectedProjectID == "" {
+			selectedProjectID = item.ProjectID
+			selectedProjectName = item.ProjectName
+			selectedSummary = item.Summary
+			selectedDetail = item.Detail
+			selectedLastVerified = lastVerified
+			selectedPillClass = itemPillClass
+			selectedCanSend = item.CanSend
+		}
+
+		options = append(options, fmt.Sprintf(
+			`<option value="%s" data-project-name="%s" data-summary="%s" data-detail="%s" data-last-verified="%s" data-pill-class="%s" data-can-send="%t">%s</option>`,
+			esc(item.ProjectID),
+			esc(item.ProjectName),
+			esc(item.Summary),
+			esc(item.Detail),
+			esc(lastVerified),
+			esc(itemPillClass),
+			item.CanSend,
+			esc(item.ProjectName),
+		))
+	}
+
+	summaryChips := fmt.Sprintf(
+		`<div class="button-row" style="margin-top:12px"><span class="status-pill ok">%s</span><span class="status-pill %s">%s</span></div>`,
+		esc(fmt.Sprintf(t(lang, "確認済み: %d", "Verified: %d"), verifiedCount)),
+		map[bool]string{true: "warn", false: "ok"}[unverifiedCount > 0],
+		esc(fmt.Sprintf(t(lang, "未確認: %d", "Unverified: %d"), unverifiedCount)),
+	)
+
+	return fmt.Sprintf(`
+<div class="section-card glass diag-state-card">
+  <div class="diag-state-head">
+    <div>
+      <h3>%s</h3>
+      <div class="diag-state-body">
+        <p>%s</p>
+        %s
+      </div>
+    </div>
+    <span class="status-pill %s">%s</span>
+  </div>
+  %s
+  <div class="diag-project-list">
+    <div class="diag-project-item">
+      <label for="diagProjectSelect">%s</label>
+      <select id="diagProjectSelect">%s</select>
+      <div class="diag-project-head">
+        <div>
+          <strong id="diagProjectName">%s</strong>
+          <div class="diag-project-meta" id="diagProjectDetail">%s</div>
+          <div class="diag-project-meta" id="diagProjectLastVerified">%s%s</div>
+        </div>
+        <span class="status-pill %s" id="diagProjectBadge">%s</span>
+      </div>
+      <div class="diag-project-actions">
+        <button class="btn" type="button" id="diagProjectTestButton" data-project-id="%s"%s>%s</button>
+      </div>
+      <div class="diag-state-note" id="diagProjectFeedback" hidden></div>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var select = document.getElementById('diagProjectSelect');
+  var button = document.getElementById('diagProjectTestButton');
+  var badge = document.getElementById('diagProjectBadge');
+  var detail = document.getElementById('diagProjectDetail');
+  var verified = document.getElementById('diagProjectLastVerified');
+  var feedback = document.getElementById('diagProjectFeedback');
+  var name = document.getElementById('diagProjectName');
+  if (!select || !button || !badge || !detail || !verified || !feedback || !name) { return; }
+  var original = button.textContent;
+
+  function syncSelectedProject() {
+    var option = select.options[select.selectedIndex];
+    if (!option) { return; }
+    button.setAttribute('data-project-id', option.value);
+    button.disabled = option.getAttribute('data-can-send') !== 'true';
+    name.textContent = option.getAttribute('data-project-name') || option.textContent;
+    detail.textContent = option.getAttribute('data-detail') || '';
+    verified.textContent = %q + (option.getAttribute('data-last-verified') || '-');
+    badge.className = 'status-pill ' + (option.getAttribute('data-pill-class') || 'warn');
+    badge.textContent = option.getAttribute('data-summary') || '';
+    feedback.hidden = true;
+    feedback.textContent = '';
+  }
+
+  select.addEventListener('change', syncSelectedProject);
+  syncSelectedProject();
+
+  button.addEventListener('click', async function(){
+    if (button.disabled) { return; }
+    button.disabled = true;
+    button.textContent = %q;
+    feedback.hidden = true;
+    feedback.textContent = '';
+    try {
+      var resp = await fetch(%q, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: button.getAttribute('data-project-id') })
+      });
+      var data = await resp.json();
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || ('HTTP ' + resp.status));
+      }
+      var selected = select.options[select.selectedIndex];
+      var nowLabel = new Date().toLocaleString();
+      if (selected) {
+        selected.setAttribute('data-summary', %q);
+        selected.setAttribute('data-detail', %q);
+        selected.setAttribute('data-last-verified', nowLabel);
+        selected.setAttribute('data-pill-class', 'ok');
+      }
+      badge.className = 'status-pill ok';
+      badge.textContent = %q;
+      detail.textContent = %q;
+      verified.textContent = %q + nowLabel;
+      feedback.hidden = false;
+      feedback.textContent = %q;
+    } catch (err) {
+      badge.className = 'status-pill warn';
+      badge.textContent = %q;
+      feedback.hidden = false;
+      feedback.textContent = %q + (err && err.message ? err.message : 'unknown error');
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  });
+})();
+</script>`,
+		esc(t(lang, "通知配信の確認", "Notification delivery verification")),
+		esc(state.Detail),
+		fixHTML,
+		pillClass,
+		esc(state.Summary),
+		summaryChips,
+		esc(t(lang, "プロダクション", "Production")),
+		strings.Join(options, ""),
+		esc(selectedProjectName),
+		esc(selectedDetail),
+		esc(t(lang, "最終確認: ", "Last verified: ")),
+		esc(selectedLastVerified),
+		selectedPillClass,
+		esc(selectedSummary),
+		esc(selectedProjectID),
+		map[bool]string{true: "", false: " disabled"}[selectedCanSend],
+		esc(t(lang, "テスト通知を送信", "Send test notification")),
+		t(lang, "最終確認: ", "Last verified: "),
+		t(lang, "送信中...", "Sending..."),
+		state.APIPath,
+		t(lang, "確認済み", "Verified"),
+		t(lang, "この project のテスト通知成功が記録されました。", "A successful test notification was recorded for this project."),
+		t(lang, "確認済み", "Verified"),
+		t(lang, "この project のテスト通知成功が記録されました。", "A successful test notification was recorded for this project."),
+		t(lang, "最終確認: ", "Last verified: "),
+		t(lang, "テスト通知を送信しました。Discord 側の到達も確認してください。", "A test notification was sent. Confirm that it arrived in Discord as well."),
 		t(lang, "未確認", "Not verified"),
 		t(lang, "テスト通知を送信できませんでした: ", "The test notification could not be sent: "),
 	)

@@ -740,6 +740,9 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 		reconnectMsg := r.URL.Query().Get("msg")
 
 		var webhookRows strings.Builder
+		healthyWebhookCount := 0
+		warnWebhookCount := 0
+		failedWebhookCount := 0
 		for _, wh := range allWebhooks {
 			projName := projectNames[wh.KitsuProjectID]
 			if projName == "" {
@@ -754,6 +757,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			var statusCell string
 			var actionCell string
 			if entry, bad := failedURLs[wh.WebhookURL]; bad {
+				failedWebhookCount++
 				statusCell = fmt.Sprintf(`<span class="status-pill bad">%s %d</span>`,
 					esc(t(lang, "\u5931\u6557:", "Failed:")), entry.FailureCount)
 				if entry.LastError != "" {
@@ -765,9 +769,11 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 						wh.ID, esc(t(lang, "\u518d\u63a5\u7d9a", "Reconnect")))
 				}
 			} else if Stats.WebhookInactive(wh.WebhookURL, 7*24*time.Hour) {
+				warnWebhookCount++
 				statusCell = `<span class="status-pill" style="background:rgba(255,200,80,.14);color:#ffc850;border-color:rgba(255,200,80,.3)">` +
 					esc(t(lang, "\u26a0\ufe0f 7\u65e5\u4ee5\u4e0a\u672a\u9001\u4fe1", "\u26a0\ufe0f No activity 7d+")) + `</span>`
 			} else {
+				healthyWebhookCount++
 				statusCell = `<span class="status-pill ok">` + esc(t(lang, "\u6b63\u5e38", "OK")) + `</span>`
 			}
 			webhookRows.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>#%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
@@ -778,7 +784,12 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 		if len(allWebhooks) == 0 {
 			webhookTableHTML = `<p class="hint">` + esc(t(lang, "Webhook\u306a\u3057\uff08\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u8a2d\u5b9a\u5f8c\u306b\u8868\u793a\uff09", "No webhooks configured (shown after project setup).")) + `</p>`
 		} else {
-			webhookTableHTML = `<div class="table-wrap"><table><thead><tr>` +
+			webhookTableHTML = `<div class="button-row" style="margin:0 0 14px 0">` +
+				`<span class="status-pill ok">` + esc(fmt.Sprintf(t(lang, "正常: %d", "Healthy: %d"), healthyWebhookCount)) + `</span>` +
+				`<span class="status-pill warn">` + esc(fmt.Sprintf(t(lang, "警告: %d", "Warning: %d"), warnWebhookCount)) + `</span>` +
+				`<span class="status-pill bad">` + esc(fmt.Sprintf(t(lang, "失敗: %d", "Failed: %d"), failedWebhookCount)) + `</span>` +
+				`</div>` +
+				`<div class="table-wrap"><table><thead><tr>` +
 				`<th>` + esc(t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Project")) + `</th>` +
 				`<th>` + esc(t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb", "Channel")) + `</th>` +
 				`<th>` + esc(t(lang, "\u30bf\u30b9\u30af\u7a2e\u5225", "Task type")) + `</th>` +
