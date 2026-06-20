@@ -139,6 +139,108 @@ func DiagnosticsHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
 	}
 }
 
+func renderDiagnosticsPanel(
+	lang string,
+	r *http.Request,
+	db *gorm.DB,
+	refreshCreds func() (kitsuHost, botToken, guildID, webhookURL string),
+	rerunURL string,
+	includeBackButton bool,
+) string {
+	kitsuHost, botToken, guildID, webhookURL := refreshCreds()
+	checks := runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL, db)
+	deliveryState := buildProjectDeliveryState(lang, db, diagnosticsAPIBase(r)+"/api/setup/test-notification")
+
+	allOK := deliveryState.SummaryStatus == "ok"
+	anyFail := deliveryState.SummaryStatus == "fail"
+	for _, c := range checks {
+		if c.Status != "ok" {
+			allOK = false
+		}
+		if c.Status == "fail" {
+			anyFail = true
+		}
+	}
+
+	var summary string
+	switch {
+	case allOK:
+		summary = `<div class="diag-banner ok">` + esc(t(lang,
+			"Runtime と通知確認を含めて、現在の KitsuSync は利用可能です。",
+			"KitsuSync currently looks ready, including runtime health and notification verification.",
+		)) + `</div>`
+	case anyFail:
+		summary = `<div class="diag-banner fail">` + esc(t(lang,
+			"運用前に解決が必要な項目があります。赤い項目から確認してください。",
+			"There are blockers to resolve before relying on this setup. Start with the red items.",
+		)) + `</div>`
+	default:
+		summary = `<div class="diag-banner warn">` + esc(t(lang,
+			"Runtime は動いていますが、運用前に確認しておきたい項目があります。",
+			"The runtime is working, but there are still items worth confirming before relying on it.",
+		)) + `</div>`
+	}
+
+	var rows strings.Builder
+	for _, c := range checks {
+		rows.WriteString(renderDiagRow(lang, c))
+	}
+
+	actions := fmt.Sprintf(`<div class="button-row"><a class="btn" href="%s">%s</a>`,
+		rerunURL, esc(t(lang, "再確認", "Re-run checks")))
+	if includeBackButton {
+		actions += fmt.Sprintf(`<a class="btn-ghost" href="%s">%s</a>`,
+			withLang("/bot/admin", r), esc(t(lang, "管理画面へ", "Back to Admin")))
+	}
+	actions += `</div>`
+
+	return fmt.Sprintf(`
+<style>
+.diag-banner{padding:14px 20px;border-radius:var(--radius-md);margin-bottom:18px;font-weight:600}
+.diag-banner.ok{background:rgba(142,207,139,.18);border:1px solid rgba(142,207,139,.4);color:#8ecf8b}
+.diag-banner.warn{background:rgba(255,200,80,.12);border:1px solid rgba(255,200,80,.35);color:#ffc850}
+.diag-banner.fail{background:rgba(255,106,80,.14);border:1px solid rgba(255,106,80,.38);color:#ff6a50}
+.diag-card{display:grid;gap:16px}
+.diag-row td{color:var(--text)}
+.diag-row.diag-warn td{color:#ffc850}
+.diag-row.diag-fail td{color:#ff6a50}
+.diag-icon{width:58px;padding-right:14px;white-space:nowrap}
+.diag-mark{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:999px;font-size:15px;font-weight:700;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:var(--text)}
+.diag-mark.ok{color:#8ecf8b;border-color:rgba(142,207,139,.28);background:rgba(142,207,139,.08)}
+.diag-mark.warn{color:#ffc850;border-color:rgba(255,200,80,.3);background:rgba(255,200,80,.08)}
+.diag-mark.fail{color:#ff6a50;border-color:rgba(255,106,80,.28);background:rgba(255,106,80,.08)}
+.diag-detail{color:var(--muted);font-size:.875rem;margin-top:4px;line-height:1.6}
+.diag-fix{margin-top:8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);font-size:.82rem;color:var(--muted-2);line-height:1.55}
+.diag-state-card{padding:18px;border-radius:22px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)}
+.diag-state-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.diag-state-head h3{margin:0}
+.diag-state-body{color:var(--muted);line-height:1.65}
+.diag-state-body p{margin:10px 0 0}
+.diag-state-note{margin-top:8px;padding:8px 10px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);font-size:.82rem;color:var(--muted-2)}
+.diag-project-list{display:grid;gap:12px;margin-top:16px}
+.diag-project-item{padding:14px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);display:grid;gap:10px}
+.diag-project-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.diag-project-head strong{display:block}
+.diag-project-meta{color:var(--muted);font-size:.88rem;line-height:1.6}
+.diag-project-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+</style>
+%s
+<div class="diag-card">
+  %s
+  <div class="section-card glass">
+    <div class="table-wrap">
+      <table><tbody>%s</tbody></table>
+    </div>
+  </div>
+</div>
+%s`,
+		summary,
+		renderProjectDeliveryCard(lang, deliveryState),
+		rows.String(),
+		actions,
+	)
+}
+
 func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *gorm.DB) []diagCheck {
 	client := &http.Client{Timeout: 8 * time.Second}
 	var checks []diagCheck
