@@ -166,17 +166,17 @@ func renderDiagnosticsPanel(
 	switch {
 	case allOK:
 		summary = `<div class="diag-banner ok">` + esc(t(lang,
-			"Runtime 縺ｨ騾夂衍遒ｺ隱阪ｒ蜷ｫ繧√※縲∫樟蝨ｨ縺ｮ KitsuSync 貅門ｙ迥ｶ諷九・濶ｯ螂ｽ縺ｧ縺吶・,
+			"Runtime と通知確認を含めて、現在の KitsuSync は利用可能です。",
 			"KitsuSync currently looks ready, including runtime health and notification verification.",
 		)) + `</div>`
 	case anyFail:
 		summary = `<div class="diag-banner fail">` + esc(t(lang,
-			"螳滄°逕ｨ蜑阪↓隗｣豎ｺ縺悟ｿ・ｦ√↑鬆・岼縺後≠繧翫∪縺吶りｵ､縺・・岼縺九ｉ遒ｺ隱阪＠縺ｦ縺上□縺輔＞縲・,
+			"運用前に解決が必要な項目があります。赤い項目から確認してください。",
 			"There are blockers to resolve before relying on this setup. Start with the red items.",
 		)) + `</div>`
 	default:
 		summary = `<div class="diag-banner warn">` + esc(t(lang,
-			"Runtime 縺ｯ蜍輔＞縺ｦ縺・∪縺吶′縲・°逕ｨ蜑阪↓遒ｺ隱阪＠縺ｦ縺翫″縺溘＞鬆・岼縺後≠繧翫∪縺吶・,
+			"Runtime は動いていますが、運用前に確認しておきたい項目があります。",
 			"The runtime is working, but there are still items worth confirming before relying on it.",
 		)) + `</div>`
 	}
@@ -187,10 +187,10 @@ func renderDiagnosticsPanel(
 	}
 
 	actions := fmt.Sprintf(`<div class="button-row"><a class="btn" href="%s">%s</a>`,
-		rerunURL, esc(t(lang, "蜀咲｢ｺ隱・, "Re-run checks")))
+		rerunURL, esc(t(lang, "再確認", "Re-run checks")))
 	if includeBackButton {
 		actions += fmt.Sprintf(`<a class="btn-ghost" href="%s">%s</a>`,
-			withLang("/bot/admin", r), esc(t(lang, "邂｡逅・判髱｢縺ｸ", "Back to Admin")))
+			withLang("/bot/admin", r), esc(t(lang, "管理画面へ", "Back to Admin")))
 	}
 	actions += `</div>`
 
