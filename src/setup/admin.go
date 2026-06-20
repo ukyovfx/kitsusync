@@ -111,7 +111,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			pollerDetails.String(),
 		)
 
-		// ---- Active projects ----
+		// ---- Active productions ----
 		projects := model.ListProjects(db)
 		allWebhooks := model.ListAllProjectWebhooks(db)
 
@@ -141,8 +141,8 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
   %s
   <p class="hint" style="margin-top:12px">%s</p>
 </div>`,
-				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
-				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u672a\u8a2d\u5b9a", "No projects configured"), t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u304b\u3089\u6700\u521d\u306e production connection \u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Use New Connection Setup to configure your first production connection.")),
+				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3", "Active Productions")),
+				emptyState("\U0001F3AC", t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u672a\u8a2d\u5b9a", "No productions configured"), t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u304b\u3089\u6700\u521d\u306e production connection \u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Use New Connection Setup to configure your first production connection.")),
 				esc(t(lang, "Next \u30bb\u30af\u30b7\u30e7\u30f3\u304b\u3089\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u3044\u3066\u304f\u3060\u3055\u3044\u3002", "Open New Connection Setup from the Next section.")),
 			)
 		} else {
@@ -183,10 +183,10 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
     </table>
   </div>
 </div>`,
-				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Active Projects")),
-				withLang("/bot/setup", r),
-				esc(t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7 \u2192", "New Connection Setup \u2192")),
-				esc(t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u540d", "Project")),
+				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3", "Active Productions")),
+				withLang("/bot/admin/projects", r),
+				esc(t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u3092\u958b\u304f \u2192", "Open Connected Productions \u2192")),
+				esc(t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u540d", "Production")),
 				esc(t(lang, "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8", "Template")),
 				esc(t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u6570", "Channels")),
 				esc(t(lang, "Webhook \u6570", "Webhooks")),
@@ -231,51 +231,38 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 
 		// ---- Quick navigation ----
 		type navLink struct {
-			icon, href, titleJA, titleEN string
+			icon, href, titleJA, titleEN, subJA, subEN string
 		}
 		links := []navLink{
-			{"\U0001F5C2", "/bot/admin/projects", "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions"},
-			{"\u2764", "/bot/admin/health", "\u30d8\u30eb\u30b9", "Health"},
-			{"\U0001F50D", "/bot/admin/diagnostics", "\u74b0\u5883\u8a3a\u65ad", "Diagnostics"},
-			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users"},
-			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings"},
-			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage"},
-			{"\U0001F9FE", "/bot/admin/audit", "\u76e3\u67fb\u30ed\u30b0", "Audit Log"},
+			{"\U0001F5C2", "/bot/admin/projects", "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions", "\u65e2\u5b58\u306e routing \u3068 Discord \u9023\u643a\u3092\u898b\u76f4\u3057\u307e\u3059\u3002", "Review existing routing and Discord connections."},
+			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users", "\u5272\u308a\u5f53\u3066\u3068 reviewer / checker \u8a2d\u5b9a\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002", "Review assignments and reviewer / checker settings."},
+			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings", "\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u8a2d\u5b9a\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002", "Review shared Bot / Runtime prerequisites."},
+			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage", "\u88dc\u52a9\u30ea\u30f3\u30af\u3084\u4fdd\u5b58\u5148\u3092\u7ba1\u7406\u3057\u307e\u3059\u3002", "Manage helper links and saved destinations."},
+			{"\u2764", "/bot/admin/health", "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "System Status", "\u7a3c\u50cd\u72b6\u614b\u3068 webhook health \u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002", "Check runtime status and webhook health."},
+			{"\U0001F9FE", "/bot/admin/audit", "\u76e3\u67fb\u30ed\u30b0", "Audit Log", "\u6700\u8fd1\u306e\u5909\u66f4\u5c65\u6b74\u3092\u305f\u3069\u308c\u307e\u3059\u3002", "Review recent change history."},
 		}
 		var navGrid strings.Builder
 		navGrid.WriteString(`<div class="dashboard-grid">`)
 		for _, lnk := range links {
 			navGrid.WriteString(fmt.Sprintf(
-				`<a class="tile glass" href="%s"><div class="tile-icon">%s</div><div class="tile-title">%s</div></a>`,
-				withLang(lnk.href, r), lnk.icon, t(lang, lnk.titleJA, lnk.titleEN),
+				`<a class="tile glass" href="%s"><div class="tile-icon">%s</div><div class="tile-title">%s</div><div class="tile-sub">%s</div></a>`,
+				withLang(lnk.href, r), lnk.icon, t(lang, lnk.titleJA, lnk.titleEN), esc(t(lang, lnk.subJA, lnk.subEN)),
 			))
 		}
 		navGrid.WriteString(`</div>`)
 
-		nextTitle := t(lang, "\u6b21\u306b\u3084\u308b\u3053\u3068", "Next")
-		nextCardTitle := t(lang, "\u72b6\u614b\u3092\u898b\u76f4\u3059", "Review system status")
-		nextCardBody := t(lang, "\u307e\u305a\u306f\u30d8\u30eb\u30b9\u3067\u554f\u984c\u306e\u3042\u308b\u7a3c\u50cd\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3001\u5fc5\u8981\u306a\u5834\u5408\u3060\u3051 Diagnostics \u3067\u8a73\u3057\u304f\u898b\u3066\u304f\u3060\u3055\u3044\u3002", "Start with Health to review runtime issues, then use Diagnostics only when you need deeper inspection.")
-		nextPrimaryHref := withLang("/bot/admin/health", r)
-		nextPrimaryLabel := t(lang, "\u30d8\u30eb\u30b9\u3092\u958b\u304f", "Open Health")
-		nextSecondaryHref := withLang("/bot/admin/diagnostics", r)
-		nextSecondaryLabel := t(lang, "Diagnostics \u3092\u958b\u304f", "Open Diagnostics")
+		nextTitle := t(lang, "\u6b21\u306e\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7", "Next Setup")
+		nextCardTitle := t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
+		nextCardBody := t(lang, "\u65b0\u3057\u3044 production connection \u306e\u8ffd\u52a0\u306f\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u304b\u3089\u9032\u3081\u307e\u3059\u3002\u65e2\u5b58\u306e\u9023\u643a\u72b6\u6cc1\u306f Step 2 \u3068 \u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406 \u3067\u78ba\u8a8d\u3067\u304d\u307e\u3059\u3002", "Add new production connections from New Connection Setup. Existing connected productions remain visible in Step 2 and in Connected Productions.")
+		nextPrimaryHref := withLang("/bot/setup", r)
+		nextPrimaryLabel := t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
 		nextBadge := `<span class="status-pill bad">` + esc(t(lang, "\u512a\u5148", "Priority")) + `</span>`
 		nextProjectList := ""
 		if !hasIssues && projectCount == 0 {
-			nextCardTitle = t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
-			nextCardBody = t(lang, "\u6700\u521d\u306e production connection \u306f\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u304b\u3089\u958b\u59cb\u3057\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot\u8a2d\u5b9a\u304b\u3089\u884c\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start the first production connection in New Connection Setup. Use Bot Settings to review shared bot / runtime prerequisites.")
-			nextPrimaryHref = withLang("/bot/setup", r)
-			nextPrimaryLabel = t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
-			nextSecondaryHref = withLang("/bot/admin/bot", r)
-			nextSecondaryLabel = t(lang, "Bot\u8a2d\u5b9a\u3092\u78ba\u8a8d", "Review Bot Settings")
+			nextCardBody = t(lang, "\u6700\u521d\u306e production connection \u306f\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u304b\u3089\u958b\u59cb\u3057\u307e\u3059\u3002\u5171\u6709 Bot / Runtime \u306e\u524d\u63d0\u78ba\u8a8d\u306f Bot\u8a2d\u5b9a\u3067\u884c\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Start the first production connection in New Connection Setup. Review shared Bot / Runtime prerequisites in Bot Settings.")
 			nextBadge = `<span class="status-pill warn">` + esc(t(lang, "\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7", "Setup")) + `</span>`
 		} else if !hasIssues && projectCount > 0 {
-			nextCardTitle = t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u3092\u78ba\u8a8d\u3059\u308b", "Review connected productions")
-			nextCardBody = t(lang, "\u65e2\u5b58\u306e production \u306e routing\u3001channel\u3001webhook \u306e\u78ba\u8a8d\u30fb\u4fee\u6b63\u306f\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406\u304b\u3089\u884c\u3048\u307e\u3059\u3002\u65b0\u3057\u3044\u9023\u643a\u3092\u8db3\u3059\u5834\u5408\u306f\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u4f7f\u3063\u3066\u304f\u3060\u3055\u3044\u3002", "Use Connected Productions to review and fix routing, channels, and webhooks for existing productions. Use New Connection Setup when you need to add another connection.")
-			nextPrimaryHref = withLang("/bot/setup", r)
-			nextPrimaryLabel = t(lang, "\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u3092\u958b\u304f", "Open New Connection Setup")
-			nextSecondaryHref = withLang("/bot/admin/projects", r)
-			nextSecondaryLabel = t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406\u3092\u958b\u304f", "Open Connected Productions")
+			nextCardBody = t(lang, "\u65b0\u3057\u3044 production connection \u306e\u8ffd\u52a0\u306f\u65b0\u898f\u9023\u643a\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u304b\u3089\u9032\u3081\u307e\u3059\u3002\u65e2\u5b58\u306e\u9023\u643a\u72b6\u6cc1\u306f Step 2 \u3067\u540d\u524d\u3092\u78ba\u8a8d\u3057\u3001\u8a73\u7d30\u306f \u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406 \u3067\u898b\u76f4\u3057\u307e\u3059\u3002", "Add new production connections from New Connection Setup. Use Step 2 for connected production names and Connected Productions for detailed review.")
 			nextBadge = `<span class="status-pill ok">` + esc(t(lang, "\u6e96\u5099\u6e08\u307f", "Ready")) + `</span>`
 			var projectNameTags strings.Builder
 			for _, proj := range projects {
@@ -295,7 +282,6 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
   %s
   <div class="button-row" style="margin-top:14px">
     <a class="btn" href="%s">%s</a>
-    <a class="btn-ghost" href="%s">%s</a>
   </div>
 </div>`,
 			esc(nextCardTitle),
@@ -304,16 +290,14 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			nextProjectList,
 			nextPrimaryHref,
 			esc(nextPrimaryLabel),
-			nextSecondaryHref,
-			esc(nextSecondaryLabel),
 		)
 
 		body := `<div class="section-stack">` +
-			`<div><div class="eyebrow">NOW</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u73fe\u5728\u306e\u72b6\u614b", "Now")) + `</h2></div>` +
+			`<div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u6982\u8981", "Overview")) + `</h2></div>` +
 			statusBar + pollerCard + warningsCard + projectsCard +
-			`<div><div class="eyebrow">NEXT</div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
+			`<div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
 			nextActionCard +
-			`<div class="section-card glass"><div class="page-heading" style="margin-bottom:14px"><div><div class="eyebrow">LATER</div><h3 style="margin:0">` + esc(t(lang, "\u5f8c\u3067\u4f7f\u3046\u7ba1\u7406\u6a5f\u80fd", "Later / Advanced")) + `</h3><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "\u3053\u308c\u3089\u306f\u521d\u56de\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u5b8c\u4e86\u5f8c\u3084\u500b\u5225\u8abf\u6574\u306e\u3068\u304d\u306b\u4f7f\u3046\u7ba1\u7406\u30da\u30fc\u30b8\u3067\u3059\u3002", "These are secondary admin pages for follow-up setup, maintenance, and detailed adjustments.")) + `</p></div></div>` + navGrid.String() + `</div>` +
+			`<div class="section-card glass"><div class="page-heading" style="margin-bottom:14px"><div><h3 style="margin:0">` + esc(t(lang, "\u8a73\u7d30\u8a2d\u5b9a", "Advanced Settings")) + `</h3><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "\u521d\u56de\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u5b8c\u4e86\u5f8c\u306e\u898b\u76f4\u3057\u3001\u7ba1\u7406\u3001\u78ba\u8a8d\u306b\u4f7f\u3046\u30da\u30fc\u30b8\u3067\u3059\u3002", "Use these pages for review, management, and status checks after initial setup.")) + `</p></div></div>` + navGrid.String() + `</div>` +
 			`</div>`
 
 		fmt.Fprint(w, adminPage(lang, t(lang, "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9", "Dashboard"), r, body))
