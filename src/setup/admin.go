@@ -851,12 +851,22 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			esc(t(lang, "\u30ea\u30bd\u30fc\u30b9", "Resources")), resourceRows,
 		)
 
-		body := `<div class="section-stack">` + summaryCard + detailsAccordion + `</div>` +
+		diagnosticsSection := `<div class="section-card glass"><div class="page-heading" style="margin-bottom:16px"><div><h3 style="margin:0">` +
+			esc(t(lang, "迺ｰ蠅・ｨｺ譁ｭ", "Environment Diagnostics")) +
+			`</h3><p class="hint" style="margin:8px 0 0">` +
+			esc(t(lang, "notification delivery verification 縺ｨ current runtime / configuration checks 繧定ｸ縺､縺ｮ繝壹・繧ｸ縺ｧ遒ｺ隱阪〒縺阪∪縺吶・, "Review notification delivery verification and the current runtime / configuration checks in one place.")) +
+			`</p></div></div>` +
+			renderDiagnosticsPanel(lang, r, db, func() (string, string, string, string) {
+				return model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db), model.GetSetting(db, "discord.guild_id"), model.GetSetting(db, "discord.webhook_url")
+			}, withLang("/bot/admin/health", r), false) +
+			`</div>`
+
+		body := `<div class="section-stack">` + summaryCard + detailsAccordion + diagnosticsSection + `</div>` +
 			`<div class="button-row" style="margin-top:16px">` +
 			`<a class="btn-ghost" href="` + withLang("/bot/admin", r) + `">` + esc(t(lang, "\u7ba1\u7406\u753b\u9762\u3078", "Back to Admin")) + `</a>` +
 			`</div>`
 
-		fmt.Fprint(w, adminPage(lang, t(lang, "\u30b7\u30b9\u30c6\u30e0\u30d8\u30eb\u30b9", "System Health"), r, body))
+		fmt.Fprint(w, adminPage(lang, t(lang, "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "System Status"), r, body))
 	}
 }
 
