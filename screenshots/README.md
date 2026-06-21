@@ -20,9 +20,9 @@ This directory is for repository presentation assets used in README or GitHub re
   - route: `/bot/admin`
   - purpose: show routing, user mappings, or checker mappings
   - status: pending manual capture
-- `docs.png`
-  - route: `/bot/docs/`
-  - purpose: show the operator-facing documentation surface
+- `system-status.png`
+  - route: `/bot/admin/health`
+  - purpose: show the System Status verification and diagnostics surface
   - status: pending manual capture
 
 ## Capture Notes

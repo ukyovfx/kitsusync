@@ -688,7 +688,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 </div>`,
 			overallBadge(),
 			esc(lastSyncText()),
-			withLang("/bot/admin/health", r), esc(t(lang, "\u66f4\u65b0", "Refresh")),
+			withLang("/bot/admin/health", r), esc(t(lang, "状態を更新", "Refresh status")),
 		)
 
 		// --- Level 2: detailed sections (inside accordion) ---

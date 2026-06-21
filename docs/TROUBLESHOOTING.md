@@ -18,7 +18,7 @@ For setup state, the `/api/setup/status` endpoint returns a JSON snapshot of eve
 curl http://localhost:8090/api/setup/status
 ```
 
-The dashboard at `/bot/admin` shows the same data visually, including active projects, poller state, and any warnings.
+`/bot/admin/health` shows the same status data visually, including active projects, poller state, and any warnings.
 
 ---
 
