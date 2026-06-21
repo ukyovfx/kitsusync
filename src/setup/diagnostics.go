@@ -39,7 +39,7 @@ type projectDeliveryItem struct {
 	CanSend      bool
 }
 
-// DiagnosticsHandler runs environment and delivery-readiness checks on demand.
+// DiagnosticsHandler is retained for the retired diagnostics page implementation.
 func DiagnosticsHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, guildID, webhookURL string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

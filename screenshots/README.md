@@ -8,13 +8,17 @@ This directory is for repository presentation assets used in README or GitHub re
   - route: `/bot/login`
   - purpose: show the admin login entry point
   - status: pending manual capture
-- `setup-wizard.png`
-  - route: `/bot/setup-wizard`
-  - purpose: show the recommended first-run flow
-  - status: pending manual capture
 - `setup-projects.png`
   - route: `/bot/setup`
-  - purpose: show project provisioning and configured project cards
+  - purpose: show the current project setup and routing surface
+  - status: pending manual capture
+- `bot-settings.png`
+  - route: `/bot/admin/bot`
+  - purpose: show shared bot/runtime prerequisites
+  - status: pending manual capture
+- `connected-productions.png`
+  - route: `/bot/admin/projects`
+  - purpose: show connected production review and maintenance
   - status: pending manual capture
 - `admin-routing.png`
   - route: `/bot/admin`

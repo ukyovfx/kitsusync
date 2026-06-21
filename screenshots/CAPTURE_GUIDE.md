@@ -27,71 +27,70 @@
 
 ---
 
-### 2. セットアップウィザード Step 1: Kitsu Connection (`wizard-step1.png`)
+### 2. Project Setup (`setup-projects.png`)
 
 **事前準備:**
 1. `/bot/login` でログイン（Kitsu マネージャー/管理者アカウント）
-2. `/bot/setup-wizard` にアクセス
+2. `/bot/setup` にアクセス
 
-**URL:** `http://localhost:8090/bot/setup-wizard` (Step 1 が表示されている状態)
+**URL:** `http://localhost:8090/bot/setup`
 
 **画面内容:**
-- "Step 1: Kitsu Connection" ヘッダ
-- Kitsu Hostname / Email / Password フォーム
-- "Checking connection..." または "✓ Kitsu: Authenticated" バッジ
+- Project Setup のヘッダ
+- project selection / setup action が見える状態
+- 作成済み project card または setup guidance
 
 **撮影時の注意:**
-- パスワードフィールドは空欄のままで OK（シークレット）
-- ✓ Authenticated バッジが表示されている状態で撮影
+- studio 名や runtime ID が見える場合は公開前にマスク
+- setup/admin の導線が分かる状態で撮影
 
-**保存先:** `screenshots/wizard-step1.png`
+**保存先:** `screenshots/setup-projects.png`
 
 ---
 
-### 3. セットアップウィザード Step 2: Discord Bot (`wizard-step2.png`)
+### 3. Bot Settings (`bot-settings.png`)
 
-**手順:** Step 1 で "Next" をクリック
+**手順:** `/bot/admin/bot` にアクセス
 
-**URL:** `http://localhost:8090/bot/setup-wizard` (Step 2 が表示されている状態)
+**URL:** `http://localhost:8090/bot/admin/bot`
 
 **画面内容:**
-- "Step 2: Discord Bot" ヘッダ
-- Bot Token / Guild ID フォーム
-- "✓ Discord: BotName / ServerName" バッジ
+- Bot Settings のヘッダ
+- Bot Token / Guild ID などの shared prerequisites
+- 保存済み設定または status 表示
 
 **撮影時の注意:**
 - Bot Token フィールドは空欄のままで OK（トークンを入力しないこと）
-- ✓ Discord バッジが見える状態で撮影
+- shared prerequisite surface と分かる状態で撮影
 
-**保存先:** `screenshots/wizard-step2.png`
+**保存先:** `screenshots/bot-settings.png`
 
 ---
 
-### 4. セットアップウィザード Step 3: Project Setup (`wizard-step3.png`)
+### 4. System Status (`system-status.png`)
 
-**手順:** Step 2 で "Next" をクリック
+**手順:** `/bot/admin/health` にアクセス
 
-**URL:** `http://localhost:8090/bot/setup-wizard` (Step 3 が表示されている状態)
+**URL:** `http://localhost:8090/bot/admin/health`
 
 **画面内容:**
-- "Step 3: Project Setup" ヘッダ
-- Project ドロップダウン（Kitsu から取得したプロジェクト一覧）
-- Language selector (Japanese / English)
-- "Create Channels" ボタン
-- 作成済みプロジェクトリスト（すでに設定されている場合）
+- System Status のヘッダ
+- 通知配信の確認
+- webhook summary
+- grouped diagnostics
 
 **撮影時の注意:**
-- 複数プロジェクトが表示される場合、どれか1つを選択した状態で撮影
-- "Create Channels" ボタンの状態（enabled / disabled）が見える状態
+- production dropdown でどれか1つを選択した状態で撮影
+- 状態を更新 / Refresh status ボタンが見える状態
 
-**保存先:** `screenshots/wizard-step3.png`
+**保存先:** `screenshots/system-status.png`
 
 ---
 
 ### 5. 管理ダッシュボード (`admin-dashboard.png`)
 
 **手順:**
-1. ウィザードを完了するか、既存セッションから `/bot/admin` にアクセス
+1. `/bot/setup` の確認後、または既存セッションから `/bot/admin` にアクセス
 2. 左側のナビゲーションから "Dashboard" を選択
 
 **URL:** `http://localhost:8090/bot/admin`
@@ -153,9 +152,9 @@
 ls -la screenshots/
 # 以下ファイルが存在すること:
 # - login.png
-# - wizard-step1.png
-# - wizard-step2.png
-# - wizard-step3.png
+# - setup-projects.png
+# - bot-settings.png
+# - system-status.png
 # - admin-dashboard.png
 # - discord-notification.png
 
@@ -167,9 +166,9 @@ git commit -m "docs: add v0.1.0 release screenshots"
 
 | 問題 | 対処法 |
 |------|--------|
-| Step 2 で "✓ Discord" バッジが表示されない | `.env.local` の Bot Token と Guild ID が正しいか確認 |
-| Step 3 で Project ドロップダウンが空 | Kitsu に認証情報で接続できているか確認；`docker compose logs app \| grep "Got tasks"` で確認 |
-| Discord 通知が見つからない | チャンネルが実際に作成されているか確認；ウィザード完了直後は 1-2 ポーリングサイクル待ってから確認 |
+| Bot Settings で Discord 設定が確認できない | `.env.local` の Bot Token と Guild ID が正しいか確認 |
+| System Status で production dropdown が空 | Kitsu に認証情報で接続できているか確認；`docker compose logs app \| grep "Got tasks"` で確認 |
+| Discord 通知が見つからない | チャンネルが実際に作成されているか確認；setup 更新直後は 1-2 ポーリングサイクル待ってから確認 |
 | スクリーンショット撮影時にパスワードが見える | ブラウザの開発者ツール（F12）で HTML の value 属性を削除するか、入力フィールドが空になるまで待つ |
 
 ---
