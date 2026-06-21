@@ -423,11 +423,11 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		)
 
 		body := `<div class="section-stack">` +
-			`<div><div class="eyebrow">OVERVIEW</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u6982\u8981", "Overview")) + `</h2></div>` +
+			`<div><div class="eyebrow">NOW</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u6982\u8981", "Overview")) + `</h2></div>` +
 			statusBar + pollerCard + warningsCard + projectsCard +
-			`<div><div class="eyebrow">NEW SETUP</div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
+			`<div><div class="eyebrow">NEXT</div><h2 style="margin:6px 0 0">` + esc(nextTitle) + `</h2></div>` +
 			nextActionCard +
-			`<div><div class="eyebrow">ADVANCED SETTINGS</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u8a73\u7d30\u8a2d\u5b9a", "Advanced Settings")) + `</h2></div>` +
+			`<div><div class="eyebrow">LATER</div><h2 style="margin:6px 0 0">` + esc(t(lang, "\u8a73\u7d30\u8a2d\u5b9a", "Advanced Settings")) + `</h2></div>` +
 			navGrid.String() +
 			`</div>`
 
