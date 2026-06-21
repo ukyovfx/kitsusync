@@ -830,6 +830,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
   <summary>
     <div class="accordion-summary-main">
       <div class="tile-title">%s</div>
+      <div class="tile-sub">%s</div>
     </div>
     <div class="accordion-summary-side">
       <span class="accordion-caret">⌄</span>
@@ -855,7 +856,8 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
   </div>
 </details>`,
 			detailsOpen,
-			esc(t(lang, "\u8a73\u7d30\u3092\u898b\u308b", "Show details")),
+			esc(t(lang, "ランタイム詳細", "Runtime Details")),
+			esc(t(lang, "Polling / Discord 送信 / Webhook ヘルス / リソース", "Polling / Discord Sends / Webhook Health / Resources")),
 			esc(t(lang, "\u30dd\u30fc\u30ea\u30f3\u30b0", "Polling")), pollRows,
 			esc(t(lang, "Discord \u9001\u4fe1", "Discord Sends")), sendRows,
 			esc(t(lang, "Webhook \u30d8\u30eb\u30b9", "Webhook Health")), webhookTableHTML,
@@ -863,9 +865,9 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 		)
 
 		diagnosticsSection := `<div class="section-card glass"><div class="page-heading" style="margin-bottom:16px"><div><h3 style="margin:0">` +
-			esc(t(lang, "環境診断", "Environment Diagnostics")) +
+			esc(t(lang, "通知と診断", "Delivery & Diagnostics")) +
 			`</h3><p class="hint" style="margin:8px 0 0">` +
-			esc(t(lang, "通知配信の確認と現在の runtime / configuration checks を一つのページで確認できます。", "Review notification delivery verification and the current runtime / configuration checks in one place.")) +
+			esc(t(lang, "通知確認と現在の runtime / configuration checks をまとめて確認できます。", "Review delivery verification and the current runtime / configuration checks together.")) +
 			`</p></div></div>` +
 			renderDiagnosticsPanel(lang, r, db, func() (string, string, string, string) {
 				return model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db), model.GetSetting(db, "discord.guild_id"), model.GetSetting(db, "discord.webhook_url")
