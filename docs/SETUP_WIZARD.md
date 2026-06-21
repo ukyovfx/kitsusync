@@ -69,7 +69,7 @@ It is no longer the main required place to enter Guild ID for new project setup.
 
 ---
 
-## What Diagnostics Is For
+## What System Status Is For
 
 Use `/bot/admin/health` when you need deeper troubleshooting or verification detail.
 
@@ -79,7 +79,7 @@ Examples:
 - inspect setup blockers
 - verify Kitsu/Discord connectivity beyond the main flow
 
-Diagnostics is intentionally secondary to `/bot/setup`.
+System Status is intentionally secondary to `/bot/setup`.
 
 ---
 

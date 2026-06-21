@@ -82,11 +82,10 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 - `/bot/setup` — primary setup and project routing surface
 - `/bot/admin/bot` — shared bot/runtime prerequisites and token rotation
 - `/bot/admin/projects` — review/edit for existing project-to-guild assignment
-- `/bot/admin/diagnostics` — secondary troubleshooting surface
+- `/bot/admin/health` — single System Status surface for status, verification, and diagnostics
 - `/bot/admin` — operational dashboard: system health, active projects, warnings
 - `/bot/admin/users` — map Kitsu users to Discord IDs for @mentions
 - `/bot/admin/checkers` — map task types to reviewer Discord IDs
-- `/bot/docs/` — operator-facing pipeline documentation
 
 Screenshot placeholders live in `screenshots/README.md`. Capture guidance lives in `screenshots/CAPTURE_GUIDE.md`.
 
@@ -340,7 +339,7 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 - Template variables and custom preset guide: `docs/TEMPLATES.md`
 - Dev vs production environment setup: `docs/ENVIRONMENTS.md`
 - First-time studio setup walkthrough: `docs/SETUP_FOR_STUDIOS.md`
-- Error messages and diagnostics: `docs/TROUBLESHOOTING.md`
+- Error messages and System Status troubleshooting: `docs/TROUBLESHOOTING.md`
 - Repo-local release notes and scope sync: `docs/notes/`
 
 ## Contributing and Security

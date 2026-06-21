@@ -757,7 +757,7 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 	state := projectDeliveryState{
 		SummaryStatus: "warn",
 		Summary:       t(lang, "未確認", "Not verified"),
-		Detail:        t(lang, "project ごとの通知到達を確認します。", "Confirm delivery for each project."),
+		Detail:        t(lang, "project ごとの通知到達を確認します。", "Confirm delivery per project."),
 		Fix:           t(lang, "必要に応じて各 project でテスト通知を 1 回だけ送信し、Discord 側の着信も確認してください。", "When ready, send one test notification per project and confirm that it arrived in Discord."),
 		APIPath:       apiPath,
 	}
@@ -1062,7 +1062,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 	verifiedCount := 0
 	unverifiedCount := 0
 	selectedProjectID := ""
-	selectedProjectName := ""
 	selectedSummary := ""
 	selectedLastVerified := "-"
 	selectedPillClass := "warn"
@@ -1090,7 +1089,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 
 		if selectedProjectID == "" {
 			selectedProjectID = item.ProjectID
-			selectedProjectName = item.ProjectName
 			selectedSummary = item.Summary
 			selectedLastVerified = lastVerified
 			selectedPillClass = itemPillClass
@@ -1136,7 +1134,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
       <select id="diagProjectSelect">%s</select>
       <div class="diag-project-head">
         <div>
-          <strong id="diagProjectName">%s</strong>
           <div class="diag-project-meta" id="diagProjectLastVerified">%s%s</div>
         </div>
         <span class="status-pill %s" id="diagProjectBadge">%s</span>
@@ -1155,8 +1152,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
   var badge = document.getElementById('diagProjectBadge');
   var verified = document.getElementById('diagProjectLastVerified');
   var feedback = document.getElementById('diagProjectFeedback');
-  var name = document.getElementById('diagProjectName');
-  if (!select || !button || !badge || !verified || !feedback || !name) { return; }
+  if (!select || !button || !badge || !verified || !feedback) { return; }
   var original = button.textContent;
 
   function syncSelectedProject() {
@@ -1164,7 +1160,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
     if (!option) { return; }
     button.setAttribute('data-project-id', option.value);
     button.disabled = option.getAttribute('data-can-send') !== 'true';
-    name.textContent = option.getAttribute('data-project-name') || option.textContent;
     verified.textContent = %q + (option.getAttribute('data-last-verified') || '-');
     badge.className = 'status-pill ' + (option.getAttribute('data-pill-class') || 'warn');
     badge.textContent = option.getAttribute('data-summary') || '';
@@ -1224,7 +1219,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 		summaryChips,
 		esc(t(lang, "確認するプロダクション", "Production to verify")),
 		strings.Join(options, ""),
-		esc(selectedProjectName),
 		esc(t(lang, "最終確認: ", "Last verified: ")),
 		esc(selectedLastVerified),
 		selectedPillClass,
