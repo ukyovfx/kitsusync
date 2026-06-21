@@ -131,7 +131,7 @@ func DiagnosticsHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
 			summary,
 			renderProjectDeliveryCard(lang, deliveryState),
 			rows.String(),
-			rerunURL, esc(t(lang, "再確認", "Re-run checks")),
+			rerunURL, esc(t(lang, "状態を更新", "Refresh status")),
 			withLang("/bot/admin", r), esc(t(lang, "管理画面へ", "Back to Admin")),
 		)
 
@@ -184,7 +184,7 @@ func renderDiagnosticsPanel(
 	groupHTML := renderDiagGroups(lang, checks)
 
 	actions := fmt.Sprintf(`<div class="button-row"><a class="btn" href="%s">%s</a>`,
-		rerunURL, esc(t(lang, "再確認", "Re-run checks")))
+		rerunURL, esc(t(lang, "状態を更新", "Refresh status")))
 	if includeBackButton {
 		actions += fmt.Sprintf(`<a class="btn-ghost" href="%s">%s</a>`,
 			withLang("/bot/admin", r), esc(t(lang, "管理画面へ", "Back to Admin")))
@@ -757,7 +757,7 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 	state := projectDeliveryState{
 		SummaryStatus: "warn",
 		Summary:       t(lang, "未確認", "Not verified"),
-		Detail:        t(lang, "プロジェクトごとに通知確認を行うと、実際の通知先まで含めて確認できます。", "Verify notification delivery per project so the actual delivery path is confirmed."),
+		Detail:        t(lang, "project ごとの通知到達を確認します。", "Confirm delivery for each project."),
 		Fix:           t(lang, "必要に応じて各 project でテスト通知を 1 回だけ送信し、Discord 側の着信も確認してください。", "When ready, send one test notification per project and confirm that it arrived in Discord."),
 		APIPath:       apiPath,
 	}
@@ -817,12 +817,12 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 	case !allReady:
 		state.SummaryStatus = "fail"
 		state.Summary = t(lang, "要修正", "Needs setup")
-		state.Detail = t(lang, "project-level webhook が未設定または不完全な project があります。", "At least one project is missing complete project-level webhook configuration.")
+		state.Detail = t(lang, "project-level webhook が未完了の project があります。", "Some projects still need complete project-level webhooks.")
 		state.Fix = t(lang, "Project Management で不足している project webhook を確認してください。", "Review the incomplete project webhook setup in Project Management.")
 	case anyVerified:
 		state.SummaryStatus = "ok"
 		state.Summary = t(lang, "確認済み", "Verified")
-		state.Detail = t(lang, "少なくとも 1 つの project でテスト通知成功が記録されています。", "At least one project has a recorded successful test notification.")
+		state.Detail = t(lang, "テスト通知成功を記録済みの project があります。", "A successful test notification is already recorded for a project.")
 	}
 
 	return state
@@ -1064,7 +1064,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 	selectedProjectID := ""
 	selectedProjectName := ""
 	selectedSummary := ""
-	selectedDetail := ""
 	selectedLastVerified := "-"
 	selectedPillClass := "warn"
 	selectedCanSend := false
@@ -1093,7 +1092,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 			selectedProjectID = item.ProjectID
 			selectedProjectName = item.ProjectName
 			selectedSummary = item.Summary
-			selectedDetail = item.Detail
 			selectedLastVerified = lastVerified
 			selectedPillClass = itemPillClass
 			selectedCanSend = item.CanSend
@@ -1139,7 +1137,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
       <div class="diag-project-head">
         <div>
           <strong id="diagProjectName">%s</strong>
-          <div class="diag-project-meta" id="diagProjectDetail">%s</div>
           <div class="diag-project-meta" id="diagProjectLastVerified">%s%s</div>
         </div>
         <span class="status-pill %s" id="diagProjectBadge">%s</span>
@@ -1156,11 +1153,10 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
   var select = document.getElementById('diagProjectSelect');
   var button = document.getElementById('diagProjectTestButton');
   var badge = document.getElementById('diagProjectBadge');
-  var detail = document.getElementById('diagProjectDetail');
   var verified = document.getElementById('diagProjectLastVerified');
   var feedback = document.getElementById('diagProjectFeedback');
   var name = document.getElementById('diagProjectName');
-  if (!select || !button || !badge || !detail || !verified || !feedback || !name) { return; }
+  if (!select || !button || !badge || !verified || !feedback || !name) { return; }
   var original = button.textContent;
 
   function syncSelectedProject() {
@@ -1169,7 +1165,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
     button.setAttribute('data-project-id', option.value);
     button.disabled = option.getAttribute('data-can-send') !== 'true';
     name.textContent = option.getAttribute('data-project-name') || option.textContent;
-    detail.textContent = option.getAttribute('data-detail') || '';
     verified.textContent = %q + (option.getAttribute('data-last-verified') || '-');
     badge.className = 'status-pill ' + (option.getAttribute('data-pill-class') || 'warn');
     badge.textContent = option.getAttribute('data-summary') || '';
@@ -1201,13 +1196,11 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
       var nowLabel = new Date().toLocaleString();
       if (selected) {
         selected.setAttribute('data-summary', %q);
-        selected.setAttribute('data-detail', %q);
         selected.setAttribute('data-last-verified', nowLabel);
         selected.setAttribute('data-pill-class', 'ok');
       }
       badge.className = 'status-pill ok';
       badge.textContent = %q;
-      detail.textContent = %q;
       verified.textContent = %q + nowLabel;
       feedback.hidden = false;
       feedback.textContent = %q;
@@ -1232,7 +1225,6 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 		esc(t(lang, "確認するプロダクション", "Production to verify")),
 		strings.Join(options, ""),
 		esc(selectedProjectName),
-		esc(selectedDetail),
 		esc(t(lang, "最終確認: ", "Last verified: ")),
 		esc(selectedLastVerified),
 		selectedPillClass,
@@ -1244,9 +1236,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 		t(lang, "送信中...", "Sending..."),
 		state.APIPath,
 		t(lang, "確認済み", "Verified"),
-		t(lang, "この project のテスト通知成功が記録されました。", "A successful test notification was recorded for this project."),
 		t(lang, "確認済み", "Verified"),
-		t(lang, "この project のテスト通知成功が記録されました。", "A successful test notification was recorded for this project."),
 		t(lang, "最終確認: ", "Last verified: "),
 		t(lang, "テスト通知を送信しました。Discord 側の到達も確認してください。", "A test notification was sent. Confirm that it arrived in Discord as well."),
 		t(lang, "未確認", "Not verified"),

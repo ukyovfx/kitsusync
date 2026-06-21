@@ -867,7 +867,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 		diagnosticsSection := `<div class="section-card glass"><div class="page-heading" style="margin-bottom:16px"><div><h3 style="margin:0">` +
 			esc(t(lang, "通知と診断", "Delivery & Diagnostics")) +
 			`</h3><p class="hint" style="margin:8px 0 0">` +
-			esc(t(lang, "通知確認と現在の runtime / configuration checks をまとめて確認できます。", "Review delivery verification and the current runtime / configuration checks together.")) +
+			esc(t(lang, "通知確認と runtime / configuration checks をまとめて確認できます。", "Review delivery verification with the current runtime / configuration checks.")) +
 			`</p></div></div>` +
 			renderDiagnosticsPanel(lang, r, db, func() (string, string, string, string) {
 				return model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db), model.GetSetting(db, "discord.guild_id"), model.GetSetting(db, "discord.webhook_url")
