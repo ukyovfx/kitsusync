@@ -29,8 +29,7 @@ const sections = {
           ['/bot/admin/users','ユーザー割り当て'],
           ['/bot/admin/checkers','チェッカー割り当て'],
           ['/bot/admin/bot','Bot 設定'],
-          ['/bot/admin/audit','監査ログ'],
-          ['/bot/docs/','ドキュメント']
+          ['/bot/admin/audit','監査ログ']
         ]
       }
     },
@@ -122,7 +121,7 @@ const sections = {
 };
 sections.en = [
   { ...sections.ja[0], label: 'Overview', kicker: 'System Overview', title: 'Kitsu x Discord Pipeline', subtitle: 'Current production architecture and responsibilities', intro: 'This app polls Kitsu/Zou, detects status or comment changes, and sends Discord notifications. The public build removes DCC integrations while keeping setup, assignment, audit, and preview workflows needed for operations.', bullets: ['Fetches tasks, task statuses, entities, projects, task types, persons, and comments from Kitsu APIs', 'Uses SQLite state to detect changes', 'Sends Discord embeds and message updates', 'Adds preview image URLs when preview_file_id is present', 'Exposes audit logs and daily summary through the admin UI'] },
-  { ...sections.ja[1], label: 'Routes', subtitle: 'Current nginx and bot-app entry points', table: { headers: ['Path','Purpose'], rows: [['/','Kitsu application'],['/bot/login','Admin login'],['/bot/setup','Project setup and bot bootstrap'],['/bot/admin','Admin home'],['/bot/admin/users','User assignment'],['/bot/admin/checkers','Checker assignment'],['/bot/admin/bot','Bot settings'],['/bot/admin/audit','Audit log'],['/bot/docs/','Documentation']] } },
+  { ...sections.ja[1], label: 'Routes', subtitle: 'Current nginx and bot-app entry points', table: { headers: ['Path','Purpose'], rows: [['/','Kitsu application'],['/bot/login','Admin login'],['/bot/setup','Project setup and bot bootstrap'],['/bot/admin','Admin home'],['/bot/admin/users','User assignment'],['/bot/admin/checkers','Checker assignment'],['/bot/admin/bot','Bot settings'],['/bot/admin/audit','Audit log']] } },
   { ...sections.ja[2], label: 'Setup', subtitle: 'First-run workflow for administrators', bullets: ['Bot bootstrap auto-detects the public Kitsu hostname and only asks for studio admin email and password', 'Project Setup creates Discord categories and text channels from a selected Kitsu project', 'Supports CG / VFX, Live Action, and Anime project types', 'Creates webhooks for each channel and stores them in project_webhooks', 'Existing projects can be deleted or have channels added and removed from the setup page'] },
   { ...sections.ja[3], label: 'Channels', subtitle: 'Templates and general notification routing', intro: 'Each project can have task-type channels plus a general channel mapped to `*`. Daily summary prefers these general webhooks.', bullets: ['Keeps templates for CG / VFX, Live Action, and Anime', 'Supports custom channels in addition to templates', 'Task-specific webhooks are preferred; `*` general webhooks are the fallback', 'Channel add and delete actions apply to Discord immediately'] },
   { ...sections.ja[4], label: 'Assignments', subtitle: 'How individual mentions are resolved', bullets: ['User Assignment stores Kitsu user to Discord ID mappings', 'The Kitsu bot account is excluded from assignment candidates', 'Checker Assignment stores a user per task type and normally resolves the Discord ID from User Assignment', 'Edit mode can override the Resolved ID directly', 'Missing IDs are shown as No ID in the UI'] },
