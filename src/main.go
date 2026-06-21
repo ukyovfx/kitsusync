@@ -928,34 +928,19 @@ func main() {
 		}))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
-		mux.HandleFunc(prefix+"/admin/diagnostics", setup.RequireSession(setup.DiagnosticsHandler(db, func() (string, string, string, string) {
-			h, _, _ := getKitsuCreds(db, conf)
-			tok, gid, wh := getDiscordSettings(db, conf)
-			return h, tok, gid, wh
-		})))
+		mux.HandleFunc(prefix+"/admin/diagnostics", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/bot/admin/health", http.StatusFound)
+		}))
 	}
 	registerAdminRoutes("")
 	registerAdminRoutes("/bot")
-
-	serveDocsHTML := func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "./docs.html")
-	}
-	serveDocsJSX := func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-		http.ServeFile(w, r, "./site.jsx")
-	}
-	mux.HandleFunc("/docs", serveDocsHTML)
-	mux.HandleFunc("/bot/docs", serveDocsHTML)
-	mux.HandleFunc("/bot/docs/", serveDocsHTML)
-	mux.HandleFunc("/site.jsx", serveDocsJSX)
-	mux.HandleFunc("/bot/docs/site.jsx", serveDocsJSX)
 
 	server := &http.Server{
 		Addr:    ":8090",
 		Handler: mux,
 	}
 	go func() {
-		slog.Info("HTTP server listening on :8090  (/health, /login, /setup, /admin/*, /docs, /bot/docs/)")
+		slog.Info("HTTP server listening on :8090  (/health, /login, /setup, /admin/*)")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("HTTP server failed", "err", err)
 		}

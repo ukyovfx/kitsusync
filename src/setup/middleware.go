@@ -241,6 +241,5 @@ func loginPageHTML(lang, errMsg, next string, r *http.Request) string {
 		t(lang, "ログイン", "Login"),
 	)
 
-	nav := `<a class="home-link glass" href="` + withLang("/bot/docs/", r) + `">` + t(lang, "Docs", "Docs") + `</a>`
-	return appShell("KitsuSync", "", lang, r, nav, body)
+	return appShell("KitsuSync", "", lang, r, "", body)
 }
