@@ -130,7 +130,7 @@ Start with:
 
 - `.env.local`
 - `/bot/admin/bot`
-- `/bot/admin/diagnostics` when you need more detail
+- `/bot/admin/health` when you need more detail
 
 If you changed `.env.local`, restart the app container before reloading the setup page.
 

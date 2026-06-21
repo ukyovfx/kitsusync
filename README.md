@@ -16,7 +16,7 @@ KitsuSync helps teams that already track production in Kitsu but need Discord to
 
 - Poll Kitsu and post only meaningful task changes
 - Create and manage Discord routing from the browser
-- Keep setup, login, docs, and admin tooling in one service
+- Keep setup, login, and admin tooling in one service
 - Stay deployable with Docker Compose and SQLite
 
 ## What It Solves
@@ -56,7 +56,7 @@ Current limitations are intentionally conservative:
 
 - Not an enterprise pipeline platform or ShotGrid replacement.
 - Discord resource rollback during setup is best-effort, not full orchestration.
-- Admin review and diagnostics surfaces are still required for some recovery paths.
+- Admin review and System Status surfaces are still required for some recovery paths.
 - Setup depends on correct Discord bot permissions and Kitsu reachability.
 - Notification routing remains webhook-based.
 - SQLite is suitable for lightweight/small deployments, not large multi-node scale-out.
@@ -191,10 +191,9 @@ curl http://localhost:8090/health
 ### Direct local access
 
 - Login page: `http://localhost:8090/bot/login`
-- Docs: `http://localhost:8090/bot/docs/`
 - Project Management: `http://localhost:8090/bot/setup`
 - Bot Settings: `http://localhost:8090/bot/admin/bot`
-- Diagnostics: `http://localhost:8090/bot/admin/diagnostics`
+- System Status: `http://localhost:8090/bot/admin/health`
 - Admin: `http://localhost:8090/bot/admin`
 
 ### Behind a reverse proxy
@@ -202,10 +201,9 @@ curl http://localhost:8090/health
 Use the public `/bot/*` paths exposed by your proxy, for example:
 
 - `/bot/login`
-- `/bot/docs/`
 - `/bot/setup`
 - `/bot/admin/bot`
-- `/bot/admin/diagnostics`
+- `/bot/admin/health`
 - `/bot/admin`
 
 ### Operator checklist
@@ -216,7 +214,7 @@ Use the public `/bot/*` paths exposed by your proxy, for example:
 4. Enter a Discord Server / Guild ID per project during `/bot/setup` Step 2. This is required for new project routing.
 5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment.
 6. If setup fails after partial Discord provisioning, rollback is best-effort and manual cleanup may still be required before retrying.
-7. Review routing and user mappings in `/bot/admin`, then watch polling logs such as `Connected to Kitsu`, `Got tasks`, and `Done FilterTasks`.
+7. Review routing and user mappings in `/bot/admin`, use `/bot/admin/health` for status and remediation details, then watch polling logs such as `Connected to Kitsu`, `Got tasks`, and `Done FilterTasks`.
 
 ## Environment Variables
 

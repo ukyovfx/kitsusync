@@ -84,7 +84,7 @@ func DiagnosticsHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, g
 			rows.WriteString(renderDiagRow(lang, c))
 		}
 
-		rerunURL := withLang("/bot/admin/diagnostics", r)
+		rerunURL := withLang("/bot/admin/health", r)
 		body := fmt.Sprintf(`
 <style>
 .diag-banner{padding:14px 20px;border-radius:var(--radius-md);margin-bottom:18px;font-weight:600}

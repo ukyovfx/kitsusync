@@ -8,7 +8,7 @@ The normal setup path is now:
 2. Review shared prerequisites in `/bot/admin/bot`
 3. Create or manage project routing in `/bot/setup`
 4. Use `/bot/admin/projects` only for review/edit of existing project guild assignment
-5. Use `/bot/admin/diagnostics` only when troubleshooting is needed
+5. Use `/bot/admin/health` for troubleshooting and verification when needed
 
 `/bot/setup-wizard`, Manual Setup, and Setup Status are no longer normal user-facing setup paths.
 
@@ -71,7 +71,7 @@ It is no longer the main required place to enter Guild ID for new project setup.
 
 ## What Diagnostics Is For
 
-Use `/bot/admin/diagnostics` only when you need deeper troubleshooting.
+Use `/bot/admin/health` when you need deeper troubleshooting or verification detail.
 
 Examples:
 
