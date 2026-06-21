@@ -1229,7 +1229,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 		pillClass,
 		esc(state.Summary),
 		summaryChips,
-		esc(t(lang, "プロダクション", "Production")),
+		esc(t(lang, "確認するプロダクション", "Production to verify")),
 		strings.Join(options, ""),
 		esc(selectedProjectName),
 		esc(selectedDetail),
