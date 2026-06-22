@@ -473,6 +473,25 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
 				return
 			}
+			if action == "execute_validated_channel_delete" {
+				expected := t(lang, "削除", "delete")
+				if projectID == "" || strings.TrimSpace(r.FormValue("confirm_text")) != expected {
+					http.Redirect(w, r, redirectURL+"&danger_preview=1&validated_channels=1&msg=error", http.StatusSeeOther)
+					return
+				}
+				project := model.FindProjectByKitsuID(db, projectID)
+				if project == nil {
+					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
+					return
+				}
+				effectiveGuildID := strings.TrimSpace(project.DiscordGuildID)
+				if effectiveGuildID == "" {
+					effectiveGuildID = fallbackGuildID
+				}
+				execResult := executeConnectedProductionValidatedChannelDelete(lang, *project, effectiveGuildID, botToken, db)
+				fmt.Fprint(w, renderConnectedProductionChannelDeleteResultPage(lang, r, *project, execResult))
+				return
+			}
 			if action == "remove_connection" {
 				expected := t(lang, "削除", "delete")
 				if projectID != "" && strings.TrimSpace(r.FormValue("confirm_text")) == expected {
@@ -795,6 +814,15 @@ type connectedProductionChannelValidationResult struct {
 	Reason        string
 }
 
+type connectedProductionChannelDeleteExecution struct {
+	ValidationSummary string
+	Checks            []string
+	Deleted           []connectedProductionChannelValidationResult
+	Skipped           []connectedProductionChannelValidationResult
+	Failed            []connectedProductionChannelValidationResult
+	CleanupWarnings   []connectedProductionChannelValidationResult
+}
+
 func buildConnectedProductionChannelCandidates(webhooks []model.ProjectWebhook) []connectedProductionChannelCandidate {
 	byID := map[string]map[string]bool{}
 	for _, wh := range webhooks {
@@ -1029,6 +1057,7 @@ func renderConnectedProductionChannelValidationCard(lang string, r *http.Request
         </div>
       </div>
       <div class="button-row" style="margin-top:14px">
+        %s
         <a class="btn-ghost" href="%s">%s</a>
       </div>
     </div>`,
@@ -1050,9 +1079,166 @@ func renderConnectedProductionChannelValidationCard(lang string, r *http.Request
 		renderList(deletable, false),
 		esc(t(lang, "Skipped / uncertain candidates", "Skipped / uncertain candidates")),
 		renderList(skipped, true),
+		renderConnectedProductionChannelDeleteAction(lang, project, len(deletable)),
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&danger_preview=1", r)),
 		esc(t(lang, "検証前のプレビューへ戻る", "Back to saved-data preview")),
 	)
+}
+
+func renderConnectedProductionChannelDeleteAction(lang string, project model.Project, deletableCount int) string {
+	if deletableCount == 0 {
+		return `<p class="field-help" style="margin:0">` + esc(t(lang, "削除を実行できる validated candidate はまだありません。skipped / uncertain candidate を確認してください。", "There are no validated candidates available for deletion yet. Review the skipped or uncertain candidates first.")) + `</p>`
+	}
+	return `<form method="POST" class="delete-form" style="margin:0" data-confirm="` +
+		esc(t(lang, project.Name+" の validated Discord channel だけを削除します。production connection 全体や category は削除されません。", "Delete only the validated Discord channels for "+project.Name+". The full production connection and category are not deleted.")) +
+		`" data-require-text="` + esc(t(lang, "削除", "delete")) + `">` +
+		`<input type="hidden" name="action" value="execute_validated_channel_delete">` +
+		`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
+		`<button type="submit" class="btn-danger">` + esc(t(lang, "validated channel を削除", "Delete validated channels")) + `</button></form>`
+}
+
+func executeConnectedProductionValidatedChannelDelete(lang string, project model.Project, effectiveGuildID, botToken string, db *gorm.DB) connectedProductionChannelDeleteExecution {
+	allWebhooks := model.ListAllProjectWebhooks(db)
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	candidates := buildConnectedProductionChannelCandidates(webhooks)
+	deletable, skipped, summary, checks := validateConnectedProductionChannelCandidates(lang, project, effectiveGuildID, botToken, allWebhooks, candidates)
+	result := connectedProductionChannelDeleteExecution{
+		ValidationSummary: summary,
+		Checks:            checks,
+		Skipped:           skipped,
+	}
+	for _, candidate := range deletable {
+		if err := DeleteChannel(candidate.ChannelID, botToken); err != nil {
+			failed := candidate
+			failed.Reason = t(lang, "Delete failed: ", "Delete failed: ") + err.Error()
+			result.Failed = append(result.Failed, failed)
+			continue
+		}
+		result.Deleted = append(result.Deleted, candidate)
+		if err := db.Where("kitsu_project_id = ? AND discord_channel_id = ?", project.KitsuProjectID, candidate.ChannelID).Delete(&model.ProjectWebhook{}).Error; err != nil {
+			warn := candidate
+			warn.Reason = t(lang, "Discord deletion succeeded, but DB webhook cleanup failed: ", "Discord deletion succeeded, but DB webhook cleanup failed: ") + err.Error()
+			result.CleanupWarnings = append(result.CleanupWarnings, warn)
+			continue
+		}
+	}
+	return result
+}
+
+func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Request, project model.Project, result connectedProductionChannelDeleteExecution) string {
+	renderList := func(items []connectedProductionChannelValidationResult, includeReason bool) string {
+		if len(items) == 0 {
+			return `<p class="field-help" style="margin:0">` + esc(t(lang, "該当なし", "None")) + `</p>`
+		}
+		var out strings.Builder
+		out.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+		for _, item := range items {
+			line := `<code>` + esc(item.ChannelID) + `</code>`
+			if strings.TrimSpace(item.CurrentName) != "" {
+				line += ` <span class="hint">(` + esc(item.CurrentName) + `)</span>`
+			} else if len(item.StoredNames) > 0 {
+				line += ` <span class="hint">(` + esc(strings.Join(item.StoredNames, ", ")) + `)</span>`
+			}
+			if includeReason && strings.TrimSpace(item.Reason) != "" {
+				line += `<div class="field-help">` + esc(item.Reason) + `</div>`
+			}
+			out.WriteString(`<li>` + line + `</li>`)
+		}
+		out.WriteString(`</ul>`)
+		return out.String()
+	}
+
+	var checksHTML strings.Builder
+	checksHTML.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+	for _, check := range result.Checks {
+		checksHTML.WriteString(`<li>` + esc(check) + `</li>`)
+	}
+	checksHTML.WriteString(`</ul>`)
+
+	statusLabel := t(lang, "一部完了", "Completed with review notes")
+	statusClass := "warn"
+	switch {
+	case len(result.Failed) == 0 && len(result.CleanupWarnings) == 0:
+		statusLabel = t(lang, "削除完了", "Deletion completed")
+		statusClass = "ok"
+	case len(result.Deleted) == 0 && len(result.Failed) > 0:
+		statusLabel = t(lang, "削除失敗あり", "Deletion failed")
+		statusClass = "bad"
+	}
+
+	body := fmt.Sprintf(`
+<div class="section-stack">
+  <div class="section-card glass">
+    <div class="page-heading" style="margin-bottom:14px">
+      <div>
+        <div class="eyebrow">%s</div>
+        <h2 style="margin:6px 0 0">%s</h2>
+        <p class="hint" style="margin:6px 0 0">%s</p>
+      </div>
+      <span class="status-pill %s">%s</span>
+    </div>
+    <div class="metric-grid">
+      <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host">%s</div></div>
+      <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+      <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+      <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+    </div>
+    <p class="field-help" style="margin:12px 0 0">%s</p>
+    <p class="field-help" style="margin:8px 0 0">%s</p>
+  </div>
+  <div class="section-card glass">
+    <div class="eyebrow">%s</div>
+    %s
+  </div>
+  <div class="section-card glass">
+    <div class="eyebrow">%s</div>
+    %s
+  </div>
+  <div class="section-card glass">
+    <div class="eyebrow">%s</div>
+    %s
+  </div>
+  <div class="section-card glass">
+    <div class="eyebrow">%s</div>
+    %s
+  </div>
+  <div class="section-card glass">
+    <div class="eyebrow">%s</div>
+    %s
+  </div>
+  <div class="button-row">
+    <a class="btn-ghost" href="%s">%s</a>
+  </div>
+</div>`,
+		esc(t(lang, "CONNECTED PRODUCTION", "CONNECTED PRODUCTION")),
+		esc(t(lang, "validated channel deletion result", "Validated channel deletion result")),
+		esc(t(lang, "validated candidate だけを対象に Discord channel deletion を実行した結果です。production connection 全体、project row、category は削除していません。", "This result covers Discord channel deletion only for validated candidates. The full production connection, project row, and category were not deleted.")),
+		statusClass,
+		esc(statusLabel),
+		esc(t(lang, "Production", "Production")),
+		esc(project.Name),
+		esc(t(lang, "Project ID", "Project ID")),
+		esc(project.KitsuProjectID),
+		esc(t(lang, "Deleted channels", "Deleted channels")),
+		len(result.Deleted),
+		esc(t(lang, "Skipped + failed", "Skipped + failed")),
+		len(result.Skipped)+len(result.Failed)+len(result.CleanupWarnings),
+		esc(result.ValidationSummary),
+		esc(t(lang, "DB cleanup runs only for channels that were deleted successfully on Discord. Project, ProjectSetting, ProjectUserMap, ProjectCheckerMap, and Discord category remain untouched in this pass.", "DB cleanup runs only for channels that were deleted successfully on Discord. Project, ProjectSetting, ProjectUserMap, ProjectCheckerMap, and Discord category remain untouched in this pass.")),
+		esc(t(lang, "Deleted channels", "Deleted channels")),
+		renderList(result.Deleted, false),
+		esc(t(lang, "Skipped / failed validation", "Skipped / failed validation")),
+		renderList(result.Skipped, true),
+		esc(t(lang, "Failed deletions", "Failed deletions")),
+		renderList(result.Failed, true),
+		esc(t(lang, "DB cleanup warnings", "DB cleanup warnings")),
+		renderList(result.CleanupWarnings, true),
+		esc(t(lang, "Checks used at execution time", "Checks used at execution time")),
+		checksHTML.String(),
+		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&danger_preview=1&validated_channels=1", r)),
+		esc(t(lang, "validated review に戻る", "Back to validated review")),
+	)
+	return adminPage(lang, t(lang, "連携済みプロダクション管理", "Connected Productions"), r, body)
 }
 
 func compactSortedStrings(values []string) []string {
