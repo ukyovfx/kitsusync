@@ -278,30 +278,35 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			)
 		}
 
-		assignmentProject := configuredAssignmentProject(db, "")
-		userAssignmentCount := 0
-		checkerAssignmentCount := 0
-		if assignmentProject != nil {
-			userAssignmentCount = len(model.ListProjectUserMaps(db, assignmentProject.ID))
-			checkerAssignmentCount = len(model.ListProjectCheckerMaps(db, assignmentProject.ID))
+		projectsWithUserAssignments := 0
+		projectsWithReviewerAssignments := 0
+		for _, project := range projects {
+			projectUserAssignments := len(model.ListProjectUserMaps(db, project.ID))
+			projectReviewerAssignments := len(model.ListProjectCheckerMaps(db, project.ID))
+			if projectUserAssignments > 0 {
+				projectsWithUserAssignments++
+			}
+			if projectReviewerAssignments > 0 {
+				projectsWithReviewerAssignments++
+			}
 		}
 		usersStatus := tileStatus(
-			statusChip(map[bool]string{true: "ok", false: "bad"}[userAssignmentCount > 0], fmt.Sprintf(t(lang, "割り当て済み: %d", "Assigned: %d"), userAssignmentCount)),
+			statusChip(map[bool]string{true: "ok", false: "bad"}[projectsWithUserAssignments > 0], fmt.Sprintf(t(lang, "割り当て production: %d/%d", "Assigned productions: %d/%d"), projectsWithUserAssignments, projectCount)),
 		)
-		if assignmentProject == nil {
+		if projectCount == 0 {
 			usersStatus = tileStatus(
 				statusChip("bad", t(lang, "対象なし", "No target")),
 				statusChip("warn", t(lang, "未設定", "Unset")),
 			)
-		} else if checkerAssignmentCount == 0 {
+		} else if projectsWithReviewerAssignments == 0 {
 			usersStatus = tileStatus(
-				statusChip(map[bool]string{true: "ok", false: "bad"}[userAssignmentCount > 0], fmt.Sprintf(t(lang, "割り当て済み: %d", "Assigned: %d"), userAssignmentCount)),
-				statusChip("warn", t(lang, "レビュアー未設定", "No reviewers")),
+				statusChip(map[bool]string{true: "ok", false: "bad"}[projectsWithUserAssignments > 0], fmt.Sprintf(t(lang, "割り当て production: %d/%d", "Assigned productions: %d/%d"), projectsWithUserAssignments, projectCount)),
+				statusChip("warn", fmt.Sprintf(t(lang, "レビュアー production: %d/%d", "Reviewer productions: %d/%d"), projectsWithReviewerAssignments, projectCount)),
 			)
 		} else {
 			usersStatus = tileStatus(
-				statusChip(map[bool]string{true: "ok", false: "bad"}[userAssignmentCount > 0], fmt.Sprintf(t(lang, "割り当て済み: %d", "Assigned: %d"), userAssignmentCount)),
-				statusChip("ok", fmt.Sprintf(t(lang, "レビュアー設定: %d", "Reviewers: %d"), checkerAssignmentCount)),
+				statusChip(map[bool]string{true: "ok", false: "bad"}[projectsWithUserAssignments > 0], fmt.Sprintf(t(lang, "割り当て production: %d/%d", "Assigned productions: %d/%d"), projectsWithUserAssignments, projectCount)),
+				statusChip("ok", fmt.Sprintf(t(lang, "レビュアー production: %d/%d", "Reviewer productions: %d/%d"), projectsWithReviewerAssignments, projectCount)),
 			)
 		}
 
