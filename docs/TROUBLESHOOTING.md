@@ -12,6 +12,8 @@ curl http://localhost:8090/health
 
 A healthy app returns `{"status":"ok"}` on the health endpoint and shows no ERROR lines in the last 50 log lines at steady state.
 
+On the temporary GCP stack, remember that the compose service name is `app` and the running container name is `app-app-1`. Verify the recreated app container, not an assumed service/container label from an older runbook.
+
 For setup state, the `/api/setup/status` endpoint returns a JSON snapshot of every component:
 
 ```bash
@@ -277,6 +279,8 @@ docker compose up -d --build
 ```
 
 In production, confirm `../data/sqlite.db` is correctly mounted via the volume in `deploy/docker-compose.yml`.
+
+If sqlite hashes differ before and after a recreate, do not assume the bind mount failed from that signal alone. Confirm the post-deploy host and container hashes match each other, confirm the expected sqlite bind mount is still attached, and confirm the app is healthy on `/health`.
 
 ---
 

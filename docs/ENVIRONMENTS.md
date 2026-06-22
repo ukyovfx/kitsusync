@@ -78,6 +78,7 @@ For the current temporary GCP stack used during maintenance validation, treat co
 
 - Live stack path: `/home/ukyovfx/kitsu-discord-custom/app/docker-compose.yml`
 - Workdir: `/home/ukyovfx/kitsu-discord-custom/app`
+- Compose service to rebuild/recreate: `app`
 - Live container: `app-app-1`
 - After the explicit sqlite bind-mount change is deployed, the live DB is expected to be host-backed at `./data/sqlite.db` -> `/app/sqlite.db`
 - During migration, treat the current live container `/app/sqlite.db` as authoritative
@@ -89,9 +90,58 @@ Before recreating the container, back up these paths from the live container whe
 - `/app/logs`
 - `/app/dump`
 
+If `/app/logs` or `/app/dump` is missing, record that as "not present" rather than treating it as an automatic deploy failure. `sqlite.db` is the required backup artifact. Logs and dump backups are still useful for rollback evidence when they exist.
+
 Before the first recreate after adding the explicit sqlite bind mount, export the current live `/app/sqlite.db` from the running container and copy that exact file to the host-side `./data/sqlite.db`.
 
 `/app/logs/all-levels.log` can now be recreated automatically by the app if missing, but logs backup is still useful for rollback and deploy evidence.
+
+### Temporary GCP safe deploy sequence
+
+Run the temporary GCP deploy in this order. Do not overlap the build and recreate steps.
+
+1. Update the workdir to the target `master` commit and record the previous live commit/image first.
+2. Back up `./data/sqlite.db` and, when present, `/app/logs` and `/app/dump`.
+3. Build only the app service:
+
+```bash
+cd /home/ukyovfx/kitsu-discord-custom/app
+docker compose build app
+```
+
+4. Recreate only the app service after the build finishes:
+
+```bash
+docker compose up -d --force-recreate app
+```
+
+5. Verify the recreated container, not just the image cache:
+
+```bash
+docker compose ps app
+docker inspect app-app-1 --format '{{.Image}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}'
+curl http://localhost:8090/health
+```
+
+6. Confirm anonymous route behavior:
+
+```bash
+curl -I http://localhost:8090/bot/admin
+curl -I http://localhost:8090/bot/admin/health
+curl -I http://localhost:8090/bot/admin/diagnostics
+```
+
+For the current stack, the expected compose service name is `app` and the expected running container name is `app-app-1`. Avoid checking a non-existent service label when verifying the deploy.
+
+### Interpreting sqlite hashes after recreate
+
+Do not treat pre-deploy vs post-deploy sqlite hash drift by itself as proof of a bind-mount failure. The more reliable checks are:
+
+- the post-deploy host `./data/sqlite.db` hash matches the post-deploy container `/app/sqlite.db` hash
+- the expected bind mount `./data/sqlite.db -> /app/sqlite.db` is still attached
+- the recreated container is healthy and `/health` returns `{"status":"ok"}`
+
+If those post-deploy checks all pass, hash drift across the recreate can still be explained by normal runtime writes.
 
 ### Path layout expected by deploy/docker-compose.yml
 
