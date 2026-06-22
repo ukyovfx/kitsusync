@@ -465,6 +465,14 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
 				return
 			}
+			if action == "validate_remove_connection_channels" {
+				if projectID != "" {
+					http.Redirect(w, r, redirectURL+"&danger_preview=1&validated_channels=1", http.StatusSeeOther)
+					return
+				}
+				http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
+				return
+			}
 			if action == "remove_connection" {
 				expected := t(lang, "削除", "delete")
 				if projectID != "" && strings.TrimSpace(r.FormValue("confirm_text")) == expected {
@@ -488,10 +496,15 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		}
 
 		allTaskTypes := kitsu.GetTaskTypes().Each
+		allWebhooks := model.ListAllProjectWebhooks(db)
 		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
 		dangerPreviewProjectID := ""
 		if strings.TrimSpace(r.URL.Query().Get("danger_preview")) != "" {
 			dangerPreviewProjectID = selectedProjectID
+		}
+		validatedChannelProjectID := ""
+		if strings.TrimSpace(r.URL.Query().Get("validated_channels")) != "" {
+			validatedChannelProjectID = selectedProjectID
 		}
 		var blocks strings.Builder
 		for _, p := range model.ListProjects(db) {
@@ -575,6 +588,12 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				}
 				previewChannelsHTML.WriteString(`</ul>`)
 			}
+			var validatedHTML string
+			if validatedChannelProjectID != "" && validatedChannelProjectID == p.KitsuProjectID {
+				candidates := buildConnectedProductionChannelCandidates(webhooks)
+				deletableCandidates, skippedCandidates, validationSummary, validationChecks := validateConnectedProductionChannelCandidates(lang, p, effectiveGuildID, botToken, allWebhooks, candidates)
+				validatedHTML = renderConnectedProductionChannelValidationCard(lang, r, p, validationSummary, validationChecks, deletableCandidates, skippedCandidates)
+			}
 			dangerPreviewHTML := ""
 			if dangerPreviewProjectID != "" && dangerPreviewProjectID == p.KitsuProjectID {
 				dangerPreviewHTML = fmt.Sprintf(`
@@ -600,6 +619,11 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
         </div>
       </div>
       <div class="button-row" style="margin-top:14px">
+        <form method="POST" style="margin:0">
+          <input type="hidden" name="action" value="validate_remove_connection_channels">
+          <input type="hidden" name="project_id" value="%s">
+          <button type="submit" class="btn">%s</button>
+        </form>
         <a class="btn-ghost" href="%s">%s</a>
       </div>
     </div>`,
@@ -617,6 +641,8 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					esc(t(lang, "現在の保存データだけでは ownership は確定できません。特に category 配下の channel 全体や、手動変更済み channel の安全削除はまだ判断していません。", "Current saved data does not prove ownership. In particular, this preview does not yet decide whether category-wide or manually edited channels would be safe to delete.")),
 					esc(t(lang, "Stored channel references", "Stored channel references")),
 					previewChannelsHTML.String(),
+					esc(p.KitsuProjectID),
+					esc(t(lang, "channel 候補を検証する", "Validate channel candidates")),
 					esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)),
 					esc(t(lang, "プレビューを閉じる", "Close preview")),
 				)
@@ -698,6 +724,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
     </form>
     %s
     %s
+    %s
   </div>
 </details>`,
 				openAttr,
@@ -742,6 +769,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not delete anything on Discord. Ownership is not proven strongly enough yet, so this pass is dry-run only.")),
 				esc(t(lang, "削除候補をプレビュー", "Preview deletion scope")),
 				dangerPreviewHTML,
+				validatedHTML,
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 			))
 		}
@@ -751,6 +779,293 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "このページでは連携済み production ごとに Discord 側の接続情報と routing を管理します。新しい接続は新規連携セットアップから作成し、既存の見直しはここで行います。", "Use this page to manage Discord connection details and routing for each connected production. Create new connections in New Connection Setup, then review existing ones here.")) + `</p></div>` + blocks.String() + `</div>`
 		fmt.Fprint(w, adminPage(lang, t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions"), r, body))
 	}
+}
+
+type connectedProductionChannelCandidate struct {
+	ChannelID   string
+	StoredNames []string
+}
+
+type connectedProductionChannelValidationResult struct {
+	ChannelID     string
+	StoredNames   []string
+	CurrentName   string
+	CurrentType   int
+	CurrentParent string
+	Reason        string
+}
+
+func buildConnectedProductionChannelCandidates(webhooks []model.ProjectWebhook) []connectedProductionChannelCandidate {
+	byID := map[string]map[string]bool{}
+	for _, wh := range webhooks {
+		channelID := strings.TrimSpace(wh.DiscordChannelID)
+		if channelID == "" {
+			continue
+		}
+		if _, ok := byID[channelID]; !ok {
+			byID[channelID] = map[string]bool{}
+		}
+		channelName := strings.TrimSpace(wh.ChannelName)
+		if channelName != "" {
+			byID[channelID][channelName] = true
+		}
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]connectedProductionChannelCandidate, 0, len(ids))
+	for _, id := range ids {
+		names := make([]string, 0, len(byID[id]))
+		for name := range byID[id] {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out = append(out, connectedProductionChannelCandidate{ChannelID: id, StoredNames: names})
+	}
+	return out
+}
+
+func validateConnectedProductionChannelCandidates(lang string, project model.Project, effectiveGuildID, botToken string, allWebhooks []model.ProjectWebhook, candidates []connectedProductionChannelCandidate) ([]connectedProductionChannelValidationResult, []connectedProductionChannelValidationResult, string, []string) {
+	checks := []string{
+		t(lang, "現在の guild channel list に対象 channel が存在する", "Candidate channel exists in the current guild channel list"),
+		t(lang, "現在の channel type が text channel である", "Current channel type is text channel"),
+		t(lang, "同じ channel ID が他 production から参照されていない", "Channel ID is not referenced by another production"),
+		t(lang, "保存済み category がある場合、現在の parent が一致する", "Current parent matches the recorded project category when one is saved"),
+		t(lang, "保存済み channel name がある場合、現在の name が一致する", "Current channel name matches one of the stored channel names when names are saved"),
+	}
+	results := make([]connectedProductionChannelValidationResult, 0, len(candidates))
+	for _, candidate := range candidates {
+		results = append(results, connectedProductionChannelValidationResult{
+			ChannelID:   candidate.ChannelID,
+			StoredNames: append([]string(nil), candidate.StoredNames...),
+		})
+	}
+	if len(results) == 0 {
+		return nil, nil, t(lang, "この production には保存済みの Discord channel candidate がありません。", "No stored Discord channel candidates were found for this production."), checks
+	}
+
+	effectiveGuildID = strings.TrimSpace(effectiveGuildID)
+	if effectiveGuildID == "" {
+		for i := range results {
+			results[i].Reason = t(lang, "Skip: この production には有効な Discord guild ID がありません。", "Skipped: no Discord guild ID is configured for this production.")
+		}
+		return nil, results, t(lang, "有効な Discord guild ID がないため、candidate を検証できませんでした。", "Validation could not confirm candidates because this production has no effective Discord guild ID."), checks
+	}
+	trimmedToken := strings.TrimSpace(botToken)
+	if trimmedToken == "" {
+		for i := range results {
+			results[i].Reason = t(lang, "Skip: 検証に使う Discord bot token がありません。", "Skipped: Discord bot token is not available for validation.")
+		}
+		return nil, results, t(lang, "この runtime では Discord bot token が利用できないため、Discord 照合を実行できませんでした。", "Validation could not contact Discord because the bot token is unavailable in this runtime."), checks
+	}
+
+	body, status, err := botDo("GET", discordAPI+"/guilds/"+effectiveGuildID+"/channels", nil, trimmedToken)
+	if err != nil {
+		for i := range results {
+			results[i].Reason = t(lang, "Skip: Discord から guild channel list を取得できませんでした。", "Skipped: failed to read the guild channel list from Discord.")
+		}
+		return nil, results, t(lang, "Discord から現在の guild channel list を取得できませんでした: ", "Validation could not read the current guild channel list from Discord: ")+err.Error(), checks
+	}
+	if status != http.StatusOK {
+		for i := range results {
+			results[i].Reason = fmt.Sprintf(t(lang, "Skip: guild channel list 取得時に Discord が HTTP %d を返しました。", "Skipped: Discord returned HTTP %d while listing guild channels."), status)
+		}
+		return nil, results, fmt.Sprintf(t(lang, "Discord から現在の guild channel list を取得できませんでした (HTTP %d)。", "Validation could not read the current guild channel list from Discord (HTTP %d)."), status), checks
+	}
+
+	var guildChannels []struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Type     int    `json:"type"`
+		ParentID string `json:"parent_id"`
+	}
+	if err := json.Unmarshal(body, &guildChannels); err != nil {
+		for i := range results {
+			results[i].Reason = t(lang, "Skip: Discord channel list の応答を解析できませんでした。", "Skipped: Discord channel list response could not be parsed.")
+		}
+		return nil, results, t(lang, "Discord が返した guild channel list を解析できませんでした。", "Validation could not parse the guild channel list returned by Discord."), checks
+	}
+
+	channelsByID := make(map[string]struct {
+		Name     string
+		Type     int
+		ParentID string
+	}, len(guildChannels))
+	for _, ch := range guildChannels {
+		channelsByID[strings.TrimSpace(ch.ID)] = struct {
+			Name     string
+			Type     int
+			ParentID string
+		}{
+			Name:     strings.TrimSpace(ch.Name),
+			Type:     ch.Type,
+			ParentID: strings.TrimSpace(ch.ParentID),
+		}
+	}
+
+	otherProjectRefs := map[string][]string{}
+	for _, wh := range allWebhooks {
+		channelID := strings.TrimSpace(wh.DiscordChannelID)
+		projectID := strings.TrimSpace(wh.KitsuProjectID)
+		if channelID == "" || projectID == "" || projectID == project.KitsuProjectID {
+			continue
+		}
+		otherProjectRefs[channelID] = append(otherProjectRefs[channelID], projectID)
+	}
+	for channelID, refs := range otherProjectRefs {
+		sort.Strings(refs)
+		otherProjectRefs[channelID] = compactSortedStrings(refs)
+	}
+
+	recordedCategoryID := strings.TrimSpace(project.DiscordCategoryID)
+	deletable := make([]connectedProductionChannelValidationResult, 0, len(results))
+	skipped := make([]connectedProductionChannelValidationResult, 0)
+	for _, result := range results {
+		current, ok := channelsByID[result.ChannelID]
+		if !ok {
+			result.Reason = t(lang, "Skip: 現在の guild channel list にこの channel が見つかりません。", "Skipped: current channel was not found in the guild channel list.")
+			skipped = append(skipped, result)
+			continue
+		}
+		result.CurrentName = current.Name
+		result.CurrentType = current.Type
+		result.CurrentParent = current.ParentID
+		if current.Type != 0 {
+			result.Reason = fmt.Sprintf(t(lang, "Skip: 現在の channel type は %d で、期待する text channel type 0 ではありません。", "Skipped: current channel type is %d, not the expected text channel type 0."), current.Type)
+			skipped = append(skipped, result)
+			continue
+		}
+		if refs := otherProjectRefs[result.ChannelID]; len(refs) > 0 {
+			result.Reason = t(lang, "Skip: 同じ Discord channel ID が他 production からも参照されています (", "Skipped: the same Discord channel ID is also referenced by another production (") + strings.Join(refs, ", ") + ")."
+			skipped = append(skipped, result)
+			continue
+		}
+		if recordedCategoryID != "" && strings.TrimSpace(current.ParentID) != recordedCategoryID {
+			result.Reason = t(lang, "Skip: 現在の parent/category が保存済み project category と一致しません。", "Skipped: current parent/category no longer matches the recorded project category.")
+			skipped = append(skipped, result)
+			continue
+		}
+		if len(result.StoredNames) > 0 {
+			matchesStoredName := false
+			for _, name := range result.StoredNames {
+				if strings.TrimSpace(name) == current.Name {
+					matchesStoredName = true
+					break
+				}
+			}
+			if !matchesStoredName {
+				result.Reason = t(lang, "Skip: 現在の channel name が保存済み channel name 参照と一致しません。", "Skipped: current channel name does not match the stored channel name reference.")
+				skipped = append(skipped, result)
+				continue
+			}
+		}
+		deletable = append(deletable, result)
+	}
+
+	summary := fmt.Sprintf(t(lang, "保存済み channel candidate %d 件を現在の Discord guild state と照合しました。この pass ではまだ何も削除しません。", "Validated %d stored channel candidate(s) against the current Discord guild state. This pass still does not delete anything."), len(results))
+	return deletable, skipped, summary, checks
+}
+
+func renderConnectedProductionChannelValidationCard(lang string, r *http.Request, project model.Project, summary string, checks []string, deletable []connectedProductionChannelValidationResult, skipped []connectedProductionChannelValidationResult) string {
+	var checksHTML strings.Builder
+	checksHTML.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+	for _, check := range checks {
+		checksHTML.WriteString(`<li>` + esc(check) + `</li>`)
+	}
+	checksHTML.WriteString(`</ul>`)
+
+	renderList := func(items []connectedProductionChannelValidationResult, includeReason bool) string {
+		if len(items) == 0 {
+			return `<p class="field-help" style="margin:0">` + esc(t(lang, "該当なし", "None")) + `</p>`
+		}
+		var out strings.Builder
+		out.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+		for _, item := range items {
+			line := `<code>` + esc(item.ChannelID) + `</code>`
+			if strings.TrimSpace(item.CurrentName) != "" {
+				line += ` <span class="hint">(` + esc(item.CurrentName) + `)</span>`
+			} else if len(item.StoredNames) > 0 {
+				line += ` <span class="hint">(` + esc(strings.Join(item.StoredNames, ", ")) + `)</span>`
+			}
+			if includeReason && strings.TrimSpace(item.Reason) != "" {
+				line += `<div class="field-help">` + esc(item.Reason) + `</div>`
+			}
+			out.WriteString(`<li>` + line + `</li>`)
+		}
+		out.WriteString(`</ul>`)
+		return out.String()
+	}
+
+	return fmt.Sprintf(`
+    <div class="section-card glass" style="border-color:#ffd4a8">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+        <span class="status-pill warn">%s</span>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host">%s</div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+      </div>
+      <p class="field-help" style="margin:12px 0 0">%s</p>
+      <div class="section-stack" style="margin-top:12px">
+        <div>
+          <div class="eyebrow">%s</div>
+          %s
+        </div>
+        <div>
+          <div class="eyebrow">%s</div>
+          %s
+        </div>
+        <div>
+          <div class="eyebrow">%s</div>
+          %s
+        </div>
+      </div>
+      <div class="button-row" style="margin-top:14px">
+        <a class="btn-ghost" href="%s">%s</a>
+      </div>
+    </div>`,
+		esc(t(lang, "channel-only 削除候補の検証", "Validated channel-only deletion candidates")),
+		esc(t(lang, "Discord 上の current state と保存済み参照を照合した確認結果です。まだ削除は実行されません。将来の destructive 実装に進める候補と、手動確認が必要な候補を分けて表示します。", "This card compares saved references with the current Discord state. No deletion is executed yet. It separates candidates that are strong enough for a future destructive slice from candidates that still need manual review.")),
+		esc(t(lang, "VALIDATION ONLY", "VALIDATION ONLY")),
+		esc(t(lang, "Production", "Production")),
+		esc(project.Name),
+		esc(t(lang, "Project ID", "Project ID")),
+		esc(project.KitsuProjectID),
+		esc(t(lang, "Deletable candidates", "Deletable candidates")),
+		len(deletable),
+		esc(t(lang, "Skipped candidates", "Skipped candidates")),
+		len(skipped),
+		esc(summary),
+		esc(t(lang, "Checks performed", "Checks performed")),
+		checksHTML.String(),
+		esc(t(lang, "Deletable candidates", "Deletable candidates")),
+		renderList(deletable, false),
+		esc(t(lang, "Skipped / uncertain candidates", "Skipped / uncertain candidates")),
+		renderList(skipped, true),
+		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&danger_preview=1", r)),
+		esc(t(lang, "検証前のプレビューへ戻る", "Back to saved-data preview")),
+	)
+}
+
+func compactSortedStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := []string{values[0]}
+	for _, value := range values[1:] {
+		if value != out[len(out)-1] {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // HealthHandler shows the runtime health dashboard.
