@@ -446,15 +446,31 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		}
 
 		if r.Method == http.MethodPost {
+			action := strings.TrimSpace(r.FormValue("action"))
 			projectID := strings.TrimSpace(r.FormValue("project_id"))
+			redirectURL := withLang("/bot/admin/projects", r)
+			if projectID != "" {
+				redirectURL += "&project=" + url.QueryEscape(projectID)
+			}
+			if action == "remove_connection" {
+				expected := t(lang, "削除", "delete")
+				if projectID != "" && strings.TrimSpace(r.FormValue("confirm_text")) == expected {
+					if err := DeleteProjectConnectionOnly(projectID, db); err == nil {
+						http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=saved", http.StatusSeeOther)
+						return
+					}
+				}
+				http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
+				return
+			}
 			guildID := strings.TrimSpace(r.FormValue("guild_id"))
 			if projectID != "" {
 				if err := model.UpdateProjectGuildID(db, projectID, guildID); err == nil {
-					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=saved", http.StatusSeeOther)
+					http.Redirect(w, r, redirectURL+"&msg=saved", http.StatusSeeOther)
 					return
 				}
 			}
-			http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
+			http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
 			return
 		}
 
@@ -555,6 +571,18 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
       </div>
       <div class="button-row"><button type="submit" class="btn">%s</button></div>
     </form>
+    <form method="POST" class="section-card glass delete-form" data-confirm="%s" data-require-text="%s">
+      <input type="hidden" name="action" value="remove_connection">
+      <input type="hidden" name="project_id" value="%s">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+      </div>
+      <p class="field-help" style="margin:0 0 12px">%s</p>
+      <div class="button-row"><button type="submit" class="btn-danger">%s</button></div>
+    </form>
     %s
   </div>
 </details>`,
@@ -587,6 +615,13 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(effectiveGuildID),
 				esc(t(lang, "この保存は Discord ID のみを更新します。", "This save action updates only the Discord ID.")),
 				esc(t(lang, "保存", "Save")),
+				esc(t(lang, p.Name+" の KitsuSync 連携だけを削除します。Discord channel / category は削除されません。", "Remove only the KitsuSync connection for "+p.Name+". Discord channels and category are kept.")),
+				esc(t(lang, "削除", "delete")),
+				esc(p.KitsuProjectID),
+				esc(t(lang, "連携を削除", "Remove connection")),
+				esc(t(lang, "この production の KitsuSync 側の接続情報だけを解除します。Discord の channel / category はそのまま残ります。", "Remove only this production's KitsuSync-side connection records. Discord channels and category stay as they are.")),
+				esc(t(lang, "削除されるのは KitsuSync の保存データのみです。Discord 側の削除はこの操作では行いません。", "This deletes only KitsuSync's saved connection data. No Discord-side deletion happens in this action.")),
+				esc(t(lang, "連携を削除", "Remove connection")),
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 			))
 		}

@@ -29,7 +29,15 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}); err != nil {
+	if err := db.AutoMigrate(
+		&model.Project{},
+		&model.ProjectWebhook{},
+		&model.ProjectUserMap{},
+		&model.ProjectCheckerMap{},
+		&model.ProjectSetting{},
+		&model.UserMap{},
+		&model.CheckerMap{},
+	); err != nil {
 		t.Fatalf("failed to migrate setup schema: %v", err)
 	}
 	return db
@@ -243,6 +251,58 @@ func TestRunProjectSetup_UsesFallbackGuildIDWhenProjectInputIsBlank(t *testing.T
 	}
 	if got := strings.TrimSpace(project.DiscordGuildID); got != "fallback-guild" {
 		t.Fatalf("expected fallback guild to persist, got %q", got)
+	}
+}
+
+func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	if err := model.CreateProject(db, "kitsu-proj-unlink", "Project Unlink", "cg", "guild-123", "cat-123", "ja"); err != nil {
+		t.Fatalf("failed to create project: %v", err)
+	}
+	project := model.FindProjectByKitsuID(db, "kitsu-proj-unlink")
+	if project == nil {
+		t.Fatalf("expected project row")
+	}
+	if err := model.CreateProjectWebhook(db, "kitsu-proj-unlink", "general", "*", "https://discord.invalid/general", "channel-1"); err != nil {
+		t.Fatalf("failed to create webhook: %v", err)
+	}
+	model.UpsertProjectUserMap(db, project.ID, "Artist A", "artist@example.com", "discord-user-1")
+	model.UpsertProjectCheckerMap(db, project.ID, "Animation", "discord-reviewer-1")
+	db.Create(&model.ProjectSetting{ProjectID: project.ID, Key: "storage_url", Value: "s3://bucket/project"})
+	db.Create(&model.UserMap{KitsuName: "Global User", KitsuEmail: "global@example.com", DiscordID: "global-discord"})
+	db.Create(&model.CheckerMap{TaskType: "GlobalTask", KitsuName: "Global Reviewer", KitsuEmail: "reviewer@example.com", DiscordID: "global-reviewer"})
+
+	if err := DeleteProjectConnectionOnly("kitsu-proj-unlink", db); err != nil {
+		t.Fatalf("expected unlink delete to succeed, got %v", err)
+	}
+	if got := model.FindProjectByKitsuID(db, "kitsu-proj-unlink"); got != nil {
+		t.Fatalf("expected project row to be deleted")
+	}
+	if got := model.ListProjectWebhooks(db, "kitsu-proj-unlink"); len(got) != 0 {
+		t.Fatalf("expected project webhooks to be deleted, got %d", len(got))
+	}
+	if got := model.ListProjectUserMaps(db, project.ID); len(got) != 0 {
+		t.Fatalf("expected project user maps to be deleted, got %d", len(got))
+	}
+	if got := model.ListProjectCheckerMaps(db, project.ID); len(got) != 0 {
+		t.Fatalf("expected project checker maps to be deleted, got %d", len(got))
+	}
+
+	var projectSettings []model.ProjectSetting
+	db.Where("project_id = ?", project.ID).Find(&projectSettings)
+	if len(projectSettings) != 0 {
+		t.Fatalf("expected project settings to be deleted, got %d", len(projectSettings))
+	}
+
+	var globalUsers []model.UserMap
+	db.Find(&globalUsers)
+	if len(globalUsers) != 1 {
+		t.Fatalf("expected global user mappings to remain, got %d", len(globalUsers))
+	}
+	var globalCheckers []model.CheckerMap
+	db.Find(&globalCheckers)
+	if len(globalCheckers) != 1 {
+		t.Fatalf("expected global checker mappings to remain, got %d", len(globalCheckers))
 	}
 }
 

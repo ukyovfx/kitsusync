@@ -314,6 +314,27 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 	return logs, nil
 }
 
+func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
+	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
+	if kitsuProjectID == "" {
+		return fmt.Errorf("empty project id")
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		project := model.FindProjectByKitsuID(tx, kitsuProjectID)
+		if project == nil {
+			return fmt.Errorf("project not found: %s", kitsuProjectID)
+		}
+		model.DeleteProjectScopedData(tx, project.ID)
+		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
+			return fmt.Errorf("db delete webhooks: %w", err)
+		}
+		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.Project{}).Error; err != nil {
+			return fmt.Errorf("db delete project: %w", err)
+		}
+		return nil
+	})
+}
+
 func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
