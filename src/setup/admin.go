@@ -457,6 +457,14 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			if projectID != "" {
 				redirectURL += "&project=" + url.QueryEscape(projectID)
 			}
+			if action == "preview_remove_connection_with_discord" {
+				if projectID != "" {
+					http.Redirect(w, r, redirectURL+"&danger_preview=1", http.StatusSeeOther)
+					return
+				}
+				http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
+				return
+			}
 			if action == "remove_connection" {
 				expected := t(lang, "削除", "delete")
 				if projectID != "" && strings.TrimSpace(r.FormValue("confirm_text")) == expected {
@@ -481,6 +489,10 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 
 		allTaskTypes := kitsu.GetTaskTypes().Each
 		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
+		dangerPreviewProjectID := ""
+		if strings.TrimSpace(r.URL.Query().Get("danger_preview")) != "" {
+			dangerPreviewProjectID = selectedProjectID
+		}
 		var blocks strings.Builder
 		for _, p := range model.ListProjects(db) {
 			effectiveGuildID := strings.TrimSpace(p.DiscordGuildID)
@@ -524,6 +536,90 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			projectLang := strings.TrimSpace(p.Language)
 			if projectLang == "" {
 				projectLang = "ja"
+			}
+			previewCategoryID := categoryID
+			previewChannelOrder := make([]string, 0)
+			previewChannelNames := map[string]map[string]bool{}
+			for _, wh := range webhooks {
+				channelID := strings.TrimSpace(wh.DiscordChannelID)
+				if channelID == "" {
+					continue
+				}
+				if _, ok := previewChannelNames[channelID]; !ok {
+					previewChannelOrder = append(previewChannelOrder, channelID)
+					previewChannelNames[channelID] = map[string]bool{}
+				}
+				channelName := strings.TrimSpace(wh.ChannelName)
+				if channelName != "" {
+					previewChannelNames[channelID][channelName] = true
+				}
+			}
+			sort.Strings(previewChannelOrder)
+			previewCount := len(previewChannelOrder)
+			var previewChannelsHTML strings.Builder
+			if previewCount == 0 {
+				previewChannelsHTML.WriteString(`<p class="field-help" style="margin:0">` + esc(t(lang, "保存済みの DiscordChannelID は見つかりませんでした。現時点では KitsuSync 側に記録された対象 channel はありません。", "No stored DiscordChannelID values were found. There are currently no recorded Discord-side channel targets in KitsuSync.")) + `</p>`)
+			} else {
+				previewChannelsHTML.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+				for _, channelID := range previewChannelOrder {
+					names := make([]string, 0, len(previewChannelNames[channelID]))
+					for name := range previewChannelNames[channelID] {
+						names = append(names, name)
+					}
+					sort.Strings(names)
+					label := `<code>` + esc(channelID) + `</code>`
+					if len(names) > 0 {
+						label += ` <span class="hint">(` + esc(strings.Join(names, ", ")) + `)</span>`
+					}
+					previewChannelsHTML.WriteString(`<li>` + label + `</li>`)
+				}
+				previewChannelsHTML.WriteString(`</ul>`)
+			}
+			dangerPreviewHTML := ""
+			if dangerPreviewProjectID != "" && dangerPreviewProjectID == p.KitsuProjectID {
+				dangerPreviewHTML = fmt.Sprintf(`
+    <div class="section-card glass" style="border-color:#ffb08f">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+        <span class="status-pill warn">%s</span>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host">%s</div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+      </div>
+      <p class="field-help" style="margin:12px 0 0">%s</p>
+      <div class="section-stack" style="margin-top:12px">
+        <div>
+          <div class="eyebrow">%s</div>
+          %s
+        </div>
+      </div>
+      <div class="button-row" style="margin-top:14px">
+        <a class="btn-ghost" href="%s">%s</a>
+      </div>
+    </div>`,
+					esc(t(lang, "Discord 削除候補のプレビュー", "Preview Discord deletion scope")),
+					esc(t(lang, "これは確認用の dry-run です。この画面からは Discord channel / category はまだ削除されません。保存済みの接続情報から、将来の削除候補として見えている範囲だけを表示します。", "This is a dry-run preview only. No Discord channels or category are deleted from this screen. It shows only the scope currently visible from saved connection data.")),
+					esc(t(lang, "PREVIEW ONLY", "PREVIEW ONLY")),
+					esc(t(lang, "Production", "Production")),
+					esc(p.Name),
+					esc(t(lang, "Project ID", "Project ID")),
+					esc(p.KitsuProjectID),
+					esc(t(lang, "Recorded Discord Category ID", "Recorded Discord Category ID")),
+					esc(previewCategoryID),
+					esc(t(lang, "Referenced channel IDs", "Referenced channel IDs")),
+					previewCount,
+					esc(t(lang, "現在の保存データだけでは ownership は確定できません。特に category 配下の channel 全体や、手動変更済み channel の安全削除はまだ判断していません。", "Current saved data does not prove ownership. In particular, this preview does not yet decide whether category-wide or manually edited channels would be safe to delete.")),
+					esc(t(lang, "Stored channel references", "Stored channel references")),
+					previewChannelsHTML.String(),
+					esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)),
+					esc(t(lang, "プレビューを閉じる", "Close preview")),
+				)
 			}
 			openAttr := ""
 			if selectedProjectID != "" && p.KitsuProjectID == selectedProjectID {
@@ -588,6 +684,19 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
       <p class="field-help" style="margin:0 0 12px">%s</p>
       <div class="button-row"><button type="submit" class="btn-danger">%s</button></div>
     </form>
+    <form method="POST" class="section-card glass">
+      <input type="hidden" name="action" value="preview_remove_connection_with_discord">
+      <input type="hidden" name="project_id" value="%s">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+      </div>
+      <p class="field-help" style="margin:0 0 12px">%s</p>
+      <div class="button-row"><button type="submit" class="btn-danger">%s</button></div>
+    </form>
+    %s
     %s
   </div>
 </details>`,
@@ -627,6 +736,12 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "この production の KitsuSync 側の接続情報だけを解除します。Discord の channel / category はそのまま残ります。", "Remove only this production's KitsuSync-side connection records. Discord channels and category stay as they are.")),
 				esc(t(lang, "削除されるのは KitsuSync の保存データのみです。Discord 側の削除はこの操作では行いません。", "This deletes only KitsuSync's saved connection data. No Discord-side deletion happens in this action.")),
 				esc(t(lang, "連携を削除", "Remove connection")),
+				esc(p.KitsuProjectID),
+				esc(t(lang, "Discordのチャンネルごと連携を削除", "Remove connection and Discord channels")),
+				esc(t(lang, "将来の危険削除フロー候補です。この pass では実行せず、保存済みの category / channel 参照だけを preview 表示します。", "This is a future destructive-delete candidate. In this pass it does not execute; it only previews saved category / channel references.")),
+				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not delete anything on Discord. Ownership is not proven strongly enough yet, so this pass is dry-run only.")),
+				esc(t(lang, "削除候補をプレビュー", "Preview deletion scope")),
+				dangerPreviewHTML,
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 			))
 		}
