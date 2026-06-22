@@ -278,13 +278,13 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 
 	if strings.TrimSpace(guildID) == "" {
 		checks = append(checks, diagCheck{
-			Label:  "Discord guild fallback",
+			Label:  "Discord guild fallback (compatibility)",
 			Status: "ok",
 			Detail: t(lang, "未設定です。通常は project-level Discord ID を使うため、この fallback は任意です。", "Not set. This fallback is optional because project-level Discord IDs are the normal path."),
 		})
 	} else {
 		checks = append(checks, diagCheck{
-			Label:  "Discord guild fallback",
+			Label:  "Discord guild fallback (compatibility)",
 			Status: "ok",
 			Detail: t(lang, "互換用 fallback として設定されています。通常の通知経路は project-level Discord ID / webhook です。", "Configured as a compatibility fallback. The normal notification path uses project-level Discord IDs and webhooks."),
 		})
