@@ -278,7 +278,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			)
 		}
 
-		assignmentProject := configuredAssignmentProject(db)
+		assignmentProject := configuredAssignmentProject(db, "")
 		userAssignmentCount := 0
 		checkerAssignmentCount := 0
 		if assignmentProject != nil {
@@ -887,8 +887,23 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
-		project := configuredAssignmentProject(db)
+		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
+		if r.Method == http.MethodPost {
+			if formProjectID := strings.TrimSpace(r.FormValue("assignment_project_id")); formProjectID != "" {
+				selectedProjectID = formProjectID
+			}
+		}
+		projects := model.ListProjects(db)
+		project := configuredAssignmentProject(db, selectedProjectID)
 		useProjectScoped := project != nil
+		activeProjectID := ""
+		if project != nil {
+			activeProjectID = project.KitsuProjectID
+		}
+		usersPageURL := withLang("/bot/admin/users", r)
+		if activeProjectID != "" {
+			usersPageURL += "&project=" + url.QueryEscape(activeProjectID)
+		}
 		botEmail := botAccountEmail(db)
 		kitsuPeople := filterAssignablePersons(ListKitsuPersons(kitsuHostname), botEmail)
 		projectUserRows := []model.ProjectUserMap{}
@@ -955,7 +970,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					}
 				}
 			}
-			http.Redirect(w, r, withLang("/bot/admin/users", r)+"&msg=saved", http.StatusSeeOther)
+			http.Redirect(w, r, usersPageURL+"&msg=saved", http.StatusSeeOther)
 			return
 		}
 
@@ -991,8 +1006,8 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			reviewerStatus := reviewerTaskTypeBadges(user.CheckerTaskTypes, lang)
 			actionHTML := `<span class="muted">` + t(lang, "ユーザー割り当て未作成", "Create a user assignment first") + `</span>`
 			if user.RowID > 0 {
-				actionHTML = fmt.Sprintf(`<div class="inline-actions"><a class="btn-ghost" href="%s">%s</a><form method="POST" class="delete-form" data-confirm="%s" data-require-text="%s"><input type="hidden" name="action" value="delete"><input type="hidden" name="user_id" value="%d"><input type="hidden" name="kitsu_name" value="%s"><input type="hidden" name="kitsu_email" value="%s"><button class="btn-danger" type="submit">%s</button></form></div>`,
-					withLang("/bot/admin/users", r)+"&edit="+strconv.FormatUint(uint64(user.RowID), 10), t(lang, "編集", "Edit"), esc(user.KitsuName), t(lang, "削除", "delete"), user.RowID, esc(user.KitsuName), esc(user.KitsuEmail), t(lang, "削除", "Delete"))
+				actionHTML = fmt.Sprintf(`<div class="inline-actions"><a class="btn-ghost" href="%s">%s</a><form method="POST" class="delete-form" data-confirm="%s" data-require-text="%s"><input type="hidden" name="action" value="delete"><input type="hidden" name="assignment_project_id" value="%s"><input type="hidden" name="user_id" value="%d"><input type="hidden" name="kitsu_name" value="%s"><input type="hidden" name="kitsu_email" value="%s"><button class="btn-danger" type="submit">%s</button></form></div>`,
+					usersPageURL+"&edit="+strconv.FormatUint(uint64(user.RowID), 10), t(lang, "編集", "Edit"), esc(user.KitsuName), t(lang, "削除", "delete"), esc(activeProjectID), user.RowID, esc(user.KitsuName), esc(user.KitsuEmail), t(lang, "削除", "Delete"))
 			}
 			rows.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
 				esc(user.KitsuName), discordID, reviewerStatus, actionHTML))
@@ -1009,11 +1024,22 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			userID = editID
 		}
 		scopeHint := ""
+		selectorCard := ""
 		if useProjectScoped {
-			scopeHint = `<p class="field-help">` + t(lang, "現在は最初の設定済み project の割り当てを表示しています: ", "Showing assignments for the first configured project: ") + `<strong>` + esc(project.Name) + `</strong></p>`
+			scopeHint = `<p class="field-help">` + t(lang, "現在編集中の production: ", "Currently editing production: ") + `<strong>` + esc(project.Name) + `</strong></p>`
+			var projectOptions strings.Builder
+			for _, candidate := range projects {
+				selected := ""
+				if candidate.KitsuProjectID == activeProjectID {
+					selected = ` selected`
+				}
+				projectOptions.WriteString(fmt.Sprintf(`<option value="%s"%s>%s</option>`, esc(candidate.KitsuProjectID), selected, esc(candidate.Name)))
+			}
+			selectorCard = `<div class="section-card glass"><h3>` + t(lang, "編集対象の production", "Editing production") + `</h3><p class="hint">` + t(lang, "ユーザー割り当てと reviewer / checker 設定は production ごとに切り替えて編集します。", "Switch the production here to edit user assignments and reviewer/checker settings per production.") + `</p><form method="GET" action="/bot/admin/users"><input type="hidden" name="lang" value="` + esc(lang) + `"><div class="form-grid"><div><label>` + t(lang, "Production", "Production") + `</label><select name="project">` + projectOptions.String() + `</select></div></div><div class="button-row"><button type="submit" class="btn">` + t(lang, "表示を切り替え", "Switch production") + `</button></div></form></div>`
 		}
 		body := fmt.Sprintf(`
 <div class="section-stack">
+  %s
   <div class="section-card glass">
     <h3>%s</h3>
     <p class="hint">%s</p>
@@ -1022,6 +1048,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
     %s
     <form method="POST">
       <input type="hidden" name="user_id" value="%d">
+      <input type="hidden" name="assignment_project_id" value="%s">
       <input type="hidden" id="kitsuNameInput" name="kitsu_name" value="%s">
       <input type="hidden" id="kitsuEmailInput" name="kitsu_email" value="%s">
       <div class="form-grid">
@@ -1128,18 +1155,19 @@ document.addEventListener('DOMContentLoaded', function(){
   initCheckerTaskTypes();
 });
 </script>`,
+			selectorCard,
 			formTitle,
 			t(lang, "User = タスク割り当て時に @mention します。Reviewer / Checker は必要な人だけ追加で設定します。", "User = @mentioned when a task is assigned. Reviewer / Checker is optional and only needed for specific people."),
 			t(lang, "チェッカーでない人には割り当てないでください。必要な人だけ設定してください。", "Only configure reviewer/checker for people who actually need it."),
 			t(lang, "Task type ごとの reviewer/checker は 1 人です。既に他の人に設定されている task type を保存すると、その人から移動します。", "Each task type has a single reviewer/checker. Saving a task type already assigned to someone else will move it to this person."),
 			scopeHint,
-			userID, esc(selectedName), esc(selectedEmail),
+			userID, esc(activeProjectID), esc(selectedName), esc(selectedEmail),
 			t(lang, "Kitsuユーザー", "Kitsu user"), personOptions,
 			t(lang, "DiscordユーザーID", "Discord user ID"), esc(selectedDiscordID), t(lang, "未入力の場合は ID未設定 と表示されます。", "If empty, the UI will show No ID."),
 			t(lang, "レビュアー / チェッカー task type", "Reviewer / Checker task types"),
 			reviewerTaskTypePicker(taskTypes, selectedCheckerTaskTypes, lang),
 			t(lang, "task type を 1 つずつ追加してください。追加済みの task type は下に表示され、不要なら外せます。", "Add task types one by one. Selected task types appear below and can be removed if not needed."),
-			t(lang, "保存", "Save"), withLang("/bot/admin/users", r), t(lang, "キャンセル", "Cancel"),
+			t(lang, "保存", "Save"), usersPageURL, t(lang, "キャンセル", "Cancel"),
 			t(lang, "現在の割り当て", "Current assignments"), t(lang, "名前", "Name"), t(lang, "レビュアー / チェッカー", "Reviewer / Checker"), t(lang, "操作", "Actions"), rows.String(),
 			orphanReviewers,
 			t(lang, "task type を選択", "Select task type"),
@@ -1470,10 +1498,19 @@ func taskTypeIcon(taskType string) string {
 	}
 }
 
-func configuredAssignmentProject(db *gorm.DB) *model.Project {
+func configuredAssignmentProject(db *gorm.DB, selectedProjectID string) *model.Project {
 	projects := model.ListProjects(db)
 	if len(projects) == 0 {
 		return nil
+	}
+	selectedProjectID = strings.TrimSpace(selectedProjectID)
+	if selectedProjectID != "" {
+		for _, project := range projects {
+			if project.KitsuProjectID == selectedProjectID {
+				copyProject := project
+				return &copyProject
+			}
+		}
 	}
 	return &projects[0]
 }
