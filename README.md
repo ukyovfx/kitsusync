@@ -185,6 +185,8 @@ docker compose logs --tail=50 app
 curl http://localhost:8090/health
 ```
 
+For the temporary GCP maintenance stack, use a stricter deploy order: `docker compose build app` first, then `docker compose up -d --force-recreate app`. Avoid overlapping build and recreate steps. See `docs/ENVIRONMENTS.md` for the current backup-first verification flow.
+
 ## First-Time Setup Flow
 
 ### Direct local access
