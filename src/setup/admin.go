@@ -1696,13 +1696,13 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		body := fmt.Sprintf(`
 <div class="section-stack">
   %s
-  <div class="section-card glass">
-    <h3>%s</h3>
-    <p class="hint">%s</p>
-    <p class="field-help">%s</p>
-    <p class="field-help">%s</p>
-    %s
-    <form method="POST">
+  <form method="POST" class="section-stack" style="margin:0">
+    <div class="section-card glass">
+      <h3>%s</h3>
+      <p class="hint">%s</p>
+      <p class="field-help">%s</p>
+      <p class="field-help">%s</p>
+      %s
       <input type="hidden" name="user_id" value="%d">
       <input type="hidden" name="assignment_project_id" value="%s">
       <input type="hidden" id="kitsuNameInput" name="kitsu_name" value="%s">
@@ -1710,12 +1710,16 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
       <div class="form-grid">
         <div><label>%s</label><select id="personSelect" onchange="syncPersonSelect()" required>%s</select></div>
         <div><label>%s</label><input type="text" name="discord_id" value="%s" placeholder="123456789012345678"><div class="field-help">%s</div></div>
-        <div class="form-span-2"><label>%s</label><div class="checker-option-list">%s</div><div class="field-help">%s</div></div>
       </div>
+    </div>
+    <div class="section-card glass"><h3>%s</h3><div class="table-wrap"><table><thead><tr><th>%s</th><th>Discord ID</th><th>%s</th><th>%s</th></tr></thead><tbody>%s</tbody></table></div></div>
+    <div class="section-card glass">
+      <h3>%s</h3>
+      <div class="checker-option-list">%s</div>
+      <div class="field-help">%s</div>
       <div class="button-row"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a></div>
-    </form>
-  </div>
-  <div class="section-card glass"><h3>%s</h3><div class="table-wrap"><table><thead><tr><th>%s</th><th>Discord ID</th><th>%s</th><th>%s</th></tr></thead><tbody>%s</tbody></table></div></div>
+    </div>
+  </form>
   %s
 </div>
 <script>
@@ -1820,11 +1824,11 @@ document.addEventListener('DOMContentLoaded', function(){
 			userID, esc(activeProjectID), esc(selectedName), esc(selectedEmail),
 			t(lang, "Kitsuユーザー", "Kitsu user"), personOptions,
 			t(lang, "DiscordユーザーID", "Discord user ID"), esc(selectedDiscordID), t(lang, "未入力の場合は ID未設定 と表示されます。", "If empty, the UI will show No ID."),
+			t(lang, "現在の割り当て", "Current assignments"), t(lang, "名前", "Name"), t(lang, "レビュアー / チェッカー", "Reviewer / Checker"), t(lang, "操作", "Actions"), rows.String(),
 			t(lang, "レビュアー / チェッカー task type", "Reviewer / Checker task types"),
 			reviewerTaskTypePicker(taskTypes, selectedCheckerTaskTypes, lang),
 			t(lang, "task type を 1 つずつ追加してください。追加済みの task type は下に表示され、不要なら外せます。", "Add task types one by one. Selected task types appear below and can be removed if not needed."),
 			t(lang, "保存", "Save"), usersPageURL, t(lang, "キャンセル", "Cancel"),
-			t(lang, "現在の割り当て", "Current assignments"), t(lang, "名前", "Name"), t(lang, "レビュアー / チェッカー", "Reviewer / Checker"), t(lang, "操作", "Actions"), rows.String(),
 			orphanReviewers,
 			t(lang, "task type を選択", "Select task type"),
 			t(lang, "未設定", "Not set"),
