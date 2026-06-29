@@ -492,6 +492,28 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				fmt.Fprint(w, renderConnectedProductionChannelDeleteResultPage(lang, r, *project, execResult))
 				return
 			}
+			if action == "complete_connection_cleanup" {
+				expected := t(lang, "蜑企勁", "delete")
+				if projectID == "" || strings.TrimSpace(r.FormValue("confirm_text")) != expected {
+					http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
+					return
+				}
+				project := model.FindProjectByKitsuID(db, projectID)
+				if project == nil {
+					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
+					return
+				}
+				if remaining := len(model.ListProjectWebhooks(db, projectID)); remaining != 0 {
+					http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
+					return
+				}
+				if err := DeleteProjectConnectionOnly(projectID, db); err == nil {
+					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=saved", http.StatusSeeOther)
+					return
+				}
+				http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
+				return
+			}
 			if action == "remove_connection" {
 				expected := t(lang, "削除", "delete")
 				if projectID != "" && strings.TrimSpace(r.FormValue("confirm_text")) == expected {
@@ -821,6 +843,8 @@ type connectedProductionChannelDeleteExecution struct {
 	Skipped           []connectedProductionChannelValidationResult
 	Failed            []connectedProductionChannelValidationResult
 	CleanupWarnings   []connectedProductionChannelValidationResult
+	RemainingWebhooks int
+	CompletionReady   bool
 }
 
 func buildConnectedProductionChannelCandidates(webhooks []model.ProjectWebhook) []connectedProductionChannelCandidate {
@@ -1122,6 +1146,8 @@ func executeConnectedProductionValidatedChannelDelete(lang string, project model
 			continue
 		}
 	}
+	result.RemainingWebhooks = len(model.ListProjectWebhooks(db, project.KitsuProjectID))
+	result.CompletionReady = result.RemainingWebhooks == 0 && len(result.CleanupWarnings) == 0
 	return result
 }
 
@@ -1166,6 +1192,8 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 		statusClass = "bad"
 	}
 
+	completionBody, completionStatusClass, completionStatusLabel, completionSummary := renderConnectedProductionCompletionAction(lang, project, result)
+
 	body := fmt.Sprintf(`
 <div class="section-stack">
   <div class="section-card glass">
@@ -1206,6 +1234,17 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
     <div class="eyebrow">%s</div>
     %s
   </div>
+  <div class="section-card glass" style="border-color:#ffd4a8">
+    <div class="page-heading" style="margin-bottom:14px">
+      <div>
+        <div class="eyebrow">%s</div>
+        <h3 style="margin:6px 0 0">%s</h3>
+        <p class="hint" style="margin:6px 0 0">%s</p>
+      </div>
+      <span class="status-pill %s">%s</span>
+    </div>
+    %s
+  </div>
   <div class="button-row">
     <a class="btn" href="%s">%s</a>
     <a class="btn-ghost" href="%s">%s</a>
@@ -1236,12 +1275,51 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 		renderList(result.CleanupWarnings, true),
 		esc(t(lang, "Checks used at execution time", "Validation checks used before execution")),
 		checksHTML.String(),
+		esc(t(lang, "NEXT STEP", "NEXT STEP")),
+		esc(t(lang, "Complete connection cleanup", "Complete connection cleanup")),
+		esc(completionSummary),
+		completionStatusClass,
+		esc(completionStatusLabel),
+		completionBody,
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID), r)),
 		esc(t(lang, "production の詳細に戻る", "Back to production details")),
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&danger_preview=1&validated_channels=1", r)),
 		esc(t(lang, "validated review に戻る", "Back to validated review")),
 	)
 	return adminPage(lang, t(lang, "連携済みプロダクション管理", "Connected Productions"), r, body)
+}
+
+func renderConnectedProductionCompletionAction(lang string, project model.Project, result connectedProductionChannelDeleteExecution) (string, string, string, string) {
+	if result.CompletionReady {
+		body := `<p class="field-help" style="margin:0 0 12px">` +
+			esc(t(lang, "この 2 段階目は KitsuSync 側の connection cleanup だけを完了します。Project、残存 ProjectWebhook row、ProjectUserMap、ProjectCheckerMap、ProjectSetting を削除し、再セットアップ可能な未設定状態に戻します。Discord category と global user/checker mapping は削除しません。", "This second step completes only the KitsuSync-side connection cleanup. It removes the Project row, any remaining ProjectWebhook rows handled by the unlink path, ProjectUserMap, ProjectCheckerMap, and ProjectSetting so the production returns to an unconfigured state for re-setup. It does not delete the Discord category or global user/checker mappings.")) +
+			`</p><form method="POST" class="delete-form" style="margin:0" data-confirm="` +
+			esc(t(lang, project.Name+" 縺ｮ KitsuSync connection cleanup 繧堤ｮ溯｡後＠縺ｾ縺吶・iscord category 縺ｯ蜑企勁縺輔ｌ縺ｾ縺帙ｓ縲・, "Complete the KitsuSync connection cleanup for "+project.Name+". The Discord category is not deleted.")) +
+			`" data-require-text="` + esc(t(lang, "蜑企勁", "delete")) + `">` +
+			`<input type="hidden" name="action" value="complete_connection_cleanup">` +
+			`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
+			`<button type="submit" class="btn-danger">` + esc(t(lang, "Complete connection cleanup", "Complete connection cleanup")) + `</button></form>`
+		return body, "ok", t(lang, "螳溯｡後・騾｣謳ｺ隗｣髯､縺悟ｮ溯｡後〒縺阪∪縺・, "Completion cleanup is ready"), t(lang, "菫晏ｭ俶ｸ医∩ ProjectWebhook row 縺後・縺・▽繧ょ盾霑代〒縺阪∪縺励◆縲ゅ％縺薙〒 explicit 縺ｪ 2 段階目の connection cleanup を実行できます。", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup."))
+	}
+
+	blockers := []string{}
+	if result.RemainingWebhooks > 0 {
+		blockers = append(blockers, fmt.Sprintf(t(lang, "譛邨ゆｺ・ProjectWebhook row: %d", "Remaining ProjectWebhook rows: %d"), result.RemainingWebhooks))
+	}
+	if len(result.CleanupWarnings) > 0 {
+		blockers = append(blockers, fmt.Sprintf(t(lang, "DB cleanup warning: %d", "DB cleanup warnings: %d"), len(result.CleanupWarnings)))
+	}
+	if len(blockers) == 0 {
+		blockers = append(blockers, t(lang, "螳溯｡後・騾｣謳ｺ隗｣髯､縺ｮ譁ｹ螳壹′縺ｾ縺遒ｺ隱阪〒縺阪※縺・∪縺帙ｓ", "The guarded completion cleanup is not available for this result yet."))
+	}
+	var out strings.Builder
+	out.WriteString(`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "次の explicit cleanup は安全条件を満たしたときだけ有効です。Webhook row が残っている場合や DB cleanup warning がある場合は、まだ production を未設定状態に戻せません。", "The next explicit cleanup is available only when the safety conditions are met. If webhook rows remain or there are DB cleanup warnings, the production cannot yet be returned to an unconfigured state.")) + `</p>`)
+	out.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+	for _, blocker := range blockers {
+		out.WriteString(`<li>` + esc(blocker) + `</li>`)
+	}
+	out.WriteString(`</ul>`)
+	return out.String(), "warn", t(lang, "螳溯｡後・騾｣謳ｺ隗｣髯､縺ｯ縺ｾ縺譛ｪ蜍墓噪縺ｧ縺・, "Completion cleanup is not available yet"), t(lang, "この pass は channel-only deletion までです。結果が安全条件を満たしたときだけ、明示的な 2 段階目 cleanup を有効にします。", "This pass stops at channel-only deletion. The explicit second-step cleanup is enabled only when the result satisfies the safety guard conditions."))
 }
 
 func compactSortedStrings(values []string) []string {
