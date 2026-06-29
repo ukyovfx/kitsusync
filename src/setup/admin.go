@@ -646,8 +646,8 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
         <a class="btn-ghost" href="%s">%s</a>
       </div>
     </div>`,
-					esc(t(lang, "Discord 削除候補のプレビュー", "Preview delete scope only")),
-					esc(t(lang, "これは確認用の dry-run です。この画面からは Discord channel / category はまだ削除されません。保存済みの接続情報から、将来の削除候補として見えている範囲だけを表示します。", "This preview is dry-run only. It does not delete Discord channels or category. It only shows the delete scope visible from saved connection data.")),
+					esc(t(lang, "validated channel 削除候補のプレビュー", "Preview validated channel delete candidates")),
+					esc(t(lang, "これは確認用の dry-run です。この flow が今扱うのは validated channel-only deletion だけです。KitsuSync の連携解除、project row 削除、category 削除はまだ行いません。", "This preview is dry-run only. This flow currently covers validated channel-only deletion only. It does not remove the KitsuSync connection, project row, or category.")),
 					esc(t(lang, "PREVIEW ONLY", "PREVIEW ONLY")),
 					esc(t(lang, "Production", "Production")),
 					esc(p.Name),
@@ -661,7 +661,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					esc(t(lang, "Stored channel references", "Stored channel references")),
 					previewChannelsHTML.String(),
 					esc(p.KitsuProjectID),
-					esc(t(lang, "channel 候補を検証する", "Validate channel-only delete candidates")),
+					esc(t(lang, "validated channel 候補を検証する", "Validate validated channel delete candidates")),
 					esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)),
 					esc(t(lang, "プレビューを閉じる", "Close preview")),
 				)
@@ -783,10 +783,10 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "削除されるのは KitsuSync の保存データのみです。Discord 側の削除はこの操作では行いません。", "This deletes only KitsuSync's saved connection data. No Discord-side deletion happens in this action.")),
 				esc(t(lang, "連携を削除", "Remove connection")),
 				esc(p.KitsuProjectID),
-				esc(t(lang, "Discordのチャンネルごと連携を削除", "Remove connection and Discord channels")),
-				esc(t(lang, "将来の危険削除フロー候補です。この pass では実行せず、保存済みの category / channel 参照だけを preview 表示します。", "This is the more destructive delete path. In this pass it still does not execute; it only previews saved category / channel references.")),
+				esc(t(lang, "validated Discord channel の削除候補を確認", "Review validated Discord channel delete candidates")),
+				esc(t(lang, "この flow は現在、validated channel-only deletion だけを扱います。KitsuSync の連携解除、project row 削除、category 削除は自動では行わず、まず保存済みの category / channel 参照を preview 表示します。", "This flow currently covers validated channel-only deletion only. It does not automatically remove the KitsuSync connection, project row, or category. It starts by previewing the saved category / channel references.")),
 				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not execute Discord deletion. Ownership is not proven strongly enough yet, so this step is dry-run only.")),
-				esc(t(lang, "削除候補をプレビュー", "Preview Discord delete scope")),
+				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
 				dangerPreviewHTML,
 				validatedHTML,
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
@@ -1061,8 +1061,8 @@ func renderConnectedProductionChannelValidationCard(lang string, r *http.Request
         <a class="btn-ghost" href="%s">%s</a>
       </div>
     </div>`,
-		esc(t(lang, "channel-only 削除候補の検証", "Validation-only review for channel delete candidates")),
-		esc(t(lang, "Discord 上の current state と保存済み参照を照合した確認結果です。まだ削除は実行されません。将来の destructive 実装に進める候補と、手動確認が必要な候補を分けて表示します。", "This is a validation-only review card. It compares saved references with the current Discord state and does not execute deletion. It separates candidates that look safe enough from candidates that still need manual review.")),
+		esc(t(lang, "validated channel-only 削除候補の検証", "Validation-only review for validated channel delete candidates")),
+		esc(t(lang, "Discord 上の current state と保存済み参照を照合した確認結果です。まだ削除は実行されません。この flow は validated channel-only deletion だけを扱い、KitsuSync の連携解除、project row 削除、category 削除は行いません。", "This is a validation-only review card. It compares saved references with the current Discord state and does not execute deletion. This flow only covers validated channel-only deletion and does not remove the KitsuSync connection, project row, or category.")),
 		esc(t(lang, "VALIDATION ONLY", "VALIDATION ONLY")),
 		esc(t(lang, "Production", "Production")),
 		esc(project.Name),
@@ -1090,7 +1090,7 @@ func renderConnectedProductionChannelDeleteAction(lang string, project model.Pro
 		return `<p class="field-help" style="margin:0">` + esc(t(lang, "削除を実行できる validated candidate はまだありません。skipped / uncertain candidate を確認してください。", "There are no validated candidates available for deletion yet. Review the skipped or uncertain candidates first.")) + `</p>`
 	}
 	return `<form method="POST" class="delete-form" style="margin:0" data-confirm="` +
-		esc(t(lang, project.Name+" の validated Discord channel だけを削除します。production connection 全体や category は削除されません。", "Delete only the validated Discord channels for "+project.Name+". The production connection, project row, category, and unlink-only connection removal are not performed.")) +
+		esc(t(lang, project.Name+" の validated Discord channel だけを削除します。KitsuSync の連携解除は自動では行われないため、必要なら別途 Remove connection を実行してください。", "Delete only the validated Discord channels for "+project.Name+". The KitsuSync connection is not removed automatically, so run Remove connection separately if needed.")) +
 		`" data-require-text="` + esc(t(lang, "削除", "delete")) + `">` +
 		`<input type="hidden" name="action" value="execute_validated_channel_delete">` +
 		`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
@@ -1207,12 +1207,13 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
     %s
   </div>
   <div class="button-row">
+    <a class="btn" href="%s">%s</a>
     <a class="btn-ghost" href="%s">%s</a>
   </div>
 </div>`,
 		esc(t(lang, "CONNECTED PRODUCTION", "CONNECTED PRODUCTION")),
 		esc(t(lang, "validated channel deletion result", "Channel-only delete result")),
-		esc(t(lang, "validated candidate だけを対象に Discord channel deletion を実行した結果です。production connection 全体、project row、category は削除していません。", "This result covers actual Discord channel deletion only for validated candidates. Category deletion, project-row deletion, and unlink-only connection removal were not performed automatically.")),
+		esc(t(lang, "validated candidate だけを対象に Discord channel deletion を実行した結果です。KitsuSync の連携解除、project row 削除、category 削除は自動では行っていません。", "This result covers actual Discord channel deletion only for validated candidates. KitsuSync connection removal, project-row deletion, and category deletion were not performed automatically.")),
 		statusClass,
 		esc(statusLabel),
 		esc(t(lang, "Production", "Production")),
@@ -1224,7 +1225,7 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 		esc(t(lang, "Skipped + failed", "Not deleted / needs follow-up")),
 		len(result.Skipped)+len(result.Failed)+len(result.CleanupWarnings),
 		esc(result.ValidationSummary),
-		esc(t(lang, "DB cleanup runs only for channels that were deleted successfully on Discord. Project, ProjectSetting, ProjectUserMap, ProjectCheckerMap, and Discord category remain untouched in this pass.", "DB cleanup runs only for channels that were deleted successfully on Discord. Project, ProjectSetting, ProjectUserMap, ProjectCheckerMap, Discord category, and unlink-only connection removal remain untouched in this pass.")),
+		esc(t(lang, "Discord 上で削除に成功した channel だけ DB cleanup を実行します。Project、ProjectSetting、ProjectUserMap、ProjectCheckerMap、Discord category、KitsuSync の連携解除はこの pass では未実行です。必要なら次に Remove connection を別途実行してください。", "DB cleanup runs only for channels that were deleted successfully on Discord. Project, ProjectSetting, ProjectUserMap, ProjectCheckerMap, Discord category, and KitsuSync connection removal remain untouched in this pass. Run Remove connection separately afterwards if needed.")),
 		esc(t(lang, "Deleted channels", "Actually deleted on Discord")),
 		renderList(result.Deleted, false),
 		esc(t(lang, "Skipped / failed validation", "Not deleted: skipped / failed validation")),
@@ -1235,6 +1236,8 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 		renderList(result.CleanupWarnings, true),
 		esc(t(lang, "Checks used at execution time", "Validation checks used before execution")),
 		checksHTML.String(),
+		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID), r)),
+		esc(t(lang, "production の詳細に戻る", "Back to production details")),
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&danger_preview=1&validated_channels=1", r)),
 		esc(t(lang, "validated review に戻る", "Back to validated review")),
 	)
