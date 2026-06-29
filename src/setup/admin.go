@@ -1319,7 +1319,7 @@ func renderConnectedProductionCompletionAction(lang string, project model.Projec
 		out.WriteString(`<li>` + esc(blocker) + `</li>`)
 	}
 	out.WriteString(`</ul>`)
-	return out.String(), "warn", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u306f\u307e\u3060\u5229\u7528\u3067\u304d\u307e\u305b\u3093", "Completion cleanup is not available yet"), t(lang, "\u3053\u306e pass \u306f channel-only deletion \u307e\u3067\u3067\u3059\u3002\u7d50\u679c\u304c\u5b89\u5168\u6761\u4ef6\u3092\u6e80\u305f\u3057\u305f\u3068\u304d\u3060\u3051\u3001\u660e\u793a\u7684\u306a 2 \u6bb5\u968e\u76ee cleanup \u3092\u6709\u52b9\u306b\u3057\u307e\u3059\u3002", "This pass stops at channel-only deletion. The explicit second-step cleanup is enabled only when the result satisfies the safety guard conditions."))
+	return out.String(), "warn", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u306f\u307e\u3060\u5229\u7528\u3067\u304d\u307e\u305b\u3093", "Completion cleanup is not available yet"), t(lang, "\u3053\u306e pass \u306f channel-only deletion \u307e\u3067\u3067\u3059\u3002\u7d50\u679c\u304c\u5b89\u5168\u6761\u4ef6\u3092\u6e80\u305f\u3057\u305f\u3068\u304d\u3060\u3051\u3001\u660e\u793a\u7684\u306a 2 \u6bb5\u968e\u76ee cleanup \u3092\u6709\u52b9\u306b\u3057\u307e\u3059\u3002", "This pass stops at channel-only deletion. The explicit second-step cleanup is enabled only when the result satisfies the safety guard conditions.")
 }
 
 func compactSortedStrings(values []string) []string {
