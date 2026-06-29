@@ -493,7 +493,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				return
 			}
 			if action == "complete_connection_cleanup" {
-				expected := t(lang, "蜑企勁", "delete")
+				expected := t(lang, "\u524a\u9664", "delete")
 				if projectID == "" || strings.TrimSpace(r.FormValue("confirm_text")) != expected {
 					http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
 					return
@@ -1294,23 +1294,23 @@ func renderConnectedProductionCompletionAction(lang string, project model.Projec
 		body := `<p class="field-help" style="margin:0 0 12px">` +
 			esc(t(lang, "この 2 段階目は KitsuSync 側の connection cleanup だけを完了します。Project、残存 ProjectWebhook row、ProjectUserMap、ProjectCheckerMap、ProjectSetting を削除し、再セットアップ可能な未設定状態に戻します。Discord category と global user/checker mapping は削除しません。", "This second step completes only the KitsuSync-side connection cleanup. It removes the Project row, any remaining ProjectWebhook rows handled by the unlink path, ProjectUserMap, ProjectCheckerMap, and ProjectSetting so the production returns to an unconfigured state for re-setup. It does not delete the Discord category or global user/checker mappings.")) +
 			`</p><form method="POST" class="delete-form" style="margin:0" data-confirm="` +
-			esc(t(lang, project.Name+" 縺ｮ KitsuSync connection cleanup 繧堤ｮ溯｡後＠縺ｾ縺吶・iscord category 縺ｯ蜑企勁縺輔ｌ縺ｾ縺帙ｓ縲・, "Complete the KitsuSync connection cleanup for "+project.Name+". The Discord category is not deleted.")) +
-			`" data-require-text="` + esc(t(lang, "蜑企勁", "delete")) + `">` +
+			esc(t(lang, project.Name+"\u306e KitsuSync connection cleanup \u3092\u5b8c\u4e86\u3057\u307e\u3059\u3002Discord category \u306f\u524a\u9664\u3055\u308c\u307e\u305b\u3093\u3002", "Complete the KitsuSync connection cleanup for "+project.Name+". The Discord category is not deleted.")) +
+			`" data-require-text="` + esc(t(lang, "\u524a\u9664", "delete")) + `">` +
 			`<input type="hidden" name="action" value="complete_connection_cleanup">` +
 			`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
 			`<button type="submit" class="btn-danger">` + esc(t(lang, "Complete connection cleanup", "Complete connection cleanup")) + `</button></form>`
-		return body, "ok", t(lang, "螳溯｡後・騾｣謳ｺ隗｣髯､縺悟ｮ溯｡後〒縺阪∪縺・, "Completion cleanup is ready"), t(lang, "菫晏ｭ俶ｸ医∩ ProjectWebhook row 縺後・縺・▽繧ょ盾霑代〒縺阪∪縺励◆縲ゅ％縺薙〒 explicit 縺ｪ 2 段階目の connection cleanup を実行できます。", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup."))
+		return body, "ok", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u304c\u5b9f\u884c\u53ef\u80fd\u3067\u3059", "Completion cleanup is ready"), t(lang, "\u4fdd\u5b58\u6e08\u307f ProjectWebhook row \u306f\u3053\u306e production \u306b\u6b8b\u3063\u3066\u3044\u307e\u305b\u3093\u3002\u3053\u3053\u3067 explicit \u306a 2 \u6bb5\u968e\u76ee\u306e connection cleanup \u3092\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup."))
 	}
 
 	blockers := []string{}
 	if result.RemainingWebhooks > 0 {
-		blockers = append(blockers, fmt.Sprintf(t(lang, "譛邨ゆｺ・ProjectWebhook row: %d", "Remaining ProjectWebhook rows: %d"), result.RemainingWebhooks))
+		blockers = append(blockers, fmt.Sprintf(t(lang, "\u6b8b\u3063\u3066\u3044\u308b ProjectWebhook row: %d", "Remaining ProjectWebhook rows: %d"), result.RemainingWebhooks))
 	}
 	if len(result.CleanupWarnings) > 0 {
 		blockers = append(blockers, fmt.Sprintf(t(lang, "DB cleanup warning: %d", "DB cleanup warnings: %d"), len(result.CleanupWarnings)))
 	}
 	if len(blockers) == 0 {
-		blockers = append(blockers, t(lang, "螳溯｡後・騾｣謳ｺ隗｣髯､縺ｮ譁ｹ螳壹′縺ｾ縺遒ｺ隱阪〒縺阪※縺・∪縺帙ｓ", "The guarded completion cleanup is not available for this result yet."))
+		blockers = append(blockers, t(lang, "\u3053\u306e result \u3067\u306f guarded completion cleanup \u3092\u307e\u3060\u5229\u7528\u3067\u304d\u307e\u305b\u3093\u3002", "The guarded completion cleanup is not available for this result yet."))
 	}
 	var out strings.Builder
 	out.WriteString(`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "次の explicit cleanup は安全条件を満たしたときだけ有効です。Webhook row が残っている場合や DB cleanup warning がある場合は、まだ production を未設定状態に戻せません。", "The next explicit cleanup is available only when the safety conditions are met. If webhook rows remain or there are DB cleanup warnings, the production cannot yet be returned to an unconfigured state.")) + `</p>`)
@@ -1319,7 +1319,7 @@ func renderConnectedProductionCompletionAction(lang string, project model.Projec
 		out.WriteString(`<li>` + esc(blocker) + `</li>`)
 	}
 	out.WriteString(`</ul>`)
-	return out.String(), "warn", t(lang, "螳溯｡後・騾｣謳ｺ隗｣髯､縺ｯ縺ｾ縺譛ｪ蜍墓噪縺ｧ縺・, "Completion cleanup is not available yet"), t(lang, "この pass は channel-only deletion までです。結果が安全条件を満たしたときだけ、明示的な 2 段階目 cleanup を有効にします。", "This pass stops at channel-only deletion. The explicit second-step cleanup is enabled only when the result satisfies the safety guard conditions."))
+	return out.String(), "warn", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u306f\u307e\u3060\u5229\u7528\u3067\u304d\u307e\u305b\u3093", "Completion cleanup is not available yet"), t(lang, "\u3053\u306e pass \u306f channel-only deletion \u307e\u3067\u3067\u3059\u3002\u7d50\u679c\u304c\u5b89\u5168\u6761\u4ef6\u3092\u6e80\u305f\u3057\u305f\u3068\u304d\u3060\u3051\u3001\u660e\u793a\u7684\u306a 2 \u6bb5\u968e\u76ee cleanup \u3092\u6709\u52b9\u306b\u3057\u307e\u3059\u3002", "This pass stops at channel-only deletion. The explicit second-step cleanup is enabled only when the result satisfies the safety guard conditions."))
 }
 
 func compactSortedStrings(values []string) []string {
