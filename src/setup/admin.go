@@ -1299,7 +1299,7 @@ func renderConnectedProductionCompletionAction(lang string, project model.Projec
 			`<input type="hidden" name="action" value="complete_connection_cleanup">` +
 			`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
 			`<button type="submit" class="btn-danger">` + esc(t(lang, "Complete connection cleanup", "Complete connection cleanup")) + `</button></form>`
-		return body, "ok", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u304c\u5b9f\u884c\u53ef\u80fd\u3067\u3059", "Completion cleanup is ready"), t(lang, "\u4fdd\u5b58\u6e08\u307f ProjectWebhook row \u306f\u3053\u306e production \u306b\u6b8b\u3063\u3066\u3044\u307e\u305b\u3093\u3002\u3053\u3053\u3067 explicit \u306a 2 \u6bb5\u968e\u76ee\u306e connection cleanup \u3092\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup."))
+		return body, "ok", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u304c\u5b9f\u884c\u53ef\u80fd\u3067\u3059", "Completion cleanup is ready"), t(lang, "\u4fdd\u5b58\u6e08\u307f ProjectWebhook row \u306f\u3053\u306e production \u306b\u6b8b\u3063\u3066\u3044\u307e\u305b\u3093\u3002\u3053\u3053\u3067 explicit \u306a 2 \u6bb5\u968e\u76ee\u306e connection cleanup \u3092\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup.")
 	}
 
 	blockers := []string{}
