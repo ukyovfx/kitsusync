@@ -688,6 +688,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					esc(t(lang, "プレビューを閉じる", "Close preview")),
 				)
 			}
+			_ = dangerPreviewHTML
 			removeConnectionOnlyHTML := `<form method="POST" class="section-card glass delete-form" data-confirm="` +
 				esc(t(lang, p.Name+" の KitsuSync 連携だけを削除します。Discord channel / category は削除されません。", "Remove only the KitsuSync connection for "+p.Name+". Discord channels and category are not deleted.")) +
 				`" data-require-text="` + esc(t(lang, "削除", "delete")) + `">` +
