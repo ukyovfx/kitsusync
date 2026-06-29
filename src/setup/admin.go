@@ -467,7 +467,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			}
 			if action == "validate_remove_connection_channels" {
 				if projectID != "" {
-					http.Redirect(w, r, redirectURL+"&danger_preview=1&validated_channels=1", http.StatusSeeOther)
+					http.Redirect(w, r, redirectURL+"&validated_channels=1", http.StatusSeeOther)
 					return
 				}
 				http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
@@ -476,7 +476,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			if action == "execute_validated_channel_delete" {
 				expected := t(lang, "削除", "delete")
 				if projectID == "" || strings.TrimSpace(r.FormValue("confirm_text")) != expected {
-					http.Redirect(w, r, redirectURL+"&danger_preview=1&validated_channels=1&msg=error", http.StatusSeeOther)
+					http.Redirect(w, r, redirectURL+"&validated_channels=1&msg=error", http.StatusSeeOther)
 					return
 				}
 				project := model.FindProjectByKitsuID(db, projectID)
@@ -633,7 +633,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			if validatedChannelProjectID != "" && validatedChannelProjectID == p.KitsuProjectID {
 				candidates := buildConnectedProductionChannelCandidates(webhooks)
 				deletableCandidates, skippedCandidates, validationSummary, validationChecks := validateConnectedProductionChannelCandidates(lang, p, effectiveGuildID, botToken, allWebhooks, candidates)
-				validatedHTML = renderConnectedProductionChannelValidationCard(lang, r, p, validationSummary, validationChecks, deletableCandidates, skippedCandidates)
+				validatedHTML = renderUnifiedConnectedProductionChannelValidationCard(lang, r, p, validationSummary, validationChecks, deletableCandidates, skippedCandidates)
 			}
 			dangerPreviewHTML := ""
 			if dangerPreviewProjectID != "" && dangerPreviewProjectID == p.KitsuProjectID {
@@ -688,6 +688,132 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					esc(t(lang, "プレビューを閉じる", "Close preview")),
 				)
 			}
+			_ = dangerPreviewHTML
+			removeConnectionOnlyHTML := `<form method="POST" class="section-card glass delete-form" data-confirm="` +
+				esc(t(lang, p.Name+" の KitsuSync 連携だけを削除します。Discord channel / category は削除されません。", "Remove only the KitsuSync connection for "+p.Name+". Discord channels and category are not deleted.")) +
+				`" data-require-text="` + esc(t(lang, "削除", "delete")) + `">` +
+				`<input type="hidden" name="action" value="remove_connection">` +
+				`<input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `">` +
+				`<div class="page-heading" style="margin-bottom:14px"><div><h4 style="margin:0">` + esc(t(lang, "連携だけ削除", "Remove connection only")) + `</h4><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "KitsuSync 側の connection data だけを削除します。Discord channel / category はそのまま残します。", "Delete only the KitsuSync-side connection data. Discord channels and category stay as they are.")) + `</p></div></div>` +
+				`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "この action は KitsuSync の保存済み connection data だけを削除します。Discord 側の削除は一切行いません。", "This action deletes only KitsuSync's saved connection data. It does not perform any Discord-side deletion.")) + `</p>` +
+				`<div class="button-row"><button type="submit" class="btn-danger">` + esc(t(lang, "連携だけ削除", "Remove connection only")) + `</button></div></form>`
+			removeConnectionOnlyHTML = `<form method="POST" class="section-card glass delete-form" data-confirm="` +
+				esc(t(lang, "\u3053\u306e action \u3067\u306f "+p.Name+"\u306e KitsuSync \u9023\u643a\u3060\u3051\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord channel / category \u306f\u524a\u9664\u3055\u308c\u305a\u3001leftovers \u3068\u3057\u3066\u6b8b\u308b\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002", "Remove only the KitsuSync connection for "+p.Name+". Discord channels and category are not deleted and may remain as leftovers.")) +
+				`" data-require-text="` + esc(t(lang, "\u524a\u9664", "delete")) + `">` +
+				`<input type="hidden" name="action" value="remove_connection">` +
+				`<input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `">` +
+				`<div class="page-heading" style="margin-bottom:14px"><div><h4 style="margin:0">` + esc(t(lang, "\u9023\u643a\u3060\u3051\u524a\u9664", "Remove connection only")) + `</h4><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "KitsuSync \u5074\u306e connection data \u3060\u3051\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord channel / category \u306f leftovers \u3068\u3057\u3066\u6b8b\u308b\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002", "Delete only the KitsuSync-side connection data. Discord channels and category can remain behind as leftovers.")) + `</p></div></div>` +
+				`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "\u3053\u306e action \u306f KitsuSync \u306e\u4fdd\u5b58\u6e08\u307f connection data \u3060\u3051\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord \u5074\u306e\u524a\u9664\u306f\u4e00\u5207\u884c\u308f\u305a\u3001\u6b21\u306e setup \u3082\u3053\u308c\u3089\u306e\u53e4\u3044 channel / category \u306b\u81ea\u52d5\u3067\u518d\u63a5\u7d9a\u3057\u307e\u305b\u3093\u3002", "This action deletes only KitsuSync's saved connection data. It does not perform any Discord-side deletion, and the next setup will not automatically reconnect to these older channels or category.")) + `</p>` +
+				`<div class="button-row"><button type="submit" class="btn-danger">` + esc(t(lang, "\u9023\u643a\u3060\u3051\u524a\u9664", "Remove connection only")) + `</button></div></form>`
+			channelDeleteChoiceHTML := fmt.Sprintf(`
+    <div class="section-card glass" style="border-color:#ffd4a8">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h4 style="margin:0">%s</h4>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+        <span class="status-pill warn">%s</span>
+      </div>
+      <p class="field-help" style="margin:0 0 12px">%s</p>
+      <ul class="list-tight" style="margin:0;padding-left:18px">
+        <li>%s</li>
+        <li>%s</li>
+        <li>%s</li>
+      </ul>
+      <div class="button-row" style="margin-top:14px">
+        <form method="POST" style="margin:0">
+          <input type="hidden" name="action" value="validate_remove_connection_channels">
+          <input type="hidden" name="project_id" value="%s">
+          <button type="submit" class="btn-danger">%s</button>
+        </form>
+      </div>
+    </div>`,
+				esc(t(lang, "連携を削除し、削除可能な Discord チャンネルも削除", "Remove connection and delete validated Discord channels")),
+				esc(t(lang, "より強い guarded delete path です。まず削除可能な Discord channel だけを validation し、その結果を確認してから explicit に削除します。connection cleanup は安全条件を満たしたときだけ次の explicit step で完了します。", "This is the stronger guarded delete path. It first validates only the Discord channels that appear deletable, then lets you explicitly confirm that deletion. Connection cleanup finishes only in the next explicit step when the safety conditions are met.")),
+				esc(t(lang, "STRONGER DELETE", "STRONGER DELETE")),
+				esc(t(lang, "この path では validation を外しません。削除対象、削除しない対象、blocker を確認してから進みます。", "This path keeps the validation guard. Review what will be deleted, what will not be deleted, and any blockers before continuing.")),
+				esc(t(lang, "削除対象: validation で deletable と確認できた Discord channel だけ", "Will delete: only Discord channels that validation confirms as deletable")),
+				esc(t(lang, "削除しないもの: Discord category、global mapping、自動 connection cleanup", "Will not delete: the Discord category, global mappings, or any automatic connection cleanup")),
+				esc(t(lang, "blocker がある channel や ownership が弱い channel は削除されず、review に残ります", "Any blocked or uncertain channels stay undeleted and remain in the review state")),
+				esc(p.KitsuProjectID),
+				esc(t(lang, "強い削除 path を確認する", "Review stronger delete path")),
+			)
+			channelDeleteChoiceHTML = fmt.Sprintf(`
+    <div class="section-card glass" style="border-color:#ffd4a8">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h4 style="margin:0">%s</h4>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+        <span class="status-pill warn">%s</span>
+      </div>
+      <p class="field-help" style="margin:0 0 12px">%s</p>
+      <ul class="list-tight" style="margin:0;padding-left:18px">
+        <li>%s</li>
+        <li>%s</li>
+        <li>%s</li>
+      </ul>
+      <div class="button-row" style="margin-top:14px">
+        <form method="POST" style="margin:0">
+          <input type="hidden" name="action" value="validate_remove_connection_channels">
+          <input type="hidden" name="project_id" value="%s">
+          <button type="submit" class="btn-danger">%s</button>
+        </form>
+      </div>
+    </div>`,
+				esc(t(lang, "\u9023\u643a\u3092\u524a\u9664\u3057\u3001\u524a\u9664\u53ef\u80fd\u306a Discord \u30c1\u30e3\u30f3\u30cd\u30eb\u3082\u524a\u9664", "Remove connection and delete validated Discord channels")),
+				esc(t(lang, "\u3088\u308a\u5f37\u3044 guarded delete path \u3067\u3059\u3002\u307e\u305a\u524a\u9664\u53ef\u80fd\u306a Discord channel \u3060\u3051\u3092 validation \u3057\u3001\u305d\u306e\u7d50\u679c\u3092\u78ba\u8a8d\u3057\u3066\u304b\u3089 explicit \u306b\u524a\u9664\u3057\u307e\u3059\u3002clean restart \u3092\u76ee\u6307\u3059\u306a\u3089\u3001\u53e4\u3044 leftovers \u3092\u81ea\u52d5\u3067\u518d\u63a5\u7d9a\u3057\u306a\u3044\u3053\u306e path \u3092\u512a\u5148\u3059\u308b\u65b9\u304c\u660e\u78ba\u3067\u3059\u3002connection cleanup \u306f\u5b89\u5168\u6761\u4ef6\u3092\u6e80\u305f\u3057\u305f\u3068\u304d\u3060\u3051\u6b21\u306e explicit step \u3067\u5b8c\u4e86\u3057\u307e\u3059\u3002", "This is the stronger guarded delete path. It first validates only the Discord channels that appear deletable, then lets you explicitly confirm that deletion. If you want a clean restart, this path is clearer because the next setup does not automatically reconnect to old leftovers. Connection cleanup finishes only in the next explicit step when the safety conditions are met.")),
+				esc(t(lang, "STRONGER DELETE", "STRONGER DELETE")),
+				esc(t(lang, "\u3053\u306e path \u3067\u306f validation guard \u3092\u5916\u3057\u307e\u305b\u3093\u3002\u4f55\u304c\u524a\u9664\u3055\u308c\u308b\u304b\u3001\u4f55\u304c\u524a\u9664\u3055\u308c\u306a\u3044\u304b\u3001\u3069\u3053\u306b blocker \u304c\u3042\u308b\u304b\u3092\u78ba\u8a8d\u3057\u3066\u304b\u3089\u9032\u3093\u3067\u304f\u3060\u3055\u3044\u3002", "This path keeps the validation guard. Review what will be deleted, what will not be deleted, and any blockers before continuing.")),
+				esc(t(lang, "\u524a\u9664\u3055\u308c\u308b\u3082\u306e: validation \u3067 deletable \u3068\u78ba\u8a8d\u3067\u304d\u305f Discord channel \u3060\u3051", "Will delete: only Discord channels that validation confirms as deletable")),
+				esc(t(lang, "\u524a\u9664\u3055\u308c\u306a\u3044\u3082\u306e: Discord category\u3001global mapping\u3001\u81ea\u52d5 connection cleanup\u3001\u5c06\u6765\u306e setup \u3067\u306e leftovers \u81ea\u52d5\u518d\u5229\u7528", "Will not delete: the Discord category, global mappings, any automatic connection cleanup, or any automatic reuse of leftovers during future setup")),
+				esc(t(lang, "blocker \u304c\u3042\u308b channel \u3084 ownership \u304c\u5f31\u3044 channel \u306f\u524a\u9664\u3055\u308c\u305a\u3001legacy leftovers \u3068\u3057\u3066 review \u306b\u6b8b\u308a\u307e\u3059", "Any blocked or uncertain channels stay undeleted and remain in the review state as legacy leftovers.")),
+				esc(p.KitsuProjectID),
+				esc(t(lang, "\u5f37\u3044\u524a\u9664 path \u3092\u78ba\u8a8d\u3059\u308b", "Review stronger delete path")),
+			)
+			if validatedHTML != "" {
+				channelDeleteChoiceHTML = validatedHTML
+			}
+			unifiedDeleteSectionHTML := fmt.Sprintf(`
+    <div class="section-card glass">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+      </div>
+      <p class="field-help" style="margin:0 0 12px">%s</p>
+      <div class="section-stack">
+        %s
+        %s
+      </div>
+    </div>`,
+				esc(t(lang, "連携を削除", "Remove connection")),
+				esc(t(lang, "この production の delete mode をここで選びます。単純な connection removal と、validated Discord channel deletion を含む stronger path を分けて確認できます。", "Choose the delete mode for this production here. This section separates simple connection removal from the stronger path that includes validated Discord channel deletion.")),
+				esc(t(lang, "Discord channel を含む path でも validation と explicit confirmation を維持します。category deletion や broad automatic cleanup はこの flow に含めません。", "Even when Discord channels are included, this flow keeps validation and explicit confirmation. It does not include category deletion or broad automatic cleanup.")),
+				removeConnectionOnlyHTML,
+				channelDeleteChoiceHTML,
+			)
+			unifiedDeleteSectionHTML = fmt.Sprintf(`
+    <div class="section-card glass">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h3 style="margin:0">%s</h3>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+      </div>
+      <p class="field-help" style="margin:0 0 12px">%s</p>
+      <div class="section-stack">
+        %s
+        %s
+      </div>
+    </div>`,
+				esc(t(lang, "\u9023\u643a\u3092\u524a\u9664", "Remove connection")),
+				esc(t(lang, "\u3053\u306e production \u306e delete mode \u3092\u3053\u3053\u3067\u9078\u3073\u307e\u3059\u3002\u5358\u7d14\u306a connection removal \u3068\u3001validated Discord channel deletion \u3092\u542b\u3080 stronger path \u3092\u5206\u3051\u3066\u78ba\u8a8d\u3067\u304d\u307e\u3059\u3002new setup \u306f new setup \u3068\u3057\u3066\u6271\u308f\u308c\u3001\u53e4\u3044 Discord channel \u3078\u81ea\u52d5\u3067\u3064\u306a\u304e\u76f4\u3059\u3053\u3068\u306f\u3042\u308a\u307e\u305b\u3093\u3002", "Choose the delete mode for this production here. This section separates simple connection removal from the stronger path that includes validated Discord channel deletion. A new setup is treated as a new setup and does not automatically reconnect to older Discord channels.")),
+				esc(t(lang, "Discord channel \u3092\u542b\u3080 path \u3067\u3082 validation \u3068 explicit confirmation \u3092\u7dad\u6301\u3057\u307e\u3059\u3002category deletion \u3084 broad automatic cleanup \u306f\u3053\u306e flow \u306b\u542b\u3081\u307e\u305b\u3093\u3002old channels \u3092\u6b8b\u3059\u5834\u5408\u306f\u3001\u6b21\u306e setup \u306e\u518d\u5229\u7528\u5148\u3067\u306f\u306a\u304f leftovers / legacy channels \u3068\u3057\u3066\u6271\u3044\u307e\u3059\u3002", "Even when Discord channels are included, this flow keeps validation and explicit confirmation. It does not include category deletion or broad automatic cleanup. If old channels remain, treat them as leftovers or legacy channels, not as the default target for the next setup.")),
+				removeConnectionOnlyHTML,
+				channelDeleteChoiceHTML,
+			)
 			openAttr := ""
 			if selectedProjectID != "" && p.KitsuProjectID == selectedProjectID {
 				openAttr = " open"
@@ -739,30 +865,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
       </div>
       <div class="button-row"><button type="submit" class="btn">%s</button></div>
     </form>
-    <form method="POST" class="section-card glass delete-form" data-confirm="%s" data-require-text="%s">
-      <input type="hidden" name="action" value="remove_connection">
-      <input type="hidden" name="project_id" value="%s">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <div class="button-row"><button type="submit" class="btn-danger">%s</button></div>
-    </form>
-    <form method="POST" class="section-card glass">
-      <input type="hidden" name="action" value="preview_remove_connection_with_discord">
-      <input type="hidden" name="project_id" value="%s">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <div class="button-row"><button type="submit" class="btn-danger">%s</button></div>
-    </form>
+    <div style="display:none" aria-hidden="true">%s%s%s%s%s%s%s%s%s%s%s%s</div>
     %s
     %s
     %s
@@ -809,9 +912,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "この flow は現在、validated channel-only deletion だけを扱います。KitsuSync の連携解除、project row 削除、category 削除は自動では行わず、まず保存済みの category / channel 参照を preview 表示します。", "This flow currently covers validated channel-only deletion only. It does not automatically remove the KitsuSync connection, project row, or category. It starts by previewing the saved category / channel references.")),
 				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not execute Discord deletion. Ownership is not proven strongly enough yet, so this step is dry-run only.")),
 				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
-				dangerPreviewHTML,
-				validatedHTML,
+				unifiedDeleteSectionHTML,
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
+				"",
 			))
 		}
 		if blocks.Len() == 0 {
@@ -1121,6 +1224,137 @@ func renderConnectedProductionChannelDeleteAction(lang string, project model.Pro
 		`<button type="submit" class="btn-danger">` + esc(t(lang, "validated channel を削除", "Delete validated channels only")) + `</button></form>`
 }
 
+func renderUnifiedConnectedProductionChannelValidationCard(lang string, r *http.Request, project model.Project, summary string, checks []string, deletable []connectedProductionChannelValidationResult, skipped []connectedProductionChannelValidationResult) string {
+	var checksHTML strings.Builder
+	checksHTML.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+	for _, check := range checks {
+		checksHTML.WriteString(`<li>` + esc(check) + `</li>`)
+	}
+	checksHTML.WriteString(`</ul>`)
+
+	renderList := func(items []connectedProductionChannelValidationResult, includeReason bool) string {
+		if len(items) == 0 {
+			return `<p class="field-help" style="margin:0">` + esc(t(lang, "なし", "None")) + `</p>`
+		}
+		var out strings.Builder
+		out.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
+		for _, item := range items {
+			line := `<code>` + esc(item.ChannelID) + `</code>`
+			if strings.TrimSpace(item.CurrentName) != "" {
+				line += ` <span class="hint">(` + esc(item.CurrentName) + `)</span>`
+			} else if len(item.StoredNames) > 0 {
+				line += ` <span class="hint">(` + esc(strings.Join(item.StoredNames, ", ")) + `)</span>`
+			}
+			if includeReason && strings.TrimSpace(item.Reason) != "" {
+				line += `<div class="field-help">` + esc(item.Reason) + `</div>`
+			}
+			out.WriteString(`<li>` + line + `</li>`)
+		}
+		out.WriteString(`</ul>`)
+		return out.String()
+	}
+
+	return fmt.Sprintf(`
+    <div class="section-card glass" style="border-color:#ffd4a8">
+      <div class="page-heading" style="margin-bottom:14px">
+        <div>
+          <h4 style="margin:0">%s</h4>
+          <p class="hint" style="margin:6px 0 0">%s</p>
+        </div>
+        <span class="status-pill warn">%s</span>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host">%s</div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
+      </div>
+      <p class="field-help" style="margin:12px 0 0">%s</p>
+      <div class="section-stack" style="margin-top:12px">
+        <div>
+          <div class="eyebrow">%s</div>
+          <ul class="list-tight" style="margin:0;padding-left:18px">
+            <li>%s</li>
+            <li>%s</li>
+          </ul>
+        </div>
+        <div>
+          <div class="eyebrow">%s</div>
+          <ul class="list-tight" style="margin:0;padding-left:18px">
+            <li>%s</li>
+            <li>%s</li>
+          </ul>
+        </div>
+      </div>
+      <div class="section-stack" style="margin-top:12px">
+        <div>
+          <div class="eyebrow">%s</div>
+          %s
+        </div>
+        <div>
+          <div class="eyebrow">%s</div>
+          %s
+        </div>
+        <div>
+          <div class="eyebrow">%s</div>
+          %s
+        </div>
+      </div>
+      <div class="button-row" style="margin-top:14px">
+        %s
+        <a class="btn-ghost" href="%s">%s</a>
+      </div>
+    </div>`,
+		esc(t(lang, "Discord チャンネル削除の確認", "Review Discord channel deletion")),
+		esc(t(lang, "ここでは削除可能と確認できた Discord チャンネルだけを確認します。まだ削除は実行されません。", "This step reviews only the Discord channels that look safe to delete. No deletion runs yet.")),
+		esc(t(lang, "REVIEW REQUIRED", "REVIEW REQUIRED")),
+		esc(t(lang, "Production", "Production")),
+		esc(project.Name),
+		esc(t(lang, "Project ID", "Project ID")),
+		esc(project.KitsuProjectID),
+		esc(t(lang, "削除可能チャンネル", "Deletable channels")),
+		len(deletable),
+		esc(t(lang, "未削除 / 要確認", "Not deletable / needs review")),
+		len(skipped),
+		esc(summary),
+		esc(t(lang, "この実行で削除されるもの", "What this stronger delete will remove")),
+		esc(t(lang, "validation で削除可能と確認できた Discord チャンネルだけ", "Only Discord channels that passed the deletion checks")),
+		esc(t(lang, "Discord 側の削除に成功した channel に対応する ProjectWebhook row だけ", "Only the matching ProjectWebhook rows for channels that are successfully deleted on Discord")),
+		esc(t(lang, "この実行で削除されないもの", "What this stronger delete will not remove")),
+		esc(t(lang, "Discord category、Project、ProjectSetting、ProjectUserMap、ProjectCheckerMap", "The Discord category, Project, ProjectSetting, ProjectUserMap, and ProjectCheckerMap")),
+		esc(t(lang, "global user/checker mapping、automatic cleanup、validation を通らなかった channel", "Global user/checker mappings, any automatic cleanup, and channels that did not pass validation")),
+		esc(t(lang, "確認した安全条件", "Safety checks used before delete")),
+		checksHTML.String(),
+		esc(t(lang, "削除対象", "Channels that can be deleted now")),
+		renderList(deletable, false),
+		esc(t(lang, "削除しない channel / 理由", "Channels that will stay and why")),
+		renderList(skipped, true),
+		renderUnifiedConnectedProductionChannelDeleteAction(lang, project, len(deletable), len(skipped)),
+		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID), r)),
+		esc(t(lang, "削除方法の選択に戻る", "Back to delete choices")),
+	)
+}
+
+func renderUnifiedConnectedProductionChannelDeleteAction(lang string, project model.Project, deletableCount, skippedCount int) string {
+	if deletableCount == 0 {
+		return `<div><p class="field-help" style="margin:0 0 8px">` +
+			esc(t(lang, "いま削除可能と確認できた Discord チャンネルはありません。この production が詰まらないよう、上の「連携だけ削除」はそのまま使えます。", "There are no Discord channels currently confirmed as deletable. To avoid getting stuck, you can still use the Remove connection only option above.")) +
+			`</p><p class="field-help" style="margin:0">` +
+			esc(t(lang, fmt.Sprintf("この stronger delete では %d 件の channel が validation を通らなかったため削除しません。", skippedCount), fmt.Sprintf("This stronger delete will leave %d channel(s) untouched because they did not pass validation.", skippedCount))) +
+			`</p></div>`
+	}
+	return `<div><p class="field-help" style="margin:0 0 10px">` +
+		esc(t(lang, "この stronger delete は Discord チャンネル削除だけを実行します。KitsuSync の connection cleanup は自動では完了しません。必要な場合は、この後に明示的な 2 段階目を実行します。", "This stronger delete executes only Discord channel deletion. It does not automatically complete KitsuSync connection cleanup. If that becomes safe, the explicit second step appears afterwards.")) +
+		`</p><p class="field-help" style="margin:0 0 10px">` +
+		esc(t(lang, "続行前に confirm text が必要です。Discord category は削除されず、validation を通らなかった channel も削除されません。", "The confirm text is required before this can continue. The Discord category is not deleted, and channels that did not pass validation are not deleted either.")) +
+		`</p><form method="POST" class="delete-form" style="margin:0" data-confirm="` +
+		esc(t(lang, project.Name+" の削除可能な Discord チャンネルだけを削除します。Discord category は削除されず、KitsuSync の connection cleanup も自動では実行されません。続行する場合は confirm text を入力してください。", "This deletes only the Discord channels currently confirmed as safe to delete for "+project.Name+". It does not delete the Discord category, and it does not automatically complete KitsuSync connection cleanup. Enter the confirm text to continue.")) +
+		`" data-require-text="` + esc(t(lang, "削除", "delete")) + `">` +
+		`<input type="hidden" name="action" value="execute_validated_channel_delete">` +
+		`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
+		`<button type="submit" class="btn-danger">` + esc(t(lang, "削除可能な Discord チャンネルを削除", "Delete validated Discord channels")) + `</button></form></div>`
+}
+
 func executeConnectedProductionValidatedChannelDelete(lang string, project model.Project, effectiveGuildID, botToken string, db *gorm.DB) connectedProductionChannelDeleteExecution {
 	allWebhooks := model.ListAllProjectWebhooks(db)
 	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
@@ -1283,7 +1517,7 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 		completionBody,
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID), r)),
 		esc(t(lang, "production の詳細に戻る", "Back to production details")),
-		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&danger_preview=1&validated_channels=1", r)),
+		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&validated_channels=1", r)),
 		esc(t(lang, "validated review に戻る", "Back to validated review")),
 	)
 	return adminPage(lang, t(lang, "連携済みプロダクション管理", "Connected Productions"), r, body)
@@ -1292,14 +1526,14 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 func renderConnectedProductionCompletionAction(lang string, project model.Project, result connectedProductionChannelDeleteExecution) (string, string, string, string) {
 	if result.CompletionReady {
 		body := `<p class="field-help" style="margin:0 0 12px">` +
-			esc(t(lang, "\u3053\u306e 2 \u6bb5\u968e\u76ee\u306f KitsuSync \u5074\u306e connection cleanup \u3060\u3051\u3092\u5b8c\u4e86\u3057\u307e\u3059\u3002Project\u3001\u6b8b\u5b58 ProjectWebhook row\u3001ProjectUserMap\u3001ProjectCheckerMap\u3001ProjectSetting \u3092\u524a\u9664\u3057\u3001\u518d\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u53ef\u80fd\u306a\u672a\u8a2d\u5b9a\u72b6\u614b\u306b\u623b\u3057\u307e\u3059\u3002Discord category \u3068 global user/checker mapping \u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002", "This second step completes only the KitsuSync-side connection cleanup. It removes the Project row, any remaining ProjectWebhook rows handled by the unlink path, ProjectUserMap, ProjectCheckerMap, and ProjectSetting so the production returns to an unconfigured state for re-setup. It does not delete the Discord category or global user/checker mappings.")) +
+			esc(t(lang, "\u3053\u306e 2 \u6bb5\u968e\u76ee\u306f KitsuSync \u5074\u306e connection cleanup \u3060\u3051\u3092\u5b8c\u4e86\u3057\u307e\u3059\u3002Project\u3001\u6b8b\u5b58 ProjectWebhook row\u3001ProjectUserMap\u3001ProjectCheckerMap\u3001ProjectSetting \u3092\u524a\u9664\u3057\u3001\u518d\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u53ef\u80fd\u306a\u672a\u8a2d\u5b9a\u72b6\u614b\u306b\u623b\u3057\u307e\u3059\u3002Discord category \u3068 global user/checker mapping \u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002\u6b8b\u3063\u305f Discord channel / category \u304c\u3042\u3063\u3066\u3082\u3001\u6b21\u306e setup \u3067\u81ea\u52d5\u518d\u63a5\u7d9a\u306f\u3055\u308c\u305a\u3001legacy leftovers \u3068\u3057\u3066\u6271\u308f\u308c\u307e\u3059\u3002", "This second step completes only the KitsuSync-side connection cleanup. It removes the Project row, any remaining ProjectWebhook rows handled by the unlink path, ProjectUserMap, ProjectCheckerMap, and ProjectSetting so the production returns to an unconfigured state for re-setup. It does not delete the Discord category or global user/checker mappings. Any remaining Discord channels or category are not automatically reused by the next setup and should be treated as legacy leftovers.")) +
 			`</p><form method="POST" class="delete-form" style="margin:0" data-confirm="` +
-			esc(t(lang, project.Name+"\u306e KitsuSync connection cleanup \u3092\u5b8c\u4e86\u3057\u307e\u3059\u3002Discord category \u306f\u524a\u9664\u3055\u308c\u307e\u305b\u3093\u3002", "Complete the KitsuSync connection cleanup for "+project.Name+". The Discord category is not deleted.")) +
+			esc(t(lang, project.Name+"\u306e KitsuSync connection cleanup \u3092\u5b8c\u4e86\u3057\u307e\u3059\u3002Discord category \u306f\u524a\u9664\u3055\u308c\u307e\u305b\u3093\u3002\u6b21\u306e setup \u3067\u3053\u306e leftovers \u306b\u81ea\u52d5\u3067\u518d\u63a5\u7d9a\u306f\u3057\u307e\u305b\u3093\u3002", "Complete the KitsuSync connection cleanup for "+project.Name+". The Discord category is not deleted, and the next setup will not automatically reconnect to these leftovers.")) +
 			`" data-require-text="` + esc(t(lang, "\u524a\u9664", "delete")) + `">` +
 			`<input type="hidden" name="action" value="complete_connection_cleanup">` +
 			`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
 			`<button type="submit" class="btn-danger">` + esc(t(lang, "Complete connection cleanup", "Complete connection cleanup")) + `</button></form>`
-		return body, "ok", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u304c\u5b9f\u884c\u53ef\u80fd\u3067\u3059", "Completion cleanup is ready"), t(lang, "\u4fdd\u5b58\u6e08\u307f ProjectWebhook row \u306f\u3053\u306e production \u306b\u6b8b\u3063\u3066\u3044\u307e\u305b\u3093\u3002\u3053\u3053\u3067 explicit \u306a 2 \u6bb5\u968e\u76ee\u306e connection cleanup \u3092\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup.")
+		return body, "ok", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u304c\u5b9f\u884c\u53ef\u80fd\u3067\u3059", "Completion cleanup is ready"), t(lang, "\u4fdd\u5b58\u6e08\u307f ProjectWebhook row \u306f\u3053\u306e production \u306b\u6b8b\u3063\u3066\u3044\u307e\u305b\u3093\u3002\u3053\u3053\u3067 explicit \u306a 2 \u6bb5\u968e\u76ee\u306e connection cleanup \u3092\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002\u305d\u306e\u5f8c\u306e setup \u306f new setup \u3068\u3057\u3066\u6271\u308f\u308c\u3001\u6b8b\u3063\u305f Discord leftovers \u306b\u81ea\u52d5\u3067\u3064\u306a\u304c\u308a\u76f4\u3059\u3053\u3068\u306f\u3042\u308a\u307e\u305b\u3093\u3002", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup. Any later setup is treated as a new setup and will not automatically reconnect to remaining Discord leftovers.")
 	}
 
 	blockers := []string{}
