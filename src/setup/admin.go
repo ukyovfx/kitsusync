@@ -1678,7 +1678,7 @@ func renderConnectedProductionStrongDeleteResultPage(lang string, r *http.Reques
 		esc(withLang("/bot/admin/projects", r)),
 		esc(t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406\u306b\u623b\u308b", "Back to Connected Productions")),
 	)
-	return adminPage(lang, t(lang, "騾｣謳ｺ貂医∩繝励Ο繝繧ｯ繧ｷ繝ｧ繝ｳ邂｡逅・, "Connected Productions"), r, body)
+	return adminPage(lang, t(lang, "連携済みプロダクション管理", "Connected Productions"), r, body)
 }
 
 func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Request, project model.Project, result connectedProductionChannelDeleteExecution) string {
