@@ -1300,6 +1300,7 @@ func renderConnectedProductionChannelValidationCard(lang string, r *http.Request
 		esc(t(lang, "\u524a\u9664\u65b9\u6cd5\u306b\u623b\u308b", "Back to delete choices")),
 	)
 
+	/*
 	return fmt.Sprintf(`
     <div class="section-card glass" style="border-color:#ffd4a8">
       <div class="page-heading" style="margin-bottom:14px">
@@ -1357,6 +1358,7 @@ func renderConnectedProductionChannelValidationCard(lang string, r *http.Request
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&danger_preview=1", r)),
 		esc(t(lang, "検証前のプレビューへ戻る", "Back to saved-data preview")),
 	)
+	*/
 }
 
 func renderConnectedProductionChannelDeleteAction(lang string, project model.Project, deletableCount int) string {
@@ -1493,6 +1495,7 @@ func renderUnifiedConnectedProductionChannelDeleteAction(lang string, project mo
 		`<input type="hidden" name="action" value="execute_validated_channel_delete">` +
 		`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
 		`<button type="submit" class="btn-danger">` + esc(t(lang, "\u9023\u643a\u3068 Discord \u30c1\u30e3\u30f3\u30cd\u30eb\u3092\u524a\u9664", "Remove connection and Discord channels")) + `</button></form></div>`
+	/*
 	if deletableCount == 0 {
 		return `<div><p class="field-help" style="margin:0 0 8px">` +
 			esc(t(lang, "いま削除可能と確認できた Discord チャンネルはありません。この production が詰まらないよう、上の「連携だけ削除」はそのまま使えます。", "There are no Discord channels currently confirmed as deletable. To avoid getting stuck, you can still use the Remove connection only option above.")) +
@@ -1510,6 +1513,7 @@ func renderUnifiedConnectedProductionChannelDeleteAction(lang string, project mo
 		`<input type="hidden" name="action" value="execute_validated_channel_delete">` +
 		`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
 		`<button type="submit" class="btn-danger">` + esc(t(lang, "削除可能な Discord チャンネルを削除", "Delete validated Discord channels")) + `</button></form></div>`
+	*/
 }
 
 func isDiscordNotFoundDeleteError(err error) bool {
@@ -1620,7 +1624,6 @@ func renderConnectedProductionStrongDeleteResultPage(lang string, r *http.Reques
       <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
     </div>
     <p class="field-help" style="margin:12px 0 0">%s</p>
-    <p class="field-help" style="margin:8px 0 0">%s</p>
   </div>
   <div class="section-card glass">
     <div class="eyebrow">%s</div>
