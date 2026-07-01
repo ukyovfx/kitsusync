@@ -1509,16 +1509,16 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 		renderList(result.CleanupWarnings, true),
 		esc(t(lang, "Checks used at execution time", "Validation checks used before execution")),
 		checksHTML.String(),
-		esc(t(lang, "NEXT STEP", "NEXT STEP")),
-		esc(t(lang, "Complete connection cleanup", "Complete connection cleanup")),
+		esc(t(lang, "\u524a\u9664\u306e\u5b8c\u4e86", "\u524a\u9664\u306e\u5b8c\u4e86")),
+		esc(t(lang, "\u9023\u643a\u306e\u524a\u9664\u3092\u5b8c\u4e86", "\u9023\u643a\u306e\u524a\u9664\u3092\u5b8c\u4e86")),
 		esc(completionSummary),
 		completionStatusClass,
 		esc(completionStatusLabel),
 		completionBody,
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID), r)),
-		esc(t(lang, "production の詳細に戻る", "Back to production details")),
+		esc(t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u306e\u8a73\u7d30\u306b\u623b\u308b", "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u306e\u8a73\u7d30\u306b\u623b\u308b")),
 		esc(withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&validated_channels=1", r)),
-		esc(t(lang, "validated review に戻る", "Back to validated review")),
+		esc(t(lang, "\u524a\u9664\u5185\u5bb9\u306e\u78ba\u8a8d\u306b\u623b\u308b", "\u524a\u9664\u5185\u5bb9\u306e\u78ba\u8a8d\u306b\u623b\u308b")),
 	)
 	return adminPage(lang, t(lang, "連携済みプロダクション管理", "Connected Productions"), r, body)
 }
@@ -1526,34 +1526,36 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 func renderConnectedProductionCompletionAction(lang string, project model.Project, result connectedProductionChannelDeleteExecution) (string, string, string, string) {
 	if result.CompletionReady {
 		body := `<p class="field-help" style="margin:0 0 12px">` +
-			esc(t(lang, "\u3053\u306e 2 \u6bb5\u968e\u76ee\u306f KitsuSync \u5074\u306e connection cleanup \u3060\u3051\u3092\u5b8c\u4e86\u3057\u307e\u3059\u3002Project\u3001\u6b8b\u5b58 ProjectWebhook row\u3001ProjectUserMap\u3001ProjectCheckerMap\u3001ProjectSetting \u3092\u524a\u9664\u3057\u3001\u518d\u30bb\u30c3\u30c8\u30a2\u30c3\u30d7\u53ef\u80fd\u306a\u672a\u8a2d\u5b9a\u72b6\u614b\u306b\u623b\u3057\u307e\u3059\u3002Discord category \u3068 global user/checker mapping \u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002\u6b8b\u3063\u305f Discord channel / category \u304c\u3042\u3063\u3066\u3082\u3001\u6b21\u306e setup \u3067\u81ea\u52d5\u518d\u63a5\u7d9a\u306f\u3055\u308c\u305a\u3001legacy leftovers \u3068\u3057\u3066\u6271\u308f\u308c\u307e\u3059\u3002", "This second step completes only the KitsuSync-side connection cleanup. It removes the Project row, any remaining ProjectWebhook rows handled by the unlink path, ProjectUserMap, ProjectCheckerMap, and ProjectSetting so the production returns to an unconfigured state for re-setup. It does not delete the Discord category or global user/checker mappings. Any remaining Discord channels or category are not automatically reused by the next setup and should be treated as legacy leftovers.")) +
+			esc(t(lang, "\u3059\u3067\u306b Discord \u30c1\u30e3\u30f3\u30cd\u30eb\u306e\u524a\u9664\u306f\u5b8c\u4e86\u3057\u3066\u3044\u307e\u3059\u3002\u3053\u3053\u3067 KitsuSync \u5074\u306e\u9023\u643a\u60c5\u5831\u3092\u524a\u9664\u3067\u304d\u3001\u5b9f\u884c\u5f8c\u306f\u3053\u306e production \u3092\u518d\u8a2d\u5b9a\u3067\u304d\u307e\u3059\u3002", "\u3059\u3067\u306b Discord \u30c1\u30e3\u30f3\u30cd\u30eb\u306e\u524a\u9664\u306f\u5b8c\u4e86\u3057\u3066\u3044\u307e\u3059\u3002\u3053\u3053\u3067 KitsuSync \u5074\u306e\u9023\u643a\u60c5\u5831\u3092\u524a\u9664\u3067\u304d\u3001\u5b9f\u884c\u5f8c\u306f\u3053\u306e production \u3092\u518d\u8a2d\u5b9a\u3067\u304d\u307e\u3059\u3002")) +
+			`</p><p class="field-help" style="margin:0 0 12px">` +
+			esc(t(lang, "Discord \u306e category \u3084\u6b8b\u3063\u3066\u3044\u308b channel \u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002\u6b21\u56de\u306e setup \u3067\u3082\u3001\u53e4\u3044 Discord channel \u306b\u81ea\u52d5\u518d\u63a5\u7d9a\u306f\u3057\u307e\u305b\u3093\u3002", "Discord \u306e category \u3084\u6b8b\u3063\u3066\u3044\u308b channel \u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002\u6b21\u56de\u306e setup \u3067\u3082\u3001\u53e4\u3044 Discord channel \u306b\u81ea\u52d5\u518d\u63a5\u7d9a\u306f\u3057\u307e\u305b\u3093\u3002")) +
 			`</p><form method="POST" class="delete-form" style="margin:0" data-confirm="` +
-			esc(t(lang, project.Name+"\u306e KitsuSync connection cleanup \u3092\u5b8c\u4e86\u3057\u307e\u3059\u3002Discord category \u306f\u524a\u9664\u3055\u308c\u307e\u305b\u3093\u3002\u6b21\u306e setup \u3067\u3053\u306e leftovers \u306b\u81ea\u52d5\u3067\u518d\u63a5\u7d9a\u306f\u3057\u307e\u305b\u3093\u3002", "Complete the KitsuSync connection cleanup for "+project.Name+". The Discord category is not deleted, and the next setup will not automatically reconnect to these leftovers.")) +
+			esc(t(lang, project.Name+"\u306e\u9023\u643a\u60c5\u5831\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord \u306e category \u3084\u6b8b\u3063\u3066\u3044\u308b channel \u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002", project.Name+"\u306e\u9023\u643a\u60c5\u5831\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord \u306e category \u3084\u6b8b\u3063\u3066\u3044\u308b channel \u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002")) +
 			`" data-require-text="` + esc(t(lang, "\u524a\u9664", "delete")) + `">` +
 			`<input type="hidden" name="action" value="complete_connection_cleanup">` +
 			`<input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `">` +
-			`<button type="submit" class="btn-danger">` + esc(t(lang, "Complete connection cleanup", "Complete connection cleanup")) + `</button></form>`
-		return body, "ok", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u304c\u5b9f\u884c\u53ef\u80fd\u3067\u3059", "Completion cleanup is ready"), t(lang, "\u4fdd\u5b58\u6e08\u307f ProjectWebhook row \u306f\u3053\u306e production \u306b\u6b8b\u3063\u3066\u3044\u307e\u305b\u3093\u3002\u3053\u3053\u3067 explicit \u306a 2 \u6bb5\u968e\u76ee\u306e connection cleanup \u3092\u5b9f\u884c\u3067\u304d\u307e\u3059\u3002\u305d\u306e\u5f8c\u306e setup \u306f new setup \u3068\u3057\u3066\u6271\u308f\u308c\u3001\u6b8b\u3063\u305f Discord leftovers \u306b\u81ea\u52d5\u3067\u3064\u306a\u304c\u308a\u76f4\u3059\u3053\u3068\u306f\u3042\u308a\u307e\u305b\u3093\u3002", "No stored ProjectWebhook rows remain for this production. You can now explicitly run the second-step connection cleanup. Any later setup is treated as a new setup and will not automatically reconnect to remaining Discord leftovers.")
+			`<button type="submit" class="btn-danger">` + esc(t(lang, "\u9023\u643a\u524a\u9664\u3092\u5b8c\u4e86", "\u9023\u643a\u524a\u9664\u3092\u5b8c\u4e86")) + `</button></form>`
+		return body, "ok", t(lang, "\u5b9f\u884c\u3067\u304d\u307e\u3059", "\u5b9f\u884c\u3067\u304d\u307e\u3059"), t(lang, "\u5b9f\u884c\u5f8c\u306f\u3053\u306e production \u3092\u518d\u8a2d\u5b9a\u3067\u304d\u307e\u3059\u3002", "\u5b9f\u884c\u5f8c\u306f\u3053\u306e production \u3092\u518d\u8a2d\u5b9a\u3067\u304d\u307e\u3059\u3002")
 	}
 
 	blockers := []string{}
 	if result.RemainingWebhooks > 0 {
-		blockers = append(blockers, fmt.Sprintf(t(lang, "\u6b8b\u3063\u3066\u3044\u308b ProjectWebhook row: %d", "Remaining ProjectWebhook rows: %d"), result.RemainingWebhooks))
+		blockers = append(blockers, fmt.Sprintf(t(lang, "\u307e\u3060\u6574\u7406\u304c\u5fc5\u8981\u306a\u9023\u643a\u5148\u304c %d \u4ef6\u3042\u308a\u307e\u3059", "\u307e\u3060\u6574\u7406\u304c\u5fc5\u8981\u306a\u9023\u643a\u5148\u304c %d \u4ef6\u3042\u308a\u307e\u3059"), result.RemainingWebhooks))
 	}
 	if len(result.CleanupWarnings) > 0 {
-		blockers = append(blockers, fmt.Sprintf(t(lang, "DB cleanup warning: %d", "DB cleanup warnings: %d"), len(result.CleanupWarnings)))
+		blockers = append(blockers, fmt.Sprintf(t(lang, "\u524a\u9664\u5f8c\u306b\u78ba\u8a8d\u304c\u5fc5\u8981\u306a\u9805\u76ee\u304c %d \u4ef6\u3042\u308a\u307e\u3059", "\u524a\u9664\u5f8c\u306b\u78ba\u8a8d\u304c\u5fc5\u8981\u306a\u9805\u76ee\u304c %d \u4ef6\u3042\u308a\u307e\u3059"), len(result.CleanupWarnings)))
 	}
 	if len(blockers) == 0 {
-		blockers = append(blockers, t(lang, "\u3053\u306e result \u3067\u306f guarded completion cleanup \u3092\u307e\u3060\u5229\u7528\u3067\u304d\u307e\u305b\u3093\u3002", "The guarded completion cleanup is not available for this result yet."))
+		blockers = append(blockers, t(lang, "\u307e\u3060\u524a\u9664\u3092\u5b8c\u4e86\u3067\u304d\u307e\u305b\u3093\u3002", "\u307e\u3060\u524a\u9664\u3092\u5b8c\u4e86\u3067\u304d\u307e\u305b\u3093\u3002"))
 	}
 	var out strings.Builder
-	out.WriteString(`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "次の explicit cleanup は安全条件を満たしたときだけ有効です。Webhook row が残っている場合や DB cleanup warning がある場合は、まだ production を未設定状態に戻せません。", "The next explicit cleanup is available only when the safety conditions are met. If webhook rows remain or there are DB cleanup warnings, the production cannot yet be returned to an unconfigured state.")) + `</p>`)
+	out.WriteString(`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "\u307e\u3060\u9023\u643a\u524a\u9664\u306f\u5b8c\u4e86\u3067\u304d\u307e\u305b\u3093\u3002\u4e0b\u306e\u5185\u5bb9\u3092\u89e3\u6d88\u3059\u308b\u3068\u5b8c\u4e86\u3067\u304d\u307e\u3059\u3002", "\u307e\u3060\u9023\u643a\u524a\u9664\u306f\u5b8c\u4e86\u3067\u304d\u307e\u305b\u3093\u3002\u4e0b\u306e\u5185\u5bb9\u3092\u89e3\u6d88\u3059\u308b\u3068\u5b8c\u4e86\u3067\u304d\u307e\u3059\u3002")) + `</p>`)
 	out.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
 	for _, blocker := range blockers {
 		out.WriteString(`<li>` + esc(blocker) + `</li>`)
 	}
 	out.WriteString(`</ul>`)
-	return out.String(), "warn", t(lang, "\u5b8c\u4e86\u7528\u306e\u9023\u643a\u89e3\u9664\u306f\u307e\u3060\u5229\u7528\u3067\u304d\u307e\u305b\u3093", "Completion cleanup is not available yet"), t(lang, "\u3053\u306e pass \u306f channel-only deletion \u307e\u3067\u3067\u3059\u3002\u7d50\u679c\u304c\u5b89\u5168\u6761\u4ef6\u3092\u6e80\u305f\u3057\u305f\u3068\u304d\u3060\u3051\u3001\u660e\u793a\u7684\u306a 2 \u6bb5\u968e\u76ee cleanup \u3092\u6709\u52b9\u306b\u3057\u307e\u3059\u3002", "This pass stops at channel-only deletion. The explicit second-step cleanup is enabled only when the result satisfies the safety guard conditions.")
+	return out.String(), "warn", t(lang, "\u307e\u3060\u5b8c\u4e86\u3067\u304d\u307e\u305b\u3093", "\u307e\u3060\u5b8c\u4e86\u3067\u304d\u307e\u305b\u3093"), t(lang, "\u3053\u306e\u6642\u70b9\u3067\u306f\u3001\u9023\u643a\u60c5\u5831\u306e\u524a\u9664\u307e\u3067\u306f\u9032\u3081\u307e\u305b\u3093\u3002", "\u3053\u306e\u6642\u70b9\u3067\u306f\u3001\u9023\u643a\u60c5\u5831\u306e\u524a\u9664\u307e\u3067\u306f\u9032\u3081\u307e\u305b\u3093\u3002")
 }
 
 func compactSortedStrings(values []string) []string {
