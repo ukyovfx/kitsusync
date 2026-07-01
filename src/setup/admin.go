@@ -1572,7 +1572,7 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 func renderConnectedProductionStrongDeleteResultPage(lang string, r *http.Request, project model.Project, result connectedProductionChannelDeleteExecution) string {
 	renderList := func(items []connectedProductionChannelValidationResult, includeReason bool) string {
 		if len(items) == 0 {
-			return `<p class="field-help" style="margin:0">` + esc(t(lang, "隧ｲ蠖薙↑縺・, "None")) + `</p>`
+			return `<p class="field-help" style="margin:0">` + esc(t(lang, "なし", "None")) + `</p>`
 		}
 		var out strings.Builder
 		out.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
