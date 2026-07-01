@@ -1321,7 +1321,7 @@ document.addEventListener('DOMContentLoaded', function(){
 func renderResult(lang, projectName string, result SetupResult, r *http.Request) string {
 	title := t(lang, "セットアップ完了", "Setup Complete")
 	color := "#8ecf8b"
-	backURL := withLang("/bot/setup", r)
+	backURL := withLang("/bot/admin/projects", r)
 
 	var retryBadge, durationNote string
 	if result.Duration > 0 {
@@ -1346,9 +1346,9 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 		footer = `<p style="text-align:center;color:var(--muted);font-size:.84rem;margin-bottom:6px">` +
 			esc(t(lang, "✅ KitsuSync の接続のみ削除します（Discord channel はそのまま残ります）", "✅ Only KitsuSync connection is deleted (Discord channels will remain)")) + `</p>` +
 			`<p style="text-align:center;color:#b8b5ae;font-size:.9rem;margin-bottom:12px">` +
-			esc(t(lang, "5秒後に新規連携セットアップへ戻ります。", "Returning to New Connection Setup in 5 seconds.")) + `</p>` +
+			esc(t(lang, "5秒後に連携済みプロダクション管理へ戻ります。", "Returning to Connected Productions in 5 seconds.")) + `</p>` +
 			`<div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">` +
-			`<a href="` + backURL + `" class="btn">` + esc(t(lang, "新規連携セットアップへ", "Back to New Connection Setup")) + `</a>` +
+			`<a href="` + backURL + `" class="btn">` + esc(t(lang, "連携済みプロダクション管理へ", "Back to Connected Productions")) + `</a>` +
 			deleteForm + `</div>` +
 			`<script>setTimeout(function(){location.href=` + strconv.Quote(backURL) + `;},5000);</script>`
 	} else {
@@ -1429,7 +1429,7 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 	}
 
 	sub := projectName + durationNote
-body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">`+t(lang, "新規連携セットアップ", "New Connection Setup")+`</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass">%s<div class="setup-inventory">%s</div></div><div class="button-row">%s</div></div>`,
+body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">`+t(lang, "連携済みプロダクション管理", "Connected Productions")+`</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass">%s<div class="setup-inventory">%s</div></div><div class="button-row">%s</div></div>`,
 		color, esc(title), sub, retryBadge, inventoryHTML.String(), footer)
 	return appShell("KitsuSync", "", lang, nil, "", body)
 }
