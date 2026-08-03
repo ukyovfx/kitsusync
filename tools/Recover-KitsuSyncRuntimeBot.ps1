@@ -16,14 +16,11 @@ function Fail([string]$Message) {
     throw $Message
 }
 
-$sql = @"
-SELECT count(*) FROM person WHERE lower(coalesce(email,'')) = lower('$BotEmail');
-SELECT coalesce(string_agg(format('%s/%s/%s/%s', active, archived, role, is_bot), ','),'none') FROM person WHERE lower(coalesce(email,'')) = lower('$BotEmail');
-"@
-$raw = docker exec -u postgres $Container psql -d zoudb -Atc $sql
+$sql = "SELECT count(*) || '|' || coalesce(string_agg(format('%s/%s/%s/%s', active, archived, role, is_bot), ','),'none') FROM person WHERE lower(coalesce(email,'')) = lower('$BotEmail');"
+$raw = docker exec -u postgres $Container psql -d zoudb -F '|' -Atc $sql
 if ($LASTEXITCODE -ne 0) { Fail "Kitsu bot ownership check failed." }
-$rows = @($raw | Where-Object { $_ -ne "" })
-if ($rows.Count -ne 2 -or $rows[0] -ne "1" -or $rows[1] -ne "t/f/admin/t") {
+$parts = $raw.Trim().Split('|', 2)
+if ($parts.Count -ne 2 -or $parts[0] -ne "1" -or $parts[1] -ne "t/f/admin/t") {
     Fail "Recovery stopped: expected exactly one active, unarchived owned bot." 
 }
 
