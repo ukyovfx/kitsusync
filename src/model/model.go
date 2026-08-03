@@ -146,6 +146,138 @@ type ProjectWebhook struct {
 	DiscordChannelID string
 }
 
+// ProductionNotificationConfig is the explicit opt-in boundary for the
+// production-scoped notification router. ProductionName is display metadata;
+// ProductionID is the only routing identity.
+type ProductionNotificationConfig struct {
+	ID             uint   `gorm:"primaryKey"`
+	ProductionID   string `gorm:"uniqueIndex;not null"`
+	ProductionName string
+	Enabled        bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type ProductionNotificationRoute struct {
+	ID                     uint   `gorm:"primaryKey"`
+	ProductionID           string `gorm:"index;not null;uniqueIndex:idx_production_task_type"`
+	TaskTypeID             string `gorm:"not null;uniqueIndex:idx_production_task_type"`
+	TaskTypeName           string
+	DestinationWebhookID   uint `gorm:"not null"`
+	DestinationChannelID   string
+	DestinationChannelName string
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+}
+
+type NotificationRoutingDiagnosis struct {
+	ID           uint      `gorm:"primaryKey"`
+	CreatedAt    time.Time `gorm:"index"`
+	TaskID       string    `gorm:"index"`
+	ProductionID string    `gorm:"index"`
+	TaskTypeID   string    `gorm:"index"`
+	Reason       string
+	Detail       string
+}
+
+func FindProductionNotificationConfig(db *gorm.DB, productionID string) *ProductionNotificationConfig {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return nil
+	}
+	var row ProductionNotificationConfig
+	if err := db.Where("production_id = ?", strings.TrimSpace(productionID)).First(&row).Error; err != nil {
+		return nil
+	}
+	return &row
+}
+
+func ListProductionNotificationRoutes(db *gorm.DB, productionID string) []ProductionNotificationRoute {
+	var rows []ProductionNotificationRoute
+	if db == nil {
+		return rows
+	}
+	db.Where("production_id = ?", strings.TrimSpace(productionID)).Order("id asc").Find(&rows)
+	return rows
+}
+
+func SaveProductionNotificationConfig(db *gorm.DB, config *ProductionNotificationConfig, routes []ProductionNotificationRoute) error {
+	if db == nil || config == nil {
+		return gorm.ErrInvalidData
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var existing ProductionNotificationConfig
+		if err := tx.Where("production_id = ?", config.ProductionID).First(&existing).Error; err == nil {
+			config.ID = existing.ID
+			config.CreatedAt = existing.CreatedAt
+		}
+		if err := tx.Save(config).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("production_id = ?", config.ProductionID).Delete(&ProductionNotificationRoute{}).Error; err != nil {
+			return err
+		}
+		for i := range routes {
+			routes[i].ID = 0
+			routes[i].ProductionID = config.ProductionID
+			if err := tx.Create(&routes[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func RecordNotificationRoutingDiagnosis(db *gorm.DB, diagnosis NotificationRoutingDiagnosis) {
+	if db != nil {
+		db.Create(&diagnosis)
+	}
+}
+
+func ListNotificationRoutingDiagnoses(db *gorm.DB, productionID string, limit int) []NotificationRoutingDiagnosis {
+	var rows []NotificationRoutingDiagnosis
+	if db == nil {
+		return rows
+	}
+	query := db.Where("production_id = ?", strings.TrimSpace(productionID)).Order("created_at desc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	query.Find(&rows)
+	return rows
+}
+
+func ValidateProductionNotificationConfig(db *gorm.DB, productionID string, routes []ProductionNotificationRoute) []string {
+	var issues []string
+	productionID = strings.TrimSpace(productionID)
+	if productionID == "" {
+		issues = append(issues, "production ID is required")
+	}
+	if FindProjectByKitsuID(db, productionID) == nil {
+		issues = append(issues, "selected Production is not connected locally")
+	}
+	if len(routes) == 0 {
+		issues = append(issues, "at least one routing destination is required")
+	}
+	seen := make(map[string]struct{})
+	for _, route := range routes {
+		taskTypeID := strings.TrimSpace(route.TaskTypeID)
+		if taskTypeID == "" {
+			issues = append(issues, "Task Type ID is required")
+			continue
+		}
+		if _, ok := seen[taskTypeID]; ok {
+			issues = append(issues, "Task Type IDs must be unique")
+		} else {
+			seen[taskTypeID] = struct{}{}
+		}
+		webhook := FindProjectWebhookByID(db, route.DestinationWebhookID)
+		if webhook == nil || webhook.KitsuProjectID != productionID || strings.TrimSpace(webhook.WebhookURL) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" {
+			issues = append(issues, "each destination must be an existing configured webhook for the selected Production")
+		}
+	}
+	return issues
+}
+
 func CreateProject(db *gorm.DB, kitsuProjectID, name, projectType, guildID, categoryID, language string) error {
 	return db.Create(&Project{
 		KitsuProjectID:    kitsuProjectID,
@@ -243,7 +375,6 @@ func FindPendingChannel(db *gorm.DB, kitsuProjectID, channelName string) *Projec
 	}
 	return &wh
 }
-
 
 func ListProjects(db *gorm.DB) []Project {
 	var rows []Project
@@ -344,11 +475,11 @@ type UserMap struct {
 }
 
 type CheckerMap struct {
-	ID         uint   `gorm:"primaryKey"`
-	TaskType   string `gorm:"index"`
-	KitsuName  string
-	KitsuEmail string `gorm:"index"`
-	DiscordID  string
+	ID                uint   `gorm:"primaryKey"`
+	TaskType          string `gorm:"index"`
+	KitsuName         string
+	KitsuEmail        string `gorm:"index"`
+	DiscordID         string
 	OverrideDiscordID string
 }
 
@@ -577,10 +708,10 @@ func DeleteCheckerMap(db *gorm.DB, taskType string) {
 // ProjectUserMap stores project-scoped Kitsu → Discord user mappings.
 // Falls back to the global UserMap when no project-scoped entry exists.
 type ProjectUserMap struct {
-	ID            uint      `gorm:"primaryKey"`
-	ProjectID     uint      `gorm:"uniqueIndex:idx_projusermap;not null"`
-	KitsuName     string    `gorm:"uniqueIndex:idx_projusermap"`
-	KitsuEmail    string    `gorm:"index"`
+	ID            uint   `gorm:"primaryKey"`
+	ProjectID     uint   `gorm:"uniqueIndex:idx_projusermap;not null"`
+	KitsuName     string `gorm:"uniqueIndex:idx_projusermap"`
+	KitsuEmail    string `gorm:"index"`
 	DiscordUserID string
 	CreatedAt     time.Time
 }
@@ -588,9 +719,9 @@ type ProjectUserMap struct {
 // ProjectCheckerMap stores project-scoped task type → Discord reviewer mappings.
 // Falls back to the global CheckerMap when no project-scoped entry exists.
 type ProjectCheckerMap struct {
-	ID                uint      `gorm:"primaryKey"`
-	ProjectID         uint      `gorm:"uniqueIndex:idx_projcheckermap;not null"`
-	TaskType          string    `gorm:"uniqueIndex:idx_projcheckermap;not null"`
+	ID                uint   `gorm:"primaryKey"`
+	ProjectID         uint   `gorm:"uniqueIndex:idx_projcheckermap;not null"`
+	TaskType          string `gorm:"uniqueIndex:idx_projcheckermap;not null"`
 	KitsuName         string
 	KitsuEmail        string
 	DiscordUserID     string
@@ -600,9 +731,9 @@ type ProjectCheckerMap struct {
 
 // ProjectSetting stores per-project key-value settings.
 type ProjectSetting struct {
-	ID        uint      `gorm:"primaryKey"`
-	ProjectID uint      `gorm:"uniqueIndex:idx_projsetting;not null"`
-	Key       string    `gorm:"uniqueIndex:idx_projsetting;not null"`
+	ID        uint   `gorm:"primaryKey"`
+	ProjectID uint   `gorm:"uniqueIndex:idx_projsetting;not null"`
+	Key       string `gorm:"uniqueIndex:idx_projsetting;not null"`
 	Value     string
 	CreatedAt time.Time
 }
@@ -690,7 +821,7 @@ func UpsertProjectUserMap(db *gorm.DB, projectRowID uint, kitsuName, kitsuEmail,
 	err := db.Where("project_id = ? AND kitsu_name = ?", projectRowID, kitsuName).First(&row).Error
 	if err == nil {
 		db.Model(&row).Updates(map[string]interface{}{
-			"kitsu_email":    kitsuEmail,
+			"kitsu_email":     kitsuEmail,
 			"discord_user_id": discordUserID,
 		})
 		return

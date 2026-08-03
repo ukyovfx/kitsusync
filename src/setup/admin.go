@@ -370,6 +370,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		}
 		links := []navLink{
 			{"\U0001F5C2", "/bot/admin/projects", "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions", connectedStatus},
+			{"\U0001F4E3", "/bot/admin/production-routing", "Production\u901a\u77e5\u30eb\u30fc\u30c6\u30a3\u30f3\u30b0", "Production Notification Routing", ""},
 			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users", usersStatus},
 			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings", botStatus},
 			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage", storageStatus},
