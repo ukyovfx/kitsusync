@@ -46,3 +46,31 @@ func RecoverRuntimeCredentials(db *gorm.DB, kitsuHost, email, password string) e
 	}
 	return nil
 }
+
+func RecoverRuntimeToken(db *gorm.DB, kitsuHost, email, token string) error {
+	if db == nil {
+		return errors.New("runtime recovery database is unavailable")
+	}
+	email = strings.TrimSpace(email)
+	token = strings.TrimSpace(token)
+	if email == "" || token == "" {
+		return errors.New("runtime token credentials are incomplete")
+	}
+	if !basicauth.ValidateJWTToken(strings.TrimRight(kitsuHost, "/")+"/api/auth/authenticated", token) {
+		return errors.New("runtime bot token authentication failed")
+	}
+	ciphertext, err := encryptRuntimeSecret(token)
+	if err != nil {
+		return err
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		model.SetSetting(tx, RuntimeKitsuEmailSettingKey, email)
+		return model.SetSecretSettingWithError(tx, RuntimeKitsuTokenSettingKey, ciphertext)
+	}); err != nil {
+		return fmt.Errorf("runtime token persistence failed: %w", err)
+	}
+	if StoredRuntimeKitsuToken(db) == "" {
+		return errors.New("runtime token persistence verification failed")
+	}
+	return nil
+}

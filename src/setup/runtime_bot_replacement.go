@@ -7,46 +7,19 @@ import (
 	"strings"
 
 	"app/src/utils/basicauth"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 type runtimeBotReplacementPerson struct {
-	ID        string `json:"id,omitempty"`
-	Email     string `json:"email,omitempty"`
-	FirstName string `json:"first_name,omitempty"`
-	LastName  string `json:"last_name,omitempty"`
-	Role      string `json:"role,omitempty"`
-	Password  string `json:"password,omitempty"`
-	Active    bool   `json:"active,omitempty"`
-	Archived  bool   `json:"archived,omitempty"`
-	IsBot     bool   `json:"is_bot,omitempty"`
-}
-
-func verifyReplacementPasswordHash(host, token, personID, password string) error {
-	var people []runtimeBotReplacementPerson
-	requestURL := normalizeKitsuHostname(host) + "api/data/persons?with_pass_hash=true"
-	if err := kitsuJSON(token, http.MethodGet, requestURL, nil, &people); err != nil {
-		return fmt.Errorf("password hash lookup failed: %w", err)
-	}
-	matched := 0
-	var hash string
-	for _, person := range people {
-		if person.ID == personID {
-			matched++
-			hash = person.Password
-		}
-	}
-	if matched != 1 {
-		return fmt.Errorf("password hash lookup found %d matching people", matched)
-	}
-	if hash == "" {
-		return errors.New("password hash was not returned")
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
-		return errors.New("bcrypt verification failed")
-	}
-	return nil
+	ID          string `json:"id,omitempty"`
+	Email       string `json:"email,omitempty"`
+	FirstName   string `json:"first_name,omitempty"`
+	LastName    string `json:"last_name,omitempty"`
+	Role        string `json:"role,omitempty"`
+	AccessToken string `json:"access_token,omitempty"`
+	Active      bool   `json:"active,omitempty"`
+	Archived    bool   `json:"archived,omitempty"`
+	IsBot       bool   `json:"is_bot,omitempty"`
 }
 
 func listRuntimeBotPeople(host, token string) ([]runtimeBotReplacementPerson, error) {
@@ -85,15 +58,14 @@ func PrepareRuntimeBotReplacement(db *gorm.DB, host, adminEmail, adminPassword, 
 		}
 		return "", errors.New("replacement bot ownership verification failed")
 	}
-	createdSummary := fmt.Sprintf("created replacement id=%s email=%s is_bot=%t active=%t archived=%t role=%s password_hash=not returned by public API", created.ID, created.Email, created.IsBot, created.Active, created.Archived, created.Role)
-	if err := verifyReplacementPasswordHash(host, adminToken, created.ID, tempPassword); err != nil {
+	createdSummary := fmt.Sprintf("created replacement id=%s email=%s is_bot=%t active=%t archived=%t role=%s", created.ID, created.Email, created.IsBot, created.Active, created.Archived, created.Role)
+	if strings.TrimSpace(created.AccessToken) == "" {
 		if cleanupErr := kitsuJSON(adminToken, http.MethodDelete, normalizeKitsuHostname(host)+"api/data/persons/"+created.ID, nil, nil); cleanupErr != nil {
-			return "", fmt.Errorf("%s; password verification failed and rollback failed: %w", createdSummary, cleanupErr)
+			return "", fmt.Errorf("%s; creation token missing and rollback failed: %w", createdSummary, cleanupErr)
 		}
-		return "", fmt.Errorf("%s; password verification failed and rollback succeeded: %w", createdSummary, err)
+		return "", fmt.Errorf("%s; creation token missing and rollback succeeded", createdSummary)
 	}
-	createdSummary = fmt.Sprintf("created replacement id=%s email=%s is_bot=%t active=%t archived=%t role=%s password_hash=present bcrypt=verified", created.ID, created.Email, created.IsBot, created.Active, created.Archived, created.Role)
-	if err := RecoverRuntimeCredentials(db, host, tempEmail, tempPassword); err != nil {
+	if err := RecoverRuntimeToken(db, host, tempEmail, created.AccessToken); err != nil {
 		if cleanupErr := kitsuJSON(adminToken, http.MethodDelete, normalizeKitsuHostname(host)+"api/data/persons/"+created.ID, nil, nil); cleanupErr != nil {
 			return "", fmt.Errorf("replacement recovery failed and rollback failed: %w", cleanupErr)
 		}

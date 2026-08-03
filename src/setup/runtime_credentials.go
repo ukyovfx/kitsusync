@@ -18,6 +18,7 @@ import (
 
 const (
 	RuntimeKitsuPasswordSettingKey = "kitsu.runtime_password_encrypted"
+	RuntimeKitsuTokenSettingKey    = "kitsu.runtime_token_encrypted"
 	RuntimeSecretKeyFileEnv        = "KITSUSYNC_SECRET_KEY_FILE"
 	defaultRuntimeSecretKeyFile    = "data/runtime-secret.key"
 )
@@ -27,6 +28,17 @@ func runtimeSecretKeyPath() string {
 		return value
 	}
 	return defaultRuntimeSecretKeyFile
+}
+
+func loadRuntimeSecretKey() ([]byte, error) {
+	key, err := os.ReadFile(runtimeSecretKeyPath())
+	if err != nil {
+		return nil, fmt.Errorf("read runtime secret key: %w", err)
+	}
+	if len(key) != 32 {
+		return nil, errors.New("runtime secret key has an invalid length")
+	}
+	return key, nil
 }
 
 func loadOrCreateRuntimeSecretKey() ([]byte, error) {
@@ -92,7 +104,7 @@ func decryptRuntimeSecret(ciphertext string) (string, error) {
 	if !strings.HasPrefix(ciphertext, "v1:") {
 		return "", errors.New("unsupported runtime secret format")
 	}
-	key, err := loadOrCreateRuntimeSecretKey()
+	key, err := loadRuntimeSecretKey()
 	if err != nil {
 		return "", err
 	}
@@ -148,4 +160,36 @@ func StoredRuntimeKitsuPassword(db *gorm.DB) string {
 		}
 	}
 	return strings.TrimSpace(os.Getenv(RuntimeKitsuPasswordEnv))
+}
+
+func setRuntimeKitsuToken(db *gorm.DB, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("runtime Kitsu token is empty")
+	}
+	ciphertext, err := encryptRuntimeSecret(token)
+	if err != nil {
+		return err
+	}
+	if db != nil {
+		if err := model.SetSecretSettingWithError(db, RuntimeKitsuTokenSettingKey, ciphertext); err != nil {
+			return fmt.Errorf("save encrypted runtime Kitsu token: %w", err)
+		}
+	}
+	return nil
+}
+
+func StoredRuntimeKitsuToken(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	ciphertext := strings.TrimSpace(model.GetSetting(db, RuntimeKitsuTokenSettingKey))
+	if ciphertext == "" {
+		return ""
+	}
+	token, err := decryptRuntimeSecret(ciphertext)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(token)
 }

@@ -71,3 +71,23 @@ func TestRecoverRuntimeCredentialsStopsOnPersistenceFailure(t *testing.T) {
 		t.Fatal("credentials persisted after failure")
 	}
 }
+
+func TestRecoverRuntimeTokenValidatesAndPersists(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/authenticated" || r.Header.Get("Authorization") != "Bearer replacement-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	db := newSetupStateTestDB(t)
+	if err := RecoverRuntimeToken(db, server.URL, "temp@example.com", "replacement-token"); err != nil {
+		t.Fatalf("token recovery failed: %v", err)
+	}
+	if StoredRuntimeKitsuToken(db) != "replacement-token" {
+		t.Fatal("runtime token was not persisted")
+	}
+}

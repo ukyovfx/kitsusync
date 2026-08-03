@@ -824,7 +824,7 @@ func DeleteSetting(db *gorm.DB, key string) {
 
 func IsSecretSettingKey(key string) bool {
 	switch key {
-	case "kitsu.password", "kitsu.runtime_password_encrypted", "discord.botToken", "discord.webhookURL", "discord.runtime_bot_token":
+	case "kitsu.password", "kitsu.runtime_password_encrypted", "kitsu.runtime_token_encrypted", "discord.botToken", "discord.webhookURL", "discord.runtime_bot_token":
 		return true
 	default:
 		return false

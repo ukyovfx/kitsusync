@@ -74,6 +74,43 @@ func (m *runtimeManager) authenticate(hostname, email, password string) bool {
 	return true
 }
 
+func (m *runtimeManager) authenticateToken(hostname, token string) bool {
+	m.authMu.Lock()
+	defer m.authMu.Unlock()
+	hostname = strings.TrimSpace(hostname)
+	token = strings.TrimSpace(token)
+	if hostname == "" || token == "" {
+		m.mu.Lock()
+		m.mode = runtimeSetupRequired
+		m.canPoll = false
+		m.mu.Unlock()
+		return false
+	}
+	if !strings.HasSuffix(hostname, "/") {
+		hostname += "/"
+	}
+	if !basicauth.ValidateJWTToken(hostname+"api/auth/authenticated", token) {
+		m.mu.Lock()
+		if m.hadToken {
+			m.mode = runtimeDegraded
+			m.canPoll = true
+		} else {
+			m.mode = runtimeSetupRequired
+			m.canPoll = false
+		}
+		m.mu.Unlock()
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	os.Setenv("KITSU_HOSTNAME", hostname)
+	os.Setenv("KitsuJWTToken", token)
+	m.mode = runtimeConfigured
+	m.canPoll = true
+	m.hadToken = true
+	return true
+}
+
 func (m *runtimeManager) ready() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

@@ -797,6 +797,9 @@ func main() {
 	runtime := newRuntimeManager()
 	refreshRuntime := func() bool {
 		hostname, email, password := getKitsuCreds(db, conf)
+		if token := setup.StoredRuntimeKitsuToken(db); token != "" {
+			return runtime.authenticateToken(hostname, token)
+		}
 		return runtime.authenticate(hostname, email, password)
 	}
 

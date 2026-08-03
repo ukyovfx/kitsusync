@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gookit/slog"
@@ -80,4 +81,21 @@ func AuthForJWTToken(url, email, password string) string {
 		slog.Error("basicauth: authentication failed", "url", url, "status", diagnostics.StatusCode, "category", diagnostics.Category)
 	}
 	return token
+}
+
+func ValidateJWTToken(url, token string) bool {
+	if strings.TrimSpace(url) == "" || strings.TrimSpace(token) == "" {
+		return false
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
