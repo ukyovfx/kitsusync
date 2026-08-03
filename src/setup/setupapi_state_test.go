@@ -162,7 +162,7 @@ func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/bot/setup?lang=en", nil)
 	rr := httptest.NewRecorder()
 
-	Handler("http://kitsu.local/", "111111111111111111", "runtime-bot-token", db)(rr, req)
+	Handler("http://kitsu.local/", "111111111111111111", "runtime-bot-token", db, func() bool { return true }, nil)(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 for setup page, got %d", rr.Code)
 	}
@@ -192,7 +192,7 @@ func TestHandler_PostSetupRequiresProjectLevelGuildID(t *testing.T) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
 
-	Handler("http://kitsu.local/", "111111111111111111", "runtime-bot-token", db)(rr, req)
+	Handler("http://kitsu.local/", "111111111111111111", "runtime-bot-token", db, func() bool { return true }, nil)(rr, req)
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 when guild_id is missing, got %d", rr.Code)
 	}

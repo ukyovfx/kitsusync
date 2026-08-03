@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -29,7 +30,7 @@ const (
 	RuntimeKitsuEmailEnv        = "KITSU_RUNTIME_EMAIL"
 	RuntimeKitsuPasswordEnv     = "KITSU_RUNTIME_PASSWORD"
 	RuntimeDiscordBotTokenKey   = "discord.runtime_bot_token"
-	runtimeBotEmail             = "kitsusync-bot@local.invalid"
+	runtimeBotEmail             = "kitsusync-bot@google.com"
 	runtimeBotFirstName         = "KitsuSync"
 	runtimeBotLastName          = "Bot"
 )
@@ -205,6 +206,58 @@ type kitsuBotPerson struct {
 	IsBot     bool   `json:"is_bot,omitempty"`
 }
 
+type kitsuAPIError struct {
+	method   string
+	path     string
+	status   int
+	category string
+}
+
+func (e *kitsuAPIError) Error() string {
+	if e.status == 0 {
+		return "Kitsu API request failed (network error)"
+	}
+	return fmt.Sprintf("Kitsu API request failed (HTTP %d: %s)", e.status, e.category)
+}
+
+func kitsuAPIErrorCategory(status int) string {
+	switch {
+	case status == http.StatusBadRequest:
+		return "validation rejected"
+	case status == http.StatusUnauthorized:
+		return "authentication expired or rejected"
+	case status == http.StatusForbidden:
+		return "permission denied"
+	case status == http.StatusNotFound:
+		return "endpoint or account not found"
+	case status == http.StatusConflict:
+		return "request conflicts with existing data"
+	case status >= 400 && status < 500:
+		return "request rejected"
+	case status >= 500:
+		return "Kitsu service unavailable"
+	default:
+		return "unexpected response"
+	}
+}
+
+func runtimeBotSetupError(err error) string {
+	var apiErr *kitsuAPIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.category {
+		case "authentication expired or rejected":
+			return "Kitsuの管理者セッションが期限切れか拒否されました。再ログインしてからもう一度お試しください。"
+		case "permission denied":
+			return "Kitsuがアカウント作成を拒否しました。管理者権限を確認してください。"
+		case "validation rejected":
+			return "Kitsuがランタイムアカウント情報を検証できませんでした。Kitsuの設定を確認してください。"
+		case "request conflicts with existing data":
+			return "ランタイムアカウントと既存データが競合しています。管理者に確認してください。"
+		}
+	}
+	return "Kitsuのランタイムアカウント作成に失敗しました。Kitsuの状態を確認してからもう一度お試しください。"
+}
+
 func storedRuntimeKitsuEmail(db *gorm.DB) string {
 	if db != nil {
 		if value := strings.TrimSpace(model.GetSetting(db, RuntimeKitsuEmailSettingKey)); value != "" {
@@ -224,14 +277,6 @@ func setRuntimeKitsuEmail(db *gorm.DB, email string) {
 	}
 	os.Setenv(RuntimeKitsuEmailEnv, email)
 	os.Unsetenv("KITSU_EMAIL")
-}
-
-func setRuntimeKitsuPassword(password string) {
-	if password == "" {
-		return
-	}
-	os.Setenv(RuntimeKitsuPasswordEnv, password)
-	os.Unsetenv("KITSU_PASSWORD")
 }
 
 func storedRuntimeDiscordBotToken(db *gorm.DB) string {
@@ -296,11 +341,9 @@ func kitsuJSON(token, method, requestURL string, payload, out interface{}) error
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		message := strings.TrimSpace(string(respBody))
-		if message == "" {
-			message = http.StatusText(resp.StatusCode)
-		}
-		return fmt.Errorf("%s %s failed: %s", method, requestURL, message)
+		parsedURL, _ := url.Parse(requestURL)
+		path := parsedURL.Path
+		return &kitsuAPIError{method: method, path: path, status: resp.StatusCode, category: kitsuAPIErrorCategory(resp.StatusCode)}
 	}
 	if out != nil && len(bytes.TrimSpace(respBody)) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
@@ -343,25 +386,19 @@ func createRuntimeBotPerson(kitsuHost, adminToken, password string) (*kitsuBotPe
 	return &created, nil
 }
 
-func changeRuntimeBotPassword(kitsuHost, adminToken, personID, password string) error {
-	if strings.TrimSpace(personID) == "" {
-		return errors.New("runtime bot account ID is missing")
-	}
-	requestURL := normalizeKitsuHostname(kitsuHost) + "api/actions/persons/" + personID + "/change-password"
-	payload := map[string]string{
-		"password":   password,
-		"password_2": password,
-	}
-	return kitsuJSON(adminToken, http.MethodPost, requestURL, payload, nil)
-}
-
 func CreateKitsuBotAccount(kitsuHost, adminEmail, adminPassword string) (string, string, error) {
 	loginURL := normalizeKitsuHostname(kitsuHost) + "api/auth/login"
 	adminToken := basicauth.AuthForJWTToken(loginURL, adminEmail, adminPassword)
 	if adminToken == "" {
 		return "", "", errors.New("admin authentication failed")
 	}
+	return CreateKitsuBotAccountWithToken(kitsuHost, adminToken)
+}
 
+func CreateKitsuBotAccountWithToken(kitsuHost, adminToken string) (string, string, error) {
+	if strings.TrimSpace(adminToken) == "" {
+		return "", "", errors.New("admin session is missing")
+	}
 	runtimePassword, err := generateRuntimePassword()
 	if err != nil {
 		return "", "", err
@@ -378,11 +415,9 @@ func CreateKitsuBotAccount(kitsuHost, adminEmail, adminPassword string) (string,
 		}
 	} else {
 		if !person.IsBot && !strings.EqualFold(strings.TrimSpace(person.FullName), runtimeBotFullName()) {
-			return "", "", fmt.Errorf("runtime bot email %s is already used by another account", runtimeBotEmail)
+			return "", "", errors.New("runtime bot identity is already used by another account")
 		}
-		if err := changeRuntimeBotPassword(kitsuHost, adminToken, person.ID, runtimePassword); err != nil {
-			return "", "", err
-		}
+		return "", "", errors.New("runtime bot account already exists and cannot be recovered automatically")
 	}
 
 	email := strings.TrimSpace(person.Email)
@@ -390,6 +425,20 @@ func CreateKitsuBotAccount(kitsuHost, adminEmail, adminPassword string) (string,
 		email = runtimeBotEmail
 	}
 	return email, runtimePassword, nil
+}
+
+func ReuseRuntimeBotAccountWithToken(kitsuHost, adminToken, email, password string) (string, string, error) {
+	if strings.TrimSpace(email) == "" || strings.TrimSpace(password) == "" {
+		return "", "", errors.New("saved runtime bot credentials are incomplete")
+	}
+	person, err := findRuntimeBotPerson(kitsuHost, adminToken)
+	if err != nil {
+		return "", "", err
+	}
+	if person == nil || !person.IsBot || !strings.EqualFold(strings.TrimSpace(person.Email), strings.TrimSpace(email)) {
+		return "", "", errors.New("saved runtime bot account could not be verified")
+	}
+	return strings.TrimSpace(email), password, nil
 }
 
 func SeedFromConfig(db *gorm.DB, conf config.Config) {

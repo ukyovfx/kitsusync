@@ -1,8 +1,10 @@
 package setup
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -87,5 +89,51 @@ func TestSessionCookieUsesSecureForForwardedHTTPS(t *testing.T) {
 	}
 	if cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("expected lax same-site cookie, got %v", cookie.SameSite)
+	}
+}
+
+func TestLoginHandlerFirstRunAcceptsKitsuHostAndAdmin(t *testing.T) {
+	resetSessions()
+	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"admin"}}`)
+	}))
+	defer kitsu.Close()
+
+	configuredHost := ""
+	form := url.Values{"hostname": {kitsu.URL}, "email": {"admin@example.com"}, "password": {"not-returned"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandler("", func(hostname string) { configuredHost = hostname })(rr, req)
+
+	if rr.Code != http.StatusSeeOther || !strings.HasPrefix(rr.Header().Get("Location"), "/bot/setup") {
+		t.Fatalf("expected setup redirect, got status=%d location=%s", rr.Code, rr.Header().Get("Location"))
+	}
+	if configuredHost != kitsu.URL+"/" {
+		t.Fatalf("configured host = %q", configuredHost)
+	}
+	if strings.Contains(rr.Body.String(), "not-returned") || strings.Contains(rr.Body.String(), "browser-session-token") {
+		t.Fatal("login response exposed a credential")
+	}
+}
+
+func TestLoginHandlerFirstRunRejectsNonAdmin(t *testing.T) {
+	resetSessions()
+	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"user"}}`)
+	}))
+	defer kitsu.Close()
+
+	called := false
+	form := url.Values{"hostname": {kitsu.URL}, "email": {"user@example.com"}, "password": {"not-returned"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandler("", func(string) { called = true })(rr, req)
+
+	if rr.Code != http.StatusUnauthorized || called {
+		t.Fatalf("non-admin must be rejected, status=%d callback=%v", rr.Code, called)
 	}
 }

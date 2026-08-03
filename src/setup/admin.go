@@ -980,6 +980,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 				"",
 			))
+			blocks.WriteString(`<div class="button-row" style="margin:8px 0 0 12px"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/workflow-diagnosis?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "Workflow Diagnosis", "Workflow Diagnosis")) + `</a></div>`)
 		}
 		if blocks.Len() == 0 {
 			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだ連携済みプロダクションがありません", "No connected productions yet."), t(lang, "先に新規連携セットアップで production connection を作成してから、ここで確認・編集してください。", "Create the first production connection in New Connection Setup, then review it here.")))
@@ -2550,7 +2551,11 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 				kitsuChanged = true
 			}
 			if value := strings.TrimSpace(r.FormValue("kitsu_runtime_password")); value != "" {
-				setRuntimeKitsuPassword(value)
+				if err := setRuntimeKitsuPassword(db, value); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprint(w, adminPage(lang, t(lang, "保存に失敗しました", "Save failed"), r, `<div class="section-card glass"><p>`+t(lang, "Runtime credential を安全に保存できませんでした。", "Could not safely store the runtime credential.")+`</p></div>`))
+					return
+				}
 				kitsuChanged = true
 			}
 			if kitsuChanged && kitsuReconnect != nil {

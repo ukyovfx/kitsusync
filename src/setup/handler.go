@@ -23,7 +23,7 @@ type SetupResult struct {
 	SafeToRetry bool
 }
 
-func (r *SetupResult) ok(msg string) { r.Lines = append(r.Lines, "OK: "+msg) }
+func (r *SetupResult) ok(msg string)   { r.Lines = append(r.Lines, "OK: "+msg) }
 func (r *SetupResult) warn(msg string) { r.Lines = append(r.Lines, "WARN: "+msg) }
 func (r *SetupResult) fail(msg string) { r.Lines = append(r.Lines, "FAIL: "+msg) }
 func (r *SetupResult) rolled(msg string) {
@@ -335,7 +335,7 @@ func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 	})
 }
 
-func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.HandlerFunc {
+func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeReady func() bool, onRuntimeConfigured func()) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -355,13 +355,63 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB) http.Hand
 			}
 			botEmail, botPassword, err := CreateKitsuBotAccount(kitsuHostInput, adminEmail, adminPassword)
 			if err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Botアカウントの作成に失敗しました: ", "Bot account creation failed: ")+err.Error()))
+				fmt.Fprint(w, renderBotSetupError(lang, runtimeBotSetupError(err)))
 				return
 			}
 			model.SetSetting(db, "kitsu.hostname", kitsuHostInput)
 			setRuntimeKitsuEmail(db, botEmail)
-			setRuntimeKitsuPassword(botPassword)
+			if err := setRuntimeKitsuPassword(db, botPassword); err != nil {
+				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Runtime credential の安全な保存に失敗しました。もう一度実行してください。", "Could not safely store the runtime credential. Try again.")))
+				return
+			}
+			if onRuntimeConfigured != nil {
+				onRuntimeConfigured()
+			}
+			if runtimeReady == nil || !runtimeReady() {
+				fmt.Fprint(w, renderBotSetupError(lang, "Kitsuの認証確認に失敗しました。設定は完了していません。もう一度お試しください。"))
+				return
+			}
 			fmt.Fprint(w, renderBotSetupSuccess(lang))
+			return
+		}
+
+		if r.Method == http.MethodPost && r.FormValue("action") == "runtime_setup_from_session" {
+			_, adminToken, role, ok := CurrentSessionKitsuAuth(r)
+			if !ok || (role != "admin" && role != "manager") {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 管理者 session を確認できませんでした。再ログインしてください。", "The Kitsu administrator session is unavailable. Sign in again.")))
+				return
+			}
+			kitsuHostInput := normalizeKitsuHostname(model.GetSetting(db, "kitsu.hostname"))
+			botEmail, botPassword := storedRuntimeKitsuEmail(db), StoredRuntimeKitsuPassword(db)
+			var err error
+			if botEmail != "" && botPassword != "" {
+				botEmail, botPassword, err = ReuseRuntimeBotAccountWithToken(kitsuHostInput, adminToken, botEmail, botPassword)
+			} else {
+				botEmail, botPassword, err = CreateKitsuBotAccountWithToken(kitsuHostInput, adminToken)
+			}
+			if err != nil {
+				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 接続の設定に失敗しました。", "Could not configure the Kitsu connection.")))
+				return
+			}
+			setRuntimeKitsuEmail(db, botEmail)
+			if err := setRuntimeKitsuPassword(db, botPassword); err != nil {
+				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Runtime credential の安全な保存に失敗しました。もう一度実行してください。", "Could not safely store the runtime credential. Try again.")))
+				return
+			}
+			if onRuntimeConfigured != nil {
+				onRuntimeConfigured()
+			}
+			if runtimeReady == nil || !runtimeReady() {
+				fmt.Fprint(w, renderBotSetupError(lang, "Kitsuの認証確認に失敗しました。設定は完了していません。もう一度お試しください。"))
+				return
+			}
+			fmt.Fprint(w, renderBotSetupSuccess(lang))
+			return
+		}
+
+		if runtimeReady != nil && !runtimeReady() {
+			fmt.Fprint(w, renderSetupRequiredPage(lang, r))
 			return
 		}
 
@@ -1429,7 +1479,7 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 	}
 
 	sub := projectName + durationNote
-body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">`+t(lang, "連携済みプロダクション管理", "Connected Productions")+`</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass">%s<div class="setup-inventory">%s</div></div><div class="button-row">%s</div></div>`,
+	body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">`+t(lang, "連携済みプロダクション管理", "Connected Productions")+`</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass">%s<div class="setup-inventory">%s</div></div><div class="button-row">%s</div></div>`,
 		color, esc(title), sub, retryBadge, inventoryHTML.String(), footer)
 	return appShell("KitsuSync", "", lang, nil, "", body)
 }

@@ -67,12 +67,12 @@ type Config struct {
 		RequestsPerMinute int
 		WebhookURL        string
 		UseThreads        bool              `toml:"useThreads"`
-		BotToken          string            `toml:"botToken"`  // Discord Bot トークン（${DISCORD_BOT_TOKEN}）
-		GuildID           string            `toml:"guildID"`   // Discord サーバー ID
+		BotToken          string            `toml:"botToken"` // Discord Bot トークン（${DISCORD_BOT_TOKEN}）
+		GuildID           string            `toml:"guildID"`  // Discord サーバー ID
 		Productions       []Productions     `toml:"productions,omitempty"`
 		TaskTypeWebhooks  []TaskTypeWebhook `toml:"taskTypeWebhooks,omitempty"`
 	}
-	Mention      MentionConfig       `toml:"mention"`
+	Mention      MentionConfig      `toml:"mention"`
 	Notification NotificationConfig `toml:"notification"`
 	GoogleDrive  struct {
 		URL string `toml:"url"`
@@ -114,16 +114,16 @@ func (c *Config) Validate() []string {
 
 	// --- 必須フィールド ---
 	if strings.TrimSpace(c.Kitsu.Hostname) == "" {
-		issues = append(issues, "[FATAL] kitsu.hostname is empty — set it in conf.toml")
+		issues = append(issues, "[SETUP] kitsu.hostname is empty — configure it in the Web UI or conf.toml")
 	}
 	if strings.TrimSpace(c.Kitsu.Email) == "" {
-		issues = append(issues, "[FATAL] kitsu.email is empty — set it in conf.toml")
+		issues = append(issues, "[SETUP] kitsu.email is empty — runtime polling remains paused")
 	}
 	if strings.TrimSpace(c.Kitsu.Password) == "" {
-		issues = append(issues, "[FATAL] kitsu.password is empty — set KITSU_PASSWORD env var or fill in conf.toml")
+		issues = append(issues, "[SETUP] kitsu.password is empty — runtime polling remains paused")
 	}
 	if strings.TrimSpace(c.Discord.WebhookURL) == "" {
-		issues = append(issues, "[FATAL] discord.webhookURL is empty — set DISCORD_WEBHOOK_URL env var or fill in conf.toml")
+		issues = append(issues, "[WARN] discord.webhookURL is empty — project routing can be configured in the Web UI")
 	}
 
 	// --- テンプレートプレースホルダ検出 ---

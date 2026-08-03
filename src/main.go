@@ -5,13 +5,13 @@ import (
 	"app/src/api/kitsu"
 	"app/src/model"
 	"app/src/setup"
-	"app/src/utils/basicauth"
 	"app/src/utils/config"
 	logutil "app/src/utils/log"
 	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"log"
 	"os"
@@ -578,7 +578,7 @@ func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password s
 	if email == "" {
 		email = conf.Kitsu.Email
 	}
-	password = os.Getenv(setup.RuntimeKitsuPasswordEnv)
+	password = setup.StoredRuntimeKitsuPassword(db)
 	if password == "" {
 		password = conf.Kitsu.Password
 	}
@@ -733,7 +733,7 @@ func main() {
 		os.Setenv("Debug", "true")
 	}
 
-	db, err := gorm.Open(sqlite.Open("sqlite.db"), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(filepath.Join("data", "sqlite.db")), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -794,71 +794,36 @@ func main() {
 		cron.DelayIfStillRunning(cron.DefaultLogger),
 	))
 
-	kitsuHostname, kitsuEmail, kitsuPassword := getKitsuCreds(db, conf)
-	os.Setenv("KITSU_HOSTNAME", kitsuHostname)
-
-	token := basicauth.AuthForJWTToken(kitsuHostname+"api/auth/login", kitsuEmail, kitsuPassword)
-	if token == "" {
-		slog.Fatal("Initial Kitsu authentication failed: check hostname/email/password in conf.toml or /bot/admin/bot")
-		os.Exit(1)
-	}
-	os.Setenv("KitsuJWTToken", token)
-	if conf.Log {
-		slog.Info("Connected to Kitsu in %s", time.Since(start))
+	runtime := newRuntimeManager()
+	refreshRuntime := func() bool {
+		hostname, email, password := getKitsuCreds(db, conf)
+		if token := setup.StoredRuntimeKitsuToken(db); token != "" {
+			return runtime.authenticateToken(hostname, token)
+		}
+		return runtime.authenticate(hostname, email, password)
 	}
 
 	if len(conf.Discord.Productions) > 0 || len(conf.Discord.TaskTypeWebhooks) > 0 {
 		slog.Warn("conf.toml routing (Productions/TaskTypeWebhooks) is deprecated — manage channel assignments via Admin UI (/bot/setup) instead")
 	}
 
-	c.AddFunc("@every 1h", func() {
-		// Refresh runtime JWT every hour from stored runtime credentials.
-		// Runtime refresh no longer reuses admin session tokens.
-		h, e, p := getKitsuCreds(db, conf)
-		os.Setenv("KITSU_HOSTNAME", h) // Keep hostname env in sync with runtime credentials.
-		newToken := basicauth.AuthForJWTToken(h+"api/auth/login", e, p)
-		if newToken == "" {
-			slog.Warn("Kitsu token refresh failed: keeping previous token until next cycle")
-			return
-		}
-		os.Setenv("KitsuJWTToken", newToken)
-		if conf.Log {
-			slog.Info("Got new Kitsu token via stored credentials")
-		}
-	})
-
-	// Initial polling runs in the background so /health can respond during Discord backoff.
-	go func() {
-		runOnePoll(conf, db)
-		if conf.Log {
-			slog.Info("Done initial poll", "duration", time.Since(start).String())
-		}
-	}()
-
-	c.AddFunc("@every "+strconv.Itoa(conf.Kitsu.RequestInterval)+"m", func() {
-		runOnePoll(conf, db)
-	})
-
-	c.AddFunc("0 3 * * *", func() {
-		deleted := model.PurgeOldAuditLogs(db, 90)
-		if deleted > 0 {
-			slog.Info("audit log purge", "deleted_rows", deleted)
-		}
-	})
-
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"status":"ok"}`)
-	})
+	mux.HandleFunc("/health", healthHandler(runtime))
+
+	onRuntimeConfigured := func() {
+		if !refreshRuntime() {
+			slog.Warn("Kitsu runtime validation failed; setup remains required")
+			return
+		}
+		go runtime.runWhenReady(func() { runOnePoll(conf, db) })
+	}
 
 	setupHandler := func(w http.ResponseWriter, r *http.Request) {
 		kitsuHost, _, _ := getKitsuCreds(db, conf)
 		botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
-		setup.Handler(kitsuHost, fallbackGuildID, botToken, db)(w, r)
+		setup.Handler(kitsuHost, fallbackGuildID, botToken, db, runtime.ready, onRuntimeConfigured)(w, r)
 	}
 
 	setupCredsFunc := func() (string, string, string, string) {
@@ -869,7 +834,10 @@ func main() {
 
 	loginHandler := func(w http.ResponseWriter, r *http.Request) {
 		h, _, _ := getKitsuCreds(db, conf)
-		setup.LoginHandler(h)(w, r)
+		setup.LoginHandler(h, func(hostname string) {
+			model.SetSetting(db, "kitsu.hostname", hostname)
+			os.Setenv("KITSU_HOSTNAME", hostname)
+		})(w, r)
 	}
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/bot/login", loginHandler)
@@ -885,46 +853,42 @@ func main() {
 		mux.HandleFunc(prefix+"/api/setup/status", setup.RequireSession(setup.SetupStatusHandler(
 			db, conf.Kitsu.RequestInterval, setupCredsFunc,
 		)))
-		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.ProjectsHandler(db)))
-		mux.HandleFunc(prefix+"/api/setup/preview-project", setup.RequireSession(setup.PreviewProjectHandler(db, setupCredsFunc)))
-		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.ApplyProjectHandler(db, setupCredsFunc)))
-		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.TestKitsuHandler(db)))
+		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.ProjectsHandler(db))))
+		mux.HandleFunc(prefix+"/api/setup/preview-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.PreviewProjectHandler(db, setupCredsFunc))))
+		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.ApplyProjectHandler(db, setupCredsFunc))))
+		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.TestKitsuHandler(db, onRuntimeConfigured)))
 		mux.HandleFunc(prefix+"/api/setup/test-discord", setup.RequireSession(setup.TestDiscordHandler(db)))
-		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.TestNotificationHandler(db, setupCredsFunc)))
-		mux.HandleFunc(prefix+"/api/setup/mapping", setup.RequireSession(setup.MappingStateHandler(db)))
-		mux.HandleFunc(prefix+"/api/setup/mapping/users", setup.RequireSession(setup.SaveUserMappingHandler(db)))
-		mux.HandleFunc(prefix+"/api/setup/mapping/checkers", setup.RequireSession(setup.SaveCheckerMappingHandler(db)))
+		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.TestNotificationHandler(db, setupCredsFunc))))
+		mux.HandleFunc(prefix+"/api/setup/mapping", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.MappingStateHandler(db))))
+		mux.HandleFunc(prefix+"/api/setup/mapping/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.SaveUserMappingHandler(db))))
+		mux.HandleFunc(prefix+"/api/setup/mapping/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.SaveCheckerMappingHandler(db))))
 	}
 	setupAPIRoutes("")
 	setupAPIRoutes("/bot")
 
 	registerAdminRoutes := func(prefix string) {
 		mux.HandleFunc(prefix+"/admin", setup.RequireSession(setup.AdminIndex(db)))
-		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)
-		}))
-		mux.HandleFunc(prefix+"/admin/checkers", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
+		})))
+		mux.HandleFunc(prefix+"/admin/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.CheckersHandler(db, h)(w, r)
-		}))
+		})))
 		mux.HandleFunc(prefix+"/admin/drive", setup.RequireSession(setup.DriveHandler(db)))
 		// BotHandler persists shared runtime credentials and triggers reconnect.
-		kitsuReconnect := func() {
-			h, e, p := getKitsuCreds(db, conf)
-			os.Setenv("KITSU_HOSTNAME", h)
-			newToken := basicauth.AuthForJWTToken(h+"api/auth/login", e, p)
-			if newToken != "" {
-				os.Setenv("KitsuJWTToken", newToken)
-				slog.Info("Kitsu reconnected via admin UI", "hostname", h, "email", e)
-			} else {
-				slog.Warn("Kitsu reconnect failed: check credentials in /bot/admin/bot")
-			}
-		}
+		kitsuReconnect := func() { onRuntimeConfigured() }
 		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.BotHandler(db, kitsuReconnect)))
-		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
+		})))
+		mux.HandleFunc(prefix+"/admin/workflow-diagnosis", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
+			setup.WorkflowDiagnosisHandler(db, func() (string, string) {
+				host, _, _ := getKitsuCreds(db, conf)
+				return host, strings.TrimSpace(os.Getenv("KitsuJWTToken"))
+			})(w, r)
 		}))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
@@ -945,6 +909,36 @@ func main() {
 			slog.Error("HTTP server failed", "err", err)
 		}
 	}()
+
+	if refreshRuntime() {
+		slog.Info("Kitsu runtime configured")
+		go runtime.runWhenReady(func() {
+			runOnePoll(conf, db)
+			if conf.Log {
+				slog.Info("Done initial poll", "duration", time.Since(start).String())
+			}
+		})
+	} else {
+		slog.Warn("Kitsu runtime setup required; HTTP UI is available and notifications are paused")
+	}
+
+	c.AddFunc("@every 1h", func() {
+		if !refreshRuntime() {
+			slog.Warn("Kitsu token refresh failed; keeping the previous usable token when available")
+		}
+	})
+	c.AddFunc("@every "+strconv.Itoa(conf.Kitsu.RequestInterval)+"m", func() {
+		if !runtime.ready() && !refreshRuntime() {
+			return
+		}
+		runtime.runWhenReady(func() { runOnePoll(conf, db) })
+	})
+	c.AddFunc("0 3 * * *", func() {
+		deleted := model.PurgeOldAuditLogs(db, 90)
+		if deleted > 0 {
+			slog.Info("audit log purge", "deleted_rows", deleted)
+		}
+	})
 
 	c.Start()
 

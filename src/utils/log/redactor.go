@@ -11,10 +11,12 @@ import (
 var (
 	botTokenPattern = regexp.MustCompile(`MT[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 	webhookPattern  = regexp.MustCompile(`webhooks/[0-9]+/[A-Za-z0-9_-]+`)
+	jwtPattern      = regexp.MustCompile(`[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`)
 	// Checked on every call because this app sets these via os.Setenv() at runtime
 	secretEnvVars = []string{
 		"KITSU_RUNTIME_PASSWORD",
 		"KITSU_PASSWORD",
+		"KitsuJWTToken",
 		"DISCORD_BOT_TOKEN",
 		"DISCORD_WEBHOOK_URL",
 		"FB_PASSWORD",
@@ -33,6 +35,7 @@ func RedactSecrets(message string) string {
 
 	// Discord Webhook URL pattern: https://discord.com/api/webhooks/xxx/xxx
 	message = webhookPattern.ReplaceAllString(message, "webhooks/[REDACTED]/[REDACTED]")
+	message = jwtPattern.ReplaceAllString(message, "[REDACTED-JWT]")
 
 	// Environment variable values — read at call time because os.Setenv() may update these at runtime
 	for _, envVar := range secretEnvVars {
