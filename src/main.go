@@ -325,108 +325,35 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 		filtered = append(filtered, data[i])
 	}
 
-	// Route tasks by project/task-type webhook mappings stored in DB.
-	type dbRoute struct {
-		WebhookURL   string
-		TasksPayload []kitsu.MessagePayload
-		RouteLabels  map[string]struct{}
-	}
+	// The explicit Production-ID router is the only dispatch path for task
+	// notifications. Legacy name/global fallbacks are intentionally excluded:
+	// an unconfigured Production must fail closed.
 	stats := notificationRouteStats{}
-	dbRoutes := make(map[string]*dbRoute) // webhookURL -> tasks
-	for f := len(filtered) - 1; f >= 0; f-- {
-		projectID := filtered[f].Project.ID
-		taskTypeName := filtered[f].TaskType.TaskType.Name
-		webhookURL := model.FindWebhookForTask(db, projectID, taskTypeName)
-		if webhookURL == "" {
+	routes := make(map[string][]kitsu.MessagePayload)
+	webhooks := make(map[string]string)
+	labels := make(map[string]map[string]struct{})
+	for _, payload := range filtered {
+		plan := planProductionNotification(db, payload)
+		if !plan.ShouldSend {
+			recordProductionRoutingSkip(db, payload, plan.SkipReason)
+			stats.Dropped++
 			continue
 		}
-		if _, ok := dbRoutes[webhookURL]; !ok {
-			dbRoutes[webhookURL] = &dbRoute{WebhookURL: webhookURL, RouteLabels: make(map[string]struct{})}
+		webhooks[plan.DestinationID] = plan.WebhookURL
+		routes[plan.DestinationID] = append(routes[plan.DestinationID], payload)
+		if labels[plan.DestinationID] == nil {
+			labels[plan.DestinationID] = make(map[string]struct{})
 		}
-		dbRoutes[webhookURL].RouteLabels[fmt.Sprintf("projectID=%s taskType=%s", projectID, taskTypeName)] = struct{}{}
-		dbRoutes[webhookURL].TasksPayload = append(dbRoutes[webhookURL].TasksPayload, filtered[f])
-		filtered = append(filtered[:f], filtered[f+1:]...)
+		labels[plan.DestinationID][fmt.Sprintf("productionID=%s taskTypeID=%s", payload.Project.ID, payload.TaskType.ID)] = struct{}{}
 	}
-	for _, route := range dbRoutes {
-		if len(route.TasksPayload) > 0 {
-			routeLabels := labelsFromSet(route.RouteLabels)
-			stats.DBRouted += len(route.TasksPayload)
-			logRouteDispatch("db.project_webhook", routeLabels, route.TasksPayload, route.WebhookURL != "")
-			DiscordQueueSend(route.TasksPayload, conf, route.WebhookURL, db, "db.project_webhook", routeLabels)
-		}
+	for destinationID, payloads := range routes {
+		routeLabels := labelsFromSet(labels[destinationID])
+		stats.DBRouted += len(payloads)
+		logRouteDispatch("production.task_type_id", routeLabels, payloads, webhooks[destinationID] != "")
+		DiscordQueueSend(payloads, conf, webhooks[destinationID], db, "production.task_type_id", routeLabels)
 	}
 
-	// Route remaining tasks using legacy conf.toml production webhooks.
-	type TasksByProject struct {
-		ProjectName  string
-		TasksPayload []kitsu.MessagePayload
-	}
-	tasksByProject := make([]TasksByProject, len(conf.Discord.Productions))
-	for i := 0; i < len(tasksByProject); i++ {
-		for f := len(filtered) - 1; f >= 0; f-- {
-			if strings.Contains(strings.ToLower(filtered[f].Project.Name), strings.ToLower(conf.Discord.Productions[i].Production)) {
-				tasksByProject[i].ProjectName = filtered[f].Project.Name
-				tasksByProject[i].TasksPayload = append(tasksByProject[i].TasksPayload, filtered[f])
-				filtered = append(filtered[:f], filtered[f+1:]...)
-			}
-		}
-	}
-
-	if len(tasksByProject) > 0 {
-		for i := 0; i < len(tasksByProject); i++ {
-			if len(tasksByProject[i].TasksPayload) > 0 {
-				routeLabels := []string{conf.Discord.Productions[i].Production}
-				stats.ProjectRouted += len(tasksByProject[i].TasksPayload)
-				logRouteDispatch("conf.production", routeLabels, tasksByProject[i].TasksPayload, conf.Discord.Productions[i].WebhookURL != "")
-				DiscordQueueSend(tasksByProject[i].TasksPayload, conf, conf.Discord.Productions[i].WebhookURL, db, "conf.production", routeLabels)
-			}
-		}
-	}
-
-	// Route tasks configured in task-type webhooks.
-	// Route tasks configured in [[discord.taskTypeWebhooks]] before the fallback route.
-	type tasksByType struct {
-		WebhookURL   string
-		TasksPayload []kitsu.MessagePayload
-		RouteLabel   string
-	}
-	ttRoutes := make([]tasksByType, len(conf.Discord.TaskTypeWebhooks))
-	for i, tw := range conf.Discord.TaskTypeWebhooks {
-		ttRoutes[i].WebhookURL = tw.WebhookURL
-		ttRoutes[i].RouteLabel = tw.TaskType
-	}
-	for f := len(filtered) - 1; f >= 0; f-- {
-		for i, tw := range conf.Discord.TaskTypeWebhooks {
-			if strings.EqualFold(filtered[f].TaskType.TaskType.Name, tw.TaskType) {
-				ttRoutes[i].TasksPayload = append(ttRoutes[i].TasksPayload, filtered[f])
-				filtered = append(filtered[:f], filtered[f+1:]...)
-				break
-			}
-		}
-	}
-	for _, route := range ttRoutes {
-		if len(route.TasksPayload) > 0 {
-			routeLabels := []string{route.RouteLabel}
-			stats.TaskTypeRouted += len(route.TasksPayload)
-			logRouteDispatch("conf.task_type", routeLabels, route.TasksPayload, route.WebhookURL != "")
-			DiscordQueueSend(route.TasksPayload, conf, route.WebhookURL, db, "conf.task_type", routeLabels)
-		}
-	}
-
-	if len(filtered) > 0 {
-		// Fallback route for tasks that did not match DB/conf task routing.
-		_, _, mainWebhook := getDiscordSettings(db, conf)
-		if mainWebhook != "" {
-			stats.MainFallbackSent = len(filtered)
-			logRouteDispatch("fallback.main_webhook", []string{"default"}, filtered, true)
-			DiscordQueueSend(filtered, conf, mainWebhook, db, "fallback.main_webhook", []string{"default"})
-		} else {
-			stats.Dropped = len(filtered)
-			logDroppedTasks("no main webhook configured for unrouted tasks", filtered)
-		}
-	}
-
-	if len(data) > 0 && (stats.DBRouted > 0 || stats.ProjectRouted > 0 || stats.TaskTypeRouted > 0 || stats.MainFallbackSent > 0 || stats.Dropped > 0) {
+	if len(data) > 0 && (stats.DBRouted > 0 || stats.Dropped > 0) {
 		slog.Info("Notification routing summary",
 			"incomingTasks", len(data),
 			"dbRouted", stats.DBRouted,
@@ -751,6 +678,9 @@ func main() {
 		&model.Task{},
 		&model.Project{},
 		&model.ProjectWebhook{},
+		&model.ProductionNotificationConfig{},
+		&model.ProductionNotificationRoute{},
+		&model.NotificationRoutingDiagnosis{},
 		&model.UserMap{},
 		&model.CheckerMap{},
 		&model.Setting{},
@@ -884,6 +814,7 @@ func main() {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		})))
+		mux.HandleFunc(prefix+"/admin/production-routing", setup.RequireSession(setup.ProductionRoutingHandler(db)))
 		mux.HandleFunc(prefix+"/admin/workflow-diagnosis", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
 			setup.WorkflowDiagnosisHandler(db, func() (string, string) {
 				host, _, _ := getKitsuCreds(db, conf)
