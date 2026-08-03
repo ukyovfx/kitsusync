@@ -16,23 +16,41 @@ func main() {
 	dbPath := flag.String("db", "data/sqlite.db", "KitsuSync SQLite path")
 	host := flag.String("host", "http://127.0.0.1:8080", "Kitsu API host")
 	email := flag.String("email", "", "owned runtime bot email")
+	phase := flag.String("phase", "recover", "recover, prepare, or finalize")
+	oldID := flag.String("old-id", "", "verified old bot ID")
+	tempID := flag.String("temp-id", "", "verified replacement bot ID")
+	tempEmail := flag.String("temp-email", "", "verified replacement email")
 	flag.Parse()
 
-	password, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && len(password) == 0 {
-		fail("password input failed")
-	}
-	password = strings.TrimSpace(password)
-	defer func() { password = "" }()
+	reader := bufio.NewReader(os.Stdin)
+	readLine := func() string { value, _ := reader.ReadString('\n'); return strings.TrimSpace(value) }
+	first := readLine()
 
 	db, err := gorm.Open(sqlite.Open(*dbPath), &gorm.Config{})
 	if err != nil {
 		fail("database open failed")
 	}
-	if err := setup.RecoverRuntimeCredentials(db, *host, *email, password); err != nil {
-		fail(err.Error())
+	switch *phase {
+	case "recover":
+		if err := setup.RecoverRuntimeCredentials(db, *host, *email, first); err != nil {
+			fail(err.Error())
+		}
+	case "prepare":
+		adminPassword := readLine()
+		if id, err := setup.PrepareRuntimeBotReplacement(db, *host, *email, first, *tempEmail, adminPassword); err != nil {
+			fail(err.Error())
+		} else {
+			fmt.Println(id)
+		}
+	case "finalize":
+		adminPassword := first
+		if err := setup.FinalizeRuntimeBotReplacement(db, *host, *email, adminPassword, *oldID, *tempID, *tempEmail); err != nil {
+			fail(err.Error())
+		}
+	default:
+		fail("unknown recovery phase")
 	}
-	fmt.Println("runtime credentials recovered")
+	first = ""
 }
 
 func fail(message string) {
