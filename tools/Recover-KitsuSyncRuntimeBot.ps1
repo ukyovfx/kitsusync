@@ -25,7 +25,13 @@ if ($parts.Count -ne 2 -or $parts[0] -ne "1" -or $parts[1] -ne "t/f/admin/t") {
 }
 
 $bytes = New-Object byte[] 32
-[Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+try {
+    $rng.GetBytes($bytes)
+}
+finally {
+    $rng.Dispose()
+}
 $newPassword = "Ksr-" + ([Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+','-').Replace('/','_'))
 $bytes = $null
 
