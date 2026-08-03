@@ -73,14 +73,12 @@ if ($Phase -eq "Prepare") {
     if (-not (Test-Path $statePath)) { Fail "Prepare state is missing." }
     $state = Get-Content $statePath -Raw | ConvertFrom-Json
     New-Backup
-    $adminEmail = Read-Host "Kitsu admin email"
-    $adminPassword = Read-PlainPassword "Kitsu admin password"
     try {
         $hostForHelper = $KitsuHost
         if (-not (Get-Command go -ErrorAction SilentlyContinue)) { $hostForHelper = $KitsuHost.Replace('127.0.0.1','host.docker.internal').Replace('localhost','host.docker.internal') }
-        Invoke-RecoveryGo @("-phase", "finalize", "-db", "data/sqlite.db", "-host", $hostForHelper, "-email", $adminEmail, "-old-id", $state.old_id, "-temp-id", $state.replacement_id, "-temp-email", $state.replacement_email) "$adminPassword`n"
+        Invoke-RecoveryGo @("-phase", "finalize", "-db", "data/sqlite.db", "-host", $hostForHelper, "-old-id", $state.old_id, "-temp-id", $state.replacement_id, "-temp-email", $state.replacement_email) ""
         Restart-And-Verify
         Remove-Item $statePath
         Write-Output "Phase 2 finalized. Replacement now uses the canonical identity."
-    } finally { $adminPassword=$null; [GC]::Collect() }
+    } finally { [GC]::Collect() }
 }

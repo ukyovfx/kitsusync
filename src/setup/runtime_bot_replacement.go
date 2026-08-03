@@ -74,15 +74,18 @@ func PrepareRuntimeBotReplacement(db *gorm.DB, host, adminEmail, adminPassword, 
 	return created.ID, nil
 }
 
-func FinalizeRuntimeBotReplacement(db *gorm.DB, host, adminEmail, adminPassword, oldID, tempID, tempEmail string) error {
+func FinalizeRuntimeBotReplacement(db *gorm.DB, host, oldID, tempID, tempEmail string) error {
 	if db == nil || strings.TrimSpace(oldID) == "" || strings.TrimSpace(tempID) == "" {
 		return errors.New("replacement state is incomplete")
 	}
-	adminToken := basicauth.AuthForJWTToken(normalizeKitsuHostname(host)+"api/auth/login", adminEmail, adminPassword)
-	if adminToken == "" {
-		return errors.New("Kitsu admin authentication failed")
+	runtimeToken := StoredRuntimeKitsuToken(db)
+	if runtimeToken == "" {
+		return errors.New("persisted runtime bot token is unavailable")
 	}
-	people, err := listRuntimeBotPeople(host, adminToken)
+	if !basicauth.ValidateJWTToken(normalizeKitsuHostname(host)+"api/auth/authenticated", runtimeToken) {
+		return errors.New("persisted runtime bot token is invalid")
+	}
+	people, err := listRuntimeBotPeople(host, runtimeToken)
 	if err != nil {
 		return err
 	}
@@ -112,19 +115,15 @@ func FinalizeRuntimeBotReplacement(db *gorm.DB, host, adminEmail, adminPassword,
 		return errors.New("replacement ownership verification failed")
 	}
 	if oldPerson != nil {
-		if err := kitsuJSON(adminToken, http.MethodDelete, normalizeKitsuHostname(host)+"api/data/persons/"+oldID, nil, nil); err != nil {
+		if err := kitsuJSON(runtimeToken, http.MethodDelete, normalizeKitsuHostname(host)+"api/data/persons/"+oldID, nil, nil); err != nil {
 			return fmt.Errorf("old bot deletion failed: %w", err)
 		}
 	}
 	if !strings.EqualFold(replacement.Email, runtimeBotEmail) {
 		payload := map[string]interface{}{"first_name": runtimeBotFirstName, "last_name": runtimeBotLastName, "email": runtimeBotEmail, "role": "admin", "active": true, "archived": false, "is_bot": true}
-		if err := kitsuJSON(adminToken, http.MethodPut, normalizeKitsuHostname(host)+"api/data/persons/"+tempID, payload, nil); err != nil {
+		if err := kitsuJSON(runtimeToken, http.MethodPut, normalizeKitsuHostname(host)+"api/data/persons/"+tempID, payload, nil); err != nil {
 			return fmt.Errorf("replacement rename failed; keep the temporary identity and retry finalize: %w", err)
 		}
 	}
-	password := StoredRuntimeKitsuPassword(db)
-	if password == "" {
-		return errors.New("replacement password is not persisted")
-	}
-	return RecoverRuntimeCredentials(db, host, runtimeBotEmail, password)
+	return RecoverRuntimeToken(db, host, runtimeBotEmail, runtimeToken)
 }
