@@ -2,7 +2,6 @@
 package basicauth
 
 import (
-	"app/src/utils/debug"
 	"bytes"
 	"encoding/json"
 	"io/ioutil"
@@ -52,8 +51,6 @@ func AuthForJWTToken(url, email, password string) string {
 		slog.Error("basicauth: read body failed", "err", err)
 		return ""
 	}
-
-	debug.Info(resp, respBody)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		slog.Error("basicauth: non-2xx response — check Kitsu credentials in conf.toml",

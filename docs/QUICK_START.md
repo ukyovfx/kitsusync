@@ -13,7 +13,7 @@ Before you begin, confirm you have:
 - [ ] Discord server where you are an administrator
 - [ ] Discord **Bot Token** — create one at [discord.com/developers/applications](https://discord.com/developers/applications) (Bot tab → Reset Token)
 - [ ] One or more Discord **Guild IDs** — enable Developer Mode in Discord settings, then right-click each target server → Copy Server ID
-- [ ] A dedicated Kitsu **runtime account** (any role ≥ CG Artist) for the bot to poll with — do not reuse a personal account
+- [ ] A Kitsu manager/admin account for the browser setup flow
 
 > **Bot permissions required:** Manage Channels, Manage Webhooks.
 > Generate the invite URL from OAuth2 → URL Generator with scope `bot` and those two permissions.
@@ -28,7 +28,7 @@ cd kitsusync
 cp .env.example .env.local
 ```
 
-Open `.env.local` and fill in the minimum required values:
+For browser-first setup, secret values may remain empty. Existing configured deployments may continue providing:
 
 ```env
 KITSU_HOSTNAME=http://YOUR_KITSU_HOST/        # include http:// and trailing slash
@@ -58,7 +58,6 @@ docker compose logs -f app
 You should see within a few seconds:
 
 ```
-Connected to Kitsu in ...
 HTTP server listening on :8090
 ```
 
@@ -66,7 +65,7 @@ Verify health:
 
 ```bash
 curl http://localhost:8090/health
-# Expected: {"status":"ok"}
+# Expected status: 200 OK with runtime.mode set to setup_required or configured
 ```
 
 If you get a 502 or connection refused, the app is still starting — wait a moment and retry.
@@ -75,11 +74,13 @@ If you get a 502 or connection refused, the app is still starting — wait a mom
 
 ## Step 3 — Open Project Management
 
-1. Open `http://YOUR_SERVER:8090/bot/login` in a browser.
-2. Sign in with your **personal** Kitsu manager or admin account.
-3. Review shared bot/runtime prerequisites in `/bot/admin/bot` if needed.
-4. Open `/bot/setup`.
-5. Use the Project Management flow to create routing for one project at a time.
+1. Open `http://YOUR_SERVER:8090/bot/login` in a browser. For local development use `http://127.0.0.1:8090/bot/login`.
+2. If no Kitsu host is configured, enter the Kitsu URL.
+3. Sign in with your Kitsu manager or admin account.
+4. Complete the dedicated Kitsu runtime connection in `/bot/setup`. Until it succeeds, polling and notifications remain paused.
+5. Configure Discord in Bot Settings, then use Project Management to create routing for one project at a time.
+
+Invalid credentials or a temporary Kitsu outage do not stop the Web UI. Reauthenticate from the setup flow; saved configuration is retained. Browser session tokens are not reused by background polling. Do not expose port 8090 directly to the public internet.
 
 The normal operator flow now moves through these stages:
 

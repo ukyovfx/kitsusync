@@ -2550,7 +2550,11 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 				kitsuChanged = true
 			}
 			if value := strings.TrimSpace(r.FormValue("kitsu_runtime_password")); value != "" {
-				setRuntimeKitsuPassword(value)
+				if err := setRuntimeKitsuPassword(db, value); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprint(w, adminPage(lang, t(lang, "保存に失敗しました", "Save failed"), r, `<div class="section-card glass"><p>`+t(lang, "Runtime credential を安全に保存できませんでした。", "Could not safely store the runtime credential.")+`</p></div>`))
+					return
+				}
 				kitsuChanged = true
 			}
 			if kitsuChanged && kitsuReconnect != nil {

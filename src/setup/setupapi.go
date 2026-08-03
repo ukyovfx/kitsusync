@@ -501,7 +501,7 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 
 // TestKitsuHandler handles POST /api/setup/test-kitsu.
 // Verifies connectivity and authentication against a provided Kitsu endpoint.
-func TestKitsuHandler(db *gorm.DB) http.HandlerFunc {
+func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -552,7 +552,13 @@ func TestKitsuHandler(db *gorm.DB) http.HandlerFunc {
 
 		model.SetSetting(db, "kitsu.hostname", hostname)
 		setRuntimeKitsuEmail(db, email)
-		setRuntimeKitsuPassword(password)
+		if err := setRuntimeKitsuPassword(db, password); err != nil {
+			writeTestKitsuError(w, "could not safely store runtime credentials")
+			return
+		}
+		if len(onRuntimeConfigured) > 0 && onRuntimeConfigured[0] != nil {
+			onRuntimeConfigured[0]()
+		}
 
 		json.NewEncoder(w).Encode(TestKitsuResponse{Reachable: true, Authenticated: true})
 	}

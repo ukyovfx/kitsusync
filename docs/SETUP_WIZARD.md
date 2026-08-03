@@ -4,11 +4,12 @@ This document describes the current operator-facing setup flow for KitsuSync v0.
 
 The normal setup path is now:
 
-1. Open `/bot/login`
-2. Review shared prerequisites in `/bot/admin/bot`
-3. Create or manage project routing in `/bot/setup`
-4. Use `/bot/admin/projects` only for review/edit of existing project guild assignment
-5. Use `/bot/admin/health` for troubleshooting and verification when needed
+1. Start KitsuSync; missing runtime credentials enter setup-required mode instead of stopping the process
+2. Open `/bot/login`, enter the Kitsu URL when requested, and authenticate as a Kitsu manager/admin
+3. Configure the dedicated Kitsu runtime connection in `/bot/setup`
+4. Configure Discord in `/bot/admin/bot`, then create or manage project routing in `/bot/setup`
+5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment
+6. Use `/bot/admin/health` for troubleshooting and verification when needed
 
 `/bot/setup-wizard`, Manual Setup, and Setup Status are no longer normal user-facing setup paths.
 
@@ -28,6 +29,14 @@ The current flow is organized as:
 | Step 4: Test Notification | Confirm delivery after Discord resources are created |
 
 This is the only normal first-time setup path operators should follow.
+
+## Runtime states
+
+- `setup_required`: the Web UI and `/health` are available, Kitsu is disconnected, and polling/notifications are paused.
+- `configured`: the dedicated runtime credentials were validated and polling may run.
+- `degraded`: a refresh or temporary Kitsu connection attempt failed; the process and saved configuration remain available for recovery.
+
+The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. The runtime password is encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
 
 ---
 

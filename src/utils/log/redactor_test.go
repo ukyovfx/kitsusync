@@ -15,6 +15,7 @@ func TestRedactSecrets(t *testing.T) {
 		"webhook=https://discord.com/api/webhooks/123456/token-abc",
 		"token=MTabc_DEF.ghiJKL",
 		"bot=bot-token-value",
+		"jwt=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJydW50aW1lIn0.signature123",
 	}, " | ")
 
 	redacted := RedactSecrets(message)
@@ -24,6 +25,7 @@ func TestRedactSecrets(t *testing.T) {
 		"token-abc",
 		"MTabc_DEF.ghiJKL",
 		"bot-token-value",
+		"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJydW50aW1lIn0.signature123",
 	} {
 		if strings.Contains(redacted, secret) {
 			t.Fatalf("secret %q was not redacted: %s", secret, redacted)
@@ -38,5 +40,8 @@ func TestRedactSecrets(t *testing.T) {
 	}
 	if !strings.Contains(redacted, "webhooks/[REDACTED]/[REDACTED]") {
 		t.Fatalf("expected webhook redaction marker, got %s", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED-JWT]") {
+		t.Fatalf("expected JWT redaction marker, got %s", redacted)
 	}
 }

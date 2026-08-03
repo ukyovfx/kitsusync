@@ -128,20 +128,16 @@ mkdir -p data
 
 ### 2. Fill in `.env.local`
 
-At minimum, set:
+KitsuSync can start without Kitsu or Discord credentials. In that case `/health` stays available and the Web UI runs in setup-required mode with polling and notifications paused.
 
-- `DISCORD_BOT_TOKEN`
+For browser-first setup:
 
-You have two ways to provide Kitsu runtime credentials:
+1. Start the app with secret fields empty.
+2. Open `/bot/login` and enter the Kitsu URL plus a Kitsu manager/admin account.
+3. Open `/bot/setup` and configure the dedicated Kitsu runtime connection.
+4. Configure the Discord Bot Token in Bot Settings, then assign Guild IDs during production setup.
 
-1. Recommended for reproducible local bring-up
-   - Fill `KITSU_HOSTNAME`
-   - Fill `KITSU_RUNTIME_EMAIL`
-   - Fill `KITSU_RUNTIME_PASSWORD`
-2. Guided browser setup
-   - Fill only `KITSU_HOSTNAME`
-   - Start the app
-   - Open `/bot/login` and create/apply the runtime bot account from `/bot/admin/bot` when needed
+Existing installations may continue supplying `KITSU_HOSTNAME`, `KITSU_RUNTIME_EMAIL`, and `KITSU_RUNTIME_PASSWORD` through environment/config files. Browser admin sessions remain separate from background runtime authentication.
 
 If you want a default catch-all Discord route before project setup, also set:
 
@@ -176,6 +172,8 @@ Expected response:
 ```json
 {"status":"ok"}
 ```
+
+The response also reports `runtime.mode` as `setup_required`, `configured`, or `degraded`. Do not expose KitsuSync directly to the public internet; place production deployments behind the documented authenticated reverse-proxy boundary.
 
 If you want a quick release-readiness sanity check after boot:
 

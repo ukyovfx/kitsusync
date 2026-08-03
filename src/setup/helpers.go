@@ -226,14 +226,6 @@ func setRuntimeKitsuEmail(db *gorm.DB, email string) {
 	os.Unsetenv("KITSU_EMAIL")
 }
 
-func setRuntimeKitsuPassword(password string) {
-	if password == "" {
-		return
-	}
-	os.Setenv(RuntimeKitsuPasswordEnv, password)
-	os.Unsetenv("KITSU_PASSWORD")
-}
-
 func storedRuntimeDiscordBotToken(db *gorm.DB) string {
 	if db != nil {
 		if value := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenKey)); value != "" {
@@ -361,7 +353,13 @@ func CreateKitsuBotAccount(kitsuHost, adminEmail, adminPassword string) (string,
 	if adminToken == "" {
 		return "", "", errors.New("admin authentication failed")
 	}
+	return CreateKitsuBotAccountWithToken(kitsuHost, adminToken)
+}
 
+func CreateKitsuBotAccountWithToken(kitsuHost, adminToken string) (string, string, error) {
+	if strings.TrimSpace(adminToken) == "" {
+		return "", "", errors.New("admin session is missing")
+	}
 	runtimePassword, err := generateRuntimePassword()
 	if err != nil {
 		return "", "", err

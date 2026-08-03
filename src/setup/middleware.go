@@ -1,4 +1,4 @@
-﻿package setup
+package setup
 
 import (
 	"bytes"
@@ -125,27 +125,69 @@ func RequireSession(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func LoginHandler(kitsuHostname string) http.HandlerFunc {
-	loginURL := strings.TrimRight(kitsuHostname, "/") + "/api/auth/login"
+func currentSessionData(r *http.Request) (sessionData, bool) {
+	if r == nil {
+		return sessionData{}, false
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return sessionData{}, false
+	}
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	session, ok := sessions[cookie.Value]
+	if !ok || time.Now().After(session.Expiry) {
+		return sessionData{}, false
+	}
+	return session, true
+}
+
+func CurrentSessionKitsuAuth(r *http.Request) (email, token, role string, ok bool) {
+	session, ok := currentSessionData(r)
+	if !ok {
+		return "", "", "", false
+	}
+	return session.Email, session.KitsuToken, session.Role, true
+}
+
+func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		configuredHostname := normalizeKitsuHostname(kitsuHostname)
 
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
+			hostname := configuredHostname
+			if hostname == "" {
+				hostname = normalizeKitsuHostname(r.FormValue("hostname"))
+			}
 			email := strings.TrimSpace(r.FormValue("email"))
 			password := r.FormValue("password")
 			next := strings.TrimSpace(r.FormValue("next"))
 			validNext := strings.HasPrefix(next, "/bot/")
 			if next == "" || !validNext {
-				next = withLang("/bot/admin", r)
+				if configuredHostname == "" {
+					next = withLang("/bot/setup", r)
+				} else {
+					next = withLang("/bot/admin", r)
+				}
 			}
 
+			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, loginPageHTML(lang, t(lang, "Kitsu URL は http:// または https:// で入力してください。", "Enter a Kitsu URL beginning with http:// or https://."), next, configuredHostname == "", r))
+				return
+			}
+			loginURL := strings.TrimRight(hostname, "/") + "/api/auth/login"
 			role, kitsuToken, ok := kitsuLoginCheck(loginURL, email, password)
 			if !ok || (role != "admin" && role != "manager") {
 				w.WriteHeader(http.StatusUnauthorized)
-				fmt.Fprint(w, loginPageHTML(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, r))
+				fmt.Fprint(w, loginPageHTML(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r))
 				return
+			}
+			if onAdminAuthenticated != nil {
+				onAdminAuthenticated(hostname)
 			}
 
 			token := newSessionToken(email, kitsuToken, role, next)
@@ -155,7 +197,7 @@ func LoginHandler(kitsuHostname string) http.HandlerFunc {
 		}
 
 		next := r.URL.Query().Get("next")
-		fmt.Fprint(w, loginPageHTML(lang, "", next, r))
+		fmt.Fprint(w, loginPageHTML(lang, "", next, configuredHostname == "", r))
 	}
 }
 
@@ -198,7 +240,7 @@ func kitsuLoginCheck(loginURL, email, password string) (role, kitsuToken string,
 	return result.User.Role, result.AccessToken, result.User.Role != "" && result.AccessToken != ""
 }
 
-func loginPageHTML(lang, errMsg, next string, r *http.Request) string {
+func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
 	errHTML := ""
 	if errMsg != "" {
 		errHTML = `<div class="toast glass" style="background:rgba(255,106,80,.12);border-color:rgba(255,106,80,.24);color:#ffd7cf">` + html.EscapeString(errMsg) + `</div>`
@@ -206,6 +248,10 @@ func loginPageHTML(lang, errMsg, next string, r *http.Request) string {
 	nextInput := ""
 	if next != "" {
 		nextInput = `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">`
+	}
+	hostnameInput := ""
+	if showHostname {
+		hostnameInput = `<label>` + t(lang, "Kitsu URL", "Kitsu URL") + `</label><input type="url" name="hostname" placeholder="http://127.0.0.1:8080" required>`
 	}
 
 	body := fmt.Sprintf(`
@@ -221,6 +267,7 @@ func loginPageHTML(lang, errMsg, next string, r *http.Request) string {
   <form method="POST" class="section-stack">
     %s
     <div class="section-card glass">
+      %s
       <label>%s</label>
       <input type="email" name="email" autocomplete="email" required autofocus>
       <label>%s</label>
@@ -236,6 +283,7 @@ func loginPageHTML(lang, errMsg, next string, r *http.Request) string {
 		t(lang, "Kitsu の manager / admin アカウントでログインしてください。", "Sign in with a Kitsu manager or admin account."),
 		errHTML,
 		nextInput,
+		hostnameInput,
 		t(lang, "メール", "Email"),
 		t(lang, "パスワード", "Password"),
 		t(lang, "ログイン", "Login"),
