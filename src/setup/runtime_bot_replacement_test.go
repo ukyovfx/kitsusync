@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestPrepareRuntimeBotReplacementUsesPublicPersonAPI(t *testing.T) {
@@ -17,7 +19,12 @@ func TestPrepareRuntimeBotReplacementUsesPublicPersonAPI(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"access_token":"admin-token"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/data/persons":
-			_, _ = w.Write([]byte(`[]`))
+			if r.URL.Query().Get("with_pass_hash") == "true" {
+				hash, _ := bcrypt.GenerateFromPassword([]byte("bot-password"), bcrypt.DefaultCost)
+				_, _ = w.Write([]byte(`[{"id":"replacement-id","email":"temp@example.com","is_bot":true,"active":true,"archived":false,"role":"admin","password":"` + string(hash) + `"}]`))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
 		case r.Method == http.MethodPost && r.URL.Path == "/api/data/persons":
 			var body map[string]interface{}
 			if json.NewDecoder(r.Body).Decode(&body) != nil || body["is_bot"] != true || body["email"] != "temp@example.com" {

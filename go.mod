@@ -9,6 +9,7 @@ require (
 	github.com/naoina/toml v0.1.1
 	github.com/pieterclaerhout/go-waitgroup v1.0.7
 	github.com/robfig/cron/v3 v3.0.1
+	golang.org/x/crypto v0.15.0
 	gorm.io/driver/sqlite v1.1.4
 	gorm.io/gorm v1.21.15
 )
