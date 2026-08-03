@@ -21,7 +21,7 @@ $raw = docker exec -u postgres $Container psql -d zoudb -F '|' -Atc $sql
 if ($LASTEXITCODE -ne 0) { Fail "Kitsu bot ownership check failed." }
 $parts = $raw.Trim().Split('|', 2)
 if ($parts.Count -ne 2 -or $parts[0] -ne "1" -or $parts[1] -ne "t/f/admin/t") {
-    Fail "Recovery stopped: expected exactly one active, unarchived owned bot." 
+    Fail "Recovery stopped: expected exactly one active, unarchived owned bot."
 }
 
 $bytes = New-Object byte[] 32
