@@ -47,7 +47,7 @@ if ($Phase -eq "Prepare") {
     $lookup = docker exec -u postgres $Container psql -d zoudb -F '|' -Atc "SELECT count(*) || '|' || coalesce(string_agg(id || '/' || active || '/' || archived || '/' || role || '/' || is_bot, ','),'none') FROM person WHERE lower(email)=lower('$canonicalEmail');"
     if ($LASTEXITCODE -ne 0) { Fail "Ownership lookup failed." }
     $parts = $lookup.Trim().Split('|', 2)
-    if ($parts.Count -ne 2 -or $parts[0] -ne "1" -or $parts[1] -notmatch '/t/f/admin/t$') { Fail "Expected exactly one owned canonical bot." }
+    if ($parts.Count -ne 2 -or $parts[0] -ne "1" -or $parts[1] -notmatch '/true/false/admin/true$') { Fail "Expected exactly one owned canonical bot." }
     $oldID = ($parts[1] -split '/')[0]
     New-Backup
     $adminEmail = Read-Host "Kitsu admin email"
