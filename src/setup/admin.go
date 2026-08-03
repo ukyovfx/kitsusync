@@ -980,6 +980,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 				"",
 			))
+			blocks.WriteString(`<div class="button-row" style="margin:8px 0 0 12px"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/workflow-diagnosis?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "Workflow Diagnosis", "Workflow Diagnosis")) + `</a></div>`)
 		}
 		if blocks.Len() == 0 {
 			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだ連携済みプロダクションがありません", "No connected productions yet."), t(lang, "先に新規連携セットアップで production connection を作成してから、ここで確認・編集してください。", "Create the first production connection in New Connection Setup, then review it here.")))
