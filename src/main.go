@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"log"
 	"os"
@@ -732,7 +733,7 @@ func main() {
 		os.Setenv("Debug", "true")
 	}
 
-	db, err := gorm.Open(sqlite.Open("sqlite.db"), &gorm.Config{
+	db, err := gorm.Open(sqlite.Open(filepath.Join("data", "sqlite.db")), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {

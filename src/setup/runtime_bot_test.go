@@ -49,3 +49,19 @@ func TestCreateKitsuBotAccountDoesNotChangeExistingBotPassword(t *testing.T) {
 		t.Fatal("must not call the bot-incompatible change-password endpoint")
 	}
 }
+
+func TestReuseRuntimeBotAccountRequiresMatchingBot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/data/persons" {
+			_, _ = w.Write([]byte(`[{"id":"person-id","email":"kitsusync-bot@google.com","is_bot":true}]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	email, password, err := ReuseRuntimeBotAccountWithToken(server.URL+"/", "admin-session", "kitsusync-bot@google.com", "stored-password")
+	if err != nil || email != "kitsusync-bot@google.com" || password != "stored-password" {
+		t.Fatalf("expected stored bot credentials to be reused, email=%q password_present=%t err=%v", email, password != "", err)
+	}
+}

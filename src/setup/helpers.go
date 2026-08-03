@@ -427,6 +427,20 @@ func CreateKitsuBotAccountWithToken(kitsuHost, adminToken string) (string, strin
 	return email, runtimePassword, nil
 }
 
+func ReuseRuntimeBotAccountWithToken(kitsuHost, adminToken, email, password string) (string, string, error) {
+	if strings.TrimSpace(email) == "" || strings.TrimSpace(password) == "" {
+		return "", "", errors.New("saved runtime bot credentials are incomplete")
+	}
+	person, err := findRuntimeBotPerson(kitsuHost, adminToken)
+	if err != nil {
+		return "", "", err
+	}
+	if person == nil || !person.IsBot || !strings.EqualFold(strings.TrimSpace(person.Email), strings.TrimSpace(email)) {
+		return "", "", errors.New("saved runtime bot account could not be verified")
+	}
+	return strings.TrimSpace(email), password, nil
+}
+
 func SeedFromConfig(db *gorm.DB, conf config.Config) {
 	if db == nil {
 		return

@@ -367,6 +367,10 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			if onRuntimeConfigured != nil {
 				onRuntimeConfigured()
 			}
+			if runtimeReady == nil || !runtimeReady() {
+				fmt.Fprint(w, renderBotSetupError(lang, "Kitsuの認証確認に失敗しました。設定は完了していません。もう一度お試しください。"))
+				return
+			}
 			fmt.Fprint(w, renderBotSetupSuccess(lang))
 			return
 		}
@@ -379,7 +383,13 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 				return
 			}
 			kitsuHostInput := normalizeKitsuHostname(model.GetSetting(db, "kitsu.hostname"))
-			botEmail, botPassword, err := CreateKitsuBotAccountWithToken(kitsuHostInput, adminToken)
+			botEmail, botPassword := storedRuntimeKitsuEmail(db), StoredRuntimeKitsuPassword(db)
+			var err error
+			if botEmail != "" && botPassword != "" {
+				botEmail, botPassword, err = ReuseRuntimeBotAccountWithToken(kitsuHostInput, adminToken, botEmail, botPassword)
+			} else {
+				botEmail, botPassword, err = CreateKitsuBotAccountWithToken(kitsuHostInput, adminToken)
+			}
 			if err != nil {
 				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 接続の設定に失敗しました。", "Could not configure the Kitsu connection.")))
 				return
@@ -391,6 +401,10 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			}
 			if onRuntimeConfigured != nil {
 				onRuntimeConfigured()
+			}
+			if runtimeReady == nil || !runtimeReady() {
+				fmt.Fprint(w, renderBotSetupError(lang, "Kitsuの認証確認に失敗しました。設定は完了していません。もう一度お試しください。"))
+				return
 			}
 			fmt.Fprint(w, renderBotSetupSuccess(lang))
 			return
