@@ -40,7 +40,7 @@ func main() {
 		if id, err := setup.PrepareRuntimeBotReplacement(db, *host, *email, first, *tempEmail, adminPassword); err != nil {
 			fail(err.Error())
 		} else {
-			fmt.Println(id)
+			fmt.Printf("REPLACEMENT_ID=%s\n", id)
 		}
 	case "finalize":
 		adminPassword := first

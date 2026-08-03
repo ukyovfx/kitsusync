@@ -61,8 +61,10 @@ if ($Phase -eq "Prepare") {
     try {
         $hostForHelper = $KitsuHost
         if (-not (Get-Command go -ErrorAction SilentlyContinue)) { $hostForHelper = $KitsuHost.Replace('127.0.0.1','host.docker.internal').Replace('localhost','host.docker.internal') }
-        $replacementID = (Invoke-RecoveryGo @("-phase", "prepare", "-db", "data/sqlite.db", "-host", $hostForHelper, "-email", $adminEmail, "-temp-email", $tempEmail) "$adminPassword`n$tempPassword").Trim()
-        if ([string]::IsNullOrWhiteSpace($replacementID)) { Fail "Replacement ID was not returned." }
+        $helperOutput = Invoke-RecoveryGo @("-phase", "prepare", "-db", "data/sqlite.db", "-host", $hostForHelper, "-email", $adminEmail, "-temp-email", $tempEmail) "$adminPassword`n$tempPassword"
+        $replacementLine = @($helperOutput -split "`r?`n" | Where-Object { $_ -match '^REPLACEMENT_ID=([0-9a-fA-F-]{36})$' } | Select-Object -Last 1)
+        if ($replacementLine.Count -ne 1) { Fail "Replacement ID was not returned." }
+        $replacementID = ($replacementLine[0] -replace '^REPLACEMENT_ID=', '').Trim()
         @{ old_id=$oldID; replacement_id=$replacementID; replacement_email=$tempEmail; canonical_email=$canonicalEmail } | ConvertTo-Json | Set-Content -Encoding UTF8 $statePath
         Restart-And-Verify
         Write-Output "Phase 1 prepared. Stop here and explicitly approve Phase 2."
