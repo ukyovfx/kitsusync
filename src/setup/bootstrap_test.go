@@ -43,7 +43,7 @@ func TestAdminSessionCanConfigureDedicatedRuntimeWithoutReusingBrowserToken(t *t
 		case r.Method == http.MethodGet && r.URL.Path == "/api/data/persons":
 			fmt.Fprint(w, `[]`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/data/persons":
-			fmt.Fprint(w, `{"id":"runtime-person","email":"kitsusync-bot@local.invalid","is_bot":true}`)
+			fmt.Fprint(w, `{"id":"runtime-person","email":"kitsusync-bot@google.com","is_bot":true}`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -64,7 +64,7 @@ func TestAdminSessionCanConfigureDedicatedRuntimeWithoutReusingBrowserToken(t *t
 	if rr.Code != http.StatusOK || !configured {
 		t.Fatalf("runtime setup did not complete, status=%d configured=%v", rr.Code, configured)
 	}
-	if got := model.GetSetting(db, RuntimeKitsuEmailSettingKey); got != "kitsusync-bot@local.invalid" {
+	if got := model.GetSetting(db, RuntimeKitsuEmailSettingKey); got != "kitsusync-bot@google.com" {
 		t.Fatalf("runtime email = %q", got)
 	}
 	if encrypted := model.GetSetting(db, RuntimeKitsuPasswordSettingKey); !strings.HasPrefix(encrypted, "v1:") {

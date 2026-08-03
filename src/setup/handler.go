@@ -355,7 +355,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			}
 			botEmail, botPassword, err := CreateKitsuBotAccount(kitsuHostInput, adminEmail, adminPassword)
 			if err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Botアカウントの作成に失敗しました: ", "Bot account creation failed: ")+err.Error()))
+				fmt.Fprint(w, renderBotSetupError(lang, runtimeBotSetupError(err)))
 				return
 			}
 			model.SetSetting(db, "kitsu.hostname", kitsuHostInput)
