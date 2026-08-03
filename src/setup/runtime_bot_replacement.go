@@ -57,11 +57,12 @@ func PrepareRuntimeBotReplacement(db *gorm.DB, host, adminEmail, adminPassword, 
 		}
 		return "", errors.New("replacement bot ownership verification failed")
 	}
+	createdSummary := fmt.Sprintf("created replacement id=%s email=%s is_bot=%t active=%t archived=%t role=%s password_hash=not returned by public API", created.ID, created.Email, created.IsBot, created.Active, created.Archived, created.Role)
 	if err := RecoverRuntimeCredentials(db, host, tempEmail, tempPassword); err != nil {
 		if cleanupErr := kitsuJSON(adminToken, http.MethodDelete, normalizeKitsuHostname(host)+"api/data/persons/"+created.ID, nil, nil); cleanupErr != nil {
 			return "", fmt.Errorf("replacement recovery failed and rollback failed: %w", cleanupErr)
 		}
-		return "", fmt.Errorf("replacement bot authentication or persistence failed: %w", err)
+		return "", fmt.Errorf("%s; replacement recovery failed and rollback succeeded: %w", createdSummary, err)
 	}
 	return created.ID, nil
 }

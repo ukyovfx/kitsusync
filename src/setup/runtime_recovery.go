@@ -2,6 +2,7 @@ package setup
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -21,8 +22,9 @@ func RecoverRuntimeCredentials(db *gorm.DB, kitsuHost, email, password string) e
 	if email == "" || password == "" {
 		return errors.New("runtime recovery credentials are incomplete")
 	}
-	if basicauth.AuthForJWTToken(strings.TrimRight(kitsuHost, "/")+"/api/auth/login", email, password) == "" {
-		return errors.New("runtime bot authentication failed")
+	authURL := strings.TrimRight(kitsuHost, "/") + "/api/auth/login"
+	if token, diagnostics := basicauth.AuthForJWTTokenDetailed(authURL, email, password); token == "" {
+		return fmt.Errorf("runtime bot authentication failed at %s (status=%d, category=%s)", authURL, diagnostics.StatusCode, diagnostics.Category)
 	}
 	ciphertext, err := encryptRuntimeSecret(password)
 	if err != nil {
@@ -32,7 +34,7 @@ func RecoverRuntimeCredentials(db *gorm.DB, kitsuHost, email, password string) e
 		model.SetSetting(tx, RuntimeKitsuEmailSettingKey, email)
 		return model.SetSecretSettingWithError(tx, RuntimeKitsuPasswordSettingKey, ciphertext)
 	}); err != nil {
-		return err
+		return fmt.Errorf("runtime credential persistence failed: %w", err)
 	}
 	os.Setenv(RuntimeKitsuEmailEnv, email)
 	os.Setenv(RuntimeKitsuPasswordEnv, password)

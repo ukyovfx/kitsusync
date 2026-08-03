@@ -11,61 +11,73 @@ import (
 	"github.com/gookit/slog"
 )
 
-// AuthForJWTToken authenticates against Kitsu and returns a JWT.
-// Returns "" on any failure (network, bad credentials, malformed response).
-// Callers must check for the empty string and react accordingly — the
-// hourly refresher in main.go keeps the previous token if this returns "".
-func AuthForJWTToken(url, email, password string) string {
-	type Payload struct {
+type AuthDiagnostics struct {
+	StatusCode int
+	Category   string
+}
+
+// AuthForJWTTokenDetailed returns a token and sanitized diagnostics without
+// exposing credentials or response bodies.
+func AuthForJWTTokenDetailed(url, email, password string) (string, AuthDiagnostics) {
+	var diagnostics AuthDiagnostics
+
+	payload := struct {
 		Email    string `json:"email,omitempty"`
 		Password string `json:"password,omitempty"`
-	}
-
-	payload := &Payload{Email: email, Password: password}
+	}{Email: email, Password: password}
 
 	putBody, err := json.Marshal(payload)
 	if err != nil {
-		slog.Error("basicauth: marshal failed", "err", err)
-		return ""
+		diagnostics.Category = "request encoding error"
+		return "", diagnostics
 	}
-	requestBody := bytes.NewBuffer(putBody)
 
-	client := &http.Client{Timeout: 15 * time.Second}
-
-	req, err := http.NewRequest(http.MethodPost, url, requestBody)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(putBody))
 	if err != nil {
-		slog.Error("basicauth: NewRequest failed", "err", err, "url", url)
-		return ""
+		diagnostics.Category = "request creation error"
+		return "", diagnostics
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
-		slog.Error("basicauth: client.Do failed", "err", err, "url", url)
-		return ""
+		diagnostics.Category = "network error"
+		return "", diagnostics
 	}
 	defer resp.Body.Close()
 
 	respBody, err := ioutil.ReadAll(resp.Body)
+	diagnostics.StatusCode = resp.StatusCode
 	if err != nil {
-		slog.Error("basicauth: read body failed", "err", err)
-		return ""
+		diagnostics.Category = "response read error"
+		return "", diagnostics
 	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		slog.Error("basicauth: non-2xx response — check Kitsu credentials in conf.toml",
-			"status", resp.StatusCode)
-		return ""
+		diagnostics.Category = "HTTP error"
+		return "", diagnostics
 	}
 
-	type Response struct {
+	var response struct {
 		Token string `json:"access_token"`
 	}
-	var jwt Response
-	if err := json.Unmarshal(respBody, &jwt); err != nil {
-		slog.Error("basicauth: unmarshal failed — check Kitsu credentials in conf.toml", "err", err)
-		return ""
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		diagnostics.Category = "invalid auth response"
+		return "", diagnostics
 	}
+	if response.Token == "" {
+		diagnostics.Category = "missing access token"
+		return "", diagnostics
+	}
+	diagnostics.Category = "success"
+	return response.Token, diagnostics
+}
 
-	return jwt.Token
+// AuthForJWTToken authenticates against Kitsu and returns a JWT.
+// It preserves the legacy empty-string failure contract.
+func AuthForJWTToken(url, email, password string) string {
+	token, diagnostics := AuthForJWTTokenDetailed(url, email, password)
+	if diagnostics.Category != "success" {
+		slog.Error("basicauth: authentication failed", "url", url, "status", diagnostics.StatusCode, "category", diagnostics.Category)
+	}
+	return token
 }
