@@ -52,9 +52,15 @@ func PrepareRuntimeBotReplacement(db *gorm.DB, host, adminEmail, adminPassword, 
 		return "", err
 	}
 	if created.ID == "" || !created.IsBot || !strings.EqualFold(created.Email, tempEmail) {
+		if created.ID != "" {
+			_ = kitsuJSON(adminToken, http.MethodDelete, normalizeKitsuHostname(host)+"api/data/persons/"+created.ID, nil, nil)
+		}
 		return "", errors.New("replacement bot ownership verification failed")
 	}
 	if err := RecoverRuntimeCredentials(db, host, tempEmail, tempPassword); err != nil {
+		if cleanupErr := kitsuJSON(adminToken, http.MethodDelete, normalizeKitsuHostname(host)+"api/data/persons/"+created.ID, nil, nil); cleanupErr != nil {
+			return "", fmt.Errorf("replacement recovery failed and rollback failed: %w", cleanupErr)
+		}
 		return "", fmt.Errorf("replacement bot authentication or persistence failed: %w", err)
 	}
 	return created.ID, nil
