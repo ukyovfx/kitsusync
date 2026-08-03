@@ -19,7 +19,7 @@ function Read-PlainPassword([string]$Prompt) {
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
 }
 function Invoke-RecoveryGo([string[]]$Arguments, [string]$InputText) {
-    $dockerArgs = @("run", "--rm", "-i", "-v", "${repo}:/app", "-w", "/app", "golang:1.21-bookworm", "go", "run", "./tools/runtime-recovery") + $Arguments
+    $dockerArgs = @( "run", "--rm", "-i", "-v", "${repo}:/app", "-w", "/app", "golang:1.21-bookworm", "/usr/local/go/bin/go", "run", "./tools/runtime-recovery" ) + $Arguments
     if (Get-Command go -ErrorAction SilentlyContinue) {
         $InputText | go run .\tools\runtime-recovery @Arguments
     } else {
