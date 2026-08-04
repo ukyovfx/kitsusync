@@ -984,7 +984,7 @@ func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhoo
     </div>
     <div class="section-card glass">
       <h3>%s</h3>
-      <div class="channel-groups">%s</div>
+      <details class="advanced-details"><summary>%s</summary><div class="channel-groups">%s</div></details>
     </div>
     %s
     %s
@@ -995,6 +995,7 @@ func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhoo
 		t(lang, "言語", "Language"),
 		esc(displayProjectLang(projectLang)),
 		t(lang, "現在のチャンネル", "Current channels"),
+		t(lang, "タスクタイプとチャンネルの編集", "Edit Task Type and channel mappings"),
 		channelsHTML.String(),
 		addChannelHTML.String(),
 		unassignedHTML.String(),

@@ -158,3 +158,51 @@ func TestSetupResultFailureLocalization(t *testing.T) {
 		t.Fatalf("Japanese stale message was not localized: %q", got)
 	}
 }
+
+func TestConnectedProductionSurfacesNotificationControlsAndSafeHierarchy(t *testing.T) {
+	t.Setenv("KitsuJWTToken", "")
+	db, err := gorm.Open(sqlite.Open("file:connected-production-ui?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(1)
+	}
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}); err != nil {
+		t.Fatal(err)
+	}
+	project := model.Project{KitsuProjectID: "p1", Name: "Test Production", ProjectType: "asset", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1", Language: "ja"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProjectWebhook{KitsuProjectID: "p1", ChannelName: "wfa", TaskType: "Animation", WebhookURL: "https://example.invalid/webhook", DiscordChannelID: "channel-1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProductionNotificationConfig{ProductionID: "p1", ProductionName: "Test Production", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	for _, lang := range []string{"ja", "en"} {
+		req := httptest.NewRequest("GET", "/bot/admin/projects?project=p1&lang="+lang, nil)
+		body := renderConnectedProductionNotificationSection(db, project, lang, req, "ok", "Active", "Valid notification routes are active.", nil) + renderProjectChannels(project, model.ListProjectWebhooks(db, "p1"), nil, lang, req)
+		if !strings.Contains(body, "notification-controls") || !strings.Contains(body, "connected-production-dry-run") {
+			t.Fatalf("%s Connected Productions page is missing notification controls", lang)
+		}
+		advancedLabel := `class="advanced-details"`
+		if !strings.Contains(body, advancedLabel) {
+			t.Fatalf("%s page is missing collapsed advanced details", lang)
+		}
+		if strings.Index(body, `class="btn-danger"`) < strings.Index(body, `class="advanced-details"`) {
+			t.Fatalf("%s destructive action is visible before advanced/edit sections", lang)
+		}
+	}
+	config := model.FindProductionNotificationConfig(db, "p1")
+	config.Enabled = false
+	if err := db.Save(config).Error; err != nil {
+		t.Fatal(err)
+	}
+	paused := renderConnectedProductionNotificationSection(db, project, "en", httptest.NewRequest("GET", "/bot/admin/projects?lang=en", nil), "warn", "Paused", "Notifications are paused and can be resumed.", nil)
+	if !strings.Contains(paused, "Resume routing") || !strings.Contains(paused, "Inspect dry-run") {
+		t.Fatal("paused production does not expose resume and dry-run controls")
+	}
+}

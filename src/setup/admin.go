@@ -587,7 +587,31 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				statusClass = "warn"
 				statusLabel = t(lang, "確認中", "Review")
 			}
-			categoryID := strings.TrimSpace(p.DiscordCategoryID)
+			routingConfig := model.FindProductionNotificationConfig(db, p.KitsuProjectID)
+		routingIssues := []string{}
+		if routingConfig != nil {
+			routingIssues = model.ValidateProductionNotificationConfig(db, p.KitsuProjectID, model.ListProductionNotificationRoutes(db, p.KitsuProjectID))
+		}
+		statusHint := t(lang, "通知状態を確認してください。", "Review notification readiness.")
+		statusClass = "bad"
+		switch {
+		case routingConfig == nil:
+			statusLabel = t(lang, "未設定", "Incomplete")
+			statusHint = t(lang, "通知ルートを1件以上設定すると有効化できます。", "Add at least one valid notification route to activate notifications.")
+		case !routingConfig.Enabled:
+			statusClass = "warn"
+			statusLabel = t(lang, "一時停止中", "Paused")
+			statusHint = t(lang, "通知は一時停止中です。再開できます。", "Notifications are paused and can be resumed.")
+		case len(routingIssues) > 0:
+			statusLabel = t(lang, "要対応", "Needs attention")
+			statusHint = t(lang, "通知ルートに stale または未完了の項目があります。", "Notification routes contain stale or incomplete items.")
+		default:
+			statusClass = "ok"
+			statusLabel = t(lang, "有効", "Active")
+			statusHint = t(lang, "有効な通知ルートがあります。", "Valid notification routes are active.")
+		}
+		notificationSectionHTML := renderConnectedProductionNotificationSection(db, p, lang, r, statusClass, statusLabel, statusHint, routingIssues)
+		categoryID := strings.TrimSpace(p.DiscordCategoryID)
 			if categoryID == "" {
 				categoryID = "—"
 			}
@@ -886,7 +910,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			if selectedProjectID != "" && p.KitsuProjectID == selectedProjectID {
 				openAttr = " open"
 			}
-			blocks.WriteString(fmt.Sprintf(`
+			projectBlock := fmt.Sprintf(`
 <details class="accordion"%s>
   <summary>
     <div class="accordion-summary-main">
@@ -916,7 +940,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
       </div>
       <p class="hint" style="margin:12px 0 0">%s <code>%s</code> ・ %s <code>%s</code></p>
     </div>
-    <form method="POST" class="section-card glass">
+    <details class="advanced-details"><summary>%s</summary><form method="POST" class="section-card glass">
       <input type="hidden" name="project_id" value="%s">
       <div class="page-heading" style="margin-bottom:14px">
         <div>
@@ -932,8 +956,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
         </div>
       </div>
       <div class="button-row"><button type="submit" class="btn">%s</button></div>
-    </form>
+    </form></details>
     <div style="display:none" aria-hidden="true">%s%s%s%s%s%s%s%s%s%s%s%s</div>
+    %s
     %s
     %s
     %s
@@ -963,6 +988,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(p.KitsuProjectID),
 				esc(t(lang, "Discord Category ID", "Discord Category ID")),
 				esc(categoryID),
+				esc(t(lang, "詳細設定", "Advanced details")),
 				esc(p.KitsuProjectID),
 				esc(t(lang, "Discord ID を編集", "Edit Discord ID")),
 				esc(t(lang, "この production が使う Discord Server / Guild ID をここで確認・更新します。", "Review or update the Discord Server / Guild ID used by this production here.")),
@@ -981,11 +1007,17 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "この flow は現在、validated channel-only deletion だけを扱います。KitsuSync の連携解除、project row 削除、category 削除は自動では行わず、まず保存済みの category / channel 参照を preview 表示します。", "This flow currently covers validated channel-only deletion only. It does not automatically remove the KitsuSync connection, project row, or category. It starts by previewing the saved category / channel references.")),
 				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not execute Discord deletion. Ownership is not proven strongly enough yet, so this step is dry-run only.")),
 				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
+				"",
 				unifiedDeleteSectionHTML,
 				renderExplicitTaskTypeChannelPlan(p, allTaskTypes, botToken, r, lang, db),
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 				"",
-			))
+			)
+			projectBlock = strings.Replace(projectBlock, "<p class=\"hint\" style=\"margin:12px 0 0\">", "<details class=\"advanced-details\"><summary>"+esc(t(lang, "詳細設定", "Advanced details"))+"</summary><p class=\"hint\" style=\"margin:12px 0 0\">", 1)
+			projectBlock = strings.Replace(projectBlock, "</p></div>\n    <details class=\"advanced-details\">", "</p></details></div>\n    <details class=\"advanced-details\">", 1)
+			advancedFormStart := `<details class="advanced-details"><summary>` + esc(t(lang, "詳細設定", "Advanced details")) + `</summary><form`
+			projectBlock = strings.Replace(projectBlock, advancedFormStart, notificationSectionHTML+advancedFormStart, 1)
+			blocks.WriteString(projectBlock)
 			blocks.WriteString(`<div class="button-row" style="margin:8px 0 0 12px"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/workflow-diagnosis?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "Workflow Diagnosis", "Workflow Diagnosis")) + `</a></div>`)
 		}
 		if blocks.Len() == 0 {
@@ -994,6 +1026,34 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "このページでは連携済み production ごとに Discord 側の接続情報と routing を管理します。新しい接続は新規連携セットアップから作成し、既存の見直しはここで行います。", "Use this page to manage Discord connection details and routing for each connected production. Create new connections in New Connection Setup, then review existing ones here.")) + `</p></div>` + blocks.String() + `</div>`
 		fmt.Fprint(w, adminPage(lang, t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions"), r, body))
 	}
+}
+
+func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Project, lang string, r *http.Request, statusClass, statusLabel, statusHint string, issues []string) string {
+	actionURL := withLang("/bot/admin/production-routing?project="+url.QueryEscape(project.KitsuProjectID), r)
+	config := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
+	taskTypes := routingTaskTypes()
+	stateMessage := statusHint
+	if len(issues) > 0 {
+		stateMessage += " " + t(lang, "次の対応: ルートを確認してください。", "Next action: review the routing configuration.")
+	}
+	var dryRunOptions strings.Builder
+	dryRunOptions.WriteString(`<option value="">` + esc(tr(lang, "production_routing.select_task_type")) + `</option>`)
+	for _, taskType := range taskTypes {
+		dryRunOptions.WriteString(`<option value="` + esc(taskType.ID) + `">` + esc(taskType.Name) + `</option>`)
+	}
+	var actionHTML string
+	if config != nil {
+		action := "pause"
+		label := tr(lang, "production_routing.pause")
+		if !config.Enabled {
+			action = "resume"
+			label = tr(lang, "production_routing.resume")
+		}
+		actionHTML = `<form method="post" action="` + esc(actionURL) + `"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="` + action + `"><button class="btn" type="submit">` + esc(label) + `</button></form>`
+	} else {
+		actionHTML = `<a class="btn" href="` + esc(actionURL) + `">` + esc(t(lang, "通知ルートを設定", "Configure notification routes")) + `</a>`
+	}
+	return `<section class="section-card glass notification-controls" aria-labelledby="notification-controls-title"><div class="page-heading"><div><h3 id="notification-controls-title">` + esc(t(lang, "通知状態とテスト", "Notification state and testing")) + `</h3><p class="hint">` + esc(stateMessage) + `</p></div><span class="status-pill ` + esc(statusClass) + `">` + esc(statusLabel) + `</span></div><div class="button-row">` + actionHTML + `</div><form method="post" action="` + esc(actionURL) + `" class="section-card glass" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="connected-production-dry-run">` + esc(t(lang, "dry-run 用 Task Type", "Task Type for dry-run")) + `</label><select id="connected-production-dry-run" name="dry_run_task_type_id">` + dryRunOptions.String() + `</select><div class="button-row"><button class="btn secondary" type="submit">` + esc(tr(lang, "production_routing.dry_run")) + `</button></div><p class="field-help" role="note">` + esc(t(lang, "dry-run はネットワーク通信を行わず、Discord メッセージも送信しません。結果には Production、Task Type、対象 channel、実行予定、skip reason を表示します。", "Dry-run is network-free and sends no Discord message. The result shows Production, Task Type, mapped channel, intended action, and skip reason.")) + `</p></form></section>`
 }
 
 type connectedProductionChannelCandidate struct {
