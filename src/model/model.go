@@ -1,6 +1,8 @@
 package model
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -189,6 +191,42 @@ func ValidateProductionChannelMappings(productionID, guildID string, mappings []
 		}
 	}
 	return compactUniqueStrings(issues)
+}
+
+func ListProductionChannelMappings(db *gorm.DB, productionID string) []ProductionChannelMapping {
+	var rows []ProductionChannelMapping
+	if db == nil {
+		return rows
+	}
+	db.Where("production_id = ?", strings.TrimSpace(productionID)).Order("task_type_id asc").Find(&rows)
+	return rows
+}
+
+func SaveProductionChannelMappings(db *gorm.DB, productionID, guildID string, mappings []ProductionChannelMapping) error {
+	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(guildID) == "" {
+		return gorm.ErrInvalidData
+	}
+	if issues := ValidateProductionChannelMappings(productionID, guildID, mappings); len(issues) > 0 {
+		return fmt.Errorf("invalid production channel mappings: %s", strings.Join(issues, "; "))
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, mapping := range mappings {
+			var existing ProductionChannelMapping
+			err := tx.Where("production_id = ? AND task_type_id = ?", productionID, mapping.TaskTypeID).First(&existing).Error
+			if err == nil {
+				mapping.ID = existing.ID
+				mapping.CreatedAt = existing.CreatedAt
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			mapping.ProductionID = strings.TrimSpace(productionID)
+			mapping.GuildID = strings.TrimSpace(guildID)
+			if err := tx.Save(&mapping).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func compactUniqueStrings(values []string) []string {

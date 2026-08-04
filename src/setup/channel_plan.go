@@ -1,8 +1,10 @@
 package setup
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"html"
+	"net/http"
 	"regexp"
 	"sort"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"app/src/api/kitsu"
 	"app/src/model"
+	"gorm.io/gorm"
 )
 
 const discordTextChannelNameLimit = 100
@@ -46,6 +49,52 @@ func renderTaskTypeChannelPlanCard(project model.Project, webhooks []model.Proje
 		status = "Needs attention: resolve ownership or naming conflicts before any Discord write"
 	}
 	return fmt.Sprintf(`<section class="section-card glass"><div class="page-heading"><div><h3>Task Type Channels</h3><p class="hint">One channel is proposed per Kitsu Task Type in the linked Discord Guild. Names are deterministic; IDs remain routing identity.</p></div><span class="status-pill %s">%s</span></div><p class="field-help">Production: %s · Linked Discord Server: %s · Channels to create: %d</p><table><caption class="sr-only">Task Type channel creation and reuse plan</caption><thead><tr><th>Task Type</th><th>Proposed channel</th><th>Action</th></tr></thead><tbody>%s</tbody></table><p class="field-help">This is a network-free preview. No Discord write occurs until the exact plan is shown again and explicitly confirmed.</p></section>`, map[bool]string{true: "ok", false: "warn"}[plan.Valid()], html.EscapeString(status), html.EscapeString(project.Name), html.EscapeString(fallbackText(project.DiscordGuildID, "not linked")), plan.CreateCount(), rows.String())
+}
+
+func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.TaskType, botToken string, r *http.Request, lang string, db *gorm.DB) string {
+	selectedGuild := strings.TrimSpace(r.URL.Query().Get("plan_guild"))
+	var guilds []DiscordGuild
+	if strings.TrimSpace(botToken) != "" {
+		guilds, _ = ListBotGuilds(botToken)
+	}
+	var options strings.Builder
+	options.WriteString(`<option value="">Select an existing Discord Guild</option>`)
+	for _, guild := range guilds {
+		id := strings.TrimSpace(guild.ID)
+		if id == "" {
+			continue
+		}
+		selected := ""
+		if id == selectedGuild {
+			selected = " selected"
+		}
+		options.WriteString(`<option value="` + html.EscapeString(id) + `"` + selected + `>` + html.EscapeString(strings.TrimSpace(guild.Name)) + `</option>`)
+	}
+	var body strings.Builder
+	body.WriteString(`<section class="section-card glass"><h3>Task Type Channels</h3><p class="hint">Select the Production's existing Discord Guild. The complete plan is read-only until you explicitly confirm it.</p>`)
+	body.WriteString(`<form method="GET" class="section-stack"><input type="hidden" name="project" value="` + html.EscapeString(project.KitsuProjectID) + `"><label for="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `">Discord Guild</label><select id="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `" name="plan_guild">` + options.String() + `</select><button class="btn" type="submit">Preview exact channel plan</button></form>`)
+	if selectedGuild == "" || strings.TrimSpace(botToken) == "" {
+		body.WriteString(`<p class="field-help">` + html.EscapeString(map[bool]string{true: "A valid Discord bot token is required to read Guilds.", false: "Select a Guild to read its current text channels."}[strings.TrimSpace(botToken) == ""]) + ` No Discord write occurs.</p></section>`)
+		return body.String()
+	}
+	channels, err := ListGuildChannels(selectedGuild, botToken)
+	if err != nil {
+		body.WriteString(`<p class="field-help" role="status">The selected Guild could not be read. No Discord write occurs.</p></section>`)
+		return body.String()
+	}
+	plan := BuildTaskTypeChannelPlan(project.KitsuProjectID, selectedGuild, taskTypes, existingChannelsForPlan(channels, model.ListProductionChannelMappings(db, project.KitsuProjectID)))
+	body.WriteString(`<div class="table-wrap"><table><caption class="sr-only">Exact Task Type channel plan</caption><thead><tr><th>Task Type</th><th>Channel</th><th>Action</th></tr></thead><tbody>`)
+	for _, entry := range plan.Entries {
+		body.WriteString(`<tr><td>` + html.EscapeString(entry.TaskTypeName) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
+	}
+	body.WriteString(`</tbody></table></div>`)
+	if plan.Valid() {
+		body.WriteString(`<p class="field-help">This exact plan will create only missing text channels. Existing exact channels are reused. Existing channels are never renamed, deleted, overwritten, or permission-edited.</p><form method="POST" class="section-stack"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + html.EscapeString(project.KitsuProjectID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(selectedGuild) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Fingerprint()) + `"><label><input type="checkbox" name="confirm_plan" value="yes" required> I reviewed and confirm this exact plan.</label><button class="btn" type="submit">Confirm and create missing channels</button></form>`)
+	} else {
+		body.WriteString(`<p class="field-help" role="alert">This plan is blocked. Resolve the conflict or stale reference before confirmation. No Discord write occurs.</p>`)
+	}
+	body.WriteString(`</section>`)
+	return body.String()
 }
 
 type TaskTypeChannelPlanEntry struct {
@@ -100,9 +149,14 @@ func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.Ta
 			plan.Conflicts = append(plan.Conflicts, "Task Types "+previous+" and "+id+" normalize to #"+channelName)
 		}
 		seen[channelName] = id
-		if existingID := strings.TrimSpace(existing[channelName]); existingID != "" && entry.Action == "create" {
-			entry.Action = "reuse"
-			entry.ExistingID = existingID
+		if existingID, present := existing[channelName]; present && entry.Action == "create" {
+			if strings.TrimSpace(existingID) == "" {
+				entry.Action = "blocked"
+				plan.Conflicts = append(plan.Conflicts, "Discord channel name #"+channelName+" has no stable Production mapping")
+			} else {
+				entry.Action = "reuse"
+				entry.ExistingID = strings.TrimSpace(existingID)
+			}
 		}
 		plan.Entries = append(plan.Entries, entry)
 	}
@@ -133,4 +187,61 @@ func (p TaskTypeChannelPlan) Valid() bool {
 		}
 		return true
 	}()
+}
+
+func (p TaskTypeChannelPlan) Fingerprint() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\x00%s\x00", p.ProductionID, p.GuildID)
+	for _, entry := range p.Entries {
+		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%s\x00%s\x00", entry.TaskTypeID, entry.TaskTypeName, entry.ChannelName, entry.ExistingID, entry.Action)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func existingChannelsForPlan(channels []DiscordGuildChannel, mappings []model.ProductionChannelMapping) map[string]string {
+	existing := map[string]string{}
+	for _, channel := range channels {
+		if channel.Type != 0 || strings.TrimSpace(channel.ID) == "" || strings.TrimSpace(channel.Name) == "" {
+			continue
+		}
+		name := NormalizeTaskTypeChannelName(channel.Name)
+		// A Discord name alone does not prove ownership. It is blocked until a
+		// stable mapping for this Production confirms an exact reuse.
+		if _, present := existing[name]; !present {
+			existing[name] = ""
+		}
+	}
+	for _, mapping := range mappings {
+		if strings.TrimSpace(mapping.ChannelName) != "" && strings.TrimSpace(mapping.ChannelID) != "" {
+			existing[NormalizeTaskTypeChannelName(mapping.ChannelName)] = strings.TrimSpace(mapping.ChannelID)
+		}
+	}
+	return existing
+}
+
+type channelPlanCreateFunc func(guildID, name string) (string, error)
+
+func applyTaskTypeChannelPlan(plan TaskTypeChannelPlan, create channelPlanCreateFunc) ([]model.ProductionChannelMapping, int, error) {
+	if !plan.Valid() {
+		return nil, 0, fmt.Errorf("channel plan is blocked")
+	}
+	rows := make([]model.ProductionChannelMapping, 0, len(plan.Entries))
+	created := 0
+	for _, entry := range plan.Entries {
+		channelID := strings.TrimSpace(entry.ExistingID)
+		if entry.Action == "create" {
+			var err error
+			channelID, err = create(plan.GuildID, entry.ChannelName)
+			if err != nil {
+				return rows, created, fmt.Errorf("channel creation stopped after %d writes: %w", created, err)
+			}
+			created++
+		}
+		if channelID == "" {
+			return rows, created, fmt.Errorf("channel mapping result was empty for task type %s", entry.TaskTypeID)
+		}
+		rows = append(rows, model.ProductionChannelMapping{ProductionID: plan.ProductionID, GuildID: plan.GuildID, TaskTypeID: entry.TaskTypeID, TaskTypeName: entry.TaskTypeName, ChannelID: channelID, ChannelName: entry.ChannelName, Active: true, MigrationState: "current"})
+	}
+	return rows, created, nil
 }

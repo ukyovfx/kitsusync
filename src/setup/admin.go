@@ -446,6 +446,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
 		fallbackGuildID = strings.TrimSpace(fallbackGuildID)
+		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
+			return
+		}
 
 		if handleProjectRoutingMutation(w, r, lang, fallbackGuildID, botToken, db) {
 			return
@@ -979,7 +982,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not execute Discord deletion. Ownership is not proven strongly enough yet, so this step is dry-run only.")),
 				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
 				unifiedDeleteSectionHTML,
-				renderTaskTypeChannelPlanCard(p, webhooks, allTaskTypes, lang),
+				renderExplicitTaskTypeChannelPlan(p, allTaskTypes, botToken, r, lang, db),
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 				"",
 			))

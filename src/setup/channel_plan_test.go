@@ -47,3 +47,22 @@ func TestTaskTypeChannelPlanRequiresExplicitConfirmationForCreates(t *testing.T)
 		t.Fatalf("unexpected create plan: %#v", plan)
 	}
 }
+
+func TestBlockedPlanNeverCallsDiscordCreate(t *testing.T) {
+	plan := BuildTaskTypeChannelPlan("p", "g", []kitsu.TaskType{{ID: "tt", Name: "Same"}, {ID: "tt2", Name: "same"}}, nil)
+	writes := 0
+	if _, _, err := applyTaskTypeChannelPlan(plan, func(string, string) (string, error) { writes++; return "c", nil }); err == nil {
+		t.Fatal("blocked plan must fail")
+	}
+	if writes != 0 {
+		t.Fatalf("blocked plan made %d writes", writes)
+	}
+}
+
+func TestPlanFingerprintChangesWhenGuildChannelsChange(t *testing.T) {
+	base := BuildTaskTypeChannelPlan("p", "g", []kitsu.TaskType{{ID: "tt", Name: "Shot"}}, map[string]string{})
+	reuse := BuildTaskTypeChannelPlan("p", "g", []kitsu.TaskType{{ID: "tt", Name: "Shot"}}, map[string]string{"shot": "channel-1"})
+	if base.Fingerprint() == reuse.Fingerprint() {
+		t.Fatal("fingerprint must change when a channel becomes reusable")
+	}
+}

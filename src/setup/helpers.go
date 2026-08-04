@@ -619,6 +619,48 @@ func CreateTextChannel(guildID, categoryID, name, botToken string) (string, erro
 	return result.ID, nil
 }
 
+type DiscordGuildChannel struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     int    `json:"type"`
+	ParentID string `json:"parent_id"`
+}
+
+type DiscordGuild struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func ListBotGuilds(botToken string) ([]DiscordGuild, error) {
+	body, status, err := botDo(http.MethodGet, discordAPI+"/users/@me/guilds", nil, botToken)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, discordBotAPIError("discord guild list failed", status, body)
+	}
+	var guilds []DiscordGuild
+	if err := json.Unmarshal(body, &guilds); err != nil {
+		return nil, fmt.Errorf("discord guild list response was invalid")
+	}
+	return guilds, nil
+}
+
+func ListGuildChannels(guildID, botToken string) ([]DiscordGuildChannel, error) {
+	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/channels", discordAPI, strings.TrimSpace(guildID)), nil, botToken)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, discordBotAPIError("discord guild channel list failed", status, body)
+	}
+	var channels []DiscordGuildChannel
+	if err := json.Unmarshal(body, &channels); err != nil {
+		return nil, fmt.Errorf("discord guild channel list response was invalid")
+	}
+	return channels, nil
+}
+
 func CreateWebhook(channelID, name, botToken string) (string, error) {
 	respBody, status, err := botDo(http.MethodPost, fmt.Sprintf("%s/channels/%s/webhooks", discordAPI, channelID), map[string]any{
 		"name": strings.TrimSpace(name),

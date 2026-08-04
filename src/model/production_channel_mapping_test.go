@@ -1,6 +1,20 @@
 package model
 
-import "testing"
+import (
+	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func newProductionMappingTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
 
 func TestValidateProductionChannelMappingsRejectsCrossGuildAndStaleRows(t *testing.T) {
 	issues := ValidateProductionChannelMappings("p1", "g1", []ProductionChannelMapping{
@@ -19,5 +33,23 @@ func TestValidateProductionChannelMappingsUsesStableIDsAndRejectsDuplicates(t *t
 	})
 	if len(issues) != 1 {
 		t.Fatalf("expected one duplicate issue, got %#v", issues)
+	}
+}
+
+func TestProductionChannelMappingsPersistByProductionAndTaskTypeID(t *testing.T) {
+	db := newProductionMappingTestDB(t)
+	if err := db.AutoMigrate(&ProductionChannelMapping{}); err != nil {
+		t.Fatal(err)
+	}
+	rows := []ProductionChannelMapping{{ProductionID: "p1", GuildID: "g1", TaskTypeID: "tt1", TaskTypeName: "Same", ChannelID: "c1", ChannelName: "same", Active: true, MigrationState: "current"}}
+	if err := SaveProductionChannelMappings(db, "p1", "g1", rows); err != nil {
+		t.Fatal(err)
+	}
+	if got := ListProductionChannelMappings(db, "p2"); len(got) != 0 {
+		t.Fatalf("mapping leaked across Productions: %#v", got)
+	}
+	got := ListProductionChannelMappings(db, "p1")
+	if len(got) != 1 || got[0].TaskTypeID != "tt1" || got[0].ChannelID != "c1" {
+		t.Fatalf("unexpected persisted mapping: %#v", got)
 	}
 }
