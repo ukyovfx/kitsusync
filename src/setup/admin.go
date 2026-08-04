@@ -1008,7 +1008,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not execute Discord deletion. Ownership is not proven strongly enough yet, so this step is dry-run only.")),
 				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
 				"",
-				unifiedDeleteSectionHTML,
+				`<details class="advanced-details danger-zone"><summary>`+esc(t(lang, "Danger Zone", "Danger Zone"))+`</summary>`+unifiedDeleteSectionHTML+`</details>`,
 				renderExplicitTaskTypeChannelPlan(p, allTaskTypes, botToken, r, lang, db),
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 				"",
@@ -1018,7 +1018,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			advancedFormStart := `<details class="advanced-details"><summary>` + esc(t(lang, "詳細設定", "Advanced details")) + `</summary><form`
 			projectBlock = strings.Replace(projectBlock, advancedFormStart, notificationSectionHTML+advancedFormStart, 1)
 			blocks.WriteString(projectBlock)
-			blocks.WriteString(`<div class="button-row" style="margin:8px 0 0 12px"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/workflow-diagnosis?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "Workflow Diagnosis", "Workflow Diagnosis")) + `</a></div>`)
+			blocks.WriteString(`<div id="troubleshooting" class="section-card glass"><h3>` + esc(t(lang, "トラブルシューティング", "Troubleshooting")) + `</h3><p class="hint">` + esc(t(lang, "現在の状態と次の対応を確認できます。詳細な診断情報は詳細設定で確認できます。", "Review the current issue and next action. Raw diagnostic details remain in Advanced settings.")) + `</p></div>`)
 		}
 		if blocks.Len() == 0 {
 			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだ連携済みプロダクションがありません", "No connected productions yet."), t(lang, "先に新規連携セットアップで production connection を作成してから、ここで確認・編集してください。", "Create the first production connection in New Connection Setup, then review it here.")))

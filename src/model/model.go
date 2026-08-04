@@ -161,9 +161,19 @@ type ProductionChannelMapping struct {
 	ChannelName    string
 	Active         bool
 	MigrationState string `gorm:"not null;default:'current'"`
+	OperationID    string `gorm:"index"`
+	State          string `gorm:"not null;default:'current'"`
+	LastError      string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
+
+const (
+	ChannelMappingStateCurrent        = "current"
+	ChannelMappingStatePending        = "pending"
+	ChannelMappingStatePartial        = "partial"
+	ChannelMappingStateReviewRequired = "review_required"
+)
 
 func ValidateProductionChannelMappings(productionID, guildID string, mappings []ProductionChannelMapping) []string {
 	issues := []string{}
@@ -227,6 +237,51 @@ func SaveProductionChannelMappings(db *gorm.DB, productionID, guildID string, ma
 		}
 		return nil
 	})
+}
+
+// SavePendingProductionChannelMapping records a verified Discord result before
+// the complete channel plan is ready. Pending rows are deliberately inactive;
+// they make retries and manual recovery possible without enabling partial
+// notification routing.
+func SavePendingProductionChannelMapping(db *gorm.DB, mapping ProductionChannelMapping) error {
+	if db == nil || strings.TrimSpace(mapping.ProductionID) == "" || strings.TrimSpace(mapping.GuildID) == "" || strings.TrimSpace(mapping.TaskTypeID) == "" || strings.TrimSpace(mapping.ChannelID) == "" {
+		return gorm.ErrInvalidData
+	}
+	mapping.Active = false
+	mapping.State = ChannelMappingStatePending
+	mapping.MigrationState = ChannelMappingStatePending
+	var existing ProductionChannelMapping
+	if err := db.Where("production_id = ? AND task_type_id = ?", mapping.ProductionID, mapping.TaskTypeID).First(&existing).Error; err == nil {
+		mapping.ID = existing.ID
+		mapping.CreatedAt = existing.CreatedAt
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return db.Save(&mapping).Error
+}
+
+func MarkProductionChannelMappingsReviewRequired(db *gorm.DB, productionID, operationID string, keep map[string]bool, reason string) error {
+	if db == nil {
+		return gorm.ErrInvalidData
+	}
+	var rows []ProductionChannelMapping
+	if err := db.Where("production_id = ?", strings.TrimSpace(productionID)).Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if keep[row.TaskTypeID] {
+			continue
+		}
+		row.Active = false
+		row.State = ChannelMappingStateReviewRequired
+		row.MigrationState = ChannelMappingStateReviewRequired
+		row.OperationID = operationID
+		row.LastError = reason
+		if err := db.Save(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ActivateProductionRoutingFromMappings makes the new routing model the
@@ -293,7 +348,31 @@ func ActivateProductionRoutingFromMappings(db *gorm.DB, productionID, guildID st
 			}
 			mapping.ProductionID = strings.TrimSpace(productionID)
 			mapping.GuildID = strings.TrimSpace(guildID)
+			mapping.Active = true
+			mapping.State = ChannelMappingStateCurrent
+			mapping.MigrationState = ChannelMappingStateCurrent
+			mapping.LastError = ""
 			if err := tx.Save(&mapping).Error; err != nil {
+				return err
+			}
+		}
+		keep := make(map[string]bool, len(mappings))
+		for _, mapping := range mappings {
+			keep[strings.TrimSpace(mapping.TaskTypeID)] = true
+		}
+		var existingMappings []ProductionChannelMapping
+		if err := tx.Where("production_id = ?", productionID).Find(&existingMappings).Error; err != nil {
+			return err
+		}
+		for _, existingMapping := range existingMappings {
+			if keep[existingMapping.TaskTypeID] {
+				continue
+			}
+			existingMapping.Active = false
+			existingMapping.State = ChannelMappingStateReviewRequired
+			existingMapping.MigrationState = ChannelMappingStateReviewRequired
+			existingMapping.LastError = "Task Type omitted from the confirmed plan; review before reuse"
+			if err := tx.Save(&existingMapping).Error; err != nil {
 				return err
 			}
 		}

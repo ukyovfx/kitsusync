@@ -263,7 +263,11 @@ FileBrowser is for local/debug inspection only.
 
 ## Routing Behavior
 
-Notification routing priority is:
+Notification delivery uses the Production-centered model. A normal operator manages one selected Production from Connected Productions (`/bot/admin/projects?project=<production-id>`); the older routing URL is compatibility-only.
+
+The notification route identity is the stable Production ID plus stable Kitsu Task Type ID. A connected Production alone is not ready: every enabled route must resolve to a verified Discord text channel destination in that Production's linked Discord server. Unmatched, paused, stale, incomplete, cross-server, or ambiguous routes fail closed and are diagnosed without dispatch.
+
+Legacy notification fallback priority is:
 
 1. Project/task-type webhook records created by `/bot/setup`
 2. `[[discord.productions]]`

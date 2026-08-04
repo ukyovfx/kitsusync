@@ -46,6 +46,18 @@ func ProductionRoutingCompatibilityHandler() http.HandlerFunc {
 	}
 }
 
+// WorkflowDiagnosisCompatibilityHandler keeps old links usable while the
+// selected Production page owns troubleshooting for normal users.
+func WorkflowDiagnosisCompatibilityHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		target := withLang("/bot/admin/projects", r)
+		if project := strings.TrimSpace(r.URL.Query().Get("project")); project != "" {
+			target += "&project=" + url.QueryEscape(project)
+		}
+		http.Redirect(w, r, target+"#troubleshooting", http.StatusSeeOther)
+	}
+}
+
 func routingTaskTypes() []kitsu.TaskType {
 	// Unit tests and setup-required pages must remain local and fast when no
 	// runtime Kitsu session exists. The authenticated runtime supplies the list.

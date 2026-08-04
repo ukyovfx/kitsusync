@@ -58,7 +58,7 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 		guilds, _ = ListBotGuilds(botToken)
 	}
 	var options strings.Builder
-	options.WriteString(`<option value="">` + esc(tr(lang, "channel_plan.select_guild")) + `</option>`)
+	options.WriteString(`<option value="">` + esc(tr(lang, "channel_plan.select_server")) + `</option>`)
 	for _, guild := range guilds {
 		id := strings.TrimSpace(guild.ID)
 		if id == "" {
@@ -72,7 +72,7 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 	}
 	var body strings.Builder
 	body.WriteString(`<section class="section-card glass"><h3>` + esc(tr(lang, "channel_plan.title")) + `</h3><p class="hint">` + esc(tr(lang, "channel_plan.description")) + `</p>`)
-	body.WriteString(`<form method="GET" class="section-stack"><input type="hidden" name="project" value="` + html.EscapeString(project.KitsuProjectID) + `"><label for="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `">` + esc(t(lang, "Discord Guild", "Discord Guild")) + `</label><select id="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `" name="plan_guild">` + options.String() + `</select><button class="btn" type="submit">` + esc(tr(lang, "channel_plan.preview")) + `</button></form>`)
+	body.WriteString(`<form method="GET" class="section-stack"><input type="hidden" name="project" value="` + html.EscapeString(project.KitsuProjectID) + `"><label for="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `">` + esc(tr(lang, "channel_plan.server")) + `</label><select id="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `" name="plan_guild">` + options.String() + `</select><button class="btn" type="submit">` + esc(tr(lang, "channel_plan.preview")) + `</button></form>`)
 	if selectedGuild == "" || strings.TrimSpace(botToken) == "" {
 		body.WriteString(`<p class="field-help">` + html.EscapeString(map[bool]string{true: tr(lang, "channel_plan.no_token"), false: tr(lang, "channel_plan.no_guild")}[strings.TrimSpace(botToken) == ""]) + ` ` + esc(tr(lang, "channel_plan.no_write")) + `</p></section>`)
 		return body.String()

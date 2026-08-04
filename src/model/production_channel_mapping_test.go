@@ -53,3 +53,21 @@ func TestProductionChannelMappingsPersistByProductionAndTaskTypeID(t *testing.T)
 		t.Fatalf("unexpected persisted mapping: %#v", got)
 	}
 }
+
+func TestPendingProductionChannelMappingIsInactiveAndRetryable(t *testing.T) {
+	db := newProductionMappingTestDB(t)
+	if err := db.AutoMigrate(&ProductionChannelMapping{}); err != nil {
+		t.Fatal(err)
+	}
+	row := ProductionChannelMapping{ProductionID: "p1", GuildID: "g1", TaskTypeID: "tt1", ChannelID: "c1", OperationID: "op-1"}
+	if err := SavePendingProductionChannelMapping(db, row); err != nil {
+		t.Fatal(err)
+	}
+	var got ProductionChannelMapping
+	if err := db.Where("production_id = ? AND task_type_id = ?", "p1", "tt1").First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Active || got.State != ChannelMappingStatePending || got.MigrationState != ChannelMappingStatePending || got.OperationID != "op-1" {
+		t.Fatalf("pending mapping was not safely persisted: %#v", got)
+	}
+}
