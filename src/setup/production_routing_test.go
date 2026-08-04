@@ -37,7 +37,7 @@ func TestProductionRoutingHandlerDoesNotRenderWebhookURL(t *testing.T) {
 	if err := model.CreateProjectWebhook(db, "p1", "Alerts", "", "https://example.invalid/secret-value", "11111111111111111"); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/bot/admin/production-routing?project=p1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin/production-routing?project=p1&lang=en", nil)
 	res := httptest.NewRecorder()
 	ProductionRoutingHandler(db)(res, req)
 	if strings.Contains(res.Body.String(), "secret-value") {
@@ -67,7 +67,7 @@ func TestDryRunActionIsLocalAndRedactsDestinationURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	form := strings.NewReader("action=dry_run&production_id=p1&dry_run_task_type_id=tt1")
-	req := httptest.NewRequest(http.MethodPost, "/bot/admin/production-routing", form)
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/production-routing?lang=en", form)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	res := httptest.NewRecorder()
 	ProductionRoutingHandler(db)(res, req)

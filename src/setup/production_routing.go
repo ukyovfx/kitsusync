@@ -20,9 +20,9 @@ func ProductionRoutingHandler(db *gorm.DB) http.HandlerFunc {
 		message := ""
 		if r.Method == http.MethodPost {
 			if r.FormValue("action") == "dry_run" {
-				message = dryRunProductionRoutingAction(db, r)
+				message = dryRunProductionRoutingAction(db, r, lang)
 			} else {
-				message = saveProductionRoutingAction(db, r)
+				message = saveProductionRoutingAction(db, r, lang)
 			}
 		}
 		selectedID := strings.TrimSpace(r.URL.Query().Get("project"))
@@ -30,7 +30,7 @@ func ProductionRoutingHandler(db *gorm.DB) http.HandlerFunc {
 			selectedID = strings.TrimSpace(r.FormValue("production_id"))
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, adminPage(lang, "Production Notification Routing", r, renderProductionRouting(db, r, selectedID, message)))
+		fmt.Fprint(w, adminPage(lang, tr(lang, "production_routing.title"), r, renderProductionRouting(db, r, selectedID, message)))
 	}
 }
 
@@ -64,28 +64,28 @@ func taskTypeName(taskTypeID string, taskTypes []kitsu.TaskType) string {
 	return ""
 }
 
-func dryRunProductionRoutingAction(db *gorm.DB, r *http.Request) string {
+func dryRunProductionRoutingAction(db *gorm.DB, r *http.Request, lang string) string {
 	productionID := strings.TrimSpace(r.FormValue("production_id"))
 	taskTypeID := strings.TrimSpace(r.FormValue("dry_run_task_type_id"))
 	project := model.FindProjectByKitsuID(db, productionID)
 	if project == nil || taskTypeID == "" {
-		return "Dry-run skipped: select a connected Production and Task Type."
+		return tr(lang, "dry_run.select_production_task_type")
 	}
 	taskTypes := routingTaskTypes()
 	taskTypeLabel := taskTypeName(taskTypeID, taskTypes)
 	if len(taskTypes) > 0 && taskTypeLabel == "" {
-		return "Dry-run skipped: the selected Task Type is stale in current Kitsu metadata; configuration was not changed."
+		return t(lang, "dry-run をスキップしました: 選択した Task Type は現在の Kitsu metadata では stale です。設定は変更していません。", "Dry-run skipped: the selected Task Type is stale in current Kitsu metadata; configuration was not changed.")
 	}
 	if taskTypeLabel == "" {
-		taskTypeLabel = "unknown Task Type"
+		taskTypeLabel = t(lang, "不明な Task Type", "unknown Task Type")
 	}
 	config := model.FindProductionNotificationConfig(db, productionID)
-	result := fmt.Sprintf("Dry-run | Production ID: %s | Task Type ID: %s | Production: %s | Task Type: %s | matched rule: none | intended destination: none | preview: Production=%s; entity/task=not supplied; Task Type=%s; status=not supplied; user=not supplied; link=not supplied", productionID, taskTypeID, project.Name, taskTypeLabel, project.Name, taskTypeLabel)
+	result := fmt.Sprintf(t(lang, "Dry-run | Production ID: %s | Task Type ID: %s | Production: %s | Task Type: %s | matched rule: なし | intended destination: なし | preview: Production=%s; entity/task=未指定; Task Type=%s; status=未指定; user=未指定; link=未指定", "Dry-run | Production ID: %s | Task Type ID: %s | Production: %s | Task Type: %s | matched rule: none | intended destination: none | preview: Production=%s; entity/task=not supplied; Task Type=%s; status=not supplied; user=not supplied; link=not supplied"), productionID, taskTypeID, project.Name, taskTypeLabel, project.Name, taskTypeLabel)
 	if config == nil {
-		return result + " | skip reason: Production is unconfigured"
+		return result + t(lang, " | skip reason: Production は未設定です", " | skip reason: Production is unconfigured")
 	}
 	if !config.Enabled {
-		return result + " | skip reason: Production routing is paused"
+		return result + t(lang, " | skip reason: Production routing は一時停止中です", " | skip reason: Production routing is paused")
 	}
 	for _, route := range model.ListProductionNotificationRoutes(db, productionID) {
 		if route.TaskTypeID != taskTypeID {
@@ -93,39 +93,39 @@ func dryRunProductionRoutingAction(db *gorm.DB, r *http.Request) string {
 		}
 		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
 		if webhook == nil || webhook.KitsuProjectID != productionID || strings.TrimSpace(webhook.WebhookURL) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" {
-			return result + fmt.Sprintf(" | matched rule: route-%d | skip reason: destination is stale or invalid", route.ID)
+			return result + fmt.Sprintf(t(lang, " | matched rule: route-%d | skip reason: 送信先が stale または無効です", " | matched rule: route-%d | skip reason: destination is stale or invalid"), route.ID)
 		}
-		return fmt.Sprintf("Dry-run | Production ID: %s | Task Type ID: %s | Production: %s | Task Type: %s | matched rule: route-%d | intended destination: configured channel | preview: Production=%s; entity/task=not supplied; Task Type=%s; status=not supplied; user=not supplied; link=not supplied | skip reason: none", productionID, taskTypeID, project.Name, taskTypeLabel, route.ID, project.Name, taskTypeLabel)
+		return fmt.Sprintf(t(lang, "Dry-run | Production ID: %s | Task Type ID: %s | Production: %s | Task Type: %s | matched rule: route-%d | intended destination: 設定済み channel | preview: Production=%s; entity/task=未指定; Task Type=%s; status=未指定; user=未指定; link=未指定 | skip reason: なし", "Dry-run | Production ID: %s | Task Type ID: %s | Production: %s | Task Type: %s | matched rule: route-%d | intended destination: configured channel | preview: Production=%s; entity/task=not supplied; Task Type=%s; status=not supplied; user=not supplied; link=not supplied | skip reason: none"), productionID, taskTypeID, project.Name, taskTypeLabel, route.ID, project.Name, taskTypeLabel)
 	}
-	return result + " | skip reason: no Task Type ID route matched"
+	return result + t(lang, " | skip reason: Task Type ID route が一致しませんでした", " | skip reason: no Task Type ID route matched")
 }
 
-func saveProductionRoutingAction(db *gorm.DB, r *http.Request) string {
+func saveProductionRoutingAction(db *gorm.DB, r *http.Request, lang string) string {
 	productionID := strings.TrimSpace(r.FormValue("production_id"))
 	project := model.FindProjectByKitsuID(db, productionID)
 	if project == nil {
-		return "The selected Production is not connected locally."
+		return t(lang, "選択した Production はローカルに接続されていません。", "The selected Production is not connected locally.")
 	}
 	action := strings.TrimSpace(r.FormValue("action"))
 	config := model.FindProductionNotificationConfig(db, productionID)
 	if action == "pause" || action == "resume" {
 		if config == nil {
-			return "No saved routing configuration exists for this Production."
+			return t(lang, "この Production に保存済みの routing 設定はありません。", "No saved routing configuration exists for this Production.")
 		}
 		if action == "resume" {
 			routes := model.ListProductionNotificationRoutes(db, productionID)
 			if issues := model.ValidateProductionNotificationConfig(db, productionID, routes); len(issues) > 0 {
-				return "Cannot resume: " + strings.Join(issues, "; ")
+				return t(lang, "再開できません: ", "Cannot resume: ") + strings.Join(issues, "; ")
 			}
 		}
 		config.Enabled = action == "resume"
 		if err := db.Save(config).Error; err != nil {
-			return "Could not update routing state."
+			return t(lang, "routing 状態を更新できませんでした。", "Could not update routing state.")
 		}
 		if config.Enabled {
-			return "Routing resumed."
+			return t(lang, "routing を再開しました。", "Routing resumed.")
 		}
-		return "Routing paused."
+		return t(lang, "routing を一時停止しました。", "Routing paused.")
 	}
 	if action != "save" {
 		return ""
@@ -153,17 +153,17 @@ func saveProductionRoutingAction(db *gorm.DB, r *http.Request) string {
 		routes = append(routes, model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: taskTypeID, TaskTypeName: displayName, DestinationWebhookID: uint(destinationID)})
 		if len(knownTaskTypes) > 0 {
 			if _, ok := knownTaskTypeIDs[taskTypeID]; !ok {
-				return "Configuration was not activated: selected Task Type is stale in current Kitsu metadata; configuration was not changed."
+				return t(lang, "設定は有効化されませんでした: 選択した Task Type は現在の Kitsu metadata では stale です。設定は変更していません。", "Configuration was not activated: selected Task Type is stale in current Kitsu metadata; configuration was not changed.")
 			}
 		}
 	}
 	if issues := model.ValidateProductionNotificationConfig(db, productionID, routes); len(issues) > 0 {
-		return "Configuration was not activated: " + strings.Join(issues, "; ")
+		return t(lang, "設定は有効化されませんでした: ", "Configuration was not activated: ") + strings.Join(issues, "; ")
 	}
 	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: productionID, ProductionName: project.Name, Enabled: true}, routes); err != nil {
-		return "Could not save routing configuration."
+		return t(lang, "routing 設定を保存できませんでした。", "Could not save routing configuration.")
 	}
-	return "Valid configuration saved and activated automatically."
+	return t(lang, "有効な設定を保存し、自動的に有効化しました。", "Valid configuration saved and activated automatically.")
 }
 
 func valueAt(values []string, index int) string {
@@ -184,11 +184,12 @@ func renderProductionRouting(db *gorm.DB, r *http.Request, selectedID, message s
 		}
 	}
 	var b strings.Builder
-	b.WriteString(`<div class="section-stack"><div class="section-card glass"><h2>Production Notification Routing</h2><p class="hint">Choose a Production, Kitsu Task Type, and configured destination. Unconfigured or paused Productions send nothing.</p>`)
+	b.WriteString(`<div class="section-stack"><div class="section-card glass"><h2>` + esc(tr(currentLang(r), "production_routing.title")) + `</h2><p class="hint">` + esc(tr(currentLang(r), "production_routing.description")) + `</p>`)
 	if message != "" {
 		b.WriteString(`<div class="notice" role="status" aria-live="polite">` + esc(message) + `</div>`)
 	}
-	b.WriteString(`<form method="get"><label for="production-select">Production <select id="production-select" name="project" onchange="this.form.submit()"><option value="">Select a connected Production</option>`)
+	lang := currentLang(r)
+	b.WriteString(`<form method="get"><label for="production-select">Production <select id="production-select" name="project" onchange="this.form.submit()"><option value="">` + esc(tr(lang, "production_routing.select_production")) + `</option>`)
 	for _, project := range projects {
 		selectedAttr := ""
 		if project.KitsuProjectID == selectedID {
@@ -198,7 +199,7 @@ func renderProductionRouting(db *gorm.DB, r *http.Request, selectedID, message s
 	}
 	b.WriteString(`</select></label></form></div>`)
 	if selected == nil {
-		b.WriteString(`<div class="section-card glass"><p class="hint">Select a Production to configure routes and inspect non-secret diagnoses.</p></div></div>`)
+		b.WriteString(`<div class="section-card glass"><p class="hint">` + esc(tr(lang, "production_routing.no_selection")) + `</p></div></div>`)
 		return b.String()
 	}
 	config := model.FindProductionNotificationConfig(db, selected.KitsuProjectID)
@@ -210,29 +211,30 @@ func renderProductionRouting(db *gorm.DB, r *http.Request, selectedID, message s
 			state = "paused"
 		}
 	}
-	b.WriteString(`<div class="section-card glass"><h3>` + esc(selected.Name) + `</h3><p>Status: <strong class="status-text">` + esc(state) + `</strong></p><details><summary>Advanced identifiers</summary><p class="hint">Production ID: <code>` + esc(selected.KitsuProjectID) + `</code></p></details>`)
-	b.WriteString(`<form method="post"><input type="hidden" name="production_id" value="` + esc(selected.KitsuProjectID) + `"><input type="hidden" name="action" value="save"><table><thead><tr><th>Task Type</th><th>Display name</th><th>Destination</th></tr></thead><tbody>`)
+	stateLabel := map[string]string{"unconfigured": tr(lang, "production_routing.unconfigured"), "enabled": tr(lang, "production_routing.enabled"), "paused": tr(lang, "production_routing.paused")}[state]
+	b.WriteString(`<div class="section-card glass"><h3>` + esc(selected.Name) + `</h3><p>` + esc(tr(lang, "production_routing.status")) + `: <strong class="status-text">` + esc(stateLabel) + `</strong></p><details><summary>` + esc(tr(lang, "production_routing.advanced")) + `</summary><p class="hint">Production ID: <code>` + esc(selected.KitsuProjectID) + `</code></p></details>`)
+	b.WriteString(`<form method="post"><input type="hidden" name="production_id" value="` + esc(selected.KitsuProjectID) + `"><input type="hidden" name="action" value="save"><table><thead><tr><th>` + esc(tr(lang, "production_routing.task_type")) + `</th><th>` + esc(tr(lang, "production_routing.display_name")) + `</th><th>` + esc(tr(lang, "production_routing.destination")) + `</th></tr></thead><tbody>`)
 	for _, route := range model.ListProductionNotificationRoutes(db, selected.KitsuProjectID) {
-		b.WriteString(routingRow(selected.KitsuProjectID, route, db, taskTypes))
+		b.WriteString(routingRow(lang, selected.KitsuProjectID, route, db, taskTypes))
 	}
-	b.WriteString(routingRow(selected.KitsuProjectID, model.ProductionNotificationRoute{}, db, taskTypes))
-	b.WriteString(`</tbody></table><p class="hint">Task Type choices come from current Kitsu metadata. IDs are used internally and are not required for normal setup.</p><button class="btn" type="submit">Save and activate</button></form>`)
-	b.WriteString(`<form method="post" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(selected.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="dry-run-task-type">Task Type for dry-run <select id="dry-run-task-type" name="dry_run_task_type_id"><option value="">Select a Task Type</option>`)
+	b.WriteString(routingRow(lang, selected.KitsuProjectID, model.ProductionNotificationRoute{}, db, taskTypes))
+	b.WriteString(`</tbody></table><p class="hint">` + esc(t(lang, "Task Type の選択肢は現在の Kitsu metadata から取得します。ID は内部で使うため、通常の設定で入力する必要はありません。", "Task Type choices come from current Kitsu metadata. IDs are used internally and are not required for normal setup.")) + `</p><button class="btn" type="submit">` + esc(tr(lang, "production_routing.save")) + `</button></form>`)
+	b.WriteString(`<form method="post" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(selected.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="dry-run-task-type">` + esc(t(lang, "dry-run 用 Task Type", "Task Type for dry-run")) + ` <select id="dry-run-task-type" name="dry_run_task_type_id"><option value="">` + esc(tr(lang, "production_routing.select_task_type")) + `</option>`)
 	for _, taskType := range taskTypes {
 		b.WriteString(`<option value="` + esc(taskType.ID) + `">` + esc(taskType.Name) + `</option>`)
 	}
-	b.WriteString(`</select></label><button class="btn secondary" type="submit">Inspect dry-run</button></form>`)
+	b.WriteString(`</select></label><button class="btn secondary" type="submit">` + esc(tr(lang, "production_routing.dry_run")) + `</button></form>`)
 	if config != nil {
-		action, label := "pause", "Pause routing"
+		action, label := "pause", tr(lang, "production_routing.pause")
 		if !config.Enabled {
-			action, label = "resume", "Resume routing"
+			action, label = "resume", tr(lang, "production_routing.resume")
 		}
 		b.WriteString(`<form method="post" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(selected.KitsuProjectID) + `"><input type="hidden" name="action" value="` + action + `"><button class="btn secondary" type="submit">` + label + `</button></form>`)
 	}
-	b.WriteString(`</div><div class="section-card glass"><h3>Recent routing diagnoses</h3>`)
+	b.WriteString(`</div><div class="section-card glass"><h3>` + esc(tr(lang, "production_routing.diagnoses")) + `</h3>`)
 	diagnoses := model.ListNotificationRoutingDiagnoses(db, selected.KitsuProjectID, 20)
 	if len(diagnoses) == 0 {
-		b.WriteString(`<p class="hint">No routing skips recorded.</p>`)
+		b.WriteString(`<p class="hint">` + esc(tr(lang, "production_routing.no_diagnoses")) + `</p>`)
 	} else {
 		for _, diagnosis := range diagnoses {
 			b.WriteString(`<p><code>` + esc(diagnosis.TaskTypeID) + `</code>: ` + esc(diagnosis.Detail) + `</p>`)
@@ -242,13 +244,13 @@ func renderProductionRouting(db *gorm.DB, r *http.Request, selectedID, message s
 	return b.String()
 }
 
-func routingRow(projectID string, route model.ProductionNotificationRoute, db *gorm.DB, taskTypes []kitsu.TaskType) string {
+func routingRow(lang, projectID string, route model.ProductionNotificationRoute, db *gorm.DB, taskTypes []kitsu.TaskType) string {
 	var b strings.Builder
 	fieldID := "task-type-new"
 	if route.ID != 0 {
 		fieldID = "task-type-" + strconv.FormatUint(uint64(route.ID), 10)
 	}
-	b.WriteString(`<tr><td><label class="sr-only" for="` + fieldID + `">Task Type</label><select id="` + fieldID + `" name="task_type_id"><option value="">Select a Task Type</option>`)
+	b.WriteString(`<tr><td><label class="sr-only" for="` + fieldID + `">` + esc(tr(lang, "production_routing.task_type")) + `</label><select id="` + fieldID + `" name="task_type_id"><option value="">` + esc(tr(lang, "production_routing.select_task_type")) + `</option>`)
 	found := false
 	for _, taskType := range taskTypes {
 		selected := ""
@@ -258,9 +260,9 @@ func routingRow(projectID string, route model.ProductionNotificationRoute, db *g
 		b.WriteString(`<option value="` + esc(taskType.ID) + `"` + selected + `>` + esc(taskType.Name) + `</option>`)
 	}
 	if route.TaskTypeID != "" && !found {
-		b.WriteString(`<option value="` + esc(route.TaskTypeID) + `" selected>Stale Task Type reference</option>`)
+		b.WriteString(`<option value="` + esc(route.TaskTypeID) + `" selected>` + esc(t(lang, "stale Task Type reference", "Stale Task Type reference")) + `</option>`)
 	}
-	b.WriteString(`</select><input type="hidden" name="task_type_name" value="` + esc(route.TaskTypeName) + `"></td><td>` + esc(route.TaskTypeName) + `</td><td><label class="sr-only">Destination</label><select name="destination_webhook_id"><option value="">Select destination</option>`)
+	b.WriteString(`</select><input type="hidden" name="task_type_name" value="` + esc(route.TaskTypeName) + `"></td><td>` + esc(route.TaskTypeName) + `</td><td><label class="sr-only">` + esc(tr(lang, "production_routing.destination")) + `</label><select name="destination_webhook_id"><option value="">` + esc(t(lang, "送信先を選択", "Select destination")) + `</option>`)
 	for _, webhook := range model.ListProjectWebhooks(db, projectID) {
 		selected := ""
 		if webhook.ID == route.DestinationWebhookID {

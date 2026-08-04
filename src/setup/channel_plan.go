@@ -29,7 +29,7 @@ type TaskTypeChannelPlan struct {
 
 func renderTaskTypeChannelPlanCard(project model.Project, webhooks []model.ProjectWebhook, taskTypes []kitsu.TaskType, lang string) string {
 	if len(taskTypes) == 0 {
-		return `<section class="section-card glass"><h3>Task Type Channels</h3><p class="hint">Task Types are unavailable until the Kitsu runtime session is connected. No Discord changes are proposed.</p></section>`
+		return `<section class="section-card glass"><h3>` + esc(tr(lang, "channel_plan.title")) + `</h3><p class="hint">` + esc(t(lang, "Kitsu runtime session が接続されるまで Task Types は利用できません。Discord への変更は提案されません。", "Task Types are unavailable until the Kitsu runtime session is connected. No Discord changes are proposed.")) + `</p></section>`
 	}
 	existing := map[string]string{}
 	for _, webhook := range webhooks {
@@ -44,9 +44,9 @@ func renderTaskTypeChannelPlanCard(project model.Project, webhooks []model.Proje
 	for _, entry := range plan.Entries {
 		rows.WriteString(`<tr><td>` + html.EscapeString(entry.TaskTypeName) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
 	}
-	status := "Ready for explicit confirmation"
+	status := t(lang, "明示確認の準備ができています", "Ready for explicit confirmation")
 	if !plan.Valid() {
-		status = "Needs attention: resolve ownership or naming conflicts before any Discord write"
+		status = t(lang, "要確認: Discord への書き込み前に所有権または名前の競合を解消してください", "Needs attention: resolve ownership or naming conflicts before any Discord write")
 	}
 	return fmt.Sprintf(`<section class="section-card glass"><div class="page-heading"><div><h3>Task Type Channels</h3><p class="hint">One channel is proposed per Kitsu Task Type in the linked Discord Guild. Names are deterministic; IDs remain routing identity.</p></div><span class="status-pill %s">%s</span></div><p class="field-help">Production: %s · Linked Discord Server: %s · Channels to create: %d</p><table><caption class="sr-only">Task Type channel creation and reuse plan</caption><thead><tr><th>Task Type</th><th>Proposed channel</th><th>Action</th></tr></thead><tbody>%s</tbody></table><p class="field-help">This is a network-free preview. No Discord write occurs until the exact plan is shown again and explicitly confirmed.</p></section>`, map[bool]string{true: "ok", false: "warn"}[plan.Valid()], html.EscapeString(status), html.EscapeString(project.Name), html.EscapeString(fallbackText(project.DiscordGuildID, "not linked")), plan.CreateCount(), rows.String())
 }
@@ -58,7 +58,7 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 		guilds, _ = ListBotGuilds(botToken)
 	}
 	var options strings.Builder
-	options.WriteString(`<option value="">Select an existing Discord Guild</option>`)
+	options.WriteString(`<option value="">` + esc(tr(lang, "channel_plan.select_guild")) + `</option>`)
 	for _, guild := range guilds {
 		id := strings.TrimSpace(guild.ID)
 		if id == "" {
@@ -71,27 +71,27 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 		options.WriteString(`<option value="` + html.EscapeString(id) + `"` + selected + `>` + html.EscapeString(strings.TrimSpace(guild.Name)) + `</option>`)
 	}
 	var body strings.Builder
-	body.WriteString(`<section class="section-card glass"><h3>Task Type Channels</h3><p class="hint">Select the Production's existing Discord Guild. The complete plan is read-only until you explicitly confirm it.</p>`)
-	body.WriteString(`<form method="GET" class="section-stack"><input type="hidden" name="project" value="` + html.EscapeString(project.KitsuProjectID) + `"><label for="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `">Discord Guild</label><select id="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `" name="plan_guild">` + options.String() + `</select><button class="btn" type="submit">Preview exact channel plan</button></form>`)
+	body.WriteString(`<section class="section-card glass"><h3>` + esc(tr(lang, "channel_plan.title")) + `</h3><p class="hint">` + esc(tr(lang, "channel_plan.description")) + `</p>`)
+	body.WriteString(`<form method="GET" class="section-stack"><input type="hidden" name="project" value="` + html.EscapeString(project.KitsuProjectID) + `"><label for="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `">` + esc(t(lang, "Discord Guild", "Discord Guild")) + `</label><select id="plan-guild-` + html.EscapeString(project.KitsuProjectID) + `" name="plan_guild">` + options.String() + `</select><button class="btn" type="submit">` + esc(tr(lang, "channel_plan.preview")) + `</button></form>`)
 	if selectedGuild == "" || strings.TrimSpace(botToken) == "" {
-		body.WriteString(`<p class="field-help">` + html.EscapeString(map[bool]string{true: "A valid Discord bot token is required to read Guilds.", false: "Select a Guild to read its current text channels."}[strings.TrimSpace(botToken) == ""]) + ` No Discord write occurs.</p></section>`)
+		body.WriteString(`<p class="field-help">` + html.EscapeString(map[bool]string{true: tr(lang, "channel_plan.no_token"), false: tr(lang, "channel_plan.no_guild")}[strings.TrimSpace(botToken) == ""]) + ` ` + esc(tr(lang, "channel_plan.no_write")) + `</p></section>`)
 		return body.String()
 	}
 	channels, err := ListGuildChannels(selectedGuild, botToken)
 	if err != nil {
-		body.WriteString(`<p class="field-help" role="status">The selected Guild could not be read. No Discord write occurs.</p></section>`)
+		body.WriteString(`<p class="field-help" role="status">` + esc(tr(lang, "channel_plan.read_failed")) + `</p></section>`)
 		return body.String()
 	}
 	plan := BuildTaskTypeChannelPlan(project.KitsuProjectID, selectedGuild, taskTypes, existingChannelsForPlan(channels, model.ListProductionChannelMappings(db, project.KitsuProjectID)))
-	body.WriteString(`<div class="table-wrap"><table><caption class="sr-only">Exact Task Type channel plan</caption><thead><tr><th>Task Type</th><th>Channel</th><th>Action</th></tr></thead><tbody>`)
+	body.WriteString(`<div class="table-wrap"><table><caption class="sr-only">` + esc(tr(lang, "channel_plan.exact_plan")) + `</caption><thead><tr><th>` + esc(tr(lang, "channel_plan.task_type")) + `</th><th>` + esc(tr(lang, "channel_plan.channel")) + `</th><th>` + esc(tr(lang, "channel_plan.action")) + `</th></tr></thead><tbody>`)
 	for _, entry := range plan.Entries {
 		body.WriteString(`<tr><td>` + html.EscapeString(entry.TaskTypeName) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
 	}
 	body.WriteString(`</tbody></table></div>`)
 	if plan.Valid() {
-		body.WriteString(`<p class="field-help">This exact plan will create only missing text channels. Existing exact channels are reused. Existing channels are never renamed, deleted, overwritten, or permission-edited.</p><form method="POST" class="section-stack"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + html.EscapeString(project.KitsuProjectID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(selectedGuild) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Fingerprint()) + `"><label><input type="checkbox" name="confirm_plan" value="yes" required> I reviewed and confirm this exact plan.</label><button class="btn" type="submit">Confirm and create missing channels</button></form>`)
+		body.WriteString(`<p class="field-help">` + esc(tr(lang, "channel_plan.create_only")) + `</p><form method="POST" class="section-stack"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + html.EscapeString(project.KitsuProjectID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(selectedGuild) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Fingerprint()) + `"><label><input type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "channel_plan.confirmed")) + `</label><button class="btn" type="submit">` + esc(tr(lang, "channel_plan.confirm")) + `</button></form>`)
 	} else {
-		body.WriteString(`<p class="field-help" role="alert">This plan is blocked. Resolve the conflict or stale reference before confirmation. No Discord write occurs.</p>`)
+		body.WriteString(`<p class="field-help" role="alert">` + esc(tr(lang, "channel_plan.blocked")) + `</p>`)
 	}
 	body.WriteString(`</section>`)
 	return body.String()

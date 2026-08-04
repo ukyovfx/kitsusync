@@ -240,7 +240,7 @@ func kitsuLoginCheck(loginURL, email, password string) (role, kitsuToken string,
 	return result.User.Role, result.AccessToken, result.User.Role != "" && result.AccessToken != ""
 }
 
-func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
+func legacyLoginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
 	errHTML := ""
 	if errMsg != "" {
 		errHTML = `<div class="toast glass" role="alert" aria-live="assertive" style="background:rgba(255,106,80,.12);border-color:rgba(255,106,80,.24);color:#ffd7cf">` + html.EscapeString(errMsg) + `</div>`
@@ -289,5 +289,22 @@ func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request
 		t(lang, "ログイン", "Login"),
 	)
 
+	return appShell("KitsuSync", "", lang, r, "", body)
+}
+
+func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
+	errHTML := ""
+	if errMsg != "" {
+		errHTML = `<div class="toast glass" role="alert" aria-live="assertive">` + html.EscapeString(errMsg) + `</div>`
+	}
+	nextInput := ""
+	if next != "" {
+		nextInput = `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">`
+	}
+	hostnameInput := ""
+	if showHostname {
+		hostnameInput = `<label for="login-hostname">Kitsu URL</label><input id="login-hostname" type="url" name="hostname" placeholder="http://127.0.0.1:8080" required>`
+	}
+	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + hostnameInput + `<div class="section-card glass"><label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
 	return appShell("KitsuSync", "", lang, r, "", body)
 }

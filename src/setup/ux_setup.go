@@ -169,11 +169,11 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 	kitsuHost, botToken, guildID, webhookURL := refreshCreds()
 	diag := SetupDiagnostics{Timestamp: time.Now()}
 
-	diag.Env = buildEnvChecks(db, kitsuHost, botToken, guildID)
-	diag.Kitsu = buildKitsuCheck(kitsuHost)
+	diag.Env = buildEnvChecks(db, kitsuHost, botToken, guildID, "en")
+	diag.Kitsu = buildKitsuCheck(kitsuHost, "en")
 	diag.Discord = buildDiscordCheck(botToken, guildID)
 	diag.Projects = buildProjectChecks(db, botToken, guildID)
-	diag.TestNotification = buildTestNotificationCheck(db)
+	diag.TestNotification = buildTestNotificationCheck(db, "en")
 	diag.ProjectSetupApplied = strings.EqualFold(strings.TrimSpace(model.GetSetting(db, setupProjectAppliedKey)), "true")
 	diag.AppliedProjectID = strings.TrimSpace(model.GetSetting(db, setupProjectAppliedProjectKey))
 	if diag.AppliedProjectID != "" {
@@ -203,29 +203,29 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 	return diag
 }
 
-func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID string) []SetupCheck {
+func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID, lang string) []SetupCheck {
 	var checks []SetupCheck
 	email := storedRuntimeKitsuEmail(db)
 	password := strings.TrimSpace(os.Getenv(RuntimeKitsuPasswordEnv))
 	if email != "" {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupOK, Summary: "Configured", Detail: email})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the runtime email there."})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu runtime メール", "Kitsu runtime email"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で runtime メールを確認して保存してください。", "Review Bot Settings and save the runtime email there.")})
 	}
 	if password != "" {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the runtime password there."})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu runtime パスワード", "Kitsu runtime password"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で runtime パスワードを確認して保存してください。", "Review Bot Settings and save the runtime password there.")})
 	}
 	if strings.TrimSpace(kitsuHost) != "" {
 		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupOK, Summary: "Configured", Detail: strings.TrimSpace(kitsuHost)})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupError, Summary: "Missing", Fix: "Review the Kitsu hostname in Bot Settings."})
+		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: t(lang, "Kitsu hostname", "Kitsu hostname"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で Kitsu hostname を確認してください。", "Review the Kitsu hostname in Bot Settings.")})
 	}
 	if strings.TrimSpace(botToken) != "" {
 		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
 	} else {
-		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the shared bot token there."})
+		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: t(lang, "Discord bot token", "Discord bot token"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で共有 bot token を確認して保存してください。", "Review Bot Settings and save the shared bot token there.")})
 	}
 	if strings.TrimSpace(guildID) != "" {
 		checks = append(checks, SetupCheck{Key: "discord_guild_id", Label: "Discord guild fallback", Status: SetupWarn, Summary: "Configured", Detail: strings.TrimSpace(guildID), Fix: "Per-project guilds are preferred; fallback guild is only a compatibility default."})
@@ -235,7 +235,7 @@ func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID string) []SetupChe
 	return checks
 }
 
-func buildKitsuCheck(kitsuHost string) SetupCheck {
+func buildKitsuCheck(kitsuHost, lang string) SetupCheck {
 	info := checkKitsuStatus(kitsuHost)
 	check := SetupCheck{Key: "kitsu", Label: "Kitsu connection", Summary: "Unknown"}
 	switch {
@@ -246,7 +246,7 @@ func buildKitsuCheck(kitsuHost string) SetupCheck {
 	case info.Reachable:
 		check.Status = SetupWarn
 		check.Summary = "Reachable"
-		check.Detail = "Kitsu server answered, but authentication is not complete."
+		check.Detail = t(lang, "Kitsu server は応答しましたが、認証は完了していません。", "Kitsu server answered, but authentication is not complete.")
 		if info.Error != nil {
 			check.Fix = *info.Error
 		}
@@ -352,7 +352,7 @@ func buildProjectChecks(db *gorm.DB, botToken, fallbackGuildID string) []Project
 	return out
 }
 
-func buildTestNotificationCheck(db *gorm.DB) SetupCheck {
+func buildTestNotificationCheck(db *gorm.DB, lang string) SetupCheck {
 	verified := strings.EqualFold(strings.TrimSpace(model.GetSetting(db, setupTestNotificationVerifiedKey)), "true")
 	projectID := strings.TrimSpace(model.GetSetting(db, setupTestNotificationProjectKey))
 	verifiedAt := strings.TrimSpace(model.GetSetting(db, setupTestNotificationAtKey))
@@ -360,7 +360,7 @@ func buildTestNotificationCheck(db *gorm.DB) SetupCheck {
 		Key:     "test_notification",
 		Label:   "Final Health Check",
 		Summary: "Not confirmed yet",
-		Detail:  "Review Health to confirm the notification destination and runtime status before treating setup as complete.",
+		Detail:  t(lang, "setup を完了扱いにする前に Health で通知先と runtime 状態を確認してください。", "Review Health to confirm the notification destination and runtime status before treating setup as complete."),
 		Fix:     "Open Health and confirm the runtime is healthy and project webhook status looks correct.",
 	}
 	if verified {
