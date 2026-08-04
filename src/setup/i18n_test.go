@@ -107,3 +107,54 @@ func TestBotRuntimePageUsesSharedLanguageCatalog(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupResultLocalizationPreservesResourceNames(t *testing.T) {
+	result := SetupResult{
+		OK: true,
+		Lines: []string{
+			"OK: Kitsu project confirmed",
+			"OK: Discord category created",
+			"OK: channel ready: #wfa",
+			"OK: Existing resource reused: #retake",
+			"OK: project setup completed",
+		},
+	}
+	ja := renderResult("ja", "Test Production", result, httptest.NewRequest("GET", "/bot/setup?lang=ja", nil))
+	for _, want := range []string{"Kitsu プロジェクトを確認しました", "Discord カテゴリを作成しました", "チャンネルを使用可能にしました: #wfa", "既存のリソースを再利用しました: #retake"} {
+		if !strings.Contains(ja, want) {
+			t.Fatalf("Japanese setup result is missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"Kitsu project confirmed", "Discord category created", "channel ready: #wfa", "project setup completed"} {
+		if strings.Contains(ja, unwanted) {
+			t.Fatalf("Japanese setup result contains English %q", unwanted)
+		}
+	}
+	en := renderResult("en", "Test Production", result, httptest.NewRequest("GET", "/bot/setup?lang=en", nil))
+	for _, want := range []string{"Kitsu project confirmed", "Discord category created", "channel ready: #wfa", "project setup completed"} {
+		if !strings.Contains(en, want) {
+			t.Fatalf("English setup result is missing %q", want)
+		}
+	}
+}
+
+func TestSetupResultFailureLocalization(t *testing.T) {
+	result := SetupResult{SafeToRetry: true, Lines: []string{
+		"FAIL: project setup did not complete; created Discord resources are being rolled back",
+		"OK: rolled back channel: #wfa",
+		"OK: rolled back Discord category",
+		"OK: rolled back setup records",
+	}}
+	for _, lang := range []string{"ja", "en"} {
+		body := renderResult(lang, "Test Production", result, httptest.NewRequest("GET", "/bot/setup?lang="+lang, nil))
+		if lang == "ja" && (strings.Contains(body, "project setup did not complete") || strings.Contains(body, "rolled back channel")) {
+			t.Fatalf("%s setup failure result contains unlocalized English", lang)
+		}
+	}
+	if got := localizeSetupResultLine("ja", "WARN: Safe to retry — rollback completed. You can run setup again immediately."); !strings.Contains(got, "再試行") {
+		t.Fatalf("Japanese retry message was not localized: %q", got)
+	}
+	if got := localizeSetupResultLine("ja", "FAIL: The plan is stale. Review the latest plan before retrying."); !strings.Contains(got, "古く") {
+		t.Fatalf("Japanese stale message was not localized: %q", got)
+	}
+}

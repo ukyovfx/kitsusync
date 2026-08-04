@@ -1420,6 +1420,7 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 	// Group log lines by status for clearer error inventory
 	var okLines, warnLines, failLines, rolledLines []string
 	for _, line := range result.Lines {
+		line = localizeSetupResultLine(lang, line)
 		switch {
 		case strings.HasPrefix(line, "OK:"):
 			okLines = append(okLines, strings.TrimPrefix(line, "OK: "))
@@ -1483,6 +1484,92 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 	body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">`+t(lang, "連携済みプロダクション管理", "Connected Productions")+`</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass">%s<div class="setup-inventory">%s</div></div><div class="button-row">%s</div></div>`,
 		color, esc(title), sub, retryBadge, inventoryHTML.String(), footer)
 	return appShell("KitsuSync", "", lang, nil, "", body)
+}
+
+func localizeSetupResultLine(lang, line string) string {
+	status := ""
+	message := line
+	for _, prefix := range []string{"OK: ", "WARN: ", "FAIL: ", "ROLLED BACK: "} {
+		if strings.HasPrefix(line, prefix) {
+			status = prefix
+			message = strings.TrimPrefix(line, prefix)
+			break
+		}
+	}
+	localized := message
+	switch {
+	case message == "database transaction failed after Discord provisioning; attempting Discord cleanup":
+		localized = tr(lang, "setup_result.cleanup_started")
+	case strings.HasPrefix(message, "cleanup failed for #") && strings.Contains(message, ": ") && !strings.Contains(message, " after webhook error: "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "cleanup failed for #"), ": ", 2)
+		localized = trf(lang, "setup_result.cleanup_channel_failed", parts[0], parts[1])
+	case strings.HasPrefix(message, "cleanup failed for Discord category: "):
+		localized = trf(lang, "setup_result.cleanup_category_failed", strings.TrimPrefix(message, "cleanup failed for Discord category: "))
+	case strings.HasPrefix(message, "cleanup failed for setup webhook records: "):
+		localized = trf(lang, "setup_result.cleanup_webhooks_failed", strings.TrimPrefix(message, "cleanup failed for setup webhook records: "))
+	case strings.HasPrefix(message, "cleanup failed for setup project record: "):
+		localized = trf(lang, "setup_result.cleanup_project_failed", strings.TrimPrefix(message, "cleanup failed for setup project record: "))
+	case message == "no Discord guild is configured for this project":
+		localized = tr(lang, "setup_result.no_guild")
+	case strings.HasPrefix(message, "unsupported project type: "):
+		localized = trf(lang, "setup_result.unsupported_type", strings.TrimPrefix(message, "unsupported project type: "))
+	case message == "Kitsu project was not found, using a fallback project ID":
+		localized = tr(lang, "setup_result.project_missing")
+	case message == "project is already configured":
+		localized = tr(lang, "setup_result.already_configured")
+	case strings.HasPrefix(message, "orphaned webhooks detected ("):
+		count := strings.TrimPrefix(message, "orphaned webhooks detected (")
+		count = strings.TrimSuffix(count, " rows); cleaning up before setup")
+		localized = trf(lang, "setup_result.orphaned_webhooks", count)
+	case strings.HasPrefix(message, "failed to clean up orphaned webhooks: "):
+		localized = trf(lang, "setup_result.orphan_cleanup_failed", strings.TrimPrefix(message, "failed to clean up orphaned webhooks: "))
+	case message == "cleaned up orphaned webhooks":
+		localized = tr(lang, "setup_result.orphan_cleanup_done")
+	case strings.HasPrefix(message, "failed to create Discord category: "):
+		localized = trf(lang, "setup_result.category_failed", strings.TrimPrefix(message, "failed to create Discord category: "))
+	case strings.HasPrefix(message, "failed to create #") && strings.Contains(message, ": "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "failed to create #"), ": ", 2)
+		localized = trf(lang, "setup_result.channel_failed", parts[0], parts[1])
+	case strings.HasPrefix(message, "failed to create webhook for #") && strings.Contains(message, ": "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "failed to create webhook for #"), ": ", 2)
+		localized = trf(lang, "setup_result.webhook_failed", parts[0], parts[1])
+	case strings.HasPrefix(message, "cleanup failed for #") && strings.Contains(message, " after webhook error: "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "cleanup failed for #"), " after webhook error: ", 2)
+		localized = trf(lang, "setup_result.cleanup_after_webhook", parts[0], parts[1])
+	case strings.HasPrefix(message, "rolled back incomplete channel: #"):
+		localized = trf(lang, "setup_result.rollback_incomplete", strings.TrimPrefix(message, "rolled back incomplete channel: #"))
+	case message == "Kitsu project confirmed":
+		localized = tr(lang, "setup_result.kitsu_confirmed")
+	case message == "Discord category created":
+		localized = tr(lang, "setup_result.category_created")
+	case message == "project setup completed":
+		localized = tr(lang, "setup_result.completed")
+	case strings.HasPrefix(message, "channel ready: #"):
+		localized = trf(lang, "setup_result.channel_ready", strings.TrimPrefix(message, "channel ready: #"))
+	case message == "project setup did not complete; created Discord resources are being rolled back":
+		localized = tr(lang, "setup_result.partial_failure")
+	case strings.HasPrefix(message, "Discord setup succeeded but database transaction failed: "):
+		localized = trf(lang, "setup_result.db_failed", strings.TrimPrefix(message, "Discord setup succeeded but database transaction failed: "))
+	case message == "automatic Discord cleanup had warnings; verify Discord resources manually before retrying.":
+		localized = tr(lang, "setup_result.cleanup_warnings")
+	case message == "automatic Discord cleanup completed":
+		localized = tr(lang, "setup_result.cleanup_done")
+	case message == "rolled back Discord category":
+		localized = tr(lang, "setup_result.rollback_category")
+	case message == "rolled back setup records":
+		localized = tr(lang, "setup_result.rollback_records")
+	case strings.HasPrefix(message, "rolled back channel: #"):
+		localized = trf(lang, "setup_result.rollback_channel", strings.TrimPrefix(message, "rolled back channel: #"))
+	case message == "Safe to retry — rollback completed. You can run setup again immediately.":
+		localized = tr(lang, "setup_result.retry")
+	case message == "The plan is stale. Review the latest plan before retrying.":
+		localized = tr(lang, "setup_result.stale")
+	case strings.HasPrefix(message, "Existing resource reused: "):
+		localized = trf(lang, "setup_result.reused", strings.TrimPrefix(message, "Existing resource reused: "))
+	case strings.HasPrefix(message, "Resolve the conflict and retry: "):
+		localized = trf(lang, "setup_result.conflict", strings.TrimPrefix(message, "Resolve the conflict and retry: "))
+	}
+	return status + localized
 }
 
 // renderDeleteReauthPage renders the re-authentication page shown as step 2 of project deletion.
