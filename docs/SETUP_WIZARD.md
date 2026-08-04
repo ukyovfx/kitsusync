@@ -7,7 +7,7 @@ The normal setup path is now:
 1. Start KitsuSync; missing runtime credentials enter setup-required mode instead of stopping the process
 2. Open `/bot/login`, enter the Kitsu URL when requested, and authenticate as a Kitsu manager/admin
 3. Configure the dedicated Kitsu runtime connection in `/bot/setup`
-4. Configure Discord in `/bot/admin/bot`, then create or manage project routing in `/bot/setup`
+4. Configure Discord in `/bot/admin/bot`, then create or manage Production routing in `/bot/admin/production-routing`
 5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment
 6. Use `/bot/admin/health` for troubleshooting and verification when needed
 
@@ -33,7 +33,7 @@ This is the only normal first-time setup path operators should follow.
 ## Runtime states
 
 - `setup_required`: the Web UI and `/health` are available, Kitsu is disconnected, and polling/notifications are paused.
-- `configured`: the dedicated runtime credentials were validated and polling may run.
+- `configured`: the dedicated runtime credentials were validated and polling may run; this does not by itself mean Discord notifications are ready.
 - `degraded`: a refresh or temporary Kitsu connection attempt failed; the process and saved configuration remain available for recovery.
 
 The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. The runtime password is encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
@@ -41,6 +41,8 @@ The Kitsu manager/admin browser session is held in process memory and authorizes
 ---
 
 ## Shared vs Project-level Settings
+
+Notification readiness is evaluated independently: Kitsu configured, Kitsu connected, Kitsu ready, Discord bot configured, Discord API validated, and Production routing configured. Overall notification readiness is available only when all required checks pass. A connected Production alone is not configured routing.
 
 ### Shared Bot / Runtime settings
 

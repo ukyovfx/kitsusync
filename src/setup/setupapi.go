@@ -20,17 +20,28 @@ import (
 
 // SetupStatusResponse is the response body for GET /api/setup/status.
 type SetupStatusResponse struct {
-	Kitsu                KitsuStatusInfo      `json:"kitsu"`
-	Discord              DiscordStatusInfo    `json:"discord"`
-	Poller               PollerStatusInfo     `json:"poller"`
-	Project              ProjectStatusInfo    `json:"project"`
-	Projects             []ProjectGuildHealth `json:"projects,omitempty"`
-	Diagnostics          SetupDiagnostics     `json:"diagnostics,omitempty"`
-	ProjectSetupApplied  bool                 `json:"project_setup_applied"`
-	NotificationVerified bool                 `json:"notification_verified"`
-	SetupComplete        bool                 `json:"setup_complete"`
-	SetupWarnings        []string             `json:"setup_warnings"`
-	IncompleteReasons    []string             `json:"incomplete_reasons,omitempty"`
+	Kitsu                KitsuStatusInfo       `json:"kitsu"`
+	Discord              DiscordStatusInfo     `json:"discord"`
+	Poller               PollerStatusInfo      `json:"poller"`
+	Project              ProjectStatusInfo     `json:"project"`
+	Projects             []ProjectGuildHealth  `json:"projects,omitempty"`
+	Diagnostics          SetupDiagnostics      `json:"diagnostics,omitempty"`
+	ProjectSetupApplied  bool                  `json:"project_setup_applied"`
+	NotificationVerified bool                  `json:"notification_verified"`
+	SetupComplete        bool                  `json:"setup_complete"`
+	SetupWarnings        []string              `json:"setup_warnings"`
+	IncompleteReasons    []string              `json:"incomplete_reasons,omitempty"`
+	Readiness            NotificationReadiness `json:"readiness"`
+}
+
+type NotificationReadiness struct {
+	KitsuConfigured              bool   `json:"kitsu_configured"`
+	KitsuConnected               bool   `json:"kitsu_connected"`
+	KitsuReady                   bool   `json:"kitsu_ready"`
+	DiscordBotConfigured         bool   `json:"discord_bot_configured"`
+	DiscordAPIValidated          bool   `json:"discord_api_validated"`
+	ProductionRoutingConfigured  bool   `json:"production_routing_configured"`
+	OverallNotificationReadiness string `json:"overall_notification_readiness"`
 }
 
 // KitsuStatusInfo holds the current Kitsu connectivity and auth state.
@@ -213,8 +224,26 @@ func SetupStatusHandler(db *gorm.DB, pollIntervalSec int, refreshCreds func() (k
 		resp.SetupComplete = snapshot.SetupComplete
 		resp.SetupWarnings = append(resp.SetupWarnings, snapshot.Warnings...)
 		resp.IncompleteReasons = incompleteReasons(snapshot)
+		resp.Readiness = NotificationReadiness{
+			KitsuConfigured:              snapshot.Kitsu.Status != SetupError && snapshot.Kitsu.Summary != "Unknown",
+			KitsuConnected:               snapshot.Kitsu.Status == SetupOK,
+			KitsuReady:                   snapshot.Kitsu.Status == SetupOK,
+			DiscordBotConfigured:         checkSetupToken(snapshot.Env),
+			DiscordAPIValidated:          snapshot.Discord.Status == SetupOK,
+			ProductionRoutingConfigured:  snapshot.ProductionRoutingConfigured,
+			OverallNotificationReadiness: snapshot.OverallNotificationReadiness,
+		}
 		json.NewEncoder(w).Encode(resp)
 	}
+}
+
+func checkSetupToken(checks []SetupCheck) bool {
+	for _, check := range checks {
+		if check.Key == "discord_bot_token" {
+			return check.Status == SetupOK
+		}
+	}
+	return false
 }
 
 // ProjectsHandler handles GET /api/setup/projects.

@@ -1,4 +1,4 @@
-﻿package setup
+package setup
 
 import (
 	"fmt"
@@ -213,6 +213,7 @@ button,input,select{font:inherit}
 label{display:block;margin:0 0 8px;color:#ddd8d0;font-size:12px;text-transform:uppercase;letter-spacing:.16em;font-family:"Space Grotesk","Outfit",sans-serif;}
 input,select,textarea{width:100%;min-width:0;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(8,8,10,.7);color:var(--text);padding:10px 12px;outline:none;transition:border-color .18s ease, box-shadow .18s ease, background .18s ease;}
 input:focus,select:focus,textarea:focus{border-color:rgba(255,141,72,.72);box-shadow:0 0 0 3px rgba(232,90,26,.16);}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #6dc3ff;outline-offset:3px;}
 input[readonly],input[disabled],select[disabled]{opacity:.72;cursor:not-allowed;}
 .field-help{color:var(--muted-2);font-size:12px;margin-top:6px;line-height:1.55;}
 .button-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:12px;}
@@ -223,7 +224,7 @@ input[readonly],input[disabled],select[disabled]{opacity:.72;cursor:not-allowed;
 .btn-sm{color:#140904;background:linear-gradient(135deg, rgba(255,141,72,.94), rgba(232,90,26,.9));padding:6px 10px;}
 .btn-ghost{color:var(--text);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);}
 .btn-danger{color:#fff5f2;background:rgba(255,106,80,.18);border:1px solid rgba(255,106,80,.3);}
-.status-pill,.tag{display:inline-flex;align-items:center;gap:4px;padding:5px 8px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:9px;}
+.status-pill,.tag{display:inline-flex;align-items:center;gap:4px;padding:5px 8px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);color:var(--muted);font-size:12px;line-height:1.25;}
 .status-pill{white-space:nowrap;}
 .status-pill.ok{color:#d7f4d4;border-color:rgba(142,207,139,.28);background:rgba(142,207,139,.08)}
 .status-pill.warn{color:#fff1c4;border-color:rgba(255,200,80,.3);background:rgba(255,200,80,.1)}
@@ -531,6 +532,10 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
 	if r != nil {
 		homeHref = withLang("/bot/admin", r)
 	}
+	navHTML := ""
+	if nav != "" {
+		navHTML = `<nav aria-label="Primary navigation">` + nav + `</nav>`
+	}
 	return fmt.Sprintf(`<!doctype html>
 <html lang="%s">
 <head>
@@ -552,11 +557,13 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
     </a>
     <div class="top-actions">
       %s
-      %s
     </div>
   </div>
   %s
+  <main id="main-content">
+  %s
+  </main>
 </div>
 </body>
-</html>`, lang, title, adminThemeCSS, shellHeadExtras(), homeHref, title, subHTML, nav, langToggleHTML(r, lang), body)
+</html>`, lang, title, adminThemeCSS, shellHeadExtras(), homeHref, title, subHTML, langToggleHTML(r, lang), navHTML, body)
 }

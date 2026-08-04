@@ -1,5 +1,9 @@
 # Troubleshooting
 
+## Current notification routing model
+
+Notifications are fail-closed. An enabled route must match both the Kitsu Production ID and Task Type ID and must point to a valid configured destination. Unmatched, paused, stale, or incomplete routes are diagnosed without dispatching. Configure routes in `/bot/admin/production-routing`; a connected Production alone is not sufficient, and global fallback webhooks are not used for new routing.
+
 ## Quick Diagnostics
 
 Before digging deeper, run these three commands:

@@ -15,10 +15,10 @@ import (
 type SetupStatus string
 
 const (
-	SetupOK       SetupStatus = "ok"
-	SetupWarn     SetupStatus = "warn"
-	SetupError    SetupStatus = "error"
-	SetupUnknown  SetupStatus = "unknown"
+	SetupOK      SetupStatus = "ok"
+	SetupWarn    SetupStatus = "warn"
+	SetupError   SetupStatus = "error"
+	SetupUnknown SetupStatus = "unknown"
 )
 
 type SetupCheck struct {
@@ -32,34 +32,36 @@ type SetupCheck struct {
 }
 
 type ProjectSetupStatus struct {
-	ProjectID       string      `json:"project_id"`
-	ProjectName     string      `json:"project_name"`
-	GuildID         string      `json:"guild_id,omitempty"`
-	GuildStatus     SetupStatus `json:"guild_status"`
+	ProjectID        string      `json:"project_id"`
+	ProjectName      string      `json:"project_name"`
+	GuildID          string      `json:"guild_id,omitempty"`
+	GuildStatus      SetupStatus `json:"guild_status"`
 	PermissionStatus SetupStatus `json:"permission_status"`
-	WebhookStatus   SetupStatus `json:"webhook_status"`
-	ChannelCount    int         `json:"channel_count"`
-	WebhookCount    int         `json:"webhook_count"`
-	Summary         string      `json:"summary"`
-	Raw             string      `json:"raw,omitempty"`
+	WebhookStatus    SetupStatus `json:"webhook_status"`
+	ChannelCount     int         `json:"channel_count"`
+	WebhookCount     int         `json:"webhook_count"`
+	Summary          string      `json:"summary"`
+	Raw              string      `json:"raw,omitempty"`
 }
 
 type SetupDiagnostics struct {
-	Timestamp               time.Time           `json:"timestamp"`
-	Env                     []SetupCheck         `json:"env"`
-	Kitsu                   SetupCheck          `json:"kitsu"`
-	Discord                 SetupCheck          `json:"discord"`
-	Projects                []ProjectSetupStatus `json:"projects"`
-	TestNotification        SetupCheck          `json:"test_notification"`
-	ProjectSetupApplied     bool                `json:"project_setup_applied"`
-	NotificationVerified    bool                `json:"notification_verified"`
-	SetupComplete           bool                `json:"setup_complete"`
-	NextAction              string              `json:"next_action"`
-	Warnings                []string            `json:"warnings"`
-	AppliedProjectID        string              `json:"applied_project_id,omitempty"`
-	AppliedProjectName      string              `json:"applied_project_name,omitempty"`
-	VerifiedProjectID       string              `json:"verified_project_id,omitempty"`
-	VerifiedProjectName     string              `json:"verified_project_name,omitempty"`
+	Timestamp                    time.Time            `json:"timestamp"`
+	Env                          []SetupCheck         `json:"env"`
+	Kitsu                        SetupCheck           `json:"kitsu"`
+	Discord                      SetupCheck           `json:"discord"`
+	Projects                     []ProjectSetupStatus `json:"projects"`
+	TestNotification             SetupCheck           `json:"test_notification"`
+	ProjectSetupApplied          bool                 `json:"project_setup_applied"`
+	NotificationVerified         bool                 `json:"notification_verified"`
+	SetupComplete                bool                 `json:"setup_complete"`
+	ProductionRoutingConfigured  bool                 `json:"production_routing_configured"`
+	OverallNotificationReadiness string               `json:"overall_notification_readiness"`
+	NextAction                   string               `json:"next_action"`
+	Warnings                     []string             `json:"warnings"`
+	AppliedProjectID             string               `json:"applied_project_id,omitempty"`
+	AppliedProjectName           string               `json:"applied_project_name,omitempty"`
+	VerifiedProjectID            string               `json:"verified_project_id,omitempty"`
+	VerifiedProjectName          string               `json:"verified_project_name,omitempty"`
 }
 
 func localizeSetupDiagnostics(lang string, diag SetupDiagnostics) SetupDiagnostics {
@@ -163,6 +165,7 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 		}
 	}
 	diag.NotificationVerified = diag.TestNotification.Status == SetupOK
+	diag.ProductionRoutingConfigured = hasReadyProductionRouting(db)
 	diag.VerifiedProjectID = strings.TrimSpace(model.GetSetting(db, setupTestNotificationProjectKey))
 	if diag.VerifiedProjectID != "" {
 		if p := model.FindProjectByKitsuID(db, diag.VerifiedProjectID); p != nil {
@@ -174,6 +177,10 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 		diag.Warnings = append(diag.Warnings, "Legacy fallback webhook is configured; it is only used for unrouted notifications.")
 	}
 
+	diag.OverallNotificationReadiness = "blocked"
+	if diag.Kitsu.Status == SetupOK && diag.Discord.Status == SetupOK && diag.ProductionRoutingConfigured {
+		diag.OverallNotificationReadiness = "ready_pending_final_verification"
+	}
 	diag.SetupComplete = isSetupComplete(diag)
 	diag.NextAction = nextActionForDiagnostics(diag)
 	return diag
@@ -365,6 +372,9 @@ func isSetupComplete(diag SetupDiagnostics) bool {
 	if diag.Discord.Status != SetupOK {
 		return false
 	}
+	if !diag.ProductionRoutingConfigured {
+		return false
+	}
 	projectReady := false
 	for _, p := range diag.Projects {
 		if p.GuildStatus == SetupOK && p.PermissionStatus == SetupOK && p.WebhookStatus == SetupOK {
@@ -376,6 +386,17 @@ func isSetupComplete(diag SetupDiagnostics) bool {
 		return false
 	}
 	return diag.TestNotification.Status == SetupOK
+}
+
+func hasReadyProductionRouting(db *gorm.DB) bool {
+	for _, project := range model.ListProjects(db) {
+		routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
+		config := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
+		if config != nil && config.Enabled && len(model.ValidateProductionNotificationConfig(db, project.KitsuProjectID, routes)) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func nextActionForDiagnostics(diag SetupDiagnostics) string {
@@ -395,6 +416,9 @@ func nextActionForDiagnostics(diag SetupDiagnostics) string {
 			return diag.Discord.Fix
 		}
 		return "Fix the Discord bot connection first."
+	}
+	if !diag.ProductionRoutingConfigured {
+		return "Select a connected Production, Task Type, and valid destination in Production Notification Routing."
 	}
 	for _, p := range diag.Projects {
 		if p.GuildStatus != SetupOK || p.PermissionStatus != SetupOK || p.WebhookStatus != SetupOK {
@@ -420,6 +444,9 @@ func incompleteReasons(diag SetupDiagnostics) []string {
 	}
 	if diag.Discord.Status != SetupOK {
 		reasons = append(reasons, "Discord: "+firstNonEmpty(diag.Discord.Fix, diag.Discord.Detail, "Fix the Discord bot connection."))
+	}
+	if !diag.ProductionRoutingConfigured {
+		reasons = append(reasons, "Production routing: configure at least one enabled valid Production-ID / Task-Type-ID route.")
 	}
 	projectReady := false
 	for _, p := range diag.Projects {

@@ -606,7 +606,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		kitsuHostStored := model.GetSetting(db, "kitsu.hostname")
 		kitsuEmailStored := storedRuntimeKitsuEmail(db)
 		detectedHost := publicKitsuHostnameFromRequest(r, kitsuHostStored)
-		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID))
+		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID, botToken))
 	}
 }
 
@@ -1012,7 +1012,7 @@ func displayProjectLang(lang string) string {
 	return lang
 }
 
-func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID string) string {
+func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID, botToken string) string {
 	lang := currentLang(r)
 
 	var projectOptions strings.Builder
@@ -1029,8 +1029,8 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	}
 
 	// Determine setup step for progress indicator using only existing lightweight signals.
-	step1Done := kitsuHostStored != "" && kitsuEmailStored != ""
-	projectRoutingDone := len(projects) > 0
+	step1Done := kitsuHostStored != "" && kitsuEmailStored != "" && strings.TrimSpace(botToken) != ""
+	projectRoutingDone := hasReadyProductionRouting(db)
 	guildStepDone := false
 	for _, project := range projects {
 		if strings.TrimSpace(project.DiscordGuildID) != "" {
@@ -1050,7 +1050,8 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	step1Class := stepClass(step1Done, !step1Done)
 	step2Class := stepClass(projectRoutingDone, step1Done && !projectRoutingDone)
 	step3Class := stepClass(guildStepDone, projectRoutingDone && !guildStepDone)
-	step4Class := stepClass(false, guildStepDone)
+	step4Done := step1Done && projectRoutingDone && guildStepDone
+	step4Class := stepClass(step4Done, guildStepDone && !step4Done)
 	stepIndicator := fmt.Sprintf(`<div class="setup-steps">
   <div class="setup-step %s"><span class="step-num">1</span><span class="step-label">%s</span></div>
   <div class="step-connector"></div>

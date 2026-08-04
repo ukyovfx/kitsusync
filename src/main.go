@@ -542,6 +542,10 @@ func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, web
 var pollMu sync.Mutex
 
 func runOnePoll(conf config.Config, db *gorm.DB) {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("KITSUSYNC_DISABLE_POLL")), "1") {
+		slog.Info("Poll skipped by local audit guard")
+		return
+	}
 	if !pollMu.TryLock() {
 		slog.Warn("Previous poll still running; skipping this cycle to prevent duplicate Discord messages")
 		return
@@ -725,6 +729,34 @@ func main() {
 	))
 
 	runtime := newRuntimeManager()
+	healthReadinessProvider = func() readinessSnapshot {
+		host, email, _ := getKitsuCreds(db, conf)
+		botToken, _, _ := getDiscordSettings(db, conf)
+		routingReady := false
+		for _, project := range model.ListProjects(db) {
+			routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
+			cfg := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
+			if cfg != nil && cfg.Enabled && len(model.ValidateProductionNotificationConfig(db, project.KitsuProjectID, routes)) == 0 {
+				routingReady = true
+				break
+			}
+		}
+		kitsuConfigured := strings.TrimSpace(host) != "" && strings.TrimSpace(email) != ""
+		kitsuReady := runtime.ready()
+		botConfigured := strings.TrimSpace(botToken) != ""
+		overall := "blocked"
+		if kitsuReady && botConfigured && routingReady {
+			overall = "ready_pending_discord_validation"
+		}
+		return readinessSnapshot{
+			KitsuConfigured:              kitsuConfigured,
+			KitsuConnected:               kitsuReady,
+			KitsuReady:                   kitsuReady,
+			DiscordBotConfigured:         botConfigured,
+			ProductionRoutingConfigured:  routingReady,
+			OverallNotificationReadiness: overall,
+		}
+	}
 	refreshRuntime := func() bool {
 		hostname, email, password := getKitsuCreds(db, conf)
 		if token := setup.StoredRuntimeKitsuToken(db); token != "" {

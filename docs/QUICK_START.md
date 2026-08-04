@@ -78,7 +78,7 @@ If you get a 502 or connection refused, the app is still starting — wait a mom
 2. If no Kitsu host is configured, enter the Kitsu URL.
 3. Sign in with your Kitsu manager or admin account.
 4. Complete the dedicated Kitsu runtime connection in `/bot/setup`. Until it succeeds, polling and notifications remain paused.
-5. Configure Discord in Bot Settings, then use Project Management to create routing for one project at a time.
+5. Configure Discord in Bot Settings, then use `/bot/admin/production-routing` to choose a connected Production, Kitsu Task Type, and existing destination.
 
 Invalid credentials or a temporary Kitsu outage do not stop the Web UI. Reauthenticate from the setup flow; saved configuration is retained. Browser session tokens are not reused by background polling. Do not expose port 8090 directly to the public internet.
 
