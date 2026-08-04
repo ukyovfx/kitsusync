@@ -85,7 +85,7 @@ button,input,select{font:inherit}
   display:flex;
   justify-content:space-between;
   gap:12px;
-  align-items:flex-start;
+  align-items:center;
   margin-bottom:18px;
 }
 .brand-block{
@@ -123,6 +123,11 @@ button,input,select{font:inherit}
   align-items:center;
   flex-wrap:wrap;
   justify-content:flex-end;
+  flex:0 1 auto;
+  min-width:0;
+}
+.top-actions nav{
+  min-width:0;
 }
 .glass{
   background:var(--panel);
@@ -328,8 +333,8 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
 .inventory-label.warn{color:#ffc850}
 .inventory-label.rolled{color:#b8b5ae}
 .inventory-list{list-style:none;margin:0;padding:0 0 0 16px;display:flex;flex-direction:column;gap:4px;font-size:.88rem}
-@media (max-width:900px){.topbar{flex-direction:column}.top-actions{width:100%;justify-content:flex-start}.page-card{padding:14px}.page-heading{flex-direction:column}.dashboard-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:640px){.shell{padding:12px 9px 32px}.topbar{gap:10px}.top-actions{gap:6px}.brand-title{font-size:21px}.page-heading h1{font-size:22px}.page-card{width:auto!important;max-width:100%!important;margin-left:0!important;margin-right:0!important}.section-card{padding:12px;min-width:0}.dashboard-grid,.metric-grid,.form-grid,.workflow-grid{grid-template-columns:1fr}.form-span-2{grid-column:auto}.nav-card{width:100%}.lang-toggle{min-width:100px}.btn,.btn-sm,.btn-ghost,.btn-danger{max-width:100%;white-space:normal}.accordion{border-radius:16px}.accordion summary{padding:11px}.accordion-body{padding:0 9px 11px}.accordion-summary-main{flex-basis:100%}.accordion-summary-side{width:100%;justify-content:flex-start}.accordion-trigger{width:100%;justify-content:space-between}.project-panel-head{flex-direction:column}.project-panel-meta{width:100%;gap:8px}.project-panel-meta .tag{max-width:100%;white-space:normal}.project-panel-meta form,.project-panel-meta .btn-danger{width:100%}.table-wrap{margin:0 -2px}.project-channel-table{overflow:visible;background:transparent;border:none}.project-channel-table thead{display:none}.project-channel-table table,.project-channel-table tbody,.project-channel-table tr,.project-channel-table td{display:block;width:100%}.project-channel-table tr{margin:0 0 8px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.035)}.project-channel-table td{padding:5px 0;border-bottom:none}.project-channel-table td::before{content:attr(data-label);display:block;margin-bottom:4px;color:var(--muted-2);font-size:10px;text-transform:uppercase;letter-spacing:.14em;font-family:"Space Grotesk","Outfit",sans-serif}.project-channel-table td:last-child{white-space:normal}.project-channel-table .delete-form{justify-content:stretch}.project-channel-table .delete-form .btn-danger{width:100%}.delete-modal{padding:9px}.delete-box{padding:12px;border-radius:15px}.metric-value-host{font-size:14px}.workflow-overview{padding:12px}.workflow-card{min-height:auto}.setup-steps{flex-wrap:wrap;row-gap:9px}}
+@media (max-width:960px){.topbar{flex-wrap:wrap}.top-actions{flex:1 1 100%;justify-content:flex-end}.page-card{padding:14px}.page-heading{flex-direction:column}.dashboard-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.shell{padding:12px 9px 32px}.topbar{gap:10px;align-items:flex-start}.top-actions{width:100%;gap:6px;justify-content:flex-start;align-items:stretch}.top-actions nav{flex:1 1 100%;width:100%}.brand-title{font-size:21px}.page-heading h1{font-size:22px}.page-card{width:auto!important;max-width:100%!important;margin-left:0!important;margin-right:0!important}.section-card{padding:12px;min-width:0}.dashboard-grid,.metric-grid,.form-grid,.workflow-grid{grid-template-columns:1fr}.form-span-2{grid-column:auto}.nav-card{width:100%;justify-content:flex-start}.nav-chip{flex:1 1 auto;justify-content:center}.lang-toggle{min-width:100px}.btn,.btn-sm,.btn-ghost,.btn-danger{max-width:100%;white-space:normal}.accordion{border-radius:16px}.accordion summary{padding:11px}.accordion-body{padding:0 9px 11px}.accordion-summary-main{flex-basis:100%}.accordion-summary-side{width:100%;justify-content:flex-start}.accordion-trigger{width:100%;justify-content:space-between}.project-panel-head{flex-direction:column}.project-panel-meta{width:100%;gap:8px}.project-panel-meta .tag{max-width:100%;white-space:normal}.project-panel-meta form,.project-panel-meta .btn-danger{width:100%}.table-wrap{margin:0 -2px}.project-channel-table{overflow:visible;background:transparent;border:none}.project-channel-table thead{display:none}.project-channel-table table,.project-channel-table tbody,.project-channel-table tr,.project-channel-table td{display:block;width:100%}.project-channel-table tr{margin:0 0 8px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.035)}.project-channel-table td{padding:5px 0;border-bottom:none}.project-channel-table td::before{content:attr(data-label);display:block;margin-bottom:4px;color:var(--muted-2);font-size:10px;text-transform:uppercase;letter-spacing:.14em;font-family:"Space Grotesk","Outfit",sans-serif}.project-channel-table td:last-child{white-space:normal}.project-channel-table .delete-form{justify-content:stretch}.project-channel-table .delete-form .btn-danger{width:100%}.delete-modal{padding:9px}.delete-box{padding:12px;border-radius:15px}.metric-value-host{font-size:14px}.workflow-overview{padding:12px}.workflow-card{min-height:auto}.setup-steps{flex-wrap:wrap;row-gap:9px}}
 @media (max-width:480px){.section-card{padding:9px;box-shadow:none}.glass{box-shadow:none}.shell{padding:7px 6px 28px}.hint{font-size:.76rem}.metric-label{font-size:.7rem}.metric-value{font-size:1.05rem}.section-card h3{font-size:.92rem}.table-wrap table{font-size:.75rem}.field-help,.field-label{font-size:.76rem}}
 `
 
@@ -557,13 +562,13 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
     </a>
     <div class="top-actions">
       %s
+      %s
     </div>
   </div>
-  %s
   <main id="main-content">
   %s
   </main>
 </div>
 </body>
-</html>`, lang, title, adminThemeCSS, shellHeadExtras(), homeHref, title, subHTML, langToggleHTML(r, lang), navHTML, body)
+</html>`, lang, title, adminThemeCSS, shellHeadExtras(), homeHref, title, subHTML, navHTML, langToggleHTML(r, lang), body)
 }

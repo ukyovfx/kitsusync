@@ -3231,6 +3231,7 @@ func adminPage(lang, title string, r *http.Request, body string) string {
 		`<a class="nav-chip" href="` + withLang("/bot/setup", r) + `">` + t(lang, "新規連携セットアップ", "New Connection Setup") + `</a>` +
 		`<a class="nav-chip" href="` + withLang("/bot/logout", r) + `">` + t(lang, "ログアウト", "Logout") + `</a>` +
 		`</div>`
+	nav = strings.Replace(nav, ">Admin</a>", ">Management</a>", 1)
 	content := `<div class="page-card glass"><div class="page-heading"><div><h1>` + esc(title) + `</h1></div></div>` +
 		message + body + `</div>` +
 		`<div id="deleteModal" class="delete-modal"><div class="delete-box glass"><h2 class="delete-title">` + esc(t(lang, "削除の確認", "Confirm deletion")) + `</h2><p id="deleteModalText" class="delete-text"></p><p id="deleteModalHelper" class="field-help hidden"></p><div id="deleteModalInputWrap" class="delete-input hidden"><label><span class="sr-only">Confirm text</span><input id="deleteModalInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label><div class="field-help">` + esc(t(lang, "確認ワード", "Confirmation word")) + `: <code id="deleteModalExpected"></code></div></div><div class="button-row"><button id="deleteConfirmBtn" type="button" class="btn-danger">` + esc(t(lang, "削除する", "Delete")) + `</button><button id="deleteCancelBtn" type="button" class="btn-ghost">` + esc(t(lang, "キャンセル", "Cancel")) + `</button></div></div></div>` +
