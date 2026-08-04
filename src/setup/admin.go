@@ -2575,10 +2575,10 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 		sharedReadiness := sharedBotRuntimeReadiness(db, effectiveHost, storedRuntimeDiscordBotToken(db))
 		configured := sharedReadiness.OverallReady
 		statusClass := "bad"
-		statusLabel := t(lang, "Action required", "Action required")
-		primaryAction := t(lang, "Complete Bot Setup", "Complete Bot Setup")
+		statusLabel := tr(lang, "bot_runtime.action_required")
+		primaryAction := tr(lang, "bot_runtime.complete_setup")
 		if strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != "" {
-			primaryAction = t(lang, "Re-authenticate to edit", "Re-authenticate to edit")
+			primaryAction = tr(lang, "bot_runtime.reauthenticate")
 		}
 		if configured {
 			statusClass = "ok"
@@ -2596,6 +2596,8 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
   </div>
 </div>`,
 			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "新規連携セットアップで使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by New Connection Setup."), statusClass, statusLabel, esc(effectiveHost), t(lang, "Bot Token", "Bot Token"), secretStatus(storedRuntimeDiscordBotToken(db), lang), withLang("/bot/admin/bot?edit=1", r), primaryAction, withLang("/bot/setup", r), t(lang, "新規連携セットアップへ戻る", "Back to New Connection Setup"), withLang("/bot/admin/projects", r), t(lang, "連携済みプロダクション管理を開く", "Open Connected Productions"))
+		view = strings.Replace(view, "<div class=\"metric-label\">Kitsu hostname</div>", "<div class=\"metric-label\">"+esc(tr(lang, "bot_runtime.kitsu_hostname"))+"</div>", 1)
+		view = strings.Replace(view, ">Bot Token<", ">"+esc(tr(lang, "bot_runtime.bot_token"))+"<", 1)
 		if !editMode {
 			fmt.Fprint(w, adminPage(lang, t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), r, view))
 			return

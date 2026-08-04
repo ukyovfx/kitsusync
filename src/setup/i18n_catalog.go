@@ -7,6 +7,11 @@ import "fmt"
 // must be passed separately and are never translated.
 var uiText = map[string]map[string]string{
 	"ja": {
+		"bot_runtime.action_required":           "要対応",
+		"bot_runtime.complete_setup":            "Bot 設定を完了",
+		"bot_runtime.reauthenticate":            "再認証して編集",
+		"bot_runtime.kitsu_hostname":            "Kitsu ホスト名",
+		"bot_runtime.bot_token":                 "Bot トークン",
 		"production_routing.title":              "Production 通知ルーティング",
 		"production_routing.description":        "Production、Kitsu Task Type、設定済み送信先を選択します。未設定または一時停止中の Production は何も送信しません。",
 		"production_routing.select_production":  "接続済み Production を選択",
@@ -70,6 +75,11 @@ var uiText = map[string]map[string]string{
 		"login.submit":                          "ログイン",
 	},
 	"en": {
+		"bot_runtime.action_required":           "Action required",
+		"bot_runtime.complete_setup":            "Complete Bot Setup",
+		"bot_runtime.reauthenticate":            "Re-authenticate to edit",
+		"bot_runtime.kitsu_hostname":            "KITSU HOSTNAME",
+		"bot_runtime.bot_token":                 "BOT TOKEN",
 		"production_routing.title":              "Production Notification Routing",
 		"production_routing.description":        "Choose a Production, Kitsu Task Type, and configured destination. Unconfigured or paused Productions send nothing.",
 		"production_routing.select_production":  "Select a connected Production",

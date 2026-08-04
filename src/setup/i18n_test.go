@@ -73,3 +73,37 @@ func TestProductionRoutingMessagesPreserveSelectedLanguage(t *testing.T) {
 		}
 	}
 }
+
+func TestBotRuntimePageUsesSharedLanguageCatalog(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:i18n-bot-runtime?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	handler := BotHandler(db, nil)
+
+	jaRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(jaRecorder, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil))
+	ja := jaRecorder.Body.String()
+	for _, want := range []string{"要対応", "Kitsu ホスト名", "Bot トークン", "Bot 設定を完了"} {
+		if !strings.Contains(ja, want) {
+			t.Fatalf("Japanese Bot / Runtime page is missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"Action required", "KITSU HOSTNAME", "BOT TOKEN", "Complete Bot Setup"} {
+		if strings.Contains(ja, unwanted) {
+			t.Fatalf("Japanese Bot / Runtime page contains English %q", unwanted)
+		}
+	}
+
+	enRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(enRecorder, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil))
+	en := enRecorder.Body.String()
+	for _, want := range []string{"Action required", "KITSU HOSTNAME", "BOT TOKEN", "Complete Bot Setup"} {
+		if !strings.Contains(en, want) {
+			t.Fatalf("English Bot / Runtime page is missing %q", want)
+		}
+	}
+}
