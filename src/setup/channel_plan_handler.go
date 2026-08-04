@@ -34,7 +34,7 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.guild_revalidate_failed"), redirect)
 		return true
 	}
-	plan := BuildTaskTypeChannelPlan(projectID, guildID, taskTypes, existingChannelsForPlan(channels, model.ListProductionChannelMappings(db, projectID)))
+	plan := BuildTaskTypeChannelPlan(projectID, guildID, taskTypes, existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, projectID), model.ListProjectWebhooks(db, projectID)))
 	if plan.Fingerprint() != strings.TrimSpace(r.FormValue("plan_fingerprint")) {
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.stale"), redirect)
 		return true
@@ -56,12 +56,8 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.verify_failed"), redirect)
 		return true
 	}
-	if err := model.SaveProductionChannelMappings(db, projectID, guildID, rows); err != nil {
-		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.persist_failed"), redirect)
-		return true
-	}
-	if err := model.UpdateProjectGuildID(db, projectID, guildID); err != nil {
-		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.guild_save_failed"), redirect)
+	if err := model.ActivateProductionRoutingFromMappings(db, projectID, guildID, rows); err != nil {
+		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.routing_persist_failed"), redirect)
 		return true
 	}
 	renderTaskTypeChannelPlanResult(w, r, lang, trf(lang, "channel_plan.completed", created, len(rows)-created), redirect)

@@ -82,7 +82,7 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 		body.WriteString(`<p class="field-help" role="status">` + esc(tr(lang, "channel_plan.read_failed")) + `</p></section>`)
 		return body.String()
 	}
-	plan := BuildTaskTypeChannelPlan(project.KitsuProjectID, selectedGuild, taskTypes, existingChannelsForPlan(channels, model.ListProductionChannelMappings(db, project.KitsuProjectID)))
+	plan := BuildTaskTypeChannelPlan(project.KitsuProjectID, selectedGuild, taskTypes, existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.KitsuProjectID), model.ListProjectWebhooks(db, project.KitsuProjectID)))
 	body.WriteString(`<div class="table-wrap"><table><caption class="sr-only">` + esc(tr(lang, "channel_plan.exact_plan")) + `</caption><thead><tr><th>` + esc(tr(lang, "channel_plan.task_type")) + `</th><th>` + esc(tr(lang, "channel_plan.channel")) + `</th><th>` + esc(tr(lang, "channel_plan.action")) + `</th></tr></thead><tbody>`)
 	for _, entry := range plan.Entries {
 		body.WriteString(`<tr><td>` + html.EscapeString(entry.TaskTypeName) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
@@ -200,6 +200,10 @@ func (p TaskTypeChannelPlan) Fingerprint() string {
 }
 
 func existingChannelsForPlan(channels []DiscordGuildChannel, mappings []model.ProductionChannelMapping) map[string]string {
+	return existingChannelsForPlanWithLegacy(channels, mappings, nil)
+}
+
+func existingChannelsForPlanWithLegacy(channels []DiscordGuildChannel, mappings []model.ProductionChannelMapping, legacy []model.ProjectWebhook) map[string]string {
 	existing := map[string]string{}
 	for _, channel := range channels {
 		if channel.Type != 0 || strings.TrimSpace(channel.ID) == "" || strings.TrimSpace(channel.Name) == "" {
@@ -212,9 +216,26 @@ func existingChannelsForPlan(channels []DiscordGuildChannel, mappings []model.Pr
 			existing[name] = ""
 		}
 	}
+	for _, webhook := range legacy {
+		name := NormalizeTaskTypeChannelName(webhook.ChannelName)
+		id := strings.TrimSpace(webhook.DiscordChannelID)
+		if name == "" || id == "" {
+			continue
+		}
+		if previous, present := existing[name]; present && previous != "" && previous != id {
+			existing[name] = ""
+			continue
+		}
+		existing[name] = id
+	}
 	for _, mapping := range mappings {
 		if strings.TrimSpace(mapping.ChannelName) != "" && strings.TrimSpace(mapping.ChannelID) != "" {
-			existing[NormalizeTaskTypeChannelName(mapping.ChannelName)] = strings.TrimSpace(mapping.ChannelID)
+			name := NormalizeTaskTypeChannelName(mapping.ChannelName)
+			if previous, present := existing[name]; present && previous != "" && previous != strings.TrimSpace(mapping.ChannelID) {
+				existing[name] = ""
+				continue
+			}
+			existing[name] = strings.TrimSpace(mapping.ChannelID)
 		}
 	}
 	return existing

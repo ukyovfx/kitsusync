@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"app/src/api/kitsu"
+	"app/src/model"
 )
 
 func TestNormalizeTaskTypeChannelName(t *testing.T) {
@@ -64,5 +65,17 @@ func TestPlanFingerprintChangesWhenGuildChannelsChange(t *testing.T) {
 	reuse := BuildTaskTypeChannelPlan("p", "g", []kitsu.TaskType{{ID: "tt", Name: "Shot"}}, map[string]string{"shot": "channel-1"})
 	if base.Fingerprint() == reuse.Fingerprint() {
 		t.Fatal("fingerprint must change when a channel becomes reusable")
+	}
+}
+
+func TestLegacyProjectWebhookRowsBecomeExactReuseCandidates(t *testing.T) {
+	existing := existingChannelsForPlanWithLegacy(
+		[]DiscordGuildChannel{{ID: "channel-1", Name: "shot", Type: 0}},
+		nil,
+		[]model.ProjectWebhook{{KitsuProjectID: "p1", ChannelName: "shot", DiscordChannelID: "channel-1", WebhookURL: "stored"}},
+	)
+	plan := BuildTaskTypeChannelPlan("p1", "g1", []kitsu.TaskType{{ID: "tt1", Name: "Shot"}}, existing)
+	if !plan.Valid() || plan.Entries[0].Action != "reuse" || plan.Entries[0].ExistingID != "channel-1" {
+		t.Fatalf("expected legacy channel to be an exact reuse candidate: %#v", plan)
 	}
 }
