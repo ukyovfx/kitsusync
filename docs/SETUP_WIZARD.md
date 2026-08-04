@@ -7,7 +7,7 @@ The normal setup path is now:
 1. Start KitsuSync; missing runtime credentials enter setup-required mode instead of stopping the process
 2. Open `/bot/login`, enter the Kitsu URL when requested, and authenticate as a Kitsu manager/admin
 3. Configure the dedicated Kitsu runtime connection in `/bot/setup`
-4. Configure Discord in `/bot/admin/bot`, then create or manage Production routing in `/bot/admin/production-routing`
+4. Configure Discord in `/bot/admin/bot`, then create or manage each Production's linked Discord Guild and Task Type channels in `/bot/admin/projects` (Connected Productions)
 5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment
 6. Use `/bot/admin/health` for troubleshooting and verification when needed
 
@@ -42,7 +42,9 @@ The Kitsu manager/admin browser session is held in process memory and authorizes
 
 ## Shared vs Project-level Settings
 
-Notification readiness is evaluated independently: Kitsu configured, Kitsu connected, Kitsu ready, Discord bot configured, Discord API validated, and Production routing configured. Overall notification readiness is available only when all required checks pass. A connected Production alone is not configured routing.
+Notification readiness is evaluated independently: Kitsu configured, Kitsu connected, Kitsu ready, Discord bot configured, Discord API validated, Production linked to one Guild, Task Type channels configured, and routing enabled. Overall notification readiness is available only when all required checks pass. A connected Production alone is not configured routing.
+
+Each Production maps to one Discord Guild. Kitsu Task Types are the stable routing identities and are proposed as deterministic text-channel names (`lowercase`, separator normalization, Discord-safe characters, repeated-separator collapse, trimming, and length limiting). Existing channels are reused only when they are exact valid matches in the selected Guild. Collisions, stale references, cross-Guild mappings, and ambiguous ownership fail closed and require review.
 
 ### Shared Bot / Runtime settings
 
@@ -96,7 +98,7 @@ System Status is intentionally secondary to `/bot/setup`.
 
 ## Discord Resource Creation Notes
 
-Project setup in `/bot/setup` creates Discord categories, channels, and webhooks only after the create/confirm step.
+New Connection Setup fetches the selected Production's Task Types and shows a complete create/reuse/conflict plan before any Discord write. Discord channel creation is limited to the selected Guild and only missing channels listed in the confirmed plan. Connected Productions is the normal surface for reviewing mappings, previewing missing channels, pausing/resuming notifications, dry-run, and diagnosis. Compatibility route `/bot/admin/production-routing` redirects there and remains available only for old bookmarks.
 
 If setup fails partway through:
 

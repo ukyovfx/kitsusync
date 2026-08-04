@@ -146,6 +146,63 @@ type ProjectWebhook struct {
 	DiscordChannelID string
 }
 
+// ProductionChannelMapping is the stable-ID mapping for the current
+// Production -> Discord Guild -> Kitsu Task Type channel model. Display names
+// are retained as metadata; routing must use the IDs.
+type ProductionChannelMapping struct {
+	ID             uint   `gorm:"primaryKey"`
+	ProductionID   string `gorm:"not null;uniqueIndex:idx_production_task_channel"`
+	GuildID        string `gorm:"not null;index"`
+	TaskTypeID     string `gorm:"not null;uniqueIndex:idx_production_task_channel"`
+	TaskTypeName   string
+	ChannelID      string `gorm:"not null;index"`
+	ChannelName    string
+	Active         bool
+	MigrationState string `gorm:"not null;default:'current'"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+func ValidateProductionChannelMappings(productionID, guildID string, mappings []ProductionChannelMapping) []string {
+	issues := []string{}
+	productionID = strings.TrimSpace(productionID)
+	guildID = strings.TrimSpace(guildID)
+	if productionID == "" || guildID == "" {
+		issues = append(issues, "Production and linked Guild are required")
+	}
+	seenTaskTypes := map[string]bool{}
+	seenChannels := map[string]bool{}
+	for _, mapping := range mappings {
+		if strings.TrimSpace(mapping.ProductionID) != productionID || strings.TrimSpace(mapping.GuildID) != guildID {
+			issues = append(issues, "mapping belongs to a different Production or Guild")
+		}
+		if strings.TrimSpace(mapping.TaskTypeID) == "" || strings.TrimSpace(mapping.ChannelID) == "" {
+			issues = append(issues, "Task Type and channel IDs are required")
+		}
+		if seenTaskTypes[mapping.TaskTypeID] || seenChannels[mapping.ChannelID] {
+			issues = append(issues, "Task Type and channel mappings must be unique")
+		}
+		seenTaskTypes[mapping.TaskTypeID] = true
+		seenChannels[mapping.ChannelID] = true
+		if !mapping.Active || strings.TrimSpace(mapping.MigrationState) != "current" {
+			issues = append(issues, "paused or migration-required mappings are not ready")
+		}
+	}
+	return compactUniqueStrings(issues)
+}
+
+func compactUniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 // ProductionNotificationConfig is the explicit opt-in boundary for the
 // production-scoped notification router. ProductionName is display metadata;
 // ProductionID is the only routing identity.

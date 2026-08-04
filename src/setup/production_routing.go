@@ -5,6 +5,7 @@ import (
 	"app/src/model"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -30,6 +31,18 @@ func ProductionRoutingHandler(db *gorm.DB) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, adminPage(lang, "Production Notification Routing", r, renderProductionRouting(db, r, selectedID, message)))
+	}
+}
+
+// ProductionRoutingCompatibilityHandler keeps existing bookmarks working
+// while Connected Productions remains the single normal management surface.
+func ProductionRoutingCompatibilityHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		target := withLang("/bot/admin/projects", r)
+		if project := strings.TrimSpace(r.URL.Query().Get("project")); project != "" {
+			target += "&project=" + url.QueryEscape(project)
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
 	}
 }
 

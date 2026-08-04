@@ -1029,7 +1029,7 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	}
 
 	// Determine setup step for progress indicator using only existing lightweight signals.
-	step1Done := kitsuHostStored != "" && kitsuEmailStored != "" && strings.TrimSpace(botToken) != ""
+	step1Done := sharedBotRuntimeReadiness(db, kitsuHostStored, botToken).OverallReady
 	projectRoutingDone := hasReadyProductionRouting(db)
 	guildStepDone := false
 	for _, project := range projects {

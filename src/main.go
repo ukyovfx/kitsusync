@@ -682,6 +682,7 @@ func main() {
 		&model.Task{},
 		&model.Project{},
 		&model.ProjectWebhook{},
+		&model.ProductionChannelMapping{},
 		&model.ProductionNotificationConfig{},
 		&model.ProductionNotificationRoute{},
 		&model.NotificationRoutingDiagnosis{},
@@ -846,7 +847,7 @@ func main() {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/production-routing", setup.RequireSession(setup.ProductionRoutingHandler(db)))
+		mux.HandleFunc(prefix+"/admin/production-routing", setup.RequireSession(setup.ProductionRoutingCompatibilityHandler()))
 		mux.HandleFunc(prefix+"/admin/workflow-diagnosis", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
 			setup.WorkflowDiagnosisHandler(db, func() (string, string) {
 				host, _, _ := getKitsuCreds(db, conf)

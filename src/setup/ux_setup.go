@@ -64,6 +64,23 @@ type SetupDiagnostics struct {
 	VerifiedProjectName          string               `json:"verified_project_name,omitempty"`
 }
 
+// SharedBotRuntimeReadiness is the single source of truth used by the Setup
+// Wizard and Bot Settings summary. A saved Kitsu host alone is not enough: the
+// shared Discord bot prerequisite must also be present.
+type SharedBotRuntimeReadiness struct {
+	KitsuConfigured   bool
+	DiscordConfigured bool
+	OverallReady      bool
+}
+
+func sharedBotRuntimeReadiness(db *gorm.DB, kitsuHost, botToken string) SharedBotRuntimeReadiness {
+	kitsuConfigured := strings.TrimSpace(kitsuHost) != "" &&
+		strings.TrimSpace(storedRuntimeKitsuEmail(db)) != "" &&
+		(strings.TrimSpace(StoredRuntimeKitsuPassword(db)) != "" || strings.TrimSpace(model.GetSetting(db, RuntimeKitsuTokenSettingKey)) != "")
+	discordConfigured := strings.TrimSpace(botToken) != ""
+	return SharedBotRuntimeReadiness{KitsuConfigured: kitsuConfigured, DiscordConfigured: discordConfigured, OverallReady: kitsuConfigured && discordConfigured}
+}
+
 func localizeSetupDiagnostics(lang string, diag SetupDiagnostics) SetupDiagnostics {
 	localizeCheck := func(c SetupCheck) SetupCheck {
 		switch c.Key {

@@ -11,6 +11,18 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestProductionRoutingCompatibilityHandlerRedirectsToConnectedProductions(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin/production-routing?project=p1&lang=en", nil)
+	res := httptest.NewRecorder()
+	ProductionRoutingCompatibilityHandler().ServeHTTP(res, req)
+	if res.Code != http.StatusSeeOther {
+		t.Fatalf("expected compatibility redirect, got %d", res.Code)
+	}
+	if got := res.Header().Get("Location"); !strings.Contains(got, "/bot/admin/projects") || !strings.Contains(got, "project=p1") {
+		t.Fatalf("unexpected compatibility location: %s", got)
+	}
+}
+
 func TestProductionRoutingHandlerDoesNotRenderWebhookURL(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:production-routing-ui?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {

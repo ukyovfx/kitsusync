@@ -316,8 +316,9 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		if storedHost != "" {
 			effectiveHost = normalizeKitsuHostname(storedHost)
 		}
-		botTokenConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
-		runtimeConfigured := effectiveHost != "" && strings.TrimSpace(storedRuntimeKitsuEmail(db)) != ""
+		sharedReadiness := sharedBotRuntimeReadiness(db, effectiveHost, storedRuntimeDiscordBotToken(db))
+		botTokenConfigured := sharedReadiness.DiscordConfigured
+		runtimeConfigured := sharedReadiness.KitsuConfigured
 		botStatus := tileStatus(
 			statusChip(map[bool]string{true: "ok", false: "bad"}[botTokenConfigured], t(lang, map[bool]string{true: "Bot設定済み", false: "Bot未設定"}[botTokenConfigured], map[bool]string{true: "Bot set", false: "Bot unset"}[botTokenConfigured])),
 			statusChip(map[bool]string{true: "ok", false: "bad"}[runtimeConfigured], t(lang, map[bool]string{true: "Runtime設定済み", false: "Runtime未設定"}[runtimeConfigured], map[bool]string{true: "Runtime set", false: "Runtime unset"}[runtimeConfigured])),
@@ -370,7 +371,6 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 		}
 		links := []navLink{
 			{"\U0001F5C2", "/bot/admin/projects", "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions", connectedStatus},
-			{"\U0001F4E3", "/bot/admin/production-routing", "Production\u901a\u77e5\u30eb\u30fc\u30c6\u30a3\u30f3\u30b0", "Production Notification Routing", ""},
 			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users", usersStatus},
 			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings", botStatus},
 			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage", storageStatus},
@@ -934,6 +934,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
     %s
     %s
     %s
+    %s
   </div>
 </details>`,
 				openAttr,
@@ -978,6 +979,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not execute Discord deletion. Ownership is not proven strongly enough yet, so this step is dry-run only.")),
 				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
 				unifiedDeleteSectionHTML,
+				renderTaskTypeChannelPlanCard(p, webhooks, allTaskTypes, lang),
 				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
 				"",
 			))
@@ -2567,9 +2569,14 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 		}
 
 		kitsuEmail := storedRuntimeKitsuEmail(db)
-		configured := effectiveHost != "" && kitsuEmail != ""
+		sharedReadiness := sharedBotRuntimeReadiness(db, effectiveHost, storedRuntimeDiscordBotToken(db))
+		configured := sharedReadiness.OverallReady
 		statusClass := "bad"
-		statusLabel := t(lang, "未設定", "Not configured")
+		statusLabel := t(lang, "Action required", "Action required")
+		primaryAction := t(lang, "Complete Bot Setup", "Complete Bot Setup")
+		if strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != "" {
+			primaryAction = t(lang, "Re-authenticate to edit", "Re-authenticate to edit")
+		}
 		if configured {
 			statusClass = "ok"
 			statusLabel = t(lang, "設定済み", "Configured")
@@ -2585,7 +2592,7 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
     <div class="button-row"><a class="btn" data-edit-lock-link="1" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
   </div>
 </div>`,
-			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "新規連携セットアップで使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by New Connection Setup."), statusClass, statusLabel, esc(effectiveHost), t(lang, "Bot Token", "Bot Token"), secretStatus(storedRuntimeDiscordBotToken(db), lang), withLang("/bot/admin/bot?edit=1", r), t(lang, "再認証して編集する", "Re-authenticate to edit"), withLang("/bot/setup", r), t(lang, "新規連携セットアップへ戻る", "Back to New Connection Setup"), withLang("/bot/admin/projects", r), t(lang, "連携済みプロダクション管理を開く", "Open Connected Productions"))
+			t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), t(lang, "新規連携セットアップで使う共有 Bot / Runtime の設定を確認・更新できます。", "Review and update the shared Bot / Runtime settings used by New Connection Setup."), statusClass, statusLabel, esc(effectiveHost), t(lang, "Bot Token", "Bot Token"), secretStatus(storedRuntimeDiscordBotToken(db), lang), withLang("/bot/admin/bot?edit=1", r), primaryAction, withLang("/bot/setup", r), t(lang, "新規連携セットアップへ戻る", "Back to New Connection Setup"), withLang("/bot/admin/projects", r), t(lang, "連携済みプロダクション管理を開く", "Open Connected Productions"))
 		if !editMode {
 			fmt.Fprint(w, adminPage(lang, t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), r, view))
 			return

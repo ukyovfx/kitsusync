@@ -2,6 +2,7 @@ package setup
 
 import (
 	"app/src/model"
+	"os"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -48,5 +49,25 @@ func TestHasReadyProductionRoutingRequiresEnabledValidRoute(t *testing.T) {
 	}
 	if len(model.ValidateProductionNotificationConfig(db, "p2", model.ListProductionNotificationRoutes(db, "p2"))) == 0 {
 		t.Fatal("cross-Production destination must be stale")
+	}
+}
+
+func TestSharedBotRuntimeReadinessIsSharedBySetupAndSettings(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:shared-readiness?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "manager@example.invalid")
+	previous := os.Getenv(RuntimeKitsuPasswordEnv)
+	defer os.Setenv(RuntimeKitsuPasswordEnv, previous)
+	_ = os.Setenv(RuntimeKitsuPasswordEnv, "configured-in-test")
+	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", ""); got.OverallReady || got.DiscordConfigured {
+		t.Fatalf("token-less shared readiness must be incomplete: %#v", got)
+	}
+	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", "test-token"); !got.OverallReady || !got.KitsuConfigured || !got.DiscordConfigured {
+		t.Fatalf("complete shared readiness should be ready: %#v", got)
 	}
 }
