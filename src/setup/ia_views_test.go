@@ -218,7 +218,7 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
 	renderIADashboard(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Action required", "Complete Kitsu connection setup.", "Needs attention", "System status", "Productions needing attention"} {
+	for _, want := range []string{"Action required", "Complete Kitsu connection setup.", "Needs attention", "Notification system", "Productions needing attention", "dashboard-status-list", "dashboard-side-stack", "activity-columns"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing readiness copy %q", want)
 		}
@@ -228,6 +228,12 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	}
 	if strings.Contains(body, "Productions with notifications paused") || strings.Contains(body, "Paused") {
 		t.Fatal("dashboard exposes the retired pause state")
+	}
+	if strings.Count(body, "<h1") != 1 {
+		t.Fatalf("dashboard should have exactly one h1, got %d", strings.Count(body, "<h1"))
+	}
+	if strings.Contains(body, "chart") || strings.Contains(body, "sparkline") || strings.Contains(body, "waveform") {
+		t.Fatal("dashboard contains decorative chart markup outside the approved operations layout")
 	}
 }
 
@@ -263,6 +269,19 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 	}
 }
 
+func TestDashboardProblemActionTargetsDirectDestination(t *testing.T) {
+	p := model.Project{KitsuProjectID: "dashboard-action-p", Name: "Dashboard Action Production"}
+	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
+	notificationURL, notificationLabel := dashboardProblemAction(r, p, "en", "Notification destination needs attention")
+	if !strings.Contains(notificationURL, "tab=notifications") || notificationLabel != "Review notification settings" {
+		t.Fatalf("notification issue did not target notification settings: %q %q", notificationURL, notificationLabel)
+	}
+	userURL, userLabel := dashboardProblemAction(r, p, "en", "Reviewer participant is not mapped")
+	if !strings.Contains(userURL, "tab=user-settings") || userLabel != "Review user settings" {
+		t.Fatalf("participant issue did not target user settings: %q %q", userURL, userLabel)
+	}
+}
+
 func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Save(&model.Setting{Key: "kitsu.hostname", Value: "http://synthetic-kitsu.invalid"})
@@ -277,6 +296,9 @@ func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
+	}
+	if !strings.Contains(body, "dashboard-activity-row") || !strings.Contains(body, "Date and time") || !strings.Contains(body, "Result") {
+		t.Fatal("dashboard activity does not expose the aligned column structure")
 	}
 }
 
