@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -357,6 +358,60 @@ func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	if strings.Contains(body, "synthetic-discord-id") {
 		t.Fatal("global mapping leaked the raw Discord identifier")
 	}
+	if strings.Contains(body, "Discord user mapped") {
+		t.Fatal("global mapping used generic identity text instead of the stored display name")
+	}
+	if strings.Count(body, "<h1") != 1 {
+		t.Fatalf("global mapping should have exactly one h1, got %d", strings.Count(body, "<h1"))
+	}
+}
+
+func TestDiscordMemberListRejectsSyntheticIDsBeforeNetwork(t *testing.T) {
+	_, err := ListGuildMembers("qa-guild-active", "synthetic-token")
+	if err == nil {
+		t.Fatal("expected synthetic fixture ID to fail closed")
+	}
+	var failure *discordMemberListFailure
+	if !errors.As(err, &failure) || failure.Kind != discordMemberFailureFixture {
+		t.Fatalf("expected fixture classification, got %v", err)
+	}
+}
+
+func TestDiscordMemberListAcceptsOnlySnowflakeIDs(t *testing.T) {
+	for _, tc := range []struct {
+		id    string
+		valid bool
+	}{{"12345678901234567", true}, {"12345678901234567890", true}, {"guild-123", false}, {"123", false}} {
+		if got := isDiscordSnowflake(tc.id); got != tc.valid {
+			t.Fatalf("snowflake validation for %q = %v, want %v", tc.id, got, tc.valid)
+		}
+	}
+}
+
+func TestDiscordMemberListEndpointUsesSafeGETShape(t *testing.T) {
+	first, err := discordGuildMembersEndpoint("123456789012345678", "")
+	if err != nil || !strings.Contains(first, "/guilds/123456789012345678/members?limit=1000") || strings.Contains(first, "after=") {
+		t.Fatalf("unexpected first member-list endpoint: %q, %v", first, err)
+	}
+	next, err := discordGuildMembersEndpoint("123456789012345678", "123456789012345679")
+	if err != nil || !strings.Contains(next, "limit=1000&after=123456789012345679") {
+		t.Fatalf("unexpected paginated member-list endpoint: %q, %v", next, err)
+	}
+}
+
+func TestDiscordMemberListClassifiesSafeFailures(t *testing.T) {
+	malformed := classifyDiscordMemberListFailure(400, []byte(`{"message":"Invalid Form Body","code":50035}`))
+	if malformed.Kind != discordMemberFailureMalformed || malformed.Code != 50035 {
+		t.Fatalf("unexpected malformed classification: %+v", malformed)
+	}
+	intent := classifyDiscordMemberListFailure(403, []byte(`{"message":"Privileged intent is required","code":0}`))
+	if intent.Kind != discordMemberFailureIntent {
+		t.Fatalf("unexpected intent classification: %+v", intent)
+	}
+	message := globalDiscordMemberLoadMessage("en", malformed)
+	if strings.Contains(message, "Invalid Form Body") || !strings.Contains(message, "Discord users could not be loaded") || !strings.Contains(message, "Diagnostic details") {
+		t.Fatal("member-list error exposed raw API text or omitted safe diagnostic details")
+	}
 }
 
 func TestGlobalUserLinkFormUsesSafeDiscordSelection(t *testing.T) {
@@ -371,7 +426,7 @@ func TestGlobalUserLinkFormUsesSafeDiscordSelection(t *testing.T) {
 			t.Fatalf("global link form exposed legacy control %q", forbidden)
 		}
 	}
-	for _, want := range []string{`name="discord_user_id"`, `id="global-discord-user"`, "Discord users could not be loaded", "Open Bot Connection"} {
+	for _, want := range []string{`name="discord_user_id"`, `id="global-discord-user"`, "Discord users could not be loaded", "Check Bot Connection"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("global link form missing safe selection affordance %q", want)
 		}

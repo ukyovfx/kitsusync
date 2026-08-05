@@ -3,6 +3,7 @@ package setup
 import (
 	"app/src/api/kitsu"
 	"app/src/model"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -580,7 +581,7 @@ func renderIAUsers(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		rows.WriteString(`<tr><td colspan="3" class="muted">` + esc(t(lang, "ユーザー対応付けはありません。", "No user mappings yet.")) + `</td></tr>`)
 	}
 	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーの対応付けだけを管理します。Reviewer / CheckerはProductionのユーザー設定で管理します。", "Manage only Kitsu user to Discord user correspondence. Reviewer / Checker belongs in the selected Production's user settings.")) + `</p><table><thead><tr><th>Kitsu` + esc(t(lang, "ユーザー", " user")) + `</th><th>Discord` + esc(t(lang, "ユーザー", " user")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></section>`
-	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.user_mapping"), r, body))
+	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
 func renderGlobalUserMappingLegacy(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -605,7 +606,7 @@ func renderGlobalUserMappingLegacy(w http.ResponseWriter, r *http.Request, db *g
 		rows.WriteString(`<tr><td colspan="4" class="muted">` + esc(t(lang, "ユーザー対応付けはありません。", "No user mappings yet.")) + `</td></tr>`)
 	}
 	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーの対応付けだけを管理します。Reviewer / Checkerは選択中のProductionで管理します。", "Manage only Kitsu user to Discord user correspondence. Reviewer / Checker is managed inside the selected Production.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
-	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.user_mapping"), r, body))
+	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
 type globalDiscordUserOption struct {
@@ -617,14 +618,31 @@ func globalDiscordUserOptions(db *gorm.DB, botToken string) ([]globalDiscordUser
 	if strings.TrimSpace(botToken) == "" {
 		return nil, fmt.Errorf("Discord Bot is not configured")
 	}
+	projects := model.ListProjects(db)
+	for _, project := range projects {
+		if isSyntheticDiscordID(strings.TrimSpace(project.DiscordGuildID)) {
+			return nil, &discordMemberListFailure{Kind: discordMemberFailureFixture, Technical: "The connected server is synthetic fixture data and was not sent to Discord"}
+		}
+	}
+	joined, err := ListBotGuilds(botToken)
+	if err != nil {
+		return nil, err
+	}
+	joinedGuilds := map[string]bool{}
+	for _, guild := range joined {
+		joinedGuilds[strings.TrimSpace(guild.ID)] = true
+	}
 	seenGuilds := map[string]bool{}
 	var options []globalDiscordUserOption
-	for _, project := range model.ListProjects(db) {
+	for _, project := range projects {
 		guildID := strings.TrimSpace(project.DiscordGuildID)
 		if guildID == "" || seenGuilds[guildID] {
 			continue
 		}
 		seenGuilds[guildID] = true
+		if !joinedGuilds[guildID] {
+			return nil, &discordMemberListFailure{Kind: discordMemberFailureMismatch, Technical: "The Bot is not joined to the connected Discord server"}
+		}
 		members, err := ListGuildMembers(guildID, botToken)
 		if err != nil {
 			return nil, err
@@ -651,6 +669,43 @@ func globalDiscordUserOptions(db *gorm.DB, botToken string) ([]globalDiscordUser
 	return options, nil
 }
 
+func globalDiscordMemberLoadMessage(lang string, loadErr error) string {
+	kind := discordMemberFailureUnavailable
+	detail := "Discord member lookup was unavailable"
+	var failure *discordMemberListFailure
+	if errors.As(loadErr, &failure) {
+		kind = failure.Kind
+		detail = failure.Technical
+		if failure.Status > 0 {
+			detail += fmt.Sprintf(" (HTTP %d)", failure.Status)
+		}
+		if failure.Code > 0 {
+			detail += fmt.Sprintf(" (Discord code %d)", failure.Code)
+		}
+	}
+	title := t(lang, "Discordユーザーを取得できませんでした", "Discord users could not be loaded")
+	explanation := t(lang, "Discordユーザー一覧を確認できません。Bot接続とDiscordサーバーの設定を確認してください。", "The Discord user list could not be checked. Verify the Bot connection and Discord server settings.")
+	action := `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+	switch kind {
+	case discordMemberFailureFixture:
+		explanation = t(lang, "この画面は合成QAデータのため、実Discordユーザーは取得しません。", "This screen uses synthetic QA data, so real Discord users are not requested.")
+		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+	case discordMemberFailureMalformed:
+		explanation = t(lang, "Discordユーザー一覧の取得リクエストを確認できません。Discordサーバーの設定を確認して再読み込みしてください。", "Discord rejected the member-list request. Verify the Discord server configuration and reload.")
+		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/projects", lang)) + `">` + esc(t(lang, "Discordサーバーの設定を確認", "Check Discord server settings")) + `</a>`
+	case discordMemberFailureMismatch:
+		explanation = t(lang, "このProductionに設定されたDiscordサーバーへBotが参加していません。", "The Bot has not joined the Discord server connected to this Production.")
+		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+	case discordMemberFailureAccess:
+		explanation = t(lang, "BotにDiscordサーバーのメンバーを確認する権限がありません。", "The Bot does not have permission to inspect members in this Discord server.")
+		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+	case discordMemberFailureIntent:
+		explanation = t(lang, "Discord Developer PortalでServer Members Intentの設定を確認してください。", "Verify the Server Members Intent in the Discord Developer Portal.")
+		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+	}
+	return `<div class="notice notice-warning" role="status"><strong>` + esc(title) + `</strong><p>` + esc(explanation) + `</p><div class="button-row">` + action + `</div><details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="field-help">` + esc(detail) + `</p></details></div>`
+}
+
 func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.DB, user *model.UserMap) {
 	lang := currentLang(r)
 	options, loadErr := globalDiscordUserOptions(db, storedRuntimeDiscordBotToken(db))
@@ -669,10 +724,10 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 	message := ""
 	if loadErr != nil {
 		disabled = " disabled"
-		message = `<div class="notice notice-warning" role="status"><strong>` + esc(t(lang, "Discordユーザーを読み込めません", "Discord users could not be loaded")) + `</strong><p>` + esc(loadErr.Error()) + `</p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "Bot接続を確認", "Open Bot Connection")) + `</a></div>`
+		message = globalDiscordMemberLoadMessage(lang, loadErr)
 	}
-	body := `<section class="section-stack"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass"><h2>` + esc(t(lang, "ユーザー対応付けを変更", "Change user link")) + `</h2><p class="hint">` + esc(t(lang, "Kitsuユーザーに、接続済みDiscordサーバーで利用できるユーザーを選択します。", "Choose a Discord user available in a connected server for this Kitsu user.")) + `</p>` + message + `<form method="POST" class="form-stack"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(user.ID) + `"><p class="field-label">` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</p><p><strong>` + esc(user.KitsuName) + `</strong></p><label for="global-discord-user">` + esc(t(lang, "Discordユーザー", "Discord user")) + `</label><select id="global-discord-user" name="discord_user_id" required>` + optionHTML.String() + `</select><div class="button-row"><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form></section></section>`
-	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.user_mapping"), r, body))
+	body := `<section class="section-stack"><h1>` + esc(t(lang, user.KitsuName+"の対応付けを変更", "Change link for "+user.KitsuName)) + `</h1><section class="section-card glass"><p class="hint">` + esc(t(lang, "Kitsuユーザーに、接続済みDiscordサーバーで利用できるユーザーを選択します。", "Choose a Discord user available in a connected server for this Kitsu user.")) + `</p>` + message + `<form method="POST" class="form-stack"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(user.ID) + `"><p class="field-label">` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</p><p><strong>` + esc(user.KitsuName) + `</strong></p><label for="global-discord-user">` + esc(t(lang, "Discordユーザー", "Discord user")) + `</label><select id="global-discord-user" name="discord_user_id" required>` + optionHTML.String() + `</select><div class="button-row"><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form></section></section>`
+	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
 func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -697,8 +752,8 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー対応付けはありません。", "No user links yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
 	}
-	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーの本人対応付けだけを管理します。Reviewer / Checkerは選択したProductionのユーザー設定で管理します。", "Manage Kitsu user to Discord user identity links only. Reviewer / Checker is managed in the selected Production's User Settings.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
-	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.user_mapping"), r, body))
+	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーの本人対応付けだけを管理します。Reviewer / Checkerは選択したProductionのユーザー設定で管理します。", "Manage Kitsu user to Discord user identity links only. Reviewer / Checker is managed in the selected Production's User Settings.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
 func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) {

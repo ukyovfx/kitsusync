@@ -501,7 +501,9 @@ func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, 
 			return nil, 0, err
 		}
 		req.Header.Set("Authorization", "Bot "+trimmedToken)
-		req.Header.Set("Content-Type", "application/json")
+		if rawPayload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -641,6 +643,26 @@ type DiscordGuildMember struct {
 	Nick string `json:"nick"`
 }
 
+type discordMemberListFailure struct {
+	Kind      string
+	Status    int
+	Code      int
+	Technical string
+}
+
+func (e *discordMemberListFailure) Error() string {
+	return e.Technical
+}
+
+const (
+	discordMemberFailureFixture     = "fixture"
+	discordMemberFailureMalformed   = "malformed"
+	discordMemberFailureMismatch    = "mismatch"
+	discordMemberFailureAccess      = "access"
+	discordMemberFailureIntent      = "intent"
+	discordMemberFailureUnavailable = "unavailable"
+)
+
 func ListBotGuilds(botToken string) ([]DiscordGuild, error) {
 	body, status, err := botDo(http.MethodGet, discordAPI+"/users/@me/guilds", nil, botToken)
 	if err != nil {
@@ -672,18 +694,102 @@ func ListGuildChannels(guildID, botToken string) ([]DiscordGuildChannel, error) 
 }
 
 func ListGuildMembers(guildID, botToken string) ([]DiscordGuildMember, error) {
-	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/members?limit=1000", discordAPI, strings.TrimSpace(guildID)), nil, botToken)
-	if err != nil {
-		return nil, err
+	guildID = strings.TrimSpace(guildID)
+	if !isDiscordSnowflake(guildID) {
+		kind := discordMemberFailureMalformed
+		if isSyntheticDiscordID(guildID) {
+			kind = discordMemberFailureFixture
+		}
+		return nil, &discordMemberListFailure{Kind: kind, Technical: "Discord guild member list was not requested because the server ID is not a valid Discord snowflake"}
 	}
-	if status >= 400 {
-		return nil, discordBotAPIError("discord guild member list failed", status, body)
+	if strings.TrimSpace(botToken) == "" {
+		return nil, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord Bot token is not configured"}
 	}
-	var members []DiscordGuildMember
-	if err := json.Unmarshal(body, &members); err != nil {
-		return nil, fmt.Errorf("discord guild member list response was invalid")
+	const pageLimit = 1000
+	const maxPages = 100
+	var all []DiscordGuildMember
+	after := ""
+	for page := 0; page < maxPages; page++ {
+		endpoint, endpointErr := discordGuildMembersEndpoint(guildID, after)
+		if endpointErr != nil {
+			return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Technical: endpointErr.Error()}
+		}
+		body, status, err := botDo(http.MethodGet, endpoint, nil, botToken)
+		if err != nil {
+			return nil, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord guild member list request failed"}
+		}
+		if status >= 400 {
+			return nil, classifyDiscordMemberListFailure(status, body)
+		}
+		var members []DiscordGuildMember
+		if err := json.Unmarshal(body, &members); err != nil {
+			return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord returned an invalid member list response"}
+		}
+		all = append(all, members...)
+		if len(members) < pageLimit {
+			return all, nil
+		}
+		lastID := strings.TrimSpace(members[len(members)-1].User.ID)
+		if !isDiscordSnowflake(lastID) || lastID == after {
+			return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord member list pagination returned an invalid cursor"}
+		}
+		after = lastID
 	}
-	return members, nil
+	return nil, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord member list pagination exceeded the safe page limit"}
+}
+
+func isSyntheticDiscordID(id string) bool {
+	lower := strings.ToLower(strings.TrimSpace(id))
+	return strings.HasPrefix(lower, "qa-guild-") || strings.HasPrefix(lower, "synthetic-") || strings.HasPrefix(lower, "fixture-")
+}
+
+func isDiscordSnowflake(id string) bool {
+	if len(id) < 17 || len(id) > 20 {
+		return false
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func discordGuildMembersEndpoint(guildID, after string) (string, error) {
+	guildID = strings.TrimSpace(guildID)
+	if !isDiscordSnowflake(guildID) {
+		return "", fmt.Errorf("Discord guild ID is not a valid snowflake")
+	}
+	endpoint := fmt.Sprintf("%s/guilds/%s/members?limit=1000", discordAPI, url.PathEscape(guildID))
+	if strings.TrimSpace(after) != "" {
+		if !isDiscordSnowflake(strings.TrimSpace(after)) {
+			return "", fmt.Errorf("Discord member pagination cursor is not a valid snowflake")
+		}
+		endpoint += "&after=" + url.QueryEscape(strings.TrimSpace(after))
+	}
+	return endpoint, nil
+}
+
+func classifyDiscordMemberListFailure(status int, body []byte) *discordMemberListFailure {
+	var parsed struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}
+	_ = json.Unmarshal(body, &parsed)
+	lower := strings.ToLower(parsed.Message)
+	kind := discordMemberFailureUnavailable
+	switch status {
+	case http.StatusBadRequest:
+		kind = discordMemberFailureMalformed
+	case http.StatusForbidden:
+		kind = discordMemberFailureAccess
+		if strings.Contains(lower, "intent") {
+			kind = discordMemberFailureIntent
+		}
+	case http.StatusNotFound:
+		kind = discordMemberFailureMismatch
+	}
+	return &discordMemberListFailure{Kind: kind, Status: status, Code: parsed.Code, Technical: fmt.Sprintf("Discord member list request failed with HTTP %d", status)}
 }
 
 func CreateWebhook(channelID, name, botToken string) (string, error) {
