@@ -7,7 +7,7 @@ import "fmt"
 // must be passed separately and are never translated.
 var uiText = map[string]map[string]string{
 	"ja": {
-		"ia.dashboard": "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9", "ia.productions": "Production", "ia.production_list": "Production\u4e00\u89a7", "ia.overview": "\u6982\u8981", "ia.notifications": "\u901a\u77e5", "ia.user_settings": "\u30e6\u30fc\u30b6\u30fc\u8a2d\u5b9a", "ia.storage_settings": "\u30b9\u30c8\u30ec\u30fc\u30b8\u8a2d\u5b9a", "ia.activity": "\u30a2\u30af\u30c6\u30a3\u30d3\u30c6\u30a3", "ia.troubleshooting": "\u30c8\u30e9\u30d6\u30eb\u30b7\u30e5\u30fc\u30c6\u30a3\u30f3\u30b0", "ia.advanced": "\u8a73\u7d30\u8a2d\u5b9a", "ia.danger": "Danger Zone", "ia.new_connection": "\u65b0\u3057\u3044Production\u3092\u63a5\u7d9a", "ia.user_mapping": "\u30e6\u30fc\u30b6\u30fc\u7d10\u3065\u3051", "ia.bot_connection": "Bot\u63a5\u7d9a", "ia.system_status": "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "ia.audit_log": "\u76e3\u67fb\u30ed\u30b0", "ia.discord_server": "Discord\u30b5\u30fc\u30d0\u30fc", "ia.check_without_sending": "\u9001\u4fe1\u305b\u305a\u306b\u78ba\u8a8d", "ia.pause_notifications": "\u901a\u77e5\u3092\u4e00\u6642\u505c\u6b62", "ia.resume_notifications": "\u901a\u77e5\u3092\u518d\u958b", "ia.disconnect_production": "Production\u306e\u9023\u643a\u3092\u89e3\u9664", "ia.delete_discord_resources": "Discord\u5074\u306e\u30ea\u30bd\u30fc\u30b9\u3092\u524a\u9664", "channel_plan.select_server": "Discord\u30b5\u30fc\u30d0\u30fc\u3092\u9078\u629e", "channel_plan.server": "Discord\u30b5\u30fc\u30d0\u30fc", "channel_plan.check_without_sending": "\u9001\u4fe1\u305b\u305a\u306b\u78ba\u8a8d",
+		"ia.dashboard": "\u30c0\u30c3\u30b7\u30e5\u30dc\u30fc\u30c9", "ia.productions": "Production", "ia.production_list": "Production\u4e00\u89a7", "ia.overview": "\u6982\u8981", "ia.notifications": "\u901a\u77e5", "ia.user_settings": "\u30e6\u30fc\u30b6\u30fc\u8a2d\u5b9a", "ia.storage_settings": "\u30b9\u30c8\u30ec\u30fc\u30b8\u8a2d\u5b9a", "ia.activity": "\u30a2\u30af\u30c6\u30a3\u30d3\u30c6\u30a3", "ia.troubleshooting": "\u30c8\u30e9\u30d6\u30eb\u30b7\u30e5\u30fc\u30c6\u30a3\u30f3\u30b0", "ia.advanced": "\u8a73\u7d30\u8a2d\u5b9a", "ia.danger": "Danger Zone", "ia.new_connection": "\u65b0\u3057\u3044Production\u3092\u63a5\u7d9a", "ia.user_mapping": "\u30e6\u30fc\u30b6\u30fc\u7d10\u3065\u3051", "ia.bot_connection": "Bot\u63a5\u7d9a", "ia.system_status": "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "ia.audit_log": "\u76e3\u67fb\u30ed\u30b0", "ia.discord_server": "Discord\u30b5\u30fc\u30d0\u30fc", "ia.check_without_sending": "\u9001\u4fe1\u305b\u305a\u306b\u78ba\u8a8d", "ia.pause_notifications": "\u901a\u77e5\u3092\u4e00\u6642\u505c\u6b62", "ia.resume_notifications": "\u901a\u77e5\u3092\u518d\u958b", "ia.disconnect_production": "Production\u306e\u9023\u643a\u3092\u89e3\u9664", "ia.delete_discord_resources": "Discord\u5074\u306e\u30ea\u30bd\u30fc\u30b9\u3092\u524a\u9664", "channel_plan.select_server": "Discord\u30b5\u30fc\u30d0\u30fc\u3092\u9078\u629e", "channel_plan.server": "Discord\u30b5\u30fc\u30d0\u30fc", "channel_plan.check_without_sending": "\u9001\u4fe1\u305b\u305a\u306b\u78ba\u8a8d", "connections.title": "\u63a5\u7d9a\u8a2d\u5b9a", "connections.edit": "\u63a5\u7d9a\u8a2d\u5b9a\u3092\u7de8\u96c6", "connections.kitsu": "Kitsu\u63a5\u7d9a", "connections.discord": "Discord Bot\u63a5\u7d9a", "connections.host": "Kitsu\u30db\u30b9\u30c8", "connections.account": "Kitsu\u9023\u643a\u30a2\u30ab\u30a6\u30f3\u30c8", "wizard.error.select_production": "Production\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044", "wizard.error.invalid_production": "\u9078\u629e\u3057\u305fProduction\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f", "wizard.error.already_connected": "\u3053\u306eProduction\u306f\u3059\u3067\u306b\u9023\u643a\u3055\u308c\u3066\u3044\u307e\u3059",
 		"wizard.description": "ProductionとDiscordサーバーを順に選び、実行前に内容を確認します。", "wizard.progress": "接続設定の進行状況", "wizard.step_prerequisites": "準備状況", "wizard.step_production": "Production", "wizard.step_server": "Discordサーバー", "wizard.step_plan": "チャンネル計画", "wizard.step_review": "内容確認", "wizard.step_execute": "実行", "wizard.step_complete": "完了", "wizard.prerequisites_title": "接続の準備状況", "wizard.notification_state": "通知の状態", "wizard.connected": "接続済み", "wizard.not_configured": "未設定", "wizard.available": "利用可能", "wizard.unavailable": "利用不可", "wizard.unavailable_explanation": "Bot接続が完了するまで通知は利用できません。", "wizard.bot_required_explanation": "通知設定とサーバー選択にはBot接続が必要です。", "wizard.blocked_bot": "Bot接続が未設定のため、通知設定とサーバー選択はまだ開始できません。先にBot接続を完了してください。", "wizard.open_bot": "Bot接続を設定", "wizard.prerequisites_ready": "必要な接続がそろいました。Productionを選択できます。", "wizard.next": "次へ", "wizard.back": "戻る", "wizard.production_title": "Kitsu Productionを選択", "wizard.production_label": "Production", "wizard.production_help": "接続済みのProductionは選択できません。", "wizard.select_production": "Productionを選択", "wizard.already_connected": "接続済み", "wizard.server_title": "Discordサーバーを選択", "wizard.server_label": "Discordサーバー", "wizard.server_help": "Botがアクセスできるサーバーだけが表示されます。", "wizard.select_server": "Discordサーバーを選択", "wizard.plan_title": "チャンネル計画を確認", "wizard.plan_hint": "すべてのTask Typeについて、作成・再利用・確認が必要な結果を表示します。ここではDiscordへの変更は行いません。", "wizard.plan_caption": "Task Typeごとのチャンネル計画", "wizard.task_type": "Task Type", "wizard.channel": "Discordチャンネル", "wizard.result": "結果", "wizard.details": "詳細", "wizard.create": "作成", "wizard.reuse": "再利用", "wizard.conflict": "競合", "wizard.review_required": "確認が必要", "wizard.detail_create": "不足しているチャンネルを作成します。", "wizard.detail_reuse": "既存の正確なチャンネルを再利用します。", "wizard.detail_conflict": "名前または所有情報を確認してください。", "wizard.detail_review": "安全を確認するまで実行できません。", "wizard.plan_blocked": "この計画は確認が必要なため実行できません。", "wizard.plan_unavailable": "サーバーのチャンネルを確認できませんでした。変更は行われていません。", "wizard.no_write": "この画面は確認専用です。明示的に確認するまでDiscordへの変更は行いません。", "wizard.review": "内容を確認する", "wizard.confirm": "表示された計画を確認しました。", "wizard.execute_title": "接続を実行", "wizard.execute_hint": "実行は内容確認画面で明示的に同意した場合だけ行われます。", "wizard.back_to_review": "内容確認に戻る", "wizard.execute": "計画を確認して実行", "wizard.complete_title": "接続設定が完了しました", "wizard.complete_message": "%s のチャンネル設定を保存しました。", "wizard.open_production": "Productionを開く", "status.action_required": "対応が必要", "status.needs_review": "確認が必要", "status.incomplete": "未設定", "status.paused": "一時停止中", "status.active": "有効",
 		"setup_result.cleanup_started":          "Discord リソースのクリーンアップを開始しました",
 		"setup_result.cleanup_channel_failed":   "チャンネルのクリーンアップに失敗しました: #%s: %s",
@@ -110,7 +110,7 @@ var uiText = map[string]map[string]string{
 		"login.submit":                          "ログイン",
 	},
 	"en": {
-		"ia.dashboard": "Dashboard", "ia.productions": "Productions", "ia.production_list": "Production list", "ia.overview": "Overview", "ia.notifications": "Notifications", "ia.user_settings": "User settings", "ia.storage_settings": "Storage settings", "ia.activity": "Activity", "ia.troubleshooting": "Troubleshooting", "ia.advanced": "Advanced settings", "ia.danger": "Danger Zone", "ia.new_connection": "New Production Connection", "ia.user_mapping": "User Linking", "ia.bot_connection": "Bot Connection", "ia.system_status": "System Status", "ia.audit_log": "Audit Log", "ia.discord_server": "Discord server", "ia.check_without_sending": "Check without sending", "ia.pause_notifications": "Pause notifications", "ia.resume_notifications": "Resume notifications", "ia.disconnect_production": "Disconnect Production", "ia.delete_discord_resources": "Delete Discord resources", "channel_plan.select_server": "Select a Discord server", "channel_plan.server": "Discord server", "channel_plan.check_without_sending": "Check without sending",
+		"ia.dashboard": "Dashboard", "ia.productions": "Productions", "ia.production_list": "Production list", "ia.overview": "Overview", "ia.notifications": "Notifications", "ia.user_settings": "User settings", "ia.storage_settings": "Storage settings", "ia.activity": "Activity", "ia.troubleshooting": "Troubleshooting", "ia.advanced": "Advanced settings", "ia.danger": "Danger Zone", "ia.new_connection": "New Production Connection", "ia.user_mapping": "User Linking", "ia.bot_connection": "Bot Connection", "ia.system_status": "System Status", "ia.audit_log": "Audit Log", "ia.discord_server": "Discord server", "ia.check_without_sending": "Check without sending", "ia.pause_notifications": "Pause notifications", "ia.resume_notifications": "Resume notifications", "ia.disconnect_production": "Disconnect Production", "ia.delete_discord_resources": "Delete Discord resources", "channel_plan.select_server": "Select a Discord server", "channel_plan.server": "Discord server", "channel_plan.check_without_sending": "Check without sending", "connections.title": "Connections", "connections.edit": "Edit connections", "connections.kitsu": "Kitsu connection", "connections.discord": "Discord Bot connection", "connections.host": "Kitsu host", "connections.account": "Kitsu integration account", "wizard.error.select_production": "Select a Production", "wizard.error.invalid_production": "The selected Production could not be verified", "wizard.error.already_connected": "This Production is already connected",
 		"wizard.description": "Select a Production and Discord server in order, then review the exact plan before execution.", "wizard.progress": "Connection setup progress", "wizard.step_prerequisites": "Prerequisites", "wizard.step_production": "Production", "wizard.step_server": "Discord server", "wizard.step_plan": "Channel plan", "wizard.step_review": "Review", "wizard.step_execute": "Execute", "wizard.step_complete": "Complete", "wizard.prerequisites_title": "Connection prerequisites", "wizard.notification_state": "Notification state", "wizard.connected": "Connected", "wizard.not_configured": "Not configured", "wizard.available": "Available", "wizard.unavailable": "Unavailable", "wizard.unavailable_explanation": "Notifications are unavailable until Bot Connection is complete.", "wizard.bot_required_explanation": "Bot Connection is required for notification setup and server selection.", "wizard.blocked_bot": "Bot Connection is not configured, so server selection and notification setup are unavailable. Complete Bot Connection first.", "wizard.open_bot": "Set up Bot Connection", "wizard.prerequisites_ready": "All prerequisites are ready. Select a Production to continue.", "wizard.next": "Next", "wizard.back": "Back", "wizard.production_title": "Select a Kitsu Production", "wizard.production_label": "Production", "wizard.production_help": "Already-connected Productions cannot be selected.", "wizard.select_production": "Select a Production", "wizard.already_connected": "Already connected", "wizard.server_title": "Select a Discord server", "wizard.server_label": "Discord server", "wizard.server_help": "Only servers accessible to the bot are listed.", "wizard.select_server": "Select a Discord server", "wizard.plan_title": "Review the channel plan", "wizard.plan_hint": "Every Task Type is shown with its create, reuse, or review-required result. This step is read-only.", "wizard.plan_caption": "Task Type channel plan", "wizard.task_type": "Task Type", "wizard.channel": "Discord channel", "wizard.result": "Result", "wizard.details": "Details", "wizard.create": "Create", "wizard.reuse": "Reuse", "wizard.conflict": "Conflict", "wizard.review_required": "Review required", "wizard.detail_create": "A missing channel will be created.", "wizard.detail_reuse": "An exact existing channel will be reused.", "wizard.detail_conflict": "Review the name or ownership information.", "wizard.detail_review": "Execution is blocked until this is safe.", "wizard.plan_blocked": "This plan requires review and cannot be executed.", "wizard.plan_unavailable": "The server channels could not be read. No changes were made.", "wizard.no_write": "This is a review-only screen. No Discord change occurs until you explicitly confirm.", "wizard.review": "Review contents", "wizard.confirm": "I reviewed the exact plan shown above.", "wizard.execute_title": "Execute connection", "wizard.execute_hint": "Execution is available only after explicit confirmation on the review screen.", "wizard.back_to_review": "Back to review", "wizard.execute": "Confirm plan and execute", "wizard.complete_title": "Connection setup complete", "wizard.complete_message": "Channel settings were saved for %s.", "wizard.open_production": "Open Production", "status.action_required": "Action required", "status.needs_review": "Needs review", "status.incomplete": "Incomplete", "status.paused": "Paused", "status.active": "Active",
 		"setup_result.cleanup_started":          "database transaction failed after Discord provisioning; attempting Discord cleanup",
 		"setup_result.cleanup_channel_failed":   "cleanup failed for #%s: %s",
@@ -212,6 +212,118 @@ var uiText = map[string]map[string]string{
 		"login.password":                        "Password",
 		"login.submit":                          "Login",
 	},
+}
+
+/* func init() {
+	uiText["ja"]["production.unconnected.source"] = "Kitsuから取得"
+	uiText["ja"]["production.unconnected.status"] = "未接続"
+	uiText["ja"]["production.unconnected.explanation"] = "このProductionはまだKitsuSyncに接続されていません。Discordサーバー、通知先、ユーザー設定、ストレージ設定は接続後に利用できます。"
+	uiText["ja"]["production.unconnected.configure"] = "接続を設定"
+	uiText["ja"]["production.unconnected.back"] = "Production一覧へ戻る"
+	uiText["en"]["production.unconnected.source"] = "Loaded from Kitsu"
+	uiText["en"]["production.unconnected.status"] = "Not connected"
+	uiText["en"]["production.unconnected.explanation"] = "This Production is not yet connected to KitsuSync. Discord server, notification, user, and storage settings become available after connection."
+	uiText["en"]["production.unconnected.configure"] = "Configure connection"
+	uiText["en"]["production.unconnected.back"] = "Back to Productions"
+	uiText["ja"]["channel_plan.duplicate_name"] = "\u8907\u6570\u306eTask Type\u304c\u540c\u3058\u540d\u524d\u3067\u3001\u540c\u3058Discord\u30c1\u30e3\u30f3\u30cd\u30eb\u540d\u306b\u306a\u308a\u307e\u3059\u3002Kitsu\u5074\u3067Task Type\u540d\u3092\u5909\u66f4\u3059\u308b\u304b\u3001\u63a5\u7d9a\u524d\u306b\u5225\u3005\u306e\u30c1\u30e3\u30f3\u30cd\u30eb\u540d\u3092\u6307\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+	uiText["en"]["channel_plan.duplicate_name"] = "Multiple Task Types have the same name and resolve to the same Discord channel. Rename the Task Types in Kitsu or assign distinct channel names before connecting."
+	uiText["ja"]["connections.status_required"] = "\u5bfe\u5fdc\u304c\u5fc5\u8981"
+	uiText["ja"]["connections.status_configured"] = "\u8a2d\u5b9a\u6e08\u307f"
+	uiText["ja"]["connections.hint_separate"] = "Kitsu\u63a5\u7d9a\u3068Discord Bot\u63a5\u7d9a\u3092\u305d\u308c\u305e\u308c\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["connections.hint_kitsu"] = "Kitsu\u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["connections.hint_discord"] = "Discord Bot\u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["connections.persistence_now"] = "変更は実行中のプロセスに反映され、アプリ設定にも保存されます。"
+	uiText["ja"]["connections.persistence_restart"] = "再起動後は保存済みの設定が優先されます。環境変数は予備の設定としてのみ使用します。"
+	uiText["ja"]["connections.persistence_now"] = "\u5909\u66f4\u306f\u5b9f\u884c\u4e2d\u306e\u30d7\u30ed\u30bb\u30b9\u306b\u53cd\u6620\u3055\u308c\u3001\u30a2\u30d7\u30ea\u8a2d\u5b9a\u306b\u3082\u4fdd\u5b58\u3055\u308c\u307e\u3059\u3002"
+	uiText["ja"]["connections.persistence_restart"] = "\u518d\u8d77\u52d5\u5f8c\u306f\u4fdd\u5b58\u6e08\u307f\u306e\u8a2d\u5b9a\u304c\u512a\u5148\u3055\u308c\u307e\u3059\u3002\u74b0\u5883\u5909\u6570\u306f\u4e88\u5099\u306e\u8a2d\u5b9a\u3068\u3057\u3066\u306e\u307f\u4f7f\u7528\u3057\u307e\u3059\u3002"
+	uiText["ja"]["wizard.error.select_production"] = "Production\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["wizard.error.invalid_production"] = "\u9078\u629e\u3057\u305fProduction\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f"
+	uiText["ja"]["wizard.error.already_connected"] = "\u3053\u306eProduction\u306f\u3059\u3067\u306b\u9023\u643a\u3055\u308c\u3066\u3044\u307e\u3059"
+	uiText["ja"]["wizard.production_title"] = "Kitsu Production\u3092\u9078\u629e"
+	uiText["ja"]["wizard.production_label"] = "Production"
+	uiText["ja"]["wizard.production_help"] = "\u9023\u643a\u6e08\u307f\u306eProduction\u306f\u9078\u629e\u3067\u304d\u307e\u305b\u3093"
+	uiText["ja"]["wizard.select_production"] = "Production\u3092\u9078\u629e"
+	uiText["ja"]["wizard.already_connected"] = "\u9023\u643a\u6e08\u307f"
+	uiText["ja"]["wizard.next"] = "\u6b21\u3078"
+	uiText["ja"]["wizard.back"] = "\u623b\u308b"
+	uiText["en"]["connections.status_required"] = "Action required"
+	uiText["en"]["connections.status_configured"] = "Configured"
+	uiText["en"]["connections.hint_separate"] = "Review Kitsu and Discord Bot connections separately."
+	uiText["en"]["connections.hint_kitsu"] = "Complete the Kitsu connection first."
+	uiText["en"]["connections.hint_discord"] = "Complete the Discord Bot connection."
+	uiText["en"]["connections.persistence_now"] = "Token changes take effect immediately for the running process and are also saved in app settings."
+	uiText["en"]["connections.persistence_restart"] = "After restart, the saved token is used first. Environment variables remain fallback sources only."
+	uiText["en"]["wizard.error.select_production"] = "Select a Production"
+	uiText["en"]["wizard.error.invalid_production"] = "The selected Production could not be verified"
+	uiText["en"]["wizard.error.already_connected"] = "This Production is already connected"
+	uiText["ja"]["system.kitsu"] = "Kitsu接続"
+	uiText["ja"]["system.discord"] = "Discord接続"
+	uiText["ja"]["system.bot"] = "Bot状態"
+	uiText["ja"]["system.notifications"] = "通知状態"
+	uiText["ja"]["system.overall"] = "全体の状態"
+	uiText["ja"]["system.next_action"] = "次に必要な操作"
+	uiText["en"]["system.kitsu"] = "Kitsu connection"
+	uiText["en"]["system.discord"] = "Discord connection"
+	uiText["en"]["system.bot"] = "Bot state"
+	uiText["en"]["system.notifications"] = "Notification state"
+	uiText["en"]["system.overall"] = "Overall state"
+	uiText["en"]["system.next_action"] = "Next required action"
+}
+
+*/
+
+func init() {
+	uiText["ja"]["production.unconnected.source"] = "Kitsu\u304b\u3089\u53d6\u5f97"
+	uiText["ja"]["system.kitsu"] = "Kitsu\u63a5\u7d9a"
+	uiText["ja"]["system.discord"] = "Discord\u63a5\u7d9a"
+	uiText["ja"]["system.bot"] = "Bot\u72b6\u614b"
+	uiText["ja"]["system.notifications"] = "\u901a\u77e5\u72b6\u614b"
+	uiText["ja"]["system.overall"] = "\u5168\u4f53\u306e\u72b6\u614b"
+	uiText["ja"]["system.next_action"] = "\u6b21\u306b\u5fc5\u8981\u306a\u64cd\u4f5c"
+	uiText["en"]["system.kitsu"] = "Kitsu connection"
+	uiText["en"]["system.discord"] = "Discord connection"
+	uiText["en"]["system.bot"] = "Bot state"
+	uiText["en"]["system.notifications"] = "Notification state"
+	uiText["en"]["system.overall"] = "Overall state"
+	uiText["en"]["system.next_action"] = "Next required action"
+	uiText["ja"]["production.unconnected.status"] = "\u672a\u63a5\u7d9a"
+	uiText["ja"]["production.unconnected.explanation"] = "\u3053\u306eProduction\u306f\u307e\u3060KitsuSync\u306b\u63a5\u7d9a\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002Discord\u30b5\u30fc\u30d0\u30fc\u3001\u901a\u77e5\u5148\u3001\u30e6\u30fc\u30b6\u30fc\u8a2d\u5b9a\u3001\u30b9\u30c8\u30ec\u30fc\u30b8\u8a2d\u5b9a\u306f\u63a5\u7d9a\u5f8c\u306b\u5229\u7528\u3067\u304d\u307e\u3059\u3002"
+	uiText["ja"]["production.unconnected.configure"] = "\u63a5\u7d9a\u3092\u8a2d\u5b9a"
+	uiText["ja"]["production.unconnected.back"] = "Production\u4e00\u89a7\u3078\u623b\u308b"
+	uiText["en"]["production.unconnected.source"] = "Loaded from Kitsu"
+	uiText["en"]["production.unconnected.status"] = "Not connected"
+	uiText["en"]["production.unconnected.explanation"] = "This Production is not yet connected to KitsuSync. Discord server, notification, user, and storage settings become available after connection."
+	uiText["en"]["production.unconnected.configure"] = "Configure connection"
+	uiText["en"]["production.unconnected.back"] = "Back to Productions"
+	uiText["ja"]["channel_plan.duplicate_name"] = "\u8907\u6570\u306eTask Type\u304c\u540c\u3058\u540d\u524d\u3067\u3001\u540c\u3058Discord\u30c1\u30e3\u30f3\u30cd\u30eb\u540d\u306b\u306a\u308a\u307e\u3059\u3002Kitsu\u5074\u3067Task Type\u540d\u3092\u5909\u66f4\u3059\u308b\u304b\u3001\u63a5\u7d9a\u524d\u306b\u5225\u3005\u306e\u30c1\u30e3\u30f3\u30cd\u30eb\u540d\u3092\u6307\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002"
+	uiText["en"]["channel_plan.duplicate_name"] = "Multiple Task Types have the same name and resolve to the same Discord channel. Rename the Task Types in Kitsu or assign distinct channel names before connecting."
+	uiText["ja"]["connections.status_required"] = "\u5bfe\u5fdc\u304c\u5fc5\u8981"
+	uiText["ja"]["connections.status_configured"] = "\u8a2d\u5b9a\u6e08\u307f"
+	uiText["ja"]["connections.hint_separate"] = "Kitsu\u63a5\u7d9a\u3068Discord Bot\u63a5\u7d9a\u3092\u305d\u308c\u305e\u308c\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["connections.hint_kitsu"] = "Kitsu\u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["connections.hint_discord"] = "Discord Bot\u63a5\u7d9a\u3092\u8a2d\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["connections.persistence_now"] = "\u5909\u66f4\u306f\u5b9f\u884c\u4e2d\u306e\u30d7\u30ed\u30bb\u30b9\u306b\u53cd\u6620\u3055\u308c\u3001\u30a2\u30d7\u30ea\u8a2d\u5b9a\u306b\u3082\u4fdd\u5b58\u3055\u308c\u307e\u3059\u3002"
+	uiText["ja"]["connections.persistence_restart"] = "\u518d\u8d77\u52d5\u5f8c\u306f\u4fdd\u5b58\u6e08\u307f\u306e\u8a2d\u5b9a\u304c\u512a\u5148\u3055\u308c\u307e\u3059\u3002\u74b0\u5883\u5909\u6570\u306f\u4e88\u5099\u306e\u8a2d\u5b9a\u3068\u3057\u3066\u306e\u307f\u4f7f\u7528\u3057\u307e\u3059\u3002"
+	uiText["ja"]["wizard.error.select_production"] = "Production\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044"
+	uiText["ja"]["wizard.error.invalid_production"] = "\u9078\u629e\u3057\u305fProduction\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f"
+	uiText["ja"]["wizard.error.already_connected"] = "\u3053\u306eProduction\u306f\u3059\u3067\u306b\u9023\u643a\u3055\u308c\u3066\u3044\u307e\u3059"
+	uiText["ja"]["wizard.production_title"] = "Kitsu Production\u3092\u9078\u629e"
+	uiText["ja"]["wizard.production_label"] = "Production"
+	uiText["ja"]["wizard.production_help"] = "\u9023\u643a\u6e08\u307f\u306eProduction\u306f\u9078\u629e\u3067\u304d\u307e\u305b\u3093"
+	uiText["ja"]["wizard.select_production"] = "Production\u3092\u9078\u629e"
+	uiText["ja"]["wizard.already_connected"] = "\u9023\u643a\u6e08\u307f"
+	uiText["ja"]["wizard.next"] = "\u6b21\u3078"
+	uiText["ja"]["wizard.back"] = "\u623b\u308b"
+	uiText["en"]["connections.status_required"] = "Action required"
+	uiText["en"]["connections.status_configured"] = "Configured"
+	uiText["en"]["connections.hint_separate"] = "Review Kitsu and Discord Bot connections separately."
+	uiText["en"]["connections.hint_kitsu"] = "Complete the Kitsu connection first."
+	uiText["en"]["connections.hint_discord"] = "Complete the Discord Bot connection."
+	uiText["en"]["connections.persistence_now"] = "Token changes take effect immediately for the running process and are also saved in app settings."
+	uiText["en"]["connections.persistence_restart"] = "After restart, the saved token is used first. Environment variables remain fallback sources only."
+	uiText["en"]["wizard.error.select_production"] = "Select a Production"
+	uiText["en"]["wizard.error.invalid_production"] = "The selected Production could not be verified"
+	uiText["en"]["wizard.error.already_connected"] = "This Production is already connected"
 }
 
 func tr(lang, key string) string {

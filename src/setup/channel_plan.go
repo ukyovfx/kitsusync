@@ -21,10 +21,11 @@ const discordTextChannelNameLimit = 100
 // from the Discord mutation code so every write can require an explicit,
 // user-visible confirmation of the exact plan.
 type TaskTypeChannelPlan struct {
-	ProductionID string
-	GuildID      string
-	Entries      []TaskTypeChannelPlanEntry
-	Conflicts    []string
+	ProductionID   string
+	GuildID        string
+	Entries        []TaskTypeChannelPlanEntry
+	Conflicts      []string
+	DuplicateNames []string
 }
 
 func renderTaskTypeChannelPlanCard(project model.Project, webhooks []model.ProjectWebhook, taskTypes []kitsu.TaskType, lang string) string {
@@ -42,7 +43,7 @@ func renderTaskTypeChannelPlanCard(project model.Project, webhooks []model.Proje
 	plan := BuildTaskTypeChannelPlan(project.KitsuProjectID, project.DiscordGuildID, taskTypes, existing)
 	var rows strings.Builder
 	for _, entry := range plan.Entries {
-		rows.WriteString(`<tr><td>` + html.EscapeString(entry.TaskTypeName) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
+		rows.WriteString(`<tr><td>` + html.EscapeString(entry.DisplayName()) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
 	}
 	status := t(lang, "明示確認の準備ができています", "Ready for explicit confirmation")
 	if !plan.Valid() {
@@ -85,9 +86,12 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 	plan := BuildTaskTypeChannelPlan(project.KitsuProjectID, selectedGuild, taskTypes, existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.KitsuProjectID), model.ListProjectWebhooks(db, project.KitsuProjectID)))
 	body.WriteString(`<div class="table-wrap"><table><caption class="sr-only">` + esc(tr(lang, "channel_plan.exact_plan")) + `</caption><thead><tr><th>` + esc(tr(lang, "channel_plan.task_type")) + `</th><th>` + esc(tr(lang, "channel_plan.channel")) + `</th><th>` + esc(tr(lang, "channel_plan.action")) + `</th></tr></thead><tbody>`)
 	for _, entry := range plan.Entries {
-		body.WriteString(`<tr><td>` + html.EscapeString(entry.TaskTypeName) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
+		body.WriteString(`<tr><td>` + html.EscapeString(entry.DisplayName()) + `</td><td><code>` + html.EscapeString(entry.ChannelName) + `</code></td><td>` + html.EscapeString(entry.Action) + `</td></tr>`)
 	}
 	body.WriteString(`</tbody></table></div>`)
+	if len(plan.DuplicateNames) > 0 {
+		body.WriteString(`<p class="field-help" role="alert">` + esc(tr(lang, "channel_plan.duplicate_name")) + `</p>`)
+	}
 	if plan.Valid() {
 		body.WriteString(`<p class="field-help">` + esc(tr(lang, "channel_plan.create_only")) + `</p><form method="POST" class="section-stack"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + html.EscapeString(project.KitsuProjectID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(selectedGuild) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Fingerprint()) + `"><label><input type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "channel_plan.confirmed")) + `</label><button class="btn" type="submit">` + esc(tr(lang, "channel_plan.confirm")) + `</button></form>`)
 	} else {
@@ -98,11 +102,19 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 }
 
 type TaskTypeChannelPlanEntry struct {
-	TaskTypeID   string
-	TaskTypeName string
-	ChannelName  string
-	ExistingID   string
-	Action       string // create, reuse, conflict, blocked
+	TaskTypeID    string
+	TaskTypeName  string
+	TaskTypeLabel string
+	ChannelName   string
+	ExistingID    string
+	Action        string // create, reuse, conflict, blocked
+}
+
+func (e TaskTypeChannelPlanEntry) DisplayName() string {
+	if strings.TrimSpace(e.TaskTypeLabel) != "" {
+		return e.TaskTypeLabel
+	}
+	return e.TaskTypeName
 }
 
 func NormalizeTaskTypeChannelName(name string) string {
@@ -136,11 +148,26 @@ func NormalizeTaskTypeChannelName(name string) string {
 func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.TaskType, existing map[string]string) TaskTypeChannelPlan {
 	plan := TaskTypeChannelPlan{ProductionID: strings.TrimSpace(productionID), GuildID: strings.TrimSpace(guildID)}
 	seen := map[string]string{}
+	nameCounts := map[string]int{}
 	for _, taskType := range taskTypes {
+		nameCounts[strings.ToLower(strings.TrimSpace(taskType.Name))]++
+	}
+	duplicateNames := map[string]bool{}
+	nameOrdinals := map[string]int{}
+	ordered := append([]kitsu.TaskType(nil), taskTypes...)
+	sort.SliceStable(ordered, func(i, j int) bool { return strings.TrimSpace(ordered[i].ID) < strings.TrimSpace(ordered[j].ID) })
+	for _, taskType := range ordered {
 		id := strings.TrimSpace(taskType.ID)
 		name := strings.TrimSpace(taskType.Name)
 		channelName := NormalizeTaskTypeChannelName(name)
-		entry := TaskTypeChannelPlanEntry{TaskTypeID: id, TaskTypeName: name, ChannelName: channelName, Action: "create"}
+		label := name
+		nameKey := strings.ToLower(name)
+		if nameCounts[nameKey] > 1 {
+			nameOrdinals[nameKey]++
+			label = fmt.Sprintf("%s (%d)", name, nameOrdinals[nameKey])
+			duplicateNames[nameKey] = true
+		}
+		entry := TaskTypeChannelPlanEntry{TaskTypeID: id, TaskTypeName: name, TaskTypeLabel: label, ChannelName: channelName, Action: "create"}
 		if id == "" || name == "" || plan.ProductionID == "" || plan.GuildID == "" {
 			entry.Action = "blocked"
 		}
@@ -159,6 +186,13 @@ func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.Ta
 			}
 		}
 		plan.Entries = append(plan.Entries, entry)
+	}
+	for _, taskType := range ordered {
+		key := strings.ToLower(strings.TrimSpace(taskType.Name))
+		if duplicateNames[key] {
+			plan.DuplicateNames = append(plan.DuplicateNames, strings.TrimSpace(taskType.Name))
+			delete(duplicateNames, key)
+		}
 	}
 	sort.SliceStable(plan.Entries, func(i, j int) bool { return plan.Entries[i].ChannelName < plan.Entries[j].ChannelName })
 	return plan

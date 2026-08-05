@@ -46,6 +46,8 @@ type Person struct {
 	Email                     string `json:"email,omitempty"`
 	Phone                     string `json:"phone,omitempty"`
 	Active                    bool   `json:"active,omitempty"`
+	Archived                  bool   `json:"archived,omitempty"`
+	IsBot                     bool   `json:"is_bot,omitempty"`
 	LastPresence              string `json:"last_presence,omitempty"`
 	DesktopLogin              string `json:"desktop_login,omitempty"`
 	ShotgunID                 string `json:"shotgun_id,omitempty"`
@@ -164,10 +166,10 @@ type ProjectStatuses struct {
 }
 
 type MessagePayload struct {
-	PreviousStatusName    string // we store task status from DB and consider it 'old/prevous'
-	IsCommentOnly         bool   // true when only the comment changed (no status/timestamp change)
-	IsAssignNotification  bool   // true when task status is "none" (TODO) and notifyOnAssign is enabled
-	Project            struct {
+	PreviousStatusName   string // we store task status from DB and consider it 'old/prevous'
+	IsCommentOnly        bool   // true when only the comment changed (no status/timestamp change)
+	IsAssignNotification bool   // true when task status is "none" (TODO) and notifyOnAssign is enabled
+	Project              struct {
 		Project
 	}
 	Entity struct {

@@ -1,11 +1,13 @@
 package setup
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"app/src/api/kitsu"
 	"app/src/model"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -75,7 +77,7 @@ func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
 func TestPrimaryNavigationAndNewConnectionFlow(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
 	body := adminPage("en", "Dashboard", r, "")
-	for _, want := range []string{"Dashboard", "Productions", "New Production Connection", "User Linking", "Bot Connection", "System Status", "Audit Log"} {
+	for _, want := range []string{"Dashboard", "Productions", "New Production Connection", "User Linking", "Connections", "System Status", "Audit Log"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("primary navigation missing %q", want)
 		}
@@ -124,13 +126,16 @@ func TestNewConnectionWizardUsesSharedJapaneseCatalog(t *testing.T) {
 
 func TestSharedStatusSummaryRowHasSemanticStructureAndVariants(t *testing.T) {
 	body := statusSummaryRow("Discord Bot", "blocked", "Not configured", "Bot Connection is required.", `<a class="btn">Set up</a>`)
-	for _, want := range []string{`class="status-row"`, `class="status-row-label"`, `class="status-badge status-badge-blocked"`, `aria-hidden="true"`, `class="status-row-explanation"`, `class="status-row-action"`} {
+	for _, want := range []string{`class="status-row"`, `class="status-row-label"`, `class="status-badge status-badge-blocked"`, `class="status-row-explanation"`, `class="status-row-action"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("shared status row missing %q", want)
 		}
 	}
 	if strings.Contains(body, `status-pill`) {
 		t.Fatal("shared status row fell back to the legacy indistinguishable pill")
+	}
+	if strings.Contains(body, "窶") || strings.Contains(body, "�") {
+		t.Fatal("shared status row contains corrupted decorative text")
 	}
 }
 
@@ -308,7 +313,7 @@ func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
 	renderIADashboard(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Activity", "Dashboard Production", "Set up Bot Connection"} {
+	for _, want := range []string{"Activity", "Dashboard Production", "Connections"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing %q", want)
 		}
@@ -524,6 +529,180 @@ func TestGlobalUserLinkingUsesTruthfulUnavailableState(t *testing.T) {
 	}
 }
 
+func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	renderBotSettingsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
+	body := w.Body.String()
+	for _, forbidden := range []string{"Bot設定", "Discord設定", "Kitsu Runtime", "Runtimeメール", "Runtimeパスワード", "preview_not_connected", "not_set"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("normal Japanese Bot Connection surface contains legacy/internal text %q", forbidden)
+		}
+	}
+	for _, required := range []string{"Bot接続", "Kitsu接続", "Discord Bot接続", "対応が必要"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("normal Japanese Bot Connection surface is missing %q", required)
+		}
+	}
+	w = httptest.NewRecorder()
+	renderBotSettingsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db)
+	body = w.Body.String()
+	for _, required := range []string{"Connections", "Kitsu connection", "Discord Bot connection", "Action required"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("normal English Bot Connection surface is missing %q", required)
+		}
+	}
+}
+
+func checkConnectionsPageUsesSafeNameAndUnescapedStatusMarkup(t *testing.T) {
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	renderConnectionsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
+	body := w.Body.String()
+	for _, want := range []string{"接続設定", "Kitsu接続", "Discord Bot接続", "対応が必要"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Connections page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "&lt;span") || strings.Contains(body, "Bot設定") || strings.Contains(body, "Runtime") {
+		t.Fatal("Connections page contains escaped markup or internal legacy terminology")
+	}
+	if got := strings.Count(body, "<h1"); got != 1 {
+		t.Fatalf("Connections page has %d h1 elements, want 1", got)
+	}
+}
+
+func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) {
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil))
+	body := w.Body.String()
+	for _, want := range []string{"\u63a5\u7d9a\u8a2d\u5b9a", "Kitsu\u63a5\u7d9a", "Discord Bot\u63a5\u7d9a", "\u5bfe\u5fdc\u304c\u5fc5\u8981"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Connections page missing %q", want)
+		}
+	}
+	if strings.Contains(body, `&lt;span class="status-pill`) || !strings.Contains(body, `<span class="status-pill blocked" role="status">`) {
+		t.Fatal("Connections page contains escaped status markup")
+	}
+	if strings.Contains(body, `&amp;lt;span`) {
+		t.Fatal("Connections page contains visible literal status markup")
+	}
+	if got := strings.Count(body, "<h1"); got != 1 {
+		t.Fatalf("Connections page has %d h1 elements, want 1", got)
+	}
+}
+
+func TestWizardLiveProductionSelectionTargetsServerStep(t *testing.T) {
+	db := newIAViewDB(t)
+	production := KitsuProject{ID: "live-production-id", Name: "Live Production"}
+	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=2", nil)
+	body := renderWizardProductionLocalized("en", r, db, []KitsuProject{production})
+	if strings.Contains(body, "disabled") {
+		t.Fatal("unconnected live Production was disabled")
+	}
+	if !strings.Contains(body, `value="live-production-id"`) {
+		t.Fatal("live Production stable ID was not rendered")
+	}
+	if !strings.Contains(body, `name="wizard_step" value="3"`) {
+		t.Fatal("Production selection form does not target Step 3")
+	}
+}
+
+func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.UserMap{KitsuID: "user-1", KitsuName: "User One", DiscordID: "123456789012345678", DiscordDisplayName: "Discord One"})
+	w := httptest.NewRecorder()
+	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
+	body := w.Body.String()
+	if !strings.Contains(body, `type="submit" disabled`) {
+		t.Fatal("User Linking Save was not disabled initially")
+	}
+	if !strings.Contains(body, "data-initial-index") || !strings.Contains(body, "selectedIndex === Number(this.dataset.initialIndex)") {
+		t.Fatal("User Linking did not include unchanged-selection dirty-state handling")
+	}
+	if !strings.Contains(body, `class="user-link-grid-row"`) || !strings.Contains(body, "data-label=") || !strings.Contains(body, "user-link-actions") {
+		t.Fatal("User Linking did not render the shared responsive grid structure")
+	}
+	if strings.Contains(body, "123456789012345678") {
+		t.Fatal("User Linking rendered a raw Discord ID")
+	}
+}
+
+func TestDuplicateTaskTypePlanRendersDistinctLabelsAndGuidance(t *testing.T) {
+	project := model.Project{KitsuProjectID: "production-1", DiscordGuildID: "guild-1", Name: "Live Production"}
+	types := []kitsu.TaskType{{ID: "tt-2", Name: "Concept"}, {ID: "tt-1", Name: "Concept"}}
+	jp := renderTaskTypeChannelPlanCard(project, nil, types, "ja")
+	en := renderTaskTypeChannelPlanCard(project, nil, types, "en")
+	for _, body := range []string{jp, en} {
+		if !strings.Contains(body, "Concept (1)") || !strings.Contains(body, "Concept (2)") {
+			t.Fatalf("duplicate Task Types were not distinguishable: %s", body)
+		}
+		if strings.Contains(body, "tt-1") || strings.Contains(body, "tt-2") {
+			t.Fatal("duplicate Task Type guidance exposed raw IDs")
+		}
+	}
+	if !strings.Contains(tr("ja", "channel_plan.duplicate_name"), "Discord") || !strings.Contains(tr("en", "channel_plan.duplicate_name"), "Multiple Task Types have the same name") {
+		t.Fatal("duplicate Task Type explanation is not localized")
+	}
+}
+
+func TestReadModelProvenanceUsesProductionAndUserLinkingSources(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.Project{KitsuProjectID: "local-production-id", Name: "Local Production"})
+	db.Create(&model.UserMap{KitsuID: "local-user-id", KitsuName: "Local User", DiscordID: "123456789012345678"})
+	snapshot := ReadModelProvenanceSnapshot(db)
+	if len(snapshot.Productions) != 1 || snapshot.Productions[0].Source != "local_sqlite" || !snapshot.Productions[0].ConnectedLocally {
+		t.Fatalf("unexpected Production provenance: %+v", snapshot.Productions)
+	}
+	if len(snapshot.Users) != 1 || snapshot.Users[0].Source != "local_user_map" || !snapshot.Users[0].LocalMapping {
+		t.Fatalf("unexpected user provenance: %+v", snapshot.Users)
+	}
+	body, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"email", "password", "token", "discord_id", "authorization"} {
+		if strings.Contains(strings.ToLower(string(body)), forbidden) {
+			t.Fatalf("provenance exposed forbidden field %q: %s", forbidden, body)
+		}
+	}
+}
+
+func TestReadOnlyPreviewStatusDoesNotRenderInternalKey(t *testing.T) {
+	db := newIAViewDB(t)
+	class, label, hint := iaStatus(db, model.Project{ReadOnlyPreview: true}, "en")
+	if class != "warning" || label != "Not connected" || strings.Contains(label, "preview_not_connected") || !strings.Contains(hint, "Notifications are unavailable") {
+		t.Fatalf("unexpected preview status: %q %q %q", class, label, hint)
+	}
+}
+
+func TestReadOnlyProductionUsesDedicatedUnconnectedView(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "live-unconnected", Name: "KitsuSync Local Test", ReadOnlyPreview: true}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/bot/admin/projects?project=live-unconnected&lang=en", nil)
+	renderIASelectedProduction(w, r, db, p, "")
+	body := w.Body.String()
+	for _, expected := range []string{"KitsuSync Local Test", "Loaded from Kitsu", "Not connected", "Configure connection"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("unconnected Production view missing %q: %s", expected, body)
+		}
+	}
+	for _, forbidden := range []string{"production-tabs", "Danger Zone", "Notification state", "User settings", "Task Type"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("unconnected Production view exposed connected-only content %q", forbidden)
+		}
+	}
+	var count int64
+	if err := db.Model(&model.Project{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rendering unconnected Production changed local project rows: %d", count)
+	}
+}
+
 func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production"}
@@ -545,7 +724,7 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	renderIAHealth(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Not configured", "Bot state", "Notification state", "Overall problem", "Next required action"} {
+	for _, want := range []string{"Not configured", "Bot state", "Notification state", "Overall state", "Next required action"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("system status missing %q", want)
 		}

@@ -20,6 +20,14 @@ type sessionData struct {
 	KitsuToken   string
 	Role         string
 	BotEditUntil time.Time
+	Wizard       wizardState
+}
+
+type wizardState struct {
+	ProductionID    string
+	GuildID         string
+	PlanFingerprint string
+	Confirmed       bool
 }
 
 var (
@@ -148,6 +156,32 @@ func CurrentSessionKitsuAuth(r *http.Request) (email, token, role string, ok boo
 		return "", "", "", false
 	}
 	return session.Email, session.KitsuToken, session.Role, true
+}
+
+func wizardStateForRequest(r *http.Request) wizardState {
+	session, ok := currentSessionData(r)
+	if !ok {
+		return wizardState{}
+	}
+	return session.Wizard
+}
+
+func updateWizardState(r *http.Request, update func(*wizardState)) {
+	if r == nil {
+		return
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return
+	}
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	session, ok := sessions[cookie.Value]
+	if !ok || time.Now().After(session.Expiry) {
+		return
+	}
+	update(&session.Wizard)
+	sessions[cookie.Value] = session
 }
 
 func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname string)) http.HandlerFunc {

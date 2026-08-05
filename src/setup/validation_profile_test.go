@@ -64,7 +64,7 @@ func TestLiveProductionPreviewIsReadOnlyAndDoesNotPersist(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	renderIASelectedProduction(w, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), db, preview, "")
-	if !strings.Contains(w.Body.String(), "Connect this Production") || !strings.Contains(w.Body.String(), "Live Production") {
+	if !strings.Contains(w.Body.String(), "Configure connection") || !strings.Contains(w.Body.String(), "Live Production") {
 		t.Fatal("live preview did not expose the safe connection entry point")
 	}
 	var before, after int64
@@ -120,7 +120,7 @@ func TestLiveKitsuPersonsMatchActiveUserSourceRule(t *testing.T) {
 	persons := []KitsuPerson{
 		{FullName: "kitsu bot", Email: "kitsu-bot@example.invalid", Active: true},
 		{FullName: "Super Admin", Email: "admin@example.invalid", Active: true},
-		{FullName: "KitsuSync Bot", Email: "kitsusync-bot@google.com", Active: true},
+		{FullName: "KitsuSync Bot", Email: "kitsusync-bot@google.com", Active: true, IsBot: true},
 		{FullName: "Archived User", Email: "archived@example.invalid", Active: false},
 	}
 	visible := filterAssignablePersons(persons, "kitsusync-bot@google.com")

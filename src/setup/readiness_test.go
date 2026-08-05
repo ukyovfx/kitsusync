@@ -57,7 +57,7 @@ func TestSharedBotRuntimeReadinessIsSharedBySetupAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+	if err := db.AutoMigrate(&model.Setting{}, &model.Project{}, &model.ProjectWebhook{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}); err != nil {
 		t.Fatal(err)
 	}
 	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "manager@example.invalid")
@@ -67,7 +67,20 @@ func TestSharedBotRuntimeReadinessIsSharedBySetupAndSettings(t *testing.T) {
 	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", ""); got.OverallReady || got.DiscordConfigured {
 		t.Fatalf("token-less shared readiness must be incomplete: %#v", got)
 	}
-	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", "test-token"); !got.OverallReady || !got.KitsuConfigured || !got.DiscordConfigured {
-		t.Fatalf("complete shared readiness should be ready: %#v", got)
+	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", "test-token"); got.OverallReady || !got.KitsuConfigured || !got.DiscordConfigured {
+		t.Fatalf("connection prerequisites alone must remain blocked: %#v", got)
+	}
+	if err := model.CreateProject(db, "ready-production", "Ready Production", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, "ready-production", "Alerts", "", "safe-webhook", "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, "ready-production")[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: "ready-production", Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: "ready-production", TaskTypeID: "task-type-1", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", "test-token"); !got.OverallReady {
+		t.Fatalf("valid Production routing should complete shared readiness: %#v", got)
 	}
 }

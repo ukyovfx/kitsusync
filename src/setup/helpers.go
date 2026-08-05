@@ -40,6 +40,8 @@ type KitsuPerson struct {
 	FullName string
 	Email    string
 	Active   bool
+	Archived bool
+	IsBot    bool
 	Role     string
 }
 
@@ -148,6 +150,8 @@ func ListKitsuPersons(_ string) []KitsuPerson {
 			FullName: strings.TrimSpace(fullName),
 			Email:    strings.TrimSpace(person.Email),
 			Active:   person.Active,
+			Archived: person.Archived,
+			IsBot:    person.IsBot,
 			Role:     strings.TrimSpace(person.Role),
 		})
 	}

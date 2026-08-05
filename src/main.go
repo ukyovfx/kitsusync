@@ -870,6 +870,7 @@ func main() {
 		}))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
+		mux.HandleFunc(prefix+"/admin/provenance", setup.RequireSession(setup.ReadModelProvenanceHandler(db)))
 		mux.HandleFunc(prefix+"/admin/diagnostics", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/bot/admin/health", http.StatusFound)
 		}))

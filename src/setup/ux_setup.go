@@ -65,8 +65,8 @@ type SetupDiagnostics struct {
 }
 
 // SharedBotRuntimeReadiness is the single source of truth used by the Setup
-// Wizard and Bot Settings summary. A saved Kitsu host alone is not enough: the
-// shared Discord bot prerequisite must also be present.
+// Wizard, Bot Settings summary, Dashboard, and System Status. Notification
+// readiness also requires at least one valid enabled Production route.
 type SharedBotRuntimeReadiness struct {
 	KitsuConfigured   bool
 	DiscordConfigured bool
@@ -78,7 +78,7 @@ func sharedBotRuntimeReadiness(db *gorm.DB, kitsuHost, botToken string) SharedBo
 		strings.TrimSpace(storedRuntimeKitsuEmail(db)) != "" &&
 		(strings.TrimSpace(StoredRuntimeKitsuPassword(db)) != "" || strings.TrimSpace(model.GetSetting(db, RuntimeKitsuTokenSettingKey)) != "")
 	discordConfigured := strings.TrimSpace(botToken) != ""
-	return SharedBotRuntimeReadiness{KitsuConfigured: kitsuConfigured, DiscordConfigured: discordConfigured, OverallReady: kitsuConfigured && discordConfigured}
+	return SharedBotRuntimeReadiness{KitsuConfigured: kitsuConfigured, DiscordConfigured: discordConfigured, OverallReady: kitsuConfigured && discordConfigured && hasReadyProductionRouting(db)}
 }
 
 func localizeSetupDiagnostics(lang string, diag SetupDiagnostics) SetupDiagnostics {

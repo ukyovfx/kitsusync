@@ -6,9 +6,13 @@ import (
 )
 
 func TestBuildInfoIsNonSecretAndSerializable(t *testing.T) {
-	old := []string{BuildVersion, BuildCommit, BuildTimestamp, BuildSchema}
+	old := []string{BuildVersion, BuildCommit, BuildTimestamp, BuildSchema, BuildWorktreeDirty, BuildSourceID, BuildImageRevision}
 	BuildVersion, BuildCommit, BuildTimestamp, BuildSchema = "v-test", "abc123", "2026-08-04T00:00:00Z", "7"
-	t.Cleanup(func() { BuildVersion, BuildCommit, BuildTimestamp, BuildSchema = old[0], old[1], old[2], old[3] })
+	BuildWorktreeDirty, BuildSourceID, BuildImageRevision = "true", "src-123", "img-456"
+	t.Cleanup(func() {
+		BuildVersion, BuildCommit, BuildTimestamp, BuildSchema = old[0], old[1], old[2], old[3]
+		BuildWorktreeDirty, BuildSourceID, BuildImageRevision = old[4], old[5], old[6]
+	})
 	encoded, err := json.Marshal(currentBuildInfo())
 	if err != nil {
 		t.Fatal(err)
@@ -21,6 +25,10 @@ func TestBuildInfoIsNonSecretAndSerializable(t *testing.T) {
 	}
 	if !containsFold(text, "schema_version") || !containsFold(text, "abc123") {
 		t.Fatalf("build identity fields missing: %s", text)
+	}
+	info := currentBuildInfo()
+	if !info.WorktreeDirty || info.BaseCommit != "abc123" || info.BuildSourceID != "src-123" || info.ImageRevision != "img-456" {
+		t.Fatalf("dirty build identity fields missing: %+v", info)
 	}
 }
 

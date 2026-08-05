@@ -60,6 +60,23 @@ func TestBlockedPlanNeverCallsDiscordCreate(t *testing.T) {
 	}
 }
 
+func TestDuplicateTaskTypeNamesRemainVisibleAndActionable(t *testing.T) {
+	plan := BuildTaskTypeChannelPlan("production", "guild", []kitsu.TaskType{
+		{ID: "tt-2", Name: "Concept"},
+		{ID: "tt-1", Name: "Concept"},
+	}, nil)
+	if plan.Valid() || len(plan.Conflicts) != 1 || len(plan.DuplicateNames) != 1 {
+		t.Fatalf("duplicate names must block the plan: %#v", plan)
+	}
+	if plan.Entries[0].DisplayName() != "Concept (1)" || plan.Entries[1].DisplayName() != "Concept (2)" {
+		t.Fatalf("duplicate labels must be deterministic: %#v", plan.Entries)
+	}
+	writes := 0
+	if _, _, err := applyTaskTypeChannelPlan(plan, func(string, string) (string, error) { writes++; return "channel", nil }); err == nil || writes != 0 {
+		t.Fatalf("blocked duplicate plan performed a write: err=%v writes=%d", err, writes)
+	}
+}
+
 func TestPlanFingerprintChangesWhenGuildChannelsChange(t *testing.T) {
 	base := BuildTaskTypeChannelPlan("p", "g", []kitsu.TaskType{{ID: "tt", Name: "Shot"}}, map[string]string{})
 	reuse := BuildTaskTypeChannelPlan("p", "g", []kitsu.TaskType{{ID: "tt", Name: "Shot"}}, map[string]string{"shot": "channel-1"})

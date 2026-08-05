@@ -23,7 +23,7 @@ func iaNav(lang string, r *http.Request) string {
 	items := []struct{ key, path string }{
 		{"ia.dashboard", "/bot/admin"}, {"ia.productions", "/bot/admin/projects"},
 		{"ia.new_connection", "/bot/setup"}, {"ia.user_mapping", "/bot/admin/users"},
-		{"ia.bot_connection", "/bot/admin/bot"}, {"ia.system_status", "/bot/admin/health"},
+		{"connections.title", "/bot/admin/bot"}, {"ia.system_status", "/bot/admin/health"},
 		{"ia.audit_log", "/bot/admin/audit"},
 	}
 	var b strings.Builder
@@ -102,7 +102,7 @@ func liveProjectPreview(db *gorm.DB, projectID string) *model.Project {
 // statusSummaryRow is the shared normal-user status presentation. The action
 // is supplied as already-rendered HTML so links remain escaped at the call
 // site and never become part of the badge itself.
-func statusSummaryRow(label, class, value, explanation, actionHTML string) string {
+func statusSummaryRowLegacy(label, class, value, explanation, actionHTML string) string {
 	if class == "bad" {
 		class = "danger"
 	}
@@ -132,7 +132,7 @@ func ifNonEmpty(value, wrapped string) string {
 
 func iaStatus(db *gorm.DB, project model.Project, lang string) (string, string, string) {
 	if project.ReadOnlyPreview {
-		return "warning", t(lang, "preview_not_connected", "Not connected"), t(lang, "このProductionはまだKitsuSyncに接続されていません。通知は利用できません。", "This Production is not connected to KitsuSync yet. Notifications are unavailable.")
+		return "warning", t(lang, "未接続", "Not connected"), t(lang, "このProductionはまだKitsuSyncに接続されていません。通知は利用できません。", "This Production is not connected to KitsuSync yet. Notifications are unavailable.")
 	}
 	if project.ValidationOnly {
 		return "warning", t(lang, "検証専用", "Validation only"), t(lang, "実データの表示確認用です。Discordサーバーは未接続で、通知は利用できません。", "Read-only Kitsu data for validation. No Discord server is connected and notifications are unavailable.")
@@ -162,7 +162,28 @@ func iaReadiness(db *gorm.DB, lang string) (string, string, string) {
 	if !r.DiscordConfigured {
 		return "bad", t(lang, "対応が必要", "Action required"), t(lang, "Bot接続を設定してください。", "Complete Bot Connection setup.")
 	}
-	return "warn", t(lang, "確認が必要", "Needs review"), t(lang, "接続状態を確認してください。", "Review the connection state.")
+	return "warn", tr(lang, "status.action_required"), t(lang, "Productionの接続を設定すると通知を利用できます。", "Connect at least one Production before notifications can be used.")
+}
+
+func statusSummaryRow(label, class, value, explanation, actionHTML string) string {
+	if class == "bad" {
+		class = "danger"
+	}
+	if class == "warn" {
+		class = "warning"
+	}
+	if class == "ok" {
+		class = "success"
+	}
+	action := ""
+	if strings.TrimSpace(actionHTML) != "" {
+		action = `<div class="status-row-action">` + actionHTML + `</div>`
+	}
+	explanationCell := `<dd class="status-row-explanation">` + esc(explanation) + `</dd>`
+	if strings.TrimSpace(explanation) == "" {
+		explanationCell = `<dd class="status-row-explanation" aria-hidden="true"></dd>`
+	}
+	return `<div class="status-row"><dt class="status-row-label">` + esc(label) + `</dt><dd class="status-row-value"><span class="status-badge status-badge-` + esc(class) + `" role="status">` + esc(value) + `</span></dd>` + explanationCell + action + `</div>`
 }
 
 func dashboardStatusRow(label, class, value string) string {
@@ -234,6 +255,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if readiness.KitsuConfigured && !readiness.DiscordConfigured {
 		nextActionURL = withLang("/bot/admin/bot", r)
 		nextActionLabel = t(lang, "Bot接続を設定", "Set up Bot Connection")
+		nextActionLabel = tr(lang, "connections.title")
 	} else if readiness.KitsuConfigured && readiness.DiscordConfigured && !readiness.OverallReady {
 		nextActionURL = withLang("/bot/admin/projects", r)
 		nextActionLabel = tr(lang, "ia.production_list")
@@ -299,6 +321,10 @@ func iaActivityAction(lang string, log model.AuditLog) string {
 
 func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm.DB, p model.Project, fallbackGuildID string) {
 	lang := currentLang(r)
+	if p.ReadOnlyPreview {
+		fmt.Fprint(w, adminPage(lang, "", r, renderIAUnconnectedProduction(r, p, lang)))
+		return
+	}
 	tab := selectedProductionTab(r.URL.Query().Get("tab"))
 	class, label, hint := iaStatus(db, p, lang)
 	serverName := projectDiscordServerName(db, p, lang)
@@ -317,6 +343,12 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 	body := header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
 	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
+}
+
+func renderIAUnconnectedProduction(r *http.Request, p model.Project, lang string) string {
+	configureURL := withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID), r)
+	productionListURL := withLang("/bot/admin/projects", r)
+	return `<div class="section-stack"><section class="section-card glass unconnected-production" aria-labelledby="unconnected-production-title"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "ia.productions")) + `</div><h1 id="unconnected-production-title">` + esc(p.Name) + `</h1><p class="hint">` + esc(tr(lang, "production.unconnected.source")) + `</p></div><span class="status-pill blocked" role="status">` + esc(tr(lang, "production.unconnected.status")) + `</span></div><p class="state-explanation" role="status">` + esc(tr(lang, "production.unconnected.explanation")) + `</p><div class="button-row"><a class="btn" href="` + esc(configureURL) + `">` + esc(tr(lang, "production.unconnected.configure")) + `</a><a class="btn-ghost" href="` + esc(productionListURL) + `">` + esc(tr(lang, "production.unconnected.back")) + `</a></div></section></div>`
 }
 
 func projectDiscordServerName(db *gorm.DB, p model.Project, lang string) string {
@@ -579,11 +611,11 @@ func renderIABot(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	class, _, hint := iaReadiness(db, lang)
 	permissionAction := `<a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(t(lang, "Bot接続を設定", "Connect or reconnect")) + `</a>`
-	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h2>` + esc(tr(lang, "ia.bot_connection")) + `</h2><p class="hint">` + esc(hint) + `</p></div></div><dl class="status-list">` +
+	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h2>` + esc(tr(lang, "connections.title")) + `</h2><p class="hint">` + esc(hint) + `</p></div></div><dl class="status-list">` +
 		statusSummaryRow(t(lang, "Bot状態", "Bot state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, permissionAction) +
 		statusSummaryRow(t(lang, "必要な権限", "Required permissions"), "neutral", t(lang, "接続設定時に必要", "Required during connection setup"), t(lang, "チャンネル表示、メッセージ送信、接続設定時のチャンネル管理", "View channels, send messages, and manage channels during setup"), "") +
 		statusSummaryRow(t(lang, "接続済みサーバー", "Joined servers"), "neutral", t(lang, "Bot接続後に確認できます", "Available after Bot Connection"), "", "") + `</dl></section></div>`
-	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.bot_connection"), r, body))
+	fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, body))
 }
 
 func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -599,16 +631,16 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		problem = t(lang, "Kitsu接続を設定してください。", "Complete Kitsu connection setup.")
 	} else if !readiness.DiscordConfigured {
 		actionURL = "/bot/admin/bot"
-		actionLabel = tr(lang, "ia.bot_connection")
+		actionLabel = tr(lang, "connections.title")
 		problem = t(lang, "Bot接続を設定してください。", "Complete Bot Connection setup.")
 	}
 	action := `<a class="btn" href="` + esc(withLang(actionURL, r)) + `">` + esc(actionLabel) + `</a>`
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(tr(lang, "ia.system_status")) + `</h2><dl class="status-list">` +
-		statusSummaryRow("Kitsu"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured), "", "") +
-		statusSummaryRow("Discord"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
-		statusSummaryRow(t(lang, "Bot状態", "Bot state"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
-		statusSummaryRow(t(lang, "通知状態", "Notification state"), notificationClass(notificationState, readiness.OverallReady, lang), notificationState, "", "") +
-		statusSummaryRow(t(lang, "全体の問題", "Overall problem"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady), problem, action) + `</dl><p class="hint" role="status" aria-live="polite">` + esc(t(lang, "次に必要な操作", "Next required action")) + `: ` + esc(problem) + `</p></section></div>`
+		statusSummaryRow(tr(lang, "system.kitsu"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured), "", "") +
+		statusSummaryRow(tr(lang, "system.discord"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
+		statusSummaryRow(tr(lang, "system.bot"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
+		statusSummaryRow(tr(lang, "system.notifications"), notificationClass(notificationState, readiness.OverallReady, lang), notificationState, "", "") +
+		statusSummaryRow(tr(lang, "system.overall"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady), problem, action) + `</dl><p class="hint" role="status" aria-live="polite">` + esc(tr(lang, "system.next_action")) + `: ` + esc(problem) + `</p></section></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
@@ -958,9 +990,24 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
+func globalUserLinkingPeople(db *gorm.DB) ([]KitsuPerson, string) {
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
+		return filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db)), "live_kitsu_api"
+	}
+	people := make([]KitsuPerson, 0)
+	for _, user := range filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)) {
+		if strings.TrimSpace(user.KitsuName) == "" {
+			continue
+		}
+		people = append(people, KitsuPerson{ID: user.KitsuID, FullName: user.KitsuName, Email: user.KitsuEmail, Active: true})
+	}
+	sort.Slice(people, func(i, j int) bool { return strings.ToLower(people[i].FullName) < strings.ToLower(people[j].FullName) })
+	return people, "local_user_map"
+}
+
 func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
-	people := filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db))
+	people, _ := globalUserLinkingPeople(db)
 	selectedGuildID := strings.TrimSpace(r.URL.Query().Get("discord_guild_id"))
 	directory, loadErr := loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), selectedGuildID)
 	localMaps := model.ListUserMap(db)
@@ -1039,19 +1086,26 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		if mapped != nil {
 			userID = fmt.Sprint(mapped.ID)
 		}
-		disabled := ""
-		if !canSave {
-			disabled = " disabled"
+		initialIndex := 0
+		if currentDiscordID != "" {
+			for i, option := range directory.Options {
+				if strings.TrimSpace(option.ID) == currentDiscordID {
+					initialIndex = i + 1
+					break
+				}
+			}
 		}
+		disabled := " disabled"
 		actionMessage := ""
 		if !canSave {
 			actionMessage = `<p class="field-help" role="status">` + esc(t(lang, "Discordユーザーを選択すると保存できます。", "Select a Discord user to enable saving.")) + `</p>`
 		}
 		form := `<form method="POST" class="inline-form user-link-form"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + esc(userID) + `"><input type="hidden" name="kitsu_id" value="` + esc(kitsuID) + `"><input type="hidden" name="kitsu_name" value="` + esc(kitsuName) + `"><input type="hidden" name="kitsu_email" value="` + esc(kitsuEmail) + `"><input type="hidden" name="discord_guild_id" value="` + esc(directory.SelectedGuild.ID) + `"><select name="discord_user_id" aria-label="` + esc(kitsuName+" - "+t(lang, "Discordユーザー", "Discord user")) + `">` + memberOptions(currentDiscordID) + `</select><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button>` + actionMessage + `</form>`
+		form = strings.Replace(form, `<select name="discord_user_id"`, `<select data-initial-index="`+strconv.Itoa(initialIndex)+`" name="discord_user_id" onchange="this.form.querySelector('button[type=submit]').disabled = this.value === '' || this.selectedIndex === Number(this.dataset.initialIndex)"`, 1)
 		if mapped != nil && mapped.ID > 0 {
 			form += `<form method="POST" class="inline-form"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + esc(fmt.Sprint(mapped.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Unlink")) + `</button></form>`
 		}
-		rows.WriteString(`<tr><td>` + esc(person.FullName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td>` + form + `</td></tr>`)
+		rows.WriteString(`<tr class="user-link-grid-row"><td data-label="` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `">` + esc(person.FullName) + `</td><td data-label="` + esc(t(lang, "Discordユーザー", "Discord user")) + `">` + esc(identity) + `</td><td data-label="` + esc(t(lang, "状態", "Status")) + `"><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td data-label="` + esc(t(lang, "操作", "Actions")) + `"><div class="user-link-actions">` + form + `</div></td></tr>`)
 	}
 	if len(people) == 0 {
 		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "Kitsuユーザーが見つかりません", "No Kitsu users were returned")) + `</strong></td></tr>`)
@@ -1071,6 +1125,19 @@ func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) 
 		kitsuHost := model.GetSetting(db, "kitsu.hostname")
 		botToken := storedRuntimeDiscordBotToken(db)
 		projects := ListKitsuProjects(kitsuHost)
+		requestedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
+		requestedStep := strings.TrimSpace(r.URL.Query().Get("wizard_step"))
+		if requestedProjectID != "" && (requestedStep == "3" || requestedStep == "4") {
+			selected := wizardProject(projects, requestedProjectID)
+			if selected.ID != "" && model.FindProjectByKitsuID(db, selected.ID) == nil {
+				updateWizardState(r, func(state *wizardState) {
+					state.ProductionID = selected.ID
+					if guildID := strings.TrimSpace(r.URL.Query().Get("plan_guild")); guildID != "" {
+						state.GuildID = guildID
+					}
+				})
+			}
+		}
 		step := wizardStep(r, botToken, db, projectIDFromRequest(r), strings.TrimSpace(r.URL.Query().Get("plan_guild")))
 		if r.URL.Query().Get("wizard") == "complete" && sharedBotRuntimeReadiness(db, kitsuHost, botToken).OverallReady {
 			step = 7
@@ -1113,7 +1180,10 @@ func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) 
 }
 
 func projectIDFromRequest(r *http.Request) string {
-	return strings.TrimSpace(r.URL.Query().Get("project"))
+	if projectID := strings.TrimSpace(r.URL.Query().Get("project")); projectID != "" {
+		return projectID
+	}
+	return strings.TrimSpace(wizardStateForRequest(r).ProductionID)
 }
 
 func wizardStep(r *http.Request, botToken string, db *gorm.DB, projectID, guildID string) int {
@@ -1164,6 +1234,12 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 	projectID := projectIDFromRequest(r)
 	guildID := strings.TrimSpace(r.URL.Query().Get("plan_guild"))
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), botToken)
+	if step >= 3 {
+		selected := wizardProject(projects, projectID)
+		if selected.ID == "" || model.FindProjectByKitsuID(db, projectID) != nil {
+			step = 2
+		}
+	}
 	labels := []string{tr(lang, "wizard.step_prerequisites"), tr(lang, "wizard.step_production"), tr(lang, "wizard.step_server"), tr(lang, "wizard.step_plan"), tr(lang, "wizard.step_review"), tr(lang, "wizard.step_execute"), tr(lang, "wizard.step_complete")}
 	var steps strings.Builder
 	for i, label := range labels {
@@ -1192,7 +1268,7 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 	case 1:
 		body += renderWizardPrerequisites(lang, r, readiness)
 	case 2:
-		body += renderWizardProduction(lang, r, db, projects)
+		body += renderWizardProductionLocalized(lang, r, db, projects)
 	case 3:
 		body += renderWizardServer(lang, r, botToken, projectID)
 	case 4, 5:
@@ -1234,6 +1310,43 @@ func renderWizardPrerequisites(lang string, r *http.Request, readiness SharedBot
 	return body + `</section>`
 }
 
+func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject) string {
+	var options strings.Builder
+	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_production")) + `</option>`)
+	for _, p := range projects {
+		connected := model.FindProjectByKitsuID(db, p.ID) != nil
+		disabled := ""
+		label := p.Name
+		if connected {
+			disabled = " disabled"
+			label += " (" + tr(lang, "wizard.already_connected") + ")"
+		}
+		options.WriteString(`<option value="` + esc(p.ID) + `"` + disabled + `>` + esc(label) + `</option>`)
+	}
+	errorMessage := ""
+	if r.URL.Query().Get("wizard_step") == "3" {
+		projectID := strings.TrimSpace(r.URL.Query().Get("project"))
+		switch {
+		case projectID == "":
+			errorMessage = `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.error.select_production")) + `</p>`
+		case model.FindProjectByKitsuID(db, projectID) != nil:
+			errorMessage = `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.error.already_connected")) + `</p>`
+		default:
+			found := false
+			for _, p := range projects {
+				if p.ID == projectID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				errorMessage = `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.error.invalid_production")) + `</p>`
+			}
+		}
+	}
+	return `<section class="section-card glass" aria-labelledby="wizard-production-title"><h2 id="wizard-production-title">` + esc(tr(lang, "wizard.production_title")) + `</h2>` + errorMessage + `<form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="3"><label for="wizard-production">` + esc(tr(lang, "wizard.production_label")) + `</label><select id="wizard-production" name="project" required aria-describedby="wizard-production-help">` + options.String() + `</select><p id="wizard-production-help" class="field-help">` + esc(tr(lang, "wizard.production_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 1, "", "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
+}
+
 func renderWizardProduction(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject) string {
 	var options strings.Builder
 	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_production")) + `</option>`)
@@ -1247,7 +1360,17 @@ func renderWizardProduction(lang string, r *http.Request, db *gorm.DB, projects 
 		}
 		options.WriteString(`<option value="` + esc(p.ID) + `"` + disabled + `>` + esc(label) + `</option>`)
 	}
-	return `<section class="section-card glass" aria-labelledby="wizard-production-title"><h2 id="wizard-production-title">` + esc(tr(lang, "wizard.production_title")) + `</h2><form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="2"><label for="wizard-production">` + esc(tr(lang, "wizard.production_label")) + `</label><select id="wizard-production" name="project" required aria-describedby="wizard-production-help">` + options.String() + `</select><p id="wizard-production-help" class="field-help">` + esc(tr(lang, "wizard.production_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 1, "", "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
+	errorMessage := ""
+	if r.URL.Query().Get("wizard_step") == "3" {
+		if strings.TrimSpace(r.URL.Query().Get("project")) == "" {
+			errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "Productionを選択してください", "Select a Production")) + `</p>`
+		} else if selected := wizardProject(projects, strings.TrimSpace(r.URL.Query().Get("project"))); selected.ID != "" && model.FindProjectByKitsuID(db, selected.ID) != nil {
+			errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "このProductionはすでに連携されています", "This Production is already connected")) + `</p>`
+		} else {
+			errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "選択したProductionを確認できませんでした", "The selected Production could not be verified")) + `</p>`
+		}
+	}
+	return `<section class="section-card glass" aria-labelledby="wizard-production-title"><h2 id="wizard-production-title">` + esc(tr(lang, "wizard.production_title")) + `</h2>` + errorMessage + `<form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="3"><label for="wizard-production">` + esc(tr(lang, "wizard.production_label")) + `</label><select id="wizard-production" name="project" required aria-describedby="wizard-production-help">` + options.String() + `</select><p id="wizard-production-help" class="field-help">` + esc(tr(lang, "wizard.production_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 1, "", "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
 }
 
 func renderWizardServer(lang string, r *http.Request, botToken, projectID string) string {
@@ -1260,7 +1383,7 @@ func renderWizardServer(lang string, r *http.Request, botToken, projectID string
 			}
 		}
 	}
-	return `<section class="section-card glass" aria-labelledby="wizard-server-title"><h2 id="wizard-server-title">` + esc(tr(lang, "wizard.server_title")) + `</h2><form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="3"><input type="hidden" name="project" value="` + esc(projectID) + `"><label for="wizard-server">` + esc(tr(lang, "wizard.server_label")) + `</label><select id="wizard-server" name="plan_guild" required>` + options.String() + `</select><p class="field-help">` + esc(tr(lang, "wizard.server_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 2, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
+	return `<section class="section-card glass" aria-labelledby="wizard-server-title"><h2 id="wizard-server-title">` + esc(tr(lang, "wizard.server_title")) + `</h2><form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="4"><input type="hidden" name="project" value="` + esc(projectID) + `"><label for="wizard-server">` + esc(tr(lang, "wizard.server_label")) + `</label><select id="wizard-server" name="plan_guild" required>` + options.String() + `</select><p class="field-help">` + esc(tr(lang, "wizard.server_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 2, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
 }
 
 func wizardProject(projects []KitsuProject, id string) KitsuProject {
@@ -1288,14 +1411,23 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p>` + esc(tr(lang, "wizard.plan_unavailable")) + `</p></section>`
 	}
 	plan := BuildTaskTypeChannelPlan(project.ID, guildID, wizardTaskTypes(), existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.ID), model.ListProjectWebhooks(db, project.ID)))
+	updateWizardState(r, func(state *wizardState) {
+		state.ProductionID = project.ID
+		state.GuildID = guildID
+		state.PlanFingerprint = plan.Fingerprint()
+	})
 	var rows strings.Builder
 	for _, entry := range plan.Entries {
 		action := map[string]string{"create": tr(lang, "wizard.create"), "reuse": tr(lang, "wizard.reuse"), "conflict": tr(lang, "wizard.conflict"), "blocked": tr(lang, "wizard.review_required")}[entry.Action]
-		rows.WriteString(`<tr><td>` + esc(entry.TaskTypeName) + `</td><td><code>` + esc(entry.ChannelName) + `</code></td><td>` + esc(action) + `</td><td>` + esc(wizardPlanDetails(lang, entry.Action)) + `</td></tr>`)
+		rows.WriteString(`<tr><td>` + esc(entry.DisplayName()) + `</td><td><code>` + esc(entry.ChannelName) + `</code></td><td>` + esc(action) + `</td><td>` + esc(wizardPlanDetails(lang, entry.Action)) + `</td></tr>`)
 	}
 	body := `<section class="section-card glass" aria-labelledby="wizard-plan-title"><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p><div class="table-wrap"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th><th>` + esc(tr(lang, "wizard.result")) + `</th><th>` + esc(tr(lang, "wizard.details")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div>`
 	if !plan.Valid() {
-		return body + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p></section>`
+		duplicateNotice := ""
+		if len(plan.DuplicateNames) > 0 {
+			duplicateNotice = `<p class="state-explanation" role="alert">` + esc(tr(lang, "channel_plan.duplicate_name")) + `</p>`
+		}
+		return body + duplicateNotice + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p></section>`
 	}
 	if !review {
 		return body + `<p class="field-help" role="status">` + esc(tr(lang, "wizard.no_write")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><a class="btn" href="` + esc(setupWizardURL(r, 5, projectID, guildID, true)) + `">` + esc(tr(lang, "wizard.review")) + `</a></div></section>`
