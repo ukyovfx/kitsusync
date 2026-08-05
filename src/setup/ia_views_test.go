@@ -16,7 +16,7 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -32,16 +32,42 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, r, db, "")
 	body := w.Body.String()
-	for _, want := range []string{"Overview", "Notifications", "User settings", "Storage settings", "Activity", "Troubleshooting", "Advanced settings", "Danger Zone", "Notification state and testing"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("selected Production view missing %q", want)
+	if !strings.Contains(body, `role="tablist"`) || !strings.Contains(body, `aria-selected="true"`) || !strings.Contains(body, `aria-labelledby="tab-overview"`) {
+		t.Fatal("selected Production overview tab is not accessible")
+	}
+	for _, tab := range []string{"overview", "notifications", "user-settings", "storage-settings", "activity", "troubleshooting", "advanced", "danger-zone"} {
+		r := httptest.NewRequest("GET", "/bot/admin/projects?project=synthetic-production&tab="+tab+"&lang=en", nil)
+		w := httptest.NewRecorder()
+		renderIAProductionList(w, r, db, "")
+		if !strings.Contains(w.Body.String(), `aria-labelledby="tab-`+tab+`"`) {
+			t.Fatalf("selected Production tab missing %q", tab)
 		}
+	}
+	if strings.Contains(body, `id="panel-notifications"`) || strings.Contains(body, `id="panel-danger-zone"`) {
+		t.Fatal("inactive Production panels remain rendered")
 	}
 	if strings.Contains(body, "<details class=\"accordion\"") {
 		t.Fatal("selected Production view still uses the legacy accordion")
 	}
 	if strings.Contains(body, "name=\"guild_id\"") {
 		t.Fatal("selected Production view exposes manual server ID editing")
+	}
+}
+
+func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.UserMap{KitsuName: "Synthetic User", DiscordID: "synthetic-discord-id"})
+	r := httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil)
+	w := httptest.NewRecorder()
+	renderGlobalUserMapping(w, r, db)
+	body := w.Body.String()
+	for _, forbidden := range []string{"Editing production", "Reviewer / Checker task types", "Production selector", "Discord ID"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("global mapping leaked production-scoped control %q", forbidden)
+		}
+	}
+	if !strings.Contains(body, "Synthetic User") || !strings.Contains(body, "Discord user mapped") {
+		t.Fatal("global user mapping did not show user-facing identities")
 	}
 }
 
@@ -109,16 +135,42 @@ func TestSharedStatusSummaryRowHasSemanticStructureAndVariants(t *testing.T) {
 
 func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 	db := newIAViewDB(t)
-	db.Create(&model.Project{KitsuProjectID: "p", Name: "P", DiscordGuildID: "g", DiscordCategoryID: "c"})
-	r := httptest.NewRequest("GET", "/bot/admin/projects?project=p&lang=ja", nil)
+	db.Create(&model.Project{KitsuProjectID: "technical-details-p", Name: "Technical Details P", DiscordGuildID: "g", DiscordCategoryID: "c"})
+	r := httptest.NewRequest("GET", "/bot/admin/projects?project=technical-details-p&lang=ja", nil)
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, r, db, "")
 	body := w.Body.String()
-	if !strings.Contains(body, "<details class=\"advanced-details\"") || !strings.Contains(body, "class=\"advanced-details danger-zone\"") {
-		t.Fatal("advanced details and Danger Zone are not disclosure sections")
+	if strings.Contains(body, "<details") || strings.Contains(body, ">g<") || strings.Contains(body, ">c<") || strings.Contains(body, "Production ID") {
+		t.Fatal("default Overview exposed advanced or destructive details")
 	}
-	if strings.Contains(body, "Polling") || strings.Contains(body, "SQLite") || strings.Contains(body, "Stable ID") {
-		t.Fatal("technical implementation terms leaked into the normal selected Production view")
+	for _, tab := range []string{"advanced", "danger-zone"} {
+		r := httptest.NewRequest("GET", "/bot/admin/projects?project=technical-details-p&tab="+tab+"&lang=ja", nil)
+		w := httptest.NewRecorder()
+		renderIAProductionList(w, r, db, "")
+		body := w.Body.String()
+		if !strings.Contains(body, "<details") && tab == "danger-zone" {
+			t.Fatal("Danger Zone is not a disclosure section")
+		}
+	}
+}
+
+func TestSelectedProductionTabsHaveSingleAccessiblePanel(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.Project{KitsuProjectID: "tab-semantics-p", Name: "Tab Semantics P"})
+	for _, tab := range []string{"", "notifications", "user-settings", "storage-settings", "activity", "troubleshooting", "advanced", "danger-zone", "invalid"} {
+		path := "/bot/admin/projects?project=tab-semantics-p&lang=en"
+		if tab != "" {
+			path += "&tab=" + tab
+		}
+		w := httptest.NewRecorder()
+		renderIAProductionList(w, httptest.NewRequest("GET", path, nil), db, "")
+		body := w.Body.String()
+		if strings.Count(body, `role="tabpanel"`) != 1 || strings.Count(body, `role="tablist"`) < 1 {
+			t.Fatalf("tab %q did not render one tab panel", tab)
+		}
+		if tab == "invalid" && !strings.Contains(body, `id="panel-overview"`) {
+			t.Fatal("invalid tab did not fall back to Overview")
+		}
 	}
 }
 
@@ -140,19 +192,28 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 
 func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T) {
 	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "p", Name: "P", DiscordGuildID: "synthetic-guild", DiscordCategoryID: "synthetic-category"}
+	p := model.Project{KitsuProjectID: "selected-advanced-p", Name: "Selected Advanced P", DiscordGuildID: "synthetic-guild", DiscordCategoryID: "synthetic-category"}
 	db.Create(&p)
-	db.Create(&model.NotificationRoutingDiagnosis{ProductionID: "p", Detail: "Synthetic stale destination"})
+	db.Create(&model.NotificationRoutingDiagnosis{ProductionID: "selected-advanced-p", Detail: "Synthetic stale destination"})
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/bot/admin/projects?project=p&lang=en", nil)
+	r := httptest.NewRequest("GET", "/bot/admin/projects?project=selected-advanced-p&lang=en", nil)
 	renderIAProductionList(w, r, db, "")
 	body := w.Body.String()
-	advanced := strings.Index(body, "<details class=\"advanced-details\">")
-	if advanced < 0 || strings.Index(body[:advanced], "synthetic-guild") >= 0 {
-		t.Fatal("raw Discord identifier leaked before Advanced settings")
+	if strings.Contains(body, "synthetic-guild") {
+		t.Fatal("raw Discord identifier leaked into the normal Overview tab")
 	}
-	for _, want := range []string{"Current problem", "Cause", "Next action", "Diagnostic details"} {
-		if !strings.Contains(body, want) {
+	advancedRequest := httptest.NewRequest("GET", "/bot/admin/projects?project=selected-advanced-p&tab=advanced&lang=en", nil)
+	advancedWriter := httptest.NewRecorder()
+	renderIAProductionList(advancedWriter, advancedRequest, db, "")
+	if !strings.Contains(advancedWriter.Body.String(), "synthetic-guild") {
+		t.Fatal("Advanced settings did not expose the technical identifier")
+	}
+	troubleshootingRequest := httptest.NewRequest("GET", "/bot/admin/projects?project=selected-advanced-p&tab=troubleshooting&lang=en", nil)
+	troubleshootingWriter := httptest.NewRecorder()
+	renderIAProductionList(troubleshootingWriter, troubleshootingRequest, db, "")
+	troubleshootingBody := troubleshootingWriter.Body.String()
+	for _, want := range []string{"Current problem", "Next action", "Diagnostic details"} {
+		if !strings.Contains(troubleshootingBody, want) {
 			t.Fatalf("troubleshooting missing %q", want)
 		}
 	}

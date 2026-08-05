@@ -2239,6 +2239,23 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		if r.URL.Query().Get("legacy") == "1" {
+			if projectID := strings.TrimSpace(r.URL.Query().Get("project")); projectID != "" {
+				if model.FindProjectByKitsuID(db, projectID) != nil {
+					target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=user-settings", r)
+					http.Redirect(w, r, target, http.StatusSeeOther)
+					return
+				}
+			}
+			if r.URL.Query().Get("edit") == "" {
+				http.Redirect(w, r, withLang("/bot/admin/projects?msg=production-required", r), http.StatusSeeOther)
+				return
+			}
+		}
+		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
+			renderGlobalUserMapping(w, r, db)
+			return
+		}
 		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
 		if r.Method == http.MethodPost {
 			if formProjectID := strings.TrimSpace(r.FormValue("assignment_project_id")); formProjectID != "" {
