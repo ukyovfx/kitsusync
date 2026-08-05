@@ -600,7 +600,7 @@ func renderGlobalUserMappingLegacy(w http.ResponseWriter, r *http.Request, db *g
 			}
 		}
 		change := withLang("/bot/admin/users?legacy=1&edit="+fmt.Sprint(u.ID), r)
-		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `"><span aria-hidden="true">•</span> ` + esc(state) + `</span></td><td><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a></td></tr>`)
+		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a></td></tr>`)
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="4" class="muted">` + esc(t(lang, "ユーザー対応付けはありません。", "No user mappings yet.")) + `</td></tr>`)
