@@ -238,6 +238,21 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	}
 }
 
+func TestDashboardDoesNotRenderDuplicateTopProductionSummary(t *testing.T) {
+	db := newIAViewDB(t)
+	for _, lang := range []string{"ja", "en"} {
+		w := httptest.NewRecorder()
+		renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang="+lang, nil), db)
+		body := w.Body.String()
+		if strings.Contains(body, "Production availability") || strings.Contains(body, "Kitsu Productions available") || strings.Contains(body, "KitsuのProduction") {
+			t.Fatalf("duplicate top Production summary rendered in %s", lang)
+		}
+		if !strings.Contains(body, "dashboard-summary-grid") || !strings.Contains(body, "dashboard-queue") {
+			t.Fatalf("existing Dashboard structure missing in %s", lang)
+		}
+	}
+}
+
 func TestLegacyPausedProductionIsReviewRequiredAndNotPaused(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "legacy-paused-dashboard-p", Name: "Legacy State Production"}

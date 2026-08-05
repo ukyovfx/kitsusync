@@ -42,6 +42,43 @@ func TestValidationOnlyProjectRendersReadOnlyRealData(t *testing.T) {
 	}
 }
 
+func TestLiveProductionPreviewIsReadOnlyAndDoesNotPersist(t *testing.T) {
+	db := newIAViewDB(t)
+	preview := model.Project{
+		KitsuProjectID:     "live-production-id",
+		Name:               "Live Production",
+		ReadOnlyPreview:    true,
+		ValidationDataJSON: `{"task_types":[{"id":"task-type-1","name":"Animation"}],"participants":[{"id":"person-1","full_name":"Live Person"}]}`,
+	}
+	class, label, hint := iaStatus(db, preview, "en")
+	if class != "warning" || label != "Not connected" || !strings.Contains(hint, "Notifications are unavailable") {
+		t.Fatalf("unexpected live preview status: %q %q %q", class, label, hint)
+	}
+	for _, tab := range []string{"notifications", "users", "storage-settings", "danger-zone"} {
+		w := httptest.NewRecorder()
+		renderIASelectedProduction(w, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?tab="+tab+"&lang=en", nil), db, preview, "")
+		body := w.Body.String()
+		if strings.Contains(body, `method="POST"`) {
+			t.Fatalf("live preview %s panel exposes a mutation form", tab)
+		}
+	}
+	w := httptest.NewRecorder()
+	renderIASelectedProduction(w, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), db, preview, "")
+	if !strings.Contains(w.Body.String(), "Connect this Production") || !strings.Contains(w.Body.String(), "Live Production") {
+		t.Fatal("live preview did not expose the safe connection entry point")
+	}
+	var before, after int64
+	if err := db.Model(&model.Project{}).Count(&before).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.Project{}).Count(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("rendering live preview changed project rows from %d to %d", before, after)
+	}
+}
+
 func TestFixtureConfigRequiresExplicitMode(t *testing.T) {
 	t.Setenv("KITSUSYNC_FIXTURE_MODE", "")
 	if FixtureModeEnabled() {
@@ -50,6 +87,32 @@ func TestFixtureConfigRequiresExplicitMode(t *testing.T) {
 	t.Setenv("KITSUSYNC_FIXTURE_MODE", "1")
 	if !FixtureModeEnabled() {
 		t.Fatal("fixture mode did not enable with explicit flag")
+	}
+}
+
+func TestNormalStartupDoesNotSeedFixtureOrValidationData(t *testing.T) {
+	t.Setenv("KITSUSYNC_FIXTURE_MODE", "")
+	t.Setenv(validationOnlyEnv, "")
+	if FixtureModeEnabled() || ValidationOnlyModeEnabled() {
+		t.Fatal("normal startup unexpectedly enabled an isolated data mode")
+	}
+	db := newIAViewDB(t)
+	SeedConfigIfFixture(db, config.Config{Mention: config.MentionConfig{UserMap: []config.UserMapEntry{{KitsuName: "Sample User", DiscordID: "synthetic"}}}})
+	for _, table := range []string{"projects", "user_maps", "production_notification_routes", "production_channel_mappings", "audit_logs"} {
+		var before, after int64
+		if err := db.Table(table).Count(&before).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Table(table).Count(&after).Error; err != nil {
+			t.Fatal(err)
+		}
+		if after != before {
+			t.Fatalf("normal startup changed %s rows from %d to %d", table, before, after)
+		}
+	}
+	var sample model.UserMap
+	if db.Where("kitsu_name = ?", "Sample User").First(&sample).Error == nil {
+		t.Fatal("normal startup imported a sample user")
 	}
 }
 

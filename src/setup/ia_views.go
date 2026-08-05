@@ -3,10 +3,12 @@ package setup
 import (
 	"app/src/api/kitsu"
 	"app/src/model"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +40,63 @@ func hasValidationOnlyProject(db *gorm.DB) bool {
 		}
 	}
 	return false
+}
+
+// availableProjects merges live Kitsu read data with local connection state.
+// It never creates or updates database rows. Live-only records are marked as
+// in-memory previews so normal pages can explain that they are not connected.
+func availableProjects(db *gorm.DB) []model.Project {
+	local := model.ListProjects(db)
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) == "" {
+		return local
+	}
+	live := ListKitsuProjects("")
+	if len(live) == 0 {
+		return local
+	}
+	localByID := make(map[string]model.Project, len(local))
+	for _, project := range local {
+		localByID[strings.TrimSpace(project.KitsuProjectID)] = project
+	}
+	merged := make([]model.Project, 0, len(live)+len(local))
+	for _, liveProject := range live {
+		id := strings.TrimSpace(liveProject.ID)
+		if project, ok := localByID[id]; ok {
+			merged = append(merged, project)
+			delete(localByID, id)
+			continue
+		}
+		preview := model.Project{KitsuProjectID: id, Name: strings.TrimSpace(liveProject.Name), ProjectType: "live", ReadOnlyPreview: true}
+		data := model.ValidationKitsuData{}
+		for _, taskType := range kitsu.GetTaskTypes().Each {
+			if strings.TrimSpace(taskType.ID) != "" && strings.TrimSpace(taskType.Name) != "" {
+				data.TaskTypes = append(data.TaskTypes, model.ValidationTaskType{ID: strings.TrimSpace(taskType.ID), Name: strings.TrimSpace(taskType.Name)})
+			}
+		}
+		for _, person := range ListKitsuPersons("") {
+			if person.ID != "" && person.FullName != "" {
+				data.Participants = append(data.Participants, model.ValidationPerson{ID: person.ID, FullName: person.FullName, Email: person.Email})
+			}
+		}
+		if encoded, err := json.Marshal(data); err == nil {
+			preview.ValidationDataJSON = string(encoded)
+		}
+		merged = append(merged, preview)
+	}
+	for _, project := range localByID {
+		merged = append(merged, project)
+	}
+	sort.Slice(merged, func(i, j int) bool { return strings.ToLower(merged[i].Name) < strings.ToLower(merged[j].Name) })
+	return merged
+}
+
+func liveProjectPreview(db *gorm.DB, projectID string) *model.Project {
+	for _, project := range availableProjects(db) {
+		if project.ReadOnlyPreview && strings.TrimSpace(project.KitsuProjectID) == strings.TrimSpace(projectID) {
+			return &project
+		}
+	}
+	return nil
 }
 
 // statusSummaryRow is the shared normal-user status presentation. The action
@@ -72,6 +131,9 @@ func ifNonEmpty(value, wrapped string) string {
 }
 
 func iaStatus(db *gorm.DB, project model.Project, lang string) (string, string, string) {
+	if project.ReadOnlyPreview {
+		return "warning", t(lang, "preview_not_connected", "Not connected"), t(lang, "このProductionはまだKitsuSyncに接続されていません。通知は利用できません。", "This Production is not connected to KitsuSync yet. Notifications are unavailable.")
+	}
 	if project.ValidationOnly {
 		return "warning", t(lang, "検証専用", "Validation only"), t(lang, "実データの表示確認用です。Discordサーバーは未接続で、通知は利用できません。", "Read-only Kitsu data for validation. No Discord server is connected and notifications are unavailable.")
 	}
@@ -120,7 +182,7 @@ func dashboardProblemAction(r *http.Request, p model.Project, lang, hint string)
 
 func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
-	projects := model.ListProjects(db)
+	projects := availableProjects(db)
 	var attentionRows, activityRows strings.Builder
 	attentionCount := 0
 	for _, p := range projects {
@@ -201,9 +263,13 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 			renderIASelectedProduction(w, r, db, *p, fallbackGuildID)
 			return
 		}
+		if p := liveProjectPreview(db, selectedID); p != nil {
+			renderIASelectedProduction(w, r, db, *p, fallbackGuildID)
+			return
+		}
 	}
 	var rows strings.Builder
-	for _, p := range model.ListProjects(db) {
+	for _, p := range availableProjects(db) {
 		class, label, hint := iaStatus(db, p, lang)
 		rows.WriteString(fmt.Sprintf(`<article class="section-card glass production-list-item"><div><h2>%s</h2><p class="field-help">%s</p></div><div class="production-list-state"><span class="status-pill %s">%s</span><span class="field-help">%s</span></div><a class="btn" href="%s">%s</a></article>`, esc(p.Name), esc(t(lang, "現在の状態", "Current state")), class, esc(label), esc(hint), esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(t(lang, "Productionを開く", "Open Production"))))
 	}
@@ -278,14 +344,17 @@ func selectedProductionTab(raw string) string {
 func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string) string {
 	switch tab {
 	case "notifications":
-		if p.ValidationOnly {
+		if p.ReadOnlyPreview {
+			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "notification_state", "Notification state"), "blocked", t(lang, "unavailable", "Unavailable"), t(lang, "このProductionはKitsuSyncに接続されていないため、通知は利用できません。", "Notifications are unavailable because this Production is not connected to KitsuSync."), "") + `</dl><p class="field-help" role="status">` + esc(t(lang, "送信せずに確認する表示です。", "This read-only preview never sends a Discord message.")) + `</p><h3>` + esc(t(lang, "Task Type", "Task Types")) + `</h3><ul class="mapping-list">` + renderValidationTaskTypes(p, lang) + `</ul></section>`
+		}
+		if p.ValidationOnly || p.ReadOnlyPreview {
 			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "通知状態", "Notification state"), "blocked", t(lang, "利用できません", "Unavailable"), t(lang, "検証専用ProductionではDiscordサーバーが未接続のため、通知は利用できません。", "Notifications are unavailable because this validation-only Production has no Discord server connected."), "") + `</dl><p class="field-help" role="status">` + esc(t(lang, "この表示確認ではDiscordメッセージを送信しません。", "This validation view never sends a Discord message.")) + `</p><h3>` + esc(t(lang, "Task Type", "Task Types")) + `</h3><ul class="mapping-list">` + renderValidationTaskTypes(p, lang) + `</ul></section>`
 		}
 		return renderSelectedProductionNotifications(db, r, p, lang, class, label, hint)
 	case "users", "user-settings":
 		return renderSelectedProductionUserSettings(db, r, p, lang)
 	case "storage-settings":
-		if p.ValidationOnly {
+		if p.ValidationOnly || p.ReadOnlyPreview {
 			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionではストレージ設定を変更できません。", "Storage settings are read-only for validation-only Productions.")) + `</p></section>`
 		}
 		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p><form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></div></form></section>`
@@ -295,7 +364,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		return renderSelectedProductionTroubleshooting(db, p, lang)
 	case "advanced":
 		validation := ""
-		if p.ValidationOnly {
+		if p.ValidationOnly || p.ReadOnlyPreview {
 			validation = `<dt>` + esc(t(lang, "検証モード", "Validation mode")) + `</dt><dd>` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</dd>`
 		}
 		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.advanced")) + `</h2><dl class="detail-list">` + validation + `<dt>Production ID</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>Discord server ID</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>Category ID</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
@@ -306,7 +375,11 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		nextAction := t(lang, "通常どおり利用できます", "No action required")
 		nextActionHTML := ""
 		serverActionHTML := ""
-		if class != "ok" {
+		if p.ReadOnlyPreview {
+			problem = t(lang, "縺ｾ縺謗･邯壹＆繧後※縺・∪縺帙ｓ", "Not connected")
+			nextAction = t(lang, "縺薙・Production繧帝謗･邯壹☆繧九", "Connect this Production")
+			nextActionHTML = `<a class="btn" href="` + esc(withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(nextAction) + `</a>`
+		} else if class != "ok" {
 			problem = cleanStatusLabel(lang, class)
 			nextAction = hint
 			nextActionHTML = `<a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `">` + esc(tr(lang, "ia.notifications")) + `</a>`
@@ -354,7 +427,7 @@ func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.
 		}
 		participants.WriteString(`<li><strong>` + esc(u.KitsuName) + `</strong><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[identity != t(lang, "未対応", "Not mapped")] + `">` + esc(identity) + `</span>` + action + `</li>`)
 	}
-	if p.ValidationOnly && participants.Len() == 0 {
+	if (p.ValidationOnly || p.ReadOnlyPreview) && participants.Len() == 0 {
 		for _, person := range p.ValidationData().Participants {
 			participants.WriteString(`<li><strong>` + esc(person.FullName) + `</strong><span class="status-pill warn">` + esc(t(lang, "未設定", "Not linked")) + `</span></li>`)
 		}
@@ -416,7 +489,7 @@ func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang 
 }
 
 func renderSelectedProductionDanger(r *http.Request, p model.Project, lang string) string {
-	if p.ValidationOnly {
+	if p.ValidationOnly || p.ReadOnlyPreview {
 		return `<details class="advanced-details danger-zone"><summary>` + esc(tr(lang, "ia.danger")) + `</summary><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionでは変更や削除は実行できません。", "Changes and deletion are disabled for validation-only Productions.")) + `</p></details>`
 	}
 	disconnectPhrase := t(lang, "連携解除", "DISCONNECT")
@@ -787,6 +860,22 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	var rows strings.Builder
+	/* if len(model.ListUserMap(db)) == 0 && strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
+		for _, person := range ListKitsuPersons("") {
+			if strings.TrimSpace(person.FullName) == "" {
+				continue
+			}
+			rows.WriteString(`<tr><td>` + esc(person.FullName) + `</td><td>` + esc(t(lang, "譛ｪ險ｭ螳・, "Not set")) + `</td><td><span class="status-badge status-badge-blocked" role="status">` + esc(t(lang, "譛ｪ險ｭ螳・, "Not set")) + `</span></td><td><span class="field-help">` + esc(t(lang, "Kitsu縺ｮ讀懆ｨｼ繝・・繧ｿ縺ｮ縺ｿ縺ｧ縺ｯ螟画峩縺ｧ縺阪∪縺帙ｓ縲・, "Read-only live Kitsu data; no local link is configured.")) + `</span></td></tr>`)
+		}
+	} */
+	if len(model.ListUserMap(db)) == 0 && strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
+		for _, person := range ListKitsuPersons("") {
+			if strings.TrimSpace(person.FullName) == "" {
+				continue
+			}
+			rows.WriteString(`<tr><td>` + esc(person.FullName) + `</td><td>` + esc(t(lang, "not_set", "Not set")) + `</td><td><span class="status-badge status-badge-blocked" role="status">` + esc(t(lang, "not_set", "Not set")) + `</span></td><td><span class="field-help">` + esc(t(lang, "Kitsuの読み取り専用データです。ローカルの紐づけはありません。", "Read-only live Kitsu data; no local link is configured.")) + `</span></td></tr>`)
+		}
+	}
 	for _, u := range model.ListUserMap(db) {
 		state := tr(lang, "status.incomplete")
 		class := "blocked"

@@ -140,6 +140,7 @@ type Project struct {
 	StorageURL         string
 	ValidationOnly     bool   `gorm:"index"`
 	ValidationDataJSON string `gorm:"type:text"`
+	ReadOnlyPreview    bool   `gorm:"-"`
 }
 
 // ValidationKitsuData is read-only Kitsu metadata captured for an isolated
