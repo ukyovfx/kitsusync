@@ -20,7 +20,7 @@ func ProductionRoutingHandler(db *gorm.DB) http.HandlerFunc {
 		message := ""
 		if r.Method == http.MethodPost {
 			if r.FormValue("action") == "dry_run" {
-				message = dryRunProductionRoutingAction(db, r, lang)
+				message = localizeDryRunMessage(dryRunProductionRoutingAction(db, r, lang), lang)
 			} else {
 				message = saveProductionRoutingAction(db, r, lang)
 			}
@@ -32,6 +32,16 @@ func ProductionRoutingHandler(db *gorm.DB) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, adminPage(lang, tr(lang, "production_routing.title"), r, renderProductionRouting(db, r, selectedID, message)))
 	}
+}
+
+// Dry-run details are intentionally kept out of the normal user surface. The
+// underlying diagnosis remains available through the existing detailed
+// diagnostics path, while this message explains the safe next action.
+func localizeDryRunMessage(message, lang string) string {
+	if strings.Contains(strings.ToLower(message), "dry-run") || strings.Contains(strings.ToLower(message), "skip reason") || strings.Contains(strings.ToLower(message), "channel") {
+		return t(lang, "送信せずに確認しました。通知先と実行条件を確認してください。", "Check without sending completed. Review the notification destination and intended action.")
+	}
+	return message
 }
 
 // ProductionRoutingCompatibilityHandler keeps existing bookmarks working

@@ -81,3 +81,57 @@ func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 		t.Fatal("technical implementation terms leaked into the normal selected Production view")
 	}
 }
+
+func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
+	renderIADashboard(w, r, db)
+	body := w.Body.String()
+	for _, want := range []string{"Action required", "Complete Kitsu connection setup.", "Overall connection status", "Next required actions"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing readiness copy %q", want)
+		}
+	}
+	if strings.Contains(body, "Polling") || strings.Contains(body, "Runtime") {
+		t.Fatal("dashboard exposes implementation status")
+	}
+}
+
+func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "p", Name: "P", DiscordGuildID: "synthetic-guild", DiscordCategoryID: "synthetic-category"}
+	db.Create(&p)
+	db.Create(&model.NotificationRoutingDiagnosis{ProductionID: "p", Detail: "Synthetic stale destination"})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/bot/admin/projects?project=p&lang=en", nil)
+	renderIAProductionList(w, r, db, "")
+	body := w.Body.String()
+	advanced := strings.Index(body, "<details class=\"advanced-details\">")
+	if advanced < 0 || strings.Index(body[:advanced], "synthetic-guild") >= 0 {
+		t.Fatal("raw Discord identifier leaked before Advanced settings")
+	}
+	for _, want := range []string{"Current problem", "Cause", "Next action", "Diagnostic details"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("troubleshooting missing %q", want)
+		}
+	}
+}
+
+func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
+	renderIAHealth(w, r, db)
+	body := w.Body.String()
+	for _, want := range []string{"Disconnected", "Bot state", "Notification state", "Overall problem", "Next required action"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("system status missing %q", want)
+		}
+	}
+	w = httptest.NewRecorder()
+	renderIABot(w, r, db)
+	if !strings.Contains(w.Body.String(), "Action required") || !strings.Contains(w.Body.String(), "View channels") {
+		t.Fatal("Bot Connection does not expose state and permission list")
+	}
+}

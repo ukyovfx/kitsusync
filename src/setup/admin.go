@@ -1052,10 +1052,10 @@ func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Pro
 	var actionHTML string
 	if config != nil {
 		action := "pause"
-		label := tr(lang, "production_routing.pause")
+		label := t(lang, "通知を一時停止", "Pause notifications")
 		if !config.Enabled {
 			action = "resume"
-			label = tr(lang, "production_routing.resume")
+			label = t(lang, "通知を再開", "Resume notifications")
 		}
 		actionHTML = `<form method="post" action="` + esc(actionURL) + `"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="` + action + `"><button class="btn" type="submit">` + esc(label) + `</button></form>`
 	} else {
