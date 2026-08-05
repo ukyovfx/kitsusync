@@ -2674,6 +2674,25 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 		}
 		if r.Method == http.MethodPost {
 			kitsuChanged := false
+			runtimeEmail := strings.TrimSpace(r.FormValue("kitsu_runtime_email"))
+			runtimePassword := r.FormValue("kitsu_runtime_password")
+			if runtimeEmail != "" || strings.TrimSpace(runtimePassword) != "" {
+				if runtimeEmail == "" || strings.TrimSpace(runtimePassword) == "" {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu実行用のメールアドレスとパスワードを入力してください。", "Enter both the Kitsu runtime email and password.")))
+					return
+				}
+				hostForAuth := normalizeKitsuHostname(storedHost)
+				if hostForAuth == "" {
+					hostForAuth = autoHost
+				}
+				if err := RecoverRuntimeCredentials(db, hostForAuth, runtimeEmail, runtimePassword); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
+					return
+				}
+				kitsuChanged = true
+			}
 			if storedHost == "" && autoHost != "" {
 				model.SetSetting(db, "kitsu.hostname", autoHost)
 				os.Setenv("KITSU_HOSTNAME", autoHost)
