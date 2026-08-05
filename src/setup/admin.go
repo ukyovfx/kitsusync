@@ -3331,9 +3331,13 @@ func adminPage(lang, title string, r *http.Request, body string) string {
 		message = `<div class="toast glass">` + t(lang, "保存しました。", "Saved.") + `</div>`
 	}
 	nav := `<div class="nav-card glass">` + iaNav(lang, r) + `</div>`
-	content := `<div class="page-card glass"><div class="page-heading"><div><h1>` + esc(title) + `</h1></div></div>` +
+	pageHeading := ""
+	if strings.TrimSpace(title) != "" {
+		pageHeading = `<div class="page-heading"><div><h1>` + esc(title) + `</h1></div></div>`
+	}
+	content := `<div class="page-card glass">` + pageHeading +
 		message + body + `</div>` +
-		`<div id="deleteModal" class="delete-modal"><div class="delete-box glass"><h2 class="delete-title">` + esc(t(lang, "削除の確認", "Confirm deletion")) + `</h2><p id="deleteModalText" class="delete-text"></p><p id="deleteModalHelper" class="field-help hidden"></p><div id="deleteModalInputWrap" class="delete-input hidden"><label><span class="sr-only">Confirm text</span><input id="deleteModalInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label><div class="field-help">` + esc(t(lang, "確認ワード", "Confirmation word")) + `: <code id="deleteModalExpected"></code></div></div><div class="button-row"><button id="deleteConfirmBtn" type="button" class="btn-danger">` + esc(t(lang, "削除する", "Delete")) + `</button><button id="deleteCancelBtn" type="button" class="btn-ghost">` + esc(t(lang, "キャンセル", "Cancel")) + `</button></div></div></div>` +
+		`<div id="deleteModal" class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle"><div class="delete-box glass"><h2 id="deleteModalTitle" class="delete-title">` + esc(t(lang, "操作の確認", "Confirm action")) + `</h2><p id="deleteModalText" class="delete-text"></p><p id="deleteModalHelper" class="field-help hidden"></p><div id="deleteModalInputWrap" class="delete-input hidden"><label for="deleteModalInput"><span class="sr-only">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `</span><input id="deleteModalInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label><div class="field-help">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `: <code id="deleteModalExpected"></code></div></div><div class="button-row"><button id="deleteConfirmBtn" type="button" class="btn-danger">` + esc(t(lang, "実行する", "Continue")) + `</button><button id="deleteCancelBtn" type="button" class="btn-ghost">` + esc(t(lang, "キャンセル", "Cancel")) + `</button></div></div></div>` +
 		baseAdminJS(lang)
 	return appShell("KitsuSync", "", lang, r, nav, content)
 }

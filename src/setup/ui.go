@@ -91,7 +91,8 @@ button,input,select{font:inherit}
 .skip-link{position:absolute;left:10px;top:-60px;padding:10px 14px;background:#fff;color:#111;border-radius:8px;z-index:20}
 .skip-link:focus{top:10px}
 .section-nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px;padding:8px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.03)}
-.section-link{padding:8px 10px;border-radius:8px;color:var(--muted);font-weight:600}
+.section-link{padding:8px 10px;border:1px solid transparent;border-radius:8px;color:var(--muted);font-weight:600;line-height:1.25;white-space:nowrap}
+.section-link.active{color:var(--text);background:rgba(232,90,26,.2);border-color:rgba(232,90,26,.62);box-shadow:inset 0 -2px 0 var(--accent)}
 .section-link:hover,.section-link:focus-visible{color:var(--text);background:rgba(232,90,26,.16)}
 .production-list-item{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:16px;align-items:center}
 .production-list-state{display:grid;gap:4px;min-width:170px}
@@ -103,18 +104,21 @@ button,input,select{font:inherit}
 .status-row-value{display:flex;align-items:center;gap:10px;min-width:0;margin:0}
 .status-row-explanation{color:var(--muted);line-height:1.45;min-width:0;overflow-wrap:anywhere}
 .status-row-action{justify-self:end}
+.status-row-action .btn,.status-row-action .btn-ghost{white-space:nowrap}
 .status-badge{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;border-radius:999px;padding:5px 9px;border:1px solid rgba(255,255,255,.16);font-size:.78rem;font-weight:700;line-height:1.25}
 .status-badge-success{color:#d7f4d4;background:rgba(142,207,139,.12);border-color:rgba(142,207,139,.42)}
 .status-badge-warning{color:#fff1c4;background:rgba(255,200,80,.14);border-color:rgba(255,200,80,.44)}
 .status-badge-danger{color:#ffd3ca;background:rgba(255,106,80,.13);border-color:rgba(255,106,80,.44)}
 .status-badge-blocked{color:#ffe0b3;background:rgba(255,141,72,.14);border-color:rgba(255,141,72,.45)}
 .status-badge-neutral{color:var(--muted);background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.18)}
-.mapping-list li{display:flex;justify-content:space-between;gap:12px;padding:10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.mapping-list li{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:10px;border-bottom:1px solid var(--line);flex-wrap:wrap}.mapping-list li>*{min-width:0;overflow-wrap:anywhere}.mapping-list li>span{color:var(--muted);text-align:right}
+.empty-state{display:grid;gap:6px;padding:18px;border:1px dashed rgba(255,255,255,.18);border-radius:14px;background:rgba(255,255,255,.025)}.empty-state-mark{color:var(--accent-2);font-size:1.2rem}.activity-list{display:grid;gap:0;margin:0;padding:0;list-style:none}.activity-row{display:grid;grid-template-columns:minmax(9rem,auto) minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.activity-row:last-child{border-bottom:0}.activity-date{color:var(--muted);font-variant-numeric:tabular-nums}.activity-result{justify-self:end}.danger-action-block{padding:14px;border:1px solid rgba(255,106,80,.25);border-radius:14px;background:rgba(255,106,80,.035)}.danger-action-block h3{margin-top:0}
+.form-stack{display:grid;gap:10px}.form-stack label{justify-self:start}.form-stack input,.form-stack select{width:100%;min-width:0}.form-action-row{display:flex;align-items:center;gap:10px}.form-action-row select{flex:1;min-width:0}.settings-block{display:grid;gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}.settings-block:last-of-type{border-bottom:0}
 .detail-list{display:grid;grid-template-columns:minmax(130px,auto) minmax(0,1fr);gap:8px 16px}
 .detail-list dd{margin:0;overflow-wrap:anywhere}
 .danger-zone{border-color:rgba(255,106,80,.4);margin-top:18px}
 .danger-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding-top:14px}
-@media(max-width:760px){.production-list-item{grid-template-columns:1fr}.production-list-state{min-width:0}.danger-actions{grid-template-columns:1fr}.section-nav{overflow-x:auto;flex-wrap:nowrap}.section-link{white-space:nowrap}}
+@media(max-width:760px){.production-list-item{grid-template-columns:1fr}.production-list-state{min-width:0}.danger-actions{grid-template-columns:1fr}.section-nav{overflow-x:auto;flex-wrap:nowrap}.section-link{white-space:nowrap}.activity-row{grid-template-columns:1fr;gap:5px}.activity-result{justify-self:start}.mapping-list li>span{text-align:left}.status-row-action .btn,.status-row-action .btn-ghost{white-space:normal}.form-action-row{align-items:stretch;flex-direction:column}.form-action-row .btn{width:100%}}
 .brand-block{
   display:flex;
   gap:8px;
@@ -400,7 +404,7 @@ func langToggleHTML(r *http.Request, lang string) string {
 }
 
 func baseAdminJS(lang string) string {
-	requiredPrompt := t(lang, "「削除」と入力してください", `Type "delete" to confirm`)
+	requiredPrompt := t(lang, "上に表示された確認ワードを正確に入力してください。", "Enter the exact confirmation phrase shown above.")
 	authorizingText := t(lang, "認証中...", "Authorizing...")
 	return fmt.Sprintf(`
 <script>
@@ -414,6 +418,7 @@ func baseAdminJS(lang string) string {
   var confirmBtn = document.getElementById('deleteConfirmBtn');
   var cancelBtn = document.getElementById('deleteCancelBtn');
   var activeForm = null;
+  var activeTrigger = null;
   var expectedValue = "";
   var savingLabel = %q;
 
@@ -426,6 +431,8 @@ func baseAdminJS(lang string) string {
     if(inputWrap){ inputWrap.classList.add('hidden'); }
     if(helperEl){ helperEl.classList.add('hidden'); }
     if(confirmBtn){ confirmBtn.disabled = false; }
+    if(activeTrigger && activeTrigger.focus){ activeTrigger.focus(); }
+    activeTrigger = null;
   }
 
   function focusableInModal(){
@@ -451,6 +458,7 @@ func baseAdminJS(lang string) string {
       if(!modal){ return; }
       event.preventDefault();
       activeForm = form;
+      activeTrigger = event.submitter || form.querySelector('button[type="submit"]');
       textEl.textContent = form.getAttribute('data-confirm') || '';
       expectedValue = form.getAttribute('data-require-text') || '';
       if(expectedValue){

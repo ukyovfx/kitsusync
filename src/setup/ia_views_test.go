@@ -174,6 +174,44 @@ func TestSelectedProductionTabsHaveSingleAccessiblePanel(t *testing.T) {
 	}
 }
 
+func TestSelectedProductionPolishAndDangerConfirmation(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.Project{KitsuProjectID: "polish-p", Name: "Polish Production", DiscordGuildID: "synthetic-guild"})
+	w := httptest.NewRecorder()
+	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=polish-p&lang=en", nil), db, "")
+	body := w.Body.String()
+	if strings.Count(body, "Polish Production") != 1 {
+		t.Fatalf("selected Production title rendered %d times", strings.Count(body, "Polish Production"))
+	}
+	if !strings.Contains(body, `class="section-nav production-tabs`) || !strings.Contains(body, `aria-selected="true"`) {
+		t.Fatal("selected tab does not have the shared visual and ARIA state")
+	}
+	danger := httptest.NewRecorder()
+	renderIAProductionList(danger, httptest.NewRequest("GET", "/bot/admin/projects?project=polish-p&tab=danger-zone&lang=en", nil), db, "")
+	dangerBody := danger.Body.String()
+	for _, want := range []string{`data-require-text="DISCONNECT"`, `data-require-text="DELETE"`, "Discord resources remain.", "separate from disconnecting"} {
+		if !strings.Contains(dangerBody, want) {
+			t.Fatalf("Danger Zone missing confirmation safeguard %q", want)
+		}
+	}
+	if strings.Contains(dangerBody, `data-require-text="delete"`) {
+		t.Fatal("Danger Zone confirmation is not exact and case-sensitive")
+	}
+}
+
+func TestSelectedProductionJapaneseDangerConfirmation(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.Project{KitsuProjectID: "polish-ja-p", Name: "日本語Production"})
+	w := httptest.NewRecorder()
+	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=polish-ja-p&tab=danger-zone&lang=ja", nil), db, "")
+	body := w.Body.String()
+	for _, want := range []string{`data-require-text="連携解除"`, `data-require-text="削除"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Japanese confirmation phrase missing %q", want)
+		}
+	}
+}
+
 func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()

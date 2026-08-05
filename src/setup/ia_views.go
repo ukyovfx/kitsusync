@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -174,10 +175,10 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 		link := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab="+url.QueryEscape(item.id), r)
 		tabLinks.WriteString(`<a id="tab-` + esc(item.id) + `" role="tab" aria-selected="` + selectedAttr + `" aria-controls="panel-` + esc(item.id) + `" class="section-link` + map[bool]string{true: " active", false: ""}[selected] + `" href="` + esc(link) + `" tabindex="` + map[bool]string{true: "0", false: "-1"}[selected] + `">` + esc(tr(lang, item.key)) + `</a>`)
 	}
-	header := `<div class="production-context"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "ia.productions")) + `</div><h1>` + esc(p.Name) + `</h1><p class="hint">` + esc(t(lang, "選択中のProduction", "Selected Production")) + `</p></div></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "Productionのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
+	header := `<div class="production-context"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "ia.productions")) + `</div><h1>` + esc(p.Name) + `</h1><p class="hint">` + esc(t(lang, "選択中のProduction", "Selected Production")) + `</p></div><span class="status-pill ` + esc(class) + `">` + esc(label) + `</span></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "Productionのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
 	body := header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
 	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
-	fmt.Fprint(w, adminPage(lang, p.Name, r, body))
+	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
 func selectedProductionTab(raw string) string {
@@ -196,7 +197,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 	case "user-settings":
 		return renderSelectedProductionUserSettings(db, r, p, lang)
 	case "storage-settings":
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p><form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><button class="btn" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></form></section>`
+		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p><form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></div></form></section>`
 	case "activity":
 		return renderSelectedProductionActivity(db, p, lang)
 	case "troubleshooting":
@@ -208,11 +209,13 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 	default:
 		problem := t(lang, "現在の問題はありません", "No current problem")
 		nextAction := t(lang, "通常どおり利用できます", "No action required")
+		nextActionHTML := ""
 		if class != "ok" {
 			problem = cleanStatusLabel(lang, class)
 			nextAction = hint
+			nextActionHTML = `<a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `">` + esc(tr(lang, "ia.notifications")) + `</a>`
 		}
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.overview")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "Productionの状態", "Production state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + statusSummaryRow(t(lang, "Discordサーバー", "Discord server"), map[bool]string{true: "success", false: "blocked"}[strings.TrimSpace(p.DiscordGuildID) != ""], serverName, "", "") + statusSummaryRow(t(lang, "現在の問題", "Current problem"), normalizeStatusClass(class), problem, "", "") + statusSummaryRow(t(lang, "次の操作", "Next action"), normalizeStatusClass(class), nextAction, "", "") + `</dl><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=user-settings", r)) + `">` + esc(tr(lang, "ia.user_settings")) + `</a></div></section>`
+		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.overview")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "Productionの状態", "Production state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + statusSummaryRow(t(lang, "Discordサーバー", "Discord server"), map[bool]string{true: "success", false: "blocked"}[strings.TrimSpace(p.DiscordGuildID) != ""], serverName, "", "") + statusSummaryRow(t(lang, "現在の問題", "Current problem"), normalizeStatusClass(class), problem, "", "") + statusSummaryRow(t(lang, "次の操作", "Next action"), normalizeStatusClass(class), nextAction, "", nextActionHTML) + `</dl><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=user-settings", r)) + `">` + esc(tr(lang, "ia.user_settings")) + `</a></div></section>`
 	}
 }
 
@@ -240,7 +243,7 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 	if mappings.Len() == 0 {
 		mappings.WriteString(`<li class="muted">` + esc(t(lang, "チャンネル設定はありません。", "No channel settings yet.")) + `</li>`)
 	}
-	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "通知状態", "Notification state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, actionHTML) + `</dl><form method="POST" action="` + esc(actionURL) + `" class="section-card glass"><input type="hidden" name="production_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="selected-production-dry-run">` + esc(t(lang, "確認するTask Type", "Task Type to check")) + `</label><select id="selected-production-dry-run" name="dry_run_task_type_id"><option value="">` + esc(t(lang, "Task Typeを選択", "Select a Task Type")) + `</option>` + taskTypeOptions.String() + `</select><button class="btn" type="submit">` + esc(tr(lang, "ia.check_without_sending")) + `</button><p class="field-help">` + esc(t(lang, "送信せずに確認します。Discordメッセージは送信されません。", "This check sends no Discord message.")) + `</p></form><h3>` + esc(t(lang, "Task TypeとDiscordチャンネル", "Task Type to Discord channel settings")) + `</h3><ul class="mapping-list">` + mappings.String() + `</ul></section>`
+	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "通知状態", "Notification state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, actionHTML) + `</dl><form method="POST" action="` + esc(actionURL) + `" class="section-card glass form-stack"><input type="hidden" name="production_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="selected-production-dry-run">` + esc(t(lang, "確認するTask Type", "Task Type to check")) + `</label><div class="form-action-row"><select id="selected-production-dry-run" name="dry_run_task_type_id"><option value="">` + esc(t(lang, "Task Typeを選択", "Select a Task Type")) + `</option>` + taskTypeOptions.String() + `</select><button class="btn" type="submit">` + esc(tr(lang, "ia.check_without_sending")) + `</button></div><p class="field-help">` + esc(t(lang, "送信せずに確認します。Discordメッセージは送信されません。", "This check sends no Discord message.")) + `</p></form><h3>` + esc(t(lang, "Task TypeとDiscordチャンネル", "Task Type to Discord channel settings")) + `</h3><ul class="mapping-list">` + mappings.String() + `</ul></section>`
 }
 
 func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
@@ -254,32 +257,39 @@ func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.
 		action := `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a>`
 		if g, ok := global[strings.ToLower(strings.TrimSpace(u.KitsuName))]; ok && strings.TrimSpace(g.DiscordID) != "" {
 			identity = t(lang, "対応付け済み", "Mapped")
+			action = ""
 		}
 		participants.WriteString(`<li><strong>` + esc(u.KitsuName) + `</strong><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[identity != t(lang, "未対応", "Not mapped")] + `">` + esc(identity) + `</span>` + action + `</li>`)
 	}
 	if participants.Len() == 0 {
-		participants.WriteString(`<li class="muted">` + esc(t(lang, "Production参加者はまだ登録されていません。", "No Production participants are registered yet.")) + `</li>`)
+		participants.WriteString(`<li class="empty-state"><span class="empty-state-mark" aria-hidden="true">•</span><strong>` + esc(t(lang, "Production参加者はまだ登録されていません。", "No Production participants are registered yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsu側の参加者が登録されると、ここに表示されます。", "Participants appear here when they are registered in Kitsu.")) + `</span></li>`)
 	}
 	for _, c := range model.ListProjectCheckerMaps(db, p.ID) {
 		roles.WriteString(`<li><strong>` + esc(c.TaskType) + `</strong><span>` + esc(c.KitsuName) + `</span></li>`)
 	}
 	if roles.Len() == 0 {
-		roles.WriteString(`<li class="muted">` + esc(t(lang, "Reviewer / Checkerの割り当てはありません。", "No Reviewer / Checker assignments yet.")) + `</li>`)
+		roles.WriteString(`<li class="empty-state"><span class="empty-state-mark" aria-hidden="true">•</span><strong>` + esc(t(lang, "Reviewer / Checkerの割り当てはありません。", "No Reviewer / Checker assignments yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Task TypeごとにProduction単位で設定します。", "Assign these roles per Task Type for this Production.")) + `</span></li>`)
 	}
-	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.user_settings")) + `</h2><h3>` + esc(t(lang, "Production参加者", "Production participants")) + `</h3><ul class="mapping-list">` + participants.String() + `</ul><h3>` + esc(t(lang, "Reviewer / Checker", "Reviewer / Checker")) + `</h3><ul class="mapping-list">` + roles.String() + `</ul><p class="field-help">` + esc(t(lang, "Discordユーザーの対応付けはグローバルなユーザー対応付けで管理します。", "Discord identity correspondence is managed in global User Mapping.")) + `</p></section>`
+	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.user_settings")) + `</h2><div class="settings-block"><h3>` + esc(t(lang, "Production参加者", "Production participants")) + `</h3><ul class="mapping-list">` + participants.String() + `</ul></div><div class="settings-block"><h3>` + esc(t(lang, "Reviewer / Checker", "Reviewer / Checker")) + `</h3><ul class="mapping-list">` + roles.String() + `</ul></div><p class="field-help">` + esc(t(lang, "Discordユーザーの対応付けはグローバルなユーザー対応付けで管理します。", "Discord identity correspondence is managed in global User Mapping.")) + `</p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a></section>`
 }
 
 func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string) string {
 	var rows strings.Builder
 	for _, log := range model.ListAuditLogs(db, 40) {
 		if log.ProjectName == p.Name {
-			rows.WriteString(`<li>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + ` — ` + esc(iaActivityAction(lang, log)) + `</li>`)
+			result := t(lang, "成功", "Success")
+			resultClass := "success"
+			if !log.Success {
+				result = t(lang, "確認が必要", "Needs review")
+				resultClass = "warning"
+			}
+			rows.WriteString(`<li class="activity-row"><time class="activity-date" datetime="` + esc(log.CreatedAt.Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time><strong>` + esc(iaActivityAction(lang, log)) + `</strong><span class="status-badge status-badge-` + resultClass + ` activity-result">` + esc(result) + `</span></li>`)
 		}
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<li class="muted">` + esc(t(lang, "アクティビティはありません。", "No activity yet.")) + `</li>`)
+		rows.WriteString(`<li class="empty-state"><span class="empty-state-mark" aria-hidden="true">•</span><strong>` + esc(t(lang, "アクティビティはありません。", "No activity yet.")) + `</strong></li>`)
 	}
-	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.activity")) + `</h2><ul class="list-tight" role="log">` + rows.String() + `</ul></section>`
+	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.activity")) + `</h2><ul class="activity-list" role="log">` + rows.String() + `</ul></section>`
 }
 
 func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang string) string {
@@ -296,7 +306,9 @@ func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang 
 }
 
 func renderSelectedProductionDanger(r *http.Request, p model.Project, lang string) string {
-	return `<details class="advanced-details danger-zone"><summary>` + esc(tr(lang, "ia.danger")) + `</summary><div class="danger-actions"><div><h3>` + esc(tr(lang, "ia.disconnect_production")) + `</h3><p class="hint">` + esc(t(lang, "KitsuSyncの連携だけを解除します。Discord側のリソースは残ります。", "Remove only the KitsuSync connection. Discord resources remain.")) + `</p><form method="POST" class="delete-form"><input type="hidden" name="action" value="remove_connection"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-ghost" type="submit">` + esc(tr(lang, "ia.disconnect_production")) + `</button></form></div><div><h3>` + esc(tr(lang, "ia.delete_discord_resources")) + `</h3><p class="hint">` + esc(t(lang, "Discord側のリソースを削除します。影響を確認してから実行してください。", "Delete Discord-side resources only after reviewing the impact.")) + `</p><form method="POST" class="delete-form"><input type="hidden" name="action" value="preview_remove_connection_with_discord"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-danger" type="submit">` + esc(tr(lang, "ia.delete_discord_resources")) + `</button></form></div></div></details>`
+	disconnectPhrase := t(lang, "連携解除", "DISCONNECT")
+	deletePhrase := t(lang, "削除", "DELETE")
+	return `<details class="advanced-details danger-zone"><summary>` + esc(tr(lang, "ia.danger")) + `</summary><div class="danger-actions"><div class="danger-action-block"><h3>` + esc(tr(lang, "ia.disconnect_production")) + `</h3><p class="hint">` + esc(t(lang, "KitsuSyncの連携だけを解除します。Discord側のリソースは残ります。", "This removes only the KitsuSync connection. Discord resources remain.")) + `</p><form method="POST" class="delete-form" data-confirm="` + esc(t(lang, "Productionの連携を解除します。Discord側のリソースは残ります。", "This removes the Production connection. Discord resources remain.")) + `" data-require-text="` + esc(disconnectPhrase) + `"><input type="hidden" name="action" value="remove_connection"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-ghost" type="submit">` + esc(tr(lang, "ia.disconnect_production")) + `</button></form></div><div class="danger-action-block"><h3>` + esc(tr(lang, "ia.delete_discord_resources")) + `</h3><p class="hint">` + esc(t(lang, "Discord側のチャンネルとカテゴリを削除します。連携解除とは別の操作です。", "This may delete Discord channels and the category. It is separate from disconnecting the Production.")) + `</p><form method="POST" class="delete-form" data-confirm="` + esc(t(lang, "Discord側のリソースを削除します。", "This may delete Discord-side resources.")) + `" data-require-text="` + esc(deletePhrase) + `"><input type="hidden" name="action" value="preview_remove_connection_with_discord"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-danger" type="submit">` + esc(tr(lang, "ia.delete_discord_resources")) + `</button></form></div></div></details>`
 }
 
 func renderIASelectedProductionLegacy(w http.ResponseWriter, r *http.Request, db *gorm.DB, p model.Project, fallbackGuildID string) {
