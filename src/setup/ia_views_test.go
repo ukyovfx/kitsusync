@@ -218,13 +218,48 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
 	renderIADashboard(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Action required", "Complete Kitsu connection setup.", "Overall connection status", "Next required actions"} {
+	for _, want := range []string{"Action required", "Complete Kitsu connection setup.", "Needs attention", "System status", "Productions needing attention"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing readiness copy %q", want)
 		}
 	}
 	if strings.Contains(body, "Polling") || strings.Contains(body, "Runtime") {
 		t.Fatal("dashboard exposes implementation status")
+	}
+	if strings.Contains(body, "Productions with notifications paused") || strings.Contains(body, "Paused") {
+		t.Fatal("dashboard exposes the retired pause state")
+	}
+}
+
+func TestLegacyPausedProductionIsReviewRequiredAndNotPaused(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "legacy-paused-dashboard-p", Name: "Legacy State Production"}
+	db.Create(&p)
+	db.Create(&model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, Enabled: false})
+	class, label, hint := iaStatus(db, p, "en")
+	if class != "bad" || label != "Needs review" || strings.Contains(strings.ToLower(hint), "paused") {
+		t.Fatalf("legacy paused state was not converted to review-required state: %q %q %q", class, label, hint)
+	}
+	w := httptest.NewRecorder()
+	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
+	if strings.Contains(w.Body.String(), "Productions with notifications paused") || strings.Contains(w.Body.String(), "Paused") {
+		t.Fatal("legacy paused state leaked as an ordinary Dashboard state")
+	}
+}
+
+func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "notification-controls-p", Name: "Notification Controls Production"}
+	db.Create(&p)
+	db.Create(&model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, Enabled: false})
+	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?lang=en", nil), p, "en", "bad", "Needs review", "A legacy stopped state is saved.")
+	for _, forbidden := range []string{"Pause notifications", "Resume notifications", "name=\"action\" value=\"pause\"", "name=\"action\" value=\"resume\""} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
+		}
+	}
+	if !strings.Contains(body, "Check without sending") || !strings.Contains(body, "Review notification settings") {
+		t.Fatal("Notifications UI lost safe review controls")
 	}
 }
 
