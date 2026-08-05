@@ -73,7 +73,7 @@ func availableProjects(db *gorm.DB) []model.Project {
 				data.TaskTypes = append(data.TaskTypes, model.ValidationTaskType{ID: strings.TrimSpace(taskType.ID), Name: strings.TrimSpace(taskType.Name)})
 			}
 		}
-		for _, person := range ListKitsuPersons("") {
+		for _, person := range filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db)) {
 			if person.ID != "" && person.FullName != "" {
 				data.Participants = append(data.Participants, model.ValidationPerson{ID: person.ID, FullName: person.FullName, Email: person.Email})
 			}
@@ -729,59 +729,85 @@ type globalDiscordUserOption struct {
 	Name string
 }
 
+type globalDiscordDirectory struct {
+	Guilds        []DiscordGuild
+	SelectedGuild DiscordGuild
+	Options       []globalDiscordUserOption
+}
+
+func loadGlobalDiscordDirectory(botToken, selectedGuildID string) (globalDiscordDirectory, error) {
+	directory := globalDiscordDirectory{}
+	if strings.TrimSpace(botToken) == "" {
+		return directory, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord Bot token is not configured"}
+	}
+	joined, err := ListBotGuilds(botToken)
+	if err != nil {
+		return directory, err
+	}
+	for _, guild := range joined {
+		if strings.TrimSpace(guild.ID) != "" && strings.TrimSpace(guild.Name) != "" {
+			directory.Guilds = append(directory.Guilds, guild)
+		}
+	}
+	sort.Slice(directory.Guilds, func(i, j int) bool {
+		return strings.ToLower(directory.Guilds[i].Name) < strings.ToLower(directory.Guilds[j].Name)
+	})
+	selectedGuildID = strings.TrimSpace(selectedGuildID)
+	if selectedGuildID == "" && len(directory.Guilds) == 1 {
+		selectedGuildID = strings.TrimSpace(directory.Guilds[0].ID)
+	}
+	if selectedGuildID == "" {
+		return directory, nil
+	}
+	for _, guild := range directory.Guilds {
+		if strings.TrimSpace(guild.ID) == selectedGuildID {
+			directory.SelectedGuild = guild
+			break
+		}
+	}
+	if directory.SelectedGuild.ID == "" {
+		return directory, &discordMemberListFailure{Kind: discordMemberFailureMismatch, Technical: "The selected Discord server is not joined by the Bot"}
+	}
+	members, err := ListGuildMembers(directory.SelectedGuild.ID, botToken)
+	if err != nil {
+		return directory, err
+	}
+	seen := map[string]bool{}
+	for _, member := range members {
+		name := strings.TrimSpace(member.Nick)
+		if name == "" {
+			name = strings.TrimSpace(member.User.DisplayName)
+		}
+		if name == "" {
+			name = strings.TrimSpace(member.User.GlobalName)
+		}
+		if name == "" {
+			name = strings.TrimSpace(member.User.Username)
+		}
+		id := strings.TrimSpace(member.User.ID)
+		if id == "" || name == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		directory.Options = append(directory.Options, globalDiscordUserOption{ID: id, Name: name})
+	}
+	sort.Slice(directory.Options, func(i, j int) bool {
+		return strings.ToLower(directory.Options[i].Name) < strings.ToLower(directory.Options[j].Name)
+	})
+	return directory, nil
+}
+
+// globalDiscordUserOptions is kept for the legacy edit route. The normal
+// User Linking surface uses loadGlobalDiscordDirectory directly and never
+// derives its server context from a Production.
 func globalDiscordUserOptions(db *gorm.DB, botToken string) ([]globalDiscordUserOption, error) {
-	projects := model.ListProjects(db)
-	for _, project := range projects {
+	for _, project := range model.ListProjects(db) {
 		if isSyntheticDiscordID(strings.TrimSpace(project.DiscordGuildID)) {
 			return nil, &discordMemberListFailure{Kind: discordMemberFailureFixture, Technical: "The connected server is synthetic fixture data and was not sent to Discord"}
 		}
 	}
-	if strings.TrimSpace(botToken) == "" {
-		return nil, fmt.Errorf("Discord Bot is not configured")
-	}
-	joined, err := ListBotGuilds(botToken)
-	if err != nil {
-		return nil, err
-	}
-	joinedGuilds := map[string]bool{}
-	for _, guild := range joined {
-		joinedGuilds[strings.TrimSpace(guild.ID)] = true
-	}
-	seenGuilds := map[string]bool{}
-	var options []globalDiscordUserOption
-	for _, project := range projects {
-		guildID := strings.TrimSpace(project.DiscordGuildID)
-		if guildID == "" || seenGuilds[guildID] {
-			continue
-		}
-		seenGuilds[guildID] = true
-		if !joinedGuilds[guildID] {
-			return nil, &discordMemberListFailure{Kind: discordMemberFailureMismatch, Technical: "The Bot is not joined to the connected Discord server"}
-		}
-		members, err := ListGuildMembers(guildID, botToken)
-		if err != nil {
-			return nil, err
-		}
-		for _, member := range members {
-			name := strings.TrimSpace(member.Nick)
-			if name == "" {
-				name = strings.TrimSpace(member.User.DisplayName)
-			}
-			if name == "" {
-				name = strings.TrimSpace(member.User.GlobalName)
-			}
-			if name == "" {
-				name = strings.TrimSpace(member.User.Username)
-			}
-			id := strings.TrimSpace(member.User.ID)
-			if id == "" || name == "" {
-				continue
-			}
-			options = append(options, globalDiscordUserOption{ID: id, Name: name})
-		}
-	}
-	sort.Slice(options, func(i, j int) bool { return strings.ToLower(options[i].Name) < strings.ToLower(options[j].Name) })
-	return options, nil
+	directory, err := loadGlobalDiscordDirectory(botToken, "")
+	return directory.Options, err
 }
 
 func globalDiscordMemberLoadMessage(lang string, loadErr error) string {
@@ -869,7 +895,7 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		}
 	} */
 	if len(model.ListUserMap(db)) == 0 && strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
-		for _, person := range ListKitsuPersons("") {
+		for _, person := range filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db)) {
 			if strings.TrimSpace(person.FullName) == "" {
 				continue
 			}
@@ -929,6 +955,108 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません。", "No user links yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
 	}
 	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。", "Link Kitsu users to Discord users.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	fmt.Fprint(w, adminPage(lang, "", r, body))
+}
+
+func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	lang := currentLang(r)
+	people := filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db))
+	selectedGuildID := strings.TrimSpace(r.URL.Query().Get("discord_guild_id"))
+	directory, loadErr := loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), selectedGuildID)
+	localMaps := model.ListUserMap(db)
+	findMap := func(person KitsuPerson) *model.UserMap {
+		for i := range localMaps {
+			m := &localMaps[i]
+			if strings.TrimSpace(person.ID) != "" && strings.TrimSpace(m.KitsuID) == strings.TrimSpace(person.ID) {
+				return m
+			}
+			if strings.TrimSpace(person.Email) != "" && strings.EqualFold(strings.TrimSpace(m.KitsuEmail), strings.TrimSpace(person.Email)) {
+				return m
+			}
+			if strings.EqualFold(strings.TrimSpace(m.KitsuName), strings.TrimSpace(person.FullName)) {
+				return m
+			}
+		}
+		return nil
+	}
+	var guildOptions strings.Builder
+	if len(directory.Guilds) == 0 {
+		guildOptions.WriteString(`<option value="">` + esc(t(lang, "Discordサーバーが見つかりません", "No joined Discord servers")) + `</option>`)
+	} else {
+		guildOptions.WriteString(`<option value="">` + esc(t(lang, "Discordサーバーを選択", "Select a Discord server")) + `</option>`)
+		for _, guild := range directory.Guilds {
+			selected := ""
+			if strings.TrimSpace(guild.ID) == strings.TrimSpace(directory.SelectedGuild.ID) {
+				selected = " selected"
+			}
+			guildOptions.WriteString(`<option value="` + esc(guild.ID) + `"` + selected + `>` + esc(guild.Name) + `</option>`)
+		}
+	}
+	serverForm := `<form method="GET" class="form-action-row" aria-label="` + esc(t(lang, "Discordサーバーの選択", "Discord server selection")) + `"><input type="hidden" name="lang" value="` + esc(lang) + `"><label for="global-discord-guild">` + esc(tr(lang, "ia.discord_server")) + `</label><select id="global-discord-guild" name="discord_guild_id" onchange="this.form.submit()">` + guildOptions.String() + `</select><noscript><button class="btn-ghost" type="submit">` + esc(t(lang, "表示", "Show")) + `</button></noscript></form>`
+	message := ""
+	if loadErr != nil {
+		message = globalDiscordMemberLoadMessage(lang, loadErr)
+	} else if len(directory.Guilds) > 1 && directory.SelectedGuild.ID == "" {
+		message = `<div class="notice notice-info" role="status"><p>` + esc(t(lang, "Discordサーバーを選択すると、メンバーを取得して保存できます。", "Select a Discord server to load members and enable saving.")) + `</p></div>`
+	} else if directory.SelectedGuild.ID != "" {
+		message = `<p class="field-help" role="status">` + esc(t(lang, "表示中のDiscordサーバー: "+directory.SelectedGuild.Name, "Showing Discord server: "+directory.SelectedGuild.Name)) + `</p>`
+	}
+	memberOptions := func(current string) string {
+		var b strings.Builder
+		b.WriteString(`<option value="">` + esc(t(lang, "未設定", "Not set")) + `</option>`)
+		for _, option := range directory.Options {
+			selected := ""
+			if strings.TrimSpace(option.ID) == strings.TrimSpace(current) {
+				selected = " selected"
+			}
+			b.WriteString(`<option value="` + esc(option.ID) + `"` + selected + `>` + esc(option.Name) + `</option>`)
+		}
+		return b.String()
+	}
+	canSave := loadErr == nil && directory.SelectedGuild.ID != "" && len(directory.Options) > 0
+	var rows strings.Builder
+	for _, person := range people {
+		if strings.TrimSpace(person.FullName) == "" {
+			continue
+		}
+		mapped := findMap(person)
+		identity, state := t(lang, "未設定", "Not set"), t(lang, "未設定", "Not set")
+		class := "blocked"
+		currentDiscordID := ""
+		if mapped != nil {
+			currentDiscordID = strings.TrimSpace(mapped.DiscordID)
+			if isSyntheticDiscordID(currentDiscordID) {
+				identity, state, class = t(lang, "検証用データ", "Fixture data"), t(lang, "検証用データ", "Fixture data"), "neutral"
+				currentDiscordID = ""
+			} else if currentDiscordID != "" && strings.TrimSpace(mapped.DiscordDisplayName) != "" {
+				identity, state, class = strings.TrimSpace(mapped.DiscordDisplayName), t(lang, "紐づけ済み", "Linked"), "success"
+			} else if currentDiscordID != "" {
+				identity, state, class = t(lang, "表示名未確認", "Display name not verified"), t(lang, "確認が必要", "Needs verification"), "warning"
+				currentDiscordID = ""
+			}
+		}
+		kitsuID, kitsuName, kitsuEmail, userID := person.ID, person.FullName, person.Email, ""
+		if mapped != nil {
+			userID = fmt.Sprint(mapped.ID)
+		}
+		disabled := ""
+		if !canSave {
+			disabled = " disabled"
+		}
+		actionMessage := ""
+		if !canSave {
+			actionMessage = `<p class="field-help" role="status">` + esc(t(lang, "Discordユーザーを選択すると保存できます。", "Select a Discord user to enable saving.")) + `</p>`
+		}
+		form := `<form method="POST" class="inline-form user-link-form"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + esc(userID) + `"><input type="hidden" name="kitsu_id" value="` + esc(kitsuID) + `"><input type="hidden" name="kitsu_name" value="` + esc(kitsuName) + `"><input type="hidden" name="kitsu_email" value="` + esc(kitsuEmail) + `"><input type="hidden" name="discord_guild_id" value="` + esc(directory.SelectedGuild.ID) + `"><select name="discord_user_id" aria-label="` + esc(kitsuName+" - "+t(lang, "Discordユーザー", "Discord user")) + `">` + memberOptions(currentDiscordID) + `</select><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button>` + actionMessage + `</form>`
+		if mapped != nil && mapped.ID > 0 {
+			form += `<form method="POST" class="inline-form"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + esc(fmt.Sprint(mapped.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Unlink")) + `</button></form>`
+		}
+		rows.WriteString(`<tr><td>` + esc(person.FullName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td>` + form + `</td></tr>`)
+	}
+	if len(people) == 0 {
+		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "Kitsuユーザーが見つかりません", "No Kitsu users were returned")) + `</strong></td></tr>`)
+	}
+	body := `<section class="section-stack"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。", "Link Kitsu users to Discord users.")) + `</p><section class="section-card glass">` + serverForm + message + `</section><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 

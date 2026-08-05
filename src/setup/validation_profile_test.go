@@ -116,6 +116,24 @@ func TestNormalStartupDoesNotSeedFixtureOrValidationData(t *testing.T) {
 	}
 }
 
+func TestLiveKitsuPersonsMatchActiveUserSourceRule(t *testing.T) {
+	persons := []KitsuPerson{
+		{FullName: "kitsu bot", Email: "kitsu-bot@example.invalid", Active: true},
+		{FullName: "Super Admin", Email: "admin@example.invalid", Active: true},
+		{FullName: "KitsuSync Bot", Email: "kitsusync-bot@google.com", Active: true},
+		{FullName: "Archived User", Email: "archived@example.invalid", Active: false},
+	}
+	visible := filterAssignablePersons(persons, "kitsusync-bot@google.com")
+	if len(visible) != 2 {
+		t.Fatalf("visible Kitsu user count = %d, want 2", len(visible))
+	}
+	for _, person := range visible {
+		if person.FullName == "KitsuSync Bot" || person.FullName == "Archived User" {
+			t.Fatalf("stale or inactive Kitsu person remained visible: %q", person.FullName)
+		}
+	}
+}
+
 func TestSampleConfigIsIgnoredUnlessFixtureModeIsExplicit(t *testing.T) {
 	db := newIAViewDB(t)
 	conf := config.Config{}

@@ -13,7 +13,7 @@ import (
 
 func newIAViewDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:ia-view-tests?mode=memory&cache=shared"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,6 +483,44 @@ func TestGlobalUserLinkFormUsesSafeDiscordSelection(t *testing.T) {
 	}
 	if strings.Contains(body, "synthetic-discord-id") {
 		t.Fatal("global link form leaked the raw Discord identifier")
+	}
+}
+
+func TestGlobalUserLinkingModelStoresStableKitsuAndDiscordServerIdentity(t *testing.T) {
+	db := newIAViewDB(t)
+	user := model.UpsertUserMapWithIdentity(db, "kitsu-user-1", "kitsu bot", "bot@example.invalid", "123456789012345678", "123456789012345679", "Discord Bot")
+	if user == nil || user.KitsuID != "kitsu-user-1" || user.DiscordGuildID != "123456789012345678" || user.DiscordID != "123456789012345679" {
+		t.Fatalf("stable identities were not persisted: %+v", user)
+	}
+	model.UpsertUserMapWithIdentity(db, "kitsu-user-1", "kitsu bot", "bot@example.invalid", "123456789012345678", "123456789012345680", "Discord Bot 2")
+	if got := len(model.ListUserMap(db)); got != 1 {
+		t.Fatalf("identity upsert created duplicate rows: %d", got)
+	}
+}
+
+func TestGlobalUserLinkingDoesNotRequireConnectedProduction(t *testing.T) {
+	db := newIAViewDB(t)
+	if len(model.ListProjects(db)) != 0 {
+		t.Fatal("test must start with zero connected Productions")
+	}
+	directory := globalDiscordDirectory{Guilds: []DiscordGuild{{ID: "123456789012345678", Name: "Test server"}}, SelectedGuild: DiscordGuild{ID: "123456789012345678", Name: "Test server"}, Options: []globalDiscordUserOption{{ID: "123456789012345679", Name: "Discord User"}}}
+	if len(directory.Options) != 1 || directory.SelectedGuild.Name != "Test server" {
+		t.Fatal("global directory should be independent from Production rows")
+	}
+}
+
+func TestGlobalUserLinkingUsesTruthfulUnavailableState(t *testing.T) {
+	db := newIAViewDB(t)
+	t.Setenv("KITSUJWTToken", "")
+	t.Setenv("KitsuJWTToken", "")
+	w := httptest.NewRecorder()
+	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
+	body := w.Body.String()
+	if strings.Contains(body, "not_set") || strings.Contains(body, "KitsuSync Bot") {
+		t.Fatal("global User Linking exposed a placeholder or synthetic user")
+	}
+	if !strings.Contains(body, "Discord Bot token is not configured") && !strings.Contains(body, "Discord") {
+		t.Fatal("global User Linking did not expose a truthful Discord blocker")
 	}
 }
 

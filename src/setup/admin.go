@@ -2260,27 +2260,41 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		}
 		if r.URL.Query().Get("legacy") != "1" && strings.TrimSpace(r.URL.Query().Get("project")) == "" && r.Method == http.MethodPost {
 			id := parseUint(r.FormValue("user_id"))
-			if id > 0 {
-				if r.FormValue("action") == "remove_global_link" {
-					if user := model.FindUserMapByID(db, id); user != nil {
-						model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, "")
-						model.UpdateUserMapDisplayName(db, id, "")
-					}
-				} else if r.FormValue("action") == "save_global_link" {
-					if user := model.FindUserMapByID(db, id); user != nil {
-						selectedID := strings.TrimSpace(r.FormValue("discord_user_id"))
-						options, err := globalDiscordUserOptions(db, storedRuntimeDiscordBotToken(db))
-						for _, option := range options {
-							if err == nil && option.ID == selectedID {
-								model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, option.ID)
-								model.UpdateUserMapDisplayName(db, id, option.Name)
-								break
-							}
+			action := r.FormValue("action")
+			saved := false
+			if action == "remove_global_link" && id > 0 {
+				if user := model.FindUserMapByID(db, id); user != nil {
+					model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, "")
+					model.UpdateUserMapDisplayName(db, id, "")
+					db.Model(&model.UserMap{}).Where("id = ?", id).Update("discord_guild_id", "")
+					saved = true
+				}
+			} else if action == "save_global_link" {
+				selectedID := strings.TrimSpace(r.FormValue("discord_user_id"))
+				directory, err := loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), r.FormValue("discord_guild_id"))
+				if err == nil && directory.SelectedGuild.ID != "" && selectedID != "" {
+					for _, option := range directory.Options {
+						if option.ID != selectedID {
+							continue
 						}
+						if id > 0 {
+							if user := model.FindUserMapByID(db, id); user != nil {
+								model.UpsertUserMapWithIdentity(db, r.FormValue("kitsu_id"), user.KitsuName, user.KitsuEmail, directory.SelectedGuild.ID, option.ID, option.Name)
+								saved = true
+							}
+						} else {
+							model.UpsertUserMapWithIdentity(db, r.FormValue("kitsu_id"), r.FormValue("kitsu_name"), r.FormValue("kitsu_email"), directory.SelectedGuild.ID, option.ID, option.Name)
+							saved = true
+						}
+						break
 					}
 				}
 			}
-			http.Redirect(w, r, withLang("/bot/admin/users?msg=saved", r), http.StatusSeeOther)
+			msg := "error"
+			if saved {
+				msg = "saved"
+			}
+			http.Redirect(w, r, withLang("/bot/admin/users?msg="+msg, r), http.StatusSeeOther)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("project") == "" {
@@ -2290,7 +2304,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					return
 				}
 			}
-			renderGlobalUserMapping(w, r, db)
+			renderGlobalUserLinking(w, r, db)
 			return
 		}
 		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
@@ -2865,6 +2879,9 @@ func botAccountEmail(db *gorm.DB) string {
 func filterAssignablePersons(persons []KitsuPerson, botEmail string) []KitsuPerson {
 	filtered := make([]KitsuPerson, 0, len(persons))
 	for _, person := range persons {
+		if !person.Active {
+			continue
+		}
 		if shouldExcludeBotPerson(person, botEmail) {
 			continue
 		}

@@ -776,8 +776,10 @@ func SetProjectWebhook(db *gorm.DB, kitsuProjectID, webhookURL, channelID string
 
 type UserMap struct {
 	ID                 uint   `gorm:"primaryKey"`
+	KitsuID            string `gorm:"index"`
 	KitsuName          string `gorm:"index"`
 	KitsuEmail         string
+	DiscordGuildID     string `gorm:"index"`
 	DiscordID          string
 	DiscordDisplayName string
 }
@@ -836,6 +838,33 @@ func UpdateUserMap(db *gorm.DB, id uint, kitsuName, kitsuEmail, discordID string
 
 func UpdateUserMapDisplayName(db *gorm.DB, id uint, displayName string) {
 	db.Model(&UserMap{}).Where("id = ?", id).Update("discord_display_name", strings.TrimSpace(displayName))
+}
+
+func UpsertUserMapWithIdentity(db *gorm.DB, kitsuID, kitsuName, kitsuEmail, discordGuildID, discordID, displayName string) *UserMap {
+	var user UserMap
+	query := db
+	if strings.TrimSpace(kitsuID) != "" {
+		query = query.Where("kitsu_id = ?", strings.TrimSpace(kitsuID))
+	} else if strings.TrimSpace(kitsuEmail) != "" {
+		query = query.Where("kitsu_email = ?", strings.TrimSpace(kitsuEmail))
+	} else {
+		query = query.Where("kitsu_name = ?", strings.TrimSpace(kitsuName))
+	}
+	if query.First(&user).Error != nil {
+		user = UserMap{}
+	}
+	user.KitsuID = strings.TrimSpace(kitsuID)
+	user.KitsuName = strings.TrimSpace(kitsuName)
+	user.KitsuEmail = strings.TrimSpace(kitsuEmail)
+	user.DiscordGuildID = strings.TrimSpace(discordGuildID)
+	user.DiscordID = strings.TrimSpace(discordID)
+	user.DiscordDisplayName = strings.TrimSpace(displayName)
+	if user.ID == 0 {
+		db.Create(&user)
+	} else {
+		db.Save(&user)
+	}
+	return &user
 }
 
 func DeleteUserMapByID(db *gorm.DB, id uint) {
