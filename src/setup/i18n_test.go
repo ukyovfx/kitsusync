@@ -204,7 +204,7 @@ func TestConnectedProductionSurfacesNotificationControlsAndSafeHierarchy(t *test
 		t.Fatal(err)
 	}
 	paused := renderConnectedProductionNotificationSection(db, project, "en", httptest.NewRequest("GET", "/bot/admin/projects?lang=en", nil), "warn", "Paused", "Notifications are paused and can be resumed.", nil)
-	if !strings.Contains(paused, "Resume routing") || !strings.Contains(paused, "Inspect dry-run") {
+	if !strings.Contains(paused, "Resume notifications") || !strings.Contains(paused, "Check without sending") {
 		t.Fatal("paused production does not expose resume and dry-run controls")
 	}
 }

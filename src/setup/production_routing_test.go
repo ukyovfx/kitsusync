@@ -72,7 +72,7 @@ func TestDryRunActionIsLocalAndRedactsDestinationURL(t *testing.T) {
 	res := httptest.NewRecorder()
 	ProductionRoutingHandler(db)(res, req)
 	body := res.Body.String()
-	if !strings.Contains(body, "Dry-run") || !strings.Contains(body, "Production ID: p1") || !strings.Contains(body, "Task Type ID: tt1") {
+	if !strings.Contains(body, "Check without sending completed") || strings.Contains(body, "skip reason") || strings.Contains(body, "Production ID: p1") {
 		t.Fatal("dry-run result was not rendered")
 	}
 	if strings.Contains(body, "secret-value") {

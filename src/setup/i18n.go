@@ -47,6 +47,19 @@ func toggleLangURL(r *http.Request) string {
 }
 
 func t(lang, ja, en string) string {
+	// Keep legacy callers on the shared normal-user wording while the routes
+	// migrate to catalog keys. This is intentionally limited to the confirmed
+	// notification labels and does not translate external values.
+	switch en {
+	case "Task Type for dry-run":
+		ja, en = "確認するTask Type", "Task Type to check"
+	case "Inspect dry-run":
+		ja, en = "送信せずに確認", "Check without sending"
+	case "Pause routing":
+		ja, en = "通知を一時停止", "Pause notifications"
+	case "Resume routing":
+		ja, en = "通知を再開", "Resume notifications"
+	}
 	if lang == "en" {
 		return en
 	}
