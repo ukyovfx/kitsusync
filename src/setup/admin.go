@@ -2294,6 +2294,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			name := strings.TrimSpace(r.FormValue("kitsu_name"))
 			email := strings.TrimSpace(r.FormValue("kitsu_email"))
 			discordID := strings.TrimSpace(r.FormValue("discord_id"))
+			discordDisplayName := strings.TrimSpace(r.FormValue("discord_display_name"))
 			previousName, previousEmail := "", ""
 			if id > 0 {
 				if useProjectScoped {
@@ -2340,8 +2341,13 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					} else {
 						if id > 0 {
 							model.UpdateUserMap(db, id, name, email, discordID)
+							model.UpdateUserMapDisplayName(db, id, discordDisplayName)
 						} else {
 							model.UpsertUserMapWithEmail(db, name, email, discordID)
+							var created model.UserMap
+							if db.Where("kitsu_name = ?", name).First(&created).Error == nil {
+								model.UpdateUserMapDisplayName(db, created.ID, discordDisplayName)
+							}
 						}
 						if previousName != "" {
 							syncLegacyCheckerAssignmentUserIdentity(db, previousName, previousEmail, name, email)
@@ -2359,7 +2365,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		}
 
 		editID := parseUint(r.URL.Query().Get("edit"))
-		selectedName, selectedEmail, selectedDiscordID := "", "", ""
+		selectedName, selectedEmail, selectedDiscordID, selectedDiscordDisplayName := "", "", "", ""
 		if editID > 0 {
 			if useProjectScoped {
 				if editUser := model.FindProjectUserMapByID(db, editID); editUser != nil {
@@ -2372,6 +2378,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					selectedName = editUser.KitsuName
 					selectedEmail = editUser.KitsuEmail
 					selectedDiscordID = editUser.DiscordID
+					selectedDiscordDisplayName = editUser.DiscordDisplayName
 				}
 			}
 		}
@@ -2454,6 +2461,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
       <div class="form-grid">
         <div><label>%s</label><select id="personSelect" onchange="syncPersonSelect()" required>%s</select></div>
         <div><label>%s</label><input type="text" name="discord_id" value="%s" placeholder="123456789012345678"><div class="field-help">%s</div></div>
+        <div><label>%s</label><input type="text" name="discord_display_name" value="%s"><div class="field-help">%s</div></div>
       </div>
       %s
     </div>
@@ -2568,7 +2576,8 @@ document.addEventListener('DOMContentLoaded', function(){
 			scopeHint,
 			userID, esc(activeProjectID), esc(selectedName), esc(selectedEmail),
 			t(lang, "Kitsuユーザー", "Kitsu user"), personOptions,
-			t(lang, "DiscordユーザーID", "Discord user ID"), esc(selectedDiscordID), t(lang, "未入力の場合は ID未設定 と表示されます。", "If empty, the UI will show No ID."), assignmentActionRow,
+			t(lang, "DiscordユーザーID", "Discord user ID"), esc(selectedDiscordID), t(lang, "未入力の場合は ID未設定 と表示されます。", "If empty, the UI will show No ID."),
+			t(lang, "Discordユーザー表示名", "Discord display name"), esc(selectedDiscordDisplayName), t(lang, "通常画面にはIDではなく表示名を表示します。", "The normal UI shows this name instead of the internal ID."), assignmentActionRow,
 			t(lang, "現在の割り当て", "Current assignments"), t(lang, "名前", "Name"), t(lang, "レビュアー / チェッカー", "Reviewer / Checker"), t(lang, "操作", "Actions"), rows.String(),
 			t(lang, "レビュアー / チェッカー task type", "Reviewer / Checker task types"),
 			t(lang, "この selector は、選択中の production に割り当て済みのユーザーだけを表示します。新しいユーザーは先に上で割り当てを作成してください。", "This selector only shows users already assigned to the selected production. Create the user assignment above first for new people."),

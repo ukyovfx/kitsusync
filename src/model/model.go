@@ -793,6 +793,10 @@ func UpdateUserMap(db *gorm.DB, id uint, kitsuName, kitsuEmail, discordID string
 	})
 }
 
+func UpdateUserMapDisplayName(db *gorm.DB, id uint, displayName string) {
+	db.Model(&UserMap{}).Where("id = ?", id).Update("discord_display_name", strings.TrimSpace(displayName))
+}
+
 func DeleteUserMapByID(db *gorm.DB, id uint) {
 	db.Delete(&UserMap{}, id)
 }
