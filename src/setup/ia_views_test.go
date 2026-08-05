@@ -16,7 +16,7 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -225,6 +225,23 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	}
 	if strings.Contains(body, "Polling") || strings.Contains(body, "Runtime") {
 		t.Fatal("dashboard exposes implementation status")
+	}
+}
+
+func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Save(&model.Setting{Key: "kitsu.hostname", Value: "http://synthetic-kitsu.invalid"})
+	db.Save(&model.Setting{Key: RuntimeKitsuEmailSettingKey, Value: "operator@synthetic.invalid"})
+	db.Save(&model.Setting{Key: RuntimeKitsuTokenSettingKey, Value: "synthetic-runtime-credential"})
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: "dashboard-p", ProjectName: "Dashboard Production", EntityName: "configuration", Success: true})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
+	renderIADashboard(w, r, db)
+	body := w.Body.String()
+	for _, want := range []string{"Activity", "Dashboard Production", "Set up Bot Connection"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard missing %q", want)
+		}
 	}
 }
 

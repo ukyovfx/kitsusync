@@ -93,10 +93,15 @@ func iaReadiness(db *gorm.DB, lang string) (string, string, string) {
 func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	projects := model.ListProjects(db)
-	var attentionRows, pausedRows strings.Builder
+	var attentionRows, pausedRows, activityRows strings.Builder
 	for _, p := range projects {
 		class, _, hint := iaStatus(db, p, lang)
-		row := `<li><a href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)) + `"><strong>` + esc(p.Name) + `</strong></a><dl class="status-list">` + statusSummaryRow(t(lang, "現在の状態", "Current state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + `</dl></li>`
+		tab := "overview"
+		if class == "bad" {
+			tab = "notifications"
+		}
+		openURL := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab="+tab, r)
+		row := `<li><div class="dashboard-queue-row"><strong>` + esc(p.Name) + `</strong><span class="field-help">` + esc(hint) + `</span><a class="btn-ghost" href="` + esc(openURL) + `">` + esc(t(lang, "Productionを開く", "Open Production")) + `</a></div><dl class="status-list">` + statusSummaryRow(t(lang, "現在の状態", "Current state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), "", "") + `</dl></li>`
 		if class == "bad" {
 			attentionRows.WriteString(row)
 		}
@@ -110,12 +115,39 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if pausedRows.Len() == 0 {
 		pausedRows.WriteString(`<li class="muted">` + esc(t(lang, "通知停止中のProductionはありません。", "No Productions have notifications paused.")) + `</li>`)
 	}
+	for _, log := range model.ListAuditLogs(db, 5) {
+		name := strings.TrimSpace(log.ProjectName)
+		if name == "" {
+			name = strings.TrimSpace(log.ProjectID)
+		}
+		result := t(lang, "謌仙粥", "Success")
+		resultClass := "success"
+		if !log.Success {
+			result = t(lang, "要確認", "Needs review")
+			resultClass = "warning"
+		}
+		activityRows.WriteString(`<li class="activity-row"><time class="activity-date" datetime="` + esc(log.CreatedAt.Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time><strong>` + esc(iaActivityAction(lang, log)) + `</strong><span>` + esc(name) + `</span><span class="status-badge status-badge-` + resultClass + `">` + esc(result) + `</span></li>`)
+	}
+	if activityRows.Len() == 0 {
+		activityRows.WriteString(`<li class="muted">No recent activity.</li>`)
+	}
 	readinessClass, readinessLabel, readinessHint := iaReadiness(db, lang)
+	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
+	nextActionURL := withLang("/bot/setup", r)
+	nextActionLabel := tr(lang, "ia.new_connection")
+	if readiness.KitsuConfigured && !readiness.DiscordConfigured {
+		nextActionURL = withLang("/bot/admin/bot", r)
+		nextActionLabel = t(lang, "Bot接続を設定", "Set up Bot Connection")
+	} else if readiness.KitsuConfigured && readiness.DiscordConfigured && !readiness.OverallReady {
+		nextActionURL = withLang("/bot/admin/projects", r)
+		nextActionLabel = tr(lang, "ia.production_list")
+	}
 	body := `<div class="section-stack">` +
 		`<section class="section-card glass" aria-labelledby="dashboard-summary"><h2 id="dashboard-summary">` + esc(tr(lang, "ia.overview")) + `</h2><div class="metric-grid"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "全体の接続状態", "Overall connection status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></div></section>` +
 		`<section class="section-card glass" aria-labelledby="dashboard-attention"><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なProduction", "Productions needing attention")) + `</h2><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
 		`<section class="section-card glass" aria-labelledby="dashboard-paused"><h2 id="dashboard-paused">` + esc(t(lang, "通知停止中のProduction", "Productions with notifications paused")) + `</h2><ul class="list-tight">` + pausedRows.String() + `</ul></section>` +
-		`<section class="section-card glass" aria-labelledby="dashboard-next"><h2 id="dashboard-next">` + esc(t(lang, "次に必要な操作", "Next required actions")) + `</h2><p class="hint" role="status">` + esc(readinessHint) + `</p><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(tr(lang, "ia.production_list")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></section></div>`
+		`<section class="section-card glass" aria-labelledby="dashboard-next"><h2 id="dashboard-next">` + esc(t(lang, "次に必要な操作", "Next required actions")) + `</h2><p class="hint" role="status">` + esc(readinessHint) + `</p>` + ifNonEmpty(nextActionURL, `<div class="button-row"><a class="btn" href="`+esc(nextActionURL)+`">`+esc(nextActionLabel)+`</a></div>`) + `</section>` +
+		`<section class="section-card glass" aria-labelledby="dashboard-activity"><h2 id="dashboard-activity">` + esc(tr(lang, "ia.activity")) + `</h2><ul class="activity-list" role="log">` + activityRows.String() + `</ul></section></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.dashboard"), r, body))
 }
 
@@ -160,10 +192,7 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 	lang := currentLang(r)
 	tab := selectedProductionTab(r.URL.Query().Get("tab"))
 	class, label, hint := iaStatus(db, p, lang)
-	serverName := t(lang, "未接続", "Not connected")
-	if strings.TrimSpace(p.DiscordGuildID) != "" {
-		serverName = t(lang, "接続済みDiscordサーバー", "Connected Discord server")
-	}
+	serverName := projectDiscordServerName(db, p, lang)
 	tabs := []struct{ id, key string }{{"overview", "ia.overview"}, {"notifications", "ia.notifications"}, {"user-settings", "ia.user_settings"}, {"storage-settings", "ia.storage_settings"}, {"activity", "ia.activity"}, {"troubleshooting", "ia.troubleshooting"}, {"advanced", "ia.advanced"}, {"danger-zone", "ia.danger"}}
 	var tabLinks strings.Builder
 	for _, item := range tabs {
@@ -179,6 +208,19 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 	body := header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
 	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
+}
+
+func projectDiscordServerName(db *gorm.DB, p model.Project, lang string) string {
+	if strings.TrimSpace(p.DiscordGuildID) == "" {
+		return t(lang, "未接続", "Not connected")
+	}
+	var setting model.ProjectSetting
+	for _, key := range []string{"discord_server_name", "discord.guild_name"} {
+		if db != nil && db.Where("project_id = ? AND key = ?", p.ID, key).First(&setting).Error == nil && strings.TrimSpace(setting.Value) != "" {
+			return strings.TrimSpace(setting.Value)
+		}
+	}
+	return t(lang, "接続済みDiscordサーバー", "Connected Discord server")
 }
 
 func selectedProductionTab(raw string) string {
@@ -404,13 +446,25 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
 	_, notificationState, notificationHint := iaReadiness(db, lang)
-	action := `<a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a>`
+	actionURL := "/bot/admin/projects"
+	actionLabel := tr(lang, "ia.production_list")
+	problem := notificationHint
+	if !readiness.KitsuConfigured {
+		actionURL = "/bot/setup"
+		actionLabel = tr(lang, "ia.new_connection")
+		problem = t(lang, "Kitsu接続を設定してください。", "Complete Kitsu connection setup.")
+	} else if !readiness.DiscordConfigured {
+		actionURL = "/bot/admin/bot"
+		actionLabel = tr(lang, "ia.bot_connection")
+		problem = t(lang, "Bot接続を設定してください。", "Complete Bot Connection setup.")
+	}
+	action := `<a class="btn" href="` + esc(withLang(actionURL, r)) + `">` + esc(actionLabel) + `</a>`
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(tr(lang, "ia.system_status")) + `</h2><dl class="status-list">` +
 		statusSummaryRow("Kitsu"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured), "", "") +
 		statusSummaryRow("Discord"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
 		statusSummaryRow(t(lang, "Bot状態", "Bot state"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
-		statusSummaryRow(t(lang, "通知状態", "Notification state"), notificationClass(notificationState, readiness.OverallReady, lang), notificationState, notificationHint, "") +
-		statusSummaryRow(t(lang, "全体の問題", "Overall problem"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady), notificationHint, action) + `</dl><p class="hint" role="status" aria-live="polite">` + esc(t(lang, "次に必要な操作", "Next required action")) + `: ` + esc(notificationHint) + `</p></section></div>`
+		statusSummaryRow(t(lang, "通知状態", "Notification state"), notificationClass(notificationState, readiness.OverallReady, lang), notificationState, "", "") +
+		statusSummaryRow(t(lang, "全体の問題", "Overall problem"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady), problem, action) + `</dl><p class="hint" role="status" aria-live="polite">` + esc(t(lang, "次に必要な操作", "Next required action")) + `: ` + esc(problem) + `</p></section></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
