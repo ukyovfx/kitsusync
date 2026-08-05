@@ -88,6 +88,20 @@ button,input,select{font:inherit}
   align-items:center;
   margin-bottom:18px;
 }
+.skip-link{position:absolute;left:10px;top:-60px;padding:10px 14px;background:#fff;color:#111;border-radius:8px;z-index:20}
+.skip-link:focus{top:10px}
+.section-nav{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px;padding:8px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.03)}
+.section-link{padding:8px 10px;border-radius:8px;color:var(--muted);font-weight:600}
+.section-link:hover,.section-link:focus-visible{color:var(--text);background:rgba(232,90,26,.16)}
+.production-list-item{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:16px;align-items:center}
+.production-list-state{display:grid;gap:4px;min-width:170px}
+.mapping-list,.status-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
+.mapping-list li{display:flex;justify-content:space-between;gap:12px;padding:10px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.detail-list{display:grid;grid-template-columns:minmax(130px,auto) minmax(0,1fr);gap:8px 16px}
+.detail-list dd{margin:0;overflow-wrap:anywhere}
+.danger-zone{border-color:rgba(255,106,80,.4);margin-top:18px}
+.danger-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding-top:14px}
+@media(max-width:760px){.production-list-item{grid-template-columns:1fr}.production-list-state{min-width:0}.danger-actions{grid-template-columns:1fr}.section-nav{overflow-x:auto;flex-wrap:nowrap}.section-link{white-space:nowrap}}
 .brand-block{
   display:flex;
   gap:8px;
@@ -551,6 +565,7 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
 %s
 </head>
 <body>
+<a class="skip-link" href="#main-content">%s</a>
 <div class="shell">
   <div class="topbar">
     <a class="brand-block" href="%s" aria-label="KitsuSync home">
@@ -566,9 +581,10 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
     </div>
   </div>
   <main id="main-content">
+  <div id="ui-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   %s
   </main>
 </div>
 </body>
-</html>`, lang, title, adminThemeCSS, shellHeadExtras(), homeHref, title, subHTML, navHTML, langToggleHTML(r, lang), body)
+</html>`, lang, title, adminThemeCSS, shellHeadExtras(), t(lang, "本文へ移動", "Skip to content"), homeHref, title, subHTML, navHTML, langToggleHTML(r, lang), body)
 }

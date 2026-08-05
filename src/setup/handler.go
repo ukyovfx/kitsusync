@@ -597,6 +597,10 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 
 		var projects []model.Project
 		db.Find(&projects)
+		if r.URL.Query().Get("legacy") != "1" {
+			renderIANewConnection(w, r, db)
+			return
+		}
 		kitsuProjects := ListKitsuProjects(kitsuHost)
 		setupDone := map[string]bool{}
 		for _, project := range projects {

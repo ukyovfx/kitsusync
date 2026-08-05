@@ -19,7 +19,7 @@ func TestAdminHeaderKeepsGlobalActionsInPrimaryHeader(t *testing.T) {
 	if strings.Count(body[:main], `<nav aria-label="Primary navigation">`) != 1 {
 		t.Fatal("unexpected duplicate primary navigation")
 	}
-	for _, label := range []string{"Management", "New Connection Setup", "Logout", "JP", "EN"} {
+	for _, label := range []string{"Dashboard", "Productions", "New Production Connection", "User Mapping", "Bot Connection", "System Status", "Audit Log", "JP", "EN"} {
 		if !strings.Contains(body, label) {
 			t.Fatalf("header is missing %q", label)
 		}

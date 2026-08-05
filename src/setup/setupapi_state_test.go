@@ -154,7 +154,7 @@ func TestBotHandler_EditFormShowsDurablePersistenceCopy(t *testing.T) {
 	}
 }
 
-func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
+func TestHandler_GetSetupUsesProductionAndServerSelectionFlow(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
 	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "kitsusync-bot@local.invalid")
@@ -168,14 +168,13 @@ func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
 	}
 
 	body := rr.Body.String()
-	if !strings.Contains(body, `name="guild_id"`) {
-		t.Fatalf("expected project-level guild_id field on classic setup form")
+	for _, want := range []string{"Select a Kitsu Production", "Select a Discord server", "Review channels to create or reuse", "Confirm the exact plan before execution"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected approved connection flow copy %q", want)
+		}
 	}
-	if !strings.Contains(body, "Enter the Discord Server / Guild ID used as this project's notification destination.") {
-		t.Fatalf("expected project-level guild helper copy on classic setup form")
-	}
-	if !strings.Contains(body, `name="guild_id" placeholder="123456789012345678" required`) {
-		t.Fatalf("expected project-level guild_id field to be required")
+	if strings.Contains(body, `name="guild_id"`) || strings.Contains(body, "Discord Server / Guild ID") {
+		t.Fatalf("did not expect manual Guild ID entry in the normal setup flow")
 	}
 }
 
