@@ -615,14 +615,14 @@ type globalDiscordUserOption struct {
 }
 
 func globalDiscordUserOptions(db *gorm.DB, botToken string) ([]globalDiscordUserOption, error) {
-	if strings.TrimSpace(botToken) == "" {
-		return nil, fmt.Errorf("Discord Bot is not configured")
-	}
 	projects := model.ListProjects(db)
 	for _, project := range projects {
 		if isSyntheticDiscordID(strings.TrimSpace(project.DiscordGuildID)) {
 			return nil, &discordMemberListFailure{Kind: discordMemberFailureFixture, Technical: "The connected server is synthetic fixture data and was not sent to Discord"}
 		}
+	}
+	if strings.TrimSpace(botToken) == "" {
+		return nil, fmt.Errorf("Discord Bot is not configured")
 	}
 	joined, err := ListBotGuilds(botToken)
 	if err != nil {
@@ -722,9 +722,17 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 	}
 	disabled := ""
 	message := ""
+	if len(options) == 0 {
+		disabled = " disabled"
+	}
 	if loadErr != nil {
 		disabled = " disabled"
-		message = globalDiscordMemberLoadMessage(lang, loadErr)
+		var failure *discordMemberListFailure
+		if errors.As(loadErr, &failure) && failure.Kind == discordMemberFailureFixture {
+			message = `<div class="notice notice-warning" role="status"><strong>` + esc(t(lang, "Discordユーザーを取得できませんでした", "Discord users could not be loaded")) + `</strong><p>` + esc(t(lang, "この検証用Productionでは実際のDiscordユーザーを取得できません。", "Real Discord users cannot be loaded for this test-fixture Production.")) + `</p><details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="field-help">` + esc(t(lang, "検証用のDiscordサーバーIDは実Discord APIへ送信されません。", "Synthetic fixture server IDs are never sent to the real Discord API.")) + `</p></details></div>`
+		} else {
+			message = globalDiscordMemberLoadMessage(lang, loadErr)
+		}
 	}
 	body := `<section class="section-stack"><h1>` + esc(t(lang, user.KitsuName+"の対応付けを変更", "Change link for "+user.KitsuName)) + `</h1><section class="section-card glass"><p class="hint">` + esc(t(lang, "Kitsuユーザーに、接続済みDiscordサーバーで利用できるユーザーを選択します。", "Choose a Discord user available in a connected server for this Kitsu user.")) + `</p>` + message + `<form method="POST" class="form-stack"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(user.ID) + `"><p class="field-label">` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</p><p><strong>` + esc(user.KitsuName) + `</strong></p><label for="global-discord-user">` + esc(t(lang, "Discordユーザー", "Discord user")) + `</label><select id="global-discord-user" name="discord_user_id" required>` + optionHTML.String() + `</select><div class="button-row"><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form></section></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
@@ -745,9 +753,18 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 				identity = t(lang, "Discordユーザー対応付け済み", "Discord user linked")
 			}
 		}
+		if isSyntheticDiscordID(u.DiscordID) {
+			state = t(lang, "検証用データ", "Fixture data")
+			class = "neutral"
+			identity = t(lang, "検証用データ", "Fixture data")
+		} else if strings.TrimSpace(u.DiscordID) != "" && strings.TrimSpace(u.DiscordDisplayName) == "" {
+			state = t(lang, "表示名未確認", "Display name not verified")
+			class = "warning"
+			identity = t(lang, "表示名未確認", "Display name not verified")
+		}
 		change := withLang("/bot/admin/users?edit="+fmt.Sprint(u.ID), r)
 		remove := `<form method="POST" class="inline-form delete-form" data-confirm="` + esc(t(lang, "この対応付けだけを解除します。Discord側のユーザーは変更しません。", "Remove only this identity link. The Discord user will not be changed.")) + `" data-require-text="` + esc(t(lang, "解除", "REMOVE")) + `"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(u.ID) + `"><button class="btn-danger" type="submit">` + esc(t(lang, "解除", "Remove")) + `</button></form>`
-		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `"><span aria-hidden="true">窶｢</span> ` + esc(state) + `</span></td><td><div class="inline-actions"><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a>` + remove + `</div></td></tr>`)
+		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><div class="inline-actions"><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a>` + remove + `</div></td></tr>`)
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー対応付けはありません。", "No user links yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)

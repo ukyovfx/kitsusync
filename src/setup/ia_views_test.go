@@ -57,7 +57,7 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 
 func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
 	db := newIAViewDB(t)
-	db.Create(&model.UserMap{KitsuName: "Synthetic User", DiscordID: "synthetic-discord-id"})
+	db.Create(&model.UserMap{KitsuName: "Synthetic User", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord User"})
 	r := httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil)
 	w := httptest.NewRecorder()
 	renderGlobalUserMapping(w, r, db)
@@ -67,7 +67,7 @@ func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
 			t.Fatalf("global mapping leaked production-scoped control %q", forbidden)
 		}
 	}
-	if !strings.Contains(body, "Synthetic User") || !strings.Contains(body, "Discord user linked") {
+	if !strings.Contains(body, "Synthetic User") || !strings.Contains(body, "Synthetic Discord User") {
 		t.Fatal("global user mapping did not show user-facing identities")
 	}
 }
@@ -348,7 +348,7 @@ func TestSelectedProductionOffersReviewedServerChangeEntryPoint(t *testing.T) {
 
 func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
-	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "synthetic-discord-id", DiscordDisplayName: "Synthetic Discord Reviewer"})
+	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord Reviewer"})
 	w := httptest.NewRecorder()
 	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
 	body := w.Body.String()
@@ -363,6 +363,41 @@ func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	}
 	if strings.Count(body, "<h1") != 1 {
 		t.Fatalf("global mapping should have exactly one h1, got %d", strings.Count(body, "<h1"))
+	}
+}
+
+func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "安全なDiscord表示名"})
+	w := httptest.NewRecorder()
+	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
+	body := w.Body.String()
+	for _, marker := range []string{"窶", "譁", "繧", "�", "aria-hidden=\"true\""} {
+		if strings.Contains(body, marker) {
+			t.Fatalf("Japanese Global User Linking HTML contains mojibake or decorative glyph marker %q", marker)
+		}
+	}
+	if !strings.Contains(body, "安全なDiscord表示名") || !strings.Contains(body, "接続済み") {
+		t.Fatal("Japanese Global User Linking did not render the safe display name and plain status")
+	}
+}
+
+func TestSyntheticFixtureUserLinkingIsUnavailableAndDisabled(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.Project{KitsuProjectID: "fixture-production", Name: "Fixture Production", DiscordGuildID: "qa-guild-active"})
+	user := &model.UserMap{KitsuName: "Fixture User"}
+	db.Create(user)
+	w := httptest.NewRecorder()
+	renderGlobalUserLinkForm(w, httptest.NewRequest("GET", "/bot/admin/users?edit=1&lang=ja", nil), db, user)
+	body := w.Body.String()
+	if !strings.Contains(body, "この検証用Productionでは実際のDiscordユーザーを取得できません。") {
+		t.Fatal("fixture explanation was not shown")
+	}
+	if !strings.Contains(body, "name=\"discord_user_id\"") || !strings.Contains(body, "disabled") {
+		t.Fatal("fixture linking selector or disabled Save state is missing")
+	}
+	if strings.Contains(body, "Bot接続を確認") {
+		t.Fatal("fixture state incorrectly presented a Bot permission action")
 	}
 }
 
@@ -426,7 +461,7 @@ func TestGlobalUserLinkFormUsesSafeDiscordSelection(t *testing.T) {
 			t.Fatalf("global link form exposed legacy control %q", forbidden)
 		}
 	}
-	for _, want := range []string{`name="discord_user_id"`, `id="global-discord-user"`, "Discord users could not be loaded", "Check Bot Connection"} {
+	for _, want := range []string{`name="discord_user_id"`, `id="global-discord-user"`, "Discord users could not be loaded"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("global link form missing safe selection affordance %q", want)
 		}
