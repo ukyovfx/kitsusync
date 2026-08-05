@@ -333,15 +333,15 @@ func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.
 		participants.WriteString(`<li><strong>` + esc(u.KitsuName) + `</strong><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[identity != t(lang, "未対応", "Not mapped")] + `">` + esc(identity) + `</span>` + action + `</li>`)
 	}
 	if participants.Len() == 0 {
-		participants.WriteString(`<li class="empty-state"><span class="empty-state-mark" aria-hidden="true">•</span><strong>` + esc(t(lang, "Production参加者はまだ登録されていません。", "No Production participants are registered yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsu側の参加者が登録されると、ここに表示されます。", "Participants appear here when they are registered in Kitsu.")) + `</span></li>`)
+		participants.WriteString(`<li class="empty-state"><strong>` + esc(t(lang, "Production参加者はまだ登録されていません。", "No Production participants are registered yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsu側の参加者が登録されると、ここに表示されます。", "Participants appear here when they are registered in Kitsu.")) + `</span></li>`)
 	}
 	for _, c := range model.ListProjectCheckerMaps(db, p.ID) {
 		roles.WriteString(`<li><strong>` + esc(c.TaskType) + `</strong><span>` + esc(c.KitsuName) + `</span></li>`)
 	}
 	if roles.Len() == 0 {
-		roles.WriteString(`<li class="empty-state"><span class="empty-state-mark" aria-hidden="true">•</span><strong>` + esc(t(lang, "Reviewer / Checkerの割り当てはありません。", "No Reviewer / Checker assignments yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Task TypeごとにProduction単位で設定します。", "Assign these roles per Task Type for this Production.")) + `</span></li>`)
+		roles.WriteString(`<li class="empty-state"><strong>` + esc(t(lang, "Reviewer / Checkerの割り当てはありません。", "No Reviewer / Checker assignments yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Task TypeごとにProduction単位で設定します。", "Assign these roles per Task Type for this Production.")) + `</span></li>`)
 	}
-	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.user_settings")) + `</h2><div class="settings-block"><h3>` + esc(t(lang, "Production参加者", "Production participants")) + `</h3><ul class="mapping-list">` + participants.String() + `</ul></div><div class="settings-block"><h3>` + esc(t(lang, "Reviewer / Checker", "Reviewer / Checker")) + `</h3><ul class="mapping-list">` + roles.String() + `</ul></div><p class="field-help">` + esc(t(lang, "Discordユーザーの対応付けはグローバルなユーザー対応付けで管理します。", "Discord identity correspondence is managed in global User Mapping.")) + `</p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a></section>`
+	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.user_settings")) + `</h2><div class="settings-block"><h3>` + esc(t(lang, "Production参加者", "Production participants")) + `</h3><ul class="mapping-list">` + participants.String() + `</ul></div><div class="settings-block"><h3>` + esc(t(lang, "Reviewer / Checker", "Reviewer / Checker")) + `</h3><ul class="mapping-list">` + roles.String() + `</ul></div><p class="field-help">` + esc(t(lang, "Discordユーザーの紐づけはグローバルなユーザー紐づけで管理します。", "Discord user linking is managed in global User Linking.")) + `</p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a></section>`
 }
 
 func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string) string {
@@ -358,7 +358,7 @@ func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string)
 		}
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<li class="empty-state"><span class="empty-state-mark" aria-hidden="true">•</span><strong>` + esc(t(lang, "アクティビティはありません。", "No activity yet.")) + `</strong></li>`)
+		rows.WriteString(`<li class="empty-state"><strong>` + esc(t(lang, "アクティビティはありません。", "No activity yet.")) + `</strong></li>`)
 	}
 	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.activity")) + `</h2><ul class="activity-list" role="log">` + rows.String() + `</ul></section>`
 }
@@ -570,7 +570,7 @@ func renderIAUsers(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	var rows strings.Builder
 	for _, u := range model.ListUserMap(db) {
-		identity := t(lang, "Discordユーザー（対応付け済み）", "Discord user linked")
+		identity := t(lang, "Discordユーザー（紐づけ済み）", "Discord user linked")
 		if strings.TrimSpace(u.DiscordID) == "" {
 			identity = t(lang, "未設定", "Not set")
 		}
@@ -578,9 +578,9 @@ func renderIAUsers(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><a class="btn-ghost" href="` + esc(edit) + `">` + esc(t(lang, "変更", "Change")) + `</a></td></tr>`)
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="3" class="muted">` + esc(t(lang, "ユーザー対応付けはありません。", "No user mappings yet.")) + `</td></tr>`)
+		rows.WriteString(`<tr><td colspan="3" class="muted">` + esc(t(lang, "ユーザー紐づけはありません。", "No user links yet.")) + `</td></tr>`)
 	}
-	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーの対応付けだけを管理します。Reviewer / CheckerはProductionのユーザー設定で管理します。", "Manage only Kitsu user to Discord user correspondence. Reviewer / Checker belongs in the selected Production's user settings.")) + `</p><table><thead><tr><th>Kitsu` + esc(t(lang, "ユーザー", " user")) + `</th><th>Discord` + esc(t(lang, "ユーザー", " user")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></section>`
+	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。Reviewer / CheckerはProductionのユーザー設定で管理します。", "Link Kitsu users to Discord users. Reviewer / Checker belongs in the selected Production's user settings.")) + `</p><table><thead><tr><th>Kitsu` + esc(t(lang, "ユーザー", " user")) + `</th><th>Discord` + esc(t(lang, "ユーザー", " user")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
@@ -596,16 +596,16 @@ func renderGlobalUserMappingLegacy(w http.ResponseWriter, r *http.Request, db *g
 			class = "success"
 			identity = strings.TrimSpace(u.DiscordDisplayName)
 			if identity == "" {
-				identity = t(lang, "Discordユーザー対応付け済み", "Discord user mapped")
+				identity = t(lang, "Discordユーザー紐づけ済み", "Discord user linked")
 			}
 		}
 		change := withLang("/bot/admin/users?legacy=1&edit="+fmt.Sprint(u.ID), r)
 		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a></td></tr>`)
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="4" class="muted">` + esc(t(lang, "ユーザー対応付けはありません。", "No user mappings yet.")) + `</td></tr>`)
+		rows.WriteString(`<tr><td colspan="4" class="muted">` + esc(t(lang, "ユーザー紐づけはありません。", "No user links yet.")) + `</td></tr>`)
 	}
-	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーの対応付けだけを管理します。Reviewer / Checkerは選択中のProductionで管理します。", "Manage only Kitsu user to Discord user correspondence. Reviewer / Checker is managed inside the selected Production.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。", "Link Kitsu users to Discord users.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
@@ -724,6 +724,7 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 	message := ""
 	if len(options) == 0 {
 		disabled = " disabled"
+		message = `<p class="field-help" role="status">` + esc(t(lang, "Discordユーザーを選択すると保存できます。", "Select a Discord user to enable saving.")) + `</p>`
 	}
 	if loadErr != nil {
 		disabled = " disabled"
@@ -735,6 +736,9 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 		}
 	}
 	body := `<section class="section-stack"><h1>` + esc(t(lang, user.KitsuName+"の対応付けを変更", "Change link for "+user.KitsuName)) + `</h1><section class="section-card glass"><p class="hint">` + esc(t(lang, "Kitsuユーザーに、接続済みDiscordサーバーで利用できるユーザーを選択します。", "Choose a Discord user available in a connected server for this Kitsu user.")) + `</p>` + message + `<form method="POST" class="form-stack"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(user.ID) + `"><p class="field-label">` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</p><p><strong>` + esc(user.KitsuName) + `</strong></p><label for="global-discord-user">` + esc(t(lang, "Discordユーザー", "Discord user")) + `</label><select id="global-discord-user" name="discord_user_id" required>` + optionHTML.String() + `</select><div class="button-row"><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form></section></section>`
+	if len(options) == 0 {
+		body = strings.Replace(body, `</select><div class="button-row">`, `</select><p class="field-help" role="status">`+esc(t(lang, "Discordユーザーを選択すると保存できます。", "Select a Discord user to enable saving."))+`</p><div class="button-row">`, 1)
+	}
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
@@ -750,26 +754,46 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 			class = "success"
 			identity = strings.TrimSpace(u.DiscordDisplayName)
 			if identity == "" {
-				identity = t(lang, "Discordユーザー対応付け済み", "Discord user linked")
+				identity = t(lang, "Discordユーザー紐づけ済み", "Discord user linked")
 			}
 		}
 		if isSyntheticDiscordID(u.DiscordID) {
 			state = t(lang, "検証用データ", "Fixture data")
 			class = "neutral"
-			identity = t(lang, "検証用データ", "Fixture data")
+			identity = t(lang, "—", "—")
 		} else if strings.TrimSpace(u.DiscordID) != "" && strings.TrimSpace(u.DiscordDisplayName) == "" {
 			state = t(lang, "表示名未確認", "Display name not verified")
 			class = "warning"
 			identity = t(lang, "表示名未確認", "Display name not verified")
 		}
+		if strings.TrimSpace(u.DiscordID) == "" {
+			state = t(lang, "未設定", "Not set")
+			class = "blocked"
+			identity = t(lang, "未設定", "Not set")
+		} else if isSyntheticDiscordID(u.DiscordID) {
+			state = t(lang, "検証用データ", "Fixture data")
+			class = "neutral"
+			identity = t(lang, "検証用データ", "Fixture data")
+		} else if strings.TrimSpace(u.DiscordDisplayName) == "" {
+			state = t(lang, "確認が必要", "Needs verification")
+			class = "warning"
+			identity = t(lang, "表示名未確認", "Display name not verified")
+		} else {
+			state = t(lang, "紐づけ済み", "Linked")
+			class = "success"
+			identity = strings.TrimSpace(u.DiscordDisplayName)
+		}
+		if isSyntheticDiscordID(u.DiscordID) {
+			identity = t(lang, "—", "—")
+		}
 		change := withLang("/bot/admin/users?edit="+fmt.Sprint(u.ID), r)
-		remove := `<form method="POST" class="inline-form delete-form" data-confirm="` + esc(t(lang, "この対応付けだけを解除します。Discord側のユーザーは変更しません。", "Remove only this identity link. The Discord user will not be changed.")) + `" data-require-text="` + esc(t(lang, "解除", "REMOVE")) + `"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(u.ID) + `"><button class="btn-danger" type="submit">` + esc(t(lang, "解除", "Remove")) + `</button></form>`
+		remove := `<form method="POST" class="inline-form delete-form" data-confirm="` + esc(t(lang, "この紐づけだけを解除します。Discord側のユーザーは変更しません。", "Remove only this identity link. The Discord user will not be changed.")) + `" data-require-text="` + esc(t(lang, "解除", "REMOVE")) + `"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(u.ID) + `"><button class="btn-danger" type="submit">` + esc(t(lang, "解除", "Remove")) + `</button></form>`
 		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><div class="inline-actions"><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a>` + remove + `</div></td></tr>`)
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー対応付けはありません。", "No user links yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
+		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません。", "No user links yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
 	}
-	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーの本人対応付けだけを管理します。Reviewer / Checkerは選択したProductionのユーザー設定で管理します。", "Manage Kitsu user to Discord user identity links only. Reviewer / Checker is managed in the selected Production's User Settings.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。", "Link Kitsu users to Discord users.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 

@@ -75,7 +75,7 @@ func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
 func TestPrimaryNavigationAndNewConnectionFlow(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
 	body := adminPage("en", "Dashboard", r, "")
-	for _, want := range []string{"Dashboard", "Productions", "New Production Connection", "User Mapping", "Bot Connection", "System Status", "Audit Log"} {
+	for _, want := range []string{"Dashboard", "Productions", "New Production Connection", "User Linking", "Bot Connection", "System Status", "Audit Log"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("primary navigation missing %q", want)
 		}
@@ -377,7 +377,7 @@ func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testin
 			t.Fatalf("Japanese Global User Linking HTML contains mojibake or decorative glyph marker %q", marker)
 		}
 	}
-	if !strings.Contains(body, "安全なDiscord表示名") || !strings.Contains(body, "接続済み") {
+	if !strings.Contains(body, "安全なDiscord表示名") || !strings.Contains(body, "紐づけ済み") {
 		t.Fatal("Japanese Global User Linking did not render the safe display name and plain status")
 	}
 }
@@ -475,7 +475,7 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production"}
 	db.Create(&p)
-	db.Create(&model.UserMap{KitsuName: "Synthetic Participant", DiscordID: "synthetic-discord-id", DiscordDisplayName: "Synthetic Discord Name"})
+	db.Create(&model.UserMap{KitsuName: "Synthetic Participant", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord Name"})
 	db.Create(&model.ProjectUserMap{ProjectID: p.ID, KitsuName: "Synthetic Participant"})
 	body := renderSelectedProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
 	if !strings.Contains(body, "Synthetic Discord Name") {
@@ -501,5 +501,51 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	renderIABot(w, r, db)
 	if !strings.Contains(w.Body.String(), "Action required") || !strings.Contains(w.Body.String(), "View channels") {
 		t.Fatal("Bot Connection does not expose state and permission list")
+	}
+}
+
+func TestGlobalUserLinkingUsesApprovedJapaneseTerm(t *testing.T) {
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
+	body := w.Body.String()
+	if !strings.Contains(body, "\u30e6\u30fc\u30b6\u30fc\u7d10\u3065\u3051") {
+		t.Fatal("global user linking did not use the approved Japanese term")
+	}
+	if strings.Contains(body, "\u30e6\u30fc\u30b6\u30fc\u5bfe\u5fdc\u4ed8\u3051") {
+		t.Fatal("legacy Japanese user-management term remains in normal UI")
+	}
+	if !strings.Contains(body, "Kitsu\u30e6\u30fc\u30b6\u30fc\u3068Discord\u30e6\u30fc\u30b6\u30fc\u3092\u7d10\u3065\u3051\u307e\u3059\u3002") {
+		t.Fatal("global user linking description is missing")
+	}
+}
+
+func TestFixtureUserLinkingDoesNotDuplicateStatusText(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.UserMap{KitsuName: "Fixture User", DiscordID: "synthetic-discord-id", DiscordDisplayName: "Fixture Discord User"})
+	w := httptest.NewRecorder()
+	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
+	body := w.Body.String()
+	start := strings.LastIndex(body, "Fixture User")
+	end := strings.Index(body[start:], "</tr>")
+	if start < 0 || end < 0 {
+		t.Fatal("fixture user row is missing")
+	}
+	row := body[start : start+end]
+	if !strings.Contains(row, "Fixture data") && !strings.Contains(row, "\u691c\u8a3c\u7528\u30c7\u30fc\u30bf") {
+		t.Fatal("fixture status is missing")
+	}
+	if strings.Contains(row, "Fixture Discord User") || strings.Contains(row, "synthetic-discord-id") {
+		t.Fatal("fixture row claims a real Discord identity or exposes its raw ID")
+	}
+}
+
+func TestProductionUserSettingsEmptyStatesHaveNoDecorativeBullets(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "empty-user-settings", Name: "Empty User Settings"}
+	db.Create(&p)
+	body := renderSelectedProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
+	if strings.Contains(body, "empty-state-mark") || strings.Contains(body, "aria-hidden=\"true\"") || strings.Contains(body, "•") {
+		t.Fatal("Production User Settings empty state contains a decorative bullet")
 	}
 }
