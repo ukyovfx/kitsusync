@@ -29,6 +29,37 @@ func iaNav(lang string, r *http.Request) string {
 	return b.String()
 }
 
+// statusSummaryRow is the shared normal-user status presentation. The action
+// is supplied as already-rendered HTML so links remain escaped at the call
+// site and never become part of the badge itself.
+func statusSummaryRow(label, class, value, explanation, actionHTML string) string {
+	if class == "bad" {
+		class = "danger"
+	}
+	if class == "warn" {
+		class = "warning"
+	}
+	if class == "ok" {
+		class = "success"
+	}
+	icon := map[string]string{"success": "✓", "warning": "!", "danger": "×", "blocked": "!", "neutral": "•"}[class]
+	if icon == "" {
+		icon = "•"
+	}
+	action := ""
+	if strings.TrimSpace(actionHTML) != "" {
+		action = `<div class="status-row-action">` + actionHTML + `</div>`
+	}
+	return `<div class="status-row"><dt class="status-row-label">` + esc(label) + `</dt><dd class="status-row-value"><span class="status-badge status-badge-` + esc(class) + `" role="status"><span aria-hidden="true">` + icon + `</span> ` + esc(value) + `</span>` + ifNonEmpty(explanation, `<span class="status-row-explanation">`+esc(explanation)+`</span>`) + `</dd>` + action + `</div>`
+}
+
+func ifNonEmpty(value, wrapped string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return wrapped
+}
+
 func iaStatus(db *gorm.DB, project model.Project, lang string) (string, string, string) {
 	cfg := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
 	if cfg == nil {
@@ -63,8 +94,8 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	projects := model.ListProjects(db)
 	var attentionRows, pausedRows strings.Builder
 	for _, p := range projects {
-		class, label, hint := iaStatus(db, p, lang)
-		row := fmt.Sprintf(`<li><a href="%s"><strong>%s</strong></a><span class="status-pill %s">%s</span><span class="field-help">%s</span></li>`, esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(p.Name), class, esc(label), esc(hint))
+		class, _, hint := iaStatus(db, p, lang)
+		row := `<li><a href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)) + `"><strong>` + esc(p.Name) + `</strong></a><dl class="status-list">` + statusSummaryRow(t(lang, "現在の状態", "Current state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + `</dl></li>`
 		if class == "bad" {
 			attentionRows.WriteString(row)
 		}
@@ -84,6 +115,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		`<section class="section-card glass" aria-labelledby="dashboard-attention"><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なProduction", "Productions needing attention")) + `</h2><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
 		`<section class="section-card glass" aria-labelledby="dashboard-paused"><h2 id="dashboard-paused">` + esc(t(lang, "通知停止中のProduction", "Productions with notifications paused")) + `</h2><ul class="list-tight">` + pausedRows.String() + `</ul></section>` +
 		`<section class="section-card glass" aria-labelledby="dashboard-next"><h2 id="dashboard-next">` + esc(t(lang, "次に必要な操作", "Next required actions")) + `</h2><p class="hint" role="status">` + esc(readinessHint) + `</p><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(tr(lang, "ia.production_list")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></section></div>`
+	body += `<section class="section-card glass" aria-labelledby="dashboard-status-summary"><h2 id="dashboard-status-summary">` + esc(t(lang, "全体の状態", "Overall status summary")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "全体の接続状態", "Overall connection status"), normalizeStatusClass(readinessClass), cleanStatusLabel(lang, readinessClass), readinessHint, "") + `</dl></section>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.dashboard"), r, body))
 }
 
@@ -170,17 +202,25 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 		`<section id="storage-settings" class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p><form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><button class="btn" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></form></section>` +
 		`<section id="activity" class="section-card glass"><h2>` + esc(tr(lang, "ia.activity")) + `</h2><ul class="list-tight" role="log">` + activity.String() + `</ul></section>` +
 		`<section id="troubleshooting" class="section-card glass"><h2>` + esc(tr(lang, "ia.troubleshooting")) + `</h2><ul class="list-tight" role="status">` + diagnoses.String() + `</ul></section>` + advanced + `<div id="danger-zone">` + danger + `</div></div>`
+	troubleshootingClass := "success"
+	troubleshootingValue := t(lang, "問題なし", "No current problems")
+	if diagnoses.Len() > 0 && !strings.Contains(diagnoses.String(), "No current problems") && !strings.Contains(diagnoses.String(), "現在の問題はありません") {
+		troubleshootingClass = "warning"
+		troubleshootingValue = t(lang, "確認が必要", "Needs review")
+	}
+	body += `<section class="section-card glass" aria-labelledby="production-status-summary"><h2 id="production-status-summary">` + esc(t(lang, "状態の概要", "Status summary")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "Productionの状態", "Production state"), normalizeStatusClass(class), label, hint, "") + statusSummaryRow(t(lang, "Discordサーバー", "Discord server"), map[bool]string{true: "success", false: "blocked"}[strings.TrimSpace(p.DiscordGuildID) != ""], serverName, "", "") + statusSummaryRow(t(lang, "通知状態", "Notification state"), normalizeStatusClass(class), label, hint, "") + statusSummaryRow(t(lang, "トラブルシューティング", "Troubleshooting"), troubleshootingClass, troubleshootingValue, "", "") + `</dl></section>`
+	body += `<section class="section-card glass" aria-labelledby="production-status-summary"><h2 id="production-status-summary">` + esc(t(lang, "状態の概要", "Status summary")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "Productionの状態", "Production state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + statusSummaryRow(t(lang, "Discordサーバー", "Discord server"), map[bool]string{true: "success", false: "blocked"}[strings.TrimSpace(p.DiscordGuildID) != ""], serverName, "", "") + statusSummaryRow(t(lang, "通知状態", "Notification state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + `</dl></section>`
 	fmt.Fprint(w, adminPage(lang, p.Name, r, body))
 }
 
-func renderIABot(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+func renderIABotLegacy(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	class, state, hint := iaReadiness(db, lang)
 	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h2>` + esc(tr(lang, "ia.bot_connection")) + `</h2><p class="hint">` + esc(hint) + `</p></div><span class="status-pill ` + class + `">` + esc(state) + `</span></div><dl class="status-list"><dt>` + esc(t(lang, "Bot状態", "Bot state")) + `</dt><dd>` + esc(state) + `</dd></dl><h3>` + esc(t(lang, "必要な権限", "Required permissions")) + `</h3><ul class="list-tight permission-list"><li>` + esc(t(lang, "チャンネルを表示", "View channels")) + `</li><li>` + esc(t(lang, "メッセージを送信", "Send messages")) + `</li><li>` + esc(t(lang, "チャンネルを管理（接続設定時のみ）", "Manage channels (only during connection setup)")) + `</li></ul><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(t(lang, "Bot接続を設定", "Connect or reconnect")) + `</a></div></section><section class="section-card glass"><h2>` + esc(t(lang, "接続済みDiscordサーバー", "Joined Discord servers")) + `</h2><p class="hint">` + esc(t(lang, "Bot接続後に確認できます。", "Available after the bot is connected.")) + `</p></section></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.bot_connection"), r, body))
 }
 
-func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+func renderIAHealthLegacy(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
 	status := func(ok bool) string {
@@ -192,6 +232,81 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	_, notificationState, notificationHint := iaReadiness(db, lang)
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(tr(lang, "ia.system_status")) + `</h2><div class="status-list"><dl><dt>Kitsu` + esc(t(lang, "接続", " connection")) + `</dt><dd>` + esc(status(readiness.KitsuConfigured)) + `</dd><dt>Discord` + esc(t(lang, "接続", " connection")) + `</dt><dd>` + esc(status(readiness.DiscordConfigured)) + `</dd><dt>` + esc(t(lang, "Bot状態", "Bot state")) + `</dt><dd>` + esc(status(readiness.DiscordConfigured)) + `</dd><dt>` + esc(t(lang, "通知状態", "Notification state")) + `</dt><dd>` + esc(notificationState) + `</dd></dl></div><p class="state-explanation" role="status">` + esc(notificationHint) + `</p><p class="hint">` + esc(t(lang, "全体の問題", "Overall problem")) + `: ` + esc(notificationHint) + `</p><p class="hint">` + esc(t(lang, "次に必要な操作", "Next required action")) + `: ` + esc(notificationHint) + `</p><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(tr(lang, "ia.productions")) + `</a></div></section><details class="advanced-details"><summary>` + esc(tr(lang, "ia.advanced")) + `</summary><p class="hint">` + esc(t(lang, "技術的な診断情報はここに限定します。", "Technical diagnostic information is limited to this disclosure.")) + `</p></details></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
+}
+
+func renderIABot(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	lang := currentLang(r)
+	class, _, hint := iaReadiness(db, lang)
+	permissionAction := `<a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(t(lang, "Bot接続を設定", "Connect or reconnect")) + `</a>`
+	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h2>` + esc(tr(lang, "ia.bot_connection")) + `</h2><p class="hint">` + esc(hint) + `</p></div></div><dl class="status-list">` +
+		statusSummaryRow(t(lang, "Bot状態", "Bot state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, permissionAction) +
+		statusSummaryRow(t(lang, "必要な権限", "Required permissions"), "neutral", t(lang, "接続設定時に必要", "Required during connection setup"), t(lang, "チャンネル表示、メッセージ送信、接続設定時のチャンネル管理", "View channels, send messages, and manage channels during setup"), "") +
+		statusSummaryRow(t(lang, "接続済みサーバー", "Joined servers"), "neutral", t(lang, "Bot接続後に確認できます", "Available after Bot Connection"), "", "") + `</dl></section></div>`
+	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.bot_connection"), r, body))
+}
+
+func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	lang := currentLang(r)
+	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
+	_, notificationState, notificationHint := iaReadiness(db, lang)
+	action := `<a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a>`
+	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(tr(lang, "ia.system_status")) + `</h2><dl class="status-list">` +
+		statusSummaryRow("Kitsu"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured), "", "") +
+		statusSummaryRow("Discord"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
+		statusSummaryRow(t(lang, "Bot状態", "Bot state"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
+		statusSummaryRow(t(lang, "通知状態", "Notification state"), notificationClass(notificationState, readiness.OverallReady, lang), notificationState, notificationHint, "") +
+		statusSummaryRow(t(lang, "全体の問題", "Overall problem"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady), notificationHint, action) + `</dl><p class="hint" role="status" aria-live="polite">` + esc(t(lang, "次に必要な操作", "Next required action")) + `: ` + esc(notificationHint) + `</p></section></div>`
+	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
+}
+
+func normalizeStatusClass(class string) string {
+	switch class {
+	case "ok":
+		return "success"
+	case "warn":
+		return "warning"
+	case "bad":
+		return "blocked"
+	case "success", "warning", "danger", "blocked", "neutral":
+		return class
+	default:
+		return "neutral"
+	}
+}
+
+func cleanStatusLabel(lang, class string) string {
+	switch normalizeStatusClass(class) {
+	case "success":
+		return tr(lang, "wizard.connected")
+	case "warning":
+		return tr(lang, "status.needs_review")
+	case "danger":
+		return tr(lang, "status.needs_review")
+	default:
+		return tr(lang, "status.action_required")
+	}
+}
+
+func statusText(lang string, ok bool) string {
+	if ok {
+		return tr(lang, "wizard.connected")
+	}
+	return tr(lang, "wizard.not_configured")
+}
+func statusTextOverall(lang string, ok bool) string {
+	if ok {
+		return tr(lang, "wizard.available")
+	}
+	return tr(lang, "wizard.unavailable")
+}
+func notificationClass(state string, ready bool, lang string) string {
+	if strings.Contains(strings.ToLower(state), "pause") || state == t(lang, "一時停止中", "Paused") {
+		return "warning"
+	}
+	if ready {
+		return "success"
+	}
+	return "blocked"
 }
 
 func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -341,6 +456,9 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 		if n == step {
 			state = "active"
 		}
+		if n > step && step == 1 {
+			state = "blocked"
+		}
 		aria := ""
 		if n == step {
 			aria = ` aria-current="step"`
@@ -375,7 +493,20 @@ func renderWizardPrerequisites(lang string, r *http.Request, readiness SharedBot
 		}
 		return tr(lang, "wizard.not_configured")
 	}
-	body := `<section class="section-card glass" aria-labelledby="wizard-prerequisites-title"><h2 id="wizard-prerequisites-title">` + esc(tr(lang, "wizard.prerequisites_title")) + `</h2><div class="status-list"><dl><dt>Kitsu</dt><dd>` + esc(status(readiness.KitsuConfigured)) + `</dd><dt>Discord Bot</dt><dd>` + esc(status(readiness.DiscordConfigured)) + `</dd><dt>` + esc(tr(lang, "wizard.notification_state")) + `</dt><dd>` + esc(status(readiness.OverallReady)) + `</dd></dl></div>`
+	botExplanation := ""
+	if !readiness.DiscordConfigured {
+		botExplanation = tr(lang, "wizard.bot_required_explanation")
+	}
+	notificationValue := tr(lang, "wizard.unavailable")
+	notificationExplanation := tr(lang, "wizard.unavailable_explanation")
+	if readiness.OverallReady {
+		notificationValue = tr(lang, "wizard.available")
+		notificationExplanation = ""
+	}
+	body := `<section class="section-card glass" aria-labelledby="wizard-prerequisites-title"><h2 id="wizard-prerequisites-title">` + esc(tr(lang, "wizard.prerequisites_title")) + `</h2><dl class="status-list">` +
+		statusSummaryRow("Kitsu"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "blocked"}[readiness.KitsuConfigured], status(readiness.KitsuConfigured), "", "") +
+		statusSummaryRow("Discord Bot", map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], status(readiness.DiscordConfigured), botExplanation, "") +
+		statusSummaryRow(tr(lang, "wizard.notification_state"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], notificationValue, notificationExplanation, "") + `</dl>`
 	if !readiness.OverallReady {
 		body += `<p class="state-explanation" role="status" aria-live="polite">` + esc(tr(lang, "wizard.blocked_bot")) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "wizard.open_bot")) + `</a>`
 	} else {

@@ -95,6 +95,18 @@ func TestNewConnectionWizardUsesSharedJapaneseCatalog(t *testing.T) {
 	}
 }
 
+func TestSharedStatusSummaryRowHasSemanticStructureAndVariants(t *testing.T) {
+	body := statusSummaryRow("Discord Bot", "blocked", "Not configured", "Bot Connection is required.", `<a class="btn">Set up</a>`)
+	for _, want := range []string{`class="status-row"`, `class="status-row-label"`, `class="status-badge status-badge-blocked"`, `aria-hidden="true"`, `class="status-row-explanation"`, `class="status-row-action"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("shared status row missing %q", want)
+		}
+	}
+	if strings.Contains(body, `status-pill`) {
+		t.Fatal("shared status row fell back to the legacy indistinguishable pill")
+	}
+}
+
 func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.Project{KitsuProjectID: "p", Name: "P", DiscordGuildID: "g", DiscordCategoryID: "c"})
@@ -152,7 +164,7 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	renderIAHealth(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Disconnected", "Bot state", "Notification state", "Overall problem", "Next required action"} {
+	for _, want := range []string{"Not configured", "Bot state", "Notification state", "Overall problem", "Next required action"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("system status missing %q", want)
 		}
