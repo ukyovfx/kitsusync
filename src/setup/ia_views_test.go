@@ -66,7 +66,7 @@ func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
 			t.Fatalf("global mapping leaked production-scoped control %q", forbidden)
 		}
 	}
-	if !strings.Contains(body, "Synthetic User") || !strings.Contains(body, "Discord user mapped") {
+	if !strings.Contains(body, "Synthetic User") || !strings.Contains(body, "Discord user linked") {
 		t.Fatal("global user mapping did not show user-facing identities")
 	}
 }
@@ -277,7 +277,7 @@ func TestDashboardProblemActionTargetsDirectDestination(t *testing.T) {
 		t.Fatalf("notification issue did not target notification settings: %q %q", notificationURL, notificationLabel)
 	}
 	userURL, userLabel := dashboardProblemAction(r, p, "en", "Reviewer participant is not mapped")
-	if !strings.Contains(userURL, "tab=user-settings") || userLabel != "Review user settings" {
+	if !strings.Contains(userURL, "tab=users") || userLabel != "Review user settings" {
 		t.Fatalf("participant issue did not target user settings: %q %q", userURL, userLabel)
 	}
 }
@@ -356,6 +356,43 @@ func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	}
 	if strings.Contains(body, "synthetic-discord-id") {
 		t.Fatal("global mapping leaked the raw Discord identifier")
+	}
+}
+
+func TestGlobalUserLinkFormUsesSafeDiscordSelection(t *testing.T) {
+	db := newIAViewDB(t)
+	user := &model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "synthetic-discord-id", DiscordDisplayName: "Synthetic Discord Reviewer"}
+	db.Create(user)
+	w := httptest.NewRecorder()
+	renderGlobalUserLinkForm(w, httptest.NewRequest("GET", "/bot/admin/users?edit=1&lang=en", nil), db, user)
+	body := w.Body.String()
+	for _, forbidden := range []string{`name="discord_id"`, `name="discord_display_name"`, "Production selector", "Reviewer / Checker task types"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("global link form exposed legacy control %q", forbidden)
+		}
+	}
+	for _, want := range []string{`name="discord_user_id"`, `id="global-discord-user"`, "Discord users could not be loaded", "Open Bot Connection"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("global link form missing safe selection affordance %q", want)
+		}
+	}
+	if strings.Contains(body, "synthetic-discord-id") {
+		t.Fatal("global link form leaked the raw Discord identifier")
+	}
+}
+
+func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production"}
+	db.Create(&p)
+	db.Create(&model.UserMap{KitsuName: "Synthetic Participant", DiscordID: "synthetic-discord-id", DiscordDisplayName: "Synthetic Discord Name"})
+	db.Create(&model.ProjectUserMap{ProjectID: p.ID, KitsuName: "Synthetic Participant"})
+	body := renderSelectedProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
+	if !strings.Contains(body, "Synthetic Discord Name") {
+		t.Fatal("Production User Settings did not show the linked Discord display name")
+	}
+	if strings.Contains(body, "synthetic-discord-id") {
+		t.Fatal("Production User Settings leaked the raw Discord identifier")
 	}
 }
 

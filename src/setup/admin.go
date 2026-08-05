@@ -2242,17 +2242,46 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		if r.URL.Query().Get("legacy") == "1" {
 			if projectID := strings.TrimSpace(r.URL.Query().Get("project")); projectID != "" {
 				if model.FindProjectByKitsuID(db, projectID) != nil {
-					target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=user-settings", r)
+					target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=users", r)
 					http.Redirect(w, r, target, http.StatusSeeOther)
 					return
 				}
 			}
-			if r.URL.Query().Get("edit") == "" {
-				http.Redirect(w, r, withLang("/bot/admin/projects?msg=production-required", r), http.StatusSeeOther)
-				return
-			}
+			http.Redirect(w, r, withLang("/bot/admin/users?msg=legacy-user-settings", r), http.StatusSeeOther)
+			return
 		}
-		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
+		if r.URL.Query().Get("legacy") != "1" && strings.TrimSpace(r.URL.Query().Get("project")) == "" && r.Method == http.MethodPost {
+			id := parseUint(r.FormValue("user_id"))
+			if id > 0 {
+				if r.FormValue("action") == "remove_global_link" {
+					if user := model.FindUserMapByID(db, id); user != nil {
+						model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, "")
+						model.UpdateUserMapDisplayName(db, id, "")
+					}
+				} else if r.FormValue("action") == "save_global_link" {
+					if user := model.FindUserMapByID(db, id); user != nil {
+						selectedID := strings.TrimSpace(r.FormValue("discord_user_id"))
+						options, err := globalDiscordUserOptions(db, storedRuntimeDiscordBotToken(db))
+						for _, option := range options {
+							if err == nil && option.ID == selectedID {
+								model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, option.ID)
+								model.UpdateUserMapDisplayName(db, id, option.Name)
+								break
+							}
+						}
+					}
+				}
+			}
+			http.Redirect(w, r, withLang("/bot/admin/users?msg=saved", r), http.StatusSeeOther)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("project") == "" {
+			if id := parseUint(r.URL.Query().Get("edit")); id > 0 {
+				if user := model.FindUserMapByID(db, id); user != nil {
+					renderGlobalUserLinkForm(w, r, db, user)
+					return
+				}
+			}
 			renderGlobalUserMapping(w, r, db)
 			return
 		}

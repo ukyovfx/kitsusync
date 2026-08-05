@@ -631,6 +631,16 @@ type DiscordGuild struct {
 	Name string `json:"name"`
 }
 
+type DiscordGuildMember struct {
+	User struct {
+		ID          string `json:"id"`
+		Username    string `json:"username"`
+		GlobalName  string `json:"global_name"`
+		DisplayName string `json:"display_name"`
+	} `json:"user"`
+	Nick string `json:"nick"`
+}
+
 func ListBotGuilds(botToken string) ([]DiscordGuild, error) {
 	body, status, err := botDo(http.MethodGet, discordAPI+"/users/@me/guilds", nil, botToken)
 	if err != nil {
@@ -659,6 +669,21 @@ func ListGuildChannels(guildID, botToken string) ([]DiscordGuildChannel, error) 
 		return nil, fmt.Errorf("discord guild channel list response was invalid")
 	}
 	return channels, nil
+}
+
+func ListGuildMembers(guildID, botToken string) ([]DiscordGuildMember, error) {
+	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/members?limit=1000", discordAPI, strings.TrimSpace(guildID)), nil, botToken)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, discordBotAPIError("discord guild member list failed", status, body)
+	}
+	var members []DiscordGuildMember
+	if err := json.Unmarshal(body, &members); err != nil {
+		return nil, fmt.Errorf("discord guild member list response was invalid")
+	}
+	return members, nil
 }
 
 func CreateWebhook(channelID, name, botToken string) (string, error) {
