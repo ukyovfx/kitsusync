@@ -18,16 +18,20 @@ func ProductionRoutingHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		lang := currentLang(r)
 		message := ""
+		selectedID := strings.TrimSpace(r.URL.Query().Get("project"))
+		if selectedID == "" {
+			selectedID = strings.TrimSpace(r.FormValue("production_id"))
+		}
+		if r.Method == http.MethodPost && model.IsValidationOnlyProject(db, selectedID) {
+			http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
+			return
+		}
 		if r.Method == http.MethodPost {
 			if r.FormValue("action") == "dry_run" {
 				message = localizeDryRunMessage(dryRunProductionRoutingAction(db, r, lang), lang)
 			} else {
 				message = saveProductionRoutingAction(db, r, lang)
 			}
-		}
-		selectedID := strings.TrimSpace(r.URL.Query().Get("project"))
-		if selectedID == "" {
-			selectedID = strings.TrimSpace(r.FormValue("production_id"))
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprint(w, adminPage(lang, tr(lang, "production_routing.title"), r, renderProductionRouting(db, r, selectedID, message)))

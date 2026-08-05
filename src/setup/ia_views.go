@@ -31,6 +31,15 @@ func iaNav(lang string, r *http.Request) string {
 	return b.String()
 }
 
+func hasValidationOnlyProject(db *gorm.DB) bool {
+	for _, project := range model.ListProjects(db) {
+		if project.ValidationOnly {
+			return true
+		}
+	}
+	return false
+}
+
 // statusSummaryRow is the shared normal-user status presentation. The action
 // is supplied as already-rendered HTML so links remain escaped at the call
 // site and never become part of the badge itself.
@@ -63,6 +72,9 @@ func ifNonEmpty(value, wrapped string) string {
 }
 
 func iaStatus(db *gorm.DB, project model.Project, lang string) (string, string, string) {
+	if project.ValidationOnly {
+		return "warning", t(lang, "検証専用", "Validation only"), t(lang, "実データの表示確認用です。Discordサーバーは未接続で、通知は利用できません。", "Read-only Kitsu data for validation. No Discord server is connected and notifications are unavailable.")
+	}
 	cfg := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
 	if cfg == nil {
 		return "bad", t(lang, "未設定", "Incomplete"), t(lang, "通知先が設定されていません。通知先を1つ以上設定してください。", "No notification route is configured. Add at least one valid destination.")
@@ -266,17 +278,27 @@ func selectedProductionTab(raw string) string {
 func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string) string {
 	switch tab {
 	case "notifications":
+		if p.ValidationOnly {
+			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "通知状態", "Notification state"), "blocked", t(lang, "利用できません", "Unavailable"), t(lang, "検証専用ProductionではDiscordサーバーが未接続のため、通知は利用できません。", "Notifications are unavailable because this validation-only Production has no Discord server connected."), "") + `</dl><p class="field-help" role="status">` + esc(t(lang, "この表示確認ではDiscordメッセージを送信しません。", "This validation view never sends a Discord message.")) + `</p><h3>` + esc(t(lang, "Task Type", "Task Types")) + `</h3><ul class="mapping-list">` + renderValidationTaskTypes(p, lang) + `</ul></section>`
+		}
 		return renderSelectedProductionNotifications(db, r, p, lang, class, label, hint)
 	case "users", "user-settings":
 		return renderSelectedProductionUserSettings(db, r, p, lang)
 	case "storage-settings":
+		if p.ValidationOnly {
+			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionではストレージ設定を変更できません。", "Storage settings are read-only for validation-only Productions.")) + `</p></section>`
+		}
 		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p><form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></div></form></section>`
 	case "activity":
 		return renderSelectedProductionActivity(db, p, lang)
 	case "troubleshooting":
 		return renderSelectedProductionTroubleshooting(db, p, lang)
 	case "advanced":
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.advanced")) + `</h2><dl class="detail-list"><dt>Production ID</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>Discord server ID</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>Category ID</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
+		validation := ""
+		if p.ValidationOnly {
+			validation = `<dt>` + esc(t(lang, "検証モード", "Validation mode")) + `</dt><dd>` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</dd>`
+		}
+		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.advanced")) + `</h2><dl class="detail-list">` + validation + `<dt>Production ID</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>Discord server ID</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>Category ID</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
 	case "danger-zone":
 		return renderSelectedProductionDanger(r, p, lang)
 	default:
@@ -332,6 +354,11 @@ func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.
 		}
 		participants.WriteString(`<li><strong>` + esc(u.KitsuName) + `</strong><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[identity != t(lang, "未対応", "Not mapped")] + `">` + esc(identity) + `</span>` + action + `</li>`)
 	}
+	if p.ValidationOnly && participants.Len() == 0 {
+		for _, person := range p.ValidationData().Participants {
+			participants.WriteString(`<li><strong>` + esc(person.FullName) + `</strong><span class="status-pill warn">` + esc(t(lang, "未設定", "Not linked")) + `</span></li>`)
+		}
+	}
 	if participants.Len() == 0 {
 		participants.WriteString(`<li class="empty-state"><strong>` + esc(t(lang, "Production参加者はまだ登録されていません。", "No Production participants are registered yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsu側の参加者が登録されると、ここに表示されます。", "Participants appear here when they are registered in Kitsu.")) + `</span></li>`)
 	}
@@ -342,6 +369,18 @@ func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.
 		roles.WriteString(`<li class="empty-state"><strong>` + esc(t(lang, "Reviewer / Checkerの割り当てはありません。", "No Reviewer / Checker assignments yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Task TypeごとにProduction単位で設定します。", "Assign these roles per Task Type for this Production.")) + `</span></li>`)
 	}
 	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.user_settings")) + `</h2><div class="settings-block"><h3>` + esc(t(lang, "Production参加者", "Production participants")) + `</h3><ul class="mapping-list">` + participants.String() + `</ul></div><div class="settings-block"><h3>` + esc(t(lang, "Reviewer / Checker", "Reviewer / Checker")) + `</h3><ul class="mapping-list">` + roles.String() + `</ul></div><p class="field-help">` + esc(t(lang, "Discordユーザーの紐づけはグローバルなユーザー紐づけで管理します。", "Discord user linking is managed in global User Linking.")) + `</p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a></section>`
+}
+
+func renderValidationTaskTypes(p model.Project, lang string) string {
+	data := p.ValidationData()
+	if len(data.TaskTypes) == 0 {
+		return `<li class="empty-state"><strong>` + esc(t(lang, "Task Typeは取得できませんでした", "No Task Types were returned")) + `</strong></li>`
+	}
+	var rows strings.Builder
+	for _, taskType := range data.TaskTypes {
+		rows.WriteString(`<li><strong>` + esc(taskType.Name) + `</strong><span class="field-help">` + esc(t(lang, "検証専用の表示データ", "Validation-only display data")) + `</span></li>`)
+	}
+	return rows.String()
 }
 
 func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string) string {
@@ -377,6 +416,9 @@ func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang 
 }
 
 func renderSelectedProductionDanger(r *http.Request, p model.Project, lang string) string {
+	if p.ValidationOnly {
+		return `<details class="advanced-details danger-zone"><summary>` + esc(tr(lang, "ia.danger")) + `</summary><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionでは変更や削除は実行できません。", "Changes and deletion are disabled for validation-only Productions.")) + `</p></details>`
+	}
 	disconnectPhrase := t(lang, "連携解除", "DISCONNECT")
 	deletePhrase := t(lang, "削除", "DELETE")
 	return `<details class="advanced-details danger-zone"><summary>` + esc(tr(lang, "ia.danger")) + `</summary><div class="danger-actions"><div class="danger-action-block"><h3>` + esc(tr(lang, "ia.disconnect_production")) + `</h3><p class="hint">` + esc(t(lang, "KitsuSyncの連携だけを解除します。Discord側のリソースは残ります。", "This removes only the KitsuSync connection. Discord resources remain.")) + `</p><form method="POST" class="delete-form" data-confirm="` + esc(t(lang, "Productionの連携を解除します。Discord側のリソースは残ります。", "This removes the Production connection. Discord resources remain.")) + `" data-require-text="` + esc(disconnectPhrase) + `"><input type="hidden" name="action" value="remove_connection"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-ghost" type="submit">` + esc(tr(lang, "ia.disconnect_production")) + `</button></form></div><div class="danger-action-block"><h3>` + esc(tr(lang, "ia.delete_discord_resources")) + `</h3><p class="hint">` + esc(t(lang, "Discord側のチャンネルとカテゴリを削除します。連携解除とは別の操作です。", "This may delete Discord channels and the category. It is separate from disconnecting the Production.")) + `</p><form method="POST" class="delete-form" data-confirm="` + esc(t(lang, "Discord側のリソースを削除します。", "This may delete Discord-side resources.")) + `" data-require-text="` + esc(deletePhrase) + `"><input type="hidden" name="action" value="preview_remove_connection_with_discord"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-danger" type="submit">` + esc(tr(lang, "ia.delete_discord_resources")) + `</button></form></div></div></details>`
@@ -786,9 +828,13 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		if isSyntheticDiscordID(u.DiscordID) {
 			identity = t(lang, "—", "—")
 		}
-		change := withLang("/bot/admin/users?edit="+fmt.Sprint(u.ID), r)
-		remove := `<form method="POST" class="inline-form delete-form" data-confirm="` + esc(t(lang, "この紐づけだけを解除します。Discord側のユーザーは変更しません。", "Remove only this identity link. The Discord user will not be changed.")) + `" data-require-text="` + esc(t(lang, "解除", "REMOVE")) + `"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(u.ID) + `"><button class="btn-danger" type="submit">` + esc(t(lang, "解除", "Remove")) + `</button></form>`
-		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><div class="inline-actions"><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a>` + remove + `</div></td></tr>`)
+		if hasValidationOnlyProject(db) {
+			rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><span class="field-help">` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</span></td></tr>`)
+		} else {
+			change := withLang("/bot/admin/users?edit="+fmt.Sprint(u.ID), r)
+			remove := `<form method="POST" class="inline-form delete-form" data-confirm="` + esc(t(lang, "この紐づけだけを解除します。Discord側のユーザーは変更しません。", "Remove only this identity link. The Discord user will not be changed.")) + `" data-require-text="` + esc(t(lang, "解除", "REMOVE")) + `"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(u.ID) + `"><button class="btn-danger" type="submit">` + esc(t(lang, "解除", "Remove")) + `</button></form>`
+			rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><div class="inline-actions"><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a>` + remove + `</div></td></tr>`)
+		}
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません。", "No user links yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
@@ -800,6 +846,11 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if r != nil {
 		lang := currentLang(r)
+		if ValidationOnlyModeEnabled() {
+			body := `<section class="section-card glass" role="status"><h1>` + esc(tr(lang, "ia.new_connection")) + `</h1><p class="hint">` + esc(t(lang, "この環境は実データの表示確認専用です。Production接続、Discord設定、チャンネル作成は実行できません。", "This environment is for real-data display validation only. Production connection, Discord setup, and channel creation are disabled.")) + `</p></section>`
+			fmt.Fprint(w, adminPage(lang, tr(lang, "ia.new_connection"), r, body))
+			return
+		}
 		kitsuHost := model.GetSetting(db, "kitsu.hostname")
 		botToken := storedRuntimeDiscordBotToken(db)
 		projects := ListKitsuProjects(kitsuHost)

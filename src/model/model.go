@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -129,14 +130,53 @@ func FindTask(db *gorm.DB, taskID string) Task {
 }
 
 type Project struct {
-	ID                uint   `gorm:"primaryKey"`
-	KitsuProjectID    string `gorm:"uniqueIndex"`
-	Name              string
-	ProjectType       string
-	DiscordGuildID    string `gorm:"index"`
-	DiscordCategoryID string
-	Language          string
-	StorageURL        string
+	ID                 uint   `gorm:"primaryKey"`
+	KitsuProjectID     string `gorm:"uniqueIndex"`
+	Name               string
+	ProjectType        string
+	DiscordGuildID     string `gorm:"index"`
+	DiscordCategoryID  string
+	Language           string
+	StorageURL         string
+	ValidationOnly     bool   `gorm:"index"`
+	ValidationDataJSON string `gorm:"type:text"`
+}
+
+// ValidationKitsuData is read-only Kitsu metadata captured for an isolated
+// validation profile. It deliberately contains no Discord identifiers.
+type ValidationKitsuData struct {
+	TaskTypes    []ValidationTaskType `json:"task_types,omitempty"`
+	Participants []ValidationPerson   `json:"participants,omitempty"`
+}
+
+type ValidationTaskType struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type ValidationPerson struct {
+	ID       string `json:"id"`
+	FullName string `json:"full_name"`
+	Email    string `json:"email,omitempty"`
+}
+
+func (p Project) ValidationData() ValidationKitsuData {
+	var data ValidationKitsuData
+	if strings.TrimSpace(p.ValidationDataJSON) == "" {
+		return data
+	}
+	if err := json.Unmarshal([]byte(p.ValidationDataJSON), &data); err != nil {
+		return ValidationKitsuData{}
+	}
+	return data
+}
+
+func IsValidationOnlyProject(db *gorm.DB, kitsuProjectID string) bool {
+	var project Project
+	if db == nil || db.Where("kitsu_project_id = ?", strings.TrimSpace(kitsuProjectID)).First(&project).Error != nil {
+		return false
+	}
+	return project.ValidationOnly
 }
 
 type ProjectWebhook struct {

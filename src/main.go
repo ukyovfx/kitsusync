@@ -696,7 +696,7 @@ func main() {
 	)
 	model.PurgeLegacySensitiveData(db)
 
-	setup.SeedFromConfig(db, conf)
+	setup.SeedConfigIfFixture(db, conf)
 	if persistedDiscordToken := strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey)); persistedDiscordToken != "" {
 		os.Setenv("DISCORD_BOT_TOKEN", persistedDiscordToken)
 	}
@@ -784,6 +784,10 @@ func main() {
 	}
 
 	setupHandler := func(w http.ResponseWriter, r *http.Request) {
+		if setup.ValidationOnlyModeEnabled() && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "validation-only profile is read-only", http.StatusForbidden)
+			return
+		}
 		kitsuHost, _, _ := getKitsuCreds(db, conf)
 		botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 		setup.Handler(kitsuHost, fallbackGuildID, botToken, db, runtime.ready, onRuntimeConfigured)(w, r)
@@ -818,13 +822,13 @@ func main() {
 		)))
 		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.ProjectsHandler(db))))
 		mux.HandleFunc(prefix+"/api/setup/preview-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.PreviewProjectHandler(db, setupCredsFunc))))
-		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.ApplyProjectHandler(db, setupCredsFunc))))
+		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.ApplyProjectHandler(db, setupCredsFunc)))))
 		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.TestKitsuHandler(db, onRuntimeConfigured)))
-		mux.HandleFunc(prefix+"/api/setup/test-discord", setup.RequireSession(setup.TestDiscordHandler(db)))
-		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.TestNotificationHandler(db, setupCredsFunc))))
+		mux.HandleFunc(prefix+"/api/setup/test-discord", setup.RequireSession(setup.RejectValidationMutation(setup.TestDiscordHandler(db))))
+		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.TestNotificationHandler(db, setupCredsFunc)))))
 		mux.HandleFunc(prefix+"/api/setup/mapping", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.MappingStateHandler(db))))
-		mux.HandleFunc(prefix+"/api/setup/mapping/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.SaveUserMappingHandler(db))))
-		mux.HandleFunc(prefix+"/api/setup/mapping/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.SaveCheckerMappingHandler(db))))
+		mux.HandleFunc(prefix+"/api/setup/mapping/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveUserMappingHandler(db)))))
+		mux.HandleFunc(prefix+"/api/setup/mapping/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveCheckerMappingHandler(db)))))
 	}
 	setupAPIRoutes("")
 	setupAPIRoutes("/bot")
@@ -842,7 +846,7 @@ func main() {
 		mux.HandleFunc(prefix+"/admin/drive", setup.RequireSession(setup.DriveHandler(db)))
 		// BotHandler persists shared runtime credentials and triggers reconnect.
 		kitsuReconnect := func() { onRuntimeConfigured() }
-		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.BotHandler(db, kitsuReconnect)))
+		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.RejectValidationMutation(setup.BotHandler(db, kitsuReconnect))))
 		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
@@ -886,6 +890,13 @@ func main() {
 
 	if refreshRuntime() {
 		slog.Info("Kitsu runtime configured")
+		if setup.ValidationOnlyModeEnabled() {
+			if count, err := setup.SeedValidationOnlyProfile(db); err != nil {
+				slog.Warn("validation-only profile import failed", "err", err)
+			} else {
+				slog.Info("validation-only profile imported", "productions", count)
+			}
+		}
 		go runtime.runWhenReady(func() {
 			runOnePoll(conf, db)
 			if conf.Log {

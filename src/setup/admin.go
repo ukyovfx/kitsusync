@@ -450,6 +450,10 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
 		fallbackGuildID = strings.TrimSpace(fallbackGuildID)
+		if r.Method == http.MethodPost && model.IsValidationOnlyProject(db, strings.TrimSpace(r.FormValue("project_id"))) {
+			http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
+			return
+		}
 		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
 			return
 		}
@@ -459,6 +463,10 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		}
 
 		if r.Method == http.MethodPost {
+			if hasValidationOnlyProject(db) {
+				http.Error(w, "validation-only profile is read-only", http.StatusForbidden)
+				return
+			}
 			action := strings.TrimSpace(r.FormValue("action"))
 			projectID := strings.TrimSpace(r.FormValue("project_id"))
 			redirectURL := withLang("/bot/admin/projects", r)
@@ -2319,6 +2327,10 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		}
 
 		if r.Method == http.MethodPost {
+			if hasValidationOnlyProject(db) {
+				http.Error(w, "validation-only profile is read-only", http.StatusForbidden)
+				return
+			}
 			id := parseUint(r.FormValue("user_id"))
 			name := strings.TrimSpace(r.FormValue("kitsu_name"))
 			email := strings.TrimSpace(r.FormValue("kitsu_email"))
@@ -2633,6 +2645,10 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 		lang := currentLang(r)
 		if r.Method == http.MethodPost {
 			projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
+			if model.IsValidationOnlyProject(db, projectID) {
+				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
+				return
+			}
 			storageURL := strings.TrimSpace(r.FormValue("storage_url"))
 			if projectID != "" {
 				model.SetProjectStorageURL(db, projectID, storageURL)
