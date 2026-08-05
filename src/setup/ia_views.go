@@ -252,12 +252,17 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		problem := t(lang, "現在の問題はありません", "No current problem")
 		nextAction := t(lang, "通常どおり利用できます", "No action required")
 		nextActionHTML := ""
+		serverActionHTML := ""
 		if class != "ok" {
 			problem = cleanStatusLabel(lang, class)
 			nextAction = hint
 			nextActionHTML = `<a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `">` + esc(tr(lang, "ia.notifications")) + `</a>`
 		}
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.overview")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "Productionの状態", "Production state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + statusSummaryRow(t(lang, "Discordサーバー", "Discord server"), map[bool]string{true: "success", false: "blocked"}[strings.TrimSpace(p.DiscordGuildID) != ""], serverName, "", "") + statusSummaryRow(t(lang, "現在の問題", "Current problem"), normalizeStatusClass(class), problem, "", "") + statusSummaryRow(t(lang, "次の操作", "Next action"), normalizeStatusClass(class), nextAction, "", nextActionHTML) + `</dl><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=user-settings", r)) + `">` + esc(tr(lang, "ia.user_settings")) + `</a></div></section>`
+		if strings.TrimSpace(p.DiscordGuildID) != "" {
+			serverChangeURL := withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID)+"&wizard_step=3", r)
+			serverActionHTML = `<a class="btn-ghost" href="` + esc(serverChangeURL) + `">` + esc(t(lang, "Discordサーバーを変更する", "Review Discord server change")) + `</a>`
+		}
+		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.overview")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "Productionの状態", "Production state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + statusSummaryRow(t(lang, "Discordサーバー", "Discord server"), map[bool]string{true: "success", false: "blocked"}[strings.TrimSpace(p.DiscordGuildID) != ""], serverName, t(lang, "変更は確認画面で確認します。", "Changes are reviewed in the confirmation flow."), serverActionHTML) + statusSummaryRow(t(lang, "現在の問題", "Current problem"), normalizeStatusClass(class), problem, "", "") + statusSummaryRow(t(lang, "次の操作", "Next action"), normalizeStatusClass(class), nextAction, "", nextActionHTML) + `</dl><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=user-settings", r)) + `">` + esc(tr(lang, "ia.user_settings")) + `</a></div></section>`
 	}
 }
 
@@ -565,7 +570,10 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		if strings.TrimSpace(u.DiscordID) != "" {
 			state = tr(lang, "wizard.connected")
 			class = "success"
-			identity = t(lang, "Discordユーザー対応付け済み", "Discord user mapped")
+			identity = strings.TrimSpace(u.DiscordDisplayName)
+			if identity == "" {
+				identity = t(lang, "Discordユーザー対応付け済み", "Discord user mapped")
+			}
 		}
 		change := withLang("/bot/admin/users?legacy=1&edit="+fmt.Sprint(u.ID), r)
 		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `"><span aria-hidden="true">•</span> ` + esc(state) + `</span></td><td><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a></td></tr>`)

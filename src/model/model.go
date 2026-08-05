@@ -734,10 +734,11 @@ func SetProjectWebhook(db *gorm.DB, kitsuProjectID, webhookURL, channelID string
 }
 
 type UserMap struct {
-	ID         uint   `gorm:"primaryKey"`
-	KitsuName  string `gorm:"index"`
-	KitsuEmail string
-	DiscordID  string
+	ID                 uint   `gorm:"primaryKey"`
+	KitsuName          string `gorm:"index"`
+	KitsuEmail         string
+	DiscordID          string
+	DiscordDisplayName string
 }
 
 type CheckerMap struct {

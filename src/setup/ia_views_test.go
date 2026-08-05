@@ -274,6 +274,34 @@ func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T)
 	}
 }
 
+func TestSelectedProductionOffersReviewedServerChangeEntryPoint(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.Project{KitsuProjectID: "server-change-unique-2026", Name: "Server Change Production", DiscordGuildID: "synthetic-guild"})
+	w := httptest.NewRecorder()
+	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=server-change-unique-2026&lang=en", nil), db, "")
+	body := w.Body.String()
+	if !strings.Contains(body, "Review Discord server change") || !strings.Contains(body, "/bot/setup?lang=en&amp;project=server-change-unique-2026&amp;wizard_step=3") {
+		t.Fatal("selected Production does not expose the reviewed server-change flow")
+	}
+	if strings.Contains(body, `name="guild_id"`) {
+		t.Fatal("selected Production exposes a raw server ID editor")
+	}
+}
+
+func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "synthetic-discord-id", DiscordDisplayName: "Synthetic Discord Reviewer"})
+	w := httptest.NewRecorder()
+	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
+	body := w.Body.String()
+	if !strings.Contains(body, "Synthetic Discord Reviewer") {
+		t.Fatal("global mapping does not show the safe Discord display name")
+	}
+	if strings.Contains(body, "synthetic-discord-id") {
+		t.Fatal("global mapping leaked the raw Discord identifier")
+	}
+}
+
 func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
