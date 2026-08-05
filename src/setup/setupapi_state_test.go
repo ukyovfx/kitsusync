@@ -168,7 +168,7 @@ func TestHandler_GetSetupUsesProductionAndServerSelectionFlow(t *testing.T) {
 	}
 
 	body := rr.Body.String()
-	for _, want := range []string{"Select a Kitsu Production", "Select a Discord server", "Review channels to create or reuse", "Confirm the exact plan before execution"} {
+	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete", "Bot Connection is not configured"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected approved connection flow copy %q", want)
 		}

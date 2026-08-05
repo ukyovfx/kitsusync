@@ -339,6 +339,9 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
+			return
+		}
 
 		if r.Method == http.MethodPost && r.FormValue("action") == "bot_setup" {
 			_ = r.ParseForm()

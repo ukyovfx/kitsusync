@@ -57,13 +57,41 @@ func TestPrimaryNavigationAndNewConnectionFlow(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIANewConnection(w, r, db)
 	setup := w.Body.String()
-	for _, want := range []string{"Select a Kitsu Production", "Select a Discord server", "Review channels to create or reuse", "Confirm the exact plan before execution"} {
+	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete", "Bot Connection is not configured"} {
 		if !strings.Contains(setup, want) {
 			t.Fatalf("new connection flow missing %q", want)
 		}
 	}
+	if strings.Contains(setup, `name="new-connection-production"`) || strings.Contains(setup, `name="plan_guild"`) {
+		t.Fatal("blocked wizard exposed later-step selectors")
+	}
 	if strings.Contains(setup, "Guild ID") || strings.Contains(setup, "Project Routing") {
 		t.Fatal("new connection flow exposes implementation terms")
+	}
+	forced := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=2", nil)
+	forcedWriter := httptest.NewRecorder()
+	renderIANewConnection(forcedWriter, forced, db)
+	if strings.Contains(forcedWriter.Body.String(), `id="wizard-production"`) {
+		t.Fatal("later wizard step was reachable while prerequisites were blocked")
+	}
+}
+
+func TestNewConnectionWizardUsesSharedJapaneseCatalog(t *testing.T) {
+	db := newIAViewDB(t)
+	r := httptest.NewRequest("GET", "/bot/setup?lang=ja", nil)
+	w := httptest.NewRecorder()
+	renderIANewConnection(w, r, db)
+	body := w.Body.String()
+	for _, want := range []string{"接続の準備状況", "Bot接続を設定", "新しいProductionを接続", "Discordサーバー"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Japanese wizard missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Guild", "routing", "runtime", "readiness", "dry-run", "stale"} {
+		visibleMarker := ">" + strings.ToLower(forbidden) + "<"
+		if strings.Contains(strings.ToLower(body), visibleMarker) {
+			t.Fatalf("Japanese wizard leaked internal term %q", forbidden)
+		}
 	}
 }
 

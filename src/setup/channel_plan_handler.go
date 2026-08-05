@@ -93,6 +93,9 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.routing_persist_failed"), redirect)
 		return true
 	}
+	if r.URL.Path == "/bot/setup" {
+		redirect = withLang("/bot/setup?wizard=complete&project="+url.QueryEscape(projectID), r)
+	}
 	renderTaskTypeChannelPlanResult(w, r, lang, trf(lang, "channel_plan.completed", created, len(rows)-created), redirect)
 	return true
 }

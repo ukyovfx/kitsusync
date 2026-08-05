@@ -1,11 +1,13 @@
 package setup
 
 import (
+	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -230,36 +232,244 @@ func renderIAUsers(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 }
 
 func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
-	lang := currentLang(r)
-	kitsuHost := model.GetSetting(db, "kitsu.hostname")
-	botToken := storedRuntimeDiscordBotToken(db)
-	projects := ListKitsuProjects(kitsuHost)
-	projectID := strings.TrimSpace(r.URL.Query().Get("project"))
-	var projectOptions strings.Builder
-	projectOptions.WriteString(`<option value="">` + esc(t(lang, "Productionを選択", "Select a Kitsu Production")) + `</option>`)
-	for _, p := range projects {
-		selected := ""
-		if p.ID == projectID {
-			selected = " selected"
+	if r != nil {
+		lang := currentLang(r)
+		kitsuHost := model.GetSetting(db, "kitsu.hostname")
+		botToken := storedRuntimeDiscordBotToken(db)
+		projects := ListKitsuProjects(kitsuHost)
+		step := wizardStep(r, botToken, db, projectIDFromRequest(r), strings.TrimSpace(r.URL.Query().Get("plan_guild")))
+		if r.URL.Query().Get("wizard") == "complete" && sharedBotRuntimeReadiness(db, kitsuHost, botToken).OverallReady {
+			step = 7
 		}
-		projectOptions.WriteString(`<option value="` + esc(p.ID) + `"` + selected + `>` + esc(p.Name) + `</option>`)
-	}
-	body := `<div class="section-stack"><section class="section-card glass"><h1>` + esc(tr(lang, "ia.new_connection")) + `</h1><p class="hint">` + esc(t(lang, "ProductionとDiscordサーバーを選び、作成または再利用するチャンネルを確認してから接続します。", "Select a Production and Discord server, review the create/reuse plan, then connect.")) + `</p><ol class="step-list"><li>` + esc(t(lang, "Kitsu Productionを選択", "Select a Kitsu Production")) + `</li><li>` + esc(t(lang, "Discordサーバーを選択", "Select a Discord server")) + `</li><li>` + esc(t(lang, "作成または再利用するチャンネルを確認", "Review channels to create or reuse")) + `</li><li>` + esc(t(lang, "内容を確認してから実行", "Confirm the exact plan before execution")) + `</li></ol><form method="GET" class="section-stack"><label for="new-connection-production">` + esc(t(lang, "Kitsu Production", "Kitsu Production")) + `</label><select id="new-connection-production" name="project">` + projectOptions.String() + `</select><button class="btn" type="submit">` + esc(t(lang, "次へ", "Continue")) + `</button></form></section>`
-	if projectID != "" {
-		selected := KitsuProject{}
+		fmt.Fprint(w, adminPage(lang, tr(lang, "ia.new_connection"), r, renderSetupWizard(lang, r, db, projects, botToken, step)))
+	} else {
+		lang := currentLang(r)
+		kitsuHost := model.GetSetting(db, "kitsu.hostname")
+		botToken := storedRuntimeDiscordBotToken(db)
+		projects := ListKitsuProjects(kitsuHost)
+		projectID := strings.TrimSpace(r.URL.Query().Get("project"))
+		var projectOptions strings.Builder
+		projectOptions.WriteString(`<option value="">` + esc(t(lang, "Productionを選択", "Select a Kitsu Production")) + `</option>`)
 		for _, p := range projects {
+			selected := ""
 			if p.ID == projectID {
-				selected = p
-				break
+				selected = " selected"
+			}
+			projectOptions.WriteString(`<option value="` + esc(p.ID) + `"` + selected + `>` + esc(p.Name) + `</option>`)
+		}
+		body := `<div class="section-stack"><section class="section-card glass"><h1>` + esc(tr(lang, "ia.new_connection")) + `</h1><p class="hint">` + esc(t(lang, "ProductionとDiscordサーバーを選び、作成または再利用するチャンネルを確認してから接続します。", "Select a Production and Discord server, review the create/reuse plan, then connect.")) + `</p><ol class="step-list"><li>` + esc(t(lang, "Kitsu Productionを選択", "Select a Kitsu Production")) + `</li><li>` + esc(t(lang, "Discordサーバーを選択", "Select a Discord server")) + `</li><li>` + esc(t(lang, "作成または再利用するチャンネルを確認", "Review channels to create or reuse")) + `</li><li>` + esc(t(lang, "内容を確認してから実行", "Confirm the exact plan before execution")) + `</li></ol><form method="GET" class="section-stack"><label for="new-connection-production">` + esc(t(lang, "Kitsu Production", "Kitsu Production")) + `</label><select id="new-connection-production" name="project">` + projectOptions.String() + `</select><button class="btn" type="submit">` + esc(t(lang, "次へ", "Continue")) + `</button></form></section>`
+		if projectID != "" {
+			selected := KitsuProject{}
+			for _, p := range projects {
+				if p.ID == projectID {
+					selected = p
+					break
+				}
+			}
+			if selected.ID != "" {
+				body += renderExplicitTaskTypeChannelPlan(model.Project{KitsuProjectID: selected.ID, Name: selected.Name}, routingTaskTypes(), botToken, r, lang, db)
 			}
 		}
-		if selected.ID != "" {
-			body += renderExplicitTaskTypeChannelPlan(model.Project{KitsuProjectID: selected.ID, Name: selected.Name}, routingTaskTypes(), botToken, r, lang, db)
+		if strings.TrimSpace(botToken) == "" {
+			body += `<section class="section-card glass" role="status"><h2>` + esc(t(lang, "対応が必要", "Action required")) + `</h2><p class="hint">` + esc(t(lang, "Discordサーバーを読み込むにはBot接続が必要です。先にBot接続を設定してください。", "Bot Connection is required to read Discord servers. Complete Bot Connection first.")) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a></section>`
+		}
+		body += `</div>`
+		fmt.Fprint(w, adminPage(lang, tr(lang, "ia.new_connection"), r, body))
+	}
+}
+
+func projectIDFromRequest(r *http.Request) string {
+	return strings.TrimSpace(r.URL.Query().Get("project"))
+}
+
+func wizardStep(r *http.Request, botToken string, db *gorm.DB, projectID, guildID string) int {
+	ready := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), botToken).OverallReady
+	if !ready {
+		return 1
+	}
+	maxAllowed := 2
+	if projectID != "" {
+		maxAllowed = 3
+		if guildID != "" {
+			maxAllowed = 7
 		}
 	}
-	if strings.TrimSpace(botToken) == "" {
-		body += `<section class="section-card glass" role="status"><h2>` + esc(t(lang, "対応が必要", "Action required")) + `</h2><p class="hint">` + esc(t(lang, "Discordサーバーを読み込むにはBot接続が必要です。先にBot接続を設定してください。", "Bot Connection is required to read Discord servers. Complete Bot Connection first.")) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a></section>`
+	if raw := strings.TrimSpace(r.URL.Query().Get("wizard_step")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= maxAllowed {
+			return n
+		}
 	}
-	body += `</div>`
-	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.new_connection"), r, body))
+	if projectID == "" {
+		return 2
+	}
+	if guildID == "" {
+		return 3
+	}
+	if r.URL.Query().Get("review") == "1" {
+		return 5
+	}
+	return 4
+}
+
+func setupWizardURL(r *http.Request, step int, projectID, guildID string, review bool) string {
+	values := url.Values{}
+	values.Set("wizard_step", strconv.Itoa(step))
+	if projectID != "" {
+		values.Set("project", projectID)
+	}
+	if guildID != "" {
+		values.Set("plan_guild", guildID)
+	}
+	if review {
+		values.Set("review", "1")
+	}
+	return withLang("/bot/setup?"+values.Encode(), r)
+}
+
+func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject, botToken string, step int) string {
+	projectID := projectIDFromRequest(r)
+	guildID := strings.TrimSpace(r.URL.Query().Get("plan_guild"))
+	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), botToken)
+	labels := []string{tr(lang, "wizard.step_prerequisites"), tr(lang, "wizard.step_production"), tr(lang, "wizard.step_server"), tr(lang, "wizard.step_plan"), tr(lang, "wizard.step_review"), tr(lang, "wizard.step_execute"), tr(lang, "wizard.step_complete")}
+	var steps strings.Builder
+	for i, label := range labels {
+		n := i + 1
+		state := "pending"
+		if n < step {
+			state = "done"
+		}
+		if n == step {
+			state = "active"
+		}
+		aria := ""
+		if n == step {
+			aria = ` aria-current="step"`
+		}
+		steps.WriteString(`<span class="setup-step ` + state + `"` + aria + `><span class="step-num">` + strconv.Itoa(n) + `</span><span class="step-label">` + esc(label) + `</span></span>`)
+		if n < len(labels) {
+			steps.WriteString(`<span class="step-connector" aria-hidden="true"></span>`)
+		}
+	}
+	body := `<div class="section-stack"><section class="section-card glass"><h1>` + esc(tr(lang, "ia.new_connection")) + `</h1><p class="hint">` + esc(tr(lang, "wizard.description")) + `</p><div class="setup-steps" aria-label="` + esc(tr(lang, "wizard.progress")) + `">` + steps.String() + `</div></section>`
+	switch step {
+	case 1:
+		body += renderWizardPrerequisites(lang, r, readiness)
+	case 2:
+		body += renderWizardProduction(lang, r, db, projects)
+	case 3:
+		body += renderWizardServer(lang, r, botToken, projectID)
+	case 4, 5:
+		body += renderWizardPlan(lang, r, db, botToken, projects, projectID, guildID, step == 5)
+	case 6:
+		body += `<section class="section-card glass" role="status" aria-live="polite"><h2>` + esc(tr(lang, "wizard.execute_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.execute_hint")) + `</p><a class="btn" href="` + esc(setupWizardURL(r, 5, projectID, guildID, true)) + `">` + esc(tr(lang, "wizard.back_to_review")) + `</a></section>`
+	case 7:
+		body += renderWizardComplete(lang, r, db, projectID)
+	}
+	return body + `</div>`
+}
+
+func renderWizardPrerequisites(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) string {
+	status := func(ok bool) string {
+		if ok {
+			return tr(lang, "wizard.connected")
+		}
+		return tr(lang, "wizard.not_configured")
+	}
+	body := `<section class="section-card glass" aria-labelledby="wizard-prerequisites-title"><h2 id="wizard-prerequisites-title">` + esc(tr(lang, "wizard.prerequisites_title")) + `</h2><div class="status-list"><dl><dt>Kitsu</dt><dd>` + esc(status(readiness.KitsuConfigured)) + `</dd><dt>Discord Bot</dt><dd>` + esc(status(readiness.DiscordConfigured)) + `</dd><dt>` + esc(tr(lang, "wizard.notification_state")) + `</dt><dd>` + esc(status(readiness.OverallReady)) + `</dd></dl></div>`
+	if !readiness.OverallReady {
+		body += `<p class="state-explanation" role="status" aria-live="polite">` + esc(tr(lang, "wizard.blocked_bot")) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "wizard.open_bot")) + `</a>`
+	} else {
+		body += `<p class="state-explanation" role="status" aria-live="polite">` + esc(tr(lang, "wizard.prerequisites_ready")) + `</p><a class="btn" href="` + esc(setupWizardURL(r, 2, "", "", false)) + `">` + esc(tr(lang, "wizard.next")) + `</a>`
+	}
+	return body + `</section>`
+}
+
+func renderWizardProduction(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject) string {
+	var options strings.Builder
+	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_production")) + `</option>`)
+	for _, p := range projects {
+		connected := model.FindProjectByKitsuID(db, p.ID) != nil
+		disabled := ""
+		label := p.Name
+		if connected {
+			disabled = " disabled"
+			label += " (" + tr(lang, "wizard.already_connected") + ")"
+		}
+		options.WriteString(`<option value="` + esc(p.ID) + `"` + disabled + `>` + esc(label) + `</option>`)
+	}
+	return `<section class="section-card glass" aria-labelledby="wizard-production-title"><h2 id="wizard-production-title">` + esc(tr(lang, "wizard.production_title")) + `</h2><form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="2"><label for="wizard-production">` + esc(tr(lang, "wizard.production_label")) + `</label><select id="wizard-production" name="project" required aria-describedby="wizard-production-help">` + options.String() + `</select><p id="wizard-production-help" class="field-help">` + esc(tr(lang, "wizard.production_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 1, "", "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
+}
+
+func renderWizardServer(lang string, r *http.Request, botToken, projectID string) string {
+	var options strings.Builder
+	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_server")) + `</option>`)
+	if strings.TrimSpace(botToken) != "" {
+		if guilds, err := ListBotGuilds(botToken); err == nil {
+			for _, guild := range guilds {
+				options.WriteString(`<option value="` + esc(guild.ID) + `">` + esc(guild.Name) + `</option>`)
+			}
+		}
+	}
+	return `<section class="section-card glass" aria-labelledby="wizard-server-title"><h2 id="wizard-server-title">` + esc(tr(lang, "wizard.server_title")) + `</h2><form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="3"><input type="hidden" name="project" value="` + esc(projectID) + `"><label for="wizard-server">` + esc(tr(lang, "wizard.server_label")) + `</label><select id="wizard-server" name="plan_guild" required>` + options.String() + `</select><p class="field-help">` + esc(tr(lang, "wizard.server_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 2, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
+}
+
+func wizardProject(projects []KitsuProject, id string) KitsuProject {
+	for _, p := range projects {
+		if p.ID == id {
+			return p
+		}
+	}
+	return KitsuProject{}
+}
+func wizardTaskTypes() []kitsu.TaskType {
+	if types := routingTaskTypes(); len(types) > 0 {
+		return types
+	}
+	return kitsu.GetTaskTypes().Each
+}
+
+func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string, projects []KitsuProject, projectID, guildID string, review bool) string {
+	project := wizardProject(projects, projectID)
+	if project.ID == "" || guildID == "" {
+		return `<section class="section-card glass" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</section>`
+	}
+	channels, err := ListGuildChannels(guildID, botToken)
+	if err != nil {
+		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p>` + esc(tr(lang, "wizard.plan_unavailable")) + `</p></section>`
+	}
+	plan := BuildTaskTypeChannelPlan(project.ID, guildID, wizardTaskTypes(), existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.ID), model.ListProjectWebhooks(db, project.ID)))
+	var rows strings.Builder
+	for _, entry := range plan.Entries {
+		action := map[string]string{"create": tr(lang, "wizard.create"), "reuse": tr(lang, "wizard.reuse"), "conflict": tr(lang, "wizard.conflict"), "blocked": tr(lang, "wizard.review_required")}[entry.Action]
+		rows.WriteString(`<tr><td>` + esc(entry.TaskTypeName) + `</td><td><code>` + esc(entry.ChannelName) + `</code></td><td>` + esc(action) + `</td><td>` + esc(wizardPlanDetails(lang, entry.Action)) + `</td></tr>`)
+	}
+	body := `<section class="section-card glass" aria-labelledby="wizard-plan-title"><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p><div class="table-wrap"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th><th>` + esc(tr(lang, "wizard.result")) + `</th><th>` + esc(tr(lang, "wizard.details")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div>`
+	if !plan.Valid() {
+		return body + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p></section>`
+	}
+	if !review {
+		return body + `<p class="field-help" role="status">` + esc(tr(lang, "wizard.no_write")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><a class="btn" href="` + esc(setupWizardURL(r, 5, projectID, guildID, true)) + `">` + esc(tr(lang, "wizard.review")) + `</a></div></section>`
+	}
+	return body + `<p class="field-help">` + esc(tr(lang, "wizard.no_write")) + `</p><form method="POST" action="` + esc(withLang("/bot/setup", r)) + `" class="section-stack"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + esc(projectID) + `"><input type="hidden" name="guild_id" value="` + esc(guildID) + `"><input type="hidden" name="plan_fingerprint" value="` + esc(plan.Fingerprint()) + `"><label for="wizard-confirm"><input id="wizard-confirm" type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "wizard.confirm")) + `</label><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, projectID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.execute")) + `</button></div></form></section>`
+}
+
+func wizardPlanDetails(lang, action string) string {
+	switch action {
+	case "create":
+		return tr(lang, "wizard.detail_create")
+	case "reuse":
+		return tr(lang, "wizard.detail_reuse")
+	case "conflict":
+		return tr(lang, "wizard.detail_conflict")
+	default:
+		return tr(lang, "wizard.detail_review")
+	}
+}
+func renderWizardComplete(lang string, r *http.Request, db *gorm.DB, projectID string) string {
+	project := model.FindProjectByKitsuID(db, projectID)
+	name := ""
+	if project != nil {
+		name = project.Name
+	}
+	return `<section class="section-card glass" role="status" aria-live="polite"><h2>` + esc(tr(lang, "wizard.complete_title")) + `</h2><p>` + esc(trf(lang, "wizard.complete_message", name)) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(projectID), r)) + `">` + esc(tr(lang, "wizard.open_production")) + `</a></section>`
 }
