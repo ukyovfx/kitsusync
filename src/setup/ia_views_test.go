@@ -141,7 +141,7 @@ func TestSharedStatusSummaryRowHasSemanticStructureAndVariants(t *testing.T) {
 	if strings.Contains(body, `status-pill`) {
 		t.Fatal("shared status row fell back to the legacy indistinguishable pill")
 	}
-	if strings.Contains(body, "窶") || strings.Contains(body, "�") {
+	if strings.Contains(body, "\u7ab6") || strings.Contains(body, "\ufffd") {
 		t.Fatal("shared status row contains corrupted decorative text")
 	}
 }
@@ -485,7 +485,7 @@ func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testin
 	w := httptest.NewRecorder()
 	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
 	body := w.Body.String()
-	for _, marker := range []string{"窶", "譁", "繧", "�", "aria-hidden=\"true\""} {
+	for _, marker := range []string{"\u7ab6", "\u8b41", "\u7e67", "\ufffd", "aria-hidden=\"true\""} {
 		if strings.Contains(body, marker) {
 			t.Fatalf("Japanese Global User Linking HTML contains mojibake or decorative glyph marker %q", marker)
 		}

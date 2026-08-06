@@ -544,8 +544,8 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		nextActionHTML := ""
 		serverActionHTML := ""
 		if p.ReadOnlyPreview {
-			problem = t(lang, "縺ｾ縺謗･邯壹＆繧後※縺・∪縺帙ｓ", "Not connected")
-			nextAction = t(lang, "縺薙・Production繧帝謗･邯壹☆繧九", "Connect this Production")
+			problem = t(lang, "未接続", "Not connected")
+			nextAction = t(lang, "このProductionを接続", "Connect this Production")
 			nextActionHTML = `<a class="btn" href="` + esc(withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(nextAction) + `</a>`
 		} else if class != "ok" {
 			problem = cleanStatusLabel(lang, class)
@@ -1190,14 +1190,6 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	var rows strings.Builder
-	/* if len(model.ListUserMap(db)) == 0 && strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
-		for _, person := range ListKitsuPersons("") {
-			if strings.TrimSpace(person.FullName) == "" {
-				continue
-			}
-			rows.WriteString(`<tr><td>` + esc(person.FullName) + `</td><td>` + esc(t(lang, "譛ｪ險ｭ螳・, "Not set")) + `</td><td><span class="status-badge status-badge-blocked" role="status">` + esc(t(lang, "譛ｪ險ｭ螳・, "Not set")) + `</span></td><td><span class="field-help">` + esc(t(lang, "Kitsu縺ｮ讀懆ｨｼ繝・・繧ｿ縺ｮ縺ｿ縺ｧ縺ｯ螟画峩縺ｧ縺阪∪縺帙ｓ縲・, "Read-only live Kitsu data; no local link is configured.")) + `</span></td></tr>`)
-		}
-	} */
 	if len(model.ListUserMap(db)) == 0 && strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
 		for _, person := range filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db)) {
 			if strings.TrimSpace(person.FullName) == "" {

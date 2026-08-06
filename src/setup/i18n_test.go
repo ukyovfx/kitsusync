@@ -37,7 +37,7 @@ func TestRepairAgent2CanonicalCopyHasNoInternalTermsOrMojibake(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing canonical Japanese copy for %s (%q)", name, english)
 		}
-		for _, marker := range []string{"窶", "譁", "繧", "�", "<span", "Guild", "runtime", "routing", "Bot Settings", "No recent activity."} {
+		for _, marker := range []string{"\u7ab6", "\u8b41", "\u7e67", "\ufffd", "<span", "Guild", "runtime", "routing", "Bot Settings", "No recent activity."} {
 			if strings.Contains(ja, marker) {
 				t.Fatalf("Japanese copy for %s contains %q: %q", name, marker, ja)
 			}
