@@ -248,6 +248,11 @@ button,input,select{font:inherit}
 .section-stack{display:grid;gap:12px}
 .section-card{border-radius:20px;padding:14px;background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)),linear-gradient(135deg, rgba(232,90,26,.05), transparent 56%);}
 .section-card h3{margin:0 0 6px;font-size:16px;letter-spacing:-.02em;}
+.connections-card{padding:20px;}
+.connections-card-header{align-items:center;margin-bottom:18px;}
+.connections-section{padding:0 0 18px;margin:0 0 18px;}
+.connections-section h2{margin:0 0 10px;font-size:18px;}
+.connections-actions{margin-top:0;padding-top:0;padding-bottom:2px;}
 .hint,.muted{color:var(--muted);line-height:1.7}
 .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:9px;}
 .form-span-2{grid-column:span 2}

@@ -622,6 +622,25 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	if got := strings.Count(body, "<h1"); got != 1 {
 		t.Fatalf("Connections page has %d h1 elements, want 1", got)
 	}
+	pageCard := strings.Index(body, `<div class="page-card glass">`)
+	connectionsCard := strings.Index(body, `<div class="section-card glass connections-card">`)
+	h1 := strings.Index(body, "<h1")
+	if pageCard < 0 || connectionsCard < 0 || h1 < pageCard || h1 > connectionsCard {
+		t.Fatal("Connections page does not use the shared page heading above its content card")
+	}
+	if strings.Count(body, `class="settings-block connections-section"`) != 2 {
+		t.Fatal("Connections page does not use two shared connection sections")
+	}
+	if !strings.Contains(body, `class="button-row connections-actions"`) {
+		t.Fatal("Connections page action row is missing from the content card")
+	}
+
+	w = httptest.NewRecorder()
+	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil))
+	enBody := w.Body.String()
+	if strings.Count(enBody, "<h1") != 1 || !strings.Contains(enBody, `<div class="section-card glass connections-card">`) {
+		t.Fatal("English Connections page does not preserve the shared page-shell structure")
+	}
 }
 
 func TestWizardLiveProductionSelectionTargetsServerStep(t *testing.T) {
