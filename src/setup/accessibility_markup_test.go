@@ -9,8 +9,6 @@ func TestLoginMarkupHasAccessibleLabelsAndErrorRegion(t *testing.T) {
 	html := loginPageHTML("en", "invalid login", "/bot/admin", true, nil)
 	for _, want := range []string{
 		`<main id="main-content">`,
-		`<label for="login-hostname">`,
-		`id="login-hostname"`,
 		`<label for="login-email">`,
 		`id="login-email"`,
 		`<label for="login-password">`,

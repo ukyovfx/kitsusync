@@ -23,6 +23,37 @@ func TestSharedUICatalogHasJapaneseAndEnglishEntryForEveryKey(t *testing.T) {
 	}
 }
 
+func TestRepairAgent2CanonicalCopyHasNoInternalTermsOrMojibake(t *testing.T) {
+	cases := map[string]string{
+		"setup":       "Bot Settings",
+		"runtime":     "Kitsu runtime",
+		"routing":     "Project Routing",
+		"guild":       "Discord Server / Guild",
+		"empty":       "No recent activity.",
+		"setupStatus": "Setup required",
+	}
+	for name, english := range cases {
+		ja, ok := canonicalText("ja", english)
+		if !ok {
+			t.Fatalf("missing canonical Japanese copy for %s (%q)", name, english)
+		}
+		for _, marker := range []string{"窶", "譁", "繧", "�", "<span", "Guild", "runtime", "routing", "Bot Settings", "No recent activity."} {
+			if strings.Contains(ja, marker) {
+				t.Fatalf("Japanese copy for %s contains %q: %q", name, marker, ja)
+			}
+		}
+		if got, ok := canonicalText("en", english); !ok || got != english {
+			t.Fatalf("English copy changed for %s: got %q", name, got)
+		}
+	}
+	if got := tr("ja", "dashboard.no_recent_activity"); got != "最近のアクティビティはありません。" {
+		t.Fatalf("unexpected Japanese empty activity copy: %q", got)
+	}
+	if got := tr("en", "dashboard.no_recent_activity"); got != "No recent activity." {
+		t.Fatalf("unexpected English empty activity copy: %q", got)
+	}
+}
+
 func TestPrimaryRouteLocalizationDoesNotMixCatalogCopy(t *testing.T) {
 	t.Skip("superseded by the shared Production-centered catalog assertions")
 	r := httptest.NewRequest("GET", "/bot/admin?lang=ja", nil)

@@ -184,7 +184,7 @@ func updateWizardState(r *http.Request, update func(*wizardState)) {
 	sessions[cookie.Value] = session
 }
 
-func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname string)) http.HandlerFunc {
+func LoginHandler(kitsuHostname string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -193,9 +193,6 @@ func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname strin
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
 			hostname := configuredHostname
-			if hostname == "" {
-				hostname = normalizeKitsuHostname(r.FormValue("hostname"))
-			}
 			email := strings.TrimSpace(r.FormValue("email"))
 			password := r.FormValue("password")
 			next := strings.TrimSpace(r.FormValue("next"))
@@ -220,10 +217,6 @@ func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname strin
 				fmt.Fprint(w, loginPageHTML(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r))
 				return
 			}
-			if onAdminAuthenticated != nil {
-				onAdminAuthenticated(hostname)
-			}
-
 			token := newSessionToken(email, kitsuToken, role, next)
 			http.SetCookie(w, sessionCookie(r, token, int(sessionTTL.Seconds())))
 			http.Redirect(w, r, next, http.StatusSeeOther)
@@ -335,10 +328,7 @@ func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request
 	if next != "" {
 		nextInput = `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">`
 	}
-	hostnameInput := ""
-	if showHostname {
-		hostnameInput = `<label for="login-hostname">Kitsu URL</label><input id="login-hostname" type="url" name="hostname" placeholder="http://127.0.0.1:8080" required>`
-	}
-	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + hostnameInput + `<div class="section-card glass"><label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
+	_ = showHostname
+	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass"><label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
 	return appShell("KitsuSync", "", lang, r, "", body)
 }

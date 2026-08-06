@@ -168,10 +168,13 @@ func TestHandler_GetSetupUsesProductionAndServerSelectionFlow(t *testing.T) {
 	}
 
 	body := rr.Body.String()
-	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete", "Bot Connection is not configured"} {
+	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected approved connection flow copy %q", want)
 		}
+	}
+	if !strings.Contains(body, "Configure the Kitsu connection") && !strings.Contains(body, "Connection settings") {
+		t.Fatal("setup flow did not expose the state-appropriate connection action")
 	}
 	if strings.Contains(body, `name="guild_id"`) || strings.Contains(body, "Discord Server / Guild ID") {
 		t.Fatalf("did not expect manual Guild ID entry in the normal setup flow")

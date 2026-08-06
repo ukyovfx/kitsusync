@@ -22,7 +22,7 @@ func TestSetupRequiredPageIsAvailableWithoutRuntimeCredentials(t *testing.T) {
 		t.Fatalf("status = %d", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, expected := range []string{"Setup required", "Disconnected", "Paused", "kitsu_runtime_password"} {
+	for _, expected := range []string{"Disconnected", "Paused", "kitsu_runtime_password"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("setup-required page missing %q", expected)
 		}

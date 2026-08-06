@@ -119,6 +119,8 @@ func statusSummaryRowLegacy(label, class, value, explanation, actionHTML string)
 	action := ""
 	if strings.TrimSpace(actionHTML) != "" {
 		action = `<div class="status-row-action">` + actionHTML + `</div>`
+	} else {
+		action = `<div class="status-row-action" aria-hidden="true"></div>`
 	}
 	return `<div class="status-row"><dt class="status-row-label">` + esc(label) + `</dt><dd class="status-row-value"><span class="status-badge status-badge-` + esc(class) + `" role="status"><span aria-hidden="true">` + icon + `</span> ` + esc(value) + `</span>` + ifNonEmpty(explanation, `<span class="status-row-explanation">`+esc(explanation)+`</span>`) + `</dd>` + action + `</div>`
 }
@@ -165,6 +167,55 @@ func iaReadiness(db *gorm.DB, lang string) (string, string, string) {
 	return "warn", tr(lang, "status.action_required"), t(lang, "Productionの接続を設定すると通知を利用できます。", "Connect at least one Production before notifications can be used.")
 }
 
+type readinessView struct {
+	Class             string
+	Label             string
+	Hint              string
+	ActionURL         string
+	ActionLabel       string
+	Notification      string
+	NotificationClass string
+}
+
+func readinessViewFor(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) readinessView {
+	view := readinessView{Class: "blocked", NotificationClass: "blocked"}
+	switch readiness.State {
+	case ReadinessSetupRequired:
+		view.Label = t(lang, "設定が必要です", "Setup required")
+		view.Hint = t(lang, "Kitsu接続を設定してください。", "Configure the Kitsu connection before continuing.")
+		view.ActionURL = withLang("/bot/admin/bot", r)
+		view.ActionLabel = t(lang, "接続設定", "Connection settings")
+	case ReadinessBotSetupRequired:
+		view.Label = t(lang, "設定が必要です", "Setup required")
+		view.Hint = t(lang, "Discord Botを設定してください。", "Configure the Discord Bot before continuing.")
+		view.ActionURL = withLang("/bot/admin/bot", r)
+		view.ActionLabel = t(lang, "接続設定", "Connection settings")
+	case ReadinessProductionRequired:
+		view.Label = t(lang, "Production接続が必要です", "Production connection required")
+		view.Hint = t(lang, "接続済みProductionがありません。", "No Production is connected yet.")
+		view.ActionURL = withLang("/bot/setup", r)
+		view.ActionLabel = tr(lang, "ia.new_connection")
+	case ReadinessRoutingRequired:
+		view.Label = t(lang, "対応が必要です", "Action required")
+		view.Hint = t(lang, "通知先設定を確認してください。", "Review the notification destination settings.")
+		view.ActionURL = withLang("/bot/admin/projects", r)
+		view.ActionLabel = tr(lang, "ia.production_list")
+	case ReadinessReady:
+		view.Class = "success"
+		view.Label = t(lang, "利用可能", "Available")
+		view.Hint = t(lang, "通知を利用できます。", "Notifications are available.")
+	}
+	if readiness.OverallReady {
+		view.Notification = t(lang, "利用可能", "Available")
+		view.NotificationClass = "success"
+	} else if readiness.State == ReadinessRoutingRequired {
+		view.Notification = t(lang, "対応が必要です", "Action required")
+	} else {
+		view.Notification = t(lang, "利用不可", "Unavailable")
+	}
+	return view
+}
+
 func statusSummaryRow(label, class, value, explanation, actionHTML string) string {
 	if class == "bad" {
 		class = "danger"
@@ -178,6 +229,8 @@ func statusSummaryRow(label, class, value, explanation, actionHTML string) strin
 	action := ""
 	if strings.TrimSpace(actionHTML) != "" {
 		action = `<div class="status-row-action">` + actionHTML + `</div>`
+	} else {
+		action = `<div class="status-row-action" aria-hidden="true"></div>`
 	}
 	explanationCell := `<dd class="status-row-explanation">` + esc(explanation) + `</dd>`
 	if strings.TrimSpace(explanation) == "" {
@@ -246,10 +299,14 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		}
 	}
 	if activityRows.Len() == 0 {
-		activityRows.WriteString(`<li class="muted">No recent activity.</li>`)
+		activityRows.WriteString(`<li class="muted">` + esc(tr(lang, "dashboard.no_recent_activity")) + `</li>`)
 	}
 	readinessClass, readinessLabel, readinessHint := iaReadiness(db, lang)
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
+	readinessView := readinessViewFor(lang, r, readiness)
+	readinessClass = readinessView.Class
+	readinessLabel = readinessView.Label
+	readinessHint = readinessView.Hint
 	nextActionURL := withLang("/bot/setup", r)
 	nextActionLabel := tr(lang, "ia.new_connection")
 	if readiness.KitsuConfigured && !readiness.DiscordConfigured {
@@ -260,6 +317,8 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		nextActionURL = withLang("/bot/admin/projects", r)
 		nextActionLabel = tr(lang, "ia.production_list")
 	}
+	nextActionURL = readinessView.ActionURL
+	nextActionLabel = readinessView.ActionLabel
 	botState := statusText(lang, readiness.DiscordConfigured)
 	statusExplanation := readinessHint
 	statusAction := ""
@@ -621,13 +680,14 @@ func renderIABot(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
+	readinessView := readinessViewFor(lang, r, readiness)
 	_, notificationState, notificationHint := iaReadiness(db, lang)
 	actionURL := "/bot/admin/projects"
 	actionLabel := tr(lang, "ia.production_list")
 	problem := notificationHint
 	if !readiness.KitsuConfigured {
-		actionURL = "/bot/setup"
-		actionLabel = tr(lang, "ia.new_connection")
+		actionURL = "/bot/admin/bot"
+		actionLabel = tr(lang, "connections.title")
 		problem = t(lang, "Kitsu接続を設定してください。", "Complete Kitsu connection setup.")
 	} else if !readiness.DiscordConfigured {
 		actionURL = "/bot/admin/bot"
@@ -635,12 +695,28 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		problem = t(lang, "Bot接続を設定してください。", "Complete Bot Connection setup.")
 	}
 	action := `<a class="btn" href="` + esc(withLang(actionURL, r)) + `">` + esc(actionLabel) + `</a>`
+	connectionAction := `<a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "connections.title")) + `</a>`
+	productionCount := model.ListProjects(db)
+	productionValue := fmt.Sprintf(t(lang, "%d件", "%d"), len(productionCount))
+	productionExplanation := t(lang, "接続済みProductionはありません。", "No connected Productions.")
+	if len(productionCount) > 0 {
+		productionExplanation = t(lang, "接続済みProductionがあります。", "Connected Productions are available.")
+	}
+	if !readiness.KitsuConfigured {
+		problem = t(lang, "初期設定を完了してください。", "Complete initial setup.")
+	}
+	problem = readinessView.Hint
+	notificationState = readinessView.Notification
+	if strings.TrimSpace(readinessView.ActionURL) != "" {
+		actionURL = readinessView.ActionURL
+		actionLabel = readinessView.ActionLabel
+	}
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(tr(lang, "ia.system_status")) + `</h2><dl class="status-list">` +
-		statusSummaryRow(tr(lang, "system.kitsu"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured), "", "") +
-		statusSummaryRow(tr(lang, "system.discord"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
-		statusSummaryRow(tr(lang, "system.bot"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), "", "") +
+		statusSummaryRow(tr(lang, "system.kitsu"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured), t(lang, "Kitsu接続を設定してください。", "Configure the Kitsu connection."), connectionAction) +
+		statusSummaryRow(tr(lang, "system.discord"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], statusText(lang, readiness.DiscordConfigured), t(lang, "Discord Botを設定してください。", "Configure the Discord Bot."), connectionAction) +
+		statusSummaryRow(tr(lang, "system.production"), map[bool]string{true: "success", false: "blocked"}[len(productionCount) > 0], productionValue, productionExplanation, `<a class="btn-ghost" href="`+esc(withLang("/bot/admin/projects", r))+`">`+esc(tr(lang, "ia.production_list"))+`</a>`) +
 		statusSummaryRow(tr(lang, "system.notifications"), notificationClass(notificationState, readiness.OverallReady, lang), notificationState, "", "") +
-		statusSummaryRow(tr(lang, "system.overall"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady), problem, action) + `</dl><p class="hint" role="status" aria-live="polite">` + esc(tr(lang, "system.next_action")) + `: ` + esc(problem) + `</p></section></div>`
+		statusSummaryRow(tr(lang, "system.overall"), readinessView.Class, readinessView.Label, problem, action) + `</dl></section></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
@@ -1187,7 +1263,7 @@ func projectIDFromRequest(r *http.Request) string {
 }
 
 func wizardStep(r *http.Request, botToken string, db *gorm.DB, projectID, guildID string) int {
-	ready := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), botToken).OverallReady
+	ready := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), botToken).PrerequisitesReady
 	if !ready {
 		return 1
 	}
@@ -1234,6 +1310,9 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 	projectID := projectIDFromRequest(r)
 	guildID := strings.TrimSpace(r.URL.Query().Get("plan_guild"))
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), botToken)
+	if step > 1 && !readiness.PrerequisitesReady {
+		step = 1
+	}
 	if step >= 3 {
 		selected := wizardProject(projects, projectID)
 		if selected.ID == "" || model.FindProjectByKitsuID(db, projectID) != nil {
@@ -1266,7 +1345,7 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 	body := `<div class="section-stack"><section class="section-card glass"><h1>` + esc(tr(lang, "ia.new_connection")) + `</h1><p class="hint">` + esc(tr(lang, "wizard.description")) + `</p><div class="setup-steps" aria-label="` + esc(tr(lang, "wizard.progress")) + `">` + steps.String() + `</div></section>`
 	switch step {
 	case 1:
-		body += renderWizardPrerequisites(lang, r, readiness)
+		body += renderWizardPrerequisitesShared(lang, r, readiness)
 	case 2:
 		body += renderWizardProductionLocalized(lang, r, db, projects)
 	case 3:
@@ -1279,6 +1358,31 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 		body += renderWizardComplete(lang, r, db, projectID)
 	}
 	return body + `</div>`
+}
+
+func renderWizardPrerequisitesShared(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) string {
+	view := readinessViewFor(lang, r, readiness)
+	status := func(ok bool) string {
+		if ok {
+			return t(lang, "接続済み", "Connected")
+		}
+		return t(lang, "未設定", "Not configured")
+	}
+	productionValue := t(lang, "0件", "0 connected")
+	if readiness.ProductionConnected {
+		productionValue = t(lang, "接続済み", "Connected")
+	}
+	body := `<section class="section-card glass" aria-labelledby="wizard-prerequisites-title"><h2 id="wizard-prerequisites-title">` + esc(tr(lang, "wizard.prerequisites_title")) + `</h2><dl class="status-list">` +
+		statusSummaryRow(t(lang, "Kitsu接続", "Kitsu connection"), map[bool]string{true: "success", false: "blocked"}[readiness.KitsuConfigured], status(readiness.KitsuConfigured), "", "") +
+		statusSummaryRow(t(lang, "Discord Bot", "Discord Bot"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], status(readiness.DiscordConfigured), "", "") +
+		statusSummaryRow(t(lang, "Production接続", "Production connections"), map[bool]string{true: "success", false: "blocked"}[readiness.ProductionConnected], productionValue, "", "") +
+		statusSummaryRow(t(lang, "通知状態", "Notifications"), view.NotificationClass, view.Notification, view.Hint, "") + `</dl>`
+	if !readiness.PrerequisitesReady {
+		body += `<p class="state-explanation" role="status" aria-live="polite">` + esc(view.Hint) + `</p><a class="btn" href="` + esc(view.ActionURL) + `">` + esc(view.ActionLabel) + `</a>`
+	} else {
+		body += `<p class="state-explanation" role="status" aria-live="polite">` + esc(t(lang, "接続の前提条件が整いました。Productionを選択できます。", "Connection prerequisites are ready. Select a Production to continue.")) + `</p><a class="btn" href="` + esc(setupWizardURL(r, 2, "", "", false)) + `">` + esc(t(lang, "次へ", "Next")) + `</a>`
+	}
+	return body + `</section>`
 }
 
 func renderWizardPrerequisites(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) string {

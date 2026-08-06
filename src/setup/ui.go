@@ -98,7 +98,7 @@ button,input,select{font:inherit}
 .production-list-state{display:grid;gap:4px;min-width:170px}
 .mapping-list,.status-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
 .status-list{gap:8px}
-.status-row{display:grid;grid-template-columns:minmax(10rem,.8fr) minmax(8rem,auto) minmax(16rem,1.5fr) auto;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)}
+.status-row{display:grid;grid-template-columns:minmax(10rem,.8fr) minmax(8rem,auto) minmax(16rem,1.5fr) minmax(10rem,auto);align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)}
 .status-row:last-child{border-bottom:0}
 .status-row-label{font-weight:650;color:var(--text)}
 .status-row-value{display:flex;align-items:center;gap:10px;min-width:0;margin:0}
@@ -178,7 +178,8 @@ button,input,select{font:inherit}
   gap:4px;
 }
 .nav-chip,.home-link,.action-link{
-  border-radius:999px;
+	border-radius:999px;
+	min-height:44px;
   padding:8px 12px;
   display:inline-flex;
   align-items:center;
@@ -204,6 +205,7 @@ button,input,select{font:inherit}
   grid-template-columns:1fr 1fr;
   gap:4px;
   min-width:104px;
+  min-height:44px;
   padding:4px;
   border-radius:999px;
 }
@@ -251,12 +253,14 @@ button,input,select{font:inherit}
 .form-span-2{grid-column:span 2}
 label{display:block;margin:0 0 8px;color:#ddd8d0;font-size:12px;text-transform:uppercase;letter-spacing:.16em;font-family:"Space Grotesk","Outfit",sans-serif;}
 input,select,textarea{width:100%;min-width:0;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(8,8,10,.7);color:var(--text);padding:10px 12px;outline:none;transition:border-color .18s ease, box-shadow .18s ease, background .18s ease;}
+input,select{min-height:44px;}
 input:focus,select:focus,textarea:focus{border-color:rgba(255,141,72,.72);box-shadow:0 0 0 3px rgba(232,90,26,.16);}
-button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #6dc3ff;outline-offset:3px;}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #6dc3ff;outline-offset:3px;}
+summary:focus-visible{border-radius:10px;}
 input[readonly],input[disabled],select[disabled]{opacity:.72;cursor:not-allowed;}
 .field-help{color:var(--muted-2);font-size:12px;margin-top:6px;line-height:1.55;}
 .button-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:12px;}
-.btn,.btn-sm,.btn-ghost,.btn-danger{border:none;border-radius:999px;padding:8px 14px;cursor:pointer;font-weight:600;font-family:"Space Grotesk","Outfit",sans-serif;letter-spacing:.04em;transition:transform .18s ease, opacity .18s ease, box-shadow .18s ease;}
+.btn,.btn-sm,.btn-ghost,.btn-danger{display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:999px;min-height:44px;padding:8px 14px;cursor:pointer;font-weight:600;font-family:"Space Grotesk","Outfit",sans-serif;letter-spacing:.04em;transition:transform .18s ease, opacity .18s ease, box-shadow .18s ease;}
 .btn:hover,.btn-sm:hover,.btn-ghost:hover,.btn-danger:hover{transform:translateY(-1px)}
 .btn:disabled,.btn-sm:disabled,.btn-ghost:disabled,.btn-danger:disabled{cursor:not-allowed;opacity:.72;transform:none}
 .btn:disabled,.btn-sm:disabled,.btn-ghost:disabled,.btn-danger:disabled{color:var(--muted);background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.1);box-shadow:none}
@@ -376,6 +380,8 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
 @media (max-width:640px){.shell{padding:12px 9px 32px}.topbar{gap:10px;align-items:flex-start}.top-actions{width:100%;gap:6px;justify-content:flex-start;align-items:stretch}.top-actions nav{flex:1 1 100%;width:100%}.brand-title{font-size:21px}.page-heading h1{font-size:22px}.dashboard-intro{flex-direction:column;gap:8px}.dashboard-summary-grid{grid-template-columns:1fr}.dashboard-queue-row{grid-template-columns:1fr;gap:8px}.dashboard-queue-row .btn-ghost{justify-self:start}.page-card{width:auto!important;max-width:100%!important;margin-left:0!important;margin-right:0!important}.section-card{padding:12px;min-width:0}.dashboard-grid,.metric-grid,.form-grid,.workflow-grid{grid-template-columns:1fr}.form-span-2{grid-column:auto}.nav-card{width:100%;justify-content:flex-start}.nav-chip{flex:1 1 auto;justify-content:center}.lang-toggle{min-width:100px}.btn,.btn-sm,.btn-ghost,.btn-danger{max-width:100%;white-space:normal}.accordion{border-radius:16px}.accordion summary{padding:11px}.accordion-body{padding:0 9px 11px}.accordion-summary-main{flex-basis:100%}.accordion-summary-side{width:100%;justify-content:flex-start}.accordion-trigger{width:100%;justify-content:space-between}.project-panel-head{flex-direction:column}.project-panel-meta{width:100%;gap:8px}.project-panel-meta .tag{max-width:100%;white-space:normal}.project-panel-meta form,.project-panel-meta .btn-danger{width:100%}.table-wrap{margin:0 -2px}.project-channel-table{overflow:visible;background:transparent;border:none}.project-channel-table thead{display:none}.project-channel-table table,.project-channel-table tbody,.project-channel-table tr,.project-channel-table td{display:block;width:100%}.project-channel-table tr{margin:0 0 8px;padding:8px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.035)}.project-channel-table td{padding:5px 0;border-bottom:none}.project-channel-table td::before{content:attr(data-label);display:block;margin-bottom:4px;color:var(--muted-2);font-size:10px;text-transform:uppercase;letter-spacing:.14em;font-family:"Space Grotesk","Outfit",sans-serif}.project-channel-table td:last-child{white-space:normal}.project-channel-table .delete-form{justify-content:stretch}.project-channel-table .delete-form .btn-danger{width:100%}.delete-modal{padding:9px}.delete-box{padding:12px;border-radius:15px}.metric-value-host{font-size:14px}.workflow-overview{padding:12px}.workflow-card{min-height:auto}.setup-steps{flex-wrap:wrap;row-gap:9px}}
 @media (max-width:480px){.setup-steps{display:grid;grid-template-columns:1fr;gap:6px}.setup-steps .step-connector{width:2px;height:8px;min-width:2px;margin:0 0 0 12px}.setup-step{min-height:28px}}
 @media (max-width:480px){.section-card{padding:9px;box-shadow:none}.glass{box-shadow:none}.shell{padding:7px 6px 28px}.hint{font-size:.76rem}.metric-label{font-size:.7rem}.metric-value{font-size:1.05rem}.section-card h3{font-size:.92rem}.table-wrap table{font-size:.75rem}.field-help,.field-label{font-size:.76rem}}
+@media (max-width:960px){.primary-nav{min-width:0;max-width:100%;overflow:hidden}.primary-nav .nav-card{flex-wrap:nowrap;max-width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;overscroll-behavior-x:contain}.primary-nav .nav-chip{flex:0 0 auto}}
+@media (max-width:640px){.top-actions{flex-direction:column;align-items:stretch}.top-actions nav{width:100%;flex:0 0 auto}.lang-toggle{align-self:flex-start}}
 `
 
 func shellHeadExtras() string {
@@ -583,7 +589,7 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
 	}
 	navHTML := ""
 	if nav != "" {
-		navHTML = `<nav aria-label="Primary navigation">` + nav + `</nav>`
+		navHTML = `<nav class="primary-nav" aria-label="Primary navigation">` + nav + `</nav>`
 	}
 	return fmt.Sprintf(`<!doctype html>
 <html lang="%s">

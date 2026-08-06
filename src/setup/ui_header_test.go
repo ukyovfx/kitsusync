@@ -11,12 +11,12 @@ func TestAdminHeaderKeepsGlobalActionsInPrimaryHeader(t *testing.T) {
 	body := adminPage("en", "KitsuSync", r, "<p>content</p>")
 	topbar := strings.Index(body, `<div class="topbar">`)
 	actions := strings.Index(body, `<div class="top-actions">`)
-	nav := strings.Index(body, `<nav aria-label="Primary navigation">`)
+	nav := strings.Index(body, `<nav class="primary-nav" aria-label="Primary navigation">`)
 	main := strings.Index(body, `<main id="main-content">`)
 	if topbar < 0 || actions < topbar || nav < actions || main < nav {
 		t.Fatalf("global navigation is not inside the header: topbar=%d actions=%d nav=%d main=%d", topbar, actions, nav, main)
 	}
-	if strings.Count(body[:main], `<nav aria-label="Primary navigation">`) != 1 {
+	if strings.Count(body[:main], `<nav class="primary-nav" aria-label="Primary navigation">`) != 1 {
 		t.Fatal("unexpected duplicate primary navigation")
 	}
 	for _, label := range []string{"Dashboard", "Productions", "New Production Connection", "User Linking", "Connections", "System Status", "Audit Log", "JP", "EN"} {

@@ -2753,10 +2753,59 @@ func renderBotSettingsPageLegacy(w http.ResponseWriter, r *http.Request, db *gor
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.bot_connection"), r, form))
 }
 
+type connectionStatus struct {
+	Class string
+	Label string
+}
+
+func connectionSecretStatus(value, lang string) connectionStatus {
+	if strings.TrimSpace(value) == "" {
+		return connectionStatus{Class: "bad", Label: t(lang, "未設定", "Not configured")}
+	}
+	return connectionStatus{Class: "ok", Label: t(lang, "設定済み / 非表示", "Configured / hidden")}
+}
+
+func connectionStatusPill(value connectionStatus) string {
+	return `<span class="status-pill ` + esc(value.Class) + `" role="status">` + esc(value.Label) + `</span>`
+}
+
+func renderConnectionsPageSafe(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	lang := currentLang(r)
+	storedHost := model.GetSetting(db, "kitsu.hostname")
+	hostRaw := strings.TrimSpace(storedHost)
+	if hostRaw == "" {
+		hostRaw = strings.TrimSpace(os.Getenv("KITSU_HOSTNAME"))
+	}
+	if hostRaw == "" {
+		hostRaw = LocalDevelopmentKitsuHostname()
+	}
+	host := safeKitsuHostDisplay(hostRaw)
+	readinessHost := normalizeKitsuHostname(hostRaw)
+	if host == "" {
+		host = t(lang, "未設定", "Not configured")
+	}
+	botToken := storedRuntimeDiscordBotToken(db)
+	readiness := sharedBotRuntimeReadiness(db, readinessHost, botToken)
+	statusClass := "bad"
+	statusLabel := tr(lang, "connections.status_required")
+	statusHint := tr(lang, "connections.hint_separate")
+	if readiness.OverallReady {
+		statusClass = "ok"
+		statusLabel = tr(lang, "connections.status_configured")
+	} else if !readiness.KitsuConfigured {
+		statusHint = tr(lang, "connections.hint_kitsu")
+	} else if !readiness.DiscordConfigured {
+		statusClass = "warn"
+		statusHint = tr(lang, "connections.hint_discord")
+	}
+	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h1>` + esc(tr(lang, "connections.title")) + `</h1><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div><div class="settings-block"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><dl class="status-list"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd><dt>` + esc(tr(lang, "connections.account")) + `</dt><dd>` + connectionStatusPill(connectionSecretStatus(storedRuntimeKitsuEmail(db), lang)) + `</dd></dl></div><div class="settings-block"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><dl class="status-list"><dt>Discord Bot Token</dt><dd>` + connectionStatusPill(connectionSecretStatus(botToken, lang)) + `</dd></dl></div><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></section></div>`
+	fmt.Fprint(w, adminPage(lang, "", r, body))
+}
+
 func renderConnectionsPageLocalized(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	storedHost := model.GetSetting(db, "kitsu.hostname")
-	host := normalizeKitsuHostname(storedHost)
+	host := safeKitsuHostDisplay(storedHost)
 	if host == "" {
 		host = publicKitsuHostnameFromRequest(r, storedHost)
 	}
@@ -2766,7 +2815,7 @@ func renderConnectionsPageLocalized(w http.ResponseWriter, r *http.Request, db *
 	statusLabel := tr(lang, "connections.status_required")
 	statusHint := tr(lang, "connections.hint_separate")
 	if readiness.OverallReady {
-		statusClass = "success"
+		statusClass = "ok"
 		statusLabel = tr(lang, "connections.status_configured")
 	} else if !readiness.KitsuConfigured {
 		statusHint = tr(lang, "connections.hint_kitsu")
@@ -2782,28 +2831,24 @@ func renderConnectionsPageLocalized(w http.ResponseWriter, r *http.Request, db *
 		fmt.Fprint(w, adminPage(lang, "", r, body))
 		return
 	}
-	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h1>` + esc(tr(lang, "connections.title")) + `</h1><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + statusClass + `" role="status">` + esc(statusLabel) + `</span></div><div class="settings-block"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><dl class="status-list"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd><dt>` + esc(tr(lang, "connections.account")) + `</dt><dd>` + esc(secretStatus(storedRuntimeKitsuEmail(db), lang)) + `</dd></dl></div><div class="settings-block"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><dl class="status-list"><dt>Discord Bot Token</dt><dd>` + esc(secretStatus(botToken, lang)) + `</dd></dl></div><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></section></div>`
+	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h1>` + esc(tr(lang, "connections.title")) + `</h1><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + statusClass + `" role="status">` + esc(statusLabel) + `</span></div><div class="settings-block"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><dl class="status-list"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd><dt>` + esc(tr(lang, "connections.account")) + `</dt><dd>` + connectionStatusPill(connectionSecretStatus(storedRuntimeKitsuEmail(db), lang)) + `</dd></dl></div><div class="settings-block"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><dl class="status-list"><dt>` + esc(t(lang, "Discord Botトークン", "Discord Bot token")) + `</dt><dd>` + connectionStatusPill(connectionSecretStatus(botToken, lang)) + `</dd></dl></div><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></section></div>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
 func renderConnectionsPage(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
-	renderConnectionsPageLocalized(w, r, db)
+	renderConnectionsPageSafe(w, r, db)
 }
 
 func renderBotSettingsPage(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
-	renderConnectionsPageLocalized(w, r, db)
+	renderConnectionsPageSafe(w, r, db)
 }
 
 func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
-		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
-			renderConnectionsPageLocalized(w, r, db)
-			return
-		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("edit") != "1" {
-			renderIABot(w, r, db)
+			renderConnectionsPageSafe(w, r, db)
 			return
 		}
 		storedHost := model.GetSetting(db, "kitsu.hostname")

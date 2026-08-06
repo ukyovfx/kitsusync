@@ -68,17 +68,52 @@ type SetupDiagnostics struct {
 // Wizard, Bot Settings summary, Dashboard, and System Status. Notification
 // readiness also requires at least one valid enabled Production route.
 type SharedBotRuntimeReadiness struct {
-	KitsuConfigured   bool
-	DiscordConfigured bool
-	OverallReady      bool
+	KitsuConfigured     bool
+	DiscordConfigured   bool
+	ProductionConnected bool
+	RoutingReady        bool
+	PrerequisitesReady  bool
+	OverallReady        bool
+	State               ReadinessState
 }
+
+type ReadinessState string
+
+const (
+	ReadinessSetupRequired      ReadinessState = "setup_required"
+	ReadinessBotSetupRequired   ReadinessState = "bot_setup_required"
+	ReadinessProductionRequired ReadinessState = "production_required"
+	ReadinessRoutingRequired    ReadinessState = "routing_required"
+	ReadinessReady              ReadinessState = "ready"
+)
 
 func sharedBotRuntimeReadiness(db *gorm.DB, kitsuHost, botToken string) SharedBotRuntimeReadiness {
 	kitsuConfigured := strings.TrimSpace(kitsuHost) != "" &&
 		strings.TrimSpace(storedRuntimeKitsuEmail(db)) != "" &&
 		(strings.TrimSpace(StoredRuntimeKitsuPassword(db)) != "" || strings.TrimSpace(model.GetSetting(db, RuntimeKitsuTokenSettingKey)) != "")
 	discordConfigured := strings.TrimSpace(botToken) != ""
-	return SharedBotRuntimeReadiness{KitsuConfigured: kitsuConfigured, DiscordConfigured: discordConfigured, OverallReady: kitsuConfigured && discordConfigured && hasReadyProductionRouting(db)}
+	productionConnected := len(model.ListProjects(db)) > 0
+	routingReady := hasReadyProductionRouting(db)
+	prerequisitesReady := kitsuConfigured && discordConfigured
+	state := ReadinessSetupRequired
+	switch {
+	case !kitsuConfigured:
+		state = ReadinessSetupRequired
+	case !discordConfigured:
+		state = ReadinessBotSetupRequired
+	case !productionConnected:
+		state = ReadinessProductionRequired
+	case !routingReady:
+		state = ReadinessRoutingRequired
+	default:
+		state = ReadinessReady
+	}
+	return SharedBotRuntimeReadiness{
+		KitsuConfigured: kitsuConfigured, DiscordConfigured: discordConfigured,
+		ProductionConnected: productionConnected, RoutingReady: routingReady,
+		PrerequisitesReady: prerequisitesReady, OverallReady: state == ReadinessReady,
+		State: state,
+	}
 }
 
 func localizeSetupDiagnostics(lang string, diag SetupDiagnostics) SetupDiagnostics {
@@ -208,24 +243,24 @@ func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID, lang string) []Se
 	email := storedRuntimeKitsuEmail(db)
 	password := strings.TrimSpace(os.Getenv(RuntimeKitsuPasswordEnv))
 	if email != "" {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupOK, Summary: "Configured", Detail: email})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu連携アカウント", "Kitsu integration account"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: email})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu runtime メール", "Kitsu runtime email"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で runtime メールを確認して保存してください。", "Review Bot Settings and save the runtime email there.")})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu連携アカウント", "Kitsu integration account"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsu連携アカウントを保存してください。", "Save the Kitsu integration account in Connections.")})
 	}
 	if password != "" {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu連携アカウントのパスワード", "Kitsu integration account password"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: "hidden"})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu runtime パスワード", "Kitsu runtime password"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で runtime パスワードを確認して保存してください。", "Review Bot Settings and save the runtime password there.")})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu連携アカウントのパスワード", "Kitsu integration account password"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsu連携アカウントのパスワードを保存してください。", "Save the Kitsu integration account password in Connections.")})
 	}
 	if strings.TrimSpace(kitsuHost) != "" {
-		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupOK, Summary: "Configured", Detail: strings.TrimSpace(kitsuHost)})
+		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: t(lang, "Kitsuホスト", "Kitsu host"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: strings.TrimSpace(kitsuHost)})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: t(lang, "Kitsu hostname", "Kitsu hostname"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で Kitsu hostname を確認してください。", "Review the Kitsu hostname in Bot Settings.")})
+		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: t(lang, "Kitsuホスト", "Kitsu host"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsuホストを確認してください。", "Review the Kitsu host in Connections.")})
 	}
 	if strings.TrimSpace(botToken) != "" {
-		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
+		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: t(lang, "Discord Bot", "Discord Bot"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: "hidden"})
 	} else {
-		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: t(lang, "Discord bot token", "Discord bot token"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "Bot Settings で共有 bot token を確認して保存してください。", "Review Bot Settings and save the shared bot token there.")})
+		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: t(lang, "Discord Bot", "Discord Bot"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でDiscord Botを保存してください。", "Save the Discord Bot in Connections.")})
 	}
 	if strings.TrimSpace(guildID) != "" {
 		checks = append(checks, SetupCheck{Key: "discord_guild_id", Label: "Discord guild fallback", Status: SetupWarn, Summary: "Configured", Detail: strings.TrimSpace(guildID), Fix: "Per-project guilds are preferred; fallback guild is only a compatibility default."})

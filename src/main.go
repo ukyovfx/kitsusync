@@ -498,6 +498,9 @@ func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password s
 	if hostname == "" {
 		hostname = conf.Kitsu.Hostname
 	}
+	if hostname == "" {
+		hostname = setup.LocalDevelopmentKitsuHostname()
+	}
 	email = model.GetSetting(db, setup.RuntimeKitsuEmailSettingKey)
 	if email == "" {
 		email = os.Getenv(setup.RuntimeKitsuEmailEnv)
@@ -801,10 +804,7 @@ func main() {
 
 	loginHandler := func(w http.ResponseWriter, r *http.Request) {
 		h, _, _ := getKitsuCreds(db, conf)
-		setup.LoginHandler(h, func(hostname string) {
-			model.SetSetting(db, "kitsu.hostname", hostname)
-			os.Setenv("KITSU_HOSTNAME", hostname)
-		})(w, r)
+		setup.LoginHandler(h)(w, r)
 	}
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/bot/login", loginHandler)
@@ -812,16 +812,17 @@ func main() {
 	mux.HandleFunc("/logout", setup.LogoutHandler())
 	mux.HandleFunc("/bot/logout", setup.LogoutHandler())
 
-	mux.HandleFunc("/setup", setup.RequireSession(setupHandler))
-	mux.HandleFunc("/bot/setup", setup.RequireSession(setupHandler))
+	setupReadOnlyRoute := setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, setupHandler))
+	mux.HandleFunc("/setup", setupReadOnlyRoute)
+	mux.HandleFunc("/bot/setup", setupReadOnlyRoute)
 
 	// Setup diagnostic JSON API — registered under both root and /bot prefix.
 	setupAPIRoutes := func(prefix string) {
 		mux.HandleFunc(prefix+"/api/setup/status", setup.RequireSession(setup.SetupStatusHandler(
 			db, conf.Kitsu.RequestInterval, setupCredsFunc,
 		)))
-		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.ProjectsHandler(db))))
-		mux.HandleFunc(prefix+"/api/setup/preview-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.PreviewProjectHandler(db, setupCredsFunc))))
+		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, setup.ProjectsHandler(db))))
+		mux.HandleFunc(prefix+"/api/setup/preview-project", setup.RequireSession(setup.ReadOnlyAuditPreviewRoute(runtime.ready, setup.PreviewProjectHandler(db, setupCredsFunc))))
 		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.ApplyProjectHandler(db, setupCredsFunc)))))
 		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.TestKitsuHandler(db, onRuntimeConfigured)))
 		mux.HandleFunc(prefix+"/api/setup/test-discord", setup.RequireSession(setup.RejectValidationMutation(setup.TestDiscordHandler(db))))
@@ -835,11 +836,11 @@ func main() {
 
 	registerAdminRoutes := func(prefix string) {
 		mux.HandleFunc(prefix+"/admin", setup.RequireSession(setup.AdminIndex(db)))
-		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(prefix+"/admin/checkers", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.CheckersHandler(db, h)(w, r)
 		})))
@@ -847,7 +848,7 @@ func main() {
 		// BotHandler persists shared runtime credentials and triggers reconnect.
 		kitsuReconnect := func() { onRuntimeConfigured() }
 		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.RejectValidationMutation(setup.BotHandler(db, kitsuReconnect))))
-		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		})))

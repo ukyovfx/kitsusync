@@ -116,6 +116,28 @@ func normalizeKitsuHostname(raw string) string {
 	return host
 }
 
+// safeKitsuHostDisplay keeps container-only addressing out of normal UI while
+// retaining a useful local-development summary. Credentials, paths, queries,
+// and fragments are never displayed.
+func safeKitsuHostDisplay(raw string) string {
+	normalized := normalizeKitsuHostname(raw)
+	if normalized == "" {
+		return ""
+	}
+	u, err := url.Parse(normalized)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	if strings.EqualFold(u.Hostname(), "host.docker.internal") {
+		return "http://127.0.0.1:8080"
+	}
+	if u.User != nil {
+		u.User = nil
+	}
+	u.Path, u.RawQuery, u.Fragment = "", "", ""
+	return strings.TrimRight(u.String(), "/")
+}
+
 func publicKitsuHostnameFromRequest(r *http.Request, storedHost string) string {
 	if r != nil {
 		scheme := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])

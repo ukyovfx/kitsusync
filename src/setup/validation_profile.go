@@ -15,6 +15,21 @@ import (
 )
 
 const validationOnlyEnv = "KITSUSYNC_VALIDATION_ONLY"
+const localProfileEnv = "KITSUSYNC_LOCAL_PROFILE"
+
+// LocalDevelopmentKitsuHostname is intentionally opt-in. It is not an OSS
+// production default; it only supplies the container-to-host endpoint when
+// the explicit local development profile is enabled.
+func LocalDevelopmentKitsuHostname() string {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(localProfileEnv)))
+	if value != "1" && value != "true" && value != "yes" {
+		return ""
+	}
+	if host := strings.TrimSpace(os.Getenv("KITSUSYNC_LOCAL_KITSU_HOST")); host != "" {
+		return host
+	}
+	return "http://host.docker.internal:8080/"
+}
 
 func ValidationOnlyModeEnabled() bool {
 	value := strings.TrimSpace(strings.ToLower(os.Getenv(validationOnlyEnv)))

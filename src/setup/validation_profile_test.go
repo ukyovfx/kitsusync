@@ -90,6 +90,22 @@ func TestFixtureConfigRequiresExplicitMode(t *testing.T) {
 	}
 }
 
+func TestLocalDevelopmentKitsuHostnameRequiresExplicitProfile(t *testing.T) {
+	t.Setenv(localProfileEnv, "")
+	t.Setenv("KITSUSYNC_LOCAL_KITSU_HOST", "")
+	if got := LocalDevelopmentKitsuHostname(); got != "" {
+		t.Fatalf("local endpoint enabled without explicit profile: %q", got)
+	}
+	t.Setenv(localProfileEnv, "1")
+	if got := LocalDevelopmentKitsuHostname(); got != "http://host.docker.internal:8080/" {
+		t.Fatalf("unexpected local endpoint: %q", got)
+	}
+	t.Setenv("KITSUSYNC_LOCAL_KITSU_HOST", "http://example.invalid/")
+	if got := LocalDevelopmentKitsuHostname(); got != "http://example.invalid/" {
+		t.Fatalf("explicit local endpoint was not respected: %q", got)
+	}
+}
+
 func TestNormalStartupDoesNotSeedFixtureOrValidationData(t *testing.T) {
 	t.Setenv("KITSUSYNC_FIXTURE_MODE", "")
 	t.Setenv(validationOnlyEnv, "")

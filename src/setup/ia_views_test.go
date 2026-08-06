@@ -86,7 +86,7 @@ func TestPrimaryNavigationAndNewConnectionFlow(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIANewConnection(w, r, db)
 	setup := w.Body.String()
-	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete", "Bot Connection is not configured"} {
+	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete", "Configure the Kitsu connection"} {
 		if !strings.Contains(setup, want) {
 			t.Fatalf("new connection flow missing %q", want)
 		}
@@ -111,7 +111,7 @@ func TestNewConnectionWizardUsesSharedJapaneseCatalog(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIANewConnection(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"接続の準備状況", "Bot接続を設定", "新しいProductionを接続", "Discordサーバー"} {
+	for _, want := range []string{"接続の準備状況", "Kitsu接続を設定", "新しいProductionを接続", "Discordサーバー"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Japanese wizard missing %q", want)
 		}
@@ -136,6 +136,32 @@ func TestSharedStatusSummaryRowHasSemanticStructureAndVariants(t *testing.T) {
 	}
 	if strings.Contains(body, "窶") || strings.Contains(body, "�") {
 		t.Fatal("shared status row contains corrupted decorative text")
+	}
+}
+
+func TestSystemStatusUsesOneAlignedReadinessGrid(t *testing.T) {
+	t.Setenv("KITSU_HOSTNAME", "")
+	t.Setenv("KITSUSYNC_LOCAL_PROFILE", "")
+	db := newIAViewDB(t)
+	w := httptest.NewRecorder()
+	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
+	body := w.Body.String()
+	for _, label := range []string{"Kitsu connection", "Discord Bot", "Production connections", "Notifications", "Overall status"} {
+		if !strings.Contains(body, ">"+label+"<") {
+			t.Fatalf("System Status missing row %q", label)
+		}
+	}
+	if got := strings.Count(body, `class="status-row"`); got != 5 {
+		t.Fatalf("System Status rendered %d rows, want 5", got)
+	}
+	if got := strings.Count(body, `class="status-row-action"`); got != 5 {
+		t.Fatalf("System Status rendered %d action cells, want one per row", got)
+	}
+	if strings.Contains(body, "Next required action:") {
+		t.Fatal("System Status duplicated the next-action explanation below the grid")
+	}
+	if !strings.Contains(body, `href="/bot/admin/bot?lang=en"`) {
+		t.Fatal("System Status did not guide incomplete setup to Connections")
 	}
 }
 
@@ -224,7 +250,7 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
 	renderIADashboard(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Action required", "Complete Kitsu connection setup.", "Needs attention", "Notification system", "Productions needing attention", "dashboard-status-list", "dashboard-side-stack", "activity-columns"} {
+	for _, want := range []string{"Setup required", "Configure the Kitsu connection before continuing.", "Needs attention", "Notification system", "Productions needing attention", "dashboard-status-list", "dashboard-side-stack", "activity-columns"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing readiness copy %q", want)
 		}
@@ -573,6 +599,8 @@ func checkConnectionsPageUsesSafeNameAndUnescapedStatusMarkup(t *testing.T) {
 }
 
 func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) {
+	t.Setenv("KITSUSYNC_LOCAL_PROFILE", "1")
+	t.Setenv("KITSU_HOSTNAME", "")
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil))
@@ -582,11 +610,14 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 			t.Fatalf("Connections page missing %q", want)
 		}
 	}
-	if strings.Contains(body, `&lt;span class="status-pill`) || !strings.Contains(body, `<span class="status-pill blocked" role="status">`) {
+	if strings.Contains(body, `&lt;span class="status-pill`) || !strings.Contains(body, `<span class="status-pill bad" role="status">`) {
 		t.Fatal("Connections page contains escaped status markup")
 	}
 	if strings.Contains(body, `&amp;lt;span`) {
 		t.Fatal("Connections page contains visible literal status markup")
+	}
+	if !strings.Contains(body, "127.0.0.1:8080") {
+		t.Fatal("Connections page did not show a meaningful configured host")
 	}
 	if got := strings.Count(body, "<h1"); got != 1 {
 		t.Fatalf("Connections page has %d h1 elements, want 1", got)
@@ -724,7 +755,7 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	renderIAHealth(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Not configured", "Bot state", "Notification state", "Overall state", "Next required action"} {
+	for _, want := range []string{"Not configured", "Discord Bot", "Production connections", "Notifications", "Overall status"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("system status missing %q", want)
 		}
