@@ -34,9 +34,10 @@ func WriteAuditLog(db *gorm.DB, log AuditLog) {
 	if db == nil {
 		return
 	}
-	if len(log.WebhookURL) > 40 {
-		log.WebhookURL = log.WebhookURL[:40] + "..."
-	}
+	// Webhook URLs are credentials. Audit evidence keeps the outcome and
+	// destination IDs, never the secret-bearing URL itself.
+	log.WebhookURL = ""
+	log.PreviousWebhookURL = ""
 	db.Create(&log)
 }
 
@@ -85,6 +86,21 @@ func UpdateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, comme
 	})
 }
 
+// MarkTaskObserved records a non-deliverable or permanently failed event
+// without clearing a previously delivered Discord message.
+func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
+	updates := map[string]interface{}{
+		"task_updated_at":    taskUpdatedAt,
+		"task_status":        taskStatus,
+		"comment_id":         commentID,
+		"comment_updated_at": commentUpdatedAt,
+	}
+	result := db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+	if result.RowsAffected == 0 {
+		db.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt})
+	}
+}
+
 func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID string) {
 	updates := map[string]interface{}{
 		"task_updated_at":    taskUpdatedAt,
@@ -97,7 +113,18 @@ func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, comme
 	if threadID != "" {
 		updates["discord_thread_id"] = threadID
 	}
-	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+	result := db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+	if result.RowsAffected == 0 {
+		db.Create(&Task{
+			TaskID:           taskID,
+			TaskUpdatedAt:    taskUpdatedAt,
+			TaskStatus:       taskStatus,
+			CommentID:        commentID,
+			CommentUpdatedAt: commentUpdatedAt,
+			DiscordMessageID: discordMessageID,
+			DiscordThreadID:  threadID,
+		})
+	}
 }
 
 func ClearMessageID(db *gorm.DB, taskID string) {

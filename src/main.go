@@ -293,34 +293,33 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			commentChanged := dbResult.CommentUpdatedAt != data[i].LatestComment.Comment.UpdatedAt
 
 			if statusChanged || timestampChanged || commentChanged {
-				// Mark notifications that only changed comment content.
+				// Mark notifications that only changed comment content. Persisting
+				// the observation is deferred until routing and delivery are known.
 				data[i].IsCommentOnly = commentChanged && !statusChanged && !timestampChanged
-				model.UpdateTask(db, data[i].Task.Task.ID, data[i].Task.Task.UpdatedAt, data[i].TaskStatus.TaskStatus.ShortName, data[i].LatestComment.Comment.ID, data[i].LatestComment.Comment.UpdatedAt)
 			} else {
 				continue
 			}
-		} else {
-			model.CreateTask(db, data[i].Task.Task.ID, data[i].Task.Task.UpdatedAt, data[i].TaskStatus.TaskStatus.ShortName, data[i].LatestComment.Comment.ID, data[i].LatestComment.Comment.UpdatedAt)
 		}
 
 		if conf.SilentUpdateDB {
 			if conf.Log {
 				log.Printf("Ignoring message\n")
 			}
+			persistTaskObservation(db, data[i])
 			continue
 		}
-		// StatusFilter: only notify on WFA, RETAKE, DONE
+		// StatusFilter: only notify on WFA, RETAKE, DONE.
 		currentStatus := data[i].TaskStatus.TaskStatus.ShortName
-		if !isNotifiableStatus(currentStatus) {
-			continue
-		}
-
 		// Treat "none" status as an assign notification when enabled.
 		if strings.EqualFold(currentStatus, "none") {
 			if !conf.Notification.NotifyOnAssign {
+				persistTaskObservation(db, data[i])
 				continue
 			}
 			data[i].IsAssignNotification = true
+		} else if !isNotifiableStatus(currentStatus) {
+			persistTaskObservation(db, data[i])
+			continue
 		}
 		filtered = append(filtered, data[i])
 	}
@@ -350,7 +349,7 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 		routeLabels := labelsFromSet(labels[destinationID])
 		stats.DBRouted += len(payloads)
 		logRouteDispatch("production.task_type_id", routeLabels, payloads, webhooks[destinationID] != "")
-		DiscordQueueSend(payloads, conf, webhooks[destinationID], db, "production.task_type_id", routeLabels)
+		notificationDispatch(payloads, conf, webhooks[destinationID], db, "production.task_type_id", routeLabels)
 	}
 
 	if len(data) > 0 && (stats.DBRouted > 0 || stats.Dropped > 0) {
@@ -448,6 +447,7 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 					DiscordMsgID: res.MessageID,
 					WebhookURL:   webhookURL,
 					Success:      res.MessageID != "",
+					ErrorMessage: res.FailureCategory,
 				})
 				if res.MessageID != "" {
 					sentCount++
@@ -464,6 +464,11 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 					)
 				} else {
 					failedCount++
+					if !res.Retryable || res.Unknown {
+						// Permanent or unknown outcomes are not retried forever and
+						// never clear a previously delivered message reference.
+						model.MarkTaskObserved(db, taskID, task.Task.UpdatedAt, task.TaskStatus.TaskStatus.ShortName, task.LatestComment.Comment.ID, task.LatestComment.Comment.UpdatedAt)
+					}
 				}
 			}
 
@@ -543,6 +548,14 @@ func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, web
 // Polling concurrency guard.
 // pollMu prevents overlapping polling cycles in the same process.
 var pollMu sync.Mutex
+
+// notificationDispatch is replaceable in tests so routing behavior can be
+// verified without making a Discord request.
+var notificationDispatch = DiscordQueueSend
+
+func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) {
+	model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
+}
 
 func runOnePoll(conf config.Config, db *gorm.DB) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("KITSUSYNC_DISABLE_POLL")), "1") {
