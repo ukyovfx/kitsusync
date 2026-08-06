@@ -138,6 +138,48 @@ func safeKitsuHostDisplay(raw string) string {
 	return strings.TrimRight(u.String(), "/")
 }
 
+// effectiveRuntimeKitsuEndpoint resolves the address used by server-side Kitsu
+// requests. A saved setting wins; environment/profile defaults are only used
+// when no saved setting exists. This value must never be rendered directly.
+func effectiveRuntimeKitsuEndpoint(db *gorm.DB) string {
+	if db != nil {
+		if saved := strings.TrimSpace(model.GetSetting(db, "kitsu.hostname")); saved != "" {
+			return normalizeKitsuHostname(saved)
+		}
+	}
+	if configured := strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")); configured != "" {
+		return normalizeKitsuHostname(configured)
+	}
+	return normalizeKitsuHostname(LocalDevelopmentKitsuHostname())
+}
+
+func validateKitsuEndpoint(raw string) (string, error) {
+	normalized := normalizeKitsuHostname(raw)
+	if normalized == "" {
+		return "", errors.New("kitsu endpoint is empty")
+	}
+	u, err := url.Parse(normalized)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
+		return "", errors.New("kitsu endpoint is invalid")
+	}
+	return normalized, nil
+}
+
+// runtimeEndpointFromDisplay accepts the safe local display value without
+// allowing it to replace the container-to-host runtime address.
+func runtimeEndpointFromDisplay(db *gorm.DB, displayed string) (string, error) {
+	normalized, err := validateKitsuEndpoint(displayed)
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(strings.TrimRight(normalized, "/"), "http://127.0.0.1:8080") && strings.EqualFold(strings.TrimSpace(os.Getenv(localProfileEnv)), "1") {
+		if runtime := effectiveRuntimeKitsuEndpoint(db); runtime != "" {
+			return runtime, nil
+		}
+	}
+	return normalized, nil
+}
+
 func publicKitsuHostnameFromRequest(r *http.Request, storedHost string) string {
 	if r != nil {
 		scheme := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
@@ -312,6 +354,23 @@ func storedRuntimeDiscordBotToken(db *gorm.DB) string {
 		}
 	}
 	return strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+}
+
+var validateDiscordBotTokenForSave = validateDiscordBotToken
+
+func validateDiscordBotToken(token string) error {
+	if strings.TrimSpace(token) == "" {
+		return errors.New("Discord Bot Token is required")
+	}
+	body, status, err := botDo(http.MethodGet, discordAPI+"/users/@me", nil, token)
+	if err != nil {
+		return errors.New("Discord Bot could not be reached")
+	}
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		_ = body
+		return discordBotAPIError("Discord Bot validation failed", status, nil)
+	}
+	return nil
 }
 
 func setRuntimeDiscordBotToken(db *gorm.DB, token string) {

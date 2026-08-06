@@ -24,7 +24,8 @@ func RecoverRuntimeCredentials(db *gorm.DB, kitsuHost, email, password string) e
 	}
 	authURL := strings.TrimRight(kitsuHost, "/") + "/api/auth/login"
 	if token, diagnostics := basicauth.AuthForJWTTokenDetailed(authURL, email, password); token == "" {
-		return fmt.Errorf("runtime bot authentication failed at %s (status=%d, category=%s)", authURL, diagnostics.StatusCode, diagnostics.Category)
+		_ = diagnostics
+		return errors.New("Kitsu connection could not be verified")
 	}
 	ciphertext, err := encryptRuntimeSecret(password)
 	if err != nil {

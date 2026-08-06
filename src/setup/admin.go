@@ -314,12 +314,7 @@ func AdminIndex(db *gorm.DB) http.HandlerFunc {
 			)
 		}
 
-		storedHost := model.GetSetting(db, "kitsu.hostname")
-		autoHost := publicKitsuHostnameFromRequest(r, storedHost)
-		effectiveHost := autoHost
-		if storedHost != "" {
-			effectiveHost = normalizeKitsuHostname(storedHost)
-		}
+		effectiveHost := effectiveRuntimeKitsuEndpoint(db)
 		sharedReadiness := sharedBotRuntimeReadiness(db, effectiveHost, storedRuntimeDiscordBotToken(db))
 		botTokenConfigured := sharedReadiness.DiscordConfigured
 		runtimeConfigured := sharedReadiness.KitsuConfigured
@@ -2798,8 +2793,61 @@ func renderConnectionsPageSafe(w http.ResponseWriter, r *http.Request, db *gorm.
 		statusClass = "warn"
 		statusHint = tr(lang, "connections.hint_discord")
 	}
+	if r.URL.Query().Get("legacy") != "1" {
+		body := renderConnectionsDisplayBody(lang, r, db, statusHint, statusClass, statusLabel, host, botToken)
+		fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, body))
+		return
+	}
 	body := `<div class="section-card glass connections-card"><div class="page-heading connections-card-header"><div><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div><div class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><dl class="status-list"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd><dt>` + esc(tr(lang, "connections.account")) + `</dt><dd>` + connectionStatusPill(connectionSecretStatus(storedRuntimeKitsuEmail(db), lang)) + `</dd></dl></div><div class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><dl class="status-list"><dt>Discord Bot Token</dt><dd>` + connectionStatusPill(connectionSecretStatus(botToken, lang)) + `</dd></dl></div><div class="button-row connections-actions"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, body))
+}
+
+func renderConnectionsDisplayBody(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string) string {
+	return `<div class="section-card glass connections-card"><div class="page-heading connections-card-header"><div><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div><section class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.account")) + `</dt><dd>` + connectionStatusPill(connectionSecretStatus(storedRuntimeKitsuEmail(db), lang)) + `</dd></div></dl></section><section class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><dl class="connection-field-list"><div class="connection-field-row"><dt>Discord Bot Token</dt><dd>` + connectionStatusPill(connectionSecretStatus(botToken, lang)) + `</dd></div></dl></section><div class="button-row connections-actions"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></div>`
+}
+
+func renderConnectionsEditFormLegacy(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, runtimeHost, kitsuEmail string) string {
+	displayHost := safeKitsuHostDisplay(runtimeHost)
+	if displayHost == "" {
+		displayHost = t(lang, "未設定", "Not configured")
+	}
+	return fmt.Sprintf(`<div class="section-stack"><div class="auth-notice">%s</div><form method="POST" class="connections-form"><div class="section-card glass connections-card"><div class="page-heading connections-card-header"><div><p class="hint">%s</p></div><span class="status-pill %s" role="status">%s</span></div><div class="settings-block connections-section"><h2>%s</h2><label for="kitsu-hostname">%s</label><input id="kitsu-hostname" type="text" name="kitsu_hostname" value="%s" readonly><label for="kitsu-runtime-email">%s</label><input id="kitsu-runtime-email" type="email" name="kitsu_runtime_email" value="%s" autocomplete="username"><label for="kitsu-runtime-password">%s</label><input id="kitsu-runtime-password" type="password" name="kitsu_runtime_password" autocomplete="new-password"></div><div class="settings-block connections-section"><h2>%s</h2><label for="discord-bot-token">%s</label><input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password"><p class="field-help">%s</p><p class="field-help">%s</p></div><div class="button-row connections-actions"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div></div></form></div>`,
+		authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")),
+		statusHint, statusClass, statusLabel,
+		t(lang, "Kitsu接続", "Kitsu connection"), t(lang, "Kitsuホスト", "Kitsu host"), esc(displayHost),
+		t(lang, "Kitsu連携アカウント", "Kitsu integration account"), esc(kitsuEmail), t(lang, "パスワード", "Password"),
+		t(lang, "Discord Bot接続", "Discord Bot connection"), t(lang, "Discord Bot Token", "Discord Bot token"),
+		t(lang, "トークンは画面に表示しません。", "The token is never displayed."), t(lang, "変更は実行中のプロセスに反映され、アプリ設定にも保存されます。", "Token changes take effect immediately and are also saved in app settings."),
+		t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "新しいProduction接続へ戻る", "Back to New Production Connection"), withLang("/bot/admin/projects", r), t(lang, "接続済みProductionを開く", "Open Connected Productions"))
+}
+
+func renderConnectionsEditFormCombinedLegacy(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, runtimeHost, kitsuEmail string) string {
+	displayHost := safeKitsuHostDisplay(runtimeHost)
+	if displayHost == "" {
+		displayHost = t(lang, "未設定", "Not configured")
+	}
+	return fmt.Sprintf(`<div class="section-stack connections-edit-stack"><div class="auth-notice">%s</div><form method="POST" class="connections-form"><div class="section-card glass connections-card"><div class="page-heading connections-card-header"><div><p class="hint">%s</p></div><span class="status-pill %s" role="status">%s</span></div><section class="settings-block connections-section"><h2>%s</h2><div class="connection-form-field"><label for="kitsu-hostname">%s</label><input id="kitsu-hostname" type="text" name="kitsu_hostname" value="%s" readonly><p class="field-help">%s</p></div><div class="connection-form-field"><label for="kitsu-runtime-email">%s</label><input id="kitsu-runtime-email" type="email" name="kitsu_runtime_email" value="%s" autocomplete="username"><p class="field-help">%s</p></div><div class="connection-form-field"><label for="kitsu-runtime-password">%s</label><input id="kitsu-runtime-password" type="password" name="kitsu_runtime_password" autocomplete="new-password"><p class="field-help">%s</p></div></section><section class="settings-block connections-section"><h2>%s</h2><div class="connection-form-field"><label for="discord-bot-token">%s</label><input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password"><p class="field-help">%s</p></div></section><div class="button-row connections-actions"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div></div></form></div>`,
+		authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), statusHint, statusClass, statusLabel,
+		tr(lang, "connections.kitsu"), tr(lang, "connections.host"), esc(displayHost), tr(lang, "connections.host_help"), tr(lang, "connections.account"), esc(kitsuEmail), tr(lang, "connections.account_help"), t(lang, "パスワード", "Password"), tr(lang, "connections.password_help"), tr(lang, "connections.discord"), t(lang, "Discord Bot Token", "Discord Bot Token"), tr(lang, "connections.token_help"), t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "新しいProduction接続へ戻る", "Back to New Production Connection"), withLang("/bot/admin/projects", r), t(lang, "接続済みProductionを開く", "Open Connected Productions"))
+}
+
+func renderConnectionsEditForm(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, runtimeHost, kitsuEmail string) string {
+	displayHost := safeKitsuHostDisplay(runtimeHost)
+	if displayHost == "" {
+		displayHost = t(lang, "未設定", "Not configured")
+	}
+	notice := authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled."))
+	switch r.URL.Query().Get("msg") {
+	case "kitsu_saved":
+		notice = `<div class="notice notice-success" role="status">` + esc(t(lang, "Kitsu接続を保存しました。", "Kitsu connection saved.")) + `</div>`
+	case "discord_saved":
+		notice = `<div class="notice notice-success" role="status">` + esc(t(lang, "Discord Bot接続を保存しました。", "Discord Bot connection saved.")) + `</div>`
+	}
+	return `<div class="section-stack connections-edit-stack">` + notice +
+		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><div><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div>` +
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_kitsu"><section class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><div class="connection-form-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><input id="kitsu-hostname" type="url" name="kitsu_hostname" value="` + esc(displayHost) + `"><p class="field-help">` + esc(tr(lang, "connections.host_help")) + `</p></div><div class="connection-form-field"><label for="kitsu-runtime-email">` + esc(tr(lang, "connections.account")) + `</label><input id="kitsu-runtime-email" type="email" name="kitsu_runtime_email" value="` + esc(kitsuEmail) + `" autocomplete="username"><p class="field-help">` + esc(tr(lang, "connections.account_help")) + `</p></div><div class="connection-form-field"><label for="kitsu-runtime-password">` + esc(t(lang, "パスワード", "Password")) + `</label><input id="kitsu-runtime-password" type="password" name="kitsu_runtime_password" autocomplete="new-password"><p class="field-help">` + esc(tr(lang, "connections.password_help")) + `</p></div><div class="button-row connections-actions"><button type="submit" class="btn">` + esc(t(lang, "Kitsu接続を保存", "Save Kitsu connection")) + `</button></div></section></form>` +
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><section class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><div class="connection-form-field"><label for="discord-bot-token">Discord Bot Token</label><input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password"><p class="field-help">` + esc(tr(lang, "connections.token_help")) + `</p></div><div class="button-row connections-actions"><button type="submit" class="btn">` + esc(t(lang, "Discord Bot接続を保存", "Save Discord Bot connection")) + `</button></div></section></form>` +
+		`<div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しいProduction接続へ戻る", "Back to New Production Connection")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "接続済みProductionを開く", "Open Connected Productions")) + `</a></div></section></div>`
 }
 
 func renderConnectionsPageLocalized(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -2851,44 +2899,112 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 			renderConnectionsPageSafe(w, r, db)
 			return
 		}
-		storedHost := model.GetSetting(db, "kitsu.hostname")
-		autoHost := publicKitsuHostnameFromRequest(r, storedHost)
-		effectiveHost := autoHost
-		if storedHost != "" {
-			effectiveHost = normalizeKitsuHostname(storedHost)
-		}
+		effectiveHost := effectiveRuntimeKitsuEndpoint(db)
 		editMode := r.URL.Query().Get("edit") == "1"
 		if editMode && !botEditAllowed(r) {
 			http.Redirect(w, r, appendLang("/bot/login?next="+url.QueryEscape(r.URL.RequestURI()), lang), http.StatusSeeOther)
 			return
 		}
 		if r.Method == http.MethodPost {
+			_ = r.ParseForm()
+			action := strings.TrimSpace(r.FormValue("action"))
+			if action == "save_kitsu" {
+				displayedHost := strings.TrimSpace(r.FormValue("kitsu_hostname"))
+				hostForAuth, endpointErr := runtimeEndpointFromDisplay(db, displayedHost)
+				if endpointErr != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuホストを入力してください。", "Enter the Kitsu host.")))
+					return
+				}
+				email := strings.TrimSpace(r.FormValue("kitsu_runtime_email"))
+				if email == "" {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu連携アカウントを入力してください。", "Enter the Kitsu integration account.")))
+					return
+				}
+				password := strings.TrimSpace(r.FormValue("kitsu_runtime_password"))
+				if password == "" {
+					password = StoredRuntimeKitsuPassword(db)
+				}
+				if password == "" {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "初回設定ではパスワードが必要です。", "A password is required for the first Kitsu save.")))
+					return
+				}
+				if err := RecoverRuntimeCredentials(db, hostForAuth, email, password); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。接続先とアカウントを確認してください。", "Kitsu connection could not be verified. Check the host and account.")))
+					return
+				}
+				model.SetSetting(db, "kitsu.hostname", hostForAuth)
+				os.Setenv("KITSU_HOSTNAME", hostForAuth)
+				if kitsuReconnect != nil {
+					go kitsuReconnect()
+				}
+				http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=kitsu_saved", http.StatusSeeOther)
+				return
+			}
+			if action == "save_discord" {
+				token := strings.TrimSpace(r.FormValue("bot_token"))
+				if token == "" {
+					token = storedRuntimeDiscordBotToken(db)
+				}
+				if token == "" {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Discord Bot Tokenを入力してください。", "Enter the Discord Bot Token.")))
+					return
+				}
+				if err := validateDiscordBotTokenForSave(token); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Discord Botに接続できませんでした。Tokenと接続状態を確認してください。", "Discord Bot connection failed. Check the token and connection status.")))
+					return
+				}
+				setRuntimeDiscordBotToken(db, token)
+				http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=discord_saved", http.StatusSeeOther)
+				return
+			}
+			if r.URL.Query().Get("legacy") != "1" {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "保存する接続を選択してください。", "Choose which connection to save.")))
+				return
+			}
 			kitsuChanged := false
 			runtimeEmail := strings.TrimSpace(r.FormValue("kitsu_runtime_email"))
 			runtimePassword := r.FormValue("kitsu_runtime_password")
+			submittedHosts, hasSubmittedHost := r.PostForm["kitsu_hostname"]
+			displayedHost := ""
+			if len(submittedHosts) > 0 {
+				displayedHost = strings.TrimSpace(submittedHosts[0])
+			}
 			if runtimeEmail != "" || strings.TrimSpace(runtimePassword) != "" {
 				if runtimeEmail == "" || strings.TrimSpace(runtimePassword) == "" {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu実行用のメールアドレスとパスワードを入力してください。", "Enter both the Kitsu runtime email and password.")))
 					return
 				}
-				hostForAuth := normalizeKitsuHostname(storedHost)
-				if hostForAuth == "" {
-					hostForAuth = autoHost
+				if !hasSubmittedHost || displayedHost == "" {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続先を確認できませんでした。", "The Kitsu connection endpoint is missing.")))
+					return
+				}
+				hostForAuth, endpointErr := runtimeEndpointFromDisplay(db, displayedHost)
+				if endpointErr != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続先を確認できませんでした。", "The Kitsu connection endpoint is invalid.")))
+					return
 				}
 				if err := RecoverRuntimeCredentials(db, hostForAuth, runtimeEmail, runtimePassword); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
 					return
 				}
+				if model.GetSetting(db, "kitsu.hostname") != hostForAuth {
+					model.SetSetting(db, "kitsu.hostname", hostForAuth)
+				}
 				kitsuChanged = true
 			}
-			if storedHost == "" && autoHost != "" {
-				model.SetSetting(db, "kitsu.hostname", autoHost)
-				os.Setenv("KITSU_HOSTNAME", autoHost)
-				kitsuChanged = true
-			} else if storedHost != "" {
-				os.Setenv("KITSU_HOSTNAME", normalizeKitsuHostname(storedHost))
+			if runtimeHost := effectiveRuntimeKitsuEndpoint(db); runtimeHost != "" {
+				os.Setenv("KITSU_HOSTNAME", runtimeHost)
 			}
 			if value := strings.TrimSpace(r.FormValue("bot_token")); value != "" {
 				setRuntimeDiscordBotToken(db, value)
@@ -2929,6 +3045,12 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 			statusClass = "ok"
 			statusLabel = t(lang, "設定済み", "Configured")
 		}
+		statusHint := t(lang, "Kitsu接続とDiscord Bot接続をそれぞれ確認してください。", "Review Kitsu and Discord Bot connections separately.")
+		if !sharedReadiness.KitsuConfigured {
+			statusHint = t(lang, "Kitsu接続を設定してください。", "Complete the Kitsu connection first.")
+		} else if !sharedReadiness.DiscordConfigured {
+			statusHint = t(lang, "Discord Bot接続を設定してください。", "Complete the Discord Bot connection.")
+		}
 		view := fmt.Sprintf(`
 <div class="section-stack">
   <div class="section-card glass">
@@ -2945,6 +3067,10 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 		view = strings.Replace(view, ">Bot Token<", ">"+esc(tr(lang, "bot_runtime.bot_token"))+"<", 1)
 		if !editMode {
 			fmt.Fprint(w, adminPage(lang, t(lang, "共有Bot / Runtime 設定", "Shared Bot / Runtime"), r, view))
+			return
+		}
+		if editMode {
+			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, renderConnectionsEditForm(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuEmail)))
 			return
 		}
 		edit := fmt.Sprintf(`

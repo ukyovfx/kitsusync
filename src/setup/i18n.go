@@ -225,6 +225,20 @@ func t(lang, ja, en string) string {
 	// migrate to catalog keys. This is intentionally limited to the confirmed
 	// notification labels and does not translate external values.
 	switch en {
+	case "New Production Connection":
+		ja, en = "新しいプロダクションを接続", "New Production Connection"
+	case "Connected Productions":
+		ja, en = "接続済みプロダクション", "Connected Productions"
+	case "Productions currently visible":
+		ja, en = "現在確認できるプロダクション", "Productions currently visible"
+	case "Productions needing attention":
+		ja, en = "対応が必要なプロダクション", "Productions needing attention"
+	case "Production":
+		ja, en = "プロダクション", "Production"
+	case "Production connection required":
+		ja, en = "プロダクション接続が必要です", "Production connection required"
+	case "No Production is connected yet.":
+		ja, en = "接続済みプロダクションがありません。", "No Production is connected yet."
 	case "Task Type for dry-run":
 		ja, en = "確認するTask Type", "Task Type to check"
 	case "Inspect dry-run":

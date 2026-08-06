@@ -19,9 +19,25 @@ func TestAdminHeaderKeepsGlobalActionsInPrimaryHeader(t *testing.T) {
 	if strings.Count(body[:main], `<nav class="primary-nav" aria-label="Primary navigation">`) != 1 {
 		t.Fatal("unexpected duplicate primary navigation")
 	}
-	for _, label := range []string{"Dashboard", "Productions", "New Production Connection", "User Linking", "Connections", "System Status", "Audit Log", "JP", "EN"} {
+	for _, label := range []string{"Productions", "User Linking", "Connections", "System Status", "Audit Log", "JP", "EN"} {
 		if !strings.Contains(body, label) {
 			t.Fatalf("header is missing %q", label)
+		}
+	}
+	navEnd := strings.Index(body[nav:], `</nav>`)
+	if navEnd >= 0 && strings.Contains(body[nav:nav+navEnd], ">Dashboard<") {
+		t.Fatal("Dashboard remains a dedicated primary-navigation item")
+	}
+	if navEnd >= 0 && strings.Contains(body[nav:nav+navEnd], "New Production Connection") {
+		t.Fatal("New Production Connection remains a primary-navigation item")
+	}
+}
+
+func TestLanguageToggleCentersBothLabels(t *testing.T) {
+	body := adminPage("ja", "KitsuSync", httptest.NewRequest("GET", "/bot/admin?lang=ja", nil), "<p>content</p>")
+	for _, want := range []string{".lang-toggle{", "align-items:center;", "min-height:56px;", ".lang-thumb{", "top:6px;", "bottom:6px;", ".lang-option{", "display:flex;", "justify-content:center;", "line-height:1;", "min-height:44px;"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("language toggle is missing centered-label styling %q", want)
 		}
 	}
 }

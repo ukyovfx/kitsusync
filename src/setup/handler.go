@@ -345,10 +345,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 
 		if r.Method == http.MethodPost && r.FormValue("action") == "bot_setup" {
 			_ = r.ParseForm()
-			kitsuHostInput := normalizeKitsuHostname(model.GetSetting(db, "kitsu.hostname"))
-			if kitsuHostInput == "" {
-				kitsuHostInput = publicKitsuHostnameFromRequest(r, "")
-			}
+			kitsuHostInput := effectiveRuntimeKitsuEndpoint(db)
 			runtimeEmail := strings.TrimSpace(r.FormValue("kitsu_runtime_email"))
 			runtimePassword := r.FormValue("kitsu_runtime_password")
 			// Accept the old field names for bookmarked/legacy forms, but keep the
