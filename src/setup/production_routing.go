@@ -72,13 +72,22 @@ func WorkflowDiagnosisCompatibilityHandler() http.HandlerFunc {
 	}
 }
 
-func routingTaskTypes() []kitsu.TaskType {
-	// Unit tests and setup-required pages must remain local and fast when no
-	// runtime Kitsu session exists. The authenticated runtime supplies the list.
-	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) == "" {
+func routingTaskTypesForProduction(productionID string) []kitsu.TaskType {
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) == "" || strings.TrimSpace(productionID) == "" {
 		return nil
 	}
-	return kitsu.GetTaskTypes().Each
+	return filterActiveTaskTypes(kitsu.GetProjectTaskTypes(strings.TrimSpace(productionID)).Each)
+}
+
+func filterActiveTaskTypes(taskTypes []kitsu.TaskType) []kitsu.TaskType {
+	active := make([]kitsu.TaskType, 0, len(taskTypes))
+	for _, taskType := range taskTypes {
+		if taskType.Archived || taskType.IsArchived {
+			continue
+		}
+		active = append(active, taskType)
+	}
+	return active
 }
 
 func taskTypeName(taskTypeID string, taskTypes []kitsu.TaskType) string {
@@ -97,7 +106,10 @@ func dryRunProductionRoutingAction(db *gorm.DB, r *http.Request, lang string) st
 	if project == nil || taskTypeID == "" {
 		return tr(lang, "dry_run.select_production_task_type")
 	}
-	taskTypes := routingTaskTypes()
+	taskTypes := routingTaskTypesForProduction(productionID)
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" && len(taskTypes) == 0 {
+		return t(lang, "KitsuからProductionのTask Typeを確認できないため、確認せずに停止しました。", "Dry-run blocked: Production Task Types could not be verified from Kitsu.")
+	}
 	taskTypeLabel := taskTypeName(taskTypeID, taskTypes)
 	if len(taskTypes) > 0 && taskTypeLabel == "" {
 		return t(lang, "dry-run をスキップしました: 選択した Task Type は現在の Kitsu metadata では stale です。設定は変更していません。", "Dry-run skipped: the selected Task Type is stale in current Kitsu metadata; configuration was not changed.")
@@ -160,7 +172,10 @@ func saveProductionRoutingAction(db *gorm.DB, r *http.Request, lang string) stri
 	taskTypeIDs := r.Form["task_type_id"]
 	destinationIDs := r.Form["destination_webhook_id"]
 	taskTypeNames := r.Form["task_type_name"]
-	knownTaskTypes := routingTaskTypes()
+	knownTaskTypes := routingTaskTypesForProduction(productionID)
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" && len(knownTaskTypes) == 0 {
+		return t(lang, "KitsuからProductionのTask Typeを確認できないため、設定を有効化できません。", "Configuration was not activated: Production Task Types could not be verified from Kitsu.")
+	}
 	knownTaskTypeIDs := make(map[string]struct{}, len(knownTaskTypes))
 	for _, taskType := range knownTaskTypes {
 		knownTaskTypeIDs[taskType.ID] = struct{}{}
@@ -201,7 +216,6 @@ func valueAt(values []string, index int) string {
 
 func renderProductionRouting(db *gorm.DB, r *http.Request, selectedID, message string) string {
 	projects := model.ListProjects(db)
-	taskTypes := routingTaskTypes()
 	var selected *model.Project
 	for i := range projects {
 		if projects[i].KitsuProjectID == selectedID {
@@ -209,6 +223,7 @@ func renderProductionRouting(db *gorm.DB, r *http.Request, selectedID, message s
 			break
 		}
 	}
+	taskTypes := routingTaskTypesForProduction(selectedID)
 	var b strings.Builder
 	b.WriteString(`<div class="section-stack"><div class="section-card glass"><h2>` + esc(tr(currentLang(r), "production_routing.title")) + `</h2><p class="hint">` + esc(tr(currentLang(r), "production_routing.description")) + `</p>`)
 	if message != "" {

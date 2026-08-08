@@ -102,12 +102,15 @@ func renderExplicitTaskTypeChannelPlan(project model.Project, taskTypes []kitsu.
 }
 
 type TaskTypeChannelPlanEntry struct {
-	TaskTypeID    string
-	TaskTypeName  string
-	TaskTypeLabel string
-	ChannelName   string
-	ExistingID    string
-	Action        string // create, reuse, conflict, blocked
+	TaskTypeID     string
+	TaskTypeName   string
+	TaskTypeLabel  string
+	ForEntity      string
+	DepartmentID   string
+	DepartmentName string
+	ChannelName    string
+	ExistingID     string
+	Action         string // create, reuse, conflict, blocked
 }
 
 func (e TaskTypeChannelPlanEntry) DisplayName() string {
@@ -154,6 +157,7 @@ func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.Ta
 	}
 	duplicateNames := map[string]bool{}
 	nameOrdinals := map[string]int{}
+	channelOrdinals := map[string]int{}
 	ordered := append([]kitsu.TaskType(nil), taskTypes...)
 	sort.SliceStable(ordered, func(i, j int) bool { return strings.TrimSpace(ordered[i].ID) < strings.TrimSpace(ordered[j].ID) })
 	for _, taskType := range ordered {
@@ -162,18 +166,42 @@ func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.Ta
 		channelName := NormalizeTaskTypeChannelName(name)
 		label := name
 		nameKey := strings.ToLower(name)
+		context := strings.TrimSpace(taskType.ForEntity)
+		labelContext := context
+		if labelContext == "" {
+			labelContext = strings.TrimSpace(taskType.DepartmentName)
+		}
 		if nameCounts[nameKey] > 1 {
 			nameOrdinals[nameKey]++
-			label = fmt.Sprintf("%s (%d)", name, nameOrdinals[nameKey])
+			if strings.TrimSpace(taskType.ForEntity) != "" {
+				label = strings.TrimSpace(taskType.ForEntity) + " / " + name
+			} else if labelContext != "" {
+				label = labelContext + " / " + name
+			} else {
+				label = fmt.Sprintf("%s (%d)", name, nameOrdinals[nameKey])
+			}
 			duplicateNames[nameKey] = true
 		}
-		entry := TaskTypeChannelPlanEntry{TaskTypeID: id, TaskTypeName: name, TaskTypeLabel: label, ChannelName: channelName, Action: "create"}
+		if nameCounts[nameKey] > 1 && context != "" {
+			channelName = NormalizeTaskTypeChannelName(name + "-" + context)
+		}
+		entry := TaskTypeChannelPlanEntry{
+			TaskTypeID: id, TaskTypeName: name, TaskTypeLabel: label,
+			ForEntity: taskType.ForEntity, DepartmentID: taskType.DepartmentID,
+			DepartmentName: taskType.DepartmentName, ChannelName: channelName, Action: "create",
+		}
 		if id == "" || name == "" || plan.ProductionID == "" || plan.GuildID == "" {
 			entry.Action = "blocked"
 		}
 		if previous, ok := seen[channelName]; ok && previous != id {
-			entry.Action = "conflict"
-			plan.Conflicts = append(plan.Conflicts, "Task Types "+previous+" and "+id+" normalize to #"+channelName)
+			if nameCounts[nameKey] > 1 && context != "" {
+				channelOrdinals[channelName]++
+				channelName = fmt.Sprintf("%s-%d", channelName, channelOrdinals[channelName]+1)
+				entry.ChannelName = channelName
+			} else {
+				entry.Action = "conflict"
+				plan.Conflicts = append(plan.Conflicts, "Task Types "+previous+" and "+id+" normalize to #"+channelName)
+			}
 		}
 		seen[channelName] = id
 		if existingID, present := existing[channelName]; present && entry.Action == "create" {

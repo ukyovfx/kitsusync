@@ -5,6 +5,7 @@ import (
 	"app/src/utils/config"
 	"app/src/utils/request"
 	"net/http"
+	"net/url"
 	"os"
 )
 
@@ -137,9 +138,15 @@ type Comments struct {
 }
 
 type TaskType struct {
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	ShortName string `json:"short_name,omitempty"`
+	ID             string `json:"id,omitempty"`
+	Name           string `json:"name,omitempty"`
+	ShortName      string `json:"short_name,omitempty"`
+	ForEntity      string `json:"for_entity,omitempty"`
+	DepartmentID   string `json:"department_id,omitempty"`
+	DepartmentName string `json:"department_name,omitempty"`
+	Active         bool   `json:"active,omitempty"`
+	Archived       bool   `json:"archived,omitempty"`
+	IsArchived     bool   `json:"is_archived,omitempty"`
 }
 
 type TaskTypes struct {
@@ -310,6 +317,20 @@ func GetTaskTypes() TaskTypes {
 	response := TaskTypes{}
 	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
+	return response
+}
+
+// GetProjectTaskTypes returns only the Task Types associated with a selected
+// Production. The project-scoped endpoint is authoritative for setup; the
+// global Task Type list is not a safe substitute because it can contain
+// records unrelated to the selected Production.
+func GetProjectTaskTypes(projectID string) TaskTypes {
+	response := TaskTypes{}
+	if projectID == "" {
+		return response
+	}
+	path := kitsuBase() + "api/data/projects/" + url.PathEscape(projectID) + "/task-types"
+	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 	return response
 }
 

@@ -547,7 +547,6 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			return
 		}
 
-		allTaskTypes := kitsu.GetTaskTypes().Each
 		allWebhooks := model.ListAllProjectWebhooks(db)
 		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
 		if r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("danger_preview") == "" && r.URL.Query().Get("validated_channels") == "" {
@@ -564,6 +563,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		}
 		var blocks strings.Builder
 		for _, p := range model.ListProjects(db) {
+			projectTaskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
 			effectiveGuildID := strings.TrimSpace(p.DiscordGuildID)
 			if effectiveGuildID == "" {
 				effectiveGuildID = fallbackGuildID
@@ -582,7 +582,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				}
 			}
 			unassignedCount := 0
-			for _, tt := range allTaskTypes {
+			for _, tt := range projectTaskTypes {
 				if !assignedTaskTypes[tt.Name] {
 					unassignedCount++
 				}
@@ -1020,8 +1020,8 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
 				"",
 				`<details class="advanced-details danger-zone"><summary>`+esc(t(lang, "Danger Zone", "Danger Zone"))+`</summary>`+unifiedDeleteSectionHTML+`</details>`,
-				renderExplicitTaskTypeChannelPlan(p, allTaskTypes, botToken, r, lang, db),
-				renderProjectChannels(p, webhooks, allTaskTypes, lang, r),
+				renderExplicitTaskTypeChannelPlan(p, projectTaskTypes, botToken, r, lang, db),
+				renderProjectChannels(p, webhooks, projectTaskTypes, lang, r),
 				"",
 			)
 			projectBlock = strings.Replace(projectBlock, "<p class=\"hint\" style=\"margin:12px 0 0\">", "<details class=\"advanced-details\"><summary>"+esc(t(lang, "詳細設定", "Advanced details"))+"</summary><p class=\"hint\" style=\"margin:12px 0 0\">", 1)
@@ -1042,7 +1042,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Project, lang string, r *http.Request, statusClass, statusLabel, statusHint string, issues []string) string {
 	actionURL := withLang("/bot/admin/production-routing?project="+url.QueryEscape(project.KitsuProjectID), r)
 	config := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
-	taskTypes := routingTaskTypes()
+	taskTypes := routingTaskTypesForProduction(project.KitsuProjectID)
 	stateMessage := statusHint
 	if len(issues) > 0 {
 		stateMessage += " " + t(lang, "次の対応: ルートを確認してください。", "Next action: review the routing configuration.")

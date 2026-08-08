@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"app/src/api/kitsu"
 	"app/src/model"
 	"gorm.io/gorm"
 )
@@ -29,7 +28,7 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.production_missing"), redirect)
 		return true
 	}
-	taskTypes := kitsu.GetTaskTypes().Each
+	taskTypes := routingTaskTypesForProduction(projectID)
 	channels, err := ListGuildChannels(guildID, botToken)
 	if err != nil {
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.guild_revalidate_failed"), redirect)

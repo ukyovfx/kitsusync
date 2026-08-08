@@ -262,7 +262,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		if name == "" {
 			name = strings.TrimSpace(log.ProjectID)
 		}
-		result := t(lang, "謌仙粥", "Success")
+		result := t(lang, "成功", "Success")
 		resultClass := "success"
 		if !log.Success {
 			result = t(lang, "要確認", "Needs review")
@@ -542,7 +542,7 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 	actionHTML := `<a class="btn" href="` + esc(actionURL) + `">` + esc(t(lang, "通知設定を確認", "Review notification settings")) + `</a>`
 	var mappings strings.Builder
 	var taskTypeOptions strings.Builder
-	for _, taskType := range routingTaskTypes() {
+	for _, taskType := range routingTaskTypesForProduction(p.KitsuProjectID) {
 		taskTypeOptions.WriteString(`<option value="` + esc(taskType.ID) + `">` + esc(taskType.Name) + `</option>`)
 	}
 	for _, m := range model.ListProductionChannelMappings(db, p.KitsuProjectID) {
@@ -1263,7 +1263,7 @@ func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) 
 				}
 			}
 			if selected.ID != "" {
-				body += renderExplicitTaskTypeChannelPlan(model.Project{KitsuProjectID: selected.ID, Name: selected.Name}, routingTaskTypes(), botToken, r, lang, db)
+				body += renderExplicitTaskTypeChannelPlan(model.Project{KitsuProjectID: selected.ID, Name: selected.Name}, routingTaskTypesForProduction(selected.ID), botToken, r, lang, db)
 			}
 		}
 		if strings.TrimSpace(botToken) == "" {
@@ -1517,11 +1517,8 @@ func wizardProject(projects []KitsuProject, id string) KitsuProject {
 	}
 	return KitsuProject{}
 }
-func wizardTaskTypes() []kitsu.TaskType {
-	if types := routingTaskTypes(); len(types) > 0 {
-		return types
-	}
-	return kitsu.GetTaskTypes().Each
+func wizardTaskTypes(projectID string) []kitsu.TaskType {
+	return routingTaskTypesForProduction(projectID)
 }
 
 func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string, projects []KitsuProject, projectID, guildID string, review bool) string {
@@ -1533,7 +1530,7 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 	if err != nil {
 		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p>` + esc(tr(lang, "wizard.plan_unavailable")) + `</p></section>`
 	}
-	plan := BuildTaskTypeChannelPlan(project.ID, guildID, wizardTaskTypes(), existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.ID), model.ListProjectWebhooks(db, project.ID)))
+	plan := BuildTaskTypeChannelPlan(project.ID, guildID, wizardTaskTypes(project.ID), existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.ID), model.ListProjectWebhooks(db, project.ID)))
 	updateWizardState(r, func(state *wizardState) {
 		state.ProductionID = project.ID
 		state.GuildID = guildID
@@ -1550,12 +1547,22 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 		if len(plan.DuplicateNames) > 0 {
 			duplicateNotice = `<p class="state-explanation" role="alert">` + esc(tr(lang, "channel_plan.duplicate_name")) + `</p>`
 		}
-		return body + duplicateNotice + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p></section>`
+		return body + duplicateNotice + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, projectID, guildID, review) + `</section>`
 	}
 	if !review {
 		return body + `<p class="field-help" role="status">` + esc(tr(lang, "wizard.no_write")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><a class="btn" href="` + esc(setupWizardURL(r, 5, projectID, guildID, true)) + `">` + esc(tr(lang, "wizard.review")) + `</a></div></section>`
 	}
 	return body + `<p class="field-help">` + esc(tr(lang, "wizard.no_write")) + `</p><form method="POST" action="` + esc(withLang("/bot/setup", r)) + `" class="section-stack"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + esc(projectID) + `"><input type="hidden" name="guild_id" value="` + esc(guildID) + `"><input type="hidden" name="plan_fingerprint" value="` + esc(plan.Fingerprint()) + `"><label for="wizard-confirm"><input id="wizard-confirm" type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "wizard.confirm")) + `</label><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, projectID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.execute")) + `</button></div></form></section>`
+}
+
+func renderBlockedWizardPlanNavigation(lang string, r *http.Request, projectID, guildID string, review bool) string {
+	forwardLabel := tr(lang, "wizard.review")
+	backURL := setupWizardURL(r, 3, projectID, "", false)
+	if review {
+		forwardLabel = tr(lang, "wizard.execute")
+		backURL = setupWizardURL(r, 4, projectID, guildID, false)
+	}
+	return `<div class="button-row"><a class="btn-ghost" href="` + esc(backURL) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="button" disabled aria-disabled="true">` + esc(forwardLabel) + `</button></div>`
 }
 
 func wizardPlanDetails(lang, action string) string {
