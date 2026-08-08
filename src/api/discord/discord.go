@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"text/template"
@@ -273,29 +273,6 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 	}
 }
 
-// statusMessageInfo returns the Japanese message text and emoji for a given status.
-// Returns ("", "📌") for statuses we don't have a tailored message for.
-func statusMessageInfo(status string) (string, string) {
-	switch strings.ToUpper(status) {
-	case "WFA":
-		return "チェックをお願いします", "👀"
-	case "RETAKE":
-		return "修正をお願いします", "🔃"
-	case "DONE":
-		return "承認されました。お疲れ様でした！", "✅"
-	case "READY":
-		return "次工程の作業待ちです", "🟢"
-	case "TODO":
-		return "タスクが作成されました", "📋"
-	case "WIP":
-		return "作業中です", "🔧"
-	default:
-		return "", "📌"
-	}
-}
-
-// statusTransitionMessage は前後のステータス遷移に応じた補足メッセージを返す。
-// 特に対応しない遷移では空文字列を返す。
 func statusTransitionMessage(prev, current string) string {
 	if prev == "" || strings.EqualFold(prev, current) {
 		return ""
@@ -434,7 +411,7 @@ func sendMessageOnce(body []byte, reqURL string) (respBody []byte, statusCode in
 		return nil, 0, 0, err
 	}
 	defer resp.Body.Close()
-	respBody, err = ioutil.ReadAll(resp.Body)
+	respBody, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, 0, err
 	}
@@ -840,7 +817,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 }
 
 func parseTaskTemplate(tplFilePath string, data Template) string {
-	tpl, err := ioutil.ReadFile(tplFilePath)
+	tpl, err := os.ReadFile(tplFilePath)
 	if err != nil {
 		return ""
 	}

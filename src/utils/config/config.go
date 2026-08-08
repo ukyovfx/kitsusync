@@ -2,7 +2,6 @@
 package config
 
 import (
-	"io/ioutil"
 	"os"
 	"strings"
 	"unicode"
@@ -92,7 +91,7 @@ func Read() Config {
 	if os.Getenv("TEST") == "true" {
 		path = os.Getenv("CONF_PATH")
 	}
-	raw, err := ioutil.ReadFile(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		slog.Fatal(err)
 	}

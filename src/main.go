@@ -212,11 +212,8 @@ func MakeKitsuResponse(conf config.Config) []kitsu.MessagePayload {
 }
 
 type notificationRouteStats struct {
-	DBRouted         int
-	ProjectRouted    int
-	TaskTypeRouted   int
-	MainFallbackSent int
-	Dropped          int
+	DBRouted int
+	Dropped  int
 }
 
 func previewTasks(tasks []kitsu.MessagePayload, limit int) []string {
@@ -356,9 +353,6 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 		slog.Info("Notification routing summary",
 			"incomingTasks", len(data),
 			"dbRouted", stats.DBRouted,
-			"projectRouted", stats.ProjectRouted,
-			"taskTypeRouted", stats.TaskTypeRouted,
-			"mainFallbackSent", stats.MainFallbackSent,
 			"dropped", stats.Dropped)
 	}
 }

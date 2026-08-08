@@ -4,7 +4,7 @@ import (
 	"app/src/utils/debug"
 	"bytes"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -107,7 +107,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	}
 	defer resp.Body.Close()
 
-	respBody, err := ioutil.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		slog.Error("request.Do: read body failed", "err", err, "url", url)
 		return attemptResult{status: statusTransient}
