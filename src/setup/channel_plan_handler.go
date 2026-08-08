@@ -29,12 +29,14 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		return true
 	}
 	taskTypes := routingTaskTypesForProduction(projectID)
+	taskTypes, overrides := taskTypePlanRequest(r, taskTypes)
 	channels, err := ListGuildChannels(guildID, botToken)
 	if err != nil {
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.guild_revalidate_failed"), redirect)
 		return true
 	}
-	plan := BuildTaskTypeChannelPlan(projectID, guildID, taskTypes, existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, projectID), model.ListProjectWebhooks(db, projectID)))
+	existing := existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, projectID), model.ListProjectWebhooks(db, projectID))
+	plan := BuildTaskTypeChannelPlanWithOverrides(projectID, guildID, taskTypes, existing, overrides)
 	if plan.Fingerprint() != strings.TrimSpace(r.FormValue("plan_fingerprint")) {
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.stale"), redirect)
 		return true

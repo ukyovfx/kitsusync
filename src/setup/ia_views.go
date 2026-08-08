@@ -1293,6 +1293,9 @@ func wizardStep(r *http.Request, botToken string, db *gorm.DB, projectID, guildI
 			maxAllowed = 7
 		}
 	}
+	if r.URL.Query().Get("action") == "review" {
+		return 5
+	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("wizard_step")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 1 && n <= maxAllowed {
 			return n
@@ -1303,9 +1306,6 @@ func wizardStep(r *http.Request, botToken string, db *gorm.DB, projectID, guildI
 	}
 	if guildID == "" {
 		return 3
-	}
-	if r.URL.Query().Get("review") == "1" {
-		return 5
 	}
 	return 4
 }
@@ -1530,29 +1530,132 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 	if err != nil {
 		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p>` + esc(tr(lang, "wizard.plan_unavailable")) + `</p></section>`
 	}
-	plan := BuildTaskTypeChannelPlan(project.ID, guildID, wizardTaskTypes(project.ID), existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.ID), model.ListProjectWebhooks(db, project.ID)))
+	allTaskTypes := wizardTaskTypes(project.ID)
+	if taskTypePlanRequestInvalid(r, allTaskTypes) {
+		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="state-explanation">` + esc(tr(lang, "wizard.plan_blocked")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, projectID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a></div></section>`
+	}
+	taskTypes, overrides := taskTypePlanRequest(r, allTaskTypes)
+	existing := existingChannelsForPlanWithLegacy(channels, model.ListProductionChannelMappings(db, project.ID), model.ListProjectWebhooks(db, project.ID))
+	plan := BuildTaskTypeChannelPlanWithOverrides(project.ID, guildID, taskTypes, existing, overrides)
 	updateWizardState(r, func(state *wizardState) {
 		state.ProductionID = project.ID
 		state.GuildID = guildID
 		state.PlanFingerprint = plan.Fingerprint()
 	})
+	if review {
+		return renderWizardPlanReview(lang, r, project, guildID, botToken, plan)
+	}
+	if r != nil {
+		return renderWizardPlanPolished(lang, r, project, projectID, guildID, allTaskTypes, plan)
+	}
+	showStatus := false
+	for _, entry := range plan.Entries {
+		if entry.Action != "create" {
+			showStatus = true
+		}
+	}
 	var rows strings.Builder
 	for _, entry := range plan.Entries {
-		action := map[string]string{"create": tr(lang, "wizard.create"), "reuse": tr(lang, "wizard.reuse"), "conflict": tr(lang, "wizard.conflict"), "blocked": tr(lang, "wizard.review_required")}[entry.Action]
-		rows.WriteString(`<tr><td>` + esc(entry.DisplayName()) + `</td><td><code>` + esc(entry.ChannelName) + `</code></td><td>` + esc(action) + `</td><td>` + esc(wizardPlanDetails(lang, entry.Action)) + `</td></tr>`)
+		status := ""
+		if showStatus {
+			status = `<span class="wizard-plan-status wizard-plan-status-` + esc(entry.Action) + `">` + esc(wizardPlanActionLabel(lang, entry.Action)) + `</span>`
+		}
+		rows.WriteString(`<tr draggable="true" data-task-type="` + esc(entry.TaskTypeID) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><span class="wizard-drag-handle" aria-hidden="true">↕</span><strong>` + esc(entry.DisplayName()) + `</strong><div class="wizard-move-controls"><button type="button" class="wizard-move" data-move="up" aria-label="` + esc(t(lang, "上へ移動", "Move up")) + `">↑</button><button type="button" class="wizard-move" data-move="down" aria-label="` + esc(t(lang, "下へ移動", "Move down")) + `">↓</button></div></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-prefix">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required>` + status + `<input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td></tr>`)
 	}
-	body := `<section class="section-card glass" aria-labelledby="wizard-plan-title"><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p><div class="table-wrap"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th><th>` + esc(tr(lang, "wizard.result")) + `</th><th>` + esc(tr(lang, "wizard.details")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div>`
+	body := `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[plan.Valid()] + `">` + esc(wizardPlanStateLabel(lang, plan.Valid())) + `</span></div><form method="GET" action="` + esc(withLang("/bot/setup", r)) + `"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><div class="table-wrap wizard-plan-table"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th></tr></thead><tbody data-wizard-plan-sort>` + rows.String() + `</tbody></table></div>`
 	if !plan.Valid() {
 		duplicateNotice := ""
 		if len(plan.DuplicateNames) > 0 {
 			duplicateNotice = `<p class="state-explanation" role="alert">` + esc(tr(lang, "channel_plan.duplicate_name")) + `</p>`
 		}
-		return body + duplicateNotice + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, projectID, guildID, review) + `</section>`
+		return body + `</form>` + duplicateNotice + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, projectID, guildID, false) + `</section>`
 	}
-	if !review {
-		return body + `<p class="field-help" role="status">` + esc(tr(lang, "wizard.no_write")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><a class="btn" href="` + esc(setupWizardURL(r, 5, projectID, guildID, true)) + `">` + esc(tr(lang, "wizard.review")) + `</a></div></section>`
+	return body + `<p class="field-help" role="status">` + esc(tr(lang, "wizard.no_write")) + `</p><div class="button-row wizard-plan-actions"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit" name="wizard_step" value="5">` + esc(tr(lang, "wizard.review")) + `</button></div><input type="hidden" name="review" value="1"></form><script>(function(){var body=document.querySelector('[data-wizard-plan-sort]');if(!body)return;var refresh=function(){Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row,index){var field=row.querySelector('input[type="hidden"][name^="channel_order_"]');if(field)field.value=String(index+1);});};var move=function(row,direction){var target=direction==='up'?row.previousElementSibling:row.nextElementSibling;if(!target)return;if(direction==='up')body.insertBefore(row,target);else body.insertBefore(target,row);refresh();row.querySelector('button[data-move="'+(direction==='up'?'up':'down')+'"]')?.focus();};Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row){row.addEventListener('dragstart',function(event){event.dataTransfer.setData('text/plain',row.dataset.taskType);row.classList.add('is-dragging');});row.addEventListener('dragend',function(){row.classList.remove('is-dragging');});row.addEventListener('dragover',function(event){event.preventDefault();});row.addEventListener('drop',function(event){event.preventDefault();var id=event.dataTransfer.getData('text/plain'),dragged=body.querySelector('tr[data-task-type="'+id+'"]');if(dragged&&dragged!==row){var rect=row.getBoundingClientRect();body.insertBefore(dragged,event.clientY<rect.top+rect.height/2?row:row.nextElementSibling);refresh();}});Array.prototype.forEach.call(row.querySelectorAll('button[data-move]'),function(button){button.addEventListener('click',function(){move(row,button.dataset.move);});});});refresh();})();</script></section>`
+}
+
+func renderWizardPlanPolished(lang string, r *http.Request, project KitsuProject, projectID, guildID string, allTaskTypes []kitsu.TaskType, plan TaskTypeChannelPlan) string {
+	var rows strings.Builder
+	included := map[string]bool{}
+	for _, entry := range plan.Entries {
+		included[entry.TaskTypeID] = true
+		rows.WriteString(`<tr draggable="true" tabindex="0" data-task-type="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(trf(lang, "wizard.row_move_hint", entry.DisplayName())) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><strong>` + esc(entry.DisplayName()) + `</strong><input type="hidden" name="included_task_type_id" value="` + esc(entry.TaskTypeID) + `"></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-prefix">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required><input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td><td><button type="submit" name="action" value="exclude" class="wizard-exclude" data-exclude="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(tr(lang, "wizard.exclude")) + `">×</button></td></tr>`)
 	}
-	return body + `<p class="field-help">` + esc(tr(lang, "wizard.no_write")) + `</p><form method="POST" action="` + esc(withLang("/bot/setup", r)) + `" class="section-stack"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + esc(projectID) + `"><input type="hidden" name="guild_id" value="` + esc(guildID) + `"><input type="hidden" name="plan_fingerprint" value="` + esc(plan.Fingerprint()) + `"><label for="wizard-confirm"><input id="wizard-confirm" type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "wizard.confirm")) + `</label><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, projectID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.execute")) + `</button></div></form></section>`
+	var excluded strings.Builder
+	for _, taskType := range allTaskTypes {
+		id := strings.TrimSpace(taskType.ID)
+		if !included[id] {
+			excluded.WriteString(`<option value="` + esc(id) + `">` + esc(taskType.Name) + `</option>`)
+		}
+	}
+	statusBadge := ""
+	if !plan.Valid() {
+		statusBadge = `<span class="status-pill bad">` + esc(wizardPlanStateLabel(lang, false)) + `</span>`
+	}
+	body := `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div>` + statusBadge + `</div><form method="GET" class="wizard-plan-form" action="` + esc(withLang("/bot/setup", r)) + `"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><input type="hidden" name="wizard_step" value="4"><input type="hidden" name="exclude_task_type_id" id="wizard-task-type-action"><div class="table-wrap wizard-plan-table"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th><th></th></tr></thead><tbody data-wizard-plan-sort>` + rows.String() + `</tbody></table></div>`
+	addDisabled := excluded.Len() == 0
+	selectAttrs := ""
+	addAttrs := ""
+	selectOptions := `<option value="">` + esc(tr(lang, "wizard.select_task_type")) + `</option>` + excluded.String()
+	if addDisabled {
+		selectAttrs = ` disabled aria-disabled="true"`
+		addAttrs = ` disabled aria-disabled="true"`
+		selectOptions = `<option value="">` + esc(tr(lang, "wizard.all_task_types_included")) + `</option>`
+	}
+	selectWrapperClass := "wizard-add-task-type-select"
+	if addDisabled {
+		selectWrapperClass += " is-disabled"
+	}
+	body += `<div class="wizard-add-task-type" role="group" aria-labelledby="wizard-add-task-type-label"><label id="wizard-add-task-type-label" for="wizard-add-task-type">` + esc(tr(lang, "wizard.add_task_type")) + `</label><span class="` + selectWrapperClass + `"><select id="wizard-add-task-type" name="task_type_id"` + selectAttrs + `>` + selectOptions + `</select></span><button class="btn-ghost" type="submit" name="action" value="include"` + addAttrs + `>` + esc(tr(lang, "wizard.add")) + `</button></div>`
+	body = `<style>.wizard-add-task-type{display:grid;grid-template-columns:auto minmax(220px,1fr) auto;align-items:center;gap:8px;margin-top:12px}.wizard-add-task-type label{width:auto;margin:0}.wizard-add-task-type-select{position:relative;min-width:0}.wizard-add-task-type-select select{appearance:none;-webkit-appearance:none;width:100%;padding-right:36px}.wizard-add-task-type-select::after{content:"";position:absolute;right:14px;top:50%;width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;color:var(--muted);transform:translateY(-65%) rotate(45deg);pointer-events:none}.wizard-add-task-type-select.is-disabled::after{opacity:.55}.wizard-add-task-type button{white-space:nowrap}@media(max-width:640px){.wizard-add-task-type{grid-template-columns:1fr}.wizard-add-task-type label,.wizard-add-task-type-select,.wizard-add-task-type button{width:100%}}</style>` + body
+	if !plan.Valid() {
+		return body + `</form><p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, projectID, guildID, false) + `</section>`
+	}
+	return body + `<div class="button-row wizard-plan-actions"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit" name="action" value="review">` + esc(tr(lang, "wizard.review")) + `</button></div></form><script>(function(){var body=document.querySelector('[data-wizard-plan-sort]');if(!body)return;var actionField=document.getElementById('wizard-task-type-action');var refresh=function(){Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row,index){var field=row.querySelector('input[type="hidden"][name^="channel_order_"]');if(field)field.value=String(index+1);});};var move=function(row,direction){var target=direction==='up'?row.previousElementSibling:row.nextElementSibling;if(!target)return;if(direction==='up')body.insertBefore(row,target);else body.insertBefore(target,row);refresh();};Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row){row.addEventListener('dragstart',function(event){event.dataTransfer.setData('text/plain',row.dataset.taskType);row.classList.add('is-dragging');});row.addEventListener('dragend',function(){row.classList.remove('is-dragging');});row.addEventListener('dragover',function(event){event.preventDefault();row.classList.add('drag-over');});row.addEventListener('dragleave',function(){row.classList.remove('drag-over');});row.addEventListener('drop',function(event){event.preventDefault();row.classList.remove('drag-over');var id=event.dataTransfer.getData('text/plain'),dragged=body.querySelector('tr[data-task-type="'+id+'"]');if(dragged&&dragged!==row){var rect=row.getBoundingClientRect();body.insertBefore(dragged,event.clientY<rect.top+rect.height/2?row:row.nextElementSibling);refresh();}});row.addEventListener('keydown',function(event){if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();move(row,event.key==='ArrowUp'?'up':'down');row.focus();});var exclude=row.querySelector('[data-exclude]');if(exclude)exclude.addEventListener('click',function(){if(actionField)actionField.value=exclude.getAttribute('data-exclude');});});refresh();})();</script></section>`
+}
+
+func renderWizardPlanReview(lang string, r *http.Request, project KitsuProject, guildID, botToken string, plan TaskTypeChannelPlan) string {
+	guildName := t(lang, "選択したDiscordサーバー", "Selected Discord server")
+	if guilds, err := ListBotGuilds(botToken); err == nil {
+		for _, guild := range guilds {
+			if strings.TrimSpace(guild.ID) == strings.TrimSpace(guildID) && strings.TrimSpace(guild.Name) != "" {
+				guildName = guild.Name
+				break
+			}
+		}
+	}
+	var ordered strings.Builder
+	showStatus := plan.ReuseCount() > 0 || plan.CreateCount() != len(plan.Entries)
+	for _, entry := range plan.Entries {
+		line := `<li><code>#` + esc(entry.ChannelName) + `</code>`
+		if showStatus {
+			line += ` <span class="wizard-plan-status wizard-plan-status-` + esc(entry.Action) + `">` + esc(wizardPlanActionLabel(lang, entry.Action)) + `</span>`
+		}
+		ordered.WriteString(line + `</li>`)
+	}
+	var hidden strings.Builder
+	for _, entry := range plan.Entries {
+		hidden.WriteString(`<input type="hidden" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `"><input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `">`)
+	}
+	countSummary := trf(lang, "wizard.channels_create", plan.CreateCount())
+	if reused := plan.ReuseCount(); reused > 0 {
+		countSummary += ` ` + trf(lang, "wizard.channels_reuse", reused)
+	}
+	body := `<section class="section-card glass wizard-review-card" aria-labelledby="wizard-review-title"><div class="page-heading"><div><h2 id="wizard-review-title">` + esc(tr(lang, "wizard.review_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.review_hint")) + `</p></div></div><dl class="wizard-connection-summary"><div><dt>` + esc(tr(lang, "wizard.production_summary")) + `</dt><dd>` + esc(project.Name) + `</dd></div><div><dt>` + esc(tr(lang, "wizard.server_summary")) + `</dt><dd>` + esc(guildName) + `</dd></div><div><dt>` + esc(tr(lang, "wizard.area_summary")) + `</dt><dd>` + esc(KitsuSyncCategoryName(project.Name)) + `</dd></div></dl><p class="wizard-count-summary">` + esc(countSummary) + `</p><h3>` + esc(tr(lang, "wizard.order_title")) + `</h3><ol class="wizard-final-channel-list">` + ordered.String() + `</ol>`
+	if !plan.Valid() {
+		return body + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, project.ID, guildID, true) + `</section>`
+	}
+	return body + `<p class="field-help">` + esc(tr(lang, "wizard.no_write")) + `</p><form method="POST" action="` + esc(withLang("/bot/setup", r)) + `" class="wizard-confirm-form"><input type="hidden" name="action" value="confirm_task_type_channels"><input type="hidden" name="project_id" value="` + esc(project.ID) + `"><input type="hidden" name="guild_id" value="` + esc(guildID) + `"><input type="hidden" name="plan_fingerprint" value="` + esc(plan.Fingerprint()) + `">` + hidden.String() + `<label class="wizard-confirm-control" for="wizard-confirm"><input id="wizard-confirm" type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "wizard.confirm")) + `</label><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, project.ID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button id="wizard-execute" class="btn" type="submit" disabled>` + esc(tr(lang, "wizard.execute")) + `</button></div></form><script>(function(){var check=document.getElementById('wizard-confirm'),button=document.getElementById('wizard-execute');if(check&&button){var sync=function(){button.disabled=!check.checked;};check.addEventListener('change',sync);sync();}})();</script></section>`
+}
+
+func wizardPlanActionLabel(lang, action string) string {
+	return map[string]string{"create": tr(lang, "wizard.create"), "reuse": tr(lang, "wizard.reuse"), "conflict": tr(lang, "wizard.conflict"), "blocked": tr(lang, "wizard.review_required")}[action]
+}
+
+func wizardPlanStateLabel(lang string, valid bool) string {
+	if valid {
+		return tr(lang, "wizard.plan_ready")
+	}
+	return tr(lang, "wizard.plan_needs_attention")
 }
 
 func renderBlockedWizardPlanNavigation(lang string, r *http.Request, projectID, guildID string, review bool) string {

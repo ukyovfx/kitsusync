@@ -157,7 +157,7 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 
 	categoryStart := time.Now()
 	slog.Info("Project setup creating Discord category", "projectName", projectName, "guildID", guildID)
-	categoryID, err := CreateCategory(guildID, projectName, botToken)
+	categoryID, err := CreateCategory(guildID, KitsuSyncCategoryName(projectName), botToken)
 	if err != nil {
 		res.fail("failed to create Discord category: " + err.Error())
 		slog.Error("Project setup Discord category creation failed", "projectName", projectName, "guildID", guildID, "duration", time.Since(categoryStart).String(), "err", err)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -26,6 +27,84 @@ type TaskTypeChannelPlan struct {
 	Entries        []TaskTypeChannelPlanEntry
 	Conflicts      []string
 	DuplicateNames []string
+}
+
+type TaskTypeChannelPlanOverride struct {
+	ChannelName string
+	Order       int
+}
+
+// taskTypePlanRequest returns the active Task Types and their user-reviewed
+// channel overrides. An absent inclusion field means the initial plan, where
+// every Production-valid Task Type is included. Once the form emits inclusion
+// fields, only those stable IDs remain in the plan; this makes exclusion a
+// routing decision rather than a Discord deletion request.
+func taskTypePlanRequest(r *http.Request, taskTypes []kitsu.TaskType) ([]kitsu.TaskType, map[string]TaskTypeChannelPlanOverride) {
+	_ = r.ParseForm()
+	includedValues, hasInclusionFields := r.Form["included_task_type_id"]
+	included := map[string]bool{}
+	for _, value := range includedValues {
+		if id := strings.TrimSpace(value); id != "" {
+			included[id] = true
+		}
+	}
+	action := strings.TrimSpace(r.FormValue("action"))
+	target := strings.TrimSpace(r.FormValue("task_type_id"))
+	if target == "" {
+		target = strings.TrimSpace(r.FormValue("exclude_task_type_id"))
+	}
+	if action == "exclude" {
+		delete(included, target)
+		hasInclusionFields = true
+	} else if action == "include" {
+		included[target] = true
+		hasInclusionFields = true
+	} else if added := strings.TrimSpace(r.FormValue("add_task_type")); added != "" {
+		included[added] = true
+		hasInclusionFields = true
+	}
+
+	active := make([]kitsu.TaskType, 0, len(taskTypes))
+	for _, taskType := range taskTypes {
+		id := strings.TrimSpace(taskType.ID)
+		if hasInclusionFields && !included[id] {
+			continue
+		}
+		active = append(active, taskType)
+	}
+	return active, planOverridesFromRequest(r, active)
+}
+
+func taskTypePlanRequestInvalid(r *http.Request, taskTypes []kitsu.TaskType) bool {
+	valid := map[string]bool{}
+	for _, taskType := range taskTypes {
+		if id := strings.TrimSpace(taskType.ID); id != "" {
+			valid[id] = true
+		}
+	}
+	included := map[string]bool{}
+	for _, value := range r.URL.Query()["included_task_type_id"] {
+		id := strings.TrimSpace(value)
+		if id == "" || !valid[id] {
+			return true
+		}
+		included[id] = true
+	}
+	action := strings.TrimSpace(r.URL.Query().Get("action"))
+	target := strings.TrimSpace(r.URL.Query().Get("task_type_id"))
+	if target == "" {
+		target = strings.TrimSpace(r.URL.Query().Get("exclude_task_type_id"))
+	}
+	if action == "exclude" {
+		return target == "" || !valid[target] || !included[target]
+	}
+	if action == "include" {
+		return target == "" || !valid[target] || included[target]
+	}
+	if added := strings.TrimSpace(r.URL.Query().Get("add_task_type")); added != "" && !valid[added] {
+		return true
+	}
+	return false
 }
 
 func renderTaskTypeChannelPlanCard(project model.Project, webhooks []model.ProjectWebhook, taskTypes []kitsu.TaskType, lang string) string {
@@ -110,6 +189,7 @@ type TaskTypeChannelPlanEntry struct {
 	DepartmentName string
 	ChannelName    string
 	ExistingID     string
+	Order          int
 	Action         string // create, reuse, conflict, blocked
 }
 
@@ -149,6 +229,51 @@ func NormalizeTaskTypeChannelName(name string) string {
 // BuildTaskTypeChannelPlan uses IDs as identity and names only as display
 // metadata. Existing channels are scoped to the selected guild by the caller.
 func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.TaskType, existing map[string]string) TaskTypeChannelPlan {
+	return buildTaskTypeChannelPlan(productionID, guildID, taskTypes, existing, nil)
+}
+
+func BuildTaskTypeChannelPlanWithOverrides(productionID, guildID string, taskTypes []kitsu.TaskType, existing map[string]string, overrides map[string]TaskTypeChannelPlanOverride) TaskTypeChannelPlan {
+	return buildTaskTypeChannelPlan(productionID, guildID, taskTypes, existing, overrides)
+}
+
+func planOverridesFromRequest(r *http.Request, taskTypes []kitsu.TaskType) map[string]TaskTypeChannelPlanOverride {
+	overrides := map[string]TaskTypeChannelPlanOverride{}
+	for index, taskType := range taskTypes {
+		id := strings.TrimSpace(taskType.ID)
+		if id == "" {
+			continue
+		}
+		override := TaskTypeChannelPlanOverride{
+			ChannelName: strings.TrimSpace(r.FormValue("channel_name_" + id)),
+			Order:       index + 1,
+		}
+		if raw := strings.TrimSpace(r.FormValue("channel_order_" + id)); raw != "" {
+			if order, err := strconv.Atoi(raw); err == nil && order > 0 {
+				override.Order = order
+			}
+		}
+		if override.ChannelName != "" || strings.TrimSpace(r.FormValue("channel_order_"+id)) != "" {
+			overrides[id] = override
+		}
+	}
+	return overrides
+}
+
+func KitsuSyncCategoryName(productionName string) string {
+	name := strings.TrimSpace(productionName)
+	if name == "" {
+		name = "Production"
+	}
+	const prefix = "KitsuSync – "
+	result := prefix + name
+	if len([]rune(result)) <= 100 {
+		return result
+	}
+	runes := []rune(result)
+	return strings.TrimRight(string(runes[:100]), " –")
+}
+
+func buildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.TaskType, existing map[string]string, overrides map[string]TaskTypeChannelPlanOverride) TaskTypeChannelPlan {
 	plan := TaskTypeChannelPlan{ProductionID: strings.TrimSpace(productionID), GuildID: strings.TrimSpace(guildID)}
 	seen := map[string]string{}
 	nameCounts := map[string]int{}
@@ -185,16 +310,26 @@ func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.Ta
 		if nameCounts[nameKey] > 1 && context != "" {
 			channelName = NormalizeTaskTypeChannelName(name + "-" + context)
 		}
+		order := len(plan.Entries) + 1
+		if override, ok := overrides[id]; ok {
+			if strings.TrimSpace(override.ChannelName) != "" {
+				channelName = NormalizeTaskTypeChannelName(override.ChannelName)
+			}
+			if override.Order > 0 {
+				order = override.Order
+			}
+		}
 		entry := TaskTypeChannelPlanEntry{
 			TaskTypeID: id, TaskTypeName: name, TaskTypeLabel: label,
 			ForEntity: taskType.ForEntity, DepartmentID: taskType.DepartmentID,
-			DepartmentName: taskType.DepartmentName, ChannelName: channelName, Action: "create",
+			DepartmentName: taskType.DepartmentName, ChannelName: channelName, Order: order, Action: "create",
 		}
 		if id == "" || name == "" || plan.ProductionID == "" || plan.GuildID == "" {
 			entry.Action = "blocked"
 		}
 		if previous, ok := seen[channelName]; ok && previous != id {
-			if nameCounts[nameKey] > 1 && context != "" {
+			_, manuallyNamed := overrides[id]
+			if !manuallyNamed && nameCounts[nameKey] > 1 && context != "" {
 				channelOrdinals[channelName]++
 				channelName = fmt.Sprintf("%s-%d", channelName, channelOrdinals[channelName]+1)
 				entry.ChannelName = channelName
@@ -222,7 +357,22 @@ func BuildTaskTypeChannelPlan(productionID, guildID string, taskTypes []kitsu.Ta
 			delete(duplicateNames, key)
 		}
 	}
-	sort.SliceStable(plan.Entries, func(i, j int) bool { return plan.Entries[i].ChannelName < plan.Entries[j].ChannelName })
+	if len(overrides) == 0 {
+		sort.SliceStable(plan.Entries, func(i, j int) bool { return plan.Entries[i].ChannelName < plan.Entries[j].ChannelName })
+		for i := range plan.Entries {
+			plan.Entries[i].Order = i + 1
+		}
+	} else {
+		sort.SliceStable(plan.Entries, func(i, j int) bool {
+			if plan.Entries[i].Order != plan.Entries[j].Order {
+				return plan.Entries[i].Order < plan.Entries[j].Order
+			}
+			return plan.Entries[i].TaskTypeID < plan.Entries[j].TaskTypeID
+		})
+		for i := range plan.Entries {
+			plan.Entries[i].Order = i + 1
+		}
+	}
 	return plan
 }
 
@@ -230,6 +380,16 @@ func (p TaskTypeChannelPlan) CreateCount() int {
 	count := 0
 	for _, entry := range p.Entries {
 		if entry.Action == "create" {
+			count++
+		}
+	}
+	return count
+}
+
+func (p TaskTypeChannelPlan) ReuseCount() int {
+	count := 0
+	for _, entry := range p.Entries {
+		if entry.Action == "reuse" {
 			count++
 		}
 	}
@@ -255,7 +415,7 @@ func (p TaskTypeChannelPlan) Fingerprint() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\x00%s\x00", p.ProductionID, p.GuildID)
 	for _, entry := range p.Entries {
-		fmt.Fprintf(&b, "%s\x00%s\x00%s\x00%s\x00%s\x00", entry.TaskTypeID, entry.TaskTypeName, entry.ChannelName, entry.ExistingID, entry.Action)
+		fmt.Fprintf(&b, "%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00", entry.Order, entry.TaskTypeID, entry.TaskTypeName, entry.ChannelName, entry.ExistingID, entry.Action)
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return fmt.Sprintf("%x", sum[:])
