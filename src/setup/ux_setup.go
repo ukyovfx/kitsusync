@@ -69,6 +69,8 @@ type SetupDiagnostics struct {
 // readiness also requires at least one valid enabled Production route.
 type SharedBotRuntimeReadiness struct {
 	KitsuConfigured     bool
+	RuntimeHealthKnown  bool
+	RuntimeKitsuHealthy bool
 	DiscordConfigured   bool
 	ProductionConnected bool
 	RoutingReady        bool
@@ -89,8 +91,7 @@ const (
 
 func sharedBotRuntimeReadiness(db *gorm.DB, kitsuHost, botToken string) SharedBotRuntimeReadiness {
 	kitsuConfigured := strings.TrimSpace(kitsuHost) != "" &&
-		strings.TrimSpace(storedRuntimeKitsuEmail(db)) != "" &&
-		(strings.TrimSpace(StoredRuntimeKitsuPassword(db)) != "" || strings.TrimSpace(model.GetSetting(db, RuntimeKitsuTokenSettingKey)) != "")
+		strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
 	discordConfigured := strings.TrimSpace(botToken) != ""
 	productionConnected := len(model.ListProjects(db)) > 0
 	routingReady := hasReadyProductionRouting(db)
@@ -242,13 +243,16 @@ func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID, lang string) []Se
 	var checks []SetupCheck
 	email := storedRuntimeKitsuEmail(db)
 	password := strings.TrimSpace(os.Getenv(RuntimeKitsuPasswordEnv))
+	credentialState := InspectRuntimeKitsuCredential(db)
 	if email != "" {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu連携アカウント", "Kitsu integration account"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: email})
 	} else {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu連携アカウント", "Kitsu integration account"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsu連携アカウントを保存してください。", "Save the Kitsu integration account in Connections.")})
 	}
-	if password != "" {
+	if password != "" || credentialState.Decryptable {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu連携アカウントのパスワード", "Kitsu integration account password"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: "hidden"})
+	} else if credentialState.CiphertextPresent && credentialState.ErrorClass != "" {
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu runtime password", "Kitsu integration account password"), Status: SetupError, Summary: t(lang, "復旧が必要", "Recovery required"), Detail: t(lang, "保存済みのruntime認証情報を復号できません。", "The stored runtime credential could not be decrypted."), Fix: t(lang, "接続設定でKitsuパスワードを再入力してください。", "Re-enter the Kitsu password in Connections.")})
 	} else {
 		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu連携アカウントのパスワード", "Kitsu integration account password"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsu連携アカウントのパスワードを保存してください。", "Save the Kitsu integration account password in Connections.")})
 	}

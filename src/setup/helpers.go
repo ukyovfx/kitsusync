@@ -172,7 +172,11 @@ func runtimeEndpointFromDisplay(db *gorm.DB, displayed string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.EqualFold(strings.TrimRight(normalized, "/"), "http://127.0.0.1:8080") && strings.EqualFold(strings.TrimSpace(os.Getenv(localProfileEnv)), "1") {
+	if strings.EqualFold(strings.TrimRight(normalized, "/"), "http://127.0.0.1:8080") {
+		// The normal UI intentionally displays a safe host summary. Resolve that
+		// summary back to the configured runtime endpoint before making a request.
+		// This must not depend on the optional local-profile flag: saved settings
+		// may already point at the container-to-host address.
 		if runtime := effectiveRuntimeKitsuEndpoint(db); runtime != "" {
 			return runtime, nil
 		}
@@ -631,31 +635,17 @@ func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, 
 }
 
 func discordBotAPIError(action string, status int, respBody []byte) error {
-	bodyText := strings.TrimSpace(string(respBody))
-	message := bodyText
-	if message == "" {
-		message = http.StatusText(status)
-	}
-
-	var discordErr struct {
-		Message string `json:"message"`
-		Code    int    `json:"code"`
-	}
-	if len(respBody) > 0 && json.Unmarshal(respBody, &discordErr) == nil && strings.TrimSpace(discordErr.Message) != "" {
-		message = strings.TrimSpace(discordErr.Message)
-	}
-
 	switch status {
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%s: Discord bot token is missing or invalid (HTTP 401 Unauthorized)", action)
 	case http.StatusForbidden:
 		return fmt.Errorf("%s: Discord bot is authenticated but lacks permission for this request (HTTP 403 Forbidden)", action)
 	case http.StatusNotFound:
-		return fmt.Errorf("%s: Discord resource was not found for this request (HTTP 404 Not Found): %s", action, message)
+		return fmt.Errorf("%s: Discord resource was not found for this request (HTTP 404 Not Found)", action)
 	case http.StatusBadRequest:
-		return fmt.Errorf("%s: Discord rejected the request payload (HTTP 400 Bad Request): %s", action, message)
+		return fmt.Errorf("%s: Discord rejected the request payload (HTTP 400 Bad Request)", action)
 	default:
-		return fmt.Errorf("%s: Discord API returned HTTP %d: %s", action, status, message)
+		return fmt.Errorf("%s: Discord API returned HTTP %d", action, status)
 	}
 }
 
@@ -704,6 +694,19 @@ func CreateTextChannel(guildID, categoryID, name, botToken string) (string, erro
 		return "", fmt.Errorf("discord channel id was empty")
 	}
 	return result.ID, nil
+}
+
+func SetGuildChannelPosition(channelID string, position int, botToken string) error {
+	respBody, status, err := botDo(http.MethodPatch, fmt.Sprintf("%s/channels/%s", discordAPI, strings.TrimSpace(channelID)), map[string]any{
+		"position": position,
+	}, botToken)
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		return discordBotAPIError("discord channel reorder failed", status, respBody)
+	}
+	return nil
 }
 
 type DiscordGuildChannel struct {

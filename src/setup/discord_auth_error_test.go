@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -58,5 +59,24 @@ func TestDiscordBotAPIError_ClassifiesForbiddenAndNotFound(t *testing.T) {
 				t.Fatalf("expected %q in %v", tc.wantSubstr, err)
 			}
 		})
+	}
+}
+
+func TestDiscordBotAPIErrorDoesNotExposeResponseBody(t *testing.T) {
+	const secretLikeBody = `{"message":"webhook token https://example.invalid/api/webhooks/123/secret-token"}`
+	err := discordBotAPIError("discord channel delete failed", http.StatusBadRequest, []byte(secretLikeBody))
+	if err == nil {
+		t.Fatal("expected classified error")
+	}
+	if strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "webhooks/123") {
+		t.Fatalf("response body leaked into error: %v", err)
+	}
+}
+
+func TestSafeDeleteOperationMessageDoesNotExposeUnderlyingError(t *testing.T) {
+	const secretLikeValue = "request failed: webhook token secret-token"
+	message := safeDeleteOperationMessage("en", "channel_delete", fmt.Errorf("%s", secretLikeValue))
+	if strings.Contains(message, "secret-token") || strings.Contains(message, "webhook") {
+		t.Fatalf("underlying error leaked into user-facing message: %q", message)
 	}
 }

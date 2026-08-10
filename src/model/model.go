@@ -561,6 +561,51 @@ func SaveProductionNotificationConfig(db *gorm.DB, config *ProductionNotificatio
 	})
 }
 
+// DeleteProductionOperationalState removes current routing state owned by a
+// KitsuSync Production connection. Audit history is intentionally retained.
+func DeleteProductionOperationalState(db *gorm.DB, productionID string) error {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return gorm.ErrInvalidData
+	}
+	productionID = strings.TrimSpace(productionID)
+	for _, table := range []interface{}{
+		&ProductionNotificationRoute{},
+		&ProductionNotificationConfig{},
+		&ProductionChannelMapping{},
+	} {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Where("production_id = ?", productionID).Delete(table).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// HasProductionOperationalState reports whether a Production has any local
+// routing state without requiring a connected Project row.
+func HasProductionOperationalState(db *gorm.DB, productionID string) bool {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return false
+	}
+	productionID = strings.TrimSpace(productionID)
+	var count int64
+	for _, table := range []interface{}{
+		&ProductionNotificationRoute{},
+		&ProductionNotificationConfig{},
+		&ProductionChannelMapping{},
+	} {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Model(table).Where("production_id = ?", productionID).Count(&count).Error; err == nil && count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func RecordNotificationRoutingDiagnosis(db *gorm.DB, diagnosis NotificationRoutingDiagnosis) {
 	if db != nil {
 		db.Create(&diagnosis)
@@ -613,14 +658,22 @@ func ValidateProductionNotificationConfig(db *gorm.DB, productionID string, rout
 }
 
 func CreateProject(db *gorm.DB, kitsuProjectID, name, projectType, guildID, categoryID, language string) error {
-	return db.Create(&Project{
-		KitsuProjectID:    kitsuProjectID,
-		Name:              name,
-		ProjectType:       projectType,
-		DiscordGuildID:    guildID,
-		DiscordCategoryID: categoryID,
-		Language:          language,
-	}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if FindProjectByKitsuID(tx, kitsuProjectID) != nil {
+			return errors.New("project is already connected")
+		}
+		if err := DeleteProductionOperationalState(tx, kitsuProjectID); err != nil {
+			return err
+		}
+		return tx.Create(&Project{
+			KitsuProjectID:    kitsuProjectID,
+			Name:              name,
+			ProjectType:       projectType,
+			DiscordGuildID:    guildID,
+			DiscordCategoryID: categoryID,
+			Language:          language,
+		}).Error
+	})
 }
 
 func UpdateProjectGuildID(db *gorm.DB, kitsuProjectID, guildID string) error {

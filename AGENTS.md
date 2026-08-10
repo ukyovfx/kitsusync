@@ -26,7 +26,7 @@ This repo prioritizes runtime safety and beginner onboarding clarity over clever
 
 ## Preferred Change Style
 - Prefer the smallest safe diff.
-- Keep PRs focused on one purpose.
+- Keep changes focused on one purpose.
 - Cleanup is incremental, not architectural.
 - Preserve beginner UX even when code could be cleaner.
 
@@ -48,3 +48,12 @@ These are intentionally out of scope for now:
 - autonomous cleanup passes
 - self-modifying prompts
 - orchestration automation
+
+## Current IA UI Guardrails
+- Before changing Current IA UI, read `docs/CURRENT-IA-UI-SPEC.md`.
+- Browser-rendered output is the final source of truth for visual acceptance; tests/build success alone cannot produce a UI PASS.
+- Use: implement → focused tests → update/preview 8090 → authenticated browser inspect → repair → re-inspect until acceptance items pass.
+- Run expensive full validation only after browser visual acceptance is green.
+- When a final UI decision changes, update the canonical spec instead of accumulating conflicting chat-only requirements.
+
+Preferred loop: PLAN → IMPLEMENT → FOCUSED TESTS → UPDATE/PREVIEW 8090 AS NEEDED → AUTHENTICATED BROWSER REVIEW → REPAIR VISUAL FAILURES → REPEAT → FINAL FULL VALIDATION ONCE.

@@ -3,6 +3,7 @@ package setup
 import (
 	"app/src/model"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -60,12 +61,15 @@ func TestSharedBotRuntimeReadinessIsSharedBySetupAndSettings(t *testing.T) {
 	if err := db.AutoMigrate(&model.Setting{}, &model.Project{}, &model.ProjectWebhook{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}); err != nil {
 		t.Fatal(err)
 	}
-	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "manager@example.invalid")
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	previous := os.Getenv(RuntimeKitsuPasswordEnv)
 	defer os.Setenv(RuntimeKitsuPasswordEnv, previous)
 	_ = os.Setenv(RuntimeKitsuPasswordEnv, "configured-in-test")
 	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", ""); got.OverallReady || got.DiscordConfigured {
 		t.Fatalf("token-less shared readiness must be incomplete: %#v", got)
+	}
+	if err := setRuntimeKitsuToken(db, "test-token"); err != nil {
+		t.Fatal(err)
 	}
 	if got := sharedBotRuntimeReadiness(db, "https://kitsu.invalid", "test-token"); got.OverallReady || !got.KitsuConfigured || !got.DiscordConfigured {
 		t.Fatalf("connection prerequisites alone must remain blocked: %#v", got)

@@ -2,6 +2,7 @@ package setup
 
 import (
 	"app/src/model"
+	"path/filepath"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -22,26 +23,28 @@ func readinessMatrixDB(t *testing.T) *gorm.DB {
 
 func TestSharedReadinessStateMatrix(t *testing.T) {
 	cases := []struct {
-		name               string
-		host, email, token string
-		projects, routes   bool
-		want               ReadinessState
+		name                    string
+		host, kitsuToken, token string
+		projects, routes        bool
+		want                    ReadinessState
 	}{
 		{"kitsu missing", "", "", "", false, false, ReadinessSetupRequired},
-		{"discord missing", "https://kitsu.invalid", "manager", "", false, false, ReadinessBotSetupRequired},
-		{"production missing", "https://kitsu.invalid", "manager", "token", false, false, ReadinessProductionRequired},
-		{"routes missing", "https://kitsu.invalid", "manager", "token", true, false, ReadinessRoutingRequired},
+		{"discord missing", "https://kitsu.invalid", "kitsu-token", "", false, false, ReadinessBotSetupRequired},
+		{"production missing", "https://kitsu.invalid", "kitsu-token", "token", false, false, ReadinessProductionRequired},
+		{"routes missing", "https://kitsu.invalid", "kitsu-token", "token", true, false, ReadinessRoutingRequired},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			db := readinessMatrixDB(t)
+			t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 			if tc.host != "" {
 				model.SetSetting(db, "kitsu.hostname", tc.host)
 			}
-			if tc.email != "" {
-				model.SetSetting(db, RuntimeKitsuEmailSettingKey, tc.email)
+			if tc.kitsuToken != "" {
+				if err := setRuntimeKitsuToken(db, tc.kitsuToken); err != nil {
+					t.Fatal(err)
+				}
 			}
-			t.Setenv(RuntimeKitsuPasswordEnv, "configured")
 			if tc.projects {
 				_ = model.CreateProject(db, "p", "Production", "", "", "", "")
 			}
@@ -56,8 +59,10 @@ func TestSharedReadinessStateMatrix(t *testing.T) {
 func TestSharedReadinessRequiresEnabledRoute(t *testing.T) {
 	db := readinessMatrixDB(t)
 	model.SetSetting(db, "kitsu.hostname", "https://kitsu.invalid")
-	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "manager")
-	t.Setenv(RuntimeKitsuPasswordEnv, "configured")
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := setRuntimeKitsuToken(db, "token"); err != nil {
+		t.Fatal(err)
+	}
 	if err := model.CreateProject(db, "p", "Production", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}

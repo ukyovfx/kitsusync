@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,6 +68,36 @@ type DiscordStatusInfo struct {
 type DiscordPermissionInfo struct {
 	ManageChannels bool `json:"manage_channels"`
 	ManageWebhooks bool `json:"manage_webhooks"`
+}
+
+func discordPermissionInfoFromBits(perms uint64) DiscordPermissionInfo {
+	const administrator = uint64(1 << 3)
+	const manageChannels = uint64(1 << 4)
+	const manageWebhooks = uint64(1 << 29)
+	isAdministrator := perms&administrator != 0
+	return DiscordPermissionInfo{
+		ManageChannels: isAdministrator || perms&manageChannels != 0,
+		ManageWebhooks: isAdministrator || perms&manageWebhooks != 0,
+	}
+}
+
+func discordPermissionBitsFromRoles(guildID string, memberRoleIDs []string, rolePermissions map[string]string, memberPermissions string) uint64 {
+	var perms uint64
+	if memberPermissions != "" {
+		perms, _ = strconv.ParseUint(memberPermissions, 10, 64)
+	}
+	roleIDs := append([]string{guildID}, memberRoleIDs...)
+	for _, roleID := range roleIDs {
+		rolePerms, ok := rolePermissions[roleID]
+		if !ok || rolePerms == "" {
+			continue
+		}
+		bits, err := strconv.ParseUint(rolePerms, 10, 64)
+		if err == nil {
+			perms |= bits
+		}
+	}
+	return perms
 }
 
 // PollerStatusInfo describes the poller's last known state.
@@ -627,12 +658,20 @@ func TestDiscordHandler(db *gorm.DB) http.HandlerFunc {
 
 // --- Internal helpers ---
 
-func checkKitsuStatus(kitsuHost string) KitsuStatusInfo {
+func checkKitsuStatus(kitsuHost string) (info KitsuStatusInfo) {
+	started := time.Now()
+	defer func() {
+		classification := "success"
+		if info.Error != nil {
+			classification = "error"
+		}
+		Stats.RecordAPIObservation("kitsu", started, info.Authenticated, classification)
+	}()
 	if kitsuHost == "" {
 		errStr := "KITSU_HOSTNAME not configured"
 		return KitsuStatusInfo{Error: &errStr}
 	}
-	info := KitsuStatusInfo{Configured: true}
+	info = KitsuStatusInfo{Configured: true}
 
 	client := &http.Client{Timeout: 8 * time.Second}
 	pingURL := strings.TrimRight(kitsuHost, "/") + "/api/"
@@ -681,16 +720,43 @@ func checkKitsuStatus(kitsuHost string) KitsuStatusInfo {
 	return info
 }
 
-func checkDiscordStatus(botToken, guildID string) DiscordStatusInfo {
+func checkDiscordStatus(botToken, guildID string) (info DiscordStatusInfo) {
+	started := time.Now()
+	defer func() {
+		classification := "success"
+		if info.Error != nil {
+			classification = "error"
+		}
+		Stats.RecordAPIObservation("discord", started, info.BotValid, classification)
+	}()
 	if botToken == "" {
 		errStr := "DISCORD_BOT_TOKEN not configured"
 		return DiscordStatusInfo{Error: &errStr}
 	}
 	if guildID == "" {
-		errStr := "DISCORD_GUILD_ID not configured"
-		return DiscordStatusInfo{Configured: true, Error: &errStr}
+		info = DiscordStatusInfo{Configured: true}
+		body, status, err := botDo("GET", discordAPI+"/users/@me", nil, botToken)
+		if err == nil && status == http.StatusOK {
+			var me struct {
+				ID       string `json:"id"`
+				Username string `json:"username"`
+			}
+			if json.Unmarshal(body, &me) == nil && strings.TrimSpace(me.ID) != "" {
+				info.BotValid = true
+				info.BotName = me.Username
+				return info
+			}
+		}
+		if err != nil {
+			errStr := "bot identity validation failed"
+			info.Error = &errStr
+		} else {
+			errStr := fmt.Sprintf("bot identity rejected (HTTP %d)", status)
+			info.Error = &errStr
+		}
+		return info
 	}
-	info := DiscordStatusInfo{Configured: true}
+	info = DiscordStatusInfo{Configured: true}
 
 	var botUserID string
 	body, status, err := botDo("GET", discordAPI+"/users/@me", nil, botToken)
@@ -738,15 +804,25 @@ func checkDiscordStatus(botToken, guildID string) DiscordStatusInfo {
 		body, status, err = botDo("GET", discordAPI+"/guilds/"+guildID+"/members/"+botUserID, nil, botToken)
 		if err == nil && status == 200 {
 			var member struct {
-				Permissions string `json:"permissions"`
+				Permissions string   `json:"permissions"`
+				Roles       []string `json:"roles"`
 			}
-			if json.Unmarshal(body, &member) == nil && member.Permissions != "" {
-				var perms uint64
-				fmt.Sscanf(member.Permissions, "%d", &perms)
-				const manageWebhooks = uint64(1 << 29)
-				const manageChannels = uint64(1 << 4)
-				info.Permissions.ManageChannels = perms&manageChannels != 0
-				info.Permissions.ManageWebhooks = perms&manageWebhooks != 0
+			if json.Unmarshal(body, &member) == nil {
+				rolePermissions := map[string]string{}
+				rolesBody, rolesStatus, rolesErr := botDo("GET", discordAPI+"/guilds/"+guildID+"/roles", nil, botToken)
+				if rolesErr == nil && rolesStatus == 200 {
+					var roles []struct {
+						ID          string `json:"id"`
+						Permissions string `json:"permissions"`
+					}
+					if json.Unmarshal(rolesBody, &roles) == nil {
+						for _, role := range roles {
+							rolePermissions[role.ID] = role.Permissions
+						}
+					}
+				}
+				perms := discordPermissionBitsFromRoles(guildID, member.Roles, rolePermissions, member.Permissions)
+				info.Permissions = discordPermissionInfoFromBits(perms)
 			}
 		}
 	}

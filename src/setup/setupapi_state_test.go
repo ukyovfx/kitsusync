@@ -100,6 +100,21 @@ func TestTestDiscordHandler_DoesNotMutateRuntimeOrSettings(t *testing.T) {
 	}
 }
 
+func TestCheckDiscordStatusValidatesBotWithoutGuild(t *testing.T) {
+	installDiscordAPIStub(t, "unused-guild")
+
+	info := checkDiscordStatus("configured-token", "")
+	if !info.Configured || !info.BotValid {
+		t.Fatalf("expected bot identity to be valid without a guild, got %+v", info)
+	}
+	if info.GuildValid {
+		t.Fatal("guild should remain unvalidated when no guild is selected")
+	}
+	if info.Error != nil {
+		t.Fatalf("unexpected bot identity error: %v", *info.Error)
+	}
+}
+
 func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
@@ -143,11 +158,8 @@ func TestBotHandler_EditFormShowsDurablePersistenceCopy(t *testing.T) {
 		t.Fatalf("expected 200 for edit form, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Enter a new token only when needed.") {
-		t.Fatalf("expected compact token guidance in connections form")
-	}
-	if !strings.Contains(body, "The saved token is not displayed. Changes take effect after saving.") {
-		t.Fatalf("expected compact token persistence guidance in connections form")
+	if strings.Contains(body, "Saved tokens are never displayed.") {
+		t.Fatalf("expected fixed secret-safe token presentation in connections form")
 	}
 	if strings.Contains(body, "After restart") || strings.Contains(body, "fallback") || strings.Contains(body, "Runtime") {
 		t.Fatalf("did not expect implementation persistence terminology in connections form")

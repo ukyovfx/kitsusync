@@ -51,7 +51,7 @@ func TestLiveProductionPreviewIsReadOnlyAndDoesNotPersist(t *testing.T) {
 		ValidationDataJSON: `{"task_types":[{"id":"task-type-1","name":"Animation"}],"participants":[{"id":"person-1","full_name":"Live Person"}]}`,
 	}
 	class, label, hint := iaStatus(db, preview, "en")
-	if class != "warning" || label != "Not connected" || !strings.Contains(hint, "Notifications are unavailable") {
+	if class != "warning" || label != "Disconnected" || !strings.Contains(hint, "Notifications are unavailable") {
 		t.Fatalf("unexpected live preview status: %q %q %q", class, label, hint)
 	}
 	for _, tab := range []string{"notifications", "users", "storage-settings", "danger-zone"} {

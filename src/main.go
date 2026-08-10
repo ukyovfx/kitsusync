@@ -561,6 +561,7 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 		return
 	}
 	defer pollMu.Unlock()
+	started := time.Now()
 
 	// Poll Kitsu with runtime credentials from DB/env/conf priority.
 	kitsuResponse := MakeKitsuResponse(conf)
@@ -572,7 +573,7 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	if conf.Log {
 		slog.Info("Done FilterTasks")
 	}
-	setup.Stats.RecordPoll(taskCount)
+	setup.Stats.RecordPollWithDuration(taskCount, time.Since(started))
 }
 
 func configureSQLite(db *gorm.DB) (*sql.DB, error) {
@@ -613,6 +614,9 @@ func configureSQLite(db *gorm.DB) (*sql.DB, error) {
 	}
 	if err := sqlDB.QueryRow("PRAGMA foreign_keys;").Scan(&foreignKeys); err != nil {
 		return nil, err
+	}
+	if foreignKeys != 1 {
+		return nil, fmt.Errorf("sqlite foreign key enforcement is disabled")
 	}
 
 	slog.Info("SQLite pragmas configured",
@@ -659,6 +663,11 @@ func main() {
 	start := time.Now()
 
 	conf := config.Read()
+	// Make the configured conf.toml host available to the UI/runtime fallback
+	// path without overriding an explicitly saved SQLite endpoint.
+	if strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) == "" && strings.TrimSpace(conf.Kitsu.Hostname) != "" {
+		os.Setenv("KITSU_HOSTNAME", conf.Kitsu.Hostname)
+	}
 
 	if issues := conf.Validate(); len(issues) > 0 {
 		for _, msg := range issues {
@@ -741,7 +750,7 @@ func main() {
 
 	runtime := newRuntimeManager()
 	healthReadinessProvider = func() readinessSnapshot {
-		host, email, _ := getKitsuCreds(db, conf)
+		host, _, _ := getKitsuCreds(db, conf)
 		botToken, _, _ := getDiscordSettings(db, conf)
 		routingReady := false
 		for _, project := range model.ListProjects(db) {
@@ -752,7 +761,8 @@ func main() {
 				break
 			}
 		}
-		kitsuConfigured := strings.TrimSpace(host) != "" && strings.TrimSpace(email) != ""
+		kitsuToken := setup.StoredRuntimeKitsuToken(db)
+		kitsuConfigured := strings.TrimSpace(host) != "" && strings.TrimSpace(kitsuToken) != ""
 		kitsuReady := runtime.ready()
 		botConfigured := strings.TrimSpace(botToken) != ""
 		overall := "blocked"
@@ -769,11 +779,32 @@ func main() {
 		}
 	}
 	refreshRuntime := func() bool {
-		hostname, email, password := getKitsuCreds(db, conf)
+		hostname, _, _ := getKitsuCreds(db, conf)
+		slog.Debug("Kitsu runtime credential availability",
+			"hostname_present", strings.TrimSpace(hostname) != "",
+			"bot_token_present", setup.StoredRuntimeKitsuToken(db) != "",
+		)
 		if token := setup.StoredRuntimeKitsuToken(db); token != "" {
-			return runtime.authenticateToken(hostname, token)
+			validationStarted := time.Now()
+			validation := setup.ValidateKitsuBotToken(db, hostname, token, true)
+			setup.Stats.RecordAPIObservation("kitsu", validationStarted, validation.Compatible(), validation.Classification)
+			slog.Debug("Kitsu Bot token runtime validation",
+				"classification", validation.Classification,
+				"stage", validation.Stage,
+				"authenticated", validation.Authenticated,
+				"failure_endpoint", validation.Failure.Endpoint,
+				"failure_status", validation.Failure.StatusCode,
+				"failure_error_class", validation.Failure.ErrorClass,
+			)
+			if validation.Compatible() {
+				setup.RecordKitsuRuntimeAuthMode(db, "bot_token", "")
+				return runtime.authenticateToken(hostname, token)
+			}
+			setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", validation.Classification)
+			return false
 		}
-		return runtime.authenticate(hostname, email, password)
+		setup.RecordKitsuRuntimeAuthMode(db, "bot_token_missing", "")
+		return false
 	}
 
 	if len(conf.Discord.Productions) > 0 || len(conf.Discord.TaskTypeWebhooks) > 0 {
@@ -786,10 +817,12 @@ func main() {
 	mux.HandleFunc("/health", healthHandler(runtime))
 
 	onRuntimeConfigured := func() {
+		slog.Debug("Kitsu reconnect attempted", "attempted", true)
 		if !refreshRuntime() {
-			slog.Warn("Kitsu runtime validation failed; setup remains required")
+			slog.Warn("Kitsu reconnect result", "success", false)
 			return
 		}
+		slog.Debug("Kitsu reconnect result", "success", true)
 		go runtime.runWhenReady(func() { runOnePoll(conf, db) })
 	}
 
@@ -828,6 +861,7 @@ func main() {
 		mux.HandleFunc(prefix+"/api/setup/status", setup.RequireSession(setup.SetupStatusHandler(
 			db, conf.Kitsu.RequestInterval, setupCredsFunc,
 		)))
+		mux.HandleFunc(prefix+"/api/setup/observability", setup.RequireSession(setup.TelemetrySnapshotHandler()))
 		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, setup.ProjectsHandler(db))))
 		mux.HandleFunc(prefix+"/api/setup/preview-project", setup.RequireSession(setup.ReadOnlyAuditPreviewRoute(runtime.ready, setup.PreviewProjectHandler(db, setupCredsFunc))))
 		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.ApplyProjectHandler(db, setupCredsFunc)))))
@@ -842,7 +876,7 @@ func main() {
 	setupAPIRoutes("/bot")
 
 	registerAdminRoutes := func(prefix string) {
-		mux.HandleFunc(prefix+"/admin", setup.RequireSession(setup.AdminIndex(db)))
+		mux.HandleFunc(prefix+"/admin", setup.RequireSession(setup.AdminIndexWithRuntime(db, runtime.ready)))
 		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)
@@ -854,7 +888,11 @@ func main() {
 		mux.HandleFunc(prefix+"/admin/drive", setup.RequireSession(setup.DriveHandler(db)))
 		// BotHandler persists shared runtime credentials and triggers reconnect.
 		kitsuReconnect := func() { onRuntimeConfigured() }
-		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.RejectValidationMutation(setup.BotHandler(db, kitsuReconnect))))
+		botHandler := setup.BotHandlerWithRuntime(db, kitsuReconnect, runtime.ready)
+		mux.HandleFunc(prefix+"/admin/bot", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
+			slog.Debug("Admin bot route dispatched", "method", r.Method, "path", r.URL.Path)
+			botHandler(w, r)
+		})))
 		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
@@ -920,6 +958,13 @@ func main() {
 		if !refreshRuntime() {
 			slog.Warn("Kitsu token refresh failed; keeping the previous usable token when available")
 		}
+	})
+	c.AddFunc("@every 20s", func() {
+		hostname, _, _ := getKitsuCreds(db, conf)
+		kitsuToken := setup.StoredRuntimeKitsuToken(db)
+		setup.ObserveKitsuRuntime(hostname, kitsuToken)
+		discordToken, _, _ := getDiscordSettings(db, conf)
+		setup.ObserveDiscordRuntime(discordToken)
 	})
 	c.AddFunc("@every "+strconv.Itoa(conf.Kitsu.RequestInterval)+"m", func() {
 		if !runtime.ready() && !refreshRuntime() {

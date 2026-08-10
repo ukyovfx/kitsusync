@@ -5,6 +5,17 @@ import (
 	"time"
 )
 
+const maxAPIObservations = 20
+
+// APIObservation is a redacted, in-memory record of one external API health check.
+// It deliberately contains no URL, credential, request, or response data.
+type APIObservation struct {
+	At             time.Time
+	Duration       time.Duration
+	Success        bool
+	Classification string
+}
+
 // RuntimeStats tracks live operational metrics updated each polling cycle.
 // Resets on app restart — acceptable for small-team self-hosted deployments.
 type RuntimeStats struct {
@@ -15,32 +26,63 @@ type RuntimeStats struct {
 	PollCount         int64
 	LastPollTime      time.Time
 	LastPollTaskCount int
+	LastPollDuration  time.Duration
 	LastPollErr       string
 
 	SendSuccessTotal int64
 	SendFailureTotal int64
 	LastSendTime     time.Time
 
-	webhookFailures  map[string]int64
-	webhookLastErr   map[string]string
-	webhookLastSend  map[string]time.Time
+	webhookFailures map[string]int64
+	webhookLastErr  map[string]string
+	webhookLastSend map[string]time.Time
+	apiObservations map[string][]APIObservation
 }
 
 // Stats is the singleton runtime stats instance used by main.go and the health handler.
 var Stats = &RuntimeStats{
-	StartTime:        time.Now(),
-	webhookFailures:  make(map[string]int64),
-	webhookLastErr:   make(map[string]string),
-	webhookLastSend:  make(map[string]time.Time),
+	StartTime:       time.Now(),
+	webhookFailures: make(map[string]int64),
+	webhookLastErr:  make(map[string]string),
+	webhookLastSend: make(map[string]time.Time),
+	apiObservations: make(map[string][]APIObservation),
+}
+
+// RecordAPIObservation adds one bounded, secret-safe observation for a service.
+func (s *RuntimeStats) RecordAPIObservation(service string, started time.Time, success bool, classification string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if service == "" {
+		return
+	}
+	if s.apiObservations == nil {
+		s.apiObservations = make(map[string][]APIObservation)
+	}
+	items := s.apiObservations[service]
+	finished := time.Now()
+	items = append(items, APIObservation{
+		At: finished, Duration: finished.Sub(started),
+		Success: success, Classification: classification,
+	})
+	if len(items) > maxAPIObservations {
+		items = items[len(items)-maxAPIObservations:]
+	}
+	s.apiObservations[service] = items
 }
 
 // RecordPoll updates polling stats after one cycle completes successfully.
 func (s *RuntimeStats) RecordPoll(taskCount int) {
+	s.RecordPollWithDuration(taskCount, 0)
+}
+
+// RecordPollWithDuration records a successful poll and its measured duration.
+func (s *RuntimeStats) RecordPollWithDuration(taskCount int, duration time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.PollCount++
 	s.LastPollTime = time.Now()
 	s.LastPollTaskCount = taskCount
+	s.LastPollDuration = duration
 	s.LastPollErr = ""
 }
 
@@ -138,24 +180,32 @@ type RuntimeSnapshot struct {
 	PollCount         int64
 	LastPollTime      time.Time
 	LastPollTaskCount int
+	LastPollDuration  time.Duration
 	LastPollErr       string
 	SendSuccessTotal  int64
 	SendFailureTotal  int64
 	LastSendTime      time.Time
+	APIObservations   map[string][]APIObservation
 }
 
 // Snapshot returns a safe copy of current metrics.
 func (s *RuntimeStats) Snapshot() RuntimeSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	observations := make(map[string][]APIObservation, len(s.apiObservations))
+	for service, items := range s.apiObservations {
+		observations[service] = append([]APIObservation(nil), items...)
+	}
 	return RuntimeSnapshot{
 		StartTime:         s.StartTime,
 		PollCount:         s.PollCount,
 		LastPollTime:      s.LastPollTime,
 		LastPollTaskCount: s.LastPollTaskCount,
+		LastPollDuration:  s.LastPollDuration,
 		LastPollErr:       s.LastPollErr,
 		SendSuccessTotal:  s.SendSuccessTotal,
 		SendFailureTotal:  s.SendFailureTotal,
 		LastSendTime:      s.LastSendTime,
+		APIObservations:   observations,
 	}
 }

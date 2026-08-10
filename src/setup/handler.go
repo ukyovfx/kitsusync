@@ -67,12 +67,14 @@ func cleanupDiscordArtifactsAfterDBFailure(categoryID, botToken string, channels
 }
 
 func cleanupSetupArtifacts(kitsuProjectID, categoryID, botToken string, channels []createdSetupChannel, db *gorm.DB, res *SetupResult) {
+	hadCleanupError := false
 	for i := len(channels) - 1; i >= 0; i-- {
 		ch := channels[i]
 		if ch.ID == "" {
 			continue
 		}
 		if err := DeleteChannel(ch.ID, botToken); err != nil {
+			hadCleanupError = true
 			res.warn(fmt.Sprintf("cleanup failed for #%s: %v", ch.Name, err))
 			slog.Warn("Setup cleanup could not delete Discord channel", "channelName", ch.Name, "channelID", ch.ID, "err", err)
 		} else {
@@ -81,11 +83,23 @@ func cleanupSetupArtifacts(kitsuProjectID, categoryID, botToken string, channels
 	}
 	if categoryID != "" {
 		if err := DeleteChannel(categoryID, botToken); err != nil {
+			hadCleanupError = true
 			res.warn("cleanup failed for Discord category: " + err.Error())
 			slog.Warn("Setup cleanup could not delete Discord category", "categoryID", categoryID, "err", err)
 		} else {
 			res.ok("rolled back Discord category")
 		}
+	}
+	if hadCleanupError {
+		_ = model.MarkProductionChannelMappingsReviewRequired(db, kitsuProjectID, "setup-cleanup", nil, "setup cleanup requires external resource review")
+		_ = db.Model(&model.ProductionNotificationConfig{}).Where("production_id = ?", kitsuProjectID).Update("enabled", false).Error
+		res.SafeToRetry = false
+		return
+	}
+	if err := model.DeleteProductionOperationalState(db, kitsuProjectID); err != nil {
+		res.warn("cleanup failed for setup routing state: " + err.Error())
+		slog.Error("Setup cleanup could not delete routing state", "kitsuProjectID", kitsuProjectID, "err", err)
+		return
 	}
 	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 		res.warn("cleanup failed for setup webhook records: " + err.Error())
@@ -301,6 +315,10 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 	if project != nil {
 		model.DeleteProjectScopedData(db, project.ID)
 	}
+	if err := model.DeleteProductionOperationalState(db, kitsuProjectID); err != nil {
+		logs = append(logs, "failed to delete production routing state")
+		return logs, fmt.Errorf("db delete production routing state: %w", err)
+	}
 
 	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 		logs = append(logs, "failed to delete project records from database")
@@ -325,6 +343,9 @@ func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 			return fmt.Errorf("project not found: %s", kitsuProjectID)
 		}
 		model.DeleteProjectScopedData(tx, project.ID)
+		if err := model.DeleteProductionOperationalState(tx, kitsuProjectID); err != nil {
+			return fmt.Errorf("db delete production routing state: %w", err)
+		}
 		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 			return fmt.Errorf("db delete webhooks: %w", err)
 		}
@@ -339,45 +360,55 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		if handleFirstTimeConnectionAction(w, r, lang, kitsuHost, botToken, db) {
+			return
+		}
 		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
 			return
 		}
 
 		if r.Method == http.MethodPost && r.FormValue("action") == "bot_setup" {
-			_ = r.ParseForm()
-			kitsuHostInput := effectiveRuntimeKitsuEndpoint(db)
-			runtimeEmail := strings.TrimSpace(r.FormValue("kitsu_runtime_email"))
-			runtimePassword := r.FormValue("kitsu_runtime_password")
-			// Accept the old field names for bookmarked/legacy forms, but keep the
-			// operation Kitsu-only. This path never creates a Kitsu or Discord bot.
-			if runtimeEmail == "" {
-				runtimeEmail = strings.TrimSpace(r.FormValue("bot_admin_email"))
-			}
-			if runtimePassword == "" {
-				runtimePassword = r.FormValue("bot_admin_password")
-			}
-			if runtimeEmail == "" || strings.TrimSpace(runtimePassword) == "" {
-				fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu実行用のメールアドレスとパスワードを入力してください。", "Enter the Kitsu runtime email and password.")))
-				return
-			}
-			if kitsuHostInput == "" {
-				fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuの接続先を確認できませんでした。Kitsu接続設定を確認してください。", "The Kitsu endpoint could not be determined. Review the Kitsu connection settings.")))
-				return
-			}
-			if err := RecoverRuntimeCredentials(db, kitsuHostInput, runtimeEmail, runtimePassword); err != nil {
-				fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
-				return
-			}
-			model.SetSetting(db, "kitsu.hostname", kitsuHostInput)
-			if onRuntimeConfigured != nil {
-				onRuntimeConfigured()
-			}
-			if runtimeReady == nil || !runtimeReady() {
-				fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。設定は保存されていません。", "Kitsu authentication could not be verified. The setup is not complete.")))
-				return
-			}
-			fmt.Fprint(w, renderKitsuConnectionSuccess(lang))
+			// Human email/password setup is no longer part of the current runtime
+			// authentication flow. Keep the old action as a safe redirect for
+			// bookmarked legacy forms; token validation happens in Connections.
+			http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
 			return
+			/*
+				_ = r.ParseForm()
+				kitsuHostInput := effectiveRuntimeKitsuEndpoint(db)
+				runtimeEmail := strings.TrimSpace(r.FormValue("kitsu_runtime_email"))
+				runtimePassword := r.FormValue("kitsu_runtime_password")
+				// Accept the old field names for bookmarked/legacy forms, but keep the
+				// operation Kitsu-only. This path never creates a Kitsu or Discord bot.
+				if runtimeEmail == "" {
+					runtimeEmail = strings.TrimSpace(r.FormValue("bot_admin_email"))
+				}
+				if runtimePassword == "" {
+					runtimePassword = r.FormValue("bot_admin_password")
+				}
+				if runtimeEmail == "" || strings.TrimSpace(runtimePassword) == "" {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu実行用のメールアドレスとパスワードを入力してください。", "Enter the Kitsu runtime email and password.")))
+					return
+				}
+				if kitsuHostInput == "" {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuの接続先を確認できませんでした。Kitsu接続設定を確認してください。", "The Kitsu endpoint could not be determined. Review the Kitsu connection settings.")))
+					return
+				}
+				if err := RecoverRuntimeCredentials(db, kitsuHostInput, runtimeEmail, runtimePassword); err != nil {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
+					return
+				}
+				model.SetSetting(db, "kitsu.hostname", kitsuHostInput)
+				if onRuntimeConfigured != nil {
+					onRuntimeConfigured()
+				}
+				if runtimeReady == nil || !runtimeReady() {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。設定は保存されていません。", "Kitsu authentication could not be verified. The setup is not complete.")))
+					return
+				}
+				fmt.Fprint(w, renderKitsuConnectionSuccess(lang))
+				return
+			*/
 		}
 
 		if r.Method == http.MethodPost && r.FormValue("action") == "runtime_setup_from_session" {
@@ -1645,11 +1676,17 @@ func renderBotSetupError(lang, errMsg string) string {
 }
 
 func renderKitsuConnectionSuccess(lang string) string {
-	return page(lang, t(lang, "Kitsu接続を設定しました", "Kitsu connection configured"), "#8ecf8b", t(lang, "Kitsuのruntime認証情報を確認し、安全に保存しました。Discord Bot設定は別途行えます。", "The Kitsu runtime credentials were verified and stored securely. Discord Bot setup is separate."), `<li>`+esc(t(lang, "次はProductionの接続設定を確認してください。", "Next, review the Production connection setup."))+`</li>`, `<a href="`+appendLang("/bot/setup", lang)+`">`+t(lang, "新規Production接続へ戻る", "Back to New Production Connection")+`</a>`)
+	return page(lang, t(lang, "Kitsu接続を保存しました", "Kitsu connection saved"), "#8ecf8b", t(lang, "Kitsu Bot tokenを検証して安全に保存しました。", "The Kitsu Bot token was validated and stored safely."), `<li>`+html.EscapeString(t(lang, "接続設定で状態を確認できます。", "Review the connection state in Connections."))+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
 }
 
-func renderKitsuConnectionError(lang, errMsg string) string {
-	return page(lang, t(lang, "Kitsu接続を設定できませんでした", "Kitsu connection could not be configured"), "#ff6a50", t(lang, "Kitsuのruntime認証情報を確認できませんでした。Discord Bot設定は実行されていません。", "The Kitsu runtime credentials could not be verified. Discord Bot setup was not run."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/setup", lang)+`">`+t(lang, "戻る", "Back")+`</a>`)
+func renderKitsuConnectionError(lang string, args ...interface{}) string {
+	errMsg := "Kitsu connection could not be verified."
+	if len(args) > 0 {
+		if message, ok := args[len(args)-1].(string); ok && message != "" {
+			errMsg = message
+		}
+	}
+	return page(lang, t(lang, "Kitsu接続を確認できませんでした", "Kitsu connection could not be verified"), "#ff6a50", t(lang, "Bot tokenを確認し、接続設定からもう一度試してください。", "Check the Bot token and try again from Connections."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
 }
 
 func legacyRuntimeSetupDisabled() bool { return true }

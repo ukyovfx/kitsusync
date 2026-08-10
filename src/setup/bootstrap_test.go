@@ -1,11 +1,9 @@
 package setup
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,10 +20,13 @@ func TestSetupRequiredPageIsAvailableWithoutRuntimeCredentials(t *testing.T) {
 		t.Fatalf("status = %d", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, expected := range []string{"Disconnected", "Paused", "kitsu_runtime_password"} {
+	for _, expected := range []string{"Disconnected", "Paused", "/bot/admin/bot?edit=1"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("setup-required page missing %q", expected)
 		}
+	}
+	if strings.Contains(body, "kitsu_runtime_email") || strings.Contains(body, "kitsu_runtime_password") {
+		t.Fatal("setup-required page rendered human Kitsu credential fields")
 	}
 }
 
@@ -60,64 +61,29 @@ func TestRuntimeReadyRequiredFailsClosed(t *testing.T) {
 }
 
 func TestKitsuSetupValidatesAndStoresRuntimeCredentialsWithoutDiscord(t *testing.T) {
-	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
-	t.Setenv(RuntimeKitsuPasswordEnv, "")
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/auth/login" {
-			t.Fatalf("unexpected Kitsu request: %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"access_token":"runtime-jwt"}`)
-	}))
-	defer kitsu.Close()
-
 	db := newSetupStateTestDB(t)
-	model.SetSetting(db, "kitsu.hostname", kitsu.URL+"/")
-	configured := false
-	form := url.Values{
-		"action":                 {"bot_setup"},
-		"kitsu_runtime_email":    {"runtime@example.test"},
-		"kitsu_runtime_password": {"runtime-password"},
-	}
+	form := url.Values{"action": {"bot_setup"}, "kitsu_runtime_email": {"runtime@example.test"}, "kitsu_runtime_password": {"runtime-password"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/setup?lang=en", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
-	Handler(kitsu.URL+"/", "", "", db, func() bool { return configured }, func() { configured = true })(rr, req)
-
-	if rr.Code != http.StatusOK || !configured {
-		t.Fatalf("Kitsu setup did not complete, status=%d configured=%v", rr.Code, configured)
+	Handler("http://kitsu.invalid/", "", "", db, func() bool { return false }, nil)(rr, req)
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot?edit=1") {
+		t.Fatalf("legacy human setup was not redirected safely: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
 	}
-	body := rr.Body.String()
-	if !strings.Contains(body, "Kitsu connection configured") || strings.Contains(body, "Bot Setup Failed") || strings.Contains(body, "runtime-password") {
-		t.Fatalf("Kitsu setup rendered the wrong result or exposed a secret: %s", body)
-	}
-	if StoredRuntimeKitsuPassword(db) == "" || model.GetSetting(db, RuntimeKitsuPasswordSettingKey) == "runtime-password" {
-		t.Fatal("runtime password was not stored only as encrypted data")
+	if model.GetSetting(db, RuntimeKitsuPasswordSettingKey) != "" {
+		t.Fatal("legacy human setup persisted a runtime credential")
 	}
 }
 
 func TestKitsuSetupFailureDoesNotRenderBotFailureOrPersistCredential(t *testing.T) {
-	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
-	t.Setenv(RuntimeKitsuPasswordEnv, "")
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer kitsu.Close()
-
 	db := newSetupStateTestDB(t)
-	model.SetSetting(db, "kitsu.hostname", kitsu.URL+"/")
-	form := url.Values{
-		"action":                 {"bot_setup"},
-		"kitsu_runtime_email":    {"runtime@example.test"},
-		"kitsu_runtime_password": {"wrong-password"},
-	}
+	form := url.Values{"action": {"bot_setup"}, "kitsu_runtime_email": {"runtime@example.test"}, "kitsu_runtime_password": {"wrong-password"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/setup?lang=en", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
-	Handler(kitsu.URL+"/", "", "", db, func() bool { return false }, nil)(rr, req)
-
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "Kitsu connection could not be configured") || strings.Contains(rr.Body.String(), "Bot Setup Failed") {
-		t.Fatalf("unexpected Kitsu failure result: status=%d body=%s", rr.Code, rr.Body.String())
+	Handler("http://kitsu.invalid/", "", "", db, func() bool { return false }, nil)(rr, req)
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/admin/bot?edit=1") {
+		t.Fatalf("legacy human setup was not redirected safely: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
 	}
 	if model.GetSetting(db, RuntimeKitsuPasswordSettingKey) != "" {
 		t.Fatal("invalid Kitsu credentials were persisted")
