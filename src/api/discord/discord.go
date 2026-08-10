@@ -4,7 +4,6 @@ import (
 	"app/src/api/kitsu"
 	"app/src/model"
 	"app/src/utils/config"
-	"app/src/utils/truncate"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -91,6 +90,9 @@ type Template struct {
 	IsAssignNotification    bool   // 新規タスクアサイン（TODO ステータス、notifyOnAssign=true）
 	StatusTransitionMessage string // ステータス遷移を説明するメッセージ
 	ChannelName             string // 通知先の Discord チャンネル名（ルーティング確認用）
+	NotificationLanguage    string
+	AllowedUserIDs          []string
+	Color                   int
 }
 
 // Discord APIのメッセージ作成レスポンス
@@ -595,6 +597,10 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		seenDiscordID := make(map[string]bool)
 		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
 		for i := 0; i < len(elem.Assignees); i++ {
+			if elem.Assignees[i].IsBot {
+				slog.Info("Kitsu bot assignee excluded from Discord mention", "taskID", elem.Task.ID)
+				continue
+			}
 			fullName := elem.Assignees[i].FullName
 			placeholders.Assignees[i].Fullname = sanitizeDiscordText(fullName)
 			placeholders.Assignees[i].Email = elem.Assignees[i].Email
@@ -684,9 +690,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			}
 		}
 		// 緊急ステータスは @here でチャンネル全員に通知
-		if containsIgnoreCase(conf.Mention.HereStatuses, currentStatus) {
-			mentionParts = append(mentionParts, "@here")
-		}
+		// @here and @everyone are never emitted by KitsuSync.
 		mentionContent := strings.Join(mentionParts, " ")
 		statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
 
@@ -734,44 +738,11 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 
 		// テンプレートを展開
 		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)
-		author := parseTaskTemplate("tpl/"+tplPreset+"/author.tpl", placeholders)
-		title := parseTaskTemplate("tpl/"+tplPreset+"/title.tpl", placeholders)
-		description := parseTaskTemplate("tpl/"+tplPreset+"/description.tpl", placeholders)
-		footer := parseTaskTemplate("tpl/"+tplPreset+"/footer.tpl", placeholders)
 
-		embed := Embed{}
-		embed.Title = truncate.TruncateString(title, 256)
-		embed.Description = truncate.TruncateString(description, 4096)
-
-		embed.Color = int(intColor) // 常にステータスカラーを使用
-		embed.Author.Name = truncate.TruncateString(author, 256)
-		embed.Footer.Text = truncate.TruncateString(footer, 2048)
-		embed.Url = truncate.TruncateString(placeholders.TaskURL, 2000)
-
-		// プレビュー画像がある場合は embed に添付
-		if placeholders.PreviewImageURL != "" {
-			embed.Image = &EmbedImage{URL: placeholders.PreviewImageURL}
-		}
-
-		fieldsRaw := parseTaskTemplate("tpl/"+tplPreset+"/fields.tpl", placeholders)
-		if strings.TrimSpace(fieldsRaw) != "" {
-			var parsedFields []EmbedField
-			err := json.Unmarshal([]byte(fieldsRaw), &parsedFields)
-			if err == nil {
-				for i := range parsedFields {
-					parsedFields[i].Name = truncate.TruncateString(parsedFields[i].Name, 256)
-					parsedFields[i].Value = truncate.TruncateString(parsedFields[i].Value, 1024)
-				}
-				embed.Fields = parsedFields
-			}
-		}
-
-		// payload を作成
-		payload := Payload{AllowedMentions: &AllowedMentions{Users: uniqueDiscordIDs(allowedUserMentions)}}
-		if mentionContent != "" {
-			payload.Content = mentionContent
-		}
-		payload.Embeds = []Embed{embed}
+		placeholders.NotificationLanguage = notifLang
+		placeholders.AllowedUserIDs = allowedUserMentions
+		placeholders.Color = int(intColor)
+		payload := RenderNotificationPayload(placeholders, tplPreset)
 
 		// スレッドモード: 既存スレッドに返信 or 新規スレッドを作成
 		prevThreadID := previousThreadIDs[elem.Task.ID]
