@@ -342,6 +342,20 @@ func GetProject(projectID string) Project {
 	return response
 }
 
+// GetProjectTeam returns the read-only Production team from Zou.  This is
+// distinct from the global person directory: a Production participant is
+// scoped to one Production and is the authoritative source for assignment
+// candidates on the Production detail page.
+func GetProjectTeam(projectID string) []Person {
+	if projectID == "" {
+		return nil
+	}
+	var response []Person
+	path := kitsuBase() + "api/data/projects/" + url.PathEscape(projectID) + "/team"
+	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
+	return response
+}
+
 func GetProjects() Projects {
 	path := kitsuBase() + "api/data/projects/"
 	response := Projects{}

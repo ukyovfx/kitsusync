@@ -318,3 +318,55 @@ func routingRow(lang, projectID string, route model.ProductionNotificationRoute,
 	b.WriteString(`</select></td></tr>`)
 	return b.String()
 }
+
+// renderCurrentIARoutingEditor is the in-context editor for a connected
+// Production. The compatibility route remains available for old bookmarks,
+// but Current IA users edit the stable ProductionID+TaskTypeID mappings here.
+func renderCurrentIARoutingEditor(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	taskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
+	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
+	var rows strings.Builder
+	for _, route := range routes {
+		rows.WriteString(routingRow(lang, p.KitsuProjectID, route, db, taskTypes))
+	}
+	rows.WriteString(routingRow(lang, p.KitsuProjectID, model.ProductionNotificationRoute{}, db, taskTypes))
+	return `<section class="section-card glass"><h3>` + esc(tr(lang, "production_routing.current_editor")) + `</h3><p class="field-help">` + esc(t(lang, "Kitsu Task TypeごとにDiscordチャンネルを1つ設定します。", "Edit one Discord channel for each Kitsu Task Type.")) + `</p><form method="post" action="` + esc(withLang("/bot/admin/production-routing?project="+url.QueryEscape(p.KitsuProjectID), r)) + `"><input type="hidden" name="production_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="save"><table><thead><tr><th>` + esc(tr(lang, "production_routing.kitsu_task_type")) + `</th><th>` + esc(tr(lang, "production_routing.display_name")) + `</th><th>` + esc(tr(lang, "production_routing.discord_channel")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table><button class="btn" type="submit">` + esc(tr(lang, "production_routing.save")) + `</button></form></section>`
+}
+
+func renderCurrentIANotificationPreview(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	taskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
+	selectedID := strings.TrimSpace(r.URL.Query().Get("preview_task_type_id"))
+	var options, result strings.Builder
+	options.WriteString(`<option value="">` + esc(t(lang, "Task Typeを選択", "Select a Task Type")) + `</option>`)
+	for _, taskType := range taskTypes {
+		selected := ""
+		if taskType.ID == selectedID {
+			selected = " selected"
+		}
+		options.WriteString(`<option value="` + esc(taskType.ID) + `"` + selected + `>` + esc(taskType.Name) + `</option>`)
+	}
+	if selectedID != "" {
+		for _, taskType := range taskTypes {
+			if taskType.ID != selectedID {
+				continue
+			}
+			var route *model.ProductionNotificationRoute
+			for _, candidate := range model.ListProductionNotificationRoutes(db, p.KitsuProjectID) {
+				if candidate.TaskTypeID == selectedID {
+					copyRoute := candidate
+					route = &copyRoute
+					break
+				}
+			}
+			destination := t(lang, "未設定", "Not configured")
+			if route != nil {
+				if webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID); webhook != nil && strings.TrimSpace(webhook.ChannelName) != "" {
+					destination = webhook.ChannelName
+				}
+			}
+			result.WriteString(`<dl class="status-list"><div class="status-row"><dt class="status-row-label">` + esc(t(lang, "送信先", "Destination")) + `</dt><dd class="status-row-value"><span class="status-badge status-badge-neutral">` + esc(destination) + `</span></dd></div><div class="status-row"><dt class="status-row-label">` + esc(t(lang, "内容", "Message")) + `</dt><dd class="status-row-value">` + esc(fmt.Sprintf(t(lang, "Kitsu Task Type「%s」の通知プレビューです。実際のDiscord送信は行いません。", "Read-only notification preview for Kitsu Task Type %q. No Discord message is sent."), taskType.Name)) + `</dd></div></dl>`)
+			break
+		}
+	}
+	return `<section class="section-card glass"><h3>` + esc(tr(lang, "production_routing.preview")) + `</h3><p class="field-help">` + esc(t(lang, "Task Typeと送信先を確認する読み取り専用表示です。", "Read-only view of the selected Task Type and destination.")) + `</p><form method="get" action="` + esc(withLang("/bot/admin/projects", r)) + `" class="form-action-row"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="notifications"><label for="production-notification-preview">` + esc(t(lang, "Kitsu Task Type", "Kitsu Task Type")) + `</label><select id="production-notification-preview" name="preview_task_type_id">` + options.String() + `</select><button class="btn-ghost" type="submit">` + esc(t(lang, "表示", "Show preview")) + `</button></form>` + result.String() + `</section>`
+}

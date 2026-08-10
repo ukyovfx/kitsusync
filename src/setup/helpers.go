@@ -227,6 +227,23 @@ func ListKitsuPersons(_ string) []KitsuPerson {
 	return out
 }
 
+func ListKitsuProjectParticipants(projectID string) []KitsuPerson {
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) == "" || strings.TrimSpace(projectID) == "" {
+		return nil
+	}
+	persons := kitsu.GetProjectTeam(strings.TrimSpace(projectID))
+	out := make([]KitsuPerson, 0, len(persons))
+	for _, person := range persons {
+		fullName := strings.TrimSpace(person.FullName)
+		if fullName == "" {
+			fullName = strings.TrimSpace(strings.TrimSpace(person.FirstName) + " " + strings.TrimSpace(person.LastName))
+		}
+		out = append(out, KitsuPerson{ID: person.ID, FullName: fullName, Email: strings.TrimSpace(person.Email), Active: person.Active, Archived: person.Archived, IsBot: person.IsBot, Role: strings.TrimSpace(person.Role)})
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].FullName) < strings.ToLower(out[j].FullName) })
+	return out
+}
+
 func ListKitsuProjects(_ string) []KitsuProject {
 	projects := kitsu.GetProjects()
 	out := make([]KitsuProject, 0, len(projects.Each))

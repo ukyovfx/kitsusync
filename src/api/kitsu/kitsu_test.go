@@ -32,3 +32,21 @@ func TestGetProjectTaskTypesUsesProductionScopedEndpointAndPreservesContext(t *t
 		t.Fatalf("second Task Type context was not preserved: %+v", got[1])
 	}
 }
+
+func TestGetProjectTeamUsesProductionScopedReadEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/projects/production-1/team" || r.Method != http.MethodGet {
+			t.Fatalf("unexpected project team request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"person-1","full_name":"Artist A","active":true,"archived":false,"is_bot":false}]`))
+	}))
+	defer server.Close()
+	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
+	t.Setenv("KitsuJWTToken", "test-token")
+
+	got := GetProjectTeam("production-1")
+	if len(got) != 1 || got[0].ID != "person-1" || got[0].FullName != "Artist A" || got[0].IsBot {
+		t.Fatalf("unexpected project team response: %+v", got)
+	}
+}

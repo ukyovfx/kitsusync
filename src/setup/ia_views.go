@@ -550,8 +550,12 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 	}
 	tab := selectedProductionTab(r.URL.Query().Get("tab"))
 	class, label, hint := iaStatus(db, p, lang)
+	headerClass, headerLabel := "success", t(lang, "接続済", "Connected")
+	if p.ValidationOnly {
+		headerClass, headerLabel = "warning", label
+	}
 	serverName := projectDiscordServerName(db, p, lang)
-	tabs := []struct{ id, key string }{{"overview", "ia.overview"}, {"notifications", "ia.notifications"}, {"users", "ia.user_settings"}, {"storage-settings", "ia.storage_settings"}, {"activity", "ia.activity"}, {"troubleshooting", "ia.troubleshooting"}, {"advanced", "ia.advanced"}, {"danger-zone", "ia.danger"}}
+	tabs := []struct{ id, key string }{{"overview", "ia.overview"}, {"notifications", "ia.notifications"}, {"users", "ia.user_settings"}, {"storage-settings", "ia.storage_settings"}, {"activity", "ia.activity"}, {"troubleshooting", "ia.troubleshooting"}, {"advanced", "ia.advanced_current"}, {"danger-zone", "ia.danger"}}
 	var tabLinks strings.Builder
 	for _, item := range tabs {
 		selected := item.id == tab
@@ -562,7 +566,7 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 		link := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab="+url.QueryEscape(item.id), r)
 		tabLinks.WriteString(`<a id="tab-` + esc(item.id) + `" role="tab" aria-selected="` + selectedAttr + `" aria-controls="panel-` + esc(item.id) + `" class="section-link` + map[bool]string{true: " active", false: ""}[selected] + `" href="` + esc(link) + `" tabindex="` + map[bool]string{true: "0", false: "-1"}[selected] + `">` + esc(tr(lang, item.key)) + `</a>`)
 	}
-	header := `<div class="production-context"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "ia.productions")) + `</div><h1>` + esc(p.Name) + `</h1><p class="hint">` + esc(t(lang, "選択中のProduction", "Selected Production")) + `</p></div><span class="status-pill ` + esc(class) + `">` + esc(label) + `</span></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "Productionのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
+	header := `<div class="production-context"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "ia.productions")) + `</div><h1>` + esc(p.Name) + `</h1><p class="hint">` + esc(t(lang, "選択中のプロダクション", "Selected Production")) + `</p></div><span class="status-pill ` + esc(headerClass) + `">` + esc(headerLabel) + `</span></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "プロダクションのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
 	body := header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
 	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
@@ -622,46 +626,61 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		if p.ValidationOnly || p.ReadOnlyPreview {
 			validation = `<dt>` + esc(t(lang, "検証モード", "Validation mode")) + `</dt><dd>` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</dd>`
 		}
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.advanced")) + `</h2><dl class="detail-list">` + validation + `<dt>Production ID</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>Discord server ID</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>Category ID</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
+		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.advanced_current")) + `</h2><dl class="detail-list">` + validation + `<dt>Production ID</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>Discord server ID</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>Category ID</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
 	case "danger-zone":
 		return strings.Replace(renderSelectedProductionDanger(r, p, lang), `value="preview_remove_connection_with_discord"`, `value="execute_current_ia_discord_delete"`, 1)
 	default:
-		problem := t(lang, "現在の問題はありません", "No current problem")
-		nextAction := t(lang, "通常どおり利用できます", "No action required")
-		nextActionHTML := ""
-		serverActionHTML := ""
+		productionLabel := func(jp, en string) string {
+			if lang == "en" {
+				return en
+			}
+			return jp
+		}
+		productionStateClass := "success"
+		productionStateLabel := productionLabel("接続済", "Connected")
+		if p.ValidationOnly {
+			productionStateClass = "warning"
+			productionStateLabel = productionLabel("検証専用", "Validation only")
+		}
 		if p.ReadOnlyPreview {
-			problem = t(lang, "未接続", "Not connected")
-			nextAction = t(lang, "このProductionを接続", "Connect this Production")
-			nextActionHTML = `<a class="btn" href="` + esc(withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(nextAction) + `</a>`
-		} else if class != "ok" {
-			problem = cleanStatusLabel(lang, class)
-			nextAction = hint
-			nextActionHTML = `<a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `">` + esc(tr(lang, "ia.notifications")) + `</a>`
+			productionStateClass = "warning"
+			productionStateLabel = productionLabel("未接続", "Disconnected")
 		}
-		if strings.TrimSpace(p.DiscordGuildID) != "" {
-			serverChangeURL := withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID)+"&wizard_step=3", r)
-			serverActionHTML = `<a class="btn-ghost" href="` + esc(serverChangeURL) + `">` + esc(t(lang, "Discordサーバーを変更する", "Review Discord server change")) + `</a>`
+		notificationClass, notificationLabel, notificationHint := iaStatus(db, p, lang)
+		switch notificationClass {
+		case "success", "ok":
+			notificationLabel = productionLabel("正常", "Healthy")
+		case "warning", "danger", "bad":
+			notificationLabel = productionLabel("要確認", "Needs review")
+		case "blocked":
+			notificationLabel = productionLabel("利用不可", "Unavailable")
+		default:
+			notificationLabel = productionLabel("未設定", "Not configured")
 		}
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.overview")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "Productionの状態", "Production state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, "") + statusSummaryRow(t(lang, "Discordサーバー", "Discord server"), map[bool]string{true: "success", false: "blocked"}[strings.TrimSpace(p.DiscordGuildID) != ""], serverName, t(lang, "変更は確認画面で確認します。", "Changes are reviewed in the confirmation flow."), serverActionHTML) + statusSummaryRow(t(lang, "現在の問題", "Current problem"), normalizeStatusClass(class), problem, "", "") + statusSummaryRow(t(lang, "次の操作", "Next action"), normalizeStatusClass(class), nextAction, "", nextActionHTML) + `</dl><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=users", r)) + `">` + esc(tr(lang, "ia.user_settings")) + `</a></div></section>`
+		if p.ReadOnlyPreview {
+			notificationClass, notificationLabel, notificationHint = "warning", productionLabel("未接続", "Disconnected"), productionLabel("このプロダクションは未接続です。", "This Production is not connected.")
+		}
+		participantCount := len(ListKitsuProjectParticipants(p.KitsuProjectID))
+		overviewProblem := productionLabel("問題なし", "No current issues")
+		overviewProblemClass := "success"
+		if len(model.ListNotificationRoutingDiagnoses(db, p.KitsuProjectID, 10)) > 0 {
+			overviewProblem, overviewProblemClass = productionLabel("要確認", "Needs review"), "warning"
+		}
+		return `<section class="section-card glass"><h2>` + esc(productionLabel("概要", "Overview")) + `</h2><dl class="status-list">` + statusSummaryRow(productionLabel("プロダクション状態", "Production state"), productionStateClass, productionStateLabel, "", "") + statusSummaryRow(productionLabel("Discord接続状態", "Discord connection"), map[bool]string{true: "success", false: "warning"}[strings.TrimSpace(p.DiscordGuildID) != ""], map[bool]string{true: productionLabel("接続済", "Connected"), false: productionLabel("未接続", "Disconnected")}[strings.TrimSpace(p.DiscordGuildID) != ""], "", "") + statusSummaryRow(productionLabel("通知ルーティング状態", "Notification routing"), normalizeStatusClass(notificationClass), notificationLabel, notificationHint, "") + statusSummaryRow(productionLabel("ユーザー/参加者", "Users / participants"), "neutral", fmt.Sprintf("%d", participantCount), "", "") + statusSummaryRow(productionLabel("現在の問題", "Current issues"), overviewProblemClass, overviewProblem, "", "") + `</dl></section>`
 	}
 }
 
 func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model.Project, lang, class, label, hint string) string {
-	actionURL := withLang("/bot/admin/production-routing?project="+url.QueryEscape(p.KitsuProjectID), r)
-	actionHTML := `<a class="btn" href="` + esc(actionURL) + `">` + esc(t(lang, "通知設定を確認", "Review notification settings")) + `</a>`
-	var mappings strings.Builder
-	var taskTypeOptions strings.Builder
-	for _, taskType := range routingTaskTypesForProduction(p.KitsuProjectID) {
-		taskTypeOptions.WriteString(`<option value="` + esc(taskType.ID) + `">` + esc(taskType.Name) + `</option>`)
+	statusLabel := t(lang, "未設定", "Not configured")
+	switch class {
+	case "success", "ok":
+		statusLabel = t(lang, "正常", "Healthy")
+	case "warning", "danger", "bad":
+		statusLabel = t(lang, "要確認", "Needs review")
+	case "blocked":
+		statusLabel = t(lang, "利用不可", "Unavailable")
 	}
-	for _, m := range model.ListProductionChannelMappings(db, p.KitsuProjectID) {
-		mappings.WriteString(`<li><strong>` + esc(m.TaskTypeName) + `</strong><span>` + esc(m.ChannelName) + `</span></li>`)
-	}
-	if mappings.Len() == 0 {
-		mappings.WriteString(`<li class="muted">` + esc(t(lang, "チャンネル設定はありません。", "No channel settings yet.")) + `</li>`)
-	}
-	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "通知状態", "Notification state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, actionHTML) + `</dl><form method="POST" action="` + esc(actionURL) + `" class="section-card glass form-stack"><input type="hidden" name="production_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="selected-production-dry-run">` + esc(t(lang, "確認するTask Type", "Task Type to check")) + `</label><div class="form-action-row"><select id="selected-production-dry-run" name="dry_run_task_type_id"><option value="">` + esc(t(lang, "Task Typeを選択", "Select a Task Type")) + `</option>` + taskTypeOptions.String() + `</select><button class="btn" type="submit">` + esc(tr(lang, "ia.check_without_sending")) + `</button></div><p class="field-help">` + esc(t(lang, "送信せずに確認します。Discordメッセージは送信されません。", "This check sends no Discord message.")) + `</p></form><h3>` + esc(t(lang, "Task TypeとDiscordチャンネル", "Task Type to Discord channel settings")) + `</h3><ul class="mapping-list">` + mappings.String() + `</ul></section>`
+	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "通知状態", "Notification state"), normalizeStatusClass(class), statusLabel, hint, "") + `</dl>` + renderCurrentIARoutingEditor(db, r, p, lang) + renderCurrentIANotificationPreview(db, r, p, lang) + `</section>`
 }
 
 func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
@@ -670,17 +689,36 @@ func renderSelectedProductionUserSettings(db *gorm.DB, r *http.Request, p model.
 		global[strings.ToLower(strings.TrimSpace(u.KitsuName))] = u
 	}
 	var participants, roles strings.Builder
-	for _, u := range model.ListProjectUserMaps(db, p.ID) {
-		identity := t(lang, "未対応", "Not mapped")
-		action := `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a>`
-		if g, ok := global[strings.ToLower(strings.TrimSpace(u.KitsuName))]; ok && strings.TrimSpace(g.DiscordID) != "" {
-			identity = t(lang, "対応付け済み", "Mapped")
-			action = ""
-			if strings.TrimSpace(g.DiscordDisplayName) != "" {
-				identity = strings.TrimSpace(g.DiscordDisplayName)
-			}
+	participantPeople := ListKitsuProjectParticipants(p.KitsuProjectID)
+	if len(participantPeople) > 0 {
+		globalByEmail := map[string]model.UserMap{}
+		for _, user := range global {
+			globalByEmail[strings.ToLower(strings.TrimSpace(user.KitsuEmail))] = user
 		}
-		participants.WriteString(`<li><strong>` + esc(u.KitsuName) + `</strong><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[identity != t(lang, "未対応", "Not mapped")] + `">` + esc(identity) + `</span>` + action + `</li>`)
+		for _, person := range filterAssignablePersons(participantPeople, botAccountEmail(db)) {
+			identity := t(lang, "未対応", "Not mapped")
+			if user, ok := globalByEmail[strings.ToLower(strings.TrimSpace(person.Email))]; ok && strings.TrimSpace(user.DiscordID) != "" {
+				identity = t(lang, "対応付け済み", "Mapped")
+				if strings.TrimSpace(user.DiscordDisplayName) != "" {
+					identity = strings.TrimSpace(user.DiscordDisplayName)
+				}
+			}
+			participants.WriteString(`<li><strong>` + esc(person.FullName) + `</strong><span class="status-pill warn">` + esc(identity) + `</span><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "ユーザー紐づけ", "User Linking")) + `</a></li>`)
+		}
+	}
+	if len(participantPeople) == 0 {
+		for _, u := range model.ListProjectUserMaps(db, p.ID) {
+			identity := t(lang, "未対応", "Not mapped")
+			action := `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a>`
+			if g, ok := global[strings.ToLower(strings.TrimSpace(u.KitsuName))]; ok && strings.TrimSpace(g.DiscordID) != "" {
+				identity = t(lang, "対応付け済み", "Mapped")
+				action = ""
+				if strings.TrimSpace(g.DiscordDisplayName) != "" {
+					identity = strings.TrimSpace(g.DiscordDisplayName)
+				}
+			}
+			participants.WriteString(`<li><strong>` + esc(u.KitsuName) + `</strong><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[identity != t(lang, "未対応", "Not mapped")] + `">` + esc(identity) + `</span>` + action + `</li>`)
+		}
 	}
 	if (p.ValidationOnly || p.ReadOnlyPreview) && participants.Len() == 0 {
 		for _, person := range p.ValidationData().Participants {
@@ -731,16 +769,37 @@ func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string)
 }
 
 func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang string) string {
-	has := len(model.ListNotificationRoutingDiagnoses(db, p.KitsuProjectID, 10)) > 0
+	diagnoses := model.ListNotificationRoutingDiagnoses(db, p.KitsuProjectID, 10)
+	has := len(diagnoses) > 0
 	class, value := "success", t(lang, "問題なし", "No current problems")
 	if has {
 		class, value = "warning", t(lang, "確認が必要", "Needs review")
 	}
-	cause := t(lang, "通知設定に問題はありません", "No notification configuration problem was found")
+	var details strings.Builder
 	if has {
-		cause = t(lang, "保存された通知先を確認できません", "The saved notification destination could not be verified")
+		details.WriteString(`<ul class="list-tight">`)
+		detailCount := 0
+		for _, diagnosis := range diagnoses {
+			text := strings.TrimSpace(diagnosis.Detail)
+			if text == "" {
+				text = strings.TrimSpace(diagnosis.Reason)
+			}
+			if text == "" {
+				continue
+			}
+			detailCount++
+			details.WriteString(`<li>` + esc(text) + `</li>`)
+		}
+		details.WriteString(`</ul>`)
+		if detailCount == 0 {
+			details.WriteString(`<p class="field-help">` + esc(t(lang, "詳細な診断情報はありません。", "No additional diagnostic detail is available.")) + `</p>`)
+		}
 	}
-	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.troubleshooting")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "現在の問題", "Current problem"), class, value, t(lang, "詳細な診断は下の開示で確認できます。", "Open diagnostic details for technical context."), "") + statusSummaryRow(t(lang, "原因", "Cause"), class, cause, "", "") + statusSummaryRow(t(lang, "次の操作", "Next action"), class, t(lang, "通知設定を確認", "Review notification settings"), "", "") + `</dl><details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="hint">` + esc(t(lang, "技術的な診断情報はここに限定します。", "Technical diagnostic information is limited to this disclosure.")) + `</p></details></section>`
+	detailSection := ""
+	if has {
+		detailSection = `<details class="advanced-details" open><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary>` + details.String() + `</details>`
+	}
+	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.troubleshooting")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "現在の問題", "Current problem"), class, value, "", "") + `</dl>` + detailSection + `</section>`
 }
 
 func renderSelectedProductionDanger(r *http.Request, p model.Project, lang string) string {

@@ -2387,6 +2387,11 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 		}
 		botEmail := botAccountEmail(db)
 		kitsuPeople := filterAssignablePersons(ListKitsuPersons(kitsuHostname), botEmail)
+		if project != nil && strings.TrimSpace(project.KitsuProjectID) != "" {
+			if projectPeople := ListKitsuProjectParticipants(project.KitsuProjectID); len(projectPeople) > 0 {
+				kitsuPeople = filterAssignablePersons(projectPeople, botEmail)
+			}
+		}
 		projectUserRows := []model.ProjectUserMap{}
 		projectCheckerRows := []model.ProjectCheckerMap{}
 		legacyUserRows := model.ListUserMap(db)
@@ -3927,10 +3932,16 @@ func deleteLegacyCheckerAssignmentsForUser(db *gorm.DB, name, email string) {
 func assignmentTaskTypes(db *gorm.DB, project *model.Project) []string {
 	taskTypes := []string{}
 	if project != nil {
+		for _, taskType := range routingTaskTypesForProduction(project.KitsuProjectID) {
+			name := strings.TrimSpace(taskType.Name)
+			if name != "" && !containsAssignmentTaskType(taskTypes, name) {
+				taskTypes = append(taskTypes, name)
+			}
+		}
 		seen := map[string]bool{}
 		for _, row := range model.ListProjectWebhooks(db, project.KitsuProjectID) {
 			taskType := strings.TrimSpace(row.TaskType)
-			if taskType == "" || seen[taskType] {
+			if taskType == "" || seen[taskType] || containsAssignmentTaskType(taskTypes, taskType) {
 				continue
 			}
 			seen[taskType] = true

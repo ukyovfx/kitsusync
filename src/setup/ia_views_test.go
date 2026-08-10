@@ -523,8 +523,15 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	if !strings.Contains(body, "Check without sending") || !strings.Contains(body, "Review notification settings") {
-		t.Fatal("Notifications UI lost safe review controls")
+	for _, want := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "Read-only view", `name="action" value="save"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Notifications UI missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Check without sending", "Review notification settings", `name="action" value="dry_run"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("retired Notifications UI remains visible: %q", forbidden)
+		}
 	}
 }
 
@@ -589,7 +596,7 @@ func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T)
 	troubleshootingWriter := httptest.NewRecorder()
 	renderIAProductionList(troubleshootingWriter, troubleshootingRequest, db, "")
 	troubleshootingBody := troubleshootingWriter.Body.String()
-	for _, want := range []string{"Current problem", "Next action", "Diagnostic details"} {
+	for _, want := range []string{"Current problem", "Diagnostic details"} {
 		if !strings.Contains(troubleshootingBody, want) {
 			t.Fatalf("troubleshooting missing %q", want)
 		}
@@ -602,11 +609,31 @@ func TestSelectedProductionOffersReviewedServerChangeEntryPoint(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=server-change-unique-2026&lang=en", nil), db, "")
 	body := w.Body.String()
-	if !strings.Contains(body, "Review Discord server change") || !strings.Contains(body, "/bot/setup?lang=en&amp;project=server-change-unique-2026&amp;wizard_step=3") {
-		t.Fatal("selected Production does not expose the reviewed server-change flow")
+	if strings.Contains(body, "Review Discord server change") || strings.Contains(body, "/bot/setup?lang=en&amp;project=server-change-unique-2026&amp;wizard_step=3") {
+		t.Fatal("selected Production exposes the misleading new-Production server-change flow")
 	}
 	if strings.Contains(body, `name="guild_id"`) {
 		t.Fatal("selected Production exposes a raw server ID editor")
+	}
+}
+
+func TestSelectedProductionOverviewUsesCanonicalConnectionStatuses(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "canonical-status-p", Name: "Canonical Status Production", DiscordGuildID: "guild"}
+	db.Create(&p)
+	db.Create(&model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, Enabled: true})
+	w := httptest.NewRecorder()
+	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=canonical-status-p&lang=ja", nil), db, "")
+	body := w.Body.String()
+	for _, want := range []string{"接続済", "要確認", "プロダクション状態", "Discord接続状態", "通知ルーティング状態"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("overview missing canonical status content %q", want)
+		}
+	}
+	for _, forbidden := range []string{"接続済み", "次の操作", "通常どおり利用できます", "wizard_step=3"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("overview retained obsolete content %q", forbidden)
+		}
 	}
 }
 
@@ -1007,6 +1034,31 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 	}
 	if strings.Contains(body, "synthetic-discord-id") {
 		t.Fatal("Production User Settings leaked the raw Discord identifier")
+	}
+}
+
+func TestProductionNotificationsSeparatesRoutingAndReadOnlyPreview(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production"}
+	db.Create(&p)
+	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&lang=en", nil), p, "en", "ok", "Active", "Ready")
+	for _, expected := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "Read-only view", `name="action" value="save"`} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("notification IA missing %q: %s", expected, body)
+		}
+	}
+	if strings.Contains(body, `name="action" value="dry_run"`) || strings.Contains(body, "Check without sending") {
+		t.Fatal("notification preview still uses the old dry-run POST flow")
+	}
+}
+
+func TestProductionDetailsUsesDetailsLabel(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "details-production", Name: "Details Production"}
+	db.Create(&p)
+	body := renderSelectedProductionPanel(db, httptest.NewRequest("GET", "/bot/admin/projects?project=details-production&tab=advanced&lang=en", nil), p, "en", "advanced", "Connected", "Ready", "Connected server", "Connected server")
+	if !strings.Contains(body, "Details") || strings.Contains(body, "Advanced settings") {
+		t.Fatalf("details panel did not use the current label: %s", body)
 	}
 }
 
