@@ -1068,6 +1068,35 @@ func TestProductionNotificationsSeparatesRoutingAndReadOnlyPreview(t *testing.T)
 	}
 }
 
+func TestProductionUserSettingsCurrentEmptyStateExplainsKitsuParticipants(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "empty-current-users", Name: "Empty Current Users"}
+	db.Create(&p)
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
+	for _, want := range []string{"プロダクション参加者", "Kitsuから参加者が取得されると", "Reviewer / Checkerは割り当てできません"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("current user empty state missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestProductionTroubleshootingExposesProcessingDiagnostics(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "diagnostic-production", Name: "Diagnostic Production"}
+	db.Create(&p)
+	body := renderCurrentProductionTroubleshooting(db, p, "en")
+	for _, want := range []string{"Kitsu connection", "Participant retrieval", "User linking", "Recent notification processing"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("troubleshooting diagnostics missing %q: %s", want, body)
+		}
+	}
+	db.Create(&model.NotificationRoutingDiagnosis{ProductionID: p.KitsuProjectID, Reason: "route missing", Detail: "A route needs review."})
+	body = renderCurrentProductionTroubleshooting(db, p, "en")
+	if !strings.Contains(body, "A route needs review.") || !strings.Contains(body, "Current issue details") {
+		t.Fatalf("troubleshooting does not expose the current issue detail: %s", body)
+	}
+}
+
 func TestProductionDetailsUsesDetailsLabel(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "details-production", Name: "Details Production"}

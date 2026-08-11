@@ -644,7 +644,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		}
 		return renderSelectedProductionNotifications(db, r, p, lang, class, label, hint)
 	case "users", "user-settings":
-		return renderSelectedProductionUserSettings(db, r, p, lang)
+		return renderCurrentProductionUserSettings(db, r, p, lang)
 	case "storage-settings":
 		if p.ValidationOnly || p.ReadOnlyPreview {
 			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionではストレージ設定を変更できません。", "Storage settings are read-only for validation-only Productions.")) + `</p></section>`
@@ -653,13 +653,16 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 	case "activity":
 		return renderSelectedProductionActivity(db, p, lang)
 	case "troubleshooting":
-		return renderSelectedProductionTroubleshooting(db, p, lang)
+		return renderCurrentProductionTroubleshooting(db, p, lang)
 	case "advanced":
-		validation := ""
-		if p.ValidationOnly || p.ReadOnlyPreview {
-			validation = `<dt>` + esc(t(lang, "検証モード", "Validation mode")) + `</dt><dd>` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</dd>`
-		}
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.advanced_current")) + `</h2><dl class="detail-list">` + validation + `<dt>Production ID</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>Discord server ID</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>Category ID</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
+		return renderCurrentProductionDetails(p, lang)
+		/*
+			validation := ""
+			if p.ValidationOnly || p.ReadOnlyPreview {
+				validation = `<dt>` + esc(t(lang, "検証モード", "Validation mode")) + `</dt><dd>` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</dd>`
+			}
+			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.advanced_current")) + `</h2><dl class="detail-list">` + validation + `<dt>Production ID</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>Discord server ID</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>Category ID</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
+		*/
 	case "danger-zone":
 		return strings.Replace(renderSelectedProductionDanger(r, p, lang), `value="preview_remove_connection_with_discord"`, `value="execute_current_ia_discord_delete"`, 1)
 	default:
@@ -701,6 +704,29 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		}
 		return `<section class="section-card glass"><h2>` + esc(productionLabel("概要", "Overview")) + `</h2><dl class="status-list">` + statusSummaryRow(productionLabel("プロダクション状態", "Production state"), productionStateClass, productionStateLabel, "", "") + statusSummaryRow(productionLabel("Discord接続状態", "Discord connection"), map[bool]string{true: "success", false: "warning"}[strings.TrimSpace(p.DiscordGuildID) != ""], map[bool]string{true: productionLabel("接続済", "Connected"), false: productionLabel("未接続", "Disconnected")}[strings.TrimSpace(p.DiscordGuildID) != ""], "", "") + statusSummaryRow(productionLabel("通知ルーティング状態", "Notification routing"), normalizeStatusClass(notificationClass), notificationLabel, notificationHint, "") + statusSummaryRow(productionLabel("ユーザー/参加者", "Users / participants"), "neutral", fmt.Sprintf("%d", participantCount), "", "") + statusSummaryRow(productionLabel("現在の問題", "Current issues"), overviewProblemClass, overviewProblem, "", "") + `</dl></section>`
 	}
+}
+
+func renderCurrentProductionDetails(p model.Project, lang string) string {
+	validation := ""
+	if p.ValidationOnly || p.ReadOnlyPreview {
+		validation = `<dt>` + esc(t(lang, "検証モード", "Validation mode")) + `</dt><dd>` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</dd>`
+	}
+	return `<section class="section-card glass"><h2>` + esc(t(lang, "詳細情報", "Details")) + `</h2><dl class="detail-list">` + validation + `<dt>` + esc(t(lang, "プロダクションID", "Production ID")) + `</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>` + esc(t(lang, "カテゴリID", "Category ID")) + `</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></section>`
+}
+
+func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	body := renderSelectedProductionUserSettings(db, r, p, lang)
+	if lang == "en" {
+		body = strings.ReplaceAll(body, "Participants appear here when they are registered in Kitsu.", "Participants appear here when they are returned by Kitsu. Reviewer / Checker assignment becomes available then.")
+		body = strings.ReplaceAll(body, "Assign these roles per Task Type for this Production.", "Reviewer / Checker assignment is unavailable until participants are returned by Kitsu.")
+		return body
+	}
+	// Keep the existing data-path renderer while making the empty state use the
+	// current IA vocabulary and explain why role assignment is unavailable.
+	body = strings.ReplaceAll(body, "Production参加者", "プロダクション参加者")
+	body = strings.ReplaceAll(body, "Kitsu側の参加者が登録されると、ここに表示されます。", "Kitsuから参加者が取得されると、ここに表示されます。Reviewer / Checkerの割り当ても可能になります。")
+	body = strings.ReplaceAll(body, "Task TypeごとにProduction単位で設定します。", "Kitsuから参加者が取得されるまで、Reviewer / Checkerは割り当てできません。")
+	return body
 }
 
 func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model.Project, lang, class, label, hint string) string {
@@ -799,6 +825,85 @@ func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string)
 		rows.WriteString(`<li class="empty-state"><strong>` + esc(t(lang, "アクティビティはありません。", "No activity yet.")) + `</strong></li>`)
 	}
 	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.activity")) + `</h2><ul class="activity-list" role="log">` + rows.String() + `</ul></section>`
+}
+
+func renderCurrentProductionTroubleshooting(db *gorm.DB, p model.Project, lang string) string {
+	diagnoses := model.ListNotificationRoutingDiagnoses(db, p.KitsuProjectID, 10)
+	problemClass, problemLabel := "success", t(lang, "問題なし", "No current problems")
+	if len(diagnoses) > 0 {
+		problemClass, problemLabel = "warning", t(lang, "要確認", "Needs review")
+	}
+	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
+	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
+	config := model.FindProductionNotificationConfig(db, p.KitsuProjectID)
+	participantCount := len(ListKitsuProjectParticipants(p.KitsuProjectID))
+	linkedCount := len(model.ListProjectUserMaps(db, p.ID))
+	recentCount, recentFailures := 0, 0
+	for _, log := range model.ListAuditLogs(db, 40) {
+		if strings.EqualFold(strings.TrimSpace(log.ProjectName), strings.TrimSpace(p.Name)) {
+			recentCount++
+			if !log.Success {
+				recentFailures++
+			}
+		}
+	}
+	item := func(label, value, class, explanation string) string {
+		return `<div class="production-diagnostic-item"><div><strong>` + esc(label) + `</strong><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(value) + `</span></div><small>` + esc(explanation) + `</small></div>`
+	}
+	kitsuValue, kitsuClass := t(lang, "未設定", "Not configured"), "warning"
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
+		kitsuValue, kitsuClass = t(lang, "接続済", "Connected"), "success"
+	} else if readiness.KitsuConfigured {
+		kitsuValue = t(lang, "要確認", "Needs review")
+	}
+	discordValue, discordClass := t(lang, "未設定", "Not configured"), "warning"
+	if readiness.DiscordConfigured {
+		discordValue, discordClass = t(lang, "設定済", "Configured"), "success"
+	}
+	routingValue, routingClass := t(lang, "未設定", "Not configured"), "warning"
+	if config != nil && config.Enabled && len(routes) > 0 {
+		routingValue, routingClass = t(lang, "正常", "Healthy"), "success"
+	}
+	participantValue, participantClass := t(lang, "確認待", "Waiting"), "warning"
+	if participantCount > 0 {
+		participantValue, participantClass = t(lang, "取得済", "Loaded"), "success"
+	}
+	linkValue, linkClass := t(lang, "記録なし", "No records"), "neutral"
+	if linkedCount > 0 {
+		linkValue, linkClass = t(lang, "設定済", "Configured"), "success"
+	}
+	processingValue, processingClass := t(lang, "記録なし", "Not recorded"), "neutral"
+	processingExplanation := t(lang, "このProductionの通知処理記録はありません。", "No notification processing records exist for this Production.")
+	if recentCount > 0 {
+		processingValue, processingClass = t(lang, "正常", "Healthy"), "success"
+		processingExplanation = fmt.Sprintf(t(lang, "直近の記録%d件、失敗%d件。", "%d recent records, %d failures."), recentCount, recentFailures)
+		if recentFailures > 0 {
+			processingValue, processingClass = t(lang, "要確認", "Needs review"), "warning"
+		}
+	}
+	var diagnosticDetails strings.Builder
+	if len(diagnoses) > 0 {
+		diagnosticDetails.WriteString(`<details class="advanced-details" open><summary>` + esc(t(lang, "現在の問題の詳細", "Current issue details")) + `</summary><ul class="list-tight">`)
+		for _, diagnosis := range diagnoses {
+			detail := strings.TrimSpace(diagnosis.Detail)
+			if detail == "" {
+				detail = strings.TrimSpace(diagnosis.Reason)
+			}
+			if detail != "" {
+				diagnosticDetails.WriteString(`<li>` + esc(detail) + `</li>`)
+			}
+		}
+		diagnosticDetails.WriteString(`</ul></details>`)
+	}
+	diagnosticDetails.WriteString(`<details class="advanced-details production-diagnostics"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><div class="production-diagnostic-grid">`)
+	diagnosticDetails.WriteString(item(t(lang, "Kitsu接続", "Kitsu connection"), kitsuValue, kitsuClass, t(lang, "現在のランタイム認証状態。", "Current runtime authentication state.")))
+	diagnosticDetails.WriteString(item(t(lang, "Discord Bot", "Discord Bot"), discordValue, discordClass, t(lang, "現在のBot設定。", "Current Bot configuration.")))
+	diagnosticDetails.WriteString(item(t(lang, "通知ルーティング", "Notification routing"), routingValue, routingClass, fmt.Sprintf(t(lang, "%d件のProductionルートと設定を確認しました。", "%d Production routes and the configuration were inspected."), len(routes))))
+	diagnosticDetails.WriteString(item(t(lang, "参加者取得", "Participant retrieval"), participantValue, participantClass, fmt.Sprintf(t(lang, "Kitsu Production team APIから%d人を取得しました。", "The Kitsu Production team API returned %d people."), participantCount)))
+	diagnosticDetails.WriteString(item(t(lang, "ユーザー紐づけ", "User linking"), linkValue, linkClass, fmt.Sprintf(t(lang, "このProductionのユーザー割り当て%d件。", "User assignments recorded for this Production: %d."), linkedCount)))
+	diagnosticDetails.WriteString(item(t(lang, "最近の通知処理", "Recent notification processing"), processingValue, processingClass, processingExplanation))
+	diagnosticDetails.WriteString(`</div></details>`)
+	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.troubleshooting")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "現在の問題", "Current problem"), problemClass, problemLabel, "", "") + `</dl>` + diagnosticDetails.String() + `</section>`
 }
 
 func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang string) string {
