@@ -756,6 +756,119 @@ func renderLegacyCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p m
 
 func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
 	if p.ValidationOnly || p.ReadOnlyPreview {
+		return renderCurrentProductionUserSettingsLegacyStacked(db, r, p, lang)
+	}
+	projectUsers := model.ListProjectUserMaps(db, p.ID)
+	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
+	query := strings.TrimSpace(r.URL.Query().Get("user_search"))
+	status := strings.TrimSpace(r.URL.Query().Get("user_status"))
+	if status == "" {
+		status = "all"
+	}
+	addUsers := r.URL.Query().Get("add_users") == "1" || status == "available"
+	postURL := withLang("/bot/admin/projects", r)
+	associated := map[string]bool{}
+	globalByIdentity := map[string]model.UserMap{}
+	for _, user := range globalUsers {
+		if strings.TrimSpace(user.DiscordID) != "" {
+			globalByIdentity[assignmentIdentityKey(user.KitsuName, user.KitsuEmail)] = user
+		}
+	}
+	for _, user := range projectUsers {
+		associated[assignmentIdentityKey(user.KitsuName, user.KitsuEmail)] = true
+	}
+	matches := func(name, email, discord string) bool {
+		if query == "" {
+			return true
+		}
+		q := strings.ToLower(query)
+		return strings.Contains(strings.ToLower(name), q) || strings.Contains(strings.ToLower(email), q) || strings.Contains(strings.ToLower(discord), q)
+	}
+	assignments := model.ListProjectCheckerMaps(db, p.ID)
+	rolesByIdentity := map[string][]string{}
+	for _, assignment := range assignments {
+		key := assignmentIdentityKey(assignment.KitsuName, assignment.KitsuEmail)
+		seen := false
+		for _, task := range rolesByIdentity[key] {
+			if task == assignment.TaskType {
+				seen = true
+			}
+		}
+		if !seen {
+			rolesByIdentity[key] = append(rolesByIdentity[key], assignment.TaskType)
+		}
+	}
+	roleSummary := func(key string) string {
+		if len(rolesByIdentity[key]) == 0 {
+			return t(lang, "未設定", "Not assigned")
+		}
+		return strings.Join(rolesByIdentity[key], ", ")
+	}
+	var rows strings.Builder
+	visibleAssociated := 0
+	var taskTypes []string
+	if len(projectUsers) > 0 {
+		taskTypes = assignmentTaskTypes(db, &p)
+	}
+	for _, user := range projectUsers {
+		key := assignmentIdentityKey(user.KitsuName, user.KitsuEmail)
+		linked := globalByIdentity[key]
+		discord := linked.DiscordDisplayName
+		if discord == "" {
+			discord = t(lang, "リンク済みユーザー", "Linked Discord user")
+		}
+		if status == "available" || !matches(user.KitsuName, user.KitsuEmail, discord) {
+			continue
+		}
+		visibleAssociated++
+		var taskOptions, existingRoles strings.Builder
+		for _, taskType := range taskTypes {
+			taskOptions.WriteString(`<option value="` + esc(taskType) + `">` + esc(taskType) + `</option>`)
+		}
+		for _, assignment := range assignments {
+			if assignmentIdentityKey(assignment.KitsuName, assignment.KitsuEmail) != key {
+				continue
+			}
+			existingRoles.WriteString(`<li><span>` + esc(assignment.TaskType) + `</span><form method="post" class="inline-action" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type" value="` + esc(assignment.TaskType) + `"><input type="hidden" name="action" value="remove_production_checker"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Remove")) + `</button></form></li>`)
+		}
+		row := `<tr><td><strong>` + esc(user.KitsuName) + `</strong><span class="field-help">` + esc(user.KitsuEmail) + `</span></td><td>` + esc(discord) + `</td><td><span class="status-pill success">` + esc(t(lang, "関連付け済み", "Associated")) + `</span></td><td>` + esc(roleSummary(key)) + `</td><td><details class="production-user-details"><summary>` + esc(t(lang, "詳細", "Details")) + `</summary><div class="production-user-detail-body"><dl class="detail-list"><dt>Kitsu</dt><dd>` + esc(user.KitsuName+" / "+user.KitsuEmail) + `</dd><dt>Discord</dt><dd>` + esc(discord) + `</dd><dt>` + esc(t(lang, "プロダクション関連付け", "Production association")) + `</dt><dd>` + esc(t(lang, "関連付け済み", "Associated")) + `</dd></dl><div class="production-user-role-editor"><h4>Reviewer / Checker</h4><ul class="production-user-role-list">` + existingRoles.String() + `</ul><form method="post" class="production-user-role-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="user_id" value="` + strconv.FormatUint(uint64(user.ID), 10) + `"><input type="hidden" name="action" value="save_production_checker"><label>Kitsu Task Type<select name="task_type">` + taskOptions.String() + `</select></label><button class="btn" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></form></div><form method="post" class="inline-action" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="user_id" value="` + strconv.FormatUint(uint64(user.ID), 10) + `"><input type="hidden" name="action" value="remove_production_user"><button class="btn-danger" type="submit">` + esc(t(lang, "プロダクションから外す", "Remove from Production")) + `</button></form></div></details></td></tr>`
+		rows.WriteString(row)
+	}
+	if visibleAssociated == 0 {
+		rows.WriteString(`<tr><td colspan="5" class="empty-state"><strong>` + esc(t(lang, "プロダクションユーザーがいません", "No Production users yet")) + `</strong><span class="field-help">` + esc(t(lang, "ユーザーを追加から、グローバルにリンク済みの人間ユーザーを関連付けてください。", "Use Add users to associate a globally linked human user.")) + `</span></td></tr>`)
+	}
+	people := filterAssignablePersons(ListKitsuProjectParticipants(p.KitsuProjectID), botAccountEmail(db))
+	var participantRows strings.Builder
+	for _, person := range people {
+		participantRows.WriteString(`<li><strong>` + esc(person.FullName) + `</strong><span>` + esc(person.Email) + `</span></li>`)
+	}
+	if participantRows.Len() == 0 {
+		participantRows.WriteString(`<li class="empty-state"><strong>` + esc(t(lang, "Kitsuのプロダクション参加者は0人です", "Kitsu returned 0 Production participants")) + `</strong><span class="field-help">` + esc(t(lang, "参加者はKitsuから取得されます。ローカルの関連付けとは別に管理されます。", "Participants come from Kitsu and remain separate from local Production associations.")) + `</span></li>`)
+	}
+	var addRows strings.Builder
+	available := 0
+	for _, user := range globalUsers {
+		key := assignmentIdentityKey(user.KitsuName, user.KitsuEmail)
+		if strings.TrimSpace(user.DiscordID) == "" || associated[key] || status == "associated" || !matches(user.KitsuName, user.KitsuEmail, user.DiscordDisplayName) {
+			continue
+		}
+		available++
+		addRows.WriteString(`<tr><td><strong>` + esc(user.KitsuName) + `</strong><span class="field-help">` + esc(user.KitsuEmail) + `</span></td><td>` + esc(user.DiscordDisplayName) + `</td><td><span class="status-pill warning">` + esc(t(lang, "追加可能", "Available")) + `</span></td><td>—</td><td><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="user_id" value="` + strconv.FormatUint(uint64(user.ID), 10) + `"><input type="hidden" name="action" value="add_production_user"><button class="btn-ghost" type="submit">` + esc(t(lang, "追加", "Add")) + `</button></form></td></tr>`)
+	}
+	if addUsers && available == 0 {
+		addRows.WriteString(`<tr><td colspan="5" class="empty-state"><strong>` + esc(t(lang, "追加できるユーザーがいません", "No eligible linked users available")) + `</strong><span class="field-help"><a href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(t(lang, "グローバルのユーザー紐づけを確認", "Review global User Linking")) + `</a></span></td></tr>`)
+	}
+	addLink := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=users&add_users=1", r)
+	toolbar := `<form method="get" class="production-users-toolbar" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="users"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>` + esc(t(lang, "検索", "Search")) + `<input type="search" name="user_search" value="` + esc(query) + `" placeholder="` + esc(t(lang, "名前またはDiscordで検索", "Search by name or Discord")) + `"></label><label>` + esc(t(lang, "状態", "Status")) + `<select name="user_status"><option value="all"` + selectedAttr(status == "all") + `>` + esc(t(lang, "すべて", "All")) + `</option><option value="associated"` + selectedAttr(status == "associated") + `>` + esc(t(lang, "関連付け済み", "Associated")) + `</option><option value="available"` + selectedAttr(status == "available") + `>` + esc(t(lang, "追加可能", "Available")) + `</option></select></label><button class="btn-ghost" type="submit">` + esc(t(lang, "絞り込む", "Filter")) + `</button></form>`
+	addPanel := ""
+	if addUsers {
+		addPanel = `<div class="production-users-add-panel"><h3>` + esc(t(lang, "ユーザーを追加", "Add users")) + `</h3><p class="field-help">` + esc(t(lang, "グローバルにリンク済みの人間ユーザーだけを追加できます。Botは除外されます。", "Only globally linked human users are eligible; bots are excluded.")) + `</p><div class="table-wrap production-users-table-wrap"><table class="production-users-table"><thead><tr><th>` + esc(t(lang, "ユーザー", "User")) + `</th><th>Discord</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "役割", "Roles")) + `</th><th></th></tr></thead><tbody>` + addRows.String() + `</tbody></table></div></div>`
+	}
+	return `<section class="section-card glass production-users-panel"><div class="production-users-heading"><div><h2>` + esc(t(lang, "プロダクションユーザー", "Production users")) + `</h2><p class="field-help">` + esc(t(lang, "グローバルなユーザー紐づけとプロダクション関連付けは別の状態です。", "Global User Linking and Production association remain separate states.")) + `</p></div><a class="btn" href="` + esc(addLink) + `">` + esc(t(lang, "ユーザーを追加", "Add users")) + `</a></div>` + toolbar + `<div class="table-wrap production-users-table-wrap"><table class="production-users-table"><caption class="sr-only">` + esc(t(lang, "プロダクションユーザー一覧", "Production user list")) + `</caption><thead><tr><th>` + esc(t(lang, "ユーザー", "User")) + `</th><th>Discord</th><th>` + esc(t(lang, "プロダクション状態", "Production status")) + `</th><th>` + esc(t(lang, "役割の概要", "Role summary")) + `</th><th>` + esc(t(lang, "詳細", "Details")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div>` + addPanel + `<details class="production-participant-details"><summary>` + esc(t(lang, "Kitsuのプロダクション参加者", "Kitsu Production participants")) + `</summary><ul class="mapping-list">` + participantRows.String() + `</ul></details></section>`
+}
+
+func renderCurrentProductionUserSettingsLegacyStacked(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	if p.ValidationOnly || p.ReadOnlyPreview {
 		return renderLegacyCurrentProductionUserSettings(db, r, p, lang)
 	}
 	projectUsers := model.ListProjectUserMaps(db, p.ID)

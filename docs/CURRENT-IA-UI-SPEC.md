@@ -134,6 +134,12 @@ Troubleshooting exposes compact, real diagnostics for Kitsu, Discord, routing in
 - Production Users distinguishes Kitsu-returned participants, local Production-associated users, and global human User Linking. A globally linked human can be added to the Production locally; association makes that user eligible for Reviewer / Checker assignment. Removing the local association does not remove global linking. Bot identities are excluded.
 - Local Production user association reuses `ProjectUserMap` and `ProjectCheckerMap`; no schema migration is required.
 
+## Production Users scalable layout
+
+Production detail Users uses a compact table as the primary view with User, Discord, Production status, role summary, and Details columns. Search matches Kitsu or Discord display identity; the status filter supports all, associated, and available. The table is intentionally bounded by the viewport and remains horizontally contained on narrow screens.
+
+Globally linked human users are not rendered as a permanent second list. `Add users` opens an explicit eligible-user panel. Each associated user's Details disclosure contains identity, Production association, Reviewer/Checker assignments, role editing, and removal. Details are closed by default. Local associations reuse `ProjectUserMap` and role assignments reuse `ProjectCheckerMap`; global User Linking is never removed by local removal, and bots are excluded.
+
 ## Source references
 
 The primary implementation is in `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/observability.go`, `src/setup/runtime_observation.go`, and the route registration in `src/main.go`.

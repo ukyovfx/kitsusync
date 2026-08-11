@@ -61,6 +61,15 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] Bot identities are excluded from normal human linking.
 - [ ] JP and EN copy is equivalent and free of mojibake.
 
+## Production Users scalable checks
+
+- [ ] Users primary view is a compact table with User, Discord, Production status, role summary, and Details columns.
+- [ ] Search matches Kitsu and Discord display names; status filters distinguish associated and available users.
+- [ ] `Add users` is the only normal entry point for eligible globally linked human users; candidates are not permanently expanded.
+- [ ] Associated-user Details disclosures are closed by default and contain Production-scoped role editing and removal.
+- [ ] Synthetic renderer fixtures cover 0, 1, 10, and 50+ users without permanently open details or page overflow.
+- [ ] JP and EN have equivalent structure and no unintended language leakage.
+
 ## System Status — `/bot/admin/health`
 
 - [ ] The page has Overall system health, API response status, operational status, and recent issues sections in that order.

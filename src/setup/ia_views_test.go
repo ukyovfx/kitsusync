@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1108,12 +1109,9 @@ func TestProductionUserSettingsCurrentEmptyStateExplainsKitsuParticipants(t *tes
 	p := model.Project{KitsuProjectID: "empty-current-users", Name: "Empty Current Users"}
 	db.Create(&p)
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
-	if strings.Contains(body, "Kitsuのプロダクション参加者は0人です") && strings.Contains(body, "プロダクションに関連付けたユーザー") {
-		return
-	}
-	for _, want := range []string{"プロダクション参加者", "Kitsuから参加者が取得されると", "Reviewer / Checkerは割り当てできません"} {
+	for _, want := range []string{"プロダクションユーザー", "プロダクションユーザーがいません", "Kitsuのプロダクション参加者は0人です", "ユーザーを追加"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("current user empty state missing %q: %s", want, body)
+			t.Fatalf("scalable empty state missing %q: %s", want, body)
 		}
 	}
 }
@@ -1124,12 +1122,10 @@ func TestProductionUserSettingsShowsGlobalLinkedHumansSeparately(t *testing.T) {
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordDisplayName: "Discord Human", DiscordID: "discord-human"})
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=en", nil), p, "en")
-	if strings.Contains(body, "Add to Production") {
-		return
-	}
-	for _, want := range []string{"Globally linked users", "Linked Human", "Discord Human", "Not eligible without Production membership"} {
+	body = renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=en&add_users=1", nil), p, "en")
+	for _, want := range []string{"Add users", "Linked Human", "Discord Human", "Available"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("global linked user distinction missing %q: %s", want, body)
+			t.Fatalf("scalable linked-user panel missing %q: %s", want, body)
 		}
 	}
 }
@@ -1499,8 +1495,8 @@ func TestCurrentProductionUsersOfferLocalAssociationAndRoleEligibility(t *testin
 	p := model.Project{KitsuProjectID: "association-production", Name: "Association Production"}
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Add to Production", "Production-associated users", "Kitsu returned 0 Production participants"} {
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en&add_users=1", nil), p, "en")
+	for _, want := range []string{"Add users", "Add", "Kitsu returned 0 Production participants"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("production association UI missing %q: %s", want, body)
 		}
@@ -1515,7 +1511,7 @@ func TestCurrentProductionUsersOfferLocalAssociationAndRoleEligibility(t *testin
 		t.Fatal("local Production association was not persisted")
 	}
 	body = renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en", nil), p, "en")
-	if !strings.Contains(body, "Eligible for Reviewer / Checker") || !strings.Contains(body, "save_production_checker") {
+	if !strings.Contains(body, "production-user-details") || !strings.Contains(body, "save_production_checker") {
 		t.Fatal("associated user did not become role-eligible")
 	}
 }
@@ -1530,5 +1526,27 @@ func TestCurrentNotificationRoutingIsReadOnlyUntilExplicitEdit(t *testing.T) {
 	}
 	if !strings.Contains(body, "Notification routing") || !strings.Contains(body, "Edit") {
 		t.Fatal("read-only routing summary missing")
+	}
+}
+
+func TestCurrentProductionUsersScaleAndFilter(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "scale-production", Name: "Scale Production"}
+	db.Create(&p)
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("User-%02d", i)
+		email := fmt.Sprintf("user-%02d@example.com", i)
+		db.Create(&model.UserMap{KitsuName: name, KitsuEmail: email, DiscordID: fmt.Sprintf("discord-%02d", i), DiscordDisplayName: "Discord " + name})
+		model.UpsertProjectUserMap(db, p.ID, name, email, fmt.Sprintf("discord-%02d", i))
+	}
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en&user_search=User-49", nil), p, "en")
+	if !strings.Contains(body, "User-49") || strings.Contains(body, "User-00") {
+		t.Fatalf("user search did not narrow the scalable table: %s", body)
+	}
+	if strings.Contains(body, `<details open`) {
+		t.Fatal("user details must remain collapsed by default")
+	}
+	if got := strings.Count(body, "production-user-details"); got != 1 {
+		t.Fatalf("filtered table rendered %d user detail rows, want 1", got)
 	}
 }
