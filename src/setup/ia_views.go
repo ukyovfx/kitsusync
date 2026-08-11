@@ -220,6 +220,10 @@ func statusSummaryRow(label, class, value, explanation, actionHTML string) strin
 	return `<div class="status-row"><dt class="status-row-label">` + esc(label) + `</dt><dd class="status-row-value"><span class="status-badge status-badge-` + esc(class) + `" role="status">` + esc(value) + `</span></dd>` + explanationCell + action + `</div>`
 }
 
+func productionSummaryCard(label, value, class string) string {
+	return `<div class="production-summary-card"><span class="production-summary-label">` + esc(label) + `</span><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(value) + `</span></div>`
+}
+
 func dashboardStatusRow(label, class, value string) string {
 	return `<div class="dashboard-status-row"><span class="dashboard-status-label">` + esc(label) + `</span><span class="status-badge status-badge-` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(value) + `</span></div>`
 }
@@ -567,7 +571,7 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 		tabLinks.WriteString(`<a id="tab-` + esc(item.id) + `" role="tab" aria-selected="` + selectedAttr + `" aria-controls="panel-` + esc(item.id) + `" class="section-link` + map[bool]string{true: " active", false: ""}[selected] + `" href="` + esc(link) + `" tabindex="` + map[bool]string{true: "0", false: "-1"}[selected] + `">` + esc(tr(lang, item.key)) + `</a>`)
 	}
 	header := `<div class="production-context"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "ia.productions")) + `</div><h1>` + esc(p.Name) + `</h1><p class="hint">` + esc(t(lang, "選択中のプロダクション", "Selected Production")) + `</p></div><span class="status-pill ` + esc(headerClass) + `">` + esc(headerLabel) + `</span></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "プロダクションのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
-	body := header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
+	body := header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
 	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
@@ -598,6 +602,35 @@ func selectedProductionTab(raw string) string {
 	default:
 		return "overview"
 	}
+}
+
+func renderProductionPanelMarkup(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string) string {
+	panel := renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName)
+	if tab != "overview" {
+		if tab == "notifications" && strings.TrimSpace(hint) != "" {
+			panel = strings.Replace(panel, esc(hint), "", 1)
+		}
+		return panel
+	}
+	panel = strings.Replace(panel, `<dl class="status-list">`, `<div class="production-summary-grid">`, 1)
+	panel = strings.Replace(panel, `</dl></section>`, `</div></section>`, 1)
+	for i := 0; i < 4; i++ {
+		panel = strings.Replace(panel, `<div class="status-row">`, `<div class="status-row production-summary-card">`, 1)
+	}
+	panel = strings.Replace(panel, `<div class="status-row">`, `<div class="status-row production-current-issues">`, 1)
+	for {
+		start := strings.Index(panel, `<dd class="status-row-explanation">`)
+		if start < 0 {
+			break
+		}
+		end := strings.Index(panel[start:], `</dd>`)
+		if end < 0 {
+			break
+		}
+		end += start + len(`</dd>`)
+		panel = panel[:start] + `<dd class="status-row-explanation" aria-hidden="true"></dd>` + panel[end:]
+	}
+	return panel
 }
 
 func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string) string {
@@ -796,6 +829,48 @@ func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang 
 		}
 	}
 	detailSection := ""
+	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
+	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
+	config := model.FindProductionNotificationConfig(db, p.KitsuProjectID)
+	participantCount := len(ListKitsuProjectParticipants(p.KitsuProjectID))
+	linkedCount := len(model.ListProjectUserMaps(db, p.ID))
+	diagnosticItem := func(label, value, class, explanation string) string {
+		return `<div class="production-diagnostic-item"><div><strong>` + esc(label) + `</strong><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(value) + `</span></div><small>` + esc(explanation) + `</small></div>`
+	}
+	kitsuStatus := t(lang, "未設定", "Not configured")
+	kitsuClass := "warning"
+	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
+		kitsuStatus, kitsuClass = t(lang, "接続済", "Connected"), "success"
+	} else if readiness.KitsuConfigured {
+		kitsuStatus = t(lang, "要確認", "Needs review")
+	}
+	discordStatus := t(lang, "未設定", "Not configured")
+	discordClass := "warning"
+	if readiness.DiscordConfigured {
+		discordStatus, discordClass = t(lang, "設定済", "Configured"), "success"
+	}
+	routingStatus := t(lang, "未設定", "Not configured")
+	routingClass := "warning"
+	if config != nil && config.Enabled && len(routes) > 0 {
+		routingStatus, routingClass = t(lang, "正常", "Healthy"), "success"
+	}
+	participantStatus := t(lang, "確認待", "Waiting")
+	participantClass := "warning"
+	if participantCount > 0 {
+		participantStatus, participantClass = t(lang, "取得済", "Loaded"), "success"
+	}
+	linkStatus := t(lang, "記録なし", "No records")
+	linkClass := "neutral"
+	if linkedCount > 0 {
+		linkStatus, linkClass = t(lang, "設定済", "Configured"), "success"
+	}
+	detailSection = `<details class="advanced-details production-diagnostics"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><div class="production-diagnostic-grid">` +
+		diagnosticItem(t(lang, "Kitsu接続", "Kitsu connection"), kitsuStatus, kitsuClass, t(lang, "ランタイム認証状態を確認します。", "Based on current runtime authentication state.")) +
+		diagnosticItem(t(lang, "Discord Bot", "Discord Bot"), discordStatus, discordClass, t(lang, "Bot設定の存在を確認します。", "Based on current Bot configuration.")) +
+		diagnosticItem(t(lang, "通知ルーティング", "Notification routing"), routingStatus, routingClass, fmt.Sprintf(t(lang, "%d件のProductionルートと設定を確認しました。", "%d Production routes and the configuration were inspected."), len(routes))) +
+		diagnosticItem(t(lang, "参加者取得", "Participant retrieval"), participantStatus, participantClass, fmt.Sprintf(t(lang, "Kitsu Production team APIから%d人を取得しました。", "The Kitsu Production team API returned %d people."), participantCount)) +
+		diagnosticItem(t(lang, "ユーザー紐づけ", "User linking"), linkStatus, linkClass, fmt.Sprintf(t(lang, "このProductionに記録されたユーザー割り当て: %d件。", "User assignments recorded for this Production: %d."), linkedCount)) +
+		`</div></details>` + detailSection
 	if has {
 		detailSection = `<details class="advanced-details" open><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary>` + details.String() + `</details>`
 	}

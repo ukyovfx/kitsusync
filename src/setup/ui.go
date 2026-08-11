@@ -96,6 +96,22 @@ button,input,select{font:inherit}
 .section-link:hover,.section-link:focus-visible{color:var(--text);background:rgba(232,90,26,.16)}
 .production-list-item{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:16px;align-items:center}
 .production-list-state{display:flex;align-items:center;justify-content:flex-start;min-width:0}
+.production-context #panel-overview>.section-card{padding:20px}
+.production-context #panel-overview>.section-card>.status-list{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.production-context #panel-overview>.section-card>.status-list>.status-row{display:grid;grid-template-columns:1fr;gap:8px;align-content:start;min-height:84px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025)}
+.production-context #panel-overview>.section-card>.status-list>.status-row:last-child{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;min-height:0}
+.production-context #panel-overview .status-row-explanation{display:none}
+.production-context #panel-overview>.section-card>.production-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.production-context #panel-overview>.section-card>.production-summary-grid>.production-summary-card{display:grid;grid-template-columns:1fr;gap:8px;align-content:start;min-height:84px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025)}
+.production-context #panel-overview>.section-card>.production-summary-grid>.production-current-issues{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;min-height:0;padding:12px 14px;border-top:1px solid rgba(255,255,255,.08)}
+.production-context #panel-notifications>.section-card>.section-card{background:rgba(255,255,255,.018);border-color:rgba(255,255,255,.07);box-shadow:none}
+.production-diagnostic-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+.production-diagnostic-item{display:grid;gap:6px;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}
+.production-diagnostic-item>div{display:flex;align-items:center;justify-content:space-between;gap:10px}.production-diagnostic-item small{color:var(--muted);line-height:1.4}
+@media (max-width:960px){.production-context #panel-overview>.section-card>.status-list{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.production-context #panel-overview>.section-card>.status-list{grid-template-columns:1fr}.production-diagnostic-grid{grid-template-columns:1fr}}
+@media (max-width:960px){.production-context #panel-overview>.section-card>.production-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.production-context #panel-overview>.section-card>.production-summary-grid{grid-template-columns:1fr}}
 .mapping-list,.status-list{display:grid;gap:10px;margin:0;padding:0;list-style:none}
 .status-list{gap:8px}
 .status-row{display:grid;grid-template-columns:minmax(10rem,.8fr) minmax(8rem,auto) minmax(16rem,1.5fr) minmax(10rem,auto);align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)}

@@ -637,6 +637,22 @@ func TestSelectedProductionOverviewUsesCanonicalConnectionStatuses(t *testing.T)
 	}
 }
 
+func TestSelectedProductionOverviewUsesCompactSummaryAndSeparatesIssues(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "compact-overview-p", Name: "Compact Overview Production", DiscordGuildID: "guild"}
+	db.Create(&p)
+	db.Create(&model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, Enabled: true})
+	w := httptest.NewRecorder()
+	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=compact-overview-p&lang=en", nil), db, "")
+	body := w.Body.String()
+	if strings.Count(body, "production-summary-card") < 4 || !strings.Contains(body, "production-current-issues") {
+		t.Fatalf("overview does not use the compact summary structure: %q", body)
+	}
+	if strings.Contains(body, "Notification destinations are active.") {
+		t.Fatal("overview exposes redundant notification explanation text")
+	}
+}
+
 func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord Reviewer"})
