@@ -51,7 +51,7 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] Notifications shows a distinct routing section and read-only preview section with visible spacing.
 - [ ] Routing rows explicitly label Kitsu Task Type and Discord Channel.
 - [ ] Preview identifies Task Type, destination, Production notification language, mention behavior, and deterministic rendered message/embed; no send control exists.
-- [ ] Production Users separately shows Kitsu participants, globally linked humans, and truthful Reviewer/Checker eligibility; bots are excluded.
+- [ ] Production Users shows only local associations in the normal management view; backend participant reads remain diagnostic-only and bots are excluded.
 - [ ] Troubleshooting exposes real connection, routing, participant, linking, and recent-notification diagnostics.
 - [ ] Details is read-only and uses localized Production/Discord/category ID labels.
 
@@ -61,14 +61,17 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] Bot identities are excluded from normal human linking.
 - [ ] JP and EN copy is equivalent and free of mojibake.
 
-## Production Users scalable checks
+## Production Users simple-flow checks
 
-- [ ] Users primary view is a compact table with User, Discord, Production status, role summary, and Details columns.
-- [ ] Search matches Kitsu and Discord display names; status filters distinguish associated and available users.
-- [ ] `Add users` is the only normal entry point for eligible globally linked human users; candidates are not permanently expanded.
-- [ ] Associated-user Details disclosures are closed by default and contain Production-scoped role editing and removal.
-- [ ] Synthetic renderer fixtures cover 0, 1, 10, and 50+ users without permanently open details or page overflow.
-- [ ] JP and EN have equivalent structure and no unintended language leakage.
+- [ ] Normal Users view has the order: Production users, Add a user, Assigned, Reviewer / Checker.
+- [ ] The associated-user list contains only local Production associations and shows User, Discord, associated status, and remove.
+- [ ] No search, status filter, expandable row details, or visible Kitsu participant section is rendered in the normal Current IA.
+- [ ] The add dropdown contains only globally linked human users not already associated; bots never appear.
+- [ ] Adding creates only a local Production association and leaves global User Linking and Kitsu membership unchanged.
+- [ ] Reviewer / Checker uses an associated Production user plus a Task Type; assignments are compact and removable.
+- [ ] Removing a role leaves the Production association; removing a Production user removes or blocks that user's local roles without removing global linking.
+- [ ] Empty states explain the next action when no associated users or eligible linked users exist.
+- [ ] JP and EN have equivalent structure, no unintended language leakage, and no page overflow.
 
 ## System Status — `/bot/admin/health`
 

@@ -123,7 +123,7 @@ The Overview uses four equal summary cards for Production state, Discord state, 
 
 Notifications contains a status row followed by two distinct sections: Notification routing and Notification preview. Routing is an editable one-to-one `Kitsu Task Type → Discord Channel` mapping. Preview is read-only and identifies the selected Task Type, destination channel, Production notification language, mention behavior, and the deterministic rendered Discord message/embed. Preview never sends a message.
 
-Production Users distinguishes Kitsu Production participants from globally linked human users. A globally linked human may be displayed even when the Kitsu team endpoint returns no participant; Reviewer/Checker eligibility must say when Production membership is required. Bot identities remain excluded from human linking and assignment.
+Production Users keeps Kitsu participant reads as backend/diagnostic data but the normal management UI shows only local Production-associated human users. Globally linked humans can be added locally; Reviewer/Checker eligibility is limited to associated users. Bot identities remain excluded from human linking and assignment.
 
 Troubleshooting exposes compact, real diagnostics for Kitsu, Discord, routing integrity, participant retrieval, User Linking, and recent notification processing. Details information is read-only and uses localized identifiers: `プロダクションID`, `DiscordサーバーID`, and `カテゴリID` in Japanese.
 
@@ -131,14 +131,14 @@ Troubleshooting exposes compact, real diagnostics for Kitsu, Discord, routing in
 
 - Overview renders one current-issues representation: `現在の問題` / `Current issues` with its single status value. It does not render a duplicate count label alongside `問題なし` / `No current issues`.
 - The default Notifications view is read-only. It shows a compact `Kitsu Task Type → Discord Channel` summary and one explicit `編集` / `Edit` entry point. The editor is available only through the explicit edit query state; the preview remains read-only and never sends.
-- Production Users distinguishes Kitsu-returned participants, local Production-associated users, and global human User Linking. A globally linked human can be added to the Production locally; association makes that user eligible for Reviewer / Checker assignment. Removing the local association does not remove global linking. Bot identities are excluded.
+- Production Users normal management shows local Production associations and global-link candidates only through the add form. Kitsu participant reads remain diagnostic-only; association makes a human eligible for Reviewer / Checker assignment. Removing the local association does not remove global linking. Bot identities are excluded.
 - Local Production user association reuses `ProjectUserMap` and `ProjectCheckerMap`; no schema migration is required.
 
-## Production Users scalable layout
+## Production Users simple flow
 
-Production detail Users uses a compact table as the primary view with User, Discord, Production status, role summary, and Details columns. Search matches Kitsu or Discord display identity; the status filter supports all, associated, and available. The table is intentionally bounded by the viewport and remains horizontally contained on narrow screens.
+Production detail Users is a compact, linear workflow: `Production users`, `Add a user`, `Assigned`, then `Reviewer / Checker`. The main list shows only locally associated users with their linked Discord identity, associated status, and a remove action. Search, status filters, expandable row details, and the Kitsu participant list are not rendered in the normal Current IA.
 
-Globally linked human users are not rendered as a permanent second list. `Add users` opens an explicit eligible-user panel. Each associated user's Details disclosure contains identity, Production association, Reviewer/Checker assignments, role editing, and removal. Details are closed by default. Local associations reuse `ProjectUserMap` and role assignments reuse `ProjectCheckerMap`; global User Linking is never removed by local removal, and bots are excluded.
+The add form contains only globally linked human users not already associated with this Production. Adding creates a local `ProjectUserMap` association and does not change global User Linking or Kitsu membership. Reviewer / Checker assignment is a separate form using an associated Production user and a Kitsu Task Type; current assignments are compact removable rows. Role removal does not remove the user association. Removing a user association also removes that user's local role assignments. `ProjectUserMap` and `ProjectCheckerMap` remain the canonical stores, and bots are excluded.
 
 ## Source references
 

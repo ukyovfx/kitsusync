@@ -756,6 +756,86 @@ func renderLegacyCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p m
 
 func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
 	if p.ValidationOnly || p.ReadOnlyPreview {
+		return renderCurrentProductionUserSettingsScalable(db, r, p, lang)
+	}
+	postURL := withLang("/bot/admin/projects", r)
+	userText := func(ja, en string) string {
+		if lang == "en" {
+			return en
+		}
+		return ja
+	}
+	projectUsers := model.ListProjectUserMaps(db, p.ID)
+	assignments := model.ListProjectCheckerMaps(db, p.ID)
+	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
+	associated := map[string]bool{}
+	for _, user := range projectUsers {
+		associated[assignmentIdentityKey(user.KitsuName, user.KitsuEmail)] = true
+	}
+
+	var users strings.Builder
+	for _, user := range projectUsers {
+		discord := user.DiscordUserID
+		for _, linked := range globalUsers {
+			if assignmentIdentityKey(linked.KitsuName, linked.KitsuEmail) == assignmentIdentityKey(user.KitsuName, user.KitsuEmail) && linked.DiscordDisplayName != "" {
+				discord = linked.DiscordDisplayName
+				break
+			}
+		}
+		users.WriteString(`<li class="production-user-simple-row"><span><strong>` + esc(user.KitsuName) + `</strong><small>` + esc(discord) + `</small></span><span class="status-pill success">` + esc(userText("関連付け済み", "Associated")) + `</span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="user_id" value="` + strconv.FormatUint(uint64(user.ID), 10) + `"><input type="hidden" name="action" value="remove_production_user"><button class="btn-ghost" type="submit">` + esc(userText("解除", "Remove")) + `</button></form></li>`)
+	}
+	if users.Len() == 0 {
+		users.WriteString(`<li class="empty-state"><strong>` + esc(userText("プロダクションユーザーはまだいません", "No Production users yet")) + `</strong><span class="field-help">` + esc(userText("グローバルにリンク済みの人間ユーザーを追加してください。", "Add a globally linked human user to this Production.")) + `</span></li>`)
+	}
+
+	var addOptions strings.Builder
+	available := 0
+	for _, user := range globalUsers {
+		key := assignmentIdentityKey(user.KitsuName, user.KitsuEmail)
+		if strings.TrimSpace(user.DiscordID) == "" || associated[key] {
+			continue
+		}
+		available++
+		addOptions.WriteString(`<option value="` + strconv.FormatUint(uint64(user.ID), 10) + `">` + esc(user.KitsuName) + ` — ` + esc(user.DiscordDisplayName) + `</option>`)
+	}
+	add := `<div class="production-users-simple-section"><h3>` + esc(userText("ユーザーを追加", "Add a user")) + `</h3>`
+	if available == 0 {
+		add += `<p class="empty-state field-help">` + esc(userText("追加できるグローバルリンク済みの人間ユーザーはいません。", "No eligible globally linked human users are available.")) + ` <a href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(userText("ユーザー紐づけを確認", "Review User Linking")) + `</a></p>`
+	} else {
+		add += `<form method="post" class="production-user-inline-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="add_production_user"><label class="sr-only" for="production-user-add">` + esc(userText("グローバルにリンク済みの人間ユーザー", "Globally linked human user")) + `</label><select id="production-user-add" name="user_id">` + addOptions.String() + `</select><button class="btn" type="submit">` + esc(userText("追加", "Add")) + `</button></form>`
+	}
+	add += `</div>`
+
+	var assignmentRows strings.Builder
+	for _, assignment := range assignments {
+		assignmentRows.WriteString(`<li class="production-user-simple-row"><span><strong>` + esc(assignment.KitsuName) + `</strong><small>` + esc(assignment.TaskType) + `</small></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type" value="` + esc(assignment.TaskType) + `"><input type="hidden" name="action" value="remove_production_checker"><button class="btn-ghost" type="submit">` + esc(userText("解除", "Remove")) + `</button></form></li>`)
+	}
+	if assignmentRows.Len() == 0 {
+		assignmentRows.WriteString(`<li class="empty-state field-help">` + esc(userText("割り当てはまだありません。", "No Reviewer / Checker assignments yet.")) + `</li>`)
+	}
+	var roleForm string
+	if len(projectUsers) == 0 {
+		roleForm = `<p class="empty-state field-help">` + esc(userText("先にプロダクションユーザーを追加してください。", "Add a Production user first.")) + `</p>`
+	} else {
+		var userOptions, taskOptions strings.Builder
+		for _, user := range projectUsers {
+			userOptions.WriteString(`<option value="` + strconv.FormatUint(uint64(user.ID), 10) + `">` + esc(user.KitsuName) + `</option>`)
+		}
+		for _, taskType := range assignmentTaskTypes(db, &p) {
+			taskOptions.WriteString(`<option value="` + esc(taskType) + `">` + esc(taskType) + `</option>`)
+		}
+		if taskOptions.Len() == 0 {
+			roleForm = `<p class="empty-state field-help">` + esc(userText("利用可能なTask Typeがありません。", "No Task Types are available.")) + `</p>`
+		} else {
+			roleForm = `<form method="post" class="production-user-inline-form production-user-role-form-simple" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="save_production_checker"><label>` + esc(userText("Production user", "Production user")) + `<select name="user_id">` + userOptions.String() + `</select></label><label>Kitsu Task Type<select name="task_type">` + taskOptions.String() + `</select></label><button class="btn" type="submit">` + esc(userText("追加", "Add")) + `</button></form>`
+		}
+	}
+
+	return `<section class="section-card glass production-users-panel"><h2>` + esc(userText("プロダクションユーザー", "Production users")) + `</h2>` + add + `<div class="production-users-simple-section"><h3>` + esc(userText("割り当て済み", "Assigned")) + `</h3><ul class="production-users-simple-list">` + users.String() + `</ul></div><div class="production-users-simple-section"><h3>Reviewer / Checker</h3>` + roleForm + `<h4>` + esc(userText("割り当て済み", "Assigned")) + `</h4><ul class="production-users-simple-list">` + assignmentRows.String() + `</ul></div></section>`
+}
+
+func renderCurrentProductionUserSettingsScalable(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	if p.ValidationOnly || p.ReadOnlyPreview {
 		return renderCurrentProductionUserSettingsLegacyStacked(db, r, p, lang)
 	}
 	projectUsers := model.ListProjectUserMaps(db, p.ID)

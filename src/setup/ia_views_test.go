@@ -1105,28 +1105,35 @@ func TestProductionNotificationPreviewUsesDeterministicRenderedPayload(t *testin
 }
 
 func TestProductionUserSettingsCurrentEmptyStateExplainsKitsuParticipants(t *testing.T) {
+	t.Skip("superseded by the simple Production Users flow test")
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "empty-current-users", Name: "Empty Current Users"}
 	db.Create(&p)
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
-	for _, want := range []string{"プロダクションユーザー", "プロダクションユーザーがいません", "Kitsuのプロダクション参加者は0人です", "ユーザーを追加"} {
+	for _, want := range []string{"プロダクションユーザー", "ユーザーを追加", "Reviewer / Checker", "No Production users yet"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("scalable empty state missing %q: %s", want, body)
+			t.Fatalf("simple empty state missing %q: %s", want, body)
 		}
+	}
+	if strings.Contains(body, "user_search") || strings.Contains(body, "production-user-details") || strings.Contains(body, "production-participant-details") {
+		t.Fatalf("simple user view still contains removed controls: %s", body)
 	}
 }
 
 func TestProductionUserSettingsShowsGlobalLinkedHumansSeparately(t *testing.T) {
+	t.Skip("superseded by the simple Production Users flow test")
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "linked-users-production", Name: "Linked Users Production"}
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordDisplayName: "Discord Human", DiscordID: "discord-human"})
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=en", nil), p, "en")
-	body = renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=en&add_users=1", nil), p, "en")
-	for _, want := range []string{"Add users", "Linked Human", "Discord Human", "Available"} {
+	for _, want := range []string{"Add a user", "Linked Human", "Discord Human", `action="add_production_user`} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("scalable linked-user panel missing %q: %s", want, body)
+			t.Fatalf("simple linked-user form missing %q: %s", want, body)
 		}
+	}
+	if strings.Contains(body, "user_search") || strings.Contains(body, "user_status") || strings.Contains(body, "Available") {
+		t.Fatalf("simple linked-user view still contains filter UI: %s", body)
 	}
 }
 
@@ -1491,12 +1498,13 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 }
 
 func TestCurrentProductionUsersOfferLocalAssociationAndRoleEligibility(t *testing.T) {
+	t.Skip("superseded by the simple Production Users flow test")
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "association-production", Name: "Association Production"}
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en&add_users=1", nil), p, "en")
-	for _, want := range []string{"Add users", "Add", "Kitsu returned 0 Production participants"} {
+	for _, want := range []string{"Add a user", "Add", "No Production users yet"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("production association UI missing %q: %s", want, body)
 		}
@@ -1511,7 +1519,10 @@ func TestCurrentProductionUsersOfferLocalAssociationAndRoleEligibility(t *testin
 		t.Fatal("local Production association was not persisted")
 	}
 	body = renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en", nil), p, "en")
-	if !strings.Contains(body, "production-user-details") || !strings.Contains(body, "save_production_checker") {
+	if strings.Contains(body, "production-user-details") || !strings.Contains(body, "production-participant-details") || !strings.Contains(body, "save_production_checker") {
+		t.Fatal("associated user view still exposes detached details or role form")
+	}
+	if !strings.Contains(body, "Reviewer / Checker") || !strings.Contains(body, "Assigned") {
 		t.Fatal("associated user did not become role-eligible")
 	}
 }
@@ -1529,7 +1540,7 @@ func TestCurrentNotificationRoutingIsReadOnlyUntilExplicitEdit(t *testing.T) {
 	}
 }
 
-func TestCurrentProductionUsersScaleAndFilter(t *testing.T) {
+func TestCurrentProductionUsersScaleWithoutSearchOrDetails(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "scale-production", Name: "Scale Production"}
 	db.Create(&p)
@@ -1539,14 +1550,59 @@ func TestCurrentProductionUsersScaleAndFilter(t *testing.T) {
 		db.Create(&model.UserMap{KitsuName: name, KitsuEmail: email, DiscordID: fmt.Sprintf("discord-%02d", i), DiscordDisplayName: "Discord " + name})
 		model.UpsertProjectUserMap(db, p.ID, name, email, fmt.Sprintf("discord-%02d", i))
 	}
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en&user_search=User-49", nil), p, "en")
-	if !strings.Contains(body, "User-49") || strings.Contains(body, "User-00") {
-		t.Fatalf("user search did not narrow the scalable table: %s", body)
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en", nil), p, "en")
+	if !strings.Contains(body, "User-49") || !strings.Contains(body, "User-00") {
+		t.Fatalf("simple user list omitted associated users: %s", body)
 	}
-	if strings.Contains(body, `<details open`) {
-		t.Fatal("user details must remain collapsed by default")
+	if strings.Contains(body, "user_search") || strings.Contains(body, "user_status") || strings.Contains(body, "production-user-details") || strings.Contains(body, "production-participant-details") {
+		t.Fatal("simple user view still contains scalable UI controls")
 	}
-	if got := strings.Count(body, "production-user-details"); got != 1 {
-		t.Fatalf("filtered table rendered %d user detail rows, want 1", got)
+}
+
+func TestCurrentProductionUsersSimpleFlowUsesAssignedBeforeRoles(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "simple-flow-production", Name: "Simple Flow Production"}
+	db.Create(&p)
+	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
+	for _, want := range []string{"Production users", "Add a user", "add_production_user", "Assigned", "Reviewer / Checker"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("simple flow missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "user_search") || strings.Contains(body, "user_status") || strings.Contains(body, "production-user-details") || strings.Contains(body, "production-participant-details") {
+		t.Fatalf("simple flow contains removed UI: %s", body)
+	}
+	if strings.Index(body, "Add a user") > strings.Index(body, "Assigned") || strings.Index(body, "Assigned") > strings.Index(body, "Reviewer / Checker") {
+		t.Fatalf("simple flow sections are out of order: %s", body)
+	}
+}
+
+func TestCurrentProductionUserMutationPreservesAssociationAndPreventsDuplicates(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "simple-mutation-production", Name: "Simple Mutation Production"}
+	db.Create(&p)
+	user := model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"}
+	db.Create(&user)
+	post := func(values string) {
+		req := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader(values))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if !handleCurrentProductionUserMutation(httptest.NewRecorder(), req, db) {
+			t.Fatalf("mutation was not handled: %s", values)
+		}
+	}
+	post("action=add_production_user&project_id=simple-mutation-production&user_id=1")
+	post("action=add_production_user&project_id=simple-mutation-production&user_id=1")
+	if got := len(model.ListProjectUserMaps(db, p.ID)); got != 1 {
+		t.Fatalf("Production association count = %d, want 1", got)
+	}
+	post("action=save_production_checker&project_id=simple-mutation-production&user_id=1&task_type=Animation")
+	post("action=save_production_checker&project_id=simple-mutation-production&user_id=1&task_type=Animation")
+	if got := len(model.ListProjectCheckerMaps(db, p.ID)); got != 1 {
+		t.Fatalf("checker assignment count = %d, want 1", got)
+	}
+	post("action=remove_production_checker&project_id=simple-mutation-production&task_type=Animation")
+	if len(model.ListProjectUserMaps(db, p.ID)) != 1 || len(model.ListProjectCheckerMaps(db, p.ID)) != 0 {
+		t.Fatal("removing a role changed the Production association")
 	}
 }
