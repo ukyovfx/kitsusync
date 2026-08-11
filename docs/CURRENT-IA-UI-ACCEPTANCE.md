@@ -47,6 +47,13 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] Routing/resource state is shown only when it is real and current.
 - [ ] No duplicate or stale resource representation is visible.
 - [ ] Normal Current IA actions do not fall into a legacy renderer.
+- [ ] Overview has four aligned summary cards and a separate counted current-issues card.
+- [ ] Notifications shows a distinct routing section and read-only preview section with visible spacing.
+- [ ] Routing rows explicitly label Kitsu Task Type and Discord Channel.
+- [ ] Preview identifies Task Type, destination, Production notification language, mention behavior, and deterministic rendered message/embed; no send control exists.
+- [ ] Production Users separately shows Kitsu participants, globally linked humans, and truthful Reviewer/Checker eligibility; bots are excluded.
+- [ ] Troubleshooting exposes real connection, routing, participant, linking, and recent-notification diagnostics.
+- [ ] Details is read-only and uses localized Production/Discord/category ID labels.
 
 ## User Linking — `/bot/admin/users`
 

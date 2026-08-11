@@ -1,6 +1,7 @@
 package setup
 
 import (
+	discordapi "app/src/api/discord"
 	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
@@ -334,6 +335,71 @@ func renderCurrentIARoutingEditor(db *gorm.DB, r *http.Request, p model.Project,
 }
 
 func renderCurrentIANotificationPreview(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	taskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
+	selectedID := strings.TrimSpace(r.URL.Query().Get("preview_task_type_id"))
+	var options strings.Builder
+	options.WriteString(`<option value="">` + esc(t(lang, "Task Typeを選択", "Select a Task Type")) + `</option>`)
+	for _, taskType := range taskTypes {
+		selected := ""
+		if taskType.ID == selectedID {
+			selected = " selected"
+		}
+		options.WriteString(`<option value="` + esc(taskType.ID) + `"` + selected + `>` + esc(taskType.Name) + `</option>`)
+	}
+	result := ""
+	if selectedID != "" {
+		for _, taskType := range taskTypes {
+			if taskType.ID != selectedID {
+				continue
+			}
+			destination := t(lang, "未設定", "Not configured")
+			for _, route := range model.ListProductionNotificationRoutes(db, p.KitsuProjectID) {
+				if route.TaskTypeID != selectedID {
+					continue
+				}
+				if webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID); webhook != nil && strings.TrimSpace(webhook.ChannelName) != "" {
+					destination = webhook.ChannelName
+				}
+				break
+			}
+			result = renderDeterministicProductionPreview(p, taskType.Name, destination, lang)
+			break
+		}
+	}
+	return `<section class="section-card glass"><h3>` + esc(tr(lang, "production_routing.preview")) + `</h3><p class="field-help">` + esc(t(lang, "Task Typeと送信先、実際の通知内容を確認できます。読み取り専用で、Discordには送信しません。", "Review the Task Type, destination, and rendered notification. This is read-only and never sends to Discord.")) + `</p><form method="get" action="` + esc(withLang("/bot/admin/projects", r)) + `" class="form-action-row"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="notifications"><label for="production-notification-preview">` + esc(t(lang, "Kitsu Task Type", "Kitsu Task Type")) + `</label><select id="production-notification-preview" name="preview_task_type_id">` + options.String() + `</select><button class="btn-ghost" type="submit">` + esc(t(lang, "表示", "Show preview")) + `</button></form>` + result + `</section>`
+}
+
+func renderDeterministicProductionPreview(p model.Project, taskTypeName, destination, lang string) string {
+	notificationLang := discordapi.NotificationLanguage(p.Language)
+	payload := discordapi.RenderNotificationPayload(discordapi.Template{
+		ProjectName:          p.Name,
+		GroupName:            p.Name,
+		ParentName:           t(lang, "プレビューイベント", "Preview event"),
+		TaskName:             t(lang, "サンプルタスク", "Example task"),
+		TaskType:             taskTypeName,
+		EntityType:           "Asset",
+		CurrentStatus:        "WIP",
+		StatusUpper:          "WIP",
+		StatusMessage:        t(lang, "作業中です", "Work is in progress"),
+		ProcessEmoji:         "•",
+		NotificationLanguage: notificationLang,
+		ChannelName:          destination,
+		AssigneesStr:         t(lang, "未設定", "Not set"),
+		Color:                0xE85A1A,
+	}, "rich")
+	embedTitle, embedDescription, embedFooter := "", "", ""
+	if len(payload.Embeds) > 0 {
+		embedTitle = payload.Embeds[0].Title
+		embedDescription = payload.Embeds[0].Description
+		embedFooter = payload.Embeds[0].Footer.Text
+	}
+	if discordapi.NotificationLanguage(lang) == "en" {
+		embedDescription = strings.ReplaceAll(embedDescription, "変更者:", "Changed by:")
+	}
+	return `<div class="notification-preview-result"><dl class="status-list"><div class="status-row"><dt class="status-row-label">` + esc(t(lang, "Kitsu Task Type", "Kitsu Task Type")) + `</dt><dd class="status-row-value">` + esc(taskTypeName) + `</dd></div><div class="status-row"><dt class="status-row-label">` + esc(t(lang, "Discordチャンネル", "Discord channel")) + `</dt><dd class="status-row-value"><span class="status-badge status-badge-neutral">` + esc(destination) + `</span></dd></div><div class="status-row"><dt class="status-row-label">` + esc(t(lang, "通知言語", "Notification language")) + `</dt><dd class="status-row-value">` + esc(notificationLang) + `</dd></div><div class="status-row"><dt class="status-row-label">` + esc(t(lang, "メンション", "Mentions")) + `</dt><dd class="status-row-value">` + esc(t(lang, "このプレビューではなし", "None in this preview")) + `</dd></div></dl><div class="notification-rendered-preview"><h4>` + esc(t(lang, "レンダリング済みDiscordメッセージ", "Rendered Discord message")) + `</h4><p class="field-help">` + esc(t(lang, "決定的レンダラーの結果です。送信は行いません。", "Deterministic renderer output. Nothing is sent.")) + `</p><dl class="status-list"><div class="status-row"><dt class="status-row-label">Title</dt><dd class="status-row-value">` + esc(embedTitle) + `</dd></div><div class="status-row"><dt class="status-row-label">Description</dt><dd class="status-row-value"><pre class="notification-preview-text">` + esc(embedDescription) + `</pre></dd></div><div class="status-row"><dt class="status-row-label">Footer</dt><dd class="status-row-value">` + esc(embedFooter) + `</dd></div></dl></div></div>`
+}
+
+func renderLegacyCurrentIANotificationPreview(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
 	taskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
 	selectedID := strings.TrimSpace(r.URL.Query().Get("preview_task_type_id"))
 	var options, result strings.Builder

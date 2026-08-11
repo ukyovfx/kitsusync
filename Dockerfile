@@ -16,6 +16,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates curl tzdata && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/kitsu-discord .
+COPY --from=builder /app/tpl ./tpl
 ARG COMMIT_SHA=unknown
 ARG WORKTREE_DIRTY=false
 ARG BUILD_SOURCE_ID=unknown

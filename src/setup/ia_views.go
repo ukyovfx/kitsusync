@@ -614,6 +614,9 @@ func renderProductionPanelMarkup(db *gorm.DB, r *http.Request, p model.Project, 
 	}
 	panel = strings.Replace(panel, `<dl class="status-list">`, `<div class="production-summary-grid">`, 1)
 	panel = strings.Replace(panel, `</dl></section>`, `</div></section>`, 1)
+	issueCount := len(model.ListNotificationRoutingDiagnoses(db, p.KitsuProjectID, 10))
+	issueLabel := fmt.Sprintf(t(lang, "現在の問題 (%d)", "Current issues (%d)"), issueCount)
+	panel = strings.Replace(panel, `>`+esc(t(lang, "現在の問題", "Current issues"))+`<`, `>`+esc(issueLabel)+`<`, 1)
 	for i := 0; i < 4; i++ {
 		panel = strings.Replace(panel, `<div class="status-row">`, `<div class="status-row production-summary-card">`, 1)
 	}
@@ -716,6 +719,29 @@ func renderCurrentProductionDetails(p model.Project, lang string) string {
 
 func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
 	body := renderSelectedProductionUserSettings(db, r, p, lang)
+	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
+	if len(globalUsers) > 0 {
+		participants := ListKitsuProjectParticipants(p.KitsuProjectID)
+		participantByIdentity := map[string]bool{}
+		for _, person := range filterAssignablePersons(participants, botAccountEmail(db)) {
+			participantByIdentity[strings.ToLower(strings.TrimSpace(person.Email))] = true
+			participantByIdentity[strings.ToLower(strings.TrimSpace(person.FullName))] = true
+		}
+		var rows strings.Builder
+		for _, user := range globalUsers {
+			identity := strings.ToLower(strings.TrimSpace(user.KitsuEmail))
+			if identity == "" {
+				identity = strings.ToLower(strings.TrimSpace(user.KitsuName))
+			}
+			roleStatus, roleClass := t(lang, "Production参加者ではないため対象外", "Not eligible without Production membership"), "warning"
+			if participantByIdentity[identity] {
+				roleStatus, roleClass = t(lang, "Reviewer / Checker対象", "Eligible for Reviewer / Checker"), "success"
+			}
+			rows.WriteString(`<li><strong>` + esc(user.KitsuName) + `</strong><span>` + esc(user.DiscordDisplayName) + `</span><span class="status-pill ` + esc(roleClass) + `">` + esc(roleStatus) + `</span></li>`)
+		}
+		linkedSection := `<div class="settings-block"><h3>` + esc(t(lang, "グローバルに紐づけ済みのユーザー", "Globally linked users")) + `</h3><p class="field-help">` + esc(t(lang, "グローバルUser Linkingの人間ユーザーです。Production参加者とは別に管理され、Reviewer / Checkerの対象はKitsuのProduction参加者に限られます。", "These human users are linked in global User Linking. Global linking is separate from Production membership; Reviewer / Checker eligibility still requires Kitsu Production membership.")) + `</p><ul class="mapping-list">` + rows.String() + `</ul></div>`
+		body = strings.Replace(body, `</section>`, linkedSection+`</section>`, 1)
+	}
 	if lang == "en" {
 		body = strings.ReplaceAll(body, "Participants appear here when they are registered in Kitsu.", "Participants appear here when they are returned by Kitsu. Reviewer / Checker assignment becomes available then.")
 		body = strings.ReplaceAll(body, "Assign these roles per Task Type for this Production.", "Reviewer / Checker assignment is unavailable until participants are returned by Kitsu.")

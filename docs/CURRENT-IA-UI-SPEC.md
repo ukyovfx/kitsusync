@@ -117,6 +117,16 @@ Operational cards expose expandable, safe diagnostic details when data exists. D
 - Credentials, Authorization headers, JWTs, webhook URLs, response bodies, and secret keys are never rendered, logged, or included in telemetry snapshots.
 - Observability requests are read-only and bounded.
 
+## Production detail final rules
+
+The Overview uses four equal summary cards for Production state, Discord state, notification routing, and users/participants. The issue summary is a separate full-width card with a real count, such as `Current issues (0)` / `現在の問題 (0)`, and a healthy `No current issues` / `問題なし` value.
+
+Notifications contains a status row followed by two distinct sections: Notification routing and Notification preview. Routing is an editable one-to-one `Kitsu Task Type → Discord Channel` mapping. Preview is read-only and identifies the selected Task Type, destination channel, Production notification language, mention behavior, and the deterministic rendered Discord message/embed. Preview never sends a message.
+
+Production Users distinguishes Kitsu Production participants from globally linked human users. A globally linked human may be displayed even when the Kitsu team endpoint returns no participant; Reviewer/Checker eligibility must say when Production membership is required. Bot identities remain excluded from human linking and assignment.
+
+Troubleshooting exposes compact, real diagnostics for Kitsu, Discord, routing integrity, participant retrieval, User Linking, and recent notification processing. Details information is read-only and uses localized identifiers: `プロダクションID`, `DiscordサーバーID`, and `カテゴリID` in Japanese.
+
 ## Source references
 
 The primary implementation is in `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/observability.go`, `src/setup/runtime_observation.go`, and the route registration in `src/main.go`.

@@ -105,11 +105,16 @@ button,input,select{font:inherit}
 .production-context #panel-overview>.section-card>.production-summary-grid>.production-summary-card{display:grid;grid-template-columns:1fr;gap:8px;align-content:start;min-height:84px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025)}
 .production-context #panel-overview>.section-card>.production-summary-grid>.production-current-issues{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;min-height:0;padding:12px 14px;border-top:1px solid rgba(255,255,255,.08)}
 .production-context #panel-notifications>.section-card>.section-card{background:rgba(255,255,255,.018);border-color:rgba(255,255,255,.07);box-shadow:none}
+.production-context #panel-notifications>.section-card>dl.status-list{margin-bottom:16px;padding:12px 14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}
+.production-context #panel-notifications>.section-card>.section-card+.section-card{margin-top:20px}
 .production-context #panel-notifications>.section-card>.section-card table{table-layout:fixed;border-spacing:0 6px}
 .production-context #panel-notifications>.section-card>.section-card table th:nth-child(2),.production-context #panel-notifications>.section-card>.section-card table td:nth-child(2){display:none}
 .production-context #panel-notifications>.section-card>.section-card table th:first-child,.production-context #panel-notifications>.section-card>.section-card table td:first-child,.production-context #panel-notifications>.section-card>.section-card table th:last-child,.production-context #panel-notifications>.section-card>.section-card table td:last-child{width:50%;vertical-align:middle}
 .production-context #panel-notifications>.section-card>.section-card table td{height:48px;padding:10px 12px}
 .production-context #panel-notifications>.section-card>.section-card table td:first-child{border-radius:10px 0 0 10px}.production-context #panel-notifications>.section-card>.section-card table td:last-child{border-radius:0 10px 10px 0}
+.production-context .notification-preview-result{display:grid;gap:14px;margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,.08)}
+.production-context .notification-rendered-preview{display:grid;gap:8px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}
+.production-context .notification-rendered-preview h4{margin:0;font-size:1rem}.production-context .notification-preview-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;color:var(--text)}
 .production-diagnostic-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
 .production-diagnostic-item{display:grid;gap:6px;padding:12px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}
 .production-diagnostic-item>div{display:flex;align-items:center;justify-content:space-between;gap:10px}.production-diagnostic-item small{color:var(--muted);line-height:1.4}

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -523,7 +525,7 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "Read-only view", `name="action" value="save"`} {
+	for _, want := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", `name="action" value="save"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
@@ -1058,13 +1060,36 @@ func TestProductionNotificationsSeparatesRoutingAndReadOnlyPreview(t *testing.T)
 	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production"}
 	db.Create(&p)
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	for _, expected := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "Read-only view", `name="action" value="save"`} {
+	for _, expected := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", `name="action" value="save"`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
 	}
 	if strings.Contains(body, `name="action" value="dry_run"`) || strings.Contains(body, "Check without sending") {
 		t.Fatal("notification preview still uses the old dry-run POST flow")
+	}
+}
+
+func TestProductionNotificationPreviewUsesDeterministicRenderedPayload(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "preview-production", Name: "Preview Production", Language: "en"}
+	db.Create(&p)
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(filepath.Join(workingDir, "..", "..")); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(workingDir)
+	body := renderDeterministicProductionPreview(p, "Lighting", "lighting", "en")
+	for _, want := range []string{"Notification language", "Discord channel", "Rendered Discord message", "Deterministic renderer output", "None in this preview"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("notification preview missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "変更者:") {
+		t.Fatalf("English notification preview leaked the Japanese author label: %s", body)
 	}
 }
 
@@ -1076,6 +1101,19 @@ func TestProductionUserSettingsCurrentEmptyStateExplainsKitsuParticipants(t *tes
 	for _, want := range []string{"プロダクション参加者", "Kitsuから参加者が取得されると", "Reviewer / Checkerは割り当てできません"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("current user empty state missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestProductionUserSettingsShowsGlobalLinkedHumansSeparately(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "linked-users-production", Name: "Linked Users Production"}
+	db.Create(&p)
+	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordDisplayName: "Discord Human", DiscordID: "discord-human"})
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=en", nil), p, "en")
+	for _, want := range []string{"Globally linked users", "Linked Human", "Discord Human", "Not eligible without Production membership"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("global linked user distinction missing %q: %s", want, body)
 		}
 	}
 }
