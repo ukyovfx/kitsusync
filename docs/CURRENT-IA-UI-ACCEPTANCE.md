@@ -95,3 +95,11 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] English chart labels are exactly `60s / 30s / Now` and `5m / 2m30s / Now`; Japanese labels are exactly `60秒 / 30秒 / 今` and `5分 / 2分30秒 / 今`.
 - [ ] The browser confirms the bars remain timestamp-positioned, full-width, zero-based, independently scaled, orthogonal, and auto-refreshed without a page reload.
 - [ ] No telemetry tooltip, HTML attribute, log, or API response exposes credentials, authorization headers, response bodies, URLs containing secrets, or internal IDs.
+
+## Current Production detail integration checks
+
+- [ ] Overview shows one current-issues representation, not both a count label and a healthy-value label.
+- [ ] Default Notifications is read-only and shows `Kitsu Task Type → Discord Channel`; only explicit `Edit` exposes routing controls.
+- [ ] Production Users distinguishes Kitsu participants from local Production-associated users and global linked humans.
+- [ ] A globally linked human has an explicit local Add-to-Production action; after association the user is selectable for Reviewer / Checker.
+- [ ] Removing a local Production association does not remove global User Linking, and bot identities never appear as candidates.

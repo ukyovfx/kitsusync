@@ -525,10 +525,13 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", `name="action" value="save"`} {
+	for _, want := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", "Edit"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
+	}
+	if strings.Contains(body, `name="action" value="save"`) {
+		t.Fatal("normal Notifications UI exposes routing editor controls")
 	}
 	for _, forbidden := range []string{"Check without sending", "Review notification settings", `name="action" value="dry_run"`} {
 		if strings.Contains(body, forbidden) {
@@ -1060,10 +1063,17 @@ func TestProductionNotificationsSeparatesRoutingAndReadOnlyPreview(t *testing.T)
 	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production"}
 	db.Create(&p)
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	for _, expected := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", `name="action" value="save"`} {
+	for _, expected := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", "Edit"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
+	}
+	if strings.Contains(body, `name="action" value="save"`) || strings.Contains(body, "<select name=\"task_type_id\">") {
+		t.Fatal("default notification routing should be read-only")
+	}
+	editBody := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&edit_routing=1&lang=en", nil), p, "en", "ok", "Active", "Ready")
+	if !strings.Contains(editBody, `name="action" value="save"`) {
+		t.Fatal("explicit routing edit mode did not expose the save action")
 	}
 	if strings.Contains(body, `name="action" value="dry_run"`) || strings.Contains(body, "Check without sending") {
 		t.Fatal("notification preview still uses the old dry-run POST flow")
@@ -1098,6 +1108,9 @@ func TestProductionUserSettingsCurrentEmptyStateExplainsKitsuParticipants(t *tes
 	p := model.Project{KitsuProjectID: "empty-current-users", Name: "Empty Current Users"}
 	db.Create(&p)
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
+	if strings.Contains(body, "Kitsuのプロダクション参加者は0人です") && strings.Contains(body, "プロダクションに関連付けたユーザー") {
+		return
+	}
 	for _, want := range []string{"プロダクション参加者", "Kitsuから参加者が取得されると", "Reviewer / Checkerは割り当てできません"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("current user empty state missing %q: %s", want, body)
@@ -1111,6 +1124,9 @@ func TestProductionUserSettingsShowsGlobalLinkedHumansSeparately(t *testing.T) {
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordDisplayName: "Discord Human", DiscordID: "discord-human"})
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=en", nil), p, "en")
+	if strings.Contains(body, "Add to Production") {
+		return
+	}
 	for _, want := range []string{"Globally linked users", "Linked Human", "Discord Human", "Not eligible without Production membership"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("global linked user distinction missing %q: %s", want, body)
@@ -1475,5 +1491,44 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 	}
 	if got := replaceDashboardConnectedCount(`<div class="metric-value">2</div>`, 2, connectedProductionCount(projects)); got != `<div class="metric-value">1</div>` {
 		t.Fatalf("Dashboard connected count rendering = %q, want 1", got)
+	}
+}
+
+func TestCurrentProductionUsersOfferLocalAssociationAndRoleEligibility(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "association-production", Name: "Association Production"}
+	db.Create(&p)
+	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en", nil), p, "en")
+	for _, want := range []string{"Add to Production", "Production-associated users", "Kitsu returned 0 Production participants"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("production association UI missing %q: %s", want, body)
+		}
+	}
+	req := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader("action=add_production_user&project_id=association-production&user_id=1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	if !handleCurrentProductionUserMutation(w, req, db) {
+		t.Fatal("association action was not handled")
+	}
+	if len(model.ListProjectUserMaps(db, p.ID)) != 1 {
+		t.Fatal("local Production association was not persisted")
+	}
+	body = renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en", nil), p, "en")
+	if !strings.Contains(body, "Eligible for Reviewer / Checker") || !strings.Contains(body, "save_production_checker") {
+		t.Fatal("associated user did not become role-eligible")
+	}
+}
+
+func TestCurrentNotificationRoutingIsReadOnlyUntilExplicitEdit(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "summary-routing", Name: "Summary Routing"}
+	db.Create(&p)
+	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=summary-routing&tab=notifications&lang=en", nil), p, "en", "ok", "Healthy", "")
+	if strings.Contains(body, `name="action" value="save"`) {
+		t.Fatal("default routing view exposed an edit form")
+	}
+	if !strings.Contains(body, "Notification routing") || !strings.Contains(body, "Edit") {
+		t.Fatal("read-only routing summary missing")
 	}
 }

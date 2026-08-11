@@ -453,6 +453,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
 			return
 		}
+		if handleCurrentProductionUserMutation(w, r, db) {
+			return
+		}
 		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
 			return
 		}

@@ -127,6 +127,13 @@ Production Users distinguishes Kitsu Production participants from globally linke
 
 Troubleshooting exposes compact, real diagnostics for Kitsu, Discord, routing integrity, participant retrieval, User Linking, and recent notification processing. Details information is read-only and uses localized identifiers: `プロダクションID`, `DiscordサーバーID`, and `カテゴリID` in Japanese.
 
+## Production detail current overrides
+
+- Overview renders one current-issues representation: `現在の問題` / `Current issues` with its single status value. It does not render a duplicate count label alongside `問題なし` / `No current issues`.
+- The default Notifications view is read-only. It shows a compact `Kitsu Task Type → Discord Channel` summary and one explicit `編集` / `Edit` entry point. The editor is available only through the explicit edit query state; the preview remains read-only and never sends.
+- Production Users distinguishes Kitsu-returned participants, local Production-associated users, and global human User Linking. A globally linked human can be added to the Production locally; association makes that user eligible for Reviewer / Checker assignment. Removing the local association does not remove global linking. Bot identities are excluded.
+- Local Production user association reuses `ProjectUserMap` and `ProjectCheckerMap`; no schema migration is required.
+
 ## Source references
 
 The primary implementation is in `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/observability.go`, `src/setup/runtime_observation.go`, and the route registration in `src/main.go`.

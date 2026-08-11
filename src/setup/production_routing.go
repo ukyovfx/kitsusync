@@ -334,6 +334,22 @@ func renderCurrentIARoutingEditor(db *gorm.DB, r *http.Request, p model.Project,
 	return `<section class="section-card glass"><h3>` + esc(tr(lang, "production_routing.current_editor")) + `</h3><p class="field-help">` + esc(t(lang, "Kitsu Task TypeごとにDiscordチャンネルを1つ設定します。", "Edit one Discord channel for each Kitsu Task Type.")) + `</p><form method="post" action="` + esc(withLang("/bot/admin/production-routing?project="+url.QueryEscape(p.KitsuProjectID), r)) + `"><input type="hidden" name="production_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="save"><table><thead><tr><th>` + esc(tr(lang, "production_routing.kitsu_task_type")) + `</th><th>` + esc(tr(lang, "production_routing.display_name")) + `</th><th>` + esc(tr(lang, "production_routing.discord_channel")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table><button class="btn" type="submit">` + esc(tr(lang, "production_routing.save")) + `</button></form></section>`
 }
 
+func renderCurrentIARoutingSummary(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	var rows strings.Builder
+	for _, route := range model.ListProductionNotificationRoutes(db, p.KitsuProjectID) {
+		channel := t(lang, "未設定", "Not configured")
+		if webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID); webhook != nil && strings.TrimSpace(webhook.ChannelName) != "" {
+			channel = "#" + strings.TrimPrefix(strings.TrimSpace(webhook.ChannelName), "#")
+		}
+		rows.WriteString(`<div class="production-routing-summary-row"><strong>` + esc(route.TaskTypeName) + `</strong><span aria-hidden="true">→</span><span>` + esc(channel) + `</span></div>`)
+	}
+	if rows.Len() == 0 {
+		rows.WriteString(`<p class="field-help">` + esc(t(lang, "通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</p>`)
+	}
+	editURL := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
+	return `<section class="section-card glass production-routing-summary"><div class="page-heading"><div><h3>` + esc(t(lang, "通知ルーティング", "Notification routing")) + `</h3><p class="field-help">` + esc(t(lang, "Kitsu Task TypeからDiscord Channelへの読み取り専用マッピング", "Read-only mapping from Kitsu Task Type to Discord Channel.")) + `</p></div><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div><div class="production-routing-summary-head"><strong>` + esc(t(lang, "Kitsu Task Type", "Kitsu Task Type")) + `</strong><strong>` + esc(t(lang, "Discord Channel", "Discord Channel")) + `</strong></div><div class="production-routing-summary-list">` + rows.String() + `</div></section>`
+}
+
 func renderCurrentIANotificationPreview(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
 	taskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
 	selectedID := strings.TrimSpace(r.URL.Query().Get("preview_task_type_id"))
