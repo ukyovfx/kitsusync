@@ -47,6 +47,12 @@ tests.bat
 *.db-shm
 *.db-wal
 
+# Runtime credentials/data must never be created under source packages.
+**/runtime-secret.key
+/src/setup/data/
+/src/setup/*sqlite.db
+=ro
+
 # Deployment sample data - never commit
 /deploy/.env
 /deploy/data/

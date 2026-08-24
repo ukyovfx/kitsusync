@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -526,9 +524,14 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", "Edit"} {
+	for _, want := range []string{"Notification routing", "Kitsu Task Type", "Discord Channel", "Edit"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Notifications UI missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Notification preview", "preview_task_type_id", "rendered notification"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("obsolete notification preview remains visible: %q", forbidden)
 		}
 	}
 	if strings.Contains(body, `name="action" value="save"`) {
@@ -950,6 +953,26 @@ func TestWizardLiveProductionSelectionTargetsServerStep(t *testing.T) {
 	}
 }
 
+func TestConnectedProductionRepairLinkAllowsExistingProductionPlan(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "stale-connected", Name: "Stale Connected", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "/bot/admin/projects?project=stale-connected&tab=notifications&lang=en", nil)
+	body := renderConnectedProductionNotificationSection(db, project, "en", r, "warning", "Needs review", "Saved Discord resources need review.", nil)
+	if !strings.Contains(body, "wizard_step=4") || !strings.Contains(body, "repair=1") {
+		t.Fatalf("stale connected Production did not expose the repair entry: %s", body)
+	}
+	repairRequest := httptest.NewRequest("GET", "/bot/setup?wizard_step=4&repair=1&project=stale-connected&plan_guild=guild-1&lang=en", nil)
+	if !productionRepairMode(repairRequest) {
+		t.Fatal("repair mode was not recognized")
+	}
+	if !strings.Contains(setupWizardURL(repairRequest, 4, project.KitsuProjectID, project.DiscordGuildID, false), "wizard_step=4") {
+		t.Fatal("repair mode did not preserve the plan step")
+	}
+}
+
 func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuID: "user-1", KitsuName: "User One", DiscordID: "123456789012345678", DiscordDisplayName: "Discord One"})
@@ -1059,45 +1082,48 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 	}
 }
 
-func TestProductionNotificationsSeparatesRoutingAndReadOnlyPreview(t *testing.T) {
+func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production"}
 	db.Create(&p)
+	if err := model.CreateProjectWebhook(db, p.KitsuProjectID, "compositing", "", "https://example.invalid/1", "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, p.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, ProductionName: p.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: p.KitsuProjectID, TaskTypeID: "compositing", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	for _, expected := range []string{"Notification routing", "Notification preview", "Kitsu Task Type", "Discord Channel", "rendered notification", "Edit"} {
+	for _, expected := range []string{"Notification routing", "Kitsu Task Type", "Discord Channel", "Edit"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
 	}
-	if strings.Contains(body, `name="action" value="save"`) || strings.Contains(body, "<select name=\"task_type_id\">") {
+	for _, forbidden := range []string{"Notification preview", "preview_task_type_id", "rendered notification"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("obsolete notification preview remains visible: %q", forbidden)
+		}
+	}
+	if strings.Contains(body, `name="action" value="save_current_production_routing"`) || strings.Contains(body, "<select name=\"task_type_id\">") {
 		t.Fatal("default notification routing should be read-only")
 	}
 	editBody := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&edit_routing=1&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	if !strings.Contains(editBody, `name="action" value="save"`) {
+	if !strings.Contains(editBody, `name="action" value="save_current_production_routing"`) {
 		t.Fatal("explicit routing edit mode did not expose the save action")
 	}
-	if strings.Contains(body, `name="action" value="dry_run"`) || strings.Contains(body, "Check without sending") {
-		t.Fatal("notification preview still uses the old dry-run POST flow")
-	}
-}
-
-func TestProductionNotificationPreviewUsesDeterministicRenderedPayload(t *testing.T) {
-	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "preview-production", Name: "Preview Production", Language: "en"}
-	db.Create(&p)
-	workingDir, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(filepath.Join(workingDir, "..", "..")); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(workingDir)
-	body := renderDeterministicProductionPreview(p, "Lighting", "lighting", "en")
-	for _, want := range []string{"Notification language", "Discord channel", "Rendered Discord message", "Deterministic renderer output", "None in this preview"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("notification preview missing %q: %s", want, body)
+	body = editBody
+	for _, expected := range []string{"Apply changes", "Cancel", "Add Task Type", "data-routing-row", "data-routing-new-row"} {
+		if !strings.Contains(editBody, expected) {
+			t.Fatalf("staged routing editor missing %q", expected)
 		}
+	}
+	for _, expected := range []string{"class=\"routing-task-type-name\">Compositing", "class=\"routing-row-menu\"", "name=\"task_type_id\" value=\"compositing\""} {
+		if !strings.Contains(editBody, expected) {
+			t.Fatalf("compact routing row missing %q: %s", expected, editBody)
+		}
+	}
+	if strings.Contains(editBody, "class=\"wizard-exclude routing-remove\"") || strings.Contains(editBody, "class=\"btn-danger-ghost routing-delete-open\"") {
+		t.Fatal("routing row still exposes the old always-visible action controls")
 	}
 	if strings.Contains(body, "変更者:") {
 		t.Fatalf("English notification preview leaked the Japanese author label: %s", body)
@@ -1604,5 +1630,16 @@ func TestCurrentProductionUserMutationPreservesAssociationAndPreventsDuplicates(
 	post("action=remove_production_checker&project_id=simple-mutation-production&task_type=Animation")
 	if len(model.ListProjectUserMaps(db, p.ID)) != 1 || len(model.ListProjectCheckerMaps(db, p.ID)) != 0 {
 		t.Fatal("removing a role changed the Production association")
+	}
+}
+
+func TestCurrentProductionUsersHideEmptyCheckerAssignmentList(t *testing.T) {
+	db := newIAViewDB(t)
+	p := model.Project{KitsuProjectID: "empty-checker-production", Name: "Empty Checker Production"}
+	db.Create(&p)
+	model.UpsertProjectUserMap(db, p.ID, "Linked Human", "human@example.com", "discord-human")
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=empty-checker-production&tab=users&lang=en", nil), p, "en")
+	if strings.Contains(body, `<h4>Assigned</h4>`) || strings.Contains(body, "No Reviewer / Checker assignments yet.") {
+		t.Fatalf("empty Reviewer / Checker assignment list was rendered: %s", body)
 	}
 }

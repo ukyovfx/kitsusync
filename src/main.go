@@ -216,6 +216,16 @@ type notificationRouteStats struct {
 	Dropped  int
 }
 
+func overallNotificationReadiness(kitsuReady, botConfigured, discordValidated, routingReady bool) string {
+	if kitsuReady && botConfigured && discordValidated && routingReady {
+		return "ready"
+	}
+	if kitsuReady && botConfigured && routingReady {
+		return "ready_pending_discord_validation"
+	}
+	return "blocked"
+}
+
 func previewTasks(tasks []kitsu.MessagePayload, limit int) []string {
 	if limit <= 0 || len(tasks) == 0 {
 		return nil
@@ -718,6 +728,10 @@ func main() {
 	setup.SeedConfigIfFixture(db, conf)
 	if persistedDiscordToken := strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey)); persistedDiscordToken != "" {
 		os.Setenv("DISCORD_BOT_TOKEN", persistedDiscordToken)
+		slog.Debug("Discord runtime token loaded",
+			"token_present", true,
+			"token_fingerprint", setup.DiscordBotTokenFingerprint(persistedDiscordToken),
+		)
 	}
 	_, seedGuildID, _ := getDiscordSettings(db, conf)
 	model.SeedProjectGuildFallback(db, seedGuildID)
@@ -751,29 +765,24 @@ func main() {
 	runtime := newRuntimeManager()
 	healthReadinessProvider = func() readinessSnapshot {
 		host, _, _ := getKitsuCreds(db, conf)
-		botToken, _, _ := getDiscordSettings(db, conf)
-		routingReady := false
-		for _, project := range model.ListProjects(db) {
-			routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
-			cfg := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
-			if cfg != nil && cfg.Enabled && len(model.ValidateProductionNotificationConfig(db, project.KitsuProjectID, routes)) == 0 {
-				routingReady = true
-				break
-			}
-		}
+		botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
+		discordValidated, routingReady := setup.ProjectDiscordReadiness(db, botToken, fallbackGuildID)
+		slog.Debug("Project Discord readiness evaluated",
+			"api_validated", discordValidated,
+			"routing_ready", routingReady,
+			"project_count", len(model.ListProjects(db)),
+		)
 		kitsuToken := setup.StoredRuntimeKitsuToken(db)
 		kitsuConfigured := strings.TrimSpace(host) != "" && strings.TrimSpace(kitsuToken) != ""
 		kitsuReady := runtime.ready()
 		botConfigured := strings.TrimSpace(botToken) != ""
-		overall := "blocked"
-		if kitsuReady && botConfigured && routingReady {
-			overall = "ready_pending_discord_validation"
-		}
+		overall := overallNotificationReadiness(kitsuReady, botConfigured, discordValidated, routingReady)
 		return readinessSnapshot{
 			KitsuConfigured:              kitsuConfigured,
 			KitsuConnected:               kitsuReady,
 			KitsuReady:                   kitsuReady,
 			DiscordBotConfigured:         botConfigured,
+			DiscordAPIValidated:          discordValidated,
 			ProductionRoutingConfigured:  routingReady,
 			OverallNotificationReadiness: overall,
 		}
@@ -926,7 +935,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":8090",
-		Handler: mux,
+		Handler: setup.RequestTrace(mux),
 	}
 	go func() {
 		slog.Info("HTTP server listening on :8090  (/health, /login, /setup, /admin/*)")

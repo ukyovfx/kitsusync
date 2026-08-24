@@ -4,7 +4,7 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- No unreleased changes yet.
+- The current v0.4.0 candidate is documented below; no post-candidate changes are listed here.
 
 ## v0.4.0
 
@@ -15,14 +15,20 @@ All notable changes to this project should be recorded here.
 - Discord Guild ID became project-level and is required for new classic project setup
 - Bot Settings now focuses on shared bot/runtime prerequisites instead of project destination setup
 - Discord Bot Token updates from Bot Settings now persist across restarts instead of applying only to the current process
+- Production notification routing is managed by stable Production + Task Type identities and supports staged reorder, destination changes, and fail-closed stale-resource handling
+- Current Production routing diagnostics verify the linked Guild, managed channels, ownership, and required Discord permissions before mutation
 
 ### Added
 
 - Release notes for the setup/admin redesign in `RELEASE_NOTES_v0.4.0.md`
+- Deterministic JP/EN Discord notification rendering with safe mention and audit behavior
+- Current IA routing editor regression coverage and Discord permission/readiness diagnostics
 
 ### Fixed
 
 - Bot Settings token rotation no longer appears lost after normal container recreate/redeploy when the live DB is preserved
+- Fully validated Kitsu/Discord/routing state now reports `overall_notification_readiness: "ready"` instead of remaining in a Discord-pending state
+- Routing deletion confirmation no longer blocks the surrounding staged-save form through nested native form validation
 
 ## v0.1.0
 

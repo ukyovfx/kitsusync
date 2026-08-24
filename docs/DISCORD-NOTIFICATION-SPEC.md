@@ -63,3 +63,7 @@ The renderer is deterministic for the same normalized data, language, preset, an
 ## External-write boundary
 
 Polling reads Kitsu. Notification delivery is the only Discord message write in this path. This specification and its renderer tests do not send Discord messages, create channels/webhooks, modify Kitsu, or modify Production routing state.
+
+## Release readiness boundary
+
+`/health` reports `overall_notification_readiness: "ready"` only when Kitsu is runtime-ready, the Discord Bot is configured and API-validated, and at least one Production routing configuration is valid. A configured Bot or connected Production alone remains a blocked or pending state.

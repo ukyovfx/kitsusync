@@ -7,6 +7,7 @@ import (
 	"app/src/utils/config"
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -377,6 +378,17 @@ func storedRuntimeDiscordBotToken(db *gorm.DB) string {
 	return strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
 }
 
+// DiscordBotTokenFingerprint returns a short, secret-safe diagnostic identity.
+// It is intentionally one-way and must never be used as a credential.
+func DiscordBotTokenFingerprint(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
 var validateDiscordBotTokenForSave = validateDiscordBotToken
 
 func validateDiscordBotToken(token string) error {
@@ -726,11 +738,32 @@ func SetGuildChannelPosition(channelID string, position int, botToken string) er
 	return nil
 }
 
+type DiscordChannelPosition struct {
+	ID       string `json:"id"`
+	Position int    `json:"position"`
+}
+
+func SetGuildChannelPositions(guildID string, positions []DiscordChannelPosition, botToken string) error {
+	guildID = strings.TrimSpace(guildID)
+	if guildID == "" || len(positions) == 0 {
+		return fmt.Errorf("discord channel reorder requires a guild and at least one channel")
+	}
+	respBody, status, err := botDo(http.MethodPatch, fmt.Sprintf("%s/guilds/%s/channels", discordAPI, guildID), positions, botToken)
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		return discordBotAPIError("discord channel reorder failed", status, respBody)
+	}
+	return nil
+}
+
 type DiscordGuildChannel struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Type     int    `json:"type"`
 	ParentID string `json:"parent_id"`
+	Position int    `json:"position"`
 }
 
 type DiscordGuild struct {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gookit/slog"
 	"gorm.io/gorm"
 )
 
@@ -357,17 +358,22 @@ func MarkProductionChannelMappingsReviewRequired(db *gorm.DB, productionID, oper
 // ProjectWebhook rows remain compatibility data and provide the webhook
 // destination required by the current dispatcher.
 func ActivateProductionRoutingFromMappings(db *gorm.DB, productionID, guildID string, mappings []ProductionChannelMapping) error {
+	slog.Debug("Production routing activation started", "production_id", strings.TrimSpace(productionID), "guild_id", strings.TrimSpace(guildID), "mapping_count", len(mappings))
 	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(guildID) == "" {
+		slog.Warn("Production routing activation rejected", "stage", "input_validation", "error_class", "missing_production_or_guild", "mapping_count", len(mappings))
 		return gorm.ErrInvalidData
 	}
 	project := FindProjectByKitsuID(db, productionID)
 	if project == nil {
+		slog.Warn("Production routing activation rejected", "stage", "project_lookup", "error_class", "production_not_connected", "production_id", strings.TrimSpace(productionID))
 		return fmt.Errorf("production is not connected locally")
 	}
 	if issues := ValidateProductionChannelMappings(productionID, guildID, mappings); len(issues) > 0 {
+		slog.Warn("Production routing activation rejected", "stage", "mapping_validation", "error_class", "invalid_mapping", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "issues", issues)
 		return fmt.Errorf("invalid production channel mappings: %s", strings.Join(issues, "; "))
 	}
 	webhooks := ListProjectWebhooks(db, productionID)
+	slog.Debug("Production routing activation destinations loaded", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "webhook_record_count", len(webhooks))
 	routes := make([]ProductionNotificationRoute, 0, len(mappings))
 	for _, mapping := range mappings {
 		var selected *ProjectWebhook
@@ -383,10 +389,12 @@ func ActivateProductionRoutingFromMappings(db *gorm.DB, productionID, guildID st
 				continue
 			}
 			if strings.TrimSpace(webhook.WebhookURL) != webhookURL {
+				slog.Warn("Production routing activation rejected", "stage", "destination_validation", "error_class", "ambiguous_webhook_destination", "task_type_id", mapping.TaskTypeID, "channel_id", mapping.ChannelID)
 				return fmt.Errorf("ambiguous webhook destinations for channel mapping %s", mapping.TaskTypeID)
 			}
 		}
 		if selected == nil {
+			slog.Warn("Production routing activation rejected", "stage", "destination_validation", "error_class", "missing_webhook_destination", "task_type_id", mapping.TaskTypeID, "channel_id", mapping.ChannelID)
 			return fmt.Errorf("no valid legacy webhook destination for channel mapping %s", mapping.TaskTypeID)
 		}
 		routes = append(routes, ProductionNotificationRoute{
@@ -399,9 +407,11 @@ func ActivateProductionRoutingFromMappings(db *gorm.DB, productionID, guildID st
 		})
 	}
 	if issues := ValidateProductionNotificationConfig(db, productionID, routes); len(issues) > 0 {
+		slog.Warn("Production routing activation rejected", "stage", "route_validation", "error_class", "invalid_notification_route", "production_id", strings.TrimSpace(productionID), "route_count", len(routes), "issues", issues)
 		return fmt.Errorf("notification routing is not valid: %s", strings.Join(issues, "; "))
 	}
-	return db.Transaction(func(tx *gorm.DB) error {
+	slog.Debug("Production routing activation transaction begin", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "route_count", len(routes))
+	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&Project{}).Where("kitsu_project_id = ?", productionID).Updates(map[string]interface{}{"discord_guild_id": strings.TrimSpace(guildID)}).Error; err != nil {
 			return err
 		}
@@ -466,6 +476,12 @@ func ActivateProductionRoutingFromMappings(db *gorm.DB, productionID, guildID st
 		}
 		return nil
 	})
+	if err != nil {
+		slog.Warn("Production routing activation rolled back", "stage", "database_transaction", "error_class", "transaction_failed", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "route_count", len(routes))
+		return err
+	}
+	slog.Debug("Production routing activation committed", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "route_count", len(routes), "committed", true)
+	return nil
 }
 
 func compactUniqueStrings(values []string) []string {

@@ -1,5 +1,10 @@
 # KitsuSync AGENTS.md
 
+## Workspace scope
+- This workspace is exclusively for KitsuSync: its Go application, backend/frontend, setup wizard, Discord integration, Kitsu/Zou integration required by KitsuSync, Docker/Compose, tests, CI, releases, and documentation.
+- Vatler, general Kitsu host/server administration, host firewall/network/SSH/Tailscale administration, Kitsu Server Console, unrelated repositories, and unrelated infrastructure are out of scope. Do not inspect, modify, or operate on them; respond `OUT_OF_SCOPE_FOR_KITSUSYNC` with the best matching workspace (or `unknown`).
+- Kitsu/Zou server behavior may be inspected when necessary to diagnose KitsuSync integration, but host-level changes belong to the Kitsu Server workspace unless explicitly authorized as cross-project work.
+
 ## Purpose
 This repo prioritizes runtime safety and beginner onboarding clarity over clever cleanup. Keep changes small, explicit, and reviewable.
 
@@ -57,3 +62,13 @@ These are intentionally out of scope for now:
 - When a final UI decision changes, update the canonical spec instead of accumulating conflicting chat-only requirements.
 
 Preferred loop: PLAN → IMPLEMENT → FOCUSED TESTS → UPDATE/PREVIEW 8090 AS NEEDED → AUTHENTICATED BROWSER REVIEW → REPAIR VISUAL FAILURES → REPEAT → FINAL FULL VALIDATION ONCE.
+
+During browser/runtime validation, proactively repair obvious in-scope UI regressions after detecting and inspecting their cause: detect → inspect → fix → focused validation → browser re-check. Keep repairs behavior-preserving and bounded; do not broaden them into redesigns or semantic changes without authorization.
+
+Before handing off any user action, self-audit and self-repair the command, paths, environment assumptions, ordering, security, and rollback behavior. Batch unavoidable user actions; do not use the user as the debugging loop.
+
+## Durable execution rules
+- Keep changes bounded to the requested scope and preserve the current dirty worktree and recovery path.
+- Continue safe in-scope inspection, implementation, focused validation, and repair without waiting for an intermediate approval.
+- Stop only for secrets/passwords, authenticated control-plane input, destructive risk, material architecture/security choices, or a genuine runtime-only blocker.
+- Reuse the architecture and validation commands documented in the repository and linked `docs/` specifications; do not duplicate them here.

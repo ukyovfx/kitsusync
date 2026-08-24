@@ -81,23 +81,93 @@ func discordPermissionInfoFromBits(perms uint64) DiscordPermissionInfo {
 	}
 }
 
-func discordPermissionBitsFromRoles(guildID string, memberRoleIDs []string, rolePermissions map[string]string, memberPermissions string) uint64 {
-	var perms uint64
-	if memberPermissions != "" {
-		perms, _ = strconv.ParseUint(memberPermissions, 10, 64)
+type discordRolePermission struct {
+	ID          string `json:"id"`
+	Permissions string `json:"permissions"`
+}
+
+func discordPermissionsFromRoles(guildID string, roles []discordRolePermission, memberRoleIDs []string) (DiscordPermissionInfo, error) {
+	memberRoles := make(map[string]bool, len(memberRoleIDs))
+	for _, roleID := range memberRoleIDs {
+		memberRoles[strings.TrimSpace(roleID)] = true
 	}
-	roleIDs := append([]string{guildID}, memberRoleIDs...)
-	for _, roleID := range roleIDs {
-		rolePerms, ok := rolePermissions[roleID]
-		if !ok || rolePerms == "" {
+
+	var permissions uint64
+	roleFound := false
+	for _, role := range roles {
+		roleID := strings.TrimSpace(role.ID)
+		if roleID != strings.TrimSpace(guildID) && !memberRoles[roleID] {
 			continue
 		}
-		bits, err := strconv.ParseUint(rolePerms, 10, 64)
-		if err == nil {
-			perms |= bits
+		value, err := strconv.ParseUint(strings.TrimSpace(role.Permissions), 10, 64)
+		if err != nil {
+			return DiscordPermissionInfo{}, fmt.Errorf("discord role permissions were not numeric")
 		}
+		permissions |= value
+		roleFound = true
 	}
-	return perms
+	if !roleFound {
+		return DiscordPermissionInfo{}, fmt.Errorf("discord bot roles were not available")
+	}
+
+	const administrator = uint64(1 << 3)
+	if permissions&administrator != 0 {
+		return DiscordPermissionInfo{ManageChannels: true, ManageWebhooks: true}, nil
+	}
+	return DiscordPermissionInfo{
+		ManageChannels: permissions&(1<<4) != 0,
+		ManageWebhooks: permissions&(1<<29) != 0,
+	}, nil
+}
+
+// discordPermissionBitsFromRoles is kept for focused legacy unit tests; the
+// effective permission calculation intentionally ignores member.Permissions.
+func discordPermissionBitsFromRoles(guildID string, memberRoleIDs []string, rolePermissions map[string]string, _ string) uint64 {
+	roles := make([]discordRolePermission, 0, len(rolePermissions))
+	for id, permissions := range rolePermissions {
+		roles = append(roles, discordRolePermission{ID: id, Permissions: permissions})
+	}
+	info, err := discordPermissionsFromRoles(guildID, roles, memberRoleIDs)
+	if err != nil {
+		return 0
+	}
+	var bits uint64
+	if info.ManageChannels {
+		bits |= 1 << 4
+	}
+	if info.ManageWebhooks {
+		bits |= 1 << 29
+	}
+	return bits
+}
+
+func fetchDiscordEffectivePermissions(guildID, botUserID, botToken string) (DiscordPermissionInfo, error) {
+	rolesBody, status, err := botDo("GET", discordAPI+"/guilds/"+guildID+"/roles", nil, botToken)
+	if err != nil {
+		return DiscordPermissionInfo{}, err
+	}
+	if status != http.StatusOK {
+		return DiscordPermissionInfo{}, fmt.Errorf("Discord roles request returned HTTP %d", status)
+	}
+	var roles []discordRolePermission
+	if err := json.Unmarshal(rolesBody, &roles); err != nil {
+		return DiscordPermissionInfo{}, fmt.Errorf("Discord roles response was invalid")
+	}
+
+	memberBody, status, err := botDo("GET", discordAPI+"/guilds/"+guildID+"/members/"+botUserID, nil, botToken)
+	if err != nil {
+		return DiscordPermissionInfo{}, err
+	}
+	if status != http.StatusOK {
+		return DiscordPermissionInfo{}, fmt.Errorf("Discord bot member request returned HTTP %d", status)
+	}
+	var member struct {
+		Roles []string `json:"roles"`
+	}
+	if err := json.Unmarshal(memberBody, &member); err != nil {
+		return DiscordPermissionInfo{}, fmt.Errorf("Discord bot member response was invalid")
+	}
+	return discordPermissionsFromRoles(guildID, roles, member.Roles)
 }
 
 // PollerStatusInfo describes the poller's last known state.
@@ -126,6 +196,9 @@ type ProjectGuildHealth struct {
 	GuildValid      bool   `json:"guild_valid"`
 	PermissionValid bool   `json:"permission_valid"`
 	WebhookHealth   string `json:"webhook_health"`
+	CategoryValid   bool   `json:"category_valid"`
+	ResourceHealth  string `json:"resource_health"`
+	StaleChannels   int    `json:"stale_channel_count"`
 }
 
 // SetupProjectItem is one entry in the GET /api/setup/projects response.
@@ -244,7 +317,7 @@ func SetupStatusHandler(db *gorm.DB, pollIntervalSec int, refreshCreds func() (k
 		snapshot := BuildSetupDiagnostics(db, refreshCreds)
 		resp := SetupStatusResponse{
 			Kitsu:                checkKitsuStatus(kitsuHost),
-			Discord:              checkDiscordStatus(botToken, guildID),
+			Discord:              buildProjectAwareDiscordStatus(db, botToken, guildID),
 			Poller:               buildPollerStatus(pollIntervalSec),
 			Project:              buildProjectStatus(db),
 			Projects:             buildProjectGuildHealth(db, botToken, guildID),
@@ -798,32 +871,20 @@ func checkDiscordStatus(botToken, guildID string) (info DiscordStatusInfo) {
 	} else if status == 403 || status == 404 {
 		errStr := fmt.Sprintf("guild not accessible (HTTP %d)", status)
 		info.Error = &errStr
+	} else if err != nil {
+		errStr := "guild validation failed"
+		info.Error = &errStr
+	} else {
+		errStr := fmt.Sprintf("unexpected Discord guild response (HTTP %d)", status)
+		info.Error = &errStr
 	}
 
 	if botUserID != "" && info.GuildValid {
-		body, status, err = botDo("GET", discordAPI+"/guilds/"+guildID+"/members/"+botUserID, nil, botToken)
-		if err == nil && status == 200 {
-			var member struct {
-				Permissions string   `json:"permissions"`
-				Roles       []string `json:"roles"`
-			}
-			if json.Unmarshal(body, &member) == nil {
-				rolePermissions := map[string]string{}
-				rolesBody, rolesStatus, rolesErr := botDo("GET", discordAPI+"/guilds/"+guildID+"/roles", nil, botToken)
-				if rolesErr == nil && rolesStatus == 200 {
-					var roles []struct {
-						ID          string `json:"id"`
-						Permissions string `json:"permissions"`
-					}
-					if json.Unmarshal(rolesBody, &roles) == nil {
-						for _, role := range roles {
-							rolePermissions[role.ID] = role.Permissions
-						}
-					}
-				}
-				perms := discordPermissionBitsFromRoles(guildID, member.Roles, rolePermissions, member.Permissions)
-				info.Permissions = discordPermissionInfoFromBits(perms)
-			}
+		if permissions, permissionErr := fetchDiscordEffectivePermissions(guildID, botUserID, botToken); permissionErr != nil {
+			errStr := permissionErr.Error()
+			info.Error = &errStr
+		} else {
+			info.Permissions = permissions
 		}
 	}
 
@@ -882,14 +943,18 @@ func buildProjectGuildHealth(db *gorm.DB, botToken, fallbackGuildID string) []Pr
 	out := make([]ProjectGuildHealth, 0, len(projects))
 	for _, p := range projects {
 		guildID := strings.TrimSpace(p.DiscordGuildID)
-		if guildID == "" {
-			guildID = strings.TrimSpace(fallbackGuildID)
-		}
+		// A Production's saved Guild is authoritative. The compatibility
+		// fallback must never make a different Guild look healthy.
 		discordInfo := checkDiscordStatus(botToken, guildID)
 		wh := model.ListProjectWebhooks(db, p.KitsuProjectID)
 		webhookHealth := "missing"
 		if len(wh) > 0 {
 			webhookHealth = "ok"
+		}
+		report := inspectProjectDiscordResources(p, db)
+		resourceHealth := "stale"
+		if report.Healthy() {
+			resourceHealth = "ok"
 		}
 		out = append(out, ProjectGuildHealth{
 			ProjectID:       p.KitsuProjectID,
@@ -898,9 +963,21 @@ func buildProjectGuildHealth(db *gorm.DB, botToken, fallbackGuildID string) []Pr
 			GuildValid:      discordInfo.GuildValid,
 			PermissionValid: discordInfo.Permissions.ManageChannels && discordInfo.Permissions.ManageWebhooks,
 			WebhookHealth:   webhookHealth,
+			CategoryValid:   report.CategoryPresent,
+			ResourceHealth:  resourceHealth,
+			StaleChannels:   report.StaleChannelCount,
 		})
 	}
 	return out
+}
+
+func buildProjectAwareDiscordStatus(db *gorm.DB, botToken, fallbackGuildID string) DiscordStatusInfo {
+	for _, project := range model.ListProjects(db) {
+		if strings.TrimSpace(project.DiscordGuildID) != "" {
+			return checkDiscordStatus(botToken, strings.TrimSpace(project.DiscordGuildID))
+		}
+	}
+	return checkDiscordStatus(botToken, fallbackGuildID)
 }
 
 func writeTestKitsuError(w http.ResponseWriter, msg string) {

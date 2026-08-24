@@ -207,7 +207,7 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 
 	diag.Env = buildEnvChecks(db, kitsuHost, botToken, guildID, "en")
 	diag.Kitsu = buildKitsuCheck(kitsuHost, "en")
-	diag.Discord = buildDiscordCheck(botToken, guildID)
+	diag.Discord = buildProjectAwareDiscordCheck(db, botToken, guildID)
 	diag.Projects = buildProjectChecks(db, botToken, guildID)
 	diag.TestNotification = buildTestNotificationCheck(db, "en")
 	diag.ProjectSetupApplied = strings.EqualFold(strings.TrimSpace(model.GetSetting(db, setupProjectAppliedKey)), "true")
@@ -218,7 +218,7 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 		}
 	}
 	diag.NotificationVerified = diag.TestNotification.Status == SetupOK
-	diag.ProductionRoutingConfigured = hasReadyProductionRouting(db)
+	diag.ProductionRoutingConfigured = hasReadyProductionRouting(db) && projectDiscordResourcesHealthy(db)
 	diag.VerifiedProjectID = strings.TrimSpace(model.GetSetting(db, setupTestNotificationProjectKey))
 	if diag.VerifiedProjectID != "" {
 		if p := model.FindProjectByKitsuID(db, diag.VerifiedProjectID); p != nil {
@@ -237,6 +237,49 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 	diag.SetupComplete = isSetupComplete(diag)
 	diag.NextAction = nextActionForDiagnostics(diag)
 	return diag
+}
+
+func buildProjectAwareDiscordCheck(db *gorm.DB, botToken, fallbackGuildID string) SetupCheck {
+	for _, project := range model.ListProjects(db) {
+		if strings.TrimSpace(project.DiscordGuildID) != "" {
+			return buildDiscordCheck(botToken, strings.TrimSpace(project.DiscordGuildID))
+		}
+	}
+	return buildDiscordCheck(botToken, fallbackGuildID)
+}
+
+func projectDiscordResourcesHealthy(db *gorm.DB) bool {
+	projects := model.ListProjects(db)
+	if len(projects) == 0 {
+		return false
+	}
+	for _, project := range projects {
+		if !inspectProjectDiscordResources(project, db).Healthy() {
+			return false
+		}
+	}
+	return true
+}
+
+// ProjectDiscordReadiness is the read-only readiness view used by /health.
+// It validates the saved Guild for each connected Production and treats stale
+// managed resources as blocked routing, without using the fallback Guild.
+func ProjectDiscordReadiness(db *gorm.DB, botToken, fallbackGuildID string) (apiValidated, routingReady bool) {
+	projects := model.ListProjects(db)
+	if len(projects) == 0 {
+		apiStatus := buildProjectAwareDiscordStatus(db, botToken, fallbackGuildID)
+		return apiStatus.BotValid && apiStatus.GuildValid && apiStatus.Permissions.ManageChannels && apiStatus.Permissions.ManageWebhooks,
+			hasReadyProductionRouting(db)
+	}
+
+	apiValidated = true
+	resourcesHealthy := true
+	for _, project := range projects {
+		report := inspectProjectDiscordResources(project, db)
+		apiValidated = apiValidated && report.GuildValid && report.ManageChannels && report.ManageWebhooks
+		resourcesHealthy = resourcesHealthy && report.Healthy()
+	}
+	return apiValidated, hasReadyProductionRouting(db) && resourcesHealthy
 }
 
 func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID, lang string) []SetupCheck {

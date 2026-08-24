@@ -46,7 +46,7 @@ Browser admin UI
 - v0.2.1: repository rename/public URL alignment to `ukyovfx/kitsusync`
 - v0.3.0: operational hardening (log redaction, side-effect-free Discord test endpoint, partial-failure cleanup hardening)
 - v0.3.1: Discord notification message UX refinement
-- v0.4.0: setup/admin flow redesign around Project Management, project-level Guild ID, and durable Bot Settings token persistence
+- v0.4.0: setup/admin flow redesign around Project Management, project-level Guild ID, durable Bot Settings token persistence, and Production-centered Discord notification routing
 
 For release history, see `CHANGELOG.md`. Per-version release notes should live in GitHub Releases going forward. The latest local release note is `RELEASE_NOTES_v0.4.0.md`.
 
@@ -59,6 +59,7 @@ Current limitations are intentionally conservative:
 - Admin review and System Status surfaces are still required for some recovery paths.
 - Setup depends on correct Discord bot permissions and Kitsu reachability.
 - Notification routing remains webhook-based.
+- Discord channel mutations are restricted to verified KitsuSync-owned Production resources and fail closed on stale or ambiguous ownership.
 - SQLite is suitable for lightweight/small deployments, not large multi-node scale-out.
 
 For production use, see `docs/SETUP_FOR_STUDIOS.md` and verify routing and operational load against your expected notification volume.

@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gookit/slog"
 )
 
 type sessionData struct {
@@ -131,6 +134,84 @@ func RequireSession(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// RequestTrace wraps the current admin/setup routes with secret-safe request
+// diagnostics. It deliberately records only routing metadata and the final
+// HTTP status; request bodies and credential-bearing fields are never logged.
+func RequestTrace(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r == nil || !tracePath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		action := traceAction(r)
+		authenticated := false
+		if _, ok := currentSessionData(r); ok {
+			authenticated = true
+		}
+		statusWriter := &traceResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(statusWriter, r)
+		status := statusWriter.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		slog.Info("admin/setup request", "method", r.Method, "path", r.URL.Path, "status", status, "action", action, "session_authenticated", authenticated)
+	})
+}
+
+type traceResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *traceResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *traceResponseWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func tracePath(path string) bool {
+	return path == "/setup" || path == "/bot/setup" ||
+		path == "/admin" || path == "/bot/admin" ||
+		strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/bot/admin/")
+}
+
+func traceAction(r *http.Request) string {
+	if r == nil {
+		return "missing"
+	}
+	action := strings.TrimSpace(r.URL.Query().Get("action"))
+	if action == "" && r.Method == http.MethodPost && strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") && r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			r.Body = io.NopCloser(strings.NewReader(string(body)))
+			if values, parseErr := url.ParseQuery(string(body)); parseErr == nil {
+				action = strings.TrimSpace(values.Get("action"))
+			}
+		}
+	}
+	if action == "" {
+		return "missing"
+	}
+	for _, ch := range action {
+		if !(ch == '_' || ch == '-' || ch == ':' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9') {
+			return "other"
+		}
+	}
+	if len(action) > 64 {
+		return "other"
+	}
+	return action
 }
 
 func currentSessionData(r *http.Request) (sessionData, bool) {

@@ -1,10 +1,10 @@
-# Release Checklist
+# KitsuSync v0.4.0 Release Checklist
 
-Use this as the v0.1.0 release gate. Any unchecked item in the `Must Pass` section is a release blocker.
+Use this as the v0.4.0 release gate. Any unchecked item in the `Must Pass` section is a release blocker.
 
 ## Must Pass
 
-- [ ] release tag/version matches the intended release (for example `v0.1.0`)
+- [ ] release tag/version matches the intended release (for example `v0.4.0`)
 - [ ] the current release notes are ready
 - [ ] README matches the current setup flow, scope, limitations, and roadmap
 - [ ] `.env.example` and `conf.toml.example` are up to date
@@ -12,7 +12,8 @@ Use this as the v0.1.0 release gate. Any unchecked item in the `Must Pass` secti
 - [ ] tracked runtime data and deploy artifacts are absent from the branch diff
 - [ ] `.gitignore` blocks `.env*`, SQLite/runtime data, deploy data, and screenshot artifacts
 - [ ] clean-clone startup procedure is documented and reviewed
-- [ ] `go test ./...` passes
+- [ ] `go test ./src/... -count=1 -timeout=120s` passes
+- [ ] `go vet ./src/...` passes
 - [ ] `docker compose build app` succeeds
 - [ ] `docker compose ps` shows `app` healthy
 - [ ] `/api/setup/status` smoke test passes
@@ -20,7 +21,7 @@ Use this as the v0.1.0 release gate. Any unchecked item in the `Must Pass` secti
 - [ ] notification routing regression test passes
 - [ ] log redaction test passes
 - [ ] polling logs still show `Connected to Kitsu`, `Got tasks`, and `Got taskStatuses`
-- [ ] `/bot/login`, `/bot/setup-wizard`, `/bot/setup`, `/bot/admin`, and `/bot/docs/` were checked
+- [ ] `/bot/login`, `/bot/setup`, `/bot/admin`, `/bot/admin/projects`, `/bot/admin/health`, and `/bot/docs/` were checked
 - [ ] debug-only FileBrowser policy is documented correctly
 - [ ] reverse proxy assumptions are documented correctly
 - [ ] destructive migrations are not included

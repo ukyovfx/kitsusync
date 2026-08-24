@@ -176,6 +176,7 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 		existing = managedExistingChannelsForFirstTime(channels, model.ListProductionChannelMappings(db, projectID), model.ListProjectWebhooks(db, projectID))
 	}
 	plan := BuildTaskTypeChannelPlanWithOverrides(projectID, guildID, active, existing, overrides)
+	plan.CategoryID = strings.TrimSpace(r.FormValue("category_id"))
 	if plan.Fingerprint() != strings.TrimSpace(r.FormValue("plan_fingerprint")) {
 		return firstTimeConnectionPlan{}, fmt.Errorf("The reviewed plan is stale")
 	}

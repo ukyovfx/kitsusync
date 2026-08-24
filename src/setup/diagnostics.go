@@ -366,36 +366,24 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 			}
 
 			if botUserID != "" {
-				body, mStatus, mErr := botDo("GET", discordAPI+"/guilds/"+guildID+"/members/"+botUserID, nil, botToken)
-				if mErr == nil && mStatus == 200 {
-					var member struct {
-						Permissions string `json:"permissions"`
-					}
-					if json.Unmarshal(body, &member) == nil && member.Permissions != "" {
-						var perms uint64
-						fmt.Sscanf(member.Permissions, "%d", &perms)
-						const manageWebhooks = uint64(1 << 29)
-						const manageChannels = uint64(1 << 4)
-						if perms&manageWebhooks != 0 && perms&manageChannels != 0 {
-							webhookPermissionDetail = "Discord member permissions include MANAGE_CHANNELS and MANAGE_WEBHOOKS."
-						} else {
-							missing := []string{}
-							if perms&manageChannels == 0 {
-								missing = append(missing, "MANAGE_CHANNELS")
-							}
-							if perms&manageWebhooks == 0 {
-								missing = append(missing, "MANAGE_WEBHOOKS")
-							}
-							webhookPermissionMissing = true
-							webhookPermissionDetail = "Discord member permissions are missing: " + strings.Join(missing, ", ")
-							webhookPermissionFix = "In Discord Developer Portal -> Bot, grant these permissions and re-invite the bot."
-						}
+				permissions, permissionErr := fetchDiscordEffectivePermissions(guildID, botUserID, botToken)
+				if permissionErr == nil {
+					if permissions.ManageChannels && permissions.ManageWebhooks {
+						webhookPermissionDetail = "Discord role permissions include MANAGE_CHANNELS and MANAGE_WEBHOOKS."
 					} else {
-						webhookPermissionDetail = "Could not read permission bits from the Discord member response."
-						webhookPermissionFix = t(lang, "permission bits が読めなくても、必要なら Bot設定と Discord 権限を確認してください。", "Review Bot Settings and confirm the Discord server permissions manually.")
+						missing := []string{}
+						if !permissions.ManageChannels {
+							missing = append(missing, "MANAGE_CHANNELS")
+						}
+						if !permissions.ManageWebhooks {
+							missing = append(missing, "MANAGE_WEBHOOKS")
+						}
+						webhookPermissionMissing = true
+						webhookPermissionDetail = "Discord role permissions are missing: " + strings.Join(missing, ", ")
+						webhookPermissionFix = "In Discord Developer Portal -> Bot, grant these permissions and re-invite the bot."
 					}
 				} else {
-					webhookPermissionDetail = "Could not retrieve Discord bot member info to verify permissions."
+					webhookPermissionDetail = "Could not retrieve Discord roles and bot membership to verify permissions."
 					webhookPermissionFix = t(lang, "permission bits を取得できなくても、必要なら Bot設定と Discord 権限を確認してください。", "Review Bot Settings and confirm the Discord server permissions manually.")
 				}
 			}
@@ -416,6 +404,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		webhookPermissionFix,
 		webhookPermissionMissing,
 	))
+	checks = append(checks, buildProjectDiscordResourceCheck(lang, db, botToken))
 
 	var count int64
 	if err := db.Raw("SELECT COUNT(*) FROM sqlite_master").Scan(&count).Error; err != nil {
@@ -451,6 +440,25 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 	}
 
 	return checks
+}
+
+func buildProjectDiscordResourceCheck(lang string, db *gorm.DB, botToken string) diagCheck {
+	projects := model.ListProjects(db)
+	label := t(lang, "Production Discord リソース", "Production Discord resources")
+	if len(projects) == 0 {
+		return diagCheck{Label: label, Status: "warn", Detail: t(lang, "接続済みProductionがないため確認できません。", "No connected Production is available to inspect."), Fix: t(lang, "Productionを接続してから再確認してください。", "Connect a Production, then rerun Diagnostics.")}
+	}
+	for _, project := range projects {
+		report := inspectProjectDiscordResources(project, db)
+		if report.Error != "" {
+			return diagCheck{Label: label, Status: "fail", Detail: fmt.Sprintf(t(lang, "%s: %s", "%s: %s"), project.Name, report.Error), Fix: t(lang, "このProductionのDiscord GuildとBot権限を確認してください。", "Review this Production's Discord Guild and bot permissions.")}
+		}
+		if report.HasStaleResources() {
+			detail := fmt.Sprintf(t(lang, "%s: 保存channel %d件、Discord上で確認できるchannel %d件、stale %d件、重複 %d件です。", "%s: %d saved channel(s), %d live channel(s), %d stale, %d duplicate."), project.Name, report.SavedChannelCount, report.LiveSavedChannelCount, report.StaleChannelCount, report.DuplicateSavedChannelCount)
+			return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: t(lang, "Production詳細の通知ルーティングから、既存Guildを再検証し、不足channelだけを明示確認して修復してください。", "Open this Production's notification routing, revalidate the linked Guild, and explicitly repair only missing channels.")}
+		}
+	}
+	return diagCheck{Label: label, Status: "ok", Detail: t(lang, "各ProductionのGuild、category、保存済みchannel ownershipを確認しました。", "Each Production Guild, category, and saved channel ownership was verified.")}
 }
 
 func buildProjectWebhookCheck(
@@ -605,7 +613,7 @@ func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSe
 		return diagCheck{
 			Label:  label,
 			Status: "fail",
-			Detail: t(lang, "直近の runtime polling は失敗しています: ", "The most recent runtime poll failed: ")+snap.LastPollErr,
+			Detail: t(lang, "直近の runtime polling は失敗しています: ", "The most recent runtime poll failed: ") + snap.LastPollErr,
 			Fix:    kitsuSettingsFix,
 		}
 	}
@@ -631,7 +639,7 @@ func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSe
 		return diagCheck{
 			Label:  label,
 			Status: "warn",
-			Detail: t(lang, "Direct auth check を確認できませんでした: ", "The direct auth check could not be confirmed: ")+authErr,
+			Detail: t(lang, "Direct auth check を確認できませんでした: ", "The direct auth check could not be confirmed: ") + authErr,
 			Fix:    kitsuSettingsFix,
 		}
 	}
@@ -763,7 +771,11 @@ func renderDiagGroups(lang string, checks []diagCheck) string {
 		case "Database (SQLite)", "data/ directory writable":
 			storageChecks = append(storageChecks, c)
 		default:
-			discordChecks = append(discordChecks, c)
+			if strings.Contains(c.Label, "Discord") || strings.Contains(c.Label, "Production Discord") {
+				discordChecks = append(discordChecks, c)
+			} else {
+				storageChecks = append(storageChecks, c)
+			}
 		}
 	}
 

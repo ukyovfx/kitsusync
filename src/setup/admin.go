@@ -456,6 +456,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		if handleCurrentProductionUserMutation(w, r, db) {
 			return
 		}
+		if handleCurrentIARoutingMutation(w, r, lang, db) {
+			return
+		}
 		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
 			return
 		}
@@ -1073,6 +1076,12 @@ func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Pro
 	if len(issues) > 0 {
 		stateMessage += " " + t(lang, "次の対応: ルートを確認してください。", "Next action: review the routing configuration.")
 	}
+	resourceReport := inspectProjectDiscordResources(project, db)
+	resourceNotice := ""
+	routingIncomplete := config == nil || len(model.ListProductionChannelMappings(db, project.KitsuProjectID)) == 0 || len(model.ListProductionNotificationRoutes(db, project.KitsuProjectID)) == 0
+	if resourceReport.Error != "" || resourceReport.HasStaleResources() || routingIncomplete {
+		resourceNotice = " " + t(lang, "Discord側の保存済みchannelを確認できません。修復計画を確認してください。", "Saved Discord channels could not be verified. Review the repair plan.")
+	}
 	var dryRunOptions strings.Builder
 	dryRunOptions.WriteString(`<option value="">` + esc(tr(lang, "production_routing.select_task_type")) + `</option>`)
 	for _, taskType := range taskTypes {
@@ -1090,7 +1099,11 @@ func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Pro
 	} else {
 		actionHTML = `<a class="btn" href="` + esc(actionURL) + `">` + esc(t(lang, "通知ルートを設定", "Configure notification routes")) + `</a>`
 	}
-	return `<section class="section-card glass notification-controls" aria-labelledby="notification-controls-title"><div class="page-heading"><div><h3 id="notification-controls-title">` + esc(t(lang, "通知状態とテスト", "Notification state and testing")) + `</h3><p class="hint">` + esc(stateMessage) + `</p></div><span class="status-pill ` + esc(statusClass) + `">` + esc(statusLabel) + `</span></div><div class="button-row">` + actionHTML + `</div><form method="post" action="` + esc(actionURL) + `" class="section-card glass" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="connected-production-dry-run">` + esc(t(lang, "dry-run 用 Task Type", "Task Type for dry-run")) + `</label><select id="connected-production-dry-run" name="dry_run_task_type_id">` + dryRunOptions.String() + `</select><div class="button-row"><button class="btn secondary" type="submit">` + esc(tr(lang, "production_routing.dry_run")) + `</button></div><p class="field-help" role="note">` + esc(t(lang, "dry-run はネットワーク通信を行わず、Discord メッセージも送信しません。結果には Production、Task Type、対象 channel、実行予定、skip reason を表示します。", "Dry-run is network-free and sends no Discord message. The result shows Production, Task Type, mapped channel, intended action, and skip reason.")) + `</p></form></section>`
+	if resourceNotice != "" && strings.TrimSpace(project.DiscordGuildID) != "" {
+		repairURL := withLang("/bot/setup?wizard_step=4&repair=1&project="+url.QueryEscape(project.KitsuProjectID)+"&plan_guild="+url.QueryEscape(project.DiscordGuildID), r)
+		actionHTML += `<a class="btn-ghost" href="` + esc(repairURL) + `">` + esc(t(lang, "修復計画を確認", "Review repair plan")) + `</a>`
+	}
+	return `<section class="section-card glass notification-controls" aria-labelledby="notification-controls-title"><div class="page-heading"><div><h3 id="notification-controls-title">` + esc(t(lang, "通知状態とテスト", "Notification state and testing")) + `</h3><p class="hint">` + esc(stateMessage+resourceNotice) + `</p></div><span class="status-pill ` + esc(statusClass) + `">` + esc(statusLabel) + `</span></div><div class="button-row">` + actionHTML + `</div><form method="post" action="` + esc(actionURL) + `" class="section-card glass" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="connected-production-dry-run">` + esc(t(lang, "dry-run 用 Task Type", "Task Type for dry-run")) + `</label><select id="connected-production-dry-run" name="dry_run_task_type_id">` + dryRunOptions.String() + `</select><div class="button-row"><button class="btn secondary" type="submit">` + esc(tr(lang, "production_routing.dry_run")) + `</button></div><p class="field-help" role="note">` + esc(t(lang, "dry-run はネットワーク通信を行わず、Discord メッセージも送信しません。結果には Production、Task Type、対象 channel、実行予定、skip reason を表示します。", "Dry-run is network-free and sends no Discord message. The result shows Production, Task Type, mapped channel, intended action, and skip reason.")) + `</p></form></section>`
 }
 
 type connectedProductionChannelCandidate struct {
@@ -2053,7 +2066,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			}
 			// Clear failure counters for the old URL so health shows clean immediately
 			Stats.RecordSend(1, 0, newURL, "")
-			slog.Info("Webhook reconnected", "channelName", wh.ChannelName, "newURL", newURL[:30]+"…")
+			slog.Info("Webhook reconnected", "channelName", wh.ChannelName, "secret_rotated", true)
 			http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_ok", http.StatusSeeOther)
 			return
 		}
@@ -3234,6 +3247,10 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 				if token == "" {
 					token = storedRuntimeDiscordBotToken(db)
 				}
+				slog.Info("Discord save token received",
+					"token_present", token != "",
+					"token_fingerprint", DiscordBotTokenFingerprint(token),
+				)
 				if token == "" {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Discord Bot Tokenを入力してください。", "Enter the Discord Bot Token.")))
@@ -3245,6 +3262,12 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					return
 				}
 				setRuntimeDiscordBotToken(db, token)
+				storedToken := storedRuntimeDiscordBotToken(db)
+				slog.Info("Discord save token persisted",
+					"stored_token_present", storedToken != "",
+					"stored_token_fingerprint", DiscordBotTokenFingerprint(storedToken),
+					"fingerprint_match", storedToken == token,
+				)
 				http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=discord_saved", http.StatusSeeOther)
 				return
 			}

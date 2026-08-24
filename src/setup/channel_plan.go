@@ -22,11 +22,13 @@ const discordTextChannelNameLimit = 100
 // from the Discord mutation code so every write can require an explicit,
 // user-visible confirmation of the exact plan.
 type TaskTypeChannelPlan struct {
-	ProductionID   string
-	GuildID        string
-	Entries        []TaskTypeChannelPlanEntry
-	Conflicts      []string
-	DuplicateNames []string
+	ProductionID    string
+	GuildID         string
+	CategoryID      string
+	CategoryOptions []DiscordGuildChannel
+	Entries         []TaskTypeChannelPlanEntry
+	Conflicts       []string
+	DuplicateNames  []string
 }
 
 type TaskTypeChannelPlanOverride struct {
@@ -413,7 +415,7 @@ func (p TaskTypeChannelPlan) Valid() bool {
 
 func (p TaskTypeChannelPlan) Fingerprint() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\x00%s\x00", p.ProductionID, p.GuildID)
+	fmt.Fprintf(&b, "%s\x00%s\x00%s\x00", p.ProductionID, p.GuildID, p.CategoryID)
 	for _, entry := range p.Entries {
 		fmt.Fprintf(&b, "%d\x00%s\x00%s\x00%s\x00%s\x00%s\x00", entry.Order, entry.TaskTypeID, entry.TaskTypeName, entry.ChannelName, entry.ExistingID, entry.Action)
 	}

@@ -1,7 +1,6 @@
 package setup
 
 import (
-	discordapi "app/src/api/discord"
 	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
@@ -324,6 +323,14 @@ func routingRow(lang, projectID string, route model.ProductionNotificationRoute,
 // Production. The compatibility route remains available for old bookmarks,
 // but Current IA users edit the stable ProductionID+TaskTypeID mappings here.
 func renderCurrentIARoutingEditor(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	body := renderCurrentIARoutingEditorBase(db, r, p, lang)
+	body = strings.Replace(body, `<form method="post"`, `<form data-routing-editor method="post"`, 1)
+	add := `<button type="button" class="btn-ghost production-routing-add-trigger" aria-controls="production-routing-new-row" aria-expanded="false" onclick="var form=this.form;var row=form&&form.querySelector('tbody tr:last-child');if(row){row.style.display='table-row';this.hidden=true;this.setAttribute('aria-expanded','true');}">+ ` + esc(t(lang, "Task Typeを追加", "Add Task Type")) + `</button>`
+	body = strings.Replace(body, `<button class="btn" type="submit">`, add+`<button class="btn" type="submit">`, 1)
+	return body
+}
+
+func renderCurrentIARoutingEditorBase(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
 	taskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
 	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
 	var rows strings.Builder
@@ -350,6 +357,7 @@ func renderCurrentIARoutingSummary(db *gorm.DB, r *http.Request, p model.Project
 	return `<section class="section-card glass production-routing-summary"><div class="page-heading"><div><h3>` + esc(t(lang, "通知ルーティング", "Notification routing")) + `</h3><p class="field-help">` + esc(t(lang, "Kitsu Task TypeからDiscord Channelへの読み取り専用マッピング", "Read-only mapping from Kitsu Task Type to Discord Channel.")) + `</p></div><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div><div class="production-routing-summary-head"><strong>` + esc(t(lang, "Kitsu Task Type", "Kitsu Task Type")) + `</strong><strong>` + esc(t(lang, "Discord Channel", "Discord Channel")) + `</strong></div><div class="production-routing-summary-list">` + rows.String() + `</div></section>`
 }
 
+/*
 func renderCurrentIANotificationPreview(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
 	taskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
 	selectedID := strings.TrimSpace(r.URL.Query().Get("preview_task_type_id"))
@@ -452,3 +460,4 @@ func renderLegacyCurrentIANotificationPreview(db *gorm.DB, r *http.Request, p mo
 	}
 	return `<section class="section-card glass"><h3>` + esc(tr(lang, "production_routing.preview")) + `</h3><p class="field-help">` + esc(t(lang, "Task Typeと送信先を確認する読み取り専用表示です。", "Read-only view of the selected Task Type and destination.")) + `</p><form method="get" action="` + esc(withLang("/bot/admin/projects", r)) + `" class="form-action-row"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="notifications"><label for="production-notification-preview">` + esc(t(lang, "Kitsu Task Type", "Kitsu Task Type")) + `</label><select id="production-notification-preview" name="preview_task_type_id">` + options.String() + `</select><button class="btn-ghost" type="submit">` + esc(t(lang, "表示", "Show preview")) + `</button></form>` + result.String() + `</section>`
 }
+*/

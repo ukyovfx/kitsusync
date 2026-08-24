@@ -55,3 +55,15 @@ func TestHealthHandlerReportsSetupRequiredWithoutSecrets(t *testing.T) {
 		t.Fatalf("unexpected health body: %s", body)
 	}
 }
+
+func TestOverallNotificationReadinessUsesDiscordValidation(t *testing.T) {
+	if got := overallNotificationReadiness(true, true, true, true); got != "ready" {
+		t.Fatalf("fully validated runtime = %q, want ready", got)
+	}
+	if got := overallNotificationReadiness(true, true, false, true); got != "ready_pending_discord_validation" {
+		t.Fatalf("unvalidated Discord runtime = %q, want pending", got)
+	}
+	if got := overallNotificationReadiness(true, true, true, false); got != "blocked" {
+		t.Fatalf("unconfigured routing = %q, want blocked", got)
+	}
+}
