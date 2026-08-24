@@ -29,6 +29,7 @@ All notable changes to this project should be recorded here.
 - Bot Settings token rotation no longer appears lost after normal container recreate/redeploy when the live DB is preserved
 - Fully validated Kitsu/Discord/routing state now reports `overall_notification_readiness: "ready"` instead of remaining in a Discord-pending state
 - Routing deletion confirmation no longer blocks the surrounding staged-save form through nested native form validation
+- Restored the documented read-only `/bot/docs` and `/bot/docs/site.jsx` aliases and included the static docs assets in the runtime image
 
 ## v0.1.0
 

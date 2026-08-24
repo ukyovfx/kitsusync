@@ -49,6 +49,10 @@ v0.4.0 is an operator-flow release. It promotes Project Management in `/bot/setu
 - Fully validated Kitsu, Discord, and Production routing state reports `overall_notification_readiness: "ready"`.
 - Runtime build metadata is passed by CI so `/health` and image labels can identify the source commit.
 
+### Documentation route
+
+- The read-only `/docs` and `/bot/docs` aliases serve the checked-in `docs.html` entry point and same-origin `site.jsx` asset in both Compose and standalone runtime images.
+
 ## Validation
 - Source/runtime alignment and operator flow were reviewed through the setup/admin redesign PR sequence.
 - Docs were updated so public setup guidance reflects the current Project Management-first flow.

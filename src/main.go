@@ -822,6 +822,7 @@ func main() {
 
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
+	registerDocsRoutes(mux)
 
 	mux.HandleFunc("/health", healthHandler(runtime))
 
