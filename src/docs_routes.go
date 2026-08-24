@@ -41,6 +41,7 @@ func serveDocsAsset(w http.ResponseWriter, r *http.Request, name string) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-cache")
 	path, ok := findRuntimeAsset(name)
 	if !ok {
 		http.NotFound(w, r)

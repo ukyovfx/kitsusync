@@ -14,7 +14,7 @@ func TestDocsRoutesServeEntryPointAndSameOriginAsset(t *testing.T) {
 	for _, path := range []string{"/bot/docs", "/bot/docs/", "/docs", "/docs/"} {
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
-		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "KitsuSync Pipeline Docs") {
+		if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "KitsuSync Documentation") {
 			t.Fatalf("%s: status=%d body prefix=%q", path, rr.Code, rr.Body.String()[:min(40, len(rr.Body.String()))])
 		}
 	}
