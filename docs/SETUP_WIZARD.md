@@ -1,6 +1,6 @@
 # Setup Flow Reference
 
-This document describes the current operator-facing setup flow for KitsuSync v0.4.1.
+This document describes the current operator-facing setup flow for KitsuSync v0.4.2.
 
 The normal setup path is now:
 
@@ -119,4 +119,4 @@ Historical docs and older releases may reference:
 - Manual Setup
 - Setup Status
 
-Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.1.
+Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.2.

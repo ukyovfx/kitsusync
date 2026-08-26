@@ -4,7 +4,23 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- The current v0.4.1 candidate is documented below; v0.4.0 remains historical.
+- The current v0.4.2 candidate is documented below; v0.4.0 and v0.4.1 remain historical.
+
+## v0.4.2
+
+### Added
+
+- Status-aware WFA, RETAKE, and DONE Discord notification cards with transition-aware Japanese and English messages.
+- User Linking-based mentions with Production-scoped Checker and assignee resolution.
+- Deterministic card fixtures and focused coverage for links, previews, comments, truncation, and safe mention behavior.
+
+### Changed
+
+- Discord embed accents now follow the Kitsu Task Status color, with a neutral fallback for missing or invalid colors.
+- Task Type is rendered as plain text and the duplicate Status metadata field is removed.
+- WFA mentions the configured Checker, RETAKE mentions the assignee, and DONE has no mention by default.
+- Kitsu and Google Drive links, preview images, and comment/assignee details are included only when safely available.
+- Recipient IDs are validated, deduplicated, bounded, and used consistently for visible mentions and AllowedMentions.
 
 ## v0.4.1
 

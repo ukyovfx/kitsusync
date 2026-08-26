@@ -1,13 +1,16 @@
-{{- if .PreviousStatus}}
-    {{- if ne .PreviousStatus .CurrentStatus}}
-        Status changed to **{{.CurrentStatus}}** (was *{{.PreviousStatus}}*)
-    {{- else}}
-        Status repeated - **{{.CurrentStatus}}**
-    {{- end}}
-{{- else}}
-    New status **{{.CurrentStatus}}**
-{{- end}}
-{{- if .CommentContent}}
-    New comment from **{{.CommentAuthor}}**:
-    ```{{.CommentContent}}```
-{{- end}}
+{{if .IsAssignNotification}}📋 A task has been assigned
+
+{{end}}{{.StatusEmoji}} {{.StatusUpper}}
+{{if .IsCommentOnly}}{{.CommentOnlyMessage}}{{else}}{{.StatusMessage}}{{if .StatusTransitionMessage}}
+{{.StatusTransitionMessage}}{{end}}{{if .PreviousStatus}}
+{{.PreviousStatus}} → {{.StatusUpper}}{{end}}{{end}}{{if .CommentContent}}
+
+{{.CommentLabel}}
+{{.CommentContent}}{{if .CommentAuthor}}
+— {{.CommentAuthorLabel}}: {{.CommentAuthor}}{{end}}{{end}}{{if .TaskURL}}
+
+{{.LinksLabel}}
+[Kitsu]({{.TaskURL}}){{if .GoogleDriveURL}} · [Drive]({{.GoogleDriveURL}}){{end}}{{else if .GoogleDriveURL}}
+
+{{.LinksLabel}}
+[Drive]({{.GoogleDriveURL}}){{end}}

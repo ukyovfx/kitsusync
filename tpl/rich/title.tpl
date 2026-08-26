@@ -1,1 +1,1 @@
-{{.GroupName}} / {{.ParentName}} - {{.TaskName}}
+{{if .ParentName}}{{.GroupName}} / {{.ParentName}} - {{.TaskName}}{{else}}{{.GroupName}} / {{.TaskName}}{{end}}

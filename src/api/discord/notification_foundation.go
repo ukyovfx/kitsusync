@@ -67,6 +67,7 @@ func RenderNotificationPayload(data Template, preset string) Payload {
 			embed.Fields = fields
 		}
 	}
+	fitEmbedTextLimits(&embed)
 
 	return Payload{
 		Content: data.MentionContent,
@@ -75,4 +76,70 @@ func RenderNotificationPayload(data Template, preset string) Payload {
 			Users: uniqueDiscordIDs(data.AllowedUserIDs),
 		},
 	}
+}
+
+const maxDiscordEmbedText = 6000
+
+func truncateNotificationText(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+func embedTextLength(embed Embed) int {
+	length := len([]rune(embed.Title)) + len([]rune(embed.Description)) + len([]rune(embed.Footer.Text)) + len([]rune(embed.Author.Name))
+	for _, field := range embed.Fields {
+		length += len([]rune(field.Name)) + len([]rune(field.Value))
+	}
+	return length
+}
+
+func fitEmbedTextLimits(embed *Embed) {
+	if embed == nil {
+		return
+	}
+	over := embedTextLength(*embed) - maxDiscordEmbedText
+	if over <= 0 {
+		return
+	}
+	if descriptionLength := len([]rune(embed.Description)); descriptionLength > 0 {
+		embed.Description = truncateNotificationText(embed.Description, maxInt(0, descriptionLength-over))
+		over = embedTextLength(*embed) - maxDiscordEmbedText
+	}
+	for over > 0 && len(embed.Fields) > 0 {
+		last := len(embed.Fields) - 1
+		valueLength := len([]rune(embed.Fields[last].Value))
+		if valueLength == 0 {
+			embed.Fields = embed.Fields[:last]
+		} else {
+			embed.Fields[last].Value = truncateNotificationText(embed.Fields[last].Value, maxInt(0, valueLength-over))
+		}
+		over = embedTextLength(*embed) - maxDiscordEmbedText
+	}
+	if over > 0 {
+		embed.Footer.Text = truncateNotificationText(embed.Footer.Text, maxInt(0, len([]rune(embed.Footer.Text))-over))
+		over = embedTextLength(*embed) - maxDiscordEmbedText
+	}
+	if over > 0 {
+		embed.Author.Name = truncateNotificationText(embed.Author.Name, maxInt(0, len([]rune(embed.Author.Name))-over))
+		over = embedTextLength(*embed) - maxDiscordEmbedText
+	}
+	if over > 0 {
+		embed.Title = truncateNotificationText(embed.Title, maxInt(0, len([]rune(embed.Title))-over))
+	}
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }

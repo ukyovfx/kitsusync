@@ -1,1 +1,1 @@
-{{.ProcessEmoji}} {{.TaskType}}
+{{.TaskType}}
