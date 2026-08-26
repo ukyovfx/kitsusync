@@ -12,13 +12,16 @@ v0.4.0 is an operator-flow release. It promotes Project Management in `/bot/setu
 
 ## Changes
 
-### Project Management-first setup flow
+### Production connection setup flow
 - `/bot/setup` now acts as the main operator setup surface.
-- The operator flow is organized around:
-  - Step 1: Bot Settings
-  - Step 2: Project Routing
-  - Step 3: Guild Assignment
-  - Step 4: Test Notification
+- The operator flow is organized around seven steps:
+  - Step 1: Prerequisites
+  - Step 2: Production
+  - Step 3: Discord Server
+  - Step 4: Channel Plan
+  - Step 5: Review
+  - Step 6: Execute
+  - Step 7: Complete
 - `/bot/admin/projects` remains available for review/edit, but is no longer the primary first-time setup destination.
 
 ### Legacy setup surface removal

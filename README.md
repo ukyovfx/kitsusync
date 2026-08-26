@@ -68,7 +68,7 @@ For production use, see `docs/SETUP_FOR_STUDIOS.md` and verify routing and opera
 The following items are tracked as future improvement areas:
 
 - Project-scoped multi-project admin management
-- Admin audit surface in the browser (`/bot/admin/audit`)
+- Additional audit and diagnostics improvements
 - Safer delete-and-recreate handling for existing Discord channel layouts
 - Direct Kitsu task deep links in notifications
 - UI controls for `@here` routing and broader mention policies
@@ -86,7 +86,7 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 - `/bot/admin/health` — single System Status surface for status, verification, and diagnostics
 - `/bot/admin` — operational dashboard: system health, active projects, warnings
 - `/bot/admin/users` — map Kitsu users to Discord IDs for @mentions
-- `/bot/admin/checkers` — map task types to reviewer Discord IDs
+- `/bot/admin/checkers` — compatibility URL that redirects to User Linking
 
 Screenshot placeholders live in `screenshots/README.md`. Capture guidance lives in `screenshots/CAPTURE_GUIDE.md`.
 
@@ -210,7 +210,7 @@ Use the public `/bot/*` paths exposed by your proxy, for example:
 
 1. Open `/bot/login` and sign in with your Kitsu manager or admin account.
 2. Review shared bot/runtime prerequisites in `/bot/admin/bot`.
-3. Open `/bot/setup` and use the 4-step Project Management flow: Step 1 `Bot Settings`, Step 2 `Project Routing` (including the project-level Discord Server / Guild ID), Step 3 `Resource Creation`, Step 4 `Test Notification`.
+3. Open `/bot/setup` and complete the seven-step Production connection flow: Prerequisites, Production, Discord Server, Channel Plan, Review, Execute, and Complete.
 4. Enter a Discord Server / Guild ID per project during `/bot/setup` Step 2. This is required for new project routing.
 5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment.
 6. If setup fails after partial Discord provisioning, rollback is best-effort and manual cleanup may still be required before retrying.

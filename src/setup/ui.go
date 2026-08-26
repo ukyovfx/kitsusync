@@ -103,7 +103,7 @@ button,input,select{font:inherit}
 .production-context #panel-overview .status-row-explanation{display:none}
 .production-context #panel-overview>.section-card>.production-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 .production-context #panel-overview>.section-card>.production-summary-grid>.production-summary-card{display:grid;grid-template-columns:1fr;gap:8px;align-content:start;min-height:84px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025)}
-.production-context #panel-overview>.section-card>.production-summary-grid>.production-current-issues{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;min-height:0;padding:12px 14px;border-top:1px solid rgba(255,255,255,.08)}
+.production-context #panel-overview>.section-card>.production-summary-grid>.production-current-issues{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;min-height:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.025)}
 .production-context #panel-notifications>.section-card>.section-card{background:rgba(255,255,255,.018);border-color:rgba(255,255,255,.07);box-shadow:none}
 .production-context #panel-notifications>.section-card>dl.status-list{margin-bottom:16px;padding:12px 14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}
 .production-context #panel-notifications>.section-card>.section-card+.section-card{margin-top:20px}

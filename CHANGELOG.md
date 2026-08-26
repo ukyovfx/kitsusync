@@ -17,6 +17,7 @@ All notable changes to this project should be recorded here.
 - Discord Bot Token updates from Bot Settings now persist across restarts instead of applying only to the current process
 - Production notification routing is managed by stable Production + Task Type identities and supports staged reorder, destination changes, and fail-closed stale-resource handling
 - Current Production routing diagnostics verify the linked Guild, managed channels, ownership, and required Discord permissions before mutation
+- Public operator documentation and route inventory now match the current seven-step setup and Production-scoped User Linking flow
 
 ### Added
 

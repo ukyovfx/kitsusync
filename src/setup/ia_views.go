@@ -113,7 +113,7 @@ func iaStatus(db *gorm.DB, project model.Project, lang string) (string, string, 
 		return "warning", "Disconnected", "This Production is not connected to KitsuSync yet. Notifications are unavailable."
 	}
 	if project.ReadOnlyPreview {
-		return "warning", t(lang, "未接続", "Not connected"), t(lang, "このProductionはまだKitsuSyncに接続されていません。通知は利用できません。", "This Production is not connected to KitsuSync yet. Notifications are unavailable.")
+		return "warning", t(lang, "未接続", "Not connected"), t(lang, "このプロダクションはまだKitsuSyncに接続されていません。通知は利用できません。", "This Production is not connected to KitsuSync yet. Notifications are unavailable.")
 	}
 	if project.ValidationOnly {
 		return "warning", t(lang, "検証専用", "Validation only"), t(lang, "実データの表示確認用です。Discordサーバーは未接続で、通知は利用できません。", "Read-only Kitsu data for validation. No Discord server is connected and notifications are unavailable.")
@@ -143,7 +143,7 @@ func iaReadiness(db *gorm.DB, lang string) (string, string, string) {
 	if !r.DiscordConfigured {
 		return "bad", t(lang, "対応が必要", "Action required"), t(lang, "Bot接続を設定してください。", "Complete Bot Connection setup.")
 	}
-	return "warn", tr(lang, "status.action_required"), t(lang, "Productionの接続を設定すると通知を利用できます。", "Connect at least one Production before notifications can be used.")
+	return "warn", tr(lang, "status.action_required"), t(lang, "プロダクションの接続を設定すると通知を利用できます。", "Connect at least one Production before notifications can be used.")
 }
 
 type readinessView struct {
@@ -261,7 +261,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		}
 	}
 	if attentionRows.Len() == 0 {
-		attentionRows.WriteString(`<li class="muted">` + esc(t(lang, "対応が必要なProductionはありません。", "No Productions need attention.")) + `</li>`)
+		attentionRows.WriteString(`<li class="muted">` + esc(t(lang, "対応が必要なプロダクションはありません。", "No Productions need attention.")) + `</li>`)
 	}
 	failureCount := 0
 	cutoff := time.Now().Add(-24 * time.Hour)
@@ -318,7 +318,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	body := `<div class="section-stack">` +
 		`<section class="dashboard-intro"><div><h1>` + esc(tr(lang, "ia.dashboard")) + `</h1><p class="hint">` + esc(t(lang, "KitsuSyncの接続状態と、対応が必要な項目を確認できます。", "Review KitsuSync connection state and items that need attention.")) + `</p></div><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin", r)) + `">` + esc(t(lang, "状態を更新", "Refresh status")) + `</a></div></section>` +
 		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "システム状態", "System status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
-		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なProduction", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
+		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なプロダクション", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
 		dashboardMenu +
 		`<div class="dashboard-lower-grid"><section class="section-card glass" aria-labelledby="dashboard-activity"><h2 id="dashboard-activity">` + esc(tr(lang, "ia.activity")) + `</h2><div class="activity-columns" aria-hidden="true"><span>` + esc(t(lang, "日時", "Date and time")) + `</span><span>` + esc(t(lang, "操作", "Action")) + `</span><span>` + esc(t(lang, "Production", "Production")) + `</span><span>` + esc(t(lang, "結果", "Result")) + `</span></div><ul class="activity-list" role="log">` + activityRows.String() + `</ul></section><div class="dashboard-side-stack"><section class="section-card glass" aria-labelledby="dashboard-system"><h2 id="dashboard-system">` + esc(t(lang, "通知システム", "Notification system")) + `</h2><div class="dashboard-status-list">` + dashboardStatusRow(t(lang, "Kitsu接続", "Kitsu connection"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured)) + dashboardStatusRow(t(lang, "Discord Bot", "Discord Bot"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], botState) + dashboardStatusRow(t(lang, "通知状態", "Notification state"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady)) + `</div><p class="field-help" role="status">` + esc(statusExplanation) + `</p>` + statusAction + `</section><section class="section-card glass dashboard-quick" aria-labelledby="dashboard-quick"><h2 id="dashboard-quick">` + esc(t(lang, "クイック操作", "Quick actions")) + `</h2><div class="button-row">` + ifNonEmpty(quickActions, quickActions) + `</div></section></div></div>`
 	body = replaceDashboardConnectedCount(body, len(projects), connectedProductionCount(projects))
@@ -489,12 +489,12 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 	for _, p := range availableProjects(db) {
 		class, label := productionConnectionStatus(p, lang)
 		_, _, hint := iaStatus(db, p, lang)
-		rows.WriteString(fmt.Sprintf(`<article class="section-card glass production-list-item"><div><h2>%s</h2><p class="field-help">%s</p></div><div class="production-list-state"><span class="status-pill %s">%s</span><span class="field-help">%s</span></div><a class="btn" href="%s">%s</a></article>`, esc(p.Name), esc(t(lang, "現在の状態", "Current state")), class, esc(label), esc(hint), esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(t(lang, "Productionを開く", "Open Production"))))
+		rows.WriteString(fmt.Sprintf(`<article class="section-card glass production-list-item"><div><h2>%s</h2><p class="field-help">%s</p></div><div class="production-list-state"><span class="status-pill %s">%s</span><span class="field-help">%s</span></div><a class="btn" href="%s">%s</a></article>`, esc(p.Name), esc(t(lang, "現在の状態", "Current state")), class, esc(label), esc(hint), esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(t(lang, "プロダクションを開く", "Open Production"))))
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(emptyState("-", t(lang, "Productionがありません", "No Productions"), t(lang, "新しいProductionを接続してください。", "Connect a new Production.")))
+		rows.WriteString(emptyState("-", t(lang, "プロダクションがありません", "No Productions"), t(lang, "新しいプロダクションを接続してください。", "Connect a new Production.")))
 	}
-	body := `<div class="section-stack"><section class="section-card glass"><p class="hint">` + esc(t(lang, "Production一覧で状態を確認し、選択したProductionを開きます。設定は選択後に表示されます。", "Use this list to review states and open one Production. Settings appear only after selection.")) + `</p></section>` + rows.String() + `</div>`
+	body := `<div class="section-stack"><section class="section-card glass"><p class="hint">` + esc(t(lang, "プロダクション一覧で状態を確認し、選択したプロダクションを開きます。設定は選択後に表示されます。", "Use this list to review states and open one Production. Settings appear only after selection.")) + `</p></section>` + rows.String() + `</div>`
 	body = strings.Replace(body, rows.String(), simplifyProductionListRows(rows.String()), 1)
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.production_list"), r, body))
 }
@@ -619,7 +619,7 @@ func renderProductionPanelMarkup(db *gorm.DB, r *http.Request, p model.Project, 
 	for i := 0; i < 4; i++ {
 		panel = strings.Replace(panel, `<div class="status-row">`, `<div class="status-row production-summary-card">`, 1)
 	}
-	panel = strings.Replace(panel, `<div class="status-row">`, `<div class="status-row production-current-issues">`, 1)
+	panel = strings.Replace(panel, `<div class="status-row">`, `<div class="status-row production-summary-card production-current-issues">`, 1)
 	for {
 		start := strings.Index(panel, `<dd class="status-row-explanation">`)
 		if start < 0 {
@@ -738,7 +738,7 @@ func renderLegacyCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p m
 			}
 			rows.WriteString(`<li><strong>` + esc(user.KitsuName) + `</strong><span>` + esc(user.DiscordDisplayName) + `</span><span class="status-pill ` + esc(roleClass) + `">` + esc(roleStatus) + `</span></li>`)
 		}
-		linkedSection := `<div class="settings-block"><h3>` + esc(t(lang, "グローバルに紐づけ済みのユーザー", "Globally linked users")) + `</h3><p class="field-help">` + esc(t(lang, "グローバルUser Linkingの人間ユーザーです。Production参加者とは別に管理され、Reviewer / Checkerの対象はKitsuのProduction参加者に限られます。", "These human users are linked in global User Linking. Global linking is separate from Production membership; Reviewer / Checker eligibility still requires Kitsu Production membership.")) + `</p><ul class="mapping-list">` + rows.String() + `</ul></div>`
+		linkedSection := `<div class="settings-block"><h3>` + esc(t(lang, "グローバルに紐づけ済みのユーザー", "Globally linked users")) + `</h3><p class="field-help">` + esc(t(lang, "グローバルなユーザー紐づけの人間ユーザーです。プロダクション参加者とは別に管理され、Reviewer / Checkerの対象はKitsuのプロダクション参加者に限られます。", "These human users are linked in global User Linking. Global linking is separate from Production membership; Reviewer / Checker eligibility still requires Kitsu Production membership.")) + `</p><ul class="mapping-list">` + rows.String() + `</ul></div>`
 		body = strings.Replace(body, `</section>`, linkedSection+`</section>`, 1)
 	}
 	if lang == "en" {
@@ -1202,7 +1202,7 @@ func renderCurrentProductionTroubleshooting(db *gorm.DB, p model.Project, lang s
 		linkValue, linkClass = t(lang, "設定済", "Configured"), "success"
 	}
 	processingValue, processingClass := t(lang, "記録なし", "Not recorded"), "neutral"
-	processingExplanation := t(lang, "このProductionの通知処理記録はありません。", "No notification processing records exist for this Production.")
+	processingExplanation := t(lang, "このプロダクションの通知処理記録はありません。", "No notification processing records exist for this Production.")
 	if recentCount > 0 {
 		processingValue, processingClass = t(lang, "正常", "Healthy"), "success"
 		processingExplanation = fmt.Sprintf(t(lang, "直近の記録%d件、失敗%d件。", "%d recent records, %d failures."), recentCount, recentFailures)
@@ -1227,9 +1227,9 @@ func renderCurrentProductionTroubleshooting(db *gorm.DB, p model.Project, lang s
 	diagnosticDetails.WriteString(`<details class="advanced-details production-diagnostics"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><div class="production-diagnostic-grid">`)
 	diagnosticDetails.WriteString(item(t(lang, "Kitsu接続", "Kitsu connection"), kitsuValue, kitsuClass, t(lang, "現在のランタイム認証状態。", "Current runtime authentication state.")))
 	diagnosticDetails.WriteString(item(t(lang, "Discord Bot", "Discord Bot"), discordValue, discordClass, t(lang, "現在のBot設定。", "Current Bot configuration.")))
-	diagnosticDetails.WriteString(item(t(lang, "通知ルーティング", "Notification routing"), routingValue, routingClass, fmt.Sprintf(t(lang, "%d件のProductionルートと設定を確認しました。", "%d Production routes and the configuration were inspected."), len(routes))))
-	diagnosticDetails.WriteString(item(t(lang, "参加者取得", "Participant retrieval"), participantValue, participantClass, fmt.Sprintf(t(lang, "Kitsu Production team APIから%d人を取得しました。", "The Kitsu Production team API returned %d people."), participantCount)))
-	diagnosticDetails.WriteString(item(t(lang, "ユーザー紐づけ", "User linking"), linkValue, linkClass, fmt.Sprintf(t(lang, "このProductionのユーザー割り当て%d件。", "User assignments recorded for this Production: %d."), linkedCount)))
+	diagnosticDetails.WriteString(item(t(lang, "通知ルーティング", "Notification routing"), routingValue, routingClass, fmt.Sprintf(t(lang, "%d件のプロダクションルートと設定を確認しました。", "%d Production routes and the configuration were inspected."), len(routes))))
+	diagnosticDetails.WriteString(item(t(lang, "参加者取得", "Participant retrieval"), participantValue, participantClass, fmt.Sprintf(t(lang, "KitsuプロダクションのチームAPIから%d人を取得しました。", "The Kitsu Production team API returned %d people."), participantCount)))
+	diagnosticDetails.WriteString(item(t(lang, "ユーザー紐づけ", "User linking"), linkValue, linkClass, fmt.Sprintf(t(lang, "このプロダクションのユーザー割り当て%d件。", "User assignments recorded for this Production: %d."), linkedCount)))
 	diagnosticDetails.WriteString(item(t(lang, "最近の通知処理", "Recent notification processing"), processingValue, processingClass, processingExplanation))
 	diagnosticDetails.WriteString(`</div></details>`)
 	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.troubleshooting")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "現在の問題", "Current problem"), problemClass, problemLabel, "", "") + `</dl>` + diagnosticDetails.String() + `</section>`
@@ -1301,9 +1301,9 @@ func renderSelectedProductionTroubleshooting(db *gorm.DB, p model.Project, lang 
 	detailSection = `<details class="advanced-details production-diagnostics"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><div class="production-diagnostic-grid">` +
 		diagnosticItem(t(lang, "Kitsu接続", "Kitsu connection"), kitsuStatus, kitsuClass, t(lang, "ランタイム認証状態を確認します。", "Based on current runtime authentication state.")) +
 		diagnosticItem(t(lang, "Discord Bot", "Discord Bot"), discordStatus, discordClass, t(lang, "Bot設定の存在を確認します。", "Based on current Bot configuration.")) +
-		diagnosticItem(t(lang, "通知ルーティング", "Notification routing"), routingStatus, routingClass, fmt.Sprintf(t(lang, "%d件のProductionルートと設定を確認しました。", "%d Production routes and the configuration were inspected."), len(routes))) +
-		diagnosticItem(t(lang, "参加者取得", "Participant retrieval"), participantStatus, participantClass, fmt.Sprintf(t(lang, "Kitsu Production team APIから%d人を取得しました。", "The Kitsu Production team API returned %d people."), participantCount)) +
-		diagnosticItem(t(lang, "ユーザー紐づけ", "User linking"), linkStatus, linkClass, fmt.Sprintf(t(lang, "このProductionに記録されたユーザー割り当て: %d件。", "User assignments recorded for this Production: %d."), linkedCount)) +
+		diagnosticItem(t(lang, "通知ルーティング", "Notification routing"), routingStatus, routingClass, fmt.Sprintf(t(lang, "%d件のプロダクションルートと設定を確認しました。", "%d Production routes and the configuration were inspected."), len(routes))) +
+		diagnosticItem(t(lang, "参加者取得", "Participant retrieval"), participantStatus, participantClass, fmt.Sprintf(t(lang, "KitsuプロダクションのチームAPIから%d人を取得しました。", "The Kitsu Production team API returned %d people."), participantCount)) +
+		diagnosticItem(t(lang, "ユーザー紐づけ", "User linking"), linkStatus, linkClass, fmt.Sprintf(t(lang, "このプロダクションに記録されたユーザー割り当て: %d件。", "User assignments recorded for this Production: %d."), linkedCount)) +
 		`</div></details>` + detailSection
 	if has {
 		detailSection = `<details class="advanced-details" open><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary>` + details.String() + `</details>`
