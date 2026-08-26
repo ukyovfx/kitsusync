@@ -60,6 +60,197 @@ Kitsu task links are constructed only when the configured Kitsu host and stable 
 
 The renderer is deterministic for the same normalized data, language, preset, and template files. It does not perform network access. Discord delivery remains in `SendMessage`/`SendMessageBunch` and is not exercised by rendering tests.
 
+## Final notification card rules
+
+These rules apply to normal `WFA`, `RETAKE`, and `DONE` cards. Assignment
+notifications remain outside this redesign.
+
+The card hierarchy is:
+
+1. Task Type as plain text
+2. Entity / Task name
+3. Status icon and current status (`👀 WFA`, `🔄 RETAKE`, or `✅ DONE`)
+4. Transition-aware short message
+5. Previous → current, only for a real status transition
+6. Latest comment, when present
+7. Comment author, when present
+8. Assignee state
+9. Individually available action links (`Kitsu`, `Google Drive`)
+10. Preview image, when available
+
+The current status must not be repeated in a lower metadata field. In
+particular, the compact metadata block must not contain a redundant
+`Status` / `ステータス` field. Production is secondary metadata only when it
+adds useful context; assignee information remains because it is not otherwise
+duplicated.
+
+The embed accent/left border is the current Kitsu Task Status `color`. Valid
+Kitsu colors are never replaced with hard-coded WFA, RETAKE, or DONE colors.
+Missing, empty, malformed, or unsafe colors use the defined neutral KitsuSync
+fallback color. The status icon, short name, transition message, and Kitsu
+color together provide the primary state cue.
+
+Task Type names remain plain text. Process or decorative emoji must not be
+placed before a Task Type name.
+
+### Final embed schema
+
+The rendered payload has one compact embed plus optional message content for
+explicit user mentions:
+
+```text
+Payload
+  content: "<@user-id> ..." or empty
+  allowed_mentions.users: exactly the resolved recipient IDs, deduplicated
+  allowed_mentions.parse: empty
+  allowed_mentions.roles: empty
+  embeds[0]
+    title: entity/task title
+    description: status line, action message, transition, comment, and links
+    color: current Kitsu Task Status color or neutral fallback
+    url: safe Kitsu link, when available
+    fields:
+      Assignee: human-readable assignee state
+      Production: only when useful and not duplicated
+    image: preview image, only when available
+    footer: secondary Production/channel context, when useful
+```
+
+There is no `Status` / `ステータス` field in the compact metadata block.
+The status is represented only by the status line, icon, short name, and
+embed color. Empty optional fields are omitted rather than rendered as
+placeholders.
+
+The message content is the only place where mentions are emitted. The embed
+shows names and assignment information, never raw mention markup.
+
+### Final JP examples
+
+```text
+Compositing
+
+Shot / SC02 - cut009
+
+🔄 RETAKE
+レビュー結果により修正が必要です
+
+WFA → RETAKE
+
+コメント
+キャラクターに入る赤みをもう少し抑えてください
+— コメント投稿者
+
+担当
+UKYO M
+
+リンク
+Kitsu · Google Drive
+```
+
+```text
+Animation
+
+Asset / Character
+
+👀 WFA
+チェックをお願いします
+
+担当
+未割り当て
+```
+
+```text
+Compositing
+
+Shot / SC02 - cut009
+
+✅ DONE
+レビューが完了しました
+
+WFA → DONE
+```
+
+Comment-only updates keep the current status line and omit a transition line:
+
+```text
+🔄 RETAKE
+修正内容が更新されました
+
+コメント
+この部分を再調整してください
+```
+
+### Final EN examples
+
+```text
+Compositing
+
+Shot / SC02 - cut009
+
+🔄 RETAKE
+A revision is required after review
+
+WFA → RETAKE
+
+Comment
+Please reduce the red tint
+— Comment by
+
+Assignee
+UKYO M
+
+Links
+Kitsu · Google Drive
+```
+
+```text
+Animation
+
+Asset / Character
+
+👀 WFA
+Please review
+
+Assignee
+Unassigned
+```
+
+```text
+Compositing
+
+Shot / SC02 - cut009
+
+✅ DONE
+Review completed
+
+WFA → DONE
+```
+
+For a comment-only update:
+
+```text
+🔄 RETAKE
+Revision details were updated
+
+Comment
+Please adjust this area again
+```
+
+Mention examples:
+
+```text
+WFA:     <@checker-id>          + embed with Assignee: UKYO M
+RETAKE:  <@artist-a> <@artist-b> + embed with both assignee names
+DONE:    empty content by default + embed only
+missing mapping: empty content   + embed with Kitsu assignee name
+```
+
+When a DONE notification has an explicitly configured operational recipient,
+the same payload may contain one deduplicated user mention. A comment-only
+WFA update follows the WFA recipient rule; a comment-only RETAKE update
+follows the RETAKE assignee rule. A comment-only DONE update is Embed-only by
+default.
+
 ## External-write boundary
 
 Polling reads Kitsu. Notification delivery is the only Discord message write in this path. This specification and its renderer tests do not send Discord messages, create channels/webhooks, modify Kitsu, or modify Production routing state.

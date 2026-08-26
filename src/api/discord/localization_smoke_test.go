@@ -26,7 +26,12 @@ func renderRichTemplate(t *testing.T, name string, data Template) string {
 		t.Fatalf("read %s: %v", tplPath, err)
 	}
 
-	tpl, err := template.New(name).Parse(string(content))
+	tpl, err := template.New(name).Funcs(template.FuncMap{
+		"json": func(value string) string {
+			encoded, _ := json.Marshal(value)
+			return strings.Trim(string(encoded), "\"")
+		},
+	}).Parse(string(content))
 	if err != nil {
 		t.Fatalf("parse %s: %v", name, err)
 	}
@@ -44,8 +49,8 @@ func TestLocalizedStatusTransitionMessage_CompactJA(t *testing.T) {
 		prev, current, want string
 	}{
 		{"WIP", "WFA", "📩 チェック依頼が送られました"},
-		{"WFA", "RETAKE", "🔁 リテイクが入りました"},
-		{"WFA", "DONE", "🎉 最終承認されました！お疲れ様でした"},
+		{"WFA", "RETAKE", "レビュー結果により修正が必要です"},
+		{"WFA", "DONE", "レビューが完了しました"},
 		{"WFA", "WIP", "🛠 修正作業に戻りました"},
 		{"RETAKE", "WIP", "🛠 リテイク対応を開始しました"},
 		{"WIP", "RETAKE", "🔁 リテイクが入りました"},
@@ -83,9 +88,9 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 			name:       "retake",
 			status:     "RETAKE",
 			prev:       "WFA",
-			statusLine: "🔁 RETAKE",
+			statusLine: "🔄 RETAKE",
 			actionLine: "修正をお願いします",
-			transLine:  "🔁 リテイクが入りました",
+			transLine:  "レビュー結果により修正が必要です",
 		},
 		{
 			name:       "done",
@@ -93,7 +98,7 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 			prev:       "WFA",
 			statusLine: "✅ DONE",
 			actionLine: "完了しました。必要に応じてご確認ください。",
-			transLine:  "🎉 最終承認されました！お疲れ様でした",
+			transLine:  "レビューが完了しました",
 		},
 	}
 
@@ -104,6 +109,10 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 			StatusMessage:           localizedStatusMessageInfoOrFail(t, tc.status),
 			StatusTransitionMessage: localizedStatusTransitionMessage(tc.prev, tc.status, "ja"),
 			CommentAuthor:           "山田太郎",
+			CommentContent:          "確認をお願いします",
+			CommentLabel:            "コメント",
+			CommentAuthorLabel:      "コメント投稿者",
+			LinksLabel:              "リンク",
 			TaskURL:                 "https://kitsu.example.com/task/1",
 			GoogleDriveURL:          "https://drive.example.com/folder/1",
 		}
@@ -111,7 +120,7 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 		mustContain(t, rendered, tc.statusLine)
 		mustContain(t, rendered, tc.actionLine)
 		mustContain(t, rendered, tc.transLine)
-		mustContain(t, rendered, "変更者: 山田太郎")
+		mustContain(t, rendered, "コメント投稿者: 山田太郎")
 		mustContain(t, rendered, "[🦊 KITSU](https://kitsu.example.com/task/1)")
 		mustContain(t, rendered, "[📁 Drive](https://drive.example.com/folder/1)")
 	}
@@ -143,7 +152,8 @@ func TestRichFields_RemainValidJSONAndMinimal(t *testing.T) {
 	data := Template{
 		PreviousStatus: "WIP",
 		CurrentStatus:  "WFA",
-		AssigneesStr:   "A, B",
+		AssigneesStr:   `A "quoted", B`,
+		AssigneeLabel:  "担当",
 		GoogleDriveURL: "https://drive.example.com/folder/1",
 	}
 	rendered := renderRichTemplate(t, "fields.tpl", data)
@@ -152,14 +162,11 @@ func TestRichFields_RemainValidJSONAndMinimal(t *testing.T) {
 	if err := json.Unmarshal([]byte(rendered), &fields); err != nil {
 		t.Fatalf("fields JSON must be valid: %v\nraw=%s", err, rendered)
 	}
-	if len(fields) != 2 {
-		t.Fatalf("expected 2 compact fields, got %d", len(fields))
+	if len(fields) != 1 {
+		t.Fatalf("expected 1 compact field, got %d", len(fields))
 	}
-	if fields[0].Name != "📊 ステータス" {
-		t.Fatalf("unexpected first field: %+v", fields[0])
-	}
-	if fields[1].Name != "👤 担当" {
-		t.Fatalf("unexpected second field: %+v", fields[1])
+	if fields[0].Name != "担当" {
+		t.Fatalf("unexpected field: %+v", fields[0])
 	}
 }
 

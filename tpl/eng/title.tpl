@@ -1,2 +1,2 @@
-{{- if .ParentName}}{{.ParentName}}{{- else}}{{.EntityType}}{{- end}} / {{.TaskName}} / {{.TaskType}}
+{{- if .ParentName}}{{.ParentName}}{{- else}}{{.EntityType}}{{- end}} / {{.TaskName}}
 

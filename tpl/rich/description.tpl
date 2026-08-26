@@ -1,11 +1,16 @@
 {{if .IsAssignNotification}}📋 タスクがアサインされました
 
-{{end}}{{.StatusEmoji}} {{.StatusUpper}}{{if .IsCommentOnly}} 💬{{end}}
-{{if .MentionContent}}> {{.MentionContent}}
-{{end}}{{if .StatusMessage}}{{.StatusMessage}}{{end}}{{if .StatusTransitionMessage}}
-{{.StatusTransitionMessage}}{{end}}
+{{end}}{{.StatusEmoji}} {{.StatusUpper}}
+{{if .IsCommentOnly}}{{.CommentOnlyMessage}}{{else}}{{.StatusMessage}}{{if .StatusTransitionMessage}}
+{{.StatusTransitionMessage}}{{end}}{{if .PreviousStatus}}
+{{.PreviousStatus}} → {{.StatusUpper}}{{end}}{{end}}{{if .CommentContent}}
 
-変更者: {{.CommentAuthor}}{{if .CommentContent}}
-💬 {{.CommentContent}}{{end}}
+{{.CommentLabel}}
+{{.CommentContent}}{{if .CommentAuthor}}
+— {{.CommentAuthorLabel}}: {{.CommentAuthor}}{{end}}{{end}}{{if .TaskURL}}
 
-**[🦊 KITSU]({{.TaskURL}})**{{if .GoogleDriveURL}} ・ [📁 Drive]({{.GoogleDriveURL}}){{end}}
+{{.LinksLabel}}
+[🦊 KITSU]({{.TaskURL}}){{if .GoogleDriveURL}} ・ [📁 Drive]({{.GoogleDriveURL}}){{end}}{{else if .GoogleDriveURL}}
+
+{{.LinksLabel}}
+[📁 Drive]({{.GoogleDriveURL}}){{end}}

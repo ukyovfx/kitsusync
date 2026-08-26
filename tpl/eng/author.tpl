@@ -1,1 +1,1 @@
-{{- range .Assignees}}{{.Fullname}}  {{- end}}
+{{.TaskType}}

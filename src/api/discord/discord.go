@@ -89,11 +89,21 @@ type Template struct {
 	IsCommentOnly           bool   // コメントのみの更新（ステータス変化なし）
 	IsAssignNotification    bool   // 新規タスクアサイン（TODO ステータス、notifyOnAssign=true）
 	StatusTransitionMessage string // ステータス遷移を説明するメッセージ
+	CommentOnlyMessage      string
+	CommentLabel            string
+	CommentAuthorLabel      string
+	AssigneeLabel           string
+	LinksLabel              string
 	ChannelName             string // 通知先の Discord チャンネル名（ルーティング確認用）
 	NotificationLanguage    string
 	AllowedUserIDs          []string
 	Color                   int
 }
+
+const (
+	neutralEmbedColor         = 0x64748B
+	maxNotificationRecipients = 20
+)
 
 // Discord APIのメッセージ作成レスポンス
 type DiscordMessage struct {
@@ -166,9 +176,9 @@ func localizedStatusMessageInfo(status, lang string) (string, string) {
 		return "チェックをお願いします", "👀"
 	case "RETAKE":
 		if normalizeNotificationLang(lang) == "en" {
-			return "A revision is needed", "🔁"
+			return "A revision is needed", "🔄"
 		}
-		return "修正をお願いします", "🔁"
+		return "修正をお願いします", "🔄"
 	case "DONE":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Completed. Please check if needed.", "✅"
@@ -202,19 +212,19 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 	switch key {
 	case "RETAKE->WFA":
 		if normalizeNotificationLang(lang) == "en" {
-			return "A revised version has been uploaded"
+			return "The revision is ready for review"
 		}
-		return "修正版がアップされました"
+		return "修正が完了しました。再チェックをお願いします"
 	case "RETAKE->DONE":
 		if normalizeNotificationLang(lang) == "en" {
-			return "Completed after revision"
+			return "Revision completed"
 		}
-		return "✅ 作業完了・承認されました"
+		return "修正対応が完了しました"
 	case "WFA->RETAKE":
 		if normalizeNotificationLang(lang) == "en" {
-			return "Review requested additional changes"
+			return "A revision is required after review"
 		}
-		return "🔁 リテイクが入りました"
+		return "レビュー結果により修正が必要です"
 	case "WFA->WIP":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Returned to rework"
@@ -242,9 +252,9 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 		return "📩 チェック依頼が送られました"
 	case "WFA->DONE":
 		if normalizeNotificationLang(lang) == "en" {
-			return "Final review is complete"
+			return "Review completed"
 		}
-		return "🎉 最終承認されました！お疲れ様でした"
+		return "レビューが完了しました"
 	case "RETAKE->WIP":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Revision work has started"
@@ -273,6 +283,112 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 	default:
 		return ""
 	}
+}
+
+func localizedCommentOnlyMessage(status, lang string) string {
+	if normalizeNotificationLang(lang) == "en" {
+		return "Revision details were updated"
+	}
+	return "修正内容が更新されました"
+}
+
+func parseKitsuStatusColor(raw string) int {
+	hex := strings.TrimSpace(raw)
+	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) == 3 {
+		hex = string([]byte{hex[0], hex[0], hex[1], hex[1], hex[2], hex[2]})
+	}
+	if len(hex) != 6 {
+		return neutralEmbedColor
+	}
+	value, err := strconv.ParseUint(hex, 16, 32)
+	if err != nil {
+		return neutralEmbedColor
+	}
+	return int(value)
+}
+
+func isValidDiscordUserID(id string) bool {
+	if len(id) < 2 || len(id) > 30 {
+		return false
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func uniqueDiscordIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if !isValidDiscordUserID(id) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+		if len(result) >= maxNotificationRecipients {
+			break
+		}
+	}
+	return result
+}
+
+func mentionContent(ids []string) string {
+	ids = uniqueDiscordIDs(ids)
+	mentions := make([]string, len(ids))
+	for i, id := range ids {
+		mentions[i] = "<@" + id + ">"
+	}
+	return strings.Join(mentions, " ")
+}
+
+func notificationRecipientCandidates(status string, assignNotification bool, assignees, checkers []string, conf config.Config) []string {
+	if assignNotification {
+		var candidates []string
+		if containsIgnoreCase(conf.Mention.CheckerStatuses, status) {
+			candidates = append(candidates, checkers...)
+		}
+		if containsIgnoreCase(conf.Mention.ArtistStatuses, status) {
+			candidates = append(candidates, assignees...)
+		}
+		return uniqueDiscordIDs(candidates)
+	}
+	switch strings.ToUpper(status) {
+	case "WFA":
+		return uniqueDiscordIDs(checkers)
+	case "RETAKE":
+		return uniqueDiscordIDs(assignees)
+	case "DONE":
+		var candidates []string
+		if containsIgnoreCase(conf.Mention.CheckerStatuses, status) {
+			candidates = append(candidates, checkers...)
+		}
+		if containsIgnoreCase(conf.Mention.ArtistStatuses, status) {
+			candidates = append(candidates, assignees...)
+		}
+		return uniqueDiscordIDs(candidates)
+	default:
+		return nil
+	}
+}
+
+func safeNotificationURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "YOUR_FOLDER_ID") {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return ""
+	}
+	return raw
 }
 
 func statusTransitionMessage(prev, current string) string {
@@ -526,23 +642,6 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 	return result
 }
 
-func uniqueDiscordIDs(ids []string) []string {
-	seen := make(map[string]struct{}, len(ids))
-	result := make([]string, 0, len(ids))
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
-	}
-	return result
-}
-
 func discordHTTPErrorCategory(statusCode int) string {
 	switch statusCode {
 	case http.StatusBadRequest:
@@ -593,8 +692,6 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// 既に追加した DiscordID を seen で重複排除する。
 		var assigneeNames []string
 		var artistMentions []string
-		var allowedUserMentions []string
-		seenDiscordID := make(map[string]bool)
 		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
 		for i := 0; i < len(elem.Assignees); i++ {
 			if elem.Assignees[i].IsBot {
@@ -611,11 +708,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			if UserMapResolver != nil {
 				assigneeEmail := elem.Assignees[i].Email
 				if did := UserMapResolver(elem.Project.ID, fullName, assigneeEmail); did != "" {
-					if !seenDiscordID[did] {
-						artistMentions = append(artistMentions, "<@"+did+">")
-						allowedUserMentions = append(allowedUserMentions, did)
-						seenDiscordID[did] = true
-					}
+					artistMentions = append(artistMentions, did)
 					matched = true
 				}
 			}
@@ -623,11 +716,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			if !matched {
 				for _, u := range conf.Mention.UserMap {
 					if u.KitsuName == fullName {
-						if !seenDiscordID[u.DiscordID] {
-							artistMentions = append(artistMentions, "<@"+u.DiscordID+">")
-							allowedUserMentions = append(allowedUserMentions, u.DiscordID)
-							seenDiscordID[u.DiscordID] = true
-						}
+						artistMentions = append(artistMentions, u.DiscordID)
 						matched = true
 						break
 					}
@@ -642,29 +731,28 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		}
 		if len(assigneeNames) > 0 {
 			placeholders.AssigneesStr = strings.Join(assigneeNames, ", ")
+		} else if normalizeNotificationLang(notifLang) == "en" {
+			placeholders.AssigneesStr = "Unassigned"
 		} else {
 			placeholders.AssigneesStr = "未割り当て"
 		}
 
 		// タスクタイプからチェッカーの Discord ID 一覧を検索（DB 優先、複数人対応）
-		var checkerMentionList []string
+		var checkerIDs []string
 		if CheckerResolver != nil {
 			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.Name); len(dids) > 0 {
 				for _, did := range dids {
-					checkerMentionList = append(checkerMentionList, "<@"+did+">")
-					allowedUserMentions = append(allowedUserMentions, did)
+					checkerIDs = append(checkerIDs, did)
 				}
 			}
 		}
-		if len(checkerMentionList) == 0 {
+		if len(checkerIDs) == 0 {
 			for _, c := range conf.Mention.Checkers {
 				if strings.EqualFold(c.TaskType, elem.TaskType.Name) {
-					checkerMentionList = append(checkerMentionList, "<@"+c.DiscordID+">")
-					allowedUserMentions = append(allowedUserMentions, c.DiscordID)
+					checkerIDs = append(checkerIDs, c.DiscordID)
 				}
 			}
 		}
-		checkerMention := strings.Join(checkerMentionList, " ")
 
 		// ステータスごとのメンション対象を conf.Mention の設定から決める。
 		// CheckerStatuses に含まれるステータスではチェッカーをメンション、
@@ -672,26 +760,17 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
 		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
-		var mentionParts []string
-		if containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) {
-			if checkerMention != "" {
-				mentionParts = append(mentionParts, checkerMention)
-			} else if len(conf.Mention.Checkers) > 0 {
-				slog.Warn("No checker configured for task type; checker will not be @-mentioned",
-					"taskType", elem.TaskType.Name,
-					"status", currentStatus,
-					"taskID", elem.Task.ID,
-					"hint", "add this task type to [[mention.checkers]] in conf.toml")
-			}
-		}
-		if containsIgnoreCase(conf.Mention.ArtistStatuses, currentStatus) {
-			if artistJoined := strings.Join(artistMentions, " "); artistJoined != "" {
-				mentionParts = append(mentionParts, artistJoined)
-			}
+		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, artistMentions, checkerIDs, conf)
+		if len(recipientIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
+			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
+				"taskType", elem.TaskType.Name,
+				"status", currentStatus,
+				"taskID", elem.Task.ID,
+				"hint", "add this task type to [[mention.checkers]] in conf.toml")
 		}
 		// 緊急ステータスは @here でチャンネル全員に通知
 		// @here and @everyone are never emitted by KitsuSync.
-		mentionContent := strings.Join(mentionParts, " ")
+		mentionContent := mentionContent(recipientIDs)
 		statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
 
 		placeholders.MentionContent = mentionContent
@@ -700,16 +779,32 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// ストレージ URL はプロジェクト別 DB 優先、なければ conf.toml のグローバル値
 		if GoogleDriveURLResolver != nil {
 			if u := GoogleDriveURLResolver(elem.Project.Project.ID); u != "" {
-				placeholders.GoogleDriveURL = u
+				placeholders.GoogleDriveURL = safeNotificationURL(u)
 			} else {
-				placeholders.GoogleDriveURL = conf.GoogleDrive.URL
+				placeholders.GoogleDriveURL = safeNotificationURL(conf.GoogleDrive.URL)
 			}
 		} else {
-			placeholders.GoogleDriveURL = conf.GoogleDrive.URL
+			placeholders.GoogleDriveURL = safeNotificationURL(conf.GoogleDrive.URL)
 		}
 		placeholders.IsCommentOnly = elem.IsCommentOnly
 		placeholders.IsAssignNotification = elem.IsAssignNotification
-		placeholders.StatusTransitionMessage = localizedStatusTransitionMessage(elem.PreviousStatusName, elem.TaskStatus.ShortName, notifLang)
+		placeholders.CommentOnlyMessage = localizedCommentOnlyMessage(currentStatus, notifLang)
+		if normalizeNotificationLang(notifLang) == "en" {
+			placeholders.CommentLabel = "Comment"
+			placeholders.CommentAuthorLabel = "Comment by"
+			placeholders.AssigneeLabel = "Assignee"
+			placeholders.LinksLabel = "Links"
+		} else {
+			placeholders.CommentLabel = "コメント"
+			placeholders.CommentAuthorLabel = "コメント投稿者"
+			placeholders.AssigneeLabel = "担当"
+			placeholders.LinksLabel = "リンク"
+		}
+		if elem.IsCommentOnly {
+			placeholders.StatusTransitionMessage = ""
+		} else {
+			placeholders.StatusTransitionMessage = localizedStatusTransitionMessage(elem.PreviousStatusName, elem.TaskStatus.ShortName, notifLang)
+		}
 
 		// TaskURL を組み立て
 		category := "assets"
@@ -717,30 +812,33 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		if strings.Contains(lowEntityType, "shot") || strings.Contains(lowEntityType, "sequence") || strings.Contains(lowEntityType, "episode") {
 			category = "shots"
 		}
-		host := conf.Kitsu.Hostname
-		if !strings.HasSuffix(host, "/") {
-			host += "/"
+		host := safeNotificationURL(conf.Kitsu.Hostname)
+		if host != "" {
+			if !strings.HasSuffix(host, "/") {
+				host += "/"
+			}
+			// ショット一覧 or アセット一覧に飛ぶ
+			placeholders.TaskURL = fmt.Sprintf("%sproductions/%s/%s", host, url.PathEscape(elem.Project.ID), category)
 		}
-		// ショット一覧 or アセット一覧に飛ぶ
-		placeholders.TaskURL = fmt.Sprintf("%sproductions/%s/%s", host, elem.Project.ID, category)
 
 		// Kitsu プレビュー画像 URL を組み立て
 		// Entity.PreviewFileID は interface{} なので string にキャストする
 		// パス: /api/pictures/thumbnails/preview-files/{id}.png
 		// nginx で認証バイパス設定が必要（README 参照）
 		if id, ok := elem.Entity.Entity.PreviewFileID.(string); ok && id != "" {
-			placeholders.PreviewImageURL = fmt.Sprintf("%sapi/pictures/thumbnails/preview-files/%s.png", host, id)
+			if host != "" {
+				placeholders.PreviewImageURL = fmt.Sprintf("%sapi/pictures/thumbnails/preview-files/%s.png", host, url.PathEscape(id))
+			}
 		}
 
 		// カラーコードを変換（ステータスカラー → フォールバック用）
-		hexColor := strings.ReplaceAll(elem.TaskStatus.Color, "#", "")
-		intColor, _ := strconv.ParseInt(hexColor, 16, 64)
+		intColor := parseKitsuStatusColor(elem.TaskStatus.Color)
 
 		// テンプレートを展開
 		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)
 
 		placeholders.NotificationLanguage = notifLang
-		placeholders.AllowedUserIDs = allowedUserMentions
+		placeholders.AllowedUserIDs = recipientIDs
 		placeholders.Color = int(intColor)
 		payload := RenderNotificationPayload(placeholders, tplPreset)
 
@@ -792,7 +890,12 @@ func parseTaskTemplate(tplFilePath string, data Template) string {
 	if err != nil {
 		return ""
 	}
-	t := template.Must(template.New("template").Parse(string(tpl)))
+	t := template.Must(template.New("template").Funcs(template.FuncMap{
+		"json": func(value string) string {
+			encoded, _ := json.Marshal(value)
+			return strings.Trim(string(encoded), "\"")
+		},
+	}).Parse(string(tpl)))
 	output := new(bytes.Buffer)
 	t.Execute(output, data)
 	return strings.TrimSpace(output.String())
