@@ -4,7 +4,18 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- The current v0.4.0 candidate is documented below; no post-candidate changes are listed here.
+- The current v0.4.1 candidate is documented below; v0.4.0 remains historical.
+
+## v0.4.1
+
+### Changed
+
+- Documentation and release metadata now identify the current candidate as v0.4.1 while preserving the historical v0.4.0 entry.
+- Documentation asset cache identity is refreshed so updated operator guidance is served after deployment.
+
+### Fixed
+
+- Clean-clone and runtime documentation loading now avoid reusing an older same-origin docs asset.
 
 ## v0.4.0
 

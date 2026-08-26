@@ -1,6 +1,6 @@
 # Setup Flow Reference
 
-This document describes the current operator-facing setup flow for KitsuSync v0.4.0.
+This document describes the current operator-facing setup flow for KitsuSync v0.4.1.
 
 The normal setup path is now:
 
@@ -23,10 +23,13 @@ The current flow is organized as:
 
 | Step | Purpose |
 |------|---------|
-| Step 1: Bot Settings | Review shared bot/runtime prerequisites |
-| Step 2: Project Routing | Select a Kitsu project, routing template, and project-level Discord Server / Guild ID |
-| Step 3: Resource Creation | Create the Discord categories, channels, and webhooks for that project |
-| Step 4: Test Notification | Confirm delivery after Discord resources are created |
+| Step 1: Prerequisites | Review shared Kitsu and Discord Bot readiness |
+| Step 2: Production | Select the Kitsu Production to connect |
+| Step 3: Discord Server | Select the project-level Discord Server / Guild ID |
+| Step 4: Channel Plan | Review Task Type channels, destinations, and order |
+| Step 5: Review | Confirm the complete plan before execution |
+| Step 6: Execute | Create or reuse Discord resources and save routing |
+| Step 7: Complete | Verify the saved connection and open the Production |
 
 This is the only normal first-time setup path operators should follow.
 
@@ -116,4 +119,4 @@ Historical docs and older releases may reference:
 - Manual Setup
 - Setup Status
 
-Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.0.
+Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.1.

@@ -1,10 +1,10 @@
-# KitsuSync v0.4.0 Release Checklist
+# KitsuSync v0.4.1 Release Checklist
 
-Use this as the v0.4.0 release gate. Any unchecked item in the `Must Pass` section is a release blocker.
+Use this as the v0.4.1 release gate. Any unchecked item in the `Must Pass` section is a release blocker.
 
 ## Must Pass
 
-- [ ] release tag/version matches the intended release (for example `v0.4.0`)
+- [ ] release tag/version matches the intended release (for example `v0.4.1`)
 - [ ] the current release notes are ready
 - [ ] README matches the current setup flow, scope, limitations, and roadmap
 - [ ] `.env.example` and `conf.toml.example` are up to date
