@@ -78,7 +78,7 @@ If you get a 502 or connection refused, the app is still starting — wait a mom
 2. If no Kitsu host is configured, enter the Kitsu URL.
 3. Sign in with your Kitsu manager or admin account.
 4. Complete the dedicated Kitsu runtime connection in `/bot/setup`. Until it succeeds, polling and notifications remain paused.
-5. Configure Discord in Bot Settings, then use Project Management to create routing for one project at a time.
+5. Configure Discord in Bot Settings, then manage each selected Production from `/bot/admin/projects`. Notifications, Task Type channel settings, pause/resume, and `Check without sending` remain on that single Production surface. The older `/bot/admin/production-routing` URL is compatibility-only.
 
 Invalid credentials or a temporary Kitsu outage do not stop the Web UI. Reauthenticate from the setup flow; saved configuration is retained. Browser session tokens are not reused by background polling. Do not expose port 8090 directly to the public internet.
 
@@ -87,8 +87,8 @@ The normal operator flow now moves through these stages:
 | Stage | What it does |
 |------|-------------|
 | Bot Settings | Reviews shared bot/runtime prerequisites |
-| Project Routing | Selects the Kitsu project and routing template |
-| Guild Assignment | Sets the Discord Server / Guild ID for that project |
+| Production selection | Selects the Kitsu Production and Discord server |
+| Channel settings | Reviews deterministic Task Type channels and exact reuse/create results |
 | Test Notification | Confirms delivery after channel/webhook creation |
 
 Connection tests do not create Discord resources. Project setup creates Discord categories, channels, and webhooks only after the confirmation step.
@@ -112,7 +112,8 @@ If Project Setup fails after partial Discord provisioning, rollback is best-effo
 | Task | Where |
 |------|-------|
 | Monitor system health | `/bot/admin` (dashboard) |
-| Create/manage project routing | `/bot/setup` |
+| Create a new Production connection | `/bot/setup` |
+| Manage an existing Production | `/bot/admin/projects?project=<production-id>` |
 | Review/edit guild per project | `/bot/admin/projects` |
 | Add more user/checker mappings | `/bot/admin/users`, `/bot/admin/checkers` |
 | Set per-project storage links | `/bot/admin/drive` |

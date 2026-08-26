@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gookit/slog"
 )
 
 type sessionData struct {
@@ -20,6 +23,14 @@ type sessionData struct {
 	KitsuToken   string
 	Role         string
 	BotEditUntil time.Time
+	Wizard       wizardState
+}
+
+type wizardState struct {
+	ProductionID    string
+	GuildID         string
+	PlanFingerprint string
+	Confirmed       bool
 }
 
 var (
@@ -125,6 +136,84 @@ func RequireSession(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// RequestTrace wraps the current admin/setup routes with secret-safe request
+// diagnostics. It deliberately records only routing metadata and the final
+// HTTP status; request bodies and credential-bearing fields are never logged.
+func RequestTrace(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r == nil || !tracePath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		action := traceAction(r)
+		authenticated := false
+		if _, ok := currentSessionData(r); ok {
+			authenticated = true
+		}
+		statusWriter := &traceResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(statusWriter, r)
+		status := statusWriter.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		slog.Info("admin/setup request", "method", r.Method, "path", r.URL.Path, "status", status, "action", action, "session_authenticated", authenticated)
+	})
+}
+
+type traceResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *traceResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *traceResponseWriter) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func tracePath(path string) bool {
+	return path == "/setup" || path == "/bot/setup" ||
+		path == "/admin" || path == "/bot/admin" ||
+		strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/bot/admin/")
+}
+
+func traceAction(r *http.Request) string {
+	if r == nil {
+		return "missing"
+	}
+	action := strings.TrimSpace(r.URL.Query().Get("action"))
+	if action == "" && r.Method == http.MethodPost && strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") && r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			r.Body = io.NopCloser(strings.NewReader(string(body)))
+			if values, parseErr := url.ParseQuery(string(body)); parseErr == nil {
+				action = strings.TrimSpace(values.Get("action"))
+			}
+		}
+	}
+	if action == "" {
+		return "missing"
+	}
+	for _, ch := range action {
+		if !(ch == '_' || ch == '-' || ch == ':' || ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9') {
+			return "other"
+		}
+	}
+	if len(action) > 64 {
+		return "other"
+	}
+	return action
+}
+
 func currentSessionData(r *http.Request) (sessionData, bool) {
 	if r == nil {
 		return sessionData{}, false
@@ -150,7 +239,33 @@ func CurrentSessionKitsuAuth(r *http.Request) (email, token, role string, ok boo
 	return session.Email, session.KitsuToken, session.Role, true
 }
 
-func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname string)) http.HandlerFunc {
+func wizardStateForRequest(r *http.Request) wizardState {
+	session, ok := currentSessionData(r)
+	if !ok {
+		return wizardState{}
+	}
+	return session.Wizard
+}
+
+func updateWizardState(r *http.Request, update func(*wizardState)) {
+	if r == nil {
+		return
+	}
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil || cookie.Value == "" {
+		return
+	}
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	session, ok := sessions[cookie.Value]
+	if !ok || time.Now().After(session.Expiry) {
+		return
+	}
+	update(&session.Wizard)
+	sessions[cookie.Value] = session
+}
+
+func LoginHandler(kitsuHostname string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -159,9 +274,6 @@ func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname strin
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
 			hostname := configuredHostname
-			if hostname == "" {
-				hostname = normalizeKitsuHostname(r.FormValue("hostname"))
-			}
 			email := strings.TrimSpace(r.FormValue("email"))
 			password := r.FormValue("password")
 			next := strings.TrimSpace(r.FormValue("next"))
@@ -186,10 +298,6 @@ func LoginHandler(kitsuHostname string, onAdminAuthenticated func(hostname strin
 				fmt.Fprint(w, loginPageHTML(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r))
 				return
 			}
-			if onAdminAuthenticated != nil {
-				onAdminAuthenticated(hostname)
-			}
-
 			token := newSessionToken(email, kitsuToken, role, next)
 			http.SetCookie(w, sessionCookie(r, token, int(sessionTTL.Seconds())))
 			http.Redirect(w, r, next, http.StatusSeeOther)
@@ -240,10 +348,10 @@ func kitsuLoginCheck(loginURL, email, password string) (role, kitsuToken string,
 	return result.User.Role, result.AccessToken, result.User.Role != "" && result.AccessToken != ""
 }
 
-func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
+func legacyLoginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
 	errHTML := ""
 	if errMsg != "" {
-		errHTML = `<div class="toast glass" style="background:rgba(255,106,80,.12);border-color:rgba(255,106,80,.24);color:#ffd7cf">` + html.EscapeString(errMsg) + `</div>`
+		errHTML = `<div class="toast glass" role="alert" aria-live="assertive" style="background:rgba(255,106,80,.12);border-color:rgba(255,106,80,.24);color:#ffd7cf">` + html.EscapeString(errMsg) + `</div>`
 	}
 	nextInput := ""
 	if next != "" {
@@ -251,7 +359,7 @@ func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request
 	}
 	hostnameInput := ""
 	if showHostname {
-		hostnameInput = `<label>` + t(lang, "Kitsu URL", "Kitsu URL") + `</label><input type="url" name="hostname" placeholder="http://127.0.0.1:8080" required>`
+		hostnameInput = `<label for="login-hostname">` + t(lang, "Kitsu URL", "Kitsu URL") + `</label><input id="login-hostname" type="url" name="hostname" placeholder="http://127.0.0.1:8080" required>`
 	}
 
 	body := fmt.Sprintf(`
@@ -268,10 +376,10 @@ func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request
     %s
     <div class="section-card glass">
       %s
-      <label>%s</label>
-      <input type="email" name="email" autocomplete="email" required autofocus>
-      <label>%s</label>
-      <input type="password" name="password" autocomplete="current-password" required>
+      <label for="login-email">%s</label>
+      <input id="login-email" type="email" name="email" autocomplete="email" required autofocus>
+      <label for="login-password">%s</label>
+      <input id="login-password" type="password" name="password" autocomplete="current-password" required>
       <div class="button-row">
         <button type="submit" class="btn">%s</button>
       </div>
@@ -289,5 +397,19 @@ func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request
 		t(lang, "ログイン", "Login"),
 	)
 
+	return appShell("KitsuSync", "", lang, r, "", body)
+}
+
+func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
+	errHTML := ""
+	if errMsg != "" {
+		errHTML = `<div class="toast glass" role="alert" aria-live="assertive">` + html.EscapeString(errMsg) + `</div>`
+	}
+	nextInput := ""
+	if next != "" {
+		nextInput = `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">`
+	}
+	_ = showHostname
+	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass"><label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
 	return appShell("KitsuSync", "", lang, r, "", body)
 }

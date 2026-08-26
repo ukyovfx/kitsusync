@@ -411,9 +411,9 @@ func workflowStatusNotifiable(shortName string) bool {
 func renderWorkflowDiagnosis(data workflowDiagnosisData, r *http.Request) string {
 	var out strings.Builder
 	out.WriteString(`<div class="section-stack">`)
-	out.WriteString(`<div class="section-card glass"><h2>Workflow Diagnosis</h2><p class="hint">Read-only. No changes will be applied to Kitsu or Discord.</p>`)
+	out.WriteString(`<div class="section-card glass"><h2>` + esc(tr(data.Lang, "workflow.title")) + `</h2><p class="hint">` + esc(tr(data.Lang, "workflow.read_only")) + `</p>`)
 	if data.Disconnected {
-		out.WriteString(`<div class="status-pill warn">Kitsu runtime is disconnected. Reconnect is required before diagnosis can run.</div>`)
+		out.WriteString(`<div class="status-pill warn">` + esc(tr(data.Lang, "workflow.disconnected")) + `</div>`)
 		out.WriteString(`</div></div>`)
 		return out.String()
 	}
@@ -432,17 +432,17 @@ func renderWorkflowDiagnosis(data workflowDiagnosisData, r *http.Request) string
 		return out.String()
 	}
 
-	out.WriteString(renderWorkflowSummary(data.Summary))
+	out.WriteString(renderWorkflowSummary(data.Lang, data.Summary))
 	out.WriteString(renderWorkflowTemplateSection(data))
 	out.WriteString(renderWorkflowActualSection(data))
 	out.WriteString(renderWorkflowStatusSection(data))
 	out.WriteString(renderWorkflowReferenceSection(data))
-	out.WriteString(`<p class="hint"><a href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(data.Production.ID), r)) + `">Back to Connected Productions</a></p></div>`)
+	out.WriteString(`<p class="hint"><a href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(data.Production.ID), r)) + `">` + esc(tr(data.Lang, "workflow.back")) + `</a></p></div>`)
 	return out.String()
 }
 
-func renderWorkflowSummary(summary workflowDiagnosisSummary) string {
-	return fmt.Sprintf(`<div class="section-card glass"><h3>Routing summary</h3><div class="metric-grid"><div class="metric-card"><div class="metric-label">Production Task Types</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">Unique resolved</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">Routed</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">Unrouted</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">Missing template entries</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">Ambiguous entries</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">Notifiable statuses</div><div class="metric-value">%d</div></div></div><p class="hint">Current routing is name-based. Multiple Task Types may share one Discord channel.</p></div>`, summary.ProductionTaskTypes, summary.UniqueResolved, summary.Routed, summary.Unrouted, summary.MissingTemplate, summary.Ambiguous, summary.NotifiableStatuses)
+func renderWorkflowSummary(lang string, summary workflowDiagnosisSummary) string {
+	return fmt.Sprintf(`<div class="section-card glass"><h3>%s</h3><div class="metric-grid"><div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div><div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div></div><p class="hint">%s</p></div>`, esc(tr(lang, "workflow.summary")), esc(t(lang, "Production Task Types", "Production Task Types")), summary.ProductionTaskTypes, esc(t(lang, "解決済み", "Unique resolved")), summary.UniqueResolved, esc(t(lang, "ルート済み", "Routed")), summary.Routed, esc(t(lang, "未ルート", "Unrouted")), summary.Unrouted, esc(t(lang, "template 不足", "Missing template entries")), summary.MissingTemplate, esc(t(lang, "曖昧な項目", "Ambiguous entries")), summary.Ambiguous, esc(t(lang, "通知対象 status", "Notifiable statuses")), summary.NotifiableStatuses, esc(t(lang, "現在の routing は名前ベースです。複数の Task Type が 1 つの Discord channel を共有する場合があります。", "Current routing is name-based. Multiple Task Types may share one Discord channel.")))
 }
 
 func renderWorkflowTemplateSection(data workflowDiagnosisData) string {
@@ -450,7 +450,7 @@ func renderWorkflowTemplateSection(data workflowDiagnosisData) string {
 	for _, entry := range data.TemplateEntries {
 		rows.WriteString(`<tr><td>` + esc(entry.ExpectedTaskType) + `</td><td>` + esc(entry.ExpectedChannel) + `</td><td>` + esc(fmt.Sprintf("global=%d / production=%d", len(entry.GlobalMatches), len(entry.ProductionMatches))) + `</td><td>` + esc(entry.EntityScope) + `</td><td>` + esc(strings.Join(entry.CurrentChannels, ", ")) + `</td><td>` + esc(entry.StableID) + `</td><td><span class="status-pill ` + workflowClass(entry.Classification) + `">` + esc(entry.Classification) + `</span>` + renderSimilar(entry.SimilarCandidates) + `</td></tr>`)
 	}
-	return `<div class="section-card glass"><h3>Current cg template comparison</h3><p class="hint">Similar names are informational only and are never treated as exact matches.</p><div style="overflow:auto"><table><thead><tr><th>Expected Task Type</th><th>Expected Discord channel</th><th>Kitsu matches</th><th>Entity scope</th><th>Current routing</th><th>Stable ID</th><th>Classification</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
+	return `<div class="section-card glass"><h3>` + esc(tr(data.Lang, "workflow.template")) + `</h3><p class="hint">` + esc(tr(data.Lang, "workflow.similar_names")) + `</p><div style="overflow:auto"><table><thead><tr><th>` + esc(t(data.Lang, "Expected Task Type", "Expected Task Type")) + `</th><th>` + esc(t(data.Lang, "Expected Discord channel", "Expected Discord channel")) + `</th><th>` + esc(t(data.Lang, "Kitsu matches", "Kitsu matches")) + `</th><th>Entity scope</th><th>Current routing</th><th>Stable ID</th><th>Classification</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
 }
 
 func renderWorkflowActualSection(data workflowDiagnosisData) string {
@@ -458,15 +458,15 @@ func renderWorkflowActualSection(data workflowDiagnosisData) string {
 	for _, entry := range data.ActualEntries {
 		channel := strings.Join(entry.CurrentChannels, ", ")
 		if channel == "" {
-			channel = "Unassigned"
+			channel = t(data.Lang, "未割り当て", "Unassigned")
 		}
 		refs := strings.Join(entry.TemplateRefs, ", ")
 		if refs == "" {
-			refs = "Not referenced by cg template"
+			refs = t(data.Lang, "cg template に未参照", "Not referenced by cg template")
 		}
 		rows.WriteString(`<tr><td>` + esc(entry.TaskType.Name) + `</td><td><code>` + esc(entry.TaskType.ID) + `</code></td><td>` + esc(entry.TaskType.ForEntity) + `</td><td>` + esc(entry.Department) + `</td><td>` + esc(channel) + `</td><td>` + esc(refs) + `</td></tr>`)
 	}
-	return `<div class="section-card glass"><h3>Production Task Types</h3><div style="overflow:auto"><table><thead><tr><th>Name</th><th>Stable ID</th><th>Scope</th><th>Department</th><th>Discord routing</th><th>cg template reference</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div>` + renderProductionAssets(data) + `</div>`
+	return `<div class="section-card glass"><h3>` + esc(t(data.Lang, "Production Task Types", "Production Task Types")) + `</h3><div style="overflow:auto"><table><thead><tr><th>` + esc(t(data.Lang, "名前", "Name")) + `</th><th>Stable ID</th><th>` + esc(t(data.Lang, "対象", "Scope")) + `</th><th>` + esc(t(data.Lang, "Department", "Department")) + `</th><th>Discord routing</th><th>cg template reference</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div>` + renderProductionAssets(data) + `</div>`
 }
 
 func renderProductionAssets(data workflowDiagnosisData) string {
@@ -475,9 +475,9 @@ func renderProductionAssets(data workflowDiagnosisData) string {
 		rows.WriteString(`<li>` + esc(asset.Name) + ` <code>` + esc(asset.ID) + `</code></li>`)
 	}
 	if rows.Len() == 0 {
-		return `<p class="hint">Production Asset Types: unavailable or none returned.</p>`
+		return `<p class="hint">` + esc(t(data.Lang, "Production Asset Types: 利用できないか、返却されませんでした。", "Production Asset Types: unavailable or none returned.")) + `</p>`
 	}
-	return `<p><strong>Production Asset Types</strong></p><ul>` + rows.String() + `</ul>`
+	return `<p><strong>` + esc(t(data.Lang, "Production Asset Types", "Production Asset Types")) + `</strong></p><ul>` + rows.String() + `</ul>`
 }
 
 func renderWorkflowStatusSection(data workflowDiagnosisData) string {
@@ -487,7 +487,7 @@ func renderWorkflowStatusSection(data workflowDiagnosisData) string {
 		flags := fmt.Sprintf("done=%t retake=%t feedback=%t wip=%t reviewable=%t", status.IsDone, status.IsRetake, status.IsFeedback, status.IsWIP, status.IsReviewable)
 		rows.WriteString(`<tr><td>` + esc(status.Name) + `</td><td>` + esc(status.ShortName) + `</td><td><code>` + esc(status.ID) + `</code></td><td>` + esc(flags) + `</td><td><span class="status-pill ` + workflowClass(fmt.Sprintf("%t", notifiable)) + `">` + esc(fmt.Sprintf("%t", notifiable)) + `</span></td></tr>`)
 	}
-	return `<div class="section-card glass"><h3>Production Task Statuses</h3><p class="hint">KitsuSync currently notifies only short names <code>wfa</code>, <code>retake</code>, and <code>done</code>.</p><div style="overflow:auto"><table><thead><tr><th>Name</th><th>Short name</th><th>Stable ID</th><th>Semantic flags</th><th>Would notify</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
+	return `<div class="section-card glass"><h3>` + esc(t(data.Lang, "Production Task Statuses", "Production Task Statuses")) + `</h3><p class="hint">` + esc(t(data.Lang, "現在 KitsuSync が通知する short name は wfa、retake、done だけです。", "KitsuSync currently notifies only short names wfa, retake, and done.")) + `</p><div style="overflow:auto"><table><thead><tr><th>` + esc(t(data.Lang, "名前", "Name")) + `</th><th>Short name</th><th>Stable ID</th><th>Semantic flags</th><th>Would notify</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
 }
 
 func renderWorkflowReferenceSection(data workflowDiagnosisData) string {
@@ -499,7 +499,7 @@ func renderWorkflowReferenceSection(data workflowDiagnosisData) string {
 	for _, department := range data.Departments {
 		departments.WriteString(`<li>` + esc(department.Name) + ` <code>` + esc(department.ID) + `</code></li>`)
 	}
-	return `<div class="section-card glass"><h3>Kitsu reference data</h3><div class="section-stack"><div><strong>Global Entity Types</strong><ul>` + entities.String() + `</ul></div><div><strong>Departments</strong><ul>` + departments.String() + `</ul></div></div></div>`
+	return `<div class="section-card glass"><h3>` + esc(t(data.Lang, "Kitsu 参照データ", "Kitsu reference data")) + `</h3><div class="section-stack"><div><strong>` + esc(t(data.Lang, "Global Entity Types", "Global Entity Types")) + `</strong><ul>` + entities.String() + `</ul></div><div><strong>` + esc(t(data.Lang, "Departments", "Departments")) + `</strong><ul>` + departments.String() + `</ul></div></div></div>`
 }
 
 func renderSimilar(names []string) string {

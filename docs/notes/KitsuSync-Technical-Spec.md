@@ -7,7 +7,7 @@ release_phase: v0.1.0-release-candidate
 
 # KitsuSync Technical Spec
 
-Historical note: this document preserves the v0.1.0 release-candidate technical scope. It is background material, not the current source of truth for the v0.4.0 maintenance state. For the current operator-facing setup flow, use `docs/SETUP_WIZARD.md` and `docs/notes/KitsuSync-CURRENT-STATE.md`.
+Historical note: this document preserves the v0.1.0 release-candidate technical scope. It is background material, not the current source of truth for the v0.4.1 maintenance state. For the current operator-facing setup flow, use `docs/SETUP_WIZARD.md` and `docs/notes/KitsuSync-CURRENT-STATE.md`.
 
 ## v0.1.0 Scope Vocabulary
 

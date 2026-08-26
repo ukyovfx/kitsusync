@@ -2,8 +2,9 @@
 package config
 
 import (
-	"io/ioutil"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
@@ -92,18 +93,36 @@ func Read() Config {
 	if os.Getenv("TEST") == "true" {
 		path = os.Getenv("CONF_PATH")
 	}
-	raw, err := ioutil.ReadFile(path)
+	config, err := ReadFromPath(path)
 	if err != nil {
 		slog.Fatal(err)
+	}
+	return config
+}
+
+// ReadFromPath loads a config file without exiting the process. It provides a
+// typed directory diagnostic so a bad bind mount is distinguishable from a
+// malformed or missing configuration file.
+func ReadFromPath(path string) (Config, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read conf.toml: %w", err)
+	}
+	if info.IsDir() {
+		return Config{}, fmt.Errorf("read conf.toml: configured path is a directory (%s)", filepath.Base(path))
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read conf.toml: %w", err)
 	}
 
 	expanded := expandEnvBraces(string(raw))
 
 	var config Config
 	if err := toml.NewDecoder(strings.NewReader(expanded)).Decode(&config); err != nil {
-		slog.Fatal(err)
+		return Config{}, fmt.Errorf("parse conf.toml: %w", err)
 	}
-	return config
+	return config, nil
 }
 
 // Validate は設定内容を検査して問題のある項目を文字列スライスで返す。

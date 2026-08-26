@@ -92,7 +92,7 @@ func TestSessionCookieUsesSecureForForwardedHTTPS(t *testing.T) {
 	}
 }
 
-func TestLoginHandlerFirstRunAcceptsKitsuHostAndAdmin(t *testing.T) {
+func TestLoginHandlerUsesConfiguredHostAndAcceptsAdmin(t *testing.T) {
 	resetSessions()
 	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -100,18 +100,14 @@ func TestLoginHandlerFirstRunAcceptsKitsuHostAndAdmin(t *testing.T) {
 	}))
 	defer kitsu.Close()
 
-	configuredHost := ""
-	form := url.Values{"hostname": {kitsu.URL}, "email": {"admin@example.com"}, "password": {"not-returned"}}
+	form := url.Values{"hostname": {"https://unexpected.example.invalid"}, "email": {"admin@example.com"}, "password": {"not-returned"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
-	LoginHandler("", func(hostname string) { configuredHost = hostname })(rr, req)
+	LoginHandler(kitsu.URL)(rr, req)
 
-	if rr.Code != http.StatusSeeOther || !strings.HasPrefix(rr.Header().Get("Location"), "/bot/setup") {
-		t.Fatalf("expected setup redirect, got status=%d location=%s", rr.Code, rr.Header().Get("Location"))
-	}
-	if configuredHost != kitsu.URL+"/" {
-		t.Fatalf("configured host = %q", configuredHost)
+	if rr.Code != http.StatusSeeOther || !strings.HasPrefix(rr.Header().Get("Location"), "/bot/admin") {
+		t.Fatalf("expected admin redirect, got status=%d location=%s", rr.Code, rr.Header().Get("Location"))
 	}
 	if strings.Contains(rr.Body.String(), "not-returned") || strings.Contains(rr.Body.String(), "browser-session-token") {
 		t.Fatal("login response exposed a credential")
@@ -131,9 +127,21 @@ func TestLoginHandlerFirstRunRejectsNonAdmin(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
-	LoginHandler("", func(string) { called = true })(rr, req)
+	LoginHandler(kitsu.URL)(rr, req)
 
 	if rr.Code != http.StatusUnauthorized || called {
 		t.Fatalf("non-admin must be rejected, status=%d callback=%v", rr.Code, called)
+	}
+}
+
+func TestLoginPageHasOnlyEmailAndPassword(t *testing.T) {
+	for _, lang := range []string{"ja", "en"} {
+		html := loginPageHTML(lang, "", "", true, nil)
+		if strings.Contains(html, "login-hostname") || strings.Contains(html, "Kitsu URL") || strings.Contains(html, "kitsu-hostname") {
+			t.Fatalf("%s login page exposes endpoint input", lang)
+		}
+		if strings.Count(html, `name="email"`) != 1 || strings.Count(html, `name="password"`) != 1 {
+			t.Fatalf("%s login page does not contain exactly email/password fields", lang)
+		}
 	}
 }

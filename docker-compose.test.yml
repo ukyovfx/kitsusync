@@ -1,0 +1,23 @@
+services:
+  kitsu-test-mock:
+    image: golang:1.21-bookworm
+    working_dir: /mock
+    command: ["go", "run", "main.go"]
+    volumes:
+      - ./tools/test-kitsu-mock:/mock:ro
+    networks:
+      default:
+        aliases:
+          - kitsu.local
+
+  test:
+    image: golang:1.21-bookworm
+    working_dir: /src
+    command: ["go", "test", "./src/...", "-count=1", "-timeout=120s"]
+    environment:
+      CGO_ENABLED: "1"
+      KITSU_HOSTNAME: http://kitsu.local/
+    volumes:
+      - ./:/src
+    depends_on:
+      - kitsu-test-mock

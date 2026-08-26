@@ -12,13 +12,16 @@ v0.4.0 is an operator-flow release. It promotes Project Management in `/bot/setu
 
 ## Changes
 
-### Project Management-first setup flow
+### Production connection setup flow
 - `/bot/setup` now acts as the main operator setup surface.
-- The operator flow is organized around:
-  - Step 1: Bot Settings
-  - Step 2: Project Routing
-  - Step 3: Guild Assignment
-  - Step 4: Test Notification
+- The operator flow is organized around seven steps:
+  - Step 1: Prerequisites
+  - Step 2: Production
+  - Step 3: Discord Server
+  - Step 4: Channel Plan
+  - Step 5: Review
+  - Step 6: Execute
+  - Step 7: Complete
 - `/bot/admin/projects` remains available for review/edit, but is no longer the primary first-time setup destination.
 
 ### Legacy setup surface removal
@@ -35,10 +38,28 @@ v0.4.0 is an operator-flow release. It promotes Project Management in `/bot/setu
 - Bot Settings now focuses on shared runtime prerequisites rather than project destination configuration.
 - Discord Bot Token saves now persist across restarts by using durable app settings in addition to immediate runtime update.
 
+### Production notification routing
+
+- Current Production routing is identified by stable Production and Kitsu Task Type IDs.
+- Staged routing changes can reorder managed Discord channels, change destinations, and remove notification routes without deleting the underlying Task Type or channel.
+- Destructive channel deletion is separate, ownership-checked, permission-checked, and requires exact-name confirmation.
+- Stale or ambiguous Discord resources fail closed and are surfaced through diagnostics instead of being guessed.
+- JP/EN notification rendering, human-only mentions, and sanitized delivery audit behavior are covered by focused tests.
+
+### Readiness and observability
+
+- Discord permission/readiness checks use the target Production Guild and verify the required channel/webhook permissions.
+- Fully validated Kitsu, Discord, and Production routing state reports `overall_notification_readiness: "ready"`.
+- Runtime build metadata is passed by CI so `/health` and image labels can identify the source commit.
+
+### Documentation route
+
+- The read-only `/docs` and `/bot/docs` aliases serve the checked-in `docs.html` entry point and same-origin `site.jsx` asset in both Compose and standalone runtime images.
+
 ## Validation
 - Source/runtime alignment and operator flow were reviewed through the setup/admin redesign PR sequence.
 - Docs were updated so public setup guidance reflects the current Project Management-first flow.
-- `go test` validation was not rerun as part of this docs/version bump slice.
+- Release-candidate validation is tracked in `.github/RELEASE_CHECKLIST.md`; the final tag and public release remain intentionally separate.
 
 ## Upgrade Notes
 - No DB schema change is required for the version bump itself.

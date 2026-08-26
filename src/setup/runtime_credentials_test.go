@@ -34,3 +34,42 @@ func TestRuntimeKitsuPasswordIsEncryptedAndReloadable(t *testing.T) {
 		t.Fatal("encrypted runtime password did not survive reload")
 	}
 }
+
+func TestInspectRuntimeKitsuCredentialReportsMissingKeyWithoutSecrets(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "missing-runtime-secret.key"))
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "manager@example.invalid")
+	if err := model.SetSecretSettingWithError(db, RuntimeKitsuPasswordSettingKey, "v1:stored-ciphertext"); err != nil {
+		t.Fatal(err)
+	}
+
+	state := InspectRuntimeKitsuCredential(db)
+	if !state.EmailPresent || !state.CiphertextPresent || state.Decryptable || state.ErrorClass != "key_unavailable" {
+		t.Fatalf("unexpected safe credential state: %+v", state)
+	}
+}
+
+func TestInspectRuntimeKitsuCredentialReportsDecryptableState(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "manager@example.invalid")
+	if err := setRuntimeKitsuPassword(db, "runtime-password"); err != nil {
+		t.Fatal(err)
+	}
+	state := InspectRuntimeKitsuCredential(db)
+	if !state.EmailPresent || !state.CiphertextPresent || !state.Decryptable || state.ErrorClass != "" {
+		t.Fatalf("unexpected safe credential state: %+v", state)
+	}
+}

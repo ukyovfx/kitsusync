@@ -25,6 +25,20 @@ type runtimeSnapshot struct {
 	RuntimeAuthenticated bool        `json:"runtime_authenticated"`
 }
 
+type readinessSnapshot struct {
+	KitsuConfigured              bool   `json:"kitsu_configured"`
+	KitsuConnected               bool   `json:"kitsu_connected"`
+	KitsuReady                   bool   `json:"kitsu_ready"`
+	DiscordBotConfigured         bool   `json:"discord_bot_configured"`
+	DiscordAPIValidated          bool   `json:"discord_api_validated"`
+	ProductionRoutingConfigured  bool   `json:"production_routing_configured"`
+	OverallNotificationReadiness string `json:"overall_notification_readiness"`
+}
+
+var healthReadinessProvider = func() readinessSnapshot {
+	return readinessSnapshot{OverallNotificationReadiness: "unknown"}
+}
+
 type runtimeManager struct {
 	authMu   sync.Mutex
 	mu       sync.RWMutex
@@ -145,9 +159,11 @@ func healthHandler(runtime *runtimeManager) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		response := struct {
-			Status  string          `json:"status"`
-			Runtime runtimeSnapshot `json:"runtime"`
-		}{Status: "ok", Runtime: runtime.snapshot()}
+			Status    string            `json:"status"`
+			Build     buildInfo         `json:"build"`
+			Runtime   runtimeSnapshot   `json:"runtime"`
+			Readiness readinessSnapshot `json:"readiness"`
+		}{Status: "ok", Build: currentBuildInfo(), Runtime: runtime.snapshot(), Readiness: healthReadinessProvider()}
 		_ = json.NewEncoder(w).Encode(response)
 	}
 }

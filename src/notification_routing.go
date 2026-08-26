@@ -4,6 +4,7 @@ import (
 	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
+	"os"
 	"strings"
 
 	"gorm.io/gorm"
@@ -24,6 +25,8 @@ type ProductionRoutingDryRun struct {
 	MatchedRule      string `json:"matched_rule,omitempty"`
 	DestinationID    string `json:"destination_id,omitempty"`
 	RenderedPreview  string `json:"rendered_preview"`
+	User             string `json:"user,omitempty"`
+	Link             string `json:"link,omitempty"`
 	SkipReason       string `json:"skip_reason,omitempty"`
 	StaleIDDiagnosis string `json:"stale_id_diagnosis,omitempty"`
 }
@@ -64,28 +67,32 @@ func planProductionNotification(db *gorm.DB, payload kitsu.MessagePayload) produ
 	return plan
 }
 
+func productionTaskLink(payload kitsu.MessagePayload) string {
+	host := strings.TrimRight(strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")), "/")
+	if host == "" || strings.TrimSpace(payload.Project.ID) == "" || strings.TrimSpace(payload.Task.ID) == "" {
+		return "not supplied"
+	}
+	return fmt.Sprintf("%s/productions/%s/tasks/%s", host, strings.TrimSpace(payload.Project.ID), strings.TrimSpace(payload.Task.ID))
+}
+
 func renderProductionDryRunPreview(payload kitsu.MessagePayload) string {
 	status := strings.TrimSpace(payload.TaskStatus.ShortName)
 	if status == "" {
 		status = strings.TrimSpace(payload.TaskStatus.Name)
 	}
-	return fmt.Sprintf("[%s] %s — %s (%s)",
-		status,
-		strings.TrimSpace(payload.Entity.Name),
-		strings.TrimSpace(payload.TaskType.Name),
-		strings.TrimSpace(payload.Project.Name),
-	)
+	user := strings.TrimSpace(payload.LatestComment.Author.FullName)
+	if user == "" && len(payload.Assignees) > 0 {
+		user = strings.TrimSpace(payload.Assignees[0].FullName)
+	}
+	if user == "" {
+		user = "not supplied"
+	}
+	return fmt.Sprintf("Production=%s; entity/task=%s; Task Type=%s; status=%s; user=%s; link=%s", strings.TrimSpace(payload.Project.Name), strings.TrimSpace(payload.Entity.Name), strings.TrimSpace(payload.TaskType.Name), status, user, productionTaskLink(payload))
 }
 
 func dryRunProductionNotification(db *gorm.DB, payload kitsu.MessagePayload, knownTaskTypeIDs map[string]struct{}) ProductionRoutingDryRun {
 	plan := planProductionNotification(db, payload)
-	result := ProductionRoutingDryRun{
-		ProductionID:    strings.TrimSpace(payload.Project.ID),
-		TaskTypeID:      strings.TrimSpace(payload.TaskType.ID),
-		DestinationID:   plan.DestinationID,
-		RenderedPreview: renderProductionDryRunPreview(payload),
-		SkipReason:      plan.SkipReason,
-	}
+	result := ProductionRoutingDryRun{ProductionID: strings.TrimSpace(payload.Project.ID), TaskTypeID: strings.TrimSpace(payload.TaskType.ID), DestinationID: plan.DestinationID, RenderedPreview: renderProductionDryRunPreview(payload), User: strings.TrimSpace(payload.LatestComment.Author.FullName), Link: productionTaskLink(payload), SkipReason: plan.SkipReason}
 	if plan.RuleID != 0 {
 		result.MatchedRule = fmt.Sprintf("route-%d", plan.RuleID)
 	}
@@ -101,11 +108,5 @@ func dryRunProductionNotification(db *gorm.DB, payload kitsu.MessagePayload, kno
 }
 
 func recordProductionRoutingSkip(db *gorm.DB, payload kitsu.MessagePayload, reason string) {
-	model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{
-		TaskID:       strings.TrimSpace(payload.Task.ID),
-		ProductionID: strings.TrimSpace(payload.Project.ID),
-		TaskTypeID:   strings.TrimSpace(payload.TaskType.ID),
-		Reason:       "notification skipped",
-		Detail:       reason,
-	})
+	model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{TaskID: strings.TrimSpace(payload.Task.ID), ProductionID: strings.TrimSpace(payload.Project.ID), TaskTypeID: strings.TrimSpace(payload.TaskType.ID), Reason: "notification skipped", Detail: reason})
 }

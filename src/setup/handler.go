@@ -67,12 +67,14 @@ func cleanupDiscordArtifactsAfterDBFailure(categoryID, botToken string, channels
 }
 
 func cleanupSetupArtifacts(kitsuProjectID, categoryID, botToken string, channels []createdSetupChannel, db *gorm.DB, res *SetupResult) {
+	hadCleanupError := false
 	for i := len(channels) - 1; i >= 0; i-- {
 		ch := channels[i]
 		if ch.ID == "" {
 			continue
 		}
 		if err := DeleteChannel(ch.ID, botToken); err != nil {
+			hadCleanupError = true
 			res.warn(fmt.Sprintf("cleanup failed for #%s: %v", ch.Name, err))
 			slog.Warn("Setup cleanup could not delete Discord channel", "channelName", ch.Name, "channelID", ch.ID, "err", err)
 		} else {
@@ -81,11 +83,23 @@ func cleanupSetupArtifacts(kitsuProjectID, categoryID, botToken string, channels
 	}
 	if categoryID != "" {
 		if err := DeleteChannel(categoryID, botToken); err != nil {
+			hadCleanupError = true
 			res.warn("cleanup failed for Discord category: " + err.Error())
 			slog.Warn("Setup cleanup could not delete Discord category", "categoryID", categoryID, "err", err)
 		} else {
 			res.ok("rolled back Discord category")
 		}
+	}
+	if hadCleanupError {
+		_ = model.MarkProductionChannelMappingsReviewRequired(db, kitsuProjectID, "setup-cleanup", nil, "setup cleanup requires external resource review")
+		_ = db.Model(&model.ProductionNotificationConfig{}).Where("production_id = ?", kitsuProjectID).Update("enabled", false).Error
+		res.SafeToRetry = false
+		return
+	}
+	if err := model.DeleteProductionOperationalState(db, kitsuProjectID); err != nil {
+		res.warn("cleanup failed for setup routing state: " + err.Error())
+		slog.Error("Setup cleanup could not delete routing state", "kitsuProjectID", kitsuProjectID, "err", err)
+		return
 	}
 	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 		res.warn("cleanup failed for setup webhook records: " + err.Error())
@@ -157,7 +171,7 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 
 	categoryStart := time.Now()
 	slog.Info("Project setup creating Discord category", "projectName", projectName, "guildID", guildID)
-	categoryID, err := CreateCategory(guildID, projectName, botToken)
+	categoryID, err := CreateCategory(guildID, KitsuSyncCategoryName(projectName), botToken)
 	if err != nil {
 		res.fail("failed to create Discord category: " + err.Error())
 		slog.Error("Project setup Discord category creation failed", "projectName", projectName, "guildID", guildID, "duration", time.Since(categoryStart).String(), "err", err)
@@ -301,6 +315,10 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 	if project != nil {
 		model.DeleteProjectScopedData(db, project.ID)
 	}
+	if err := model.DeleteProductionOperationalState(db, kitsuProjectID); err != nil {
+		logs = append(logs, "failed to delete production routing state")
+		return logs, fmt.Errorf("db delete production routing state: %w", err)
+	}
 
 	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 		logs = append(logs, "failed to delete project records from database")
@@ -325,6 +343,9 @@ func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 			return fmt.Errorf("project not found: %s", kitsuProjectID)
 		}
 		model.DeleteProjectScopedData(tx, project.ID)
+		if err := model.DeleteProductionOperationalState(tx, kitsuProjectID); err != nil {
+			return fmt.Errorf("db delete production routing state: %w", err)
+		}
 		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 			return fmt.Errorf("db delete webhooks: %w", err)
 		}
@@ -339,43 +360,65 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
-
-		if r.Method == http.MethodPost && r.FormValue("action") == "bot_setup" {
-			_ = r.ParseForm()
-			kitsuHostInput := publicKitsuHostnameFromRequest(r, model.GetSetting(db, "kitsu.hostname"))
-			adminEmail := strings.TrimSpace(r.FormValue("bot_admin_email"))
-			adminPassword := r.FormValue("bot_admin_password")
-			if adminEmail == "" || adminPassword == "" {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "スタジオ管理者のメールアドレスとパスワードを入力してください。", "Enter the studio admin email and password.")))
-				return
-			}
-			if kitsuHostInput == "" {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "公開ホストを検出できませんでした。公開URLの /bot から開き直してください。", "Could not detect the public host. Re-open this page from the public /bot URL.")))
-				return
-			}
-			botEmail, botPassword, err := CreateKitsuBotAccount(kitsuHostInput, adminEmail, adminPassword)
-			if err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, runtimeBotSetupError(err)))
-				return
-			}
-			model.SetSetting(db, "kitsu.hostname", kitsuHostInput)
-			setRuntimeKitsuEmail(db, botEmail)
-			if err := setRuntimeKitsuPassword(db, botPassword); err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Runtime credential の安全な保存に失敗しました。もう一度実行してください。", "Could not safely store the runtime credential. Try again.")))
-				return
-			}
-			if onRuntimeConfigured != nil {
-				onRuntimeConfigured()
-			}
-			if runtimeReady == nil || !runtimeReady() {
-				fmt.Fprint(w, renderBotSetupError(lang, "Kitsuの認証確認に失敗しました。設定は完了していません。もう一度お試しください。"))
-				return
-			}
-			fmt.Fprint(w, renderBotSetupSuccess(lang))
+		if handleFirstTimeConnectionAction(w, r, lang, kitsuHost, botToken, db) {
+			return
+		}
+		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
 			return
 		}
 
+		if r.Method == http.MethodPost && r.FormValue("action") == "bot_setup" {
+			// Human email/password setup is no longer part of the current runtime
+			// authentication flow. Keep the old action as a safe redirect for
+			// bookmarked legacy forms; token validation happens in Connections.
+			http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
+			return
+			/*
+				_ = r.ParseForm()
+				kitsuHostInput := effectiveRuntimeKitsuEndpoint(db)
+				runtimeEmail := strings.TrimSpace(r.FormValue("kitsu_runtime_email"))
+				runtimePassword := r.FormValue("kitsu_runtime_password")
+				// Accept the old field names for bookmarked/legacy forms, but keep the
+				// operation Kitsu-only. This path never creates a Kitsu or Discord bot.
+				if runtimeEmail == "" {
+					runtimeEmail = strings.TrimSpace(r.FormValue("bot_admin_email"))
+				}
+				if runtimePassword == "" {
+					runtimePassword = r.FormValue("bot_admin_password")
+				}
+				if runtimeEmail == "" || strings.TrimSpace(runtimePassword) == "" {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu実行用のメールアドレスとパスワードを入力してください。", "Enter the Kitsu runtime email and password.")))
+					return
+				}
+				if kitsuHostInput == "" {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuの接続先を確認できませんでした。Kitsu接続設定を確認してください。", "The Kitsu endpoint could not be determined. Review the Kitsu connection settings.")))
+					return
+				}
+				if err := RecoverRuntimeCredentials(db, kitsuHostInput, runtimeEmail, runtimePassword); err != nil {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
+					return
+				}
+				model.SetSetting(db, "kitsu.hostname", kitsuHostInput)
+				if onRuntimeConfigured != nil {
+					onRuntimeConfigured()
+				}
+				if runtimeReady == nil || !runtimeReady() {
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。設定は保存されていません。", "Kitsu authentication could not be verified. The setup is not complete.")))
+					return
+				}
+				fmt.Fprint(w, renderKitsuConnectionSuccess(lang))
+				return
+			*/
+		}
+
 		if r.Method == http.MethodPost && r.FormValue("action") == "runtime_setup_from_session" {
+			// The legacy session action used to create a Kitsu bot account. Runtime
+			// credential setup is now an explicit Kitsu-only form operation.
+			if legacyRuntimeSetupDisabled() {
+				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
+				return
+			}
+
 			_, adminToken, role, ok := CurrentSessionKitsuAuth(r)
 			if !ok || (role != "admin" && role != "manager") {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -597,6 +640,10 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 
 		var projects []model.Project
 		db.Find(&projects)
+		if r.URL.Query().Get("legacy") != "1" {
+			renderIANewConnection(w, r, db)
+			return
+		}
 		kitsuProjects := ListKitsuProjects(kitsuHost)
 		setupDone := map[string]bool{}
 		for _, project := range projects {
@@ -606,7 +653,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		kitsuHostStored := model.GetSetting(db, "kitsu.hostname")
 		kitsuEmailStored := storedRuntimeKitsuEmail(db)
 		detectedHost := publicKitsuHostnameFromRequest(r, kitsuHostStored)
-		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID))
+		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID, botToken))
 	}
 }
 
@@ -984,7 +1031,7 @@ func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhoo
     </div>
     <div class="section-card glass">
       <h3>%s</h3>
-      <div class="channel-groups">%s</div>
+      <details class="advanced-details"><summary>%s</summary><div class="channel-groups">%s</div></details>
     </div>
     %s
     %s
@@ -995,6 +1042,7 @@ func renderProjectChannels(project model.Project, webhooks []model.ProjectWebhoo
 		t(lang, "言語", "Language"),
 		esc(displayProjectLang(projectLang)),
 		t(lang, "現在のチャンネル", "Current channels"),
+		t(lang, "タスクタイプとチャンネルの編集", "Edit Task Type and channel mappings"),
 		channelsHTML.String(),
 		addChannelHTML.String(),
 		unassignedHTML.String(),
@@ -1012,7 +1060,7 @@ func displayProjectLang(lang string) string {
 	return lang
 }
 
-func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID string) string {
+func renderForm(r *http.Request, projects []model.Project, kitsuProjects []KitsuProject, setupDone map[string]bool, db *gorm.DB, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID, botToken string) string {
 	lang := currentLang(r)
 
 	var projectOptions strings.Builder
@@ -1029,8 +1077,8 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	}
 
 	// Determine setup step for progress indicator using only existing lightweight signals.
-	step1Done := kitsuHostStored != "" && kitsuEmailStored != ""
-	projectRoutingDone := len(projects) > 0
+	step1Done := sharedBotRuntimeReadiness(db, kitsuHostStored, botToken).OverallReady
+	projectRoutingDone := hasReadyProductionRouting(db)
 	guildStepDone := false
 	for _, project := range projects {
 		if strings.TrimSpace(project.DiscordGuildID) != "" {
@@ -1050,7 +1098,8 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	step1Class := stepClass(step1Done, !step1Done)
 	step2Class := stepClass(projectRoutingDone, step1Done && !projectRoutingDone)
 	step3Class := stepClass(guildStepDone, projectRoutingDone && !guildStepDone)
-	step4Class := stepClass(false, guildStepDone)
+	step4Done := step1Done && projectRoutingDone && guildStepDone
+	step4Class := stepClass(step4Done, guildStepDone && !step4Done)
 	stepIndicator := fmt.Sprintf(`<div class="setup-steps">
   <div class="setup-step %s"><span class="step-num">1</span><span class="step-label">%s</span></div>
   <div class="step-connector"></div>
@@ -1419,6 +1468,7 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 	// Group log lines by status for clearer error inventory
 	var okLines, warnLines, failLines, rolledLines []string
 	for _, line := range result.Lines {
+		line = localizeSetupResultLine(lang, line)
 		switch {
 		case strings.HasPrefix(line, "OK:"):
 			okLines = append(okLines, strings.TrimPrefix(line, "OK: "))
@@ -1484,6 +1534,92 @@ func renderResult(lang, projectName string, result SetupResult, r *http.Request)
 	return appShell("KitsuSync", "", lang, nil, "", body)
 }
 
+func localizeSetupResultLine(lang, line string) string {
+	status := ""
+	message := line
+	for _, prefix := range []string{"OK: ", "WARN: ", "FAIL: ", "ROLLED BACK: "} {
+		if strings.HasPrefix(line, prefix) {
+			status = prefix
+			message = strings.TrimPrefix(line, prefix)
+			break
+		}
+	}
+	localized := message
+	switch {
+	case message == "database transaction failed after Discord provisioning; attempting Discord cleanup":
+		localized = tr(lang, "setup_result.cleanup_started")
+	case strings.HasPrefix(message, "cleanup failed for #") && strings.Contains(message, ": ") && !strings.Contains(message, " after webhook error: "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "cleanup failed for #"), ": ", 2)
+		localized = trf(lang, "setup_result.cleanup_channel_failed", parts[0], parts[1])
+	case strings.HasPrefix(message, "cleanup failed for Discord category: "):
+		localized = trf(lang, "setup_result.cleanup_category_failed", strings.TrimPrefix(message, "cleanup failed for Discord category: "))
+	case strings.HasPrefix(message, "cleanup failed for setup webhook records: "):
+		localized = trf(lang, "setup_result.cleanup_webhooks_failed", strings.TrimPrefix(message, "cleanup failed for setup webhook records: "))
+	case strings.HasPrefix(message, "cleanup failed for setup project record: "):
+		localized = trf(lang, "setup_result.cleanup_project_failed", strings.TrimPrefix(message, "cleanup failed for setup project record: "))
+	case message == "no Discord guild is configured for this project":
+		localized = tr(lang, "setup_result.no_guild")
+	case strings.HasPrefix(message, "unsupported project type: "):
+		localized = trf(lang, "setup_result.unsupported_type", strings.TrimPrefix(message, "unsupported project type: "))
+	case message == "Kitsu project was not found, using a fallback project ID":
+		localized = tr(lang, "setup_result.project_missing")
+	case message == "project is already configured":
+		localized = tr(lang, "setup_result.already_configured")
+	case strings.HasPrefix(message, "orphaned webhooks detected ("):
+		count := strings.TrimPrefix(message, "orphaned webhooks detected (")
+		count = strings.TrimSuffix(count, " rows); cleaning up before setup")
+		localized = trf(lang, "setup_result.orphaned_webhooks", count)
+	case strings.HasPrefix(message, "failed to clean up orphaned webhooks: "):
+		localized = trf(lang, "setup_result.orphan_cleanup_failed", strings.TrimPrefix(message, "failed to clean up orphaned webhooks: "))
+	case message == "cleaned up orphaned webhooks":
+		localized = tr(lang, "setup_result.orphan_cleanup_done")
+	case strings.HasPrefix(message, "failed to create Discord category: "):
+		localized = trf(lang, "setup_result.category_failed", strings.TrimPrefix(message, "failed to create Discord category: "))
+	case strings.HasPrefix(message, "failed to create #") && strings.Contains(message, ": "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "failed to create #"), ": ", 2)
+		localized = trf(lang, "setup_result.channel_failed", parts[0], parts[1])
+	case strings.HasPrefix(message, "failed to create webhook for #") && strings.Contains(message, ": "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "failed to create webhook for #"), ": ", 2)
+		localized = trf(lang, "setup_result.webhook_failed", parts[0], parts[1])
+	case strings.HasPrefix(message, "cleanup failed for #") && strings.Contains(message, " after webhook error: "):
+		parts := strings.SplitN(strings.TrimPrefix(message, "cleanup failed for #"), " after webhook error: ", 2)
+		localized = trf(lang, "setup_result.cleanup_after_webhook", parts[0], parts[1])
+	case strings.HasPrefix(message, "rolled back incomplete channel: #"):
+		localized = trf(lang, "setup_result.rollback_incomplete", strings.TrimPrefix(message, "rolled back incomplete channel: #"))
+	case message == "Kitsu project confirmed":
+		localized = tr(lang, "setup_result.kitsu_confirmed")
+	case message == "Discord category created":
+		localized = tr(lang, "setup_result.category_created")
+	case message == "project setup completed":
+		localized = tr(lang, "setup_result.completed")
+	case strings.HasPrefix(message, "channel ready: #"):
+		localized = trf(lang, "setup_result.channel_ready", strings.TrimPrefix(message, "channel ready: #"))
+	case message == "project setup did not complete; created Discord resources are being rolled back":
+		localized = tr(lang, "setup_result.partial_failure")
+	case strings.HasPrefix(message, "Discord setup succeeded but database transaction failed: "):
+		localized = trf(lang, "setup_result.db_failed", strings.TrimPrefix(message, "Discord setup succeeded but database transaction failed: "))
+	case message == "automatic Discord cleanup had warnings; verify Discord resources manually before retrying.":
+		localized = tr(lang, "setup_result.cleanup_warnings")
+	case message == "automatic Discord cleanup completed":
+		localized = tr(lang, "setup_result.cleanup_done")
+	case message == "rolled back Discord category":
+		localized = tr(lang, "setup_result.rollback_category")
+	case message == "rolled back setup records":
+		localized = tr(lang, "setup_result.rollback_records")
+	case strings.HasPrefix(message, "rolled back channel: #"):
+		localized = trf(lang, "setup_result.rollback_channel", strings.TrimPrefix(message, "rolled back channel: #"))
+	case message == "Safe to retry — rollback completed. You can run setup again immediately.":
+		localized = tr(lang, "setup_result.retry")
+	case message == "The plan is stale. Review the latest plan before retrying.":
+		localized = tr(lang, "setup_result.stale")
+	case strings.HasPrefix(message, "Existing resource reused: "):
+		localized = trf(lang, "setup_result.reused", strings.TrimPrefix(message, "Existing resource reused: "))
+	case strings.HasPrefix(message, "Resolve the conflict and retry: "):
+		localized = trf(lang, "setup_result.conflict", strings.TrimPrefix(message, "Resolve the conflict and retry: "))
+	}
+	return status + localized
+}
+
 // renderDeleteReauthPage renders the re-authentication page shown as step 2 of project deletion.
 func renderDeleteReauthPage(lang, pid, projectName string, r *http.Request) string {
 	backURL := withLang("/bot/setup", r)
@@ -1538,3 +1674,19 @@ func renderBotSetupSuccess(lang string) string {
 func renderBotSetupError(lang, errMsg string) string {
 	return page(lang, t(lang, "Bot設定失敗", "Bot Setup Failed"), "#ff6a50", t(lang, "Botアカウントを作成できませんでした。", "The bot account could not be created."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/setup", lang)+`">`+t(lang, "戻る", "Back")+`</a>`)
 }
+
+func renderKitsuConnectionSuccess(lang string) string {
+	return page(lang, t(lang, "Kitsu接続を保存しました", "Kitsu connection saved"), "#8ecf8b", t(lang, "Kitsu Bot tokenを検証して安全に保存しました。", "The Kitsu Bot token was validated and stored safely."), `<li>`+html.EscapeString(t(lang, "接続設定で状態を確認できます。", "Review the connection state in Connections."))+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
+}
+
+func renderKitsuConnectionError(lang string, args ...interface{}) string {
+	errMsg := "Kitsu connection could not be verified."
+	if len(args) > 0 {
+		if message, ok := args[len(args)-1].(string); ok && message != "" {
+			errMsg = message
+		}
+	}
+	return page(lang, t(lang, "Kitsu接続を確認できませんでした", "Kitsu connection could not be verified"), "#ff6a50", t(lang, "Bot tokenを確認し、接続設定からもう一度試してください。", "Check the Bot token and try again from Connections."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
+}
+
+func legacyRuntimeSetupDisabled() bool { return true }

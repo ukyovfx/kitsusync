@@ -5,6 +5,7 @@ import (
 	"app/src/utils/config"
 	"app/src/utils/request"
 	"net/http"
+	"net/url"
 	"os"
 )
 
@@ -46,6 +47,8 @@ type Person struct {
 	Email                     string `json:"email,omitempty"`
 	Phone                     string `json:"phone,omitempty"`
 	Active                    bool   `json:"active,omitempty"`
+	Archived                  bool   `json:"archived,omitempty"`
+	IsBot                     bool   `json:"is_bot,omitempty"`
 	LastPresence              string `json:"last_presence,omitempty"`
 	DesktopLogin              string `json:"desktop_login,omitempty"`
 	ShotgunID                 string `json:"shotgun_id,omitempty"`
@@ -135,9 +138,15 @@ type Comments struct {
 }
 
 type TaskType struct {
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	ShortName string `json:"short_name,omitempty"`
+	ID             string `json:"id,omitempty"`
+	Name           string `json:"name,omitempty"`
+	ShortName      string `json:"short_name,omitempty"`
+	ForEntity      string `json:"for_entity,omitempty"`
+	DepartmentID   string `json:"department_id,omitempty"`
+	DepartmentName string `json:"department_name,omitempty"`
+	Active         bool   `json:"active,omitempty"`
+	Archived       bool   `json:"archived,omitempty"`
+	IsArchived     bool   `json:"is_archived,omitempty"`
 }
 
 type TaskTypes struct {
@@ -164,10 +173,10 @@ type ProjectStatuses struct {
 }
 
 type MessagePayload struct {
-	PreviousStatusName    string // we store task status from DB and consider it 'old/prevous'
-	IsCommentOnly         bool   // true when only the comment changed (no status/timestamp change)
-	IsAssignNotification  bool   // true when task status is "none" (TODO) and notifyOnAssign is enabled
-	Project            struct {
+	PreviousStatusName   string // we store task status from DB and consider it 'old/prevous'
+	IsCommentOnly        bool   // true when only the comment changed (no status/timestamp change)
+	IsAssignNotification bool   // true when task status is "none" (TODO) and notifyOnAssign is enabled
+	Project              struct {
 		Project
 	}
 	Entity struct {
@@ -311,11 +320,39 @@ func GetTaskTypes() TaskTypes {
 	return response
 }
 
+// GetProjectTaskTypes returns only the Task Types associated with a selected
+// Production. The project-scoped endpoint is authoritative for setup; the
+// global Task Type list is not a safe substitute because it can contain
+// records unrelated to the selected Production.
+func GetProjectTaskTypes(projectID string) TaskTypes {
+	response := TaskTypes{}
+	if projectID == "" {
+		return response
+	}
+	path := kitsuBase() + "api/data/projects/" + url.PathEscape(projectID) + "/task-types"
+	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	return response
+}
+
 func GetProject(projectID string) Project {
 	path := kitsuBase() + "api/data/projects/" + projectID
 	response := Project{}
 	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
 
+	return response
+}
+
+// GetProjectTeam returns the read-only Production team from Zou.  This is
+// distinct from the global person directory: a Production participant is
+// scoped to one Production and is the authoritative source for assignment
+// candidates on the Production detail page.
+func GetProjectTeam(projectID string) []Person {
+	if projectID == "" {
+		return nil
+	}
+	var response []Person
+	path := kitsuBase() + "api/data/projects/" + url.PathEscape(projectID) + "/team"
+	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
 	return response
 }
 

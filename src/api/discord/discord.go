@@ -4,15 +4,14 @@ import (
 	"app/src/api/kitsu"
 	"app/src/model"
 	"app/src/utils/config"
-	"app/src/utils/truncate"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"text/template"
@@ -47,10 +46,19 @@ type Embed struct {
 }
 
 type Payload struct {
-	Username  string  `json:"username,omitempty"`
-	AvatarUrl string  `json:"avatar_url,omitempty"`
-	Content   string  `json:"content"`
-	Embeds    []Embed `json:"embeds,omitempty"`
+	Username        string           `json:"username,omitempty"`
+	AvatarUrl       string           `json:"avatar_url,omitempty"`
+	Content         string           `json:"content"`
+	Embeds          []Embed          `json:"embeds,omitempty"`
+	AllowedMentions *AllowedMentions `json:"allowed_mentions,omitempty"`
+}
+
+// AllowedMentions keeps Kitsu-originated text from turning into an accidental
+// Discord-wide or role mention. User mentions are opt-in and listed explicitly.
+type AllowedMentions struct {
+	Parse []string `json:"parse,omitempty"`
+	Users []string `json:"users,omitempty"`
+	Roles []string `json:"roles,omitempty"`
 }
 type Assignee struct {
 	Fullname string
@@ -82,6 +90,9 @@ type Template struct {
 	IsAssignNotification    bool   // 新規タスクアサイン（TODO ステータス、notifyOnAssign=true）
 	StatusTransitionMessage string // ステータス遷移を説明するメッセージ
 	ChannelName             string // 通知先の Discord チャンネル名（ルーティング確認用）
+	NotificationLanguage    string
+	AllowedUserIDs          []string
+	Color                   int
 }
 
 // Discord APIのメッセージ作成レスポンス
@@ -107,8 +118,11 @@ var GoogleDriveURLResolver func(projectID string) string
 
 // SendResult は SendMessage / SendMessageBunch の戻り値
 type SendResult struct {
-	MessageID string // Discord メッセージID
-	ThreadID  string // Discord スレッドID（UseThreads=true 時のみ）
+	MessageID       string // Discord メッセージID
+	ThreadID        string // Discord スレッドID（UseThreads=true 時のみ）
+	FailureCategory string // safe category for a failed delivery
+	Retryable       bool   // safe to retry automatically on the next poll
+	Unknown         bool   // the request may have been accepted without a response
 }
 
 // containsIgnoreCase reports whether `target` (case-insensitive) is present in `list`.
@@ -126,6 +140,14 @@ func normalizeNotificationLang(lang string) string {
 		return "en"
 	}
 	return "ja"
+}
+
+func sanitizeDiscordText(value string) string {
+	value = strings.ReplaceAll(value, "<", "＜")
+	value = strings.ReplaceAll(value, ">", "＞")
+	value = strings.ReplaceAll(value, "@everyone", "@ everyone")
+	value = strings.ReplaceAll(value, "@here", "@ here")
+	return value
 }
 
 func localizedTemplatePreset(tplPreset, notifLang string) string {
@@ -253,29 +275,6 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 	}
 }
 
-// statusMessageInfo returns the Japanese message text and emoji for a given status.
-// Returns ("", "📌") for statuses we don't have a tailored message for.
-func statusMessageInfo(status string) (string, string) {
-	switch strings.ToUpper(status) {
-	case "WFA":
-		return "チェックをお願いします", "👀"
-	case "RETAKE":
-		return "修正をお願いします", "🔃"
-	case "DONE":
-		return "承認されました。お疲れ様でした！", "✅"
-	case "READY":
-		return "次工程の作業待ちです", "🟢"
-	case "TODO":
-		return "タスクが作成されました", "📋"
-	case "WIP":
-		return "作業中です", "🔧"
-	default:
-		return "", "📌"
-	}
-}
-
-// statusTransitionMessage は前後のステータス遷移に応じた補足メッセージを返す。
-// 特に対応しない遷移では空文字列を返す。
 func statusTransitionMessage(prev, current string) string {
 	if prev == "" || strings.EqualFold(prev, current) {
 		return ""
@@ -414,7 +413,7 @@ func sendMessageOnce(body []byte, reqURL string) (respBody []byte, statusCode in
 		return nil, 0, 0, err
 	}
 	defer resp.Body.Close()
-	respBody, err = ioutil.ReadAll(resp.Body)
+	respBody, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, 0, err
 	}
@@ -455,7 +454,7 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 	body, err := json.Marshal(payload)
 	if err != nil {
 		slog.Error("SendMessage: marshal failed", "err", err)
-		return SendResult{}
+		return SendResult{FailureCategory: "invalid_payload"}
 	}
 
 	// リトライループ: 429 Rate Limit と 5xx エラーは最大3回まで再試行
@@ -466,12 +465,12 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 		var retryAfterSec float64
 		respBody, statusCode, retryAfterSec, err = sendMessageOnce(body, reqURL)
 		if err != nil {
-			slog.Error("SendMessage: HTTP post failed", "err", err, "attempt", attempt+1)
+			slog.Error("SendMessage: HTTP post failed", "category", "network_error", "attempt", attempt+1)
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(1<<attempt) * time.Second) // 1s, 2s, 4s
 				continue
 			}
-			return SendResult{}
+			return SendResult{FailureCategory: "network_error", Retryable: true, Unknown: true}
 		}
 		if statusCode == 429 {
 			// Rate Limited: Retry-After ヘッダの秒数だけ待って再試行。
@@ -486,7 +485,7 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 			if wait > maxRateLimitWait {
 				slog.Warn("SendMessage: rate limit wait exceeds cap; skipping this task until next poll cycle",
 					"retryAfterSec", retryAfterSec, "capSec", maxRateLimitWait.Seconds(), "attempt", attempt+1)
-				return SendResult{}
+				return SendResult{FailureCategory: "rate_limited", Retryable: true}
 			}
 			slog.Warn("SendMessage: rate limited, waiting",
 				"retryAfterSec", retryAfterSec, "attempt", attempt+1)
@@ -507,14 +506,14 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 	if statusCode < 200 || statusCode >= 300 {
 		slog.Error("SendMessage: non-2xx response",
 			"status", statusCode,
-			"body", string(respBody))
-		return SendResult{}
+			"category", discordHTTPErrorCategory(statusCode))
+		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests || statusCode >= 500, Unknown: statusCode >= 500}
 	}
 
 	var msg DiscordMessage
 	if err := json.Unmarshal(respBody, &msg); err != nil {
-		slog.Error("SendMessage: unmarshal failed", "err", err, "body", string(respBody))
-		return SendResult{}
+		slog.Error("SendMessage: unmarshal failed", "err", err)
+		return SendResult{FailureCategory: "unknown_response", Unknown: true}
 	}
 
 	result := SendResult{MessageID: msg.ID}
@@ -527,6 +526,43 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 	return result
 }
 
+func uniqueDiscordIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result
+}
+
+func discordHTTPErrorCategory(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "invalid_payload"
+	case http.StatusUnauthorized:
+		return "invalid_token"
+	case http.StatusForbidden:
+		return "missing_permission"
+	case http.StatusNotFound:
+		return "missing_destination"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	default:
+		if statusCode >= 500 {
+			return "discord_server_error"
+		}
+		return "discord_http_error"
+	}
+}
+
 // SendMessageBunch は各タスクを処理して SendResult のマップを返す
 // キーはタスクID
 func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookURL string, previousMessageIDs map[string]string, previousWebhookURLs map[string]string, previousThreadIDs map[string]string, projectNotificationLanguages map[string]string, db *gorm.DB) map[string]SendResult {
@@ -536,17 +572,17 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		var placeholders Template
 		notifLang := normalizeNotificationLang(projectNotificationLanguages[elem.Project.ID])
 
-		placeholders.ProjectName = elem.Project.Name
-		placeholders.GroupName = elem.EntityType.Name
-		placeholders.ParentName = elem.Parent.Name
-		placeholders.TaskName = elem.Entity.Name
-		placeholders.TaskType = elem.TaskType.Name
-		placeholders.CurrentStatus = elem.TaskStatus.ShortName
+		placeholders.ProjectName = sanitizeDiscordText(elem.Project.Name)
+		placeholders.GroupName = sanitizeDiscordText(elem.EntityType.Name)
+		placeholders.ParentName = sanitizeDiscordText(elem.Parent.Name)
+		placeholders.TaskName = sanitizeDiscordText(elem.Entity.Name)
+		placeholders.TaskType = sanitizeDiscordText(elem.TaskType.Name)
+		placeholders.CurrentStatus = sanitizeDiscordText(elem.TaskStatus.ShortName)
 		placeholders.StatusUpper = strings.ToUpper(elem.TaskStatus.ShortName)
 		placeholders.PreviousStatus = elem.PreviousStatusName
-		placeholders.CommentContent = elem.LatestComment.Comment.Text
-		placeholders.CommentAuthor = elem.LatestComment.Author.FullName
-		placeholders.EntityType = elem.EntityType.EntityType.Name
+		placeholders.CommentContent = sanitizeDiscordText(elem.LatestComment.Comment.Text)
+		placeholders.CommentAuthor = sanitizeDiscordText(elem.LatestComment.Author.FullName)
+		placeholders.EntityType = sanitizeDiscordText(elem.EntityType.EntityType.Name)
 		placeholders.ProcessEmoji = getProcessEmoji(elem.TaskType.Name)
 		if db != nil {
 			placeholders.ChannelName = model.FindChannelNameByWebhookURL(db, webHookURL)
@@ -557,13 +593,18 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// 既に追加した DiscordID を seen で重複排除する。
 		var assigneeNames []string
 		var artistMentions []string
+		var allowedUserMentions []string
 		seenDiscordID := make(map[string]bool)
 		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
 		for i := 0; i < len(elem.Assignees); i++ {
+			if elem.Assignees[i].IsBot {
+				slog.Info("Kitsu bot assignee excluded from Discord mention", "taskID", elem.Task.ID)
+				continue
+			}
 			fullName := elem.Assignees[i].FullName
-			placeholders.Assignees[i].Fullname = fullName
+			placeholders.Assignees[i].Fullname = sanitizeDiscordText(fullName)
 			placeholders.Assignees[i].Email = elem.Assignees[i].Email
-			assigneeNames = append(assigneeNames, fullName)
+			assigneeNames = append(assigneeNames, sanitizeDiscordText(fullName))
 
 			matched := false
 			// DB 優先: UserMapResolver が注入されていれば使う（プロジェクトスコープ → グローバル フォールバック対応）
@@ -572,6 +613,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 				if did := UserMapResolver(elem.Project.ID, fullName, assigneeEmail); did != "" {
 					if !seenDiscordID[did] {
 						artistMentions = append(artistMentions, "<@"+did+">")
+						allowedUserMentions = append(allowedUserMentions, did)
 						seenDiscordID[did] = true
 					}
 					matched = true
@@ -583,6 +625,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 					if u.KitsuName == fullName {
 						if !seenDiscordID[u.DiscordID] {
 							artistMentions = append(artistMentions, "<@"+u.DiscordID+">")
+							allowedUserMentions = append(allowedUserMentions, u.DiscordID)
 							seenDiscordID[u.DiscordID] = true
 						}
 						matched = true
@@ -609,6 +652,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.Name); len(dids) > 0 {
 				for _, did := range dids {
 					checkerMentionList = append(checkerMentionList, "<@"+did+">")
+					allowedUserMentions = append(allowedUserMentions, did)
 				}
 			}
 		}
@@ -616,6 +660,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			for _, c := range conf.Mention.Checkers {
 				if strings.EqualFold(c.TaskType, elem.TaskType.Name) {
 					checkerMentionList = append(checkerMentionList, "<@"+c.DiscordID+">")
+					allowedUserMentions = append(allowedUserMentions, c.DiscordID)
 				}
 			}
 		}
@@ -645,9 +690,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			}
 		}
 		// 緊急ステータスは @here でチャンネル全員に通知
-		if containsIgnoreCase(conf.Mention.HereStatuses, currentStatus) {
-			mentionParts = append(mentionParts, "@here")
-		}
+		// @here and @everyone are never emitted by KitsuSync.
 		mentionContent := strings.Join(mentionParts, " ")
 		statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
 
@@ -695,40 +738,11 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 
 		// テンプレートを展開
 		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)
-		author := parseTaskTemplate("tpl/"+tplPreset+"/author.tpl", placeholders)
-		title := parseTaskTemplate("tpl/"+tplPreset+"/title.tpl", placeholders)
-		description := parseTaskTemplate("tpl/"+tplPreset+"/description.tpl", placeholders)
-		footer := parseTaskTemplate("tpl/"+tplPreset+"/footer.tpl", placeholders)
 
-		embed := Embed{}
-		embed.Title = truncate.TruncateString(title, 256)
-		embed.Description = truncate.TruncateString(description, 4096)
-
-		embed.Color = int(intColor) // 常にステータスカラーを使用
-		embed.Author.Name = truncate.TruncateString(author, 256)
-		embed.Footer.Text = truncate.TruncateString(footer, 2048)
-		embed.Url = truncate.TruncateString(placeholders.TaskURL, 2000)
-
-		// プレビュー画像がある場合は embed に添付
-		if placeholders.PreviewImageURL != "" {
-			embed.Image = &EmbedImage{URL: placeholders.PreviewImageURL}
-		}
-
-		fieldsRaw := parseTaskTemplate("tpl/"+tplPreset+"/fields.tpl", placeholders)
-		if strings.TrimSpace(fieldsRaw) != "" {
-			var parsedFields []EmbedField
-			err := json.Unmarshal([]byte(fieldsRaw), &parsedFields)
-			if err == nil {
-				embed.Fields = parsedFields
-			}
-		}
-
-		// payload を作成
-		payload := Payload{}
-		if mentionContent != "" {
-			payload.Content = mentionContent
-		}
-		payload.Embeds = []Embed{embed}
+		placeholders.NotificationLanguage = notifLang
+		placeholders.AllowedUserIDs = allowedUserMentions
+		placeholders.Color = int(intColor)
+		payload := RenderNotificationPayload(placeholders, tplPreset)
 
 		// スレッドモード: 既存スレッドに返信 or 新規スレッドを作成
 		prevThreadID := previousThreadIDs[elem.Task.ID]
@@ -746,10 +760,14 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// （順序が逆だと、新規送信失敗時に Discord 上の履歴が消失する）
 		newResult := SendMessage(payload, webHookURL, prevThreadID, threadName)
 		if newResult.MessageID == "" {
-			slog.Warn("SendMessage failed; clearing stale message ID to prevent orphan on next poll",
-				"taskID", elem.Task.ID)
-			// 古いメッセージIDを残すと次回ポーリング時に削除試行→重複発生するためクリア
-			model.ClearMessageID(db, elem.Task.ID)
+			slog.Warn("SendMessage failed; preserving prior delivery state",
+				"taskID", elem.Task.ID,
+				"category", newResult.FailureCategory,
+				"retryable", newResult.Retryable,
+				"unknown", newResult.Unknown)
+			// Return failures to the orchestration layer so permanent and
+			// unknown outcomes can be recorded without claiming delivery.
+			result[elem.Task.ID] = newResult
 			continue
 		}
 
@@ -770,7 +788,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 }
 
 func parseTaskTemplate(tplFilePath string, data Template) string {
-	tpl, err := ioutil.ReadFile(tplFilePath)
+	tpl, err := os.ReadFile(tplFilePath)
 	if err != nil {
 		return ""
 	}

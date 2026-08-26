@@ -15,10 +15,10 @@ import (
 type SetupStatus string
 
 const (
-	SetupOK       SetupStatus = "ok"
-	SetupWarn     SetupStatus = "warn"
-	SetupError    SetupStatus = "error"
-	SetupUnknown  SetupStatus = "unknown"
+	SetupOK      SetupStatus = "ok"
+	SetupWarn    SetupStatus = "warn"
+	SetupError   SetupStatus = "error"
+	SetupUnknown SetupStatus = "unknown"
 )
 
 type SetupCheck struct {
@@ -32,34 +32,89 @@ type SetupCheck struct {
 }
 
 type ProjectSetupStatus struct {
-	ProjectID       string      `json:"project_id"`
-	ProjectName     string      `json:"project_name"`
-	GuildID         string      `json:"guild_id,omitempty"`
-	GuildStatus     SetupStatus `json:"guild_status"`
+	ProjectID        string      `json:"project_id"`
+	ProjectName      string      `json:"project_name"`
+	GuildID          string      `json:"guild_id,omitempty"`
+	GuildStatus      SetupStatus `json:"guild_status"`
 	PermissionStatus SetupStatus `json:"permission_status"`
-	WebhookStatus   SetupStatus `json:"webhook_status"`
-	ChannelCount    int         `json:"channel_count"`
-	WebhookCount    int         `json:"webhook_count"`
-	Summary         string      `json:"summary"`
-	Raw             string      `json:"raw,omitempty"`
+	WebhookStatus    SetupStatus `json:"webhook_status"`
+	ChannelCount     int         `json:"channel_count"`
+	WebhookCount     int         `json:"webhook_count"`
+	Summary          string      `json:"summary"`
+	Raw              string      `json:"raw,omitempty"`
 }
 
 type SetupDiagnostics struct {
-	Timestamp               time.Time           `json:"timestamp"`
-	Env                     []SetupCheck         `json:"env"`
-	Kitsu                   SetupCheck          `json:"kitsu"`
-	Discord                 SetupCheck          `json:"discord"`
-	Projects                []ProjectSetupStatus `json:"projects"`
-	TestNotification        SetupCheck          `json:"test_notification"`
-	ProjectSetupApplied     bool                `json:"project_setup_applied"`
-	NotificationVerified    bool                `json:"notification_verified"`
-	SetupComplete           bool                `json:"setup_complete"`
-	NextAction              string              `json:"next_action"`
-	Warnings                []string            `json:"warnings"`
-	AppliedProjectID        string              `json:"applied_project_id,omitempty"`
-	AppliedProjectName      string              `json:"applied_project_name,omitempty"`
-	VerifiedProjectID       string              `json:"verified_project_id,omitempty"`
-	VerifiedProjectName     string              `json:"verified_project_name,omitempty"`
+	Timestamp                    time.Time            `json:"timestamp"`
+	Env                          []SetupCheck         `json:"env"`
+	Kitsu                        SetupCheck           `json:"kitsu"`
+	Discord                      SetupCheck           `json:"discord"`
+	Projects                     []ProjectSetupStatus `json:"projects"`
+	TestNotification             SetupCheck           `json:"test_notification"`
+	ProjectSetupApplied          bool                 `json:"project_setup_applied"`
+	NotificationVerified         bool                 `json:"notification_verified"`
+	SetupComplete                bool                 `json:"setup_complete"`
+	ProductionRoutingConfigured  bool                 `json:"production_routing_configured"`
+	OverallNotificationReadiness string               `json:"overall_notification_readiness"`
+	NextAction                   string               `json:"next_action"`
+	Warnings                     []string             `json:"warnings"`
+	AppliedProjectID             string               `json:"applied_project_id,omitempty"`
+	AppliedProjectName           string               `json:"applied_project_name,omitempty"`
+	VerifiedProjectID            string               `json:"verified_project_id,omitempty"`
+	VerifiedProjectName          string               `json:"verified_project_name,omitempty"`
+}
+
+// SharedBotRuntimeReadiness is the single source of truth used by the Setup
+// Wizard, Bot Settings summary, Dashboard, and System Status. Notification
+// readiness also requires at least one valid enabled Production route.
+type SharedBotRuntimeReadiness struct {
+	KitsuConfigured     bool
+	RuntimeHealthKnown  bool
+	RuntimeKitsuHealthy bool
+	DiscordConfigured   bool
+	ProductionConnected bool
+	RoutingReady        bool
+	PrerequisitesReady  bool
+	OverallReady        bool
+	State               ReadinessState
+}
+
+type ReadinessState string
+
+const (
+	ReadinessSetupRequired      ReadinessState = "setup_required"
+	ReadinessBotSetupRequired   ReadinessState = "bot_setup_required"
+	ReadinessProductionRequired ReadinessState = "production_required"
+	ReadinessRoutingRequired    ReadinessState = "routing_required"
+	ReadinessReady              ReadinessState = "ready"
+)
+
+func sharedBotRuntimeReadiness(db *gorm.DB, kitsuHost, botToken string) SharedBotRuntimeReadiness {
+	kitsuConfigured := strings.TrimSpace(kitsuHost) != "" &&
+		strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
+	discordConfigured := strings.TrimSpace(botToken) != ""
+	productionConnected := len(model.ListProjects(db)) > 0
+	routingReady := hasReadyProductionRouting(db)
+	prerequisitesReady := kitsuConfigured && discordConfigured
+	state := ReadinessSetupRequired
+	switch {
+	case !kitsuConfigured:
+		state = ReadinessSetupRequired
+	case !discordConfigured:
+		state = ReadinessBotSetupRequired
+	case !productionConnected:
+		state = ReadinessProductionRequired
+	case !routingReady:
+		state = ReadinessRoutingRequired
+	default:
+		state = ReadinessReady
+	}
+	return SharedBotRuntimeReadiness{
+		KitsuConfigured: kitsuConfigured, DiscordConfigured: discordConfigured,
+		ProductionConnected: productionConnected, RoutingReady: routingReady,
+		PrerequisitesReady: prerequisitesReady, OverallReady: state == ReadinessReady,
+		State: state,
+	}
 }
 
 func localizeSetupDiagnostics(lang string, diag SetupDiagnostics) SetupDiagnostics {
@@ -150,11 +205,11 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 	kitsuHost, botToken, guildID, webhookURL := refreshCreds()
 	diag := SetupDiagnostics{Timestamp: time.Now()}
 
-	diag.Env = buildEnvChecks(db, kitsuHost, botToken, guildID)
-	diag.Kitsu = buildKitsuCheck(kitsuHost)
-	diag.Discord = buildDiscordCheck(botToken, guildID)
+	diag.Env = buildEnvChecks(db, kitsuHost, botToken, guildID, "en")
+	diag.Kitsu = buildKitsuCheck(kitsuHost, "en")
+	diag.Discord = buildProjectAwareDiscordCheck(db, botToken, guildID)
 	diag.Projects = buildProjectChecks(db, botToken, guildID)
-	diag.TestNotification = buildTestNotificationCheck(db)
+	diag.TestNotification = buildTestNotificationCheck(db, "en")
 	diag.ProjectSetupApplied = strings.EqualFold(strings.TrimSpace(model.GetSetting(db, setupProjectAppliedKey)), "true")
 	diag.AppliedProjectID = strings.TrimSpace(model.GetSetting(db, setupProjectAppliedProjectKey))
 	if diag.AppliedProjectID != "" {
@@ -163,6 +218,7 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 		}
 	}
 	diag.NotificationVerified = diag.TestNotification.Status == SetupOK
+	diag.ProductionRoutingConfigured = hasReadyProductionRouting(db) && projectDiscordResourcesHealthy(db)
 	diag.VerifiedProjectID = strings.TrimSpace(model.GetSetting(db, setupTestNotificationProjectKey))
 	if diag.VerifiedProjectID != "" {
 		if p := model.FindProjectByKitsuID(db, diag.VerifiedProjectID); p != nil {
@@ -174,34 +230,84 @@ func BuildSetupDiagnostics(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 		diag.Warnings = append(diag.Warnings, "Legacy fallback webhook is configured; it is only used for unrouted notifications.")
 	}
 
+	diag.OverallNotificationReadiness = "blocked"
+	if diag.Kitsu.Status == SetupOK && diag.Discord.Status == SetupOK && diag.ProductionRoutingConfigured {
+		diag.OverallNotificationReadiness = "ready_pending_final_verification"
+	}
 	diag.SetupComplete = isSetupComplete(diag)
 	diag.NextAction = nextActionForDiagnostics(diag)
 	return diag
 }
 
-func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID string) []SetupCheck {
+func buildProjectAwareDiscordCheck(db *gorm.DB, botToken, fallbackGuildID string) SetupCheck {
+	for _, project := range model.ListProjects(db) {
+		if strings.TrimSpace(project.DiscordGuildID) != "" {
+			return buildDiscordCheck(botToken, strings.TrimSpace(project.DiscordGuildID))
+		}
+	}
+	return buildDiscordCheck(botToken, fallbackGuildID)
+}
+
+func projectDiscordResourcesHealthy(db *gorm.DB) bool {
+	projects := model.ListProjects(db)
+	if len(projects) == 0 {
+		return false
+	}
+	for _, project := range projects {
+		if !inspectProjectDiscordResources(project, db).Healthy() {
+			return false
+		}
+	}
+	return true
+}
+
+// ProjectDiscordReadiness is the read-only readiness view used by /health.
+// It validates the saved Guild for each connected Production and treats stale
+// managed resources as blocked routing, without using the fallback Guild.
+func ProjectDiscordReadiness(db *gorm.DB, botToken, fallbackGuildID string) (apiValidated, routingReady bool) {
+	projects := model.ListProjects(db)
+	if len(projects) == 0 {
+		apiStatus := buildProjectAwareDiscordStatus(db, botToken, fallbackGuildID)
+		return apiStatus.BotValid && apiStatus.GuildValid && apiStatus.Permissions.ManageChannels && apiStatus.Permissions.ManageWebhooks,
+			hasReadyProductionRouting(db)
+	}
+
+	apiValidated = true
+	resourcesHealthy := true
+	for _, project := range projects {
+		report := inspectProjectDiscordResources(project, db)
+		apiValidated = apiValidated && report.GuildValid && report.ManageChannels && report.ManageWebhooks
+		resourcesHealthy = resourcesHealthy && report.Healthy()
+	}
+	return apiValidated, hasReadyProductionRouting(db) && resourcesHealthy
+}
+
+func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID, lang string) []SetupCheck {
 	var checks []SetupCheck
 	email := storedRuntimeKitsuEmail(db)
 	password := strings.TrimSpace(os.Getenv(RuntimeKitsuPasswordEnv))
+	credentialState := InspectRuntimeKitsuCredential(db)
 	if email != "" {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupOK, Summary: "Configured", Detail: email})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu連携アカウント", "Kitsu integration account"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: email})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: "Kitsu runtime email", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the runtime email there."})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_email", Label: t(lang, "Kitsu連携アカウント", "Kitsu integration account"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsu連携アカウントを保存してください。", "Save the Kitsu integration account in Connections.")})
 	}
-	if password != "" {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
+	if password != "" || credentialState.Decryptable {
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu連携アカウントのパスワード", "Kitsu integration account password"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: "hidden"})
+	} else if credentialState.CiphertextPresent && credentialState.ErrorClass != "" {
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu runtime password", "Kitsu integration account password"), Status: SetupError, Summary: t(lang, "復旧が必要", "Recovery required"), Detail: t(lang, "保存済みのruntime認証情報を復号できません。", "The stored runtime credential could not be decrypted."), Fix: t(lang, "接続設定でKitsuパスワードを再入力してください。", "Re-enter the Kitsu password in Connections.")})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: "Kitsu runtime password", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the runtime password there."})
+		checks = append(checks, SetupCheck{Key: "kitsu_runtime_password", Label: t(lang, "Kitsu連携アカウントのパスワード", "Kitsu integration account password"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsu連携アカウントのパスワードを保存してください。", "Save the Kitsu integration account password in Connections.")})
 	}
 	if strings.TrimSpace(kitsuHost) != "" {
-		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupOK, Summary: "Configured", Detail: strings.TrimSpace(kitsuHost)})
+		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: t(lang, "Kitsuホスト", "Kitsu host"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: strings.TrimSpace(kitsuHost)})
 	} else {
-		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: "Kitsu hostname", Status: SetupError, Summary: "Missing", Fix: "Review the Kitsu hostname in Bot Settings."})
+		checks = append(checks, SetupCheck{Key: "kitsu_hostname", Label: t(lang, "Kitsuホスト", "Kitsu host"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でKitsuホストを確認してください。", "Review the Kitsu host in Connections.")})
 	}
 	if strings.TrimSpace(botToken) != "" {
-		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupOK, Summary: "Configured", Detail: "hidden"})
+		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: t(lang, "Discord Bot", "Discord Bot"), Status: SetupOK, Summary: t(lang, "設定済み", "Configured"), Detail: "hidden"})
 	} else {
-		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: "Discord bot token", Status: SetupError, Summary: "Missing", Fix: "Review Bot Settings and save the shared bot token there."})
+		checks = append(checks, SetupCheck{Key: "discord_bot_token", Label: t(lang, "Discord Bot", "Discord Bot"), Status: SetupError, Summary: t(lang, "未設定", "Missing"), Fix: t(lang, "接続設定でDiscord Botを保存してください。", "Save the Discord Bot in Connections.")})
 	}
 	if strings.TrimSpace(guildID) != "" {
 		checks = append(checks, SetupCheck{Key: "discord_guild_id", Label: "Discord guild fallback", Status: SetupWarn, Summary: "Configured", Detail: strings.TrimSpace(guildID), Fix: "Per-project guilds are preferred; fallback guild is only a compatibility default."})
@@ -211,7 +317,7 @@ func buildEnvChecks(db *gorm.DB, kitsuHost, botToken, guildID string) []SetupChe
 	return checks
 }
 
-func buildKitsuCheck(kitsuHost string) SetupCheck {
+func buildKitsuCheck(kitsuHost, lang string) SetupCheck {
 	info := checkKitsuStatus(kitsuHost)
 	check := SetupCheck{Key: "kitsu", Label: "Kitsu connection", Summary: "Unknown"}
 	switch {
@@ -222,7 +328,7 @@ func buildKitsuCheck(kitsuHost string) SetupCheck {
 	case info.Reachable:
 		check.Status = SetupWarn
 		check.Summary = "Reachable"
-		check.Detail = "Kitsu server answered, but authentication is not complete."
+		check.Detail = t(lang, "Kitsu server は応答しましたが、認証は完了していません。", "Kitsu server answered, but authentication is not complete.")
 		if info.Error != nil {
 			check.Fix = *info.Error
 		}
@@ -328,7 +434,7 @@ func buildProjectChecks(db *gorm.DB, botToken, fallbackGuildID string) []Project
 	return out
 }
 
-func buildTestNotificationCheck(db *gorm.DB) SetupCheck {
+func buildTestNotificationCheck(db *gorm.DB, lang string) SetupCheck {
 	verified := strings.EqualFold(strings.TrimSpace(model.GetSetting(db, setupTestNotificationVerifiedKey)), "true")
 	projectID := strings.TrimSpace(model.GetSetting(db, setupTestNotificationProjectKey))
 	verifiedAt := strings.TrimSpace(model.GetSetting(db, setupTestNotificationAtKey))
@@ -336,7 +442,7 @@ func buildTestNotificationCheck(db *gorm.DB) SetupCheck {
 		Key:     "test_notification",
 		Label:   "Final Health Check",
 		Summary: "Not confirmed yet",
-		Detail:  "Review Health to confirm the notification destination and runtime status before treating setup as complete.",
+		Detail:  t(lang, "setup を完了扱いにする前に Health で通知先と runtime 状態を確認してください。", "Review Health to confirm the notification destination and runtime status before treating setup as complete."),
 		Fix:     "Open Health and confirm the runtime is healthy and project webhook status looks correct.",
 	}
 	if verified {
@@ -365,6 +471,9 @@ func isSetupComplete(diag SetupDiagnostics) bool {
 	if diag.Discord.Status != SetupOK {
 		return false
 	}
+	if !diag.ProductionRoutingConfigured {
+		return false
+	}
 	projectReady := false
 	for _, p := range diag.Projects {
 		if p.GuildStatus == SetupOK && p.PermissionStatus == SetupOK && p.WebhookStatus == SetupOK {
@@ -376,6 +485,17 @@ func isSetupComplete(diag SetupDiagnostics) bool {
 		return false
 	}
 	return diag.TestNotification.Status == SetupOK
+}
+
+func hasReadyProductionRouting(db *gorm.DB) bool {
+	for _, project := range model.ListProjects(db) {
+		routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
+		config := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
+		if config != nil && config.Enabled && len(model.ValidateProductionNotificationConfig(db, project.KitsuProjectID, routes)) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func nextActionForDiagnostics(diag SetupDiagnostics) string {
@@ -395,6 +515,9 @@ func nextActionForDiagnostics(diag SetupDiagnostics) string {
 			return diag.Discord.Fix
 		}
 		return "Fix the Discord bot connection first."
+	}
+	if !diag.ProductionRoutingConfigured {
+		return "Select a connected Production, Task Type, and valid destination in Production Notification Routing."
 	}
 	for _, p := range diag.Projects {
 		if p.GuildStatus != SetupOK || p.PermissionStatus != SetupOK || p.WebhookStatus != SetupOK {
@@ -420,6 +543,9 @@ func incompleteReasons(diag SetupDiagnostics) []string {
 	}
 	if diag.Discord.Status != SetupOK {
 		reasons = append(reasons, "Discord: "+firstNonEmpty(diag.Discord.Fix, diag.Discord.Detail, "Fix the Discord bot connection."))
+	}
+	if !diag.ProductionRoutingConfigured {
+		reasons = append(reasons, "Production routing: configure at least one enabled valid Production-ID / Task-Type-ID route.")
 	}
 	projectReady := false
 	for _, p := range diag.Projects {

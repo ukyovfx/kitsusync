@@ -32,6 +32,9 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.Project{},
 		&model.ProjectWebhook{},
+		&model.ProductionChannelMapping{},
+		&model.ProductionNotificationConfig{},
+		&model.ProductionNotificationRoute{},
 		&model.ProjectUserMap{},
 		&model.ProjectCheckerMap{},
 		&model.ProjectSetting{},
@@ -39,6 +42,9 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 		&model.CheckerMap{},
 	); err != nil {
 		t.Fatalf("failed to migrate setup schema: %v", err)
+	}
+	if err := db.Exec("PRAGMA foreign_keys=ON").Error; err != nil {
+		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
 	return db
 }
@@ -168,6 +174,25 @@ func TestRunProjectSetup_CleansUpDiscordResourcesWhenDBTransactionFails(t *testi
 	}
 }
 
+func TestCleanupSetupArtifactsRemovesOperationalState(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	installSetupDiscordProvisioningStub(t)
+	if err := model.CreateProject(db, "kitsu-proj-cleanup", "Cleanup", "cg", "guild-123", "cat-setup-test", "en"); err != nil {
+		t.Fatalf("failed to create project: %v", err)
+	}
+	if err := model.CreateProjectWebhook(db, "kitsu-proj-cleanup", "concept", "Concept", "https://discord.invalid/concept", "channel-concept"); err != nil {
+		t.Fatalf("failed to create webhook: %v", err)
+	}
+	db.Create(&model.ProductionChannelMapping{ProductionID: "kitsu-proj-cleanup", GuildID: "guild-123", TaskTypeID: "tt-1", ChannelID: "channel-concept", Active: true, State: model.ChannelMappingStateCurrent, MigrationState: model.ChannelMappingStateCurrent})
+	db.Create(&model.ProductionNotificationConfig{ProductionID: "kitsu-proj-cleanup", ProductionName: "Cleanup", Enabled: true})
+	db.Create(&model.ProductionNotificationRoute{ProductionID: "kitsu-proj-cleanup", TaskTypeID: "tt-1", DestinationWebhookID: 1, DestinationChannelID: "channel-concept"})
+
+	cleanupSetupArtifacts("kitsu-proj-cleanup", "cat-setup-test", "bot-token", []createdSetupChannel{{ID: "channel-concept", Name: "concept"}}, db, &SetupResult{})
+	if model.FindProjectByKitsuID(db, "kitsu-proj-cleanup") != nil || len(model.ListProjectWebhooks(db, "kitsu-proj-cleanup")) != 0 || len(model.ListProductionChannelMappings(db, "kitsu-proj-cleanup")) != 0 || len(model.ListProductionNotificationRoutes(db, "kitsu-proj-cleanup")) != 0 || model.FindProductionNotificationConfig(db, "kitsu-proj-cleanup") != nil {
+		t.Fatal("setup cleanup left operational state behind")
+	}
+}
+
 func TestRunProjectSetup_DoesNotCleanupOnSuccess(t *testing.T) {
 	db := newSetupHandlerTestDB(t)
 	stub := installSetupDiscordProvisioningStub(t)
@@ -266,6 +291,9 @@ func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
 	if err := model.CreateProjectWebhook(db, "kitsu-proj-unlink", "general", "*", "https://discord.invalid/general", "channel-1"); err != nil {
 		t.Fatalf("failed to create webhook: %v", err)
 	}
+	db.Create(&model.ProductionChannelMapping{ProductionID: "kitsu-proj-unlink", GuildID: "guild-123", TaskTypeID: "tt-1", ChannelID: "channel-1", Active: true, State: model.ChannelMappingStateCurrent, MigrationState: model.ChannelMappingStateCurrent})
+	db.Create(&model.ProductionNotificationConfig{ProductionID: "kitsu-proj-unlink", ProductionName: "Project Unlink", Enabled: true})
+	db.Create(&model.ProductionNotificationRoute{ProductionID: "kitsu-proj-unlink", TaskTypeID: "tt-1", DestinationWebhookID: 1, DestinationChannelID: "channel-1"})
 	model.UpsertProjectUserMap(db, project.ID, "Artist A", "artist@example.com", "discord-user-1")
 	model.UpsertProjectCheckerMap(db, project.ID, "Animation", "discord-reviewer-1")
 	db.Create(&model.ProjectSetting{ProjectID: project.ID, Key: "storage_url", Value: "s3://bucket/project"})
@@ -280,6 +308,15 @@ func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
 	}
 	if got := model.ListProjectWebhooks(db, "kitsu-proj-unlink"); len(got) != 0 {
 		t.Fatalf("expected project webhooks to be deleted, got %d", len(got))
+	}
+	if got := model.ListProductionChannelMappings(db, "kitsu-proj-unlink"); len(got) != 0 {
+		t.Fatalf("expected production channel mappings to be deleted, got %d", len(got))
+	}
+	if got := model.ListProductionNotificationRoutes(db, "kitsu-proj-unlink"); len(got) != 0 {
+		t.Fatalf("expected notification routes to be deleted, got %d", len(got))
+	}
+	if got := model.FindProductionNotificationConfig(db, "kitsu-proj-unlink"); got != nil {
+		t.Fatal("expected notification config to be deleted")
 	}
 	if got := model.ListProjectUserMaps(db, project.ID); len(got) != 0 {
 		t.Fatalf("expected project user maps to be deleted, got %d", len(got))
@@ -306,6 +343,30 @@ func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
 	}
 }
 
+func TestCreateProjectDoesNotInheritOrphanRoutingState(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	const productionID = "kitsu-proj-reconnect"
+	db.Create(&model.ProductionChannelMapping{
+		ProductionID: productionID, GuildID: "guild-123", TaskTypeID: "tt-1", ChannelID: "channel-1",
+		Active: true, State: model.ChannelMappingStateCurrent, MigrationState: model.ChannelMappingStateCurrent,
+	})
+	db.Create(&model.ProductionNotificationConfig{ProductionID: productionID, ProductionName: "Stale", Enabled: true})
+	db.Create(&model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: "tt-1", DestinationWebhookID: 99})
+
+	if err := model.CreateProject(db, productionID, "Reconnected", "kitsu", "guild-123", "category-1", "en"); err != nil {
+		t.Fatalf("expected reconnect project creation to succeed, got %v", err)
+	}
+	if got := model.ListProductionChannelMappings(db, productionID); len(got) != 0 {
+		t.Fatalf("stale channel mappings were inherited: %d", len(got))
+	}
+	if got := model.ListProductionNotificationRoutes(db, productionID); len(got) != 0 {
+		t.Fatalf("stale notification routes were inherited: %d", len(got))
+	}
+	if got := model.FindProductionNotificationConfig(db, productionID); got != nil {
+		t.Fatal("stale notification config was inherited")
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -313,4 +374,24 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestSetupSQLiteFixtureEnablesForeignKeysAndHasNoViolations(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	var enabled int
+	if err := db.Raw("PRAGMA foreign_keys").Scan(&enabled).Error; err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 {
+		t.Fatalf("expected foreign_keys=1, got %d", enabled)
+	}
+	var violations []struct {
+		Table string
+	}
+	if err := db.Raw("PRAGMA foreign_key_check").Scan(&violations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("expected no foreign key violations, got %d", len(violations))
+	}
 }

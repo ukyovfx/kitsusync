@@ -1,9 +1,13 @@
 package model
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/gookit/slog"
 	"gorm.io/gorm"
 )
 
@@ -31,9 +35,10 @@ func WriteAuditLog(db *gorm.DB, log AuditLog) {
 	if db == nil {
 		return
 	}
-	if len(log.WebhookURL) > 40 {
-		log.WebhookURL = log.WebhookURL[:40] + "..."
-	}
+	// Webhook URLs are credentials. Audit evidence keeps the outcome and
+	// destination IDs, never the secret-bearing URL itself.
+	log.WebhookURL = ""
+	log.PreviousWebhookURL = ""
 	db.Create(&log)
 }
 
@@ -82,6 +87,21 @@ func UpdateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, comme
 	})
 }
 
+// MarkTaskObserved records a non-deliverable or permanently failed event
+// without clearing a previously delivered Discord message.
+func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
+	updates := map[string]interface{}{
+		"task_updated_at":    taskUpdatedAt,
+		"task_status":        taskStatus,
+		"comment_id":         commentID,
+		"comment_updated_at": commentUpdatedAt,
+	}
+	result := db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+	if result.RowsAffected == 0 {
+		db.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt})
+	}
+}
+
 func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID string) {
 	updates := map[string]interface{}{
 		"task_updated_at":    taskUpdatedAt,
@@ -94,7 +114,18 @@ func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, comme
 	if threadID != "" {
 		updates["discord_thread_id"] = threadID
 	}
-	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+	result := db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+	if result.RowsAffected == 0 {
+		db.Create(&Task{
+			TaskID:           taskID,
+			TaskUpdatedAt:    taskUpdatedAt,
+			TaskStatus:       taskStatus,
+			CommentID:        commentID,
+			CommentUpdatedAt: commentUpdatedAt,
+			DiscordMessageID: discordMessageID,
+			DiscordThreadID:  threadID,
+		})
+	}
 }
 
 func ClearMessageID(db *gorm.DB, taskID string) {
@@ -127,14 +158,54 @@ func FindTask(db *gorm.DB, taskID string) Task {
 }
 
 type Project struct {
-	ID                uint   `gorm:"primaryKey"`
-	KitsuProjectID    string `gorm:"uniqueIndex"`
-	Name              string
-	ProjectType       string
-	DiscordGuildID    string `gorm:"index"`
-	DiscordCategoryID string
-	Language          string
-	StorageURL        string
+	ID                 uint   `gorm:"primaryKey"`
+	KitsuProjectID     string `gorm:"uniqueIndex"`
+	Name               string
+	ProjectType        string
+	DiscordGuildID     string `gorm:"index"`
+	DiscordCategoryID  string
+	Language           string
+	StorageURL         string
+	ValidationOnly     bool   `gorm:"index"`
+	ValidationDataJSON string `gorm:"type:text"`
+	ReadOnlyPreview    bool   `gorm:"-"`
+}
+
+// ValidationKitsuData is read-only Kitsu metadata captured for an isolated
+// validation profile. It deliberately contains no Discord identifiers.
+type ValidationKitsuData struct {
+	TaskTypes    []ValidationTaskType `json:"task_types,omitempty"`
+	Participants []ValidationPerson   `json:"participants,omitempty"`
+}
+
+type ValidationTaskType struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type ValidationPerson struct {
+	ID       string `json:"id"`
+	FullName string `json:"full_name"`
+	Email    string `json:"email,omitempty"`
+}
+
+func (p Project) ValidationData() ValidationKitsuData {
+	var data ValidationKitsuData
+	if strings.TrimSpace(p.ValidationDataJSON) == "" {
+		return data
+	}
+	if err := json.Unmarshal([]byte(p.ValidationDataJSON), &data); err != nil {
+		return ValidationKitsuData{}
+	}
+	return data
+}
+
+func IsValidationOnlyProject(db *gorm.DB, kitsuProjectID string) bool {
+	var project Project
+	if db == nil || db.Where("kitsu_project_id = ?", strings.TrimSpace(kitsuProjectID)).First(&project).Error != nil {
+		return false
+	}
+	return project.ValidationOnly
 }
 
 type ProjectWebhook struct {
@@ -144,6 +215,285 @@ type ProjectWebhook struct {
 	TaskType         string
 	WebhookURL       string
 	DiscordChannelID string
+}
+
+// ProductionChannelMapping is the stable-ID mapping for the current
+// Production -> Discord Guild -> Kitsu Task Type channel model. Display names
+// are retained as metadata; routing must use the IDs.
+type ProductionChannelMapping struct {
+	ID             uint   `gorm:"primaryKey"`
+	ProductionID   string `gorm:"not null;uniqueIndex:idx_production_task_channel"`
+	GuildID        string `gorm:"not null;index"`
+	TaskTypeID     string `gorm:"not null;uniqueIndex:idx_production_task_channel"`
+	TaskTypeName   string
+	ChannelID      string `gorm:"not null;index"`
+	ChannelName    string
+	Active         bool
+	MigrationState string `gorm:"not null;default:'current'"`
+	OperationID    string `gorm:"index"`
+	State          string `gorm:"not null;default:'current'"`
+	LastError      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+const (
+	ChannelMappingStateCurrent        = "current"
+	ChannelMappingStatePending        = "pending"
+	ChannelMappingStatePartial        = "partial"
+	ChannelMappingStateReviewRequired = "review_required"
+)
+
+func ValidateProductionChannelMappings(productionID, guildID string, mappings []ProductionChannelMapping) []string {
+	issues := []string{}
+	productionID = strings.TrimSpace(productionID)
+	guildID = strings.TrimSpace(guildID)
+	if productionID == "" || guildID == "" {
+		issues = append(issues, "Production and linked Guild are required")
+	}
+	seenTaskTypes := map[string]bool{}
+	seenChannels := map[string]bool{}
+	for _, mapping := range mappings {
+		if strings.TrimSpace(mapping.ProductionID) != productionID || strings.TrimSpace(mapping.GuildID) != guildID {
+			issues = append(issues, "mapping belongs to a different Production or Guild")
+		}
+		if strings.TrimSpace(mapping.TaskTypeID) == "" || strings.TrimSpace(mapping.ChannelID) == "" {
+			issues = append(issues, "Task Type and channel IDs are required")
+		}
+		if seenTaskTypes[mapping.TaskTypeID] || seenChannels[mapping.ChannelID] {
+			issues = append(issues, "Task Type and channel mappings must be unique")
+		}
+		seenTaskTypes[mapping.TaskTypeID] = true
+		seenChannels[mapping.ChannelID] = true
+		if !mapping.Active || strings.TrimSpace(mapping.MigrationState) != "current" {
+			issues = append(issues, "paused or migration-required mappings are not ready")
+		}
+	}
+	return compactUniqueStrings(issues)
+}
+
+func ListProductionChannelMappings(db *gorm.DB, productionID string) []ProductionChannelMapping {
+	var rows []ProductionChannelMapping
+	if db == nil {
+		return rows
+	}
+	db.Where("production_id = ?", strings.TrimSpace(productionID)).Order("task_type_id asc").Find(&rows)
+	return rows
+}
+
+func SaveProductionChannelMappings(db *gorm.DB, productionID, guildID string, mappings []ProductionChannelMapping) error {
+	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(guildID) == "" {
+		return gorm.ErrInvalidData
+	}
+	if issues := ValidateProductionChannelMappings(productionID, guildID, mappings); len(issues) > 0 {
+		return fmt.Errorf("invalid production channel mappings: %s", strings.Join(issues, "; "))
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, mapping := range mappings {
+			var existing ProductionChannelMapping
+			err := tx.Where("production_id = ? AND task_type_id = ?", productionID, mapping.TaskTypeID).First(&existing).Error
+			if err == nil {
+				mapping.ID = existing.ID
+				mapping.CreatedAt = existing.CreatedAt
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			mapping.ProductionID = strings.TrimSpace(productionID)
+			mapping.GuildID = strings.TrimSpace(guildID)
+			if err := tx.Save(&mapping).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// SavePendingProductionChannelMapping records a verified Discord result before
+// the complete channel plan is ready. Pending rows are deliberately inactive;
+// they make retries and manual recovery possible without enabling partial
+// notification routing.
+func SavePendingProductionChannelMapping(db *gorm.DB, mapping ProductionChannelMapping) error {
+	if db == nil || strings.TrimSpace(mapping.ProductionID) == "" || strings.TrimSpace(mapping.GuildID) == "" || strings.TrimSpace(mapping.TaskTypeID) == "" || strings.TrimSpace(mapping.ChannelID) == "" {
+		return gorm.ErrInvalidData
+	}
+	mapping.Active = false
+	mapping.State = ChannelMappingStatePending
+	mapping.MigrationState = ChannelMappingStatePending
+	var existing ProductionChannelMapping
+	if err := db.Where("production_id = ? AND task_type_id = ?", mapping.ProductionID, mapping.TaskTypeID).First(&existing).Error; err == nil {
+		mapping.ID = existing.ID
+		mapping.CreatedAt = existing.CreatedAt
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return db.Save(&mapping).Error
+}
+
+func MarkProductionChannelMappingsReviewRequired(db *gorm.DB, productionID, operationID string, keep map[string]bool, reason string) error {
+	if db == nil {
+		return gorm.ErrInvalidData
+	}
+	var rows []ProductionChannelMapping
+	if err := db.Where("production_id = ?", strings.TrimSpace(productionID)).Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if keep[row.TaskTypeID] {
+			continue
+		}
+		row.Active = false
+		row.State = ChannelMappingStateReviewRequired
+		row.MigrationState = ChannelMappingStateReviewRequired
+		row.OperationID = operationID
+		row.LastError = reason
+		if err := db.Save(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ActivateProductionRoutingFromMappings makes the new routing model the
+// dispatch source of truth after a confirmed channel plan. Legacy
+// ProjectWebhook rows remain compatibility data and provide the webhook
+// destination required by the current dispatcher.
+func ActivateProductionRoutingFromMappings(db *gorm.DB, productionID, guildID string, mappings []ProductionChannelMapping) error {
+	slog.Debug("Production routing activation started", "production_id", strings.TrimSpace(productionID), "guild_id", strings.TrimSpace(guildID), "mapping_count", len(mappings))
+	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(guildID) == "" {
+		slog.Warn("Production routing activation rejected", "stage", "input_validation", "error_class", "missing_production_or_guild", "mapping_count", len(mappings))
+		return gorm.ErrInvalidData
+	}
+	project := FindProjectByKitsuID(db, productionID)
+	if project == nil {
+		slog.Warn("Production routing activation rejected", "stage", "project_lookup", "error_class", "production_not_connected", "production_id", strings.TrimSpace(productionID))
+		return fmt.Errorf("production is not connected locally")
+	}
+	if issues := ValidateProductionChannelMappings(productionID, guildID, mappings); len(issues) > 0 {
+		slog.Warn("Production routing activation rejected", "stage", "mapping_validation", "error_class", "invalid_mapping", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "issues", issues)
+		return fmt.Errorf("invalid production channel mappings: %s", strings.Join(issues, "; "))
+	}
+	webhooks := ListProjectWebhooks(db, productionID)
+	slog.Debug("Production routing activation destinations loaded", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "webhook_record_count", len(webhooks))
+	routes := make([]ProductionNotificationRoute, 0, len(mappings))
+	for _, mapping := range mappings {
+		var selected *ProjectWebhook
+		webhookURL := ""
+		for i := range webhooks {
+			webhook := &webhooks[i]
+			if strings.TrimSpace(webhook.DiscordChannelID) != strings.TrimSpace(mapping.ChannelID) || strings.TrimSpace(webhook.WebhookURL) == "" {
+				continue
+			}
+			if selected == nil {
+				selected = webhook
+				webhookURL = strings.TrimSpace(webhook.WebhookURL)
+				continue
+			}
+			if strings.TrimSpace(webhook.WebhookURL) != webhookURL {
+				slog.Warn("Production routing activation rejected", "stage", "destination_validation", "error_class", "ambiguous_webhook_destination", "task_type_id", mapping.TaskTypeID, "channel_id", mapping.ChannelID)
+				return fmt.Errorf("ambiguous webhook destinations for channel mapping %s", mapping.TaskTypeID)
+			}
+		}
+		if selected == nil {
+			slog.Warn("Production routing activation rejected", "stage", "destination_validation", "error_class", "missing_webhook_destination", "task_type_id", mapping.TaskTypeID, "channel_id", mapping.ChannelID)
+			return fmt.Errorf("no valid legacy webhook destination for channel mapping %s", mapping.TaskTypeID)
+		}
+		routes = append(routes, ProductionNotificationRoute{
+			ProductionID:           productionID,
+			TaskTypeID:             mapping.TaskTypeID,
+			TaskTypeName:           mapping.TaskTypeName,
+			DestinationWebhookID:   selected.ID,
+			DestinationChannelID:   mapping.ChannelID,
+			DestinationChannelName: mapping.ChannelName,
+		})
+	}
+	if issues := ValidateProductionNotificationConfig(db, productionID, routes); len(issues) > 0 {
+		slog.Warn("Production routing activation rejected", "stage", "route_validation", "error_class", "invalid_notification_route", "production_id", strings.TrimSpace(productionID), "route_count", len(routes), "issues", issues)
+		return fmt.Errorf("notification routing is not valid: %s", strings.Join(issues, "; "))
+	}
+	slog.Debug("Production routing activation transaction begin", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "route_count", len(routes))
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&Project{}).Where("kitsu_project_id = ?", productionID).Updates(map[string]interface{}{"discord_guild_id": strings.TrimSpace(guildID)}).Error; err != nil {
+			return err
+		}
+		for _, mapping := range mappings {
+			var existing ProductionChannelMapping
+			err := tx.Where("production_id = ? AND task_type_id = ?", productionID, mapping.TaskTypeID).First(&existing).Error
+			if err == nil {
+				mapping.ID = existing.ID
+				mapping.CreatedAt = existing.CreatedAt
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			mapping.ProductionID = strings.TrimSpace(productionID)
+			mapping.GuildID = strings.TrimSpace(guildID)
+			mapping.Active = true
+			mapping.State = ChannelMappingStateCurrent
+			mapping.MigrationState = ChannelMappingStateCurrent
+			mapping.LastError = ""
+			if err := tx.Save(&mapping).Error; err != nil {
+				return err
+			}
+		}
+		keep := make(map[string]bool, len(mappings))
+		for _, mapping := range mappings {
+			keep[strings.TrimSpace(mapping.TaskTypeID)] = true
+		}
+		var existingMappings []ProductionChannelMapping
+		if err := tx.Where("production_id = ?", productionID).Find(&existingMappings).Error; err != nil {
+			return err
+		}
+		for _, existingMapping := range existingMappings {
+			if keep[existingMapping.TaskTypeID] {
+				continue
+			}
+			existingMapping.Active = false
+			existingMapping.State = ChannelMappingStateReviewRequired
+			existingMapping.MigrationState = ChannelMappingStateReviewRequired
+			existingMapping.LastError = "Task Type omitted from the confirmed plan; review before reuse"
+			if err := tx.Save(&existingMapping).Error; err != nil {
+				return err
+			}
+		}
+		var config ProductionNotificationConfig
+		err := tx.Where("production_id = ?", productionID).First(&config).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			config = ProductionNotificationConfig{ProductionID: productionID, ProductionName: project.Name}
+		} else if err != nil {
+			return err
+		}
+		config.ProductionName = project.Name
+		config.Enabled = true
+		if err := tx.Save(&config).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("production_id = ?", productionID).Delete(&ProductionNotificationRoute{}).Error; err != nil {
+			return err
+		}
+		for _, route := range routes {
+			if err := tx.Create(&route).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Warn("Production routing activation rolled back", "stage", "database_transaction", "error_class", "transaction_failed", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "route_count", len(routes))
+		return err
+	}
+	slog.Debug("Production routing activation committed", "production_id", strings.TrimSpace(productionID), "mapping_count", len(mappings), "route_count", len(routes), "committed", true)
+	return nil
+}
+
+func compactUniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // ProductionNotificationConfig is the explicit opt-in boundary for the
@@ -227,6 +577,51 @@ func SaveProductionNotificationConfig(db *gorm.DB, config *ProductionNotificatio
 	})
 }
 
+// DeleteProductionOperationalState removes current routing state owned by a
+// KitsuSync Production connection. Audit history is intentionally retained.
+func DeleteProductionOperationalState(db *gorm.DB, productionID string) error {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return gorm.ErrInvalidData
+	}
+	productionID = strings.TrimSpace(productionID)
+	for _, table := range []interface{}{
+		&ProductionNotificationRoute{},
+		&ProductionNotificationConfig{},
+		&ProductionChannelMapping{},
+	} {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Where("production_id = ?", productionID).Delete(table).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// HasProductionOperationalState reports whether a Production has any local
+// routing state without requiring a connected Project row.
+func HasProductionOperationalState(db *gorm.DB, productionID string) bool {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return false
+	}
+	productionID = strings.TrimSpace(productionID)
+	var count int64
+	for _, table := range []interface{}{
+		&ProductionNotificationRoute{},
+		&ProductionNotificationConfig{},
+		&ProductionChannelMapping{},
+	} {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Model(table).Where("production_id = ?", productionID).Count(&count).Error; err == nil && count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func RecordNotificationRoutingDiagnosis(db *gorm.DB, diagnosis NotificationRoutingDiagnosis) {
 	if db != nil {
 		db.Create(&diagnosis)
@@ -279,14 +674,22 @@ func ValidateProductionNotificationConfig(db *gorm.DB, productionID string, rout
 }
 
 func CreateProject(db *gorm.DB, kitsuProjectID, name, projectType, guildID, categoryID, language string) error {
-	return db.Create(&Project{
-		KitsuProjectID:    kitsuProjectID,
-		Name:              name,
-		ProjectType:       projectType,
-		DiscordGuildID:    guildID,
-		DiscordCategoryID: categoryID,
-		Language:          language,
-	}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if FindProjectByKitsuID(tx, kitsuProjectID) != nil {
+			return errors.New("project is already connected")
+		}
+		if err := DeleteProductionOperationalState(tx, kitsuProjectID); err != nil {
+			return err
+		}
+		return tx.Create(&Project{
+			KitsuProjectID:    kitsuProjectID,
+			Name:              name,
+			ProjectType:       projectType,
+			DiscordGuildID:    guildID,
+			DiscordCategoryID: categoryID,
+			Language:          language,
+		}).Error
+	})
 }
 
 func UpdateProjectGuildID(db *gorm.DB, kitsuProjectID, guildID string) error {
@@ -468,10 +871,13 @@ func SetProjectWebhook(db *gorm.DB, kitsuProjectID, webhookURL, channelID string
 }
 
 type UserMap struct {
-	ID         uint   `gorm:"primaryKey"`
-	KitsuName  string `gorm:"index"`
-	KitsuEmail string
-	DiscordID  string
+	ID                 uint   `gorm:"primaryKey"`
+	KitsuID            string `gorm:"index"`
+	KitsuName          string `gorm:"index"`
+	KitsuEmail         string
+	DiscordGuildID     string `gorm:"index"`
+	DiscordID          string
+	DiscordDisplayName string
 }
 
 type CheckerMap struct {
@@ -524,6 +930,37 @@ func UpdateUserMap(db *gorm.DB, id uint, kitsuName, kitsuEmail, discordID string
 		"kitsu_email": kitsuEmail,
 		"discord_id":  discordID,
 	})
+}
+
+func UpdateUserMapDisplayName(db *gorm.DB, id uint, displayName string) {
+	db.Model(&UserMap{}).Where("id = ?", id).Update("discord_display_name", strings.TrimSpace(displayName))
+}
+
+func UpsertUserMapWithIdentity(db *gorm.DB, kitsuID, kitsuName, kitsuEmail, discordGuildID, discordID, displayName string) *UserMap {
+	var user UserMap
+	query := db
+	if strings.TrimSpace(kitsuID) != "" {
+		query = query.Where("kitsu_id = ?", strings.TrimSpace(kitsuID))
+	} else if strings.TrimSpace(kitsuEmail) != "" {
+		query = query.Where("kitsu_email = ?", strings.TrimSpace(kitsuEmail))
+	} else {
+		query = query.Where("kitsu_name = ?", strings.TrimSpace(kitsuName))
+	}
+	if query.First(&user).Error != nil {
+		user = UserMap{}
+	}
+	user.KitsuID = strings.TrimSpace(kitsuID)
+	user.KitsuName = strings.TrimSpace(kitsuName)
+	user.KitsuEmail = strings.TrimSpace(kitsuEmail)
+	user.DiscordGuildID = strings.TrimSpace(discordGuildID)
+	user.DiscordID = strings.TrimSpace(discordID)
+	user.DiscordDisplayName = strings.TrimSpace(displayName)
+	if user.ID == 0 {
+		db.Create(&user)
+	} else {
+		db.Save(&user)
+	}
+	return &user
 }
 
 func DeleteUserMapByID(db *gorm.DB, id uint) {

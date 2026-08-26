@@ -4,11 +4,11 @@
 [![Docker](https://img.shields.io/badge/runtime-Docker-2496ED)](#quick-start)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](#license)
 [![Security Policy](https://img.shields.io/badge/security-policy-important)](#contributing-and-security)
-[![Release](https://img.shields.io/badge/release-v0.4.0-orange)](#current-baseline-v040)
+[![Release](https://img.shields.io/badge/release-v0.4.1-orange)](#current-baseline-v041)
 
 KitsuSync is a Kitsu x Discord pipeline bridge for VFX and animation teams. It polls Kitsu, detects task changes, and posts structured Discord notifications with setup and admin tools in the browser.
 
-**Current baseline: v0.4.0.** KitsuSync is currently focused on small/mid-size CG/VFX and indie animation team workflows. It is not intended to replace enterprise production tracking systems.
+**Current baseline: v0.4.1.** KitsuSync is currently focused on small/mid-size CG/VFX and indie animation team workflows. It is not intended to replace enterprise production tracking systems.
 
 ## Why This Repo Exists
 
@@ -40,15 +40,15 @@ Browser admin UI
   -> /bot/admin
 ```
 
-## Current Baseline (v0.4.0)
+## Current Baseline (v0.4.1)
 
 - v0.2.0: Setup Wizard/operator clarity and setup-surface role consistency
 - v0.2.1: repository rename/public URL alignment to `ukyovfx/kitsusync`
 - v0.3.0: operational hardening (log redaction, side-effect-free Discord test endpoint, partial-failure cleanup hardening)
 - v0.3.1: Discord notification message UX refinement
-- v0.4.0: setup/admin flow redesign around Project Management, project-level Guild ID, and durable Bot Settings token persistence
+- v0.4.1: release-candidate maintenance update for the v0.4.0 setup/admin flow, documentation alignment, and release asset cache refresh
 
-For release history, see `CHANGELOG.md`. Per-version release notes should live in GitHub Releases going forward. The latest local release note is `RELEASE_NOTES_v0.4.0.md`.
+For release history, see `CHANGELOG.md`. Per-version release notes should live in GitHub Releases going forward. The latest local release note is `RELEASE_NOTES_v0.4.1.md`.
 
 ## Limitations (Current)
 
@@ -59,6 +59,7 @@ Current limitations are intentionally conservative:
 - Admin review and System Status surfaces are still required for some recovery paths.
 - Setup depends on correct Discord bot permissions and Kitsu reachability.
 - Notification routing remains webhook-based.
+- Discord channel mutations are restricted to verified KitsuSync-owned Production resources and fail closed on stale or ambiguous ownership.
 - SQLite is suitable for lightweight/small deployments, not large multi-node scale-out.
 
 For production use, see `docs/SETUP_FOR_STUDIOS.md` and verify routing and operational load against your expected notification volume.
@@ -67,7 +68,7 @@ For production use, see `docs/SETUP_FOR_STUDIOS.md` and verify routing and opera
 The following items are tracked as future improvement areas:
 
 - Project-scoped multi-project admin management
-- Admin audit surface in the browser (`/bot/admin/audit`)
+- Additional audit and diagnostics improvements
 - Safer delete-and-recreate handling for existing Discord channel layouts
 - Direct Kitsu task deep links in notifications
 - UI controls for `@here` routing and broader mention policies
@@ -85,7 +86,7 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 - `/bot/admin/health` — single System Status surface for status, verification, and diagnostics
 - `/bot/admin` — operational dashboard: system health, active projects, warnings
 - `/bot/admin/users` — map Kitsu users to Discord IDs for @mentions
-- `/bot/admin/checkers` — map task types to reviewer Discord IDs
+- `/bot/admin/checkers` — compatibility URL that redirects to User Linking
 
 Screenshot placeholders live in `screenshots/README.md`. Capture guidance lives in `screenshots/CAPTURE_GUIDE.md`.
 
@@ -209,7 +210,7 @@ Use the public `/bot/*` paths exposed by your proxy, for example:
 
 1. Open `/bot/login` and sign in with your Kitsu manager or admin account.
 2. Review shared bot/runtime prerequisites in `/bot/admin/bot`.
-3. Open `/bot/setup` and use the 4-step Project Management flow: Step 1 `Bot Settings`, Step 2 `Project Routing` (including the project-level Discord Server / Guild ID), Step 3 `Resource Creation`, Step 4 `Test Notification`.
+3. Open `/bot/setup` and complete the seven-step Production connection flow: Prerequisites, Production, Discord Server, Channel Plan, Review, Execute, and Complete.
 4. Enter a Discord Server / Guild ID per project during `/bot/setup` Step 2. This is required for new project routing.
 5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment.
 6. If setup fails after partial Discord provisioning, rollback is best-effort and manual cleanup may still be required before retrying.
@@ -263,7 +264,11 @@ FileBrowser is for local/debug inspection only.
 
 ## Routing Behavior
 
-Notification routing priority is:
+Notification delivery uses the Production-centered model. A normal operator manages one selected Production from Connected Productions (`/bot/admin/projects?project=<production-id>`); the older routing URL is compatibility-only.
+
+The notification route identity is the stable Production ID plus stable Kitsu Task Type ID. A connected Production alone is not ready: every enabled route must resolve to a verified Discord text channel destination in that Production's linked Discord server. Unmatched, paused, stale, incomplete, cross-server, or ambiguous routes fail closed and are diagnosed without dispatch.
+
+Legacy notification fallback priority is:
 
 1. Project/task-type webhook records created by `/bot/setup`
 2. `[[discord.productions]]`
@@ -347,7 +352,7 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 - Contributor guide: `CONTRIBUTING.md`
 - Security reporting: `SECURITY.md`
 - Changelog: `CHANGELOG.md`
-- Latest release notes: `RELEASE_NOTES_v0.4.0.md`
+- Latest release notes: `RELEASE_NOTES_v0.4.1.md`
 - Screenshot guidance: `screenshots/CAPTURE_GUIDE.md`
 - Future per-version release notes: GitHub Releases
 

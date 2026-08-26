@@ -8,7 +8,7 @@ updated: 2026-05-19
 
 This directory keeps repo-local historical background notes that were originally tracked in Obsidian.
 
-These notes describe the old v0.1.0 release-candidate phase. They are not the current source of truth for the v0.4.0 maintenance state.
+These notes describe the old v0.1.0 release-candidate phase. They are not the current source of truth for the v0.4.1 maintenance state.
 
 For v0.1.0, the canonical repo-facing set was:
 

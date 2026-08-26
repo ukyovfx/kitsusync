@@ -103,4 +103,11 @@ jobs:
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
-        run: docker compose build app
+        run: |
+          docker compose build \
+            --build-arg APP_VERSION="${GITHUB_REF_NAME}" \
+            --build-arg COMMIT_SHA="${GITHUB_SHA}" \
+            --build-arg BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg BUILD_SOURCE_ID="${GITHUB_SHA}" \
+            --build-arg IMAGE_REVISION="${GITHUB_SHA}" \
+            --build-arg WORKTREE_DIRTY=false app

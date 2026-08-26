@@ -2,14 +2,14 @@
 title: "KitsuSync Current State"
 status: maintenance
 updated: 2026-06-17
-release: v0.4.0
+release: v0.4.1
 ---
 
 # KitsuSync Current State
 
 ## Release Focus
 
-- current release: `v0.4.0`
+- current release: `v0.4.1`
 - current mode: maintenance with small cleanup and hardening PRs
 - scope rule: keep changes small, focused, and easy to verify
 
@@ -93,4 +93,4 @@ release: v0.4.0
 - docs maintenance cleanup continued without changing runtime behavior
 - `docs/ENVIRONMENTS.md` now documents the temporary GCP backup-first deploy behavior, including the live container DB/logs/dump backup caveat
 - `docs/notes` historical metadata is now clearly marked as historical background rather than active release-state guidance
-- current user-facing setup and deploy docs are now broadly aligned with the v0.4.0 maintenance state
+- current user-facing setup and deploy docs are now broadly aligned with the v0.4.1 maintenance state

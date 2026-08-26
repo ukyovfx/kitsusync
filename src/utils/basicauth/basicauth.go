@@ -4,7 +4,7 @@ package basicauth
 import (
 	"bytes"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -47,7 +47,7 @@ func AuthForJWTTokenDetailed(url, email, password string) (string, AuthDiagnosti
 	}
 	defer resp.Body.Close()
 
-	respBody, err := ioutil.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	diagnostics.StatusCode = resp.StatusCode
 	if err != nil {
 		diagnostics.Category = "response read error"

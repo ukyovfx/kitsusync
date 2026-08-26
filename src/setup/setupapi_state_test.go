@@ -100,6 +100,21 @@ func TestTestDiscordHandler_DoesNotMutateRuntimeOrSettings(t *testing.T) {
 	}
 }
 
+func TestCheckDiscordStatusValidatesBotWithoutGuild(t *testing.T) {
+	installDiscordAPIStub(t, "unused-guild")
+
+	info := checkDiscordStatus("configured-token", "")
+	if !info.Configured || !info.BotValid {
+		t.Fatalf("expected bot identity to be valid without a guild, got %+v", info)
+	}
+	if info.GuildValid {
+		t.Fatal("guild should remain unvalidated when no guild is selected")
+	}
+	if info.Error != nil {
+		t.Fatalf("unexpected bot identity error: %v", *info.Error)
+	}
+}
+
 func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
@@ -109,7 +124,7 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	form := url.Values{}
 	form.Set("bot_token", "rotated-token")
 	form.Set("guild_id", "999999999999999999")
-	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?legacy=1", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rr := httptest.NewRecorder()
 
@@ -143,18 +158,18 @@ func TestBotHandler_EditFormShowsDurablePersistenceCopy(t *testing.T) {
 		t.Fatalf("expected 200 for edit form, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Token changes take effect immediately for the running process and are also saved in app settings.") {
-		t.Fatalf("expected durable token persistence copy in bot settings form")
+	if strings.Contains(body, "Saved tokens are never displayed.") {
+		t.Fatalf("expected fixed secret-safe token presentation in connections form")
 	}
-	if !strings.Contains(body, "After restart, the saved token is used first.") {
-		t.Fatalf("expected restart persistence copy in bot settings form")
+	if strings.Contains(body, "After restart") || strings.Contains(body, "fallback") || strings.Contains(body, "Runtime") {
+		t.Fatalf("did not expect implementation persistence terminology in connections form")
 	}
 	if strings.Contains(body, "Compatibility fallback Guild setting") {
 		t.Fatalf("did not expect guild fallback section in bot settings form")
 	}
 }
 
-func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
+func TestHandler_GetSetupUsesProductionAndServerSelectionFlow(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
 	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "kitsusync-bot@local.invalid")
@@ -168,14 +183,16 @@ func TestHandler_GetSetupShowsProjectLevelGuildInput(t *testing.T) {
 	}
 
 	body := rr.Body.String()
-	if !strings.Contains(body, `name="guild_id"`) {
-		t.Fatalf("expected project-level guild_id field on classic setup form")
+	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected approved connection flow copy %q", want)
+		}
 	}
-	if !strings.Contains(body, "Enter the Discord Server / Guild ID used as this project's notification destination.") {
-		t.Fatalf("expected project-level guild helper copy on classic setup form")
+	if !strings.Contains(body, "Configure the Kitsu connection") && !strings.Contains(body, "Connection settings") && !strings.Contains(body, "Connections") {
+		t.Fatal("setup flow did not expose the state-appropriate connection action")
 	}
-	if !strings.Contains(body, `name="guild_id" placeholder="123456789012345678" required`) {
-		t.Fatalf("expected project-level guild_id field to be required")
+	if strings.Contains(body, `name="guild_id"`) || strings.Contains(body, "Discord Server / Guild ID") {
+		t.Fatalf("did not expect manual Guild ID entry in the normal setup flow")
 	}
 }
 

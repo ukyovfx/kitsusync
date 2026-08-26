@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"app/src/model"
 	"gorm.io/gorm"
@@ -22,6 +23,54 @@ const (
 	RuntimeSecretKeyFileEnv        = "KITSUSYNC_SECRET_KEY_FILE"
 	defaultRuntimeSecretKeyFile    = "data/runtime-secret.key"
 )
+
+type RuntimeKitsuCredentialState struct {
+	EmailPresent      bool
+	CiphertextPresent bool
+	Decryptable       bool
+	ErrorClass        string
+}
+
+// InspectRuntimeKitsuCredential reports only safe credential state. It never
+// returns or logs the email, ciphertext, key, or decrypted password.
+func InspectRuntimeKitsuCredential(db *gorm.DB) RuntimeKitsuCredentialState {
+	state := RuntimeKitsuCredentialState{}
+	if db == nil {
+		state.ErrorClass = "database_unavailable"
+		return state
+	}
+	state.EmailPresent = strings.TrimSpace(model.GetSetting(db, RuntimeKitsuEmailSettingKey)) != ""
+	ciphertext := strings.TrimSpace(model.GetSetting(db, RuntimeKitsuPasswordSettingKey))
+	state.CiphertextPresent = ciphertext != ""
+	if !state.CiphertextPresent {
+		state.ErrorClass = "ciphertext_missing"
+		return state
+	}
+	if _, err := decryptRuntimeSecret(ciphertext); err != nil {
+		state.ErrorClass = runtimeSecretErrorClass(err)
+		return state
+	}
+	state.Decryptable = true
+	return state
+}
+
+func runtimeSecretErrorClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case strings.Contains(err.Error(), "read runtime secret key"):
+		return "key_unavailable"
+	case strings.Contains(err.Error(), "invalid length"):
+		return "key_invalid"
+	case strings.Contains(err.Error(), "malformed"):
+		return "ciphertext_malformed"
+	case strings.Contains(err.Error(), "could not be decrypted"):
+		return "ciphertext_undecryptable"
+	default:
+		return "decryption_failed"
+	}
+}
 
 func runtimeSecretKeyPath() string {
 	if value := strings.TrimSpace(os.Getenv(RuntimeSecretKeyFileEnv)); value != "" {
@@ -192,4 +241,24 @@ func StoredRuntimeKitsuToken(db *gorm.DB) string {
 		return ""
 	}
 	return strings.TrimSpace(token)
+}
+
+func StoreValidatedKitsuBotMetadata(db *gorm.DB, result BotTokenValidationResult) error {
+	if db == nil || !result.Compatible() {
+		return errors.New("Kitsu Bot validation is not successful")
+	}
+	model.SetSetting(db, RuntimeKitsuAuthModeSettingKey, "bot_token")
+	model.SetSetting(db, RuntimeKitsuBotIDSettingKey, strings.TrimSpace(result.IdentityID))
+	model.SetSetting(db, RuntimeKitsuBotNameSettingKey, strings.TrimSpace(result.IdentityName))
+	model.SetSetting(db, RuntimeKitsuTokenValidatedAtSettingKey, time.Now().UTC().Format(time.RFC3339))
+	model.SetSetting(db, RuntimeKitsuTokenErrorSettingKey, "")
+	return nil
+}
+
+func RecordKitsuRuntimeAuthMode(db *gorm.DB, mode, errorClass string) {
+	if db == nil {
+		return
+	}
+	model.SetSetting(db, RuntimeKitsuAuthModeSettingKey, strings.TrimSpace(mode))
+	model.SetSetting(db, RuntimeKitsuTokenErrorSettingKey, strings.TrimSpace(errorClass))
 }
