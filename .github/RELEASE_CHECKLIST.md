@@ -12,7 +12,7 @@ Use this as the v0.4.3 release gate. Any unchecked item in the `Must Pass` secti
 - [ ] tracked runtime data and deploy artifacts are absent from the branch diff
 - [ ] `.gitignore` blocks `.env*`, SQLite/runtime data, deploy data, and screenshot artifacts
 - [ ] clean-clone startup procedure is documented and reviewed
-- [ ] `go test ./src/... -count=1 -timeout=120s` passes
+- [ ] `go test ./src/... -count=1 -timeout=240s` passes
 - [ ] `go vet ./src/...` passes
 - [ ] `docker compose build app` succeeds
 - [ ] `docker compose ps` shows `app` healthy

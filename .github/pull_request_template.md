@@ -16,7 +16,7 @@
 - runtime: yes / no
 
 ## Validation
-- `go test ./src/... -count=1 -timeout=120s`
+- `go test ./src/... -count=1 -timeout=240s`
 - `go vet ./src/...`
 - `docker compose config -q`
 

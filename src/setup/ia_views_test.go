@@ -871,6 +871,13 @@ func checkConnectionsPageUsesSafeNameAndUnescapedStatusMarkup(t *testing.T) {
 func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) {
 	t.Setenv("KITSUSYNC_LOCAL_PROFILE", "1")
 	t.Setenv("KITSU_HOSTNAME", "")
+	// This test exercises the local-profile fallback after other tests may have
+	// populated the process-wide discovery cache with a different candidate set.
+	discoveryMu.Lock()
+	discoveryAt = time.Time{}
+	discoveryResult = KitsuHostDiscoveryResult{}
+	discoveryCacheKey = ""
+	discoveryMu.Unlock()
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	BotHandler(db, nil)(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil))

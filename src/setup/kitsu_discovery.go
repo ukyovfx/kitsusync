@@ -39,6 +39,7 @@ var (
 	discoveryMu       sync.Mutex
 	discoveryAt       time.Time
 	discoveryResult   KitsuHostDiscoveryResult
+	discoveryCacheKey string
 	discoveryInterval = 30 * time.Second
 )
 
@@ -61,13 +62,16 @@ func DiscoverKitsuHost(db *gorm.DB) KitsuHostDiscoveryResult {
 
 	discoveryMu.Lock()
 	defer discoveryMu.Unlock()
-	if time.Since(discoveryAt) < discoveryInterval {
+	candidates := discoveryCandidates()
+	cacheKey := discoveryCacheFingerprint(candidates)
+	if time.Since(discoveryAt) < discoveryInterval && discoveryCacheKey == cacheKey {
 		return discoveryResult
 	}
 	discoveryAt = time.Now()
+	discoveryCacheKey = cacheKey
 	discoveryResult = KitsuHostDiscoveryResult{}
 	var found []kitsuHostProbe
-	for _, candidate := range discoveryCandidates() {
+	for _, candidate := range candidates {
 		if normalized, err := validateKitsuEndpoint(candidate.RuntimeHost); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
 			found = append(found, candidate)
 		}
@@ -101,6 +105,17 @@ func localKitsuHostCandidates() []kitsuHostProbe {
 }
 
 var discoveryCandidates = localKitsuHostCandidates
+
+func discoveryCacheFingerprint(candidates []kitsuHostProbe) string {
+	parts := []string{
+		strings.TrimSpace(os.Getenv(localProfileEnv)),
+		strings.TrimSpace(os.Getenv("KITSUSYNC_LOCAL_KITSU_HOST")),
+	}
+	for _, candidate := range candidates {
+		parts = append(parts, candidate.RuntimeHost, candidate.DisplayHost)
+	}
+	return strings.Join(parts, "\x00")
+}
 
 func probeKitsu(host string) bool {
 	client := &http.Client{Timeout: 750 * time.Millisecond}
