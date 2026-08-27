@@ -500,16 +500,10 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 // Kitsu credentials/settings helpers.
 // Prefer DB settings, then environment variables, then conf.toml.
 func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password string) {
-	hostname = model.GetSetting(db, "kitsu.hostname")
-	if hostname == "" {
-		hostname = os.Getenv("KITSU_HOSTNAME")
+	if strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) == "" && strings.TrimSpace(conf.Kitsu.Hostname) != "" {
+		os.Setenv("KITSU_HOSTNAME", conf.Kitsu.Hostname)
 	}
-	if hostname == "" {
-		hostname = conf.Kitsu.Hostname
-	}
-	if hostname == "" {
-		hostname = setup.LocalDevelopmentKitsuHostname()
-	}
+	hostname = setup.DiscoverKitsuHost(db).RuntimeHost
 	email = model.GetSetting(db, setup.RuntimeKitsuEmailSettingKey)
 	if email == "" {
 		email = os.Getenv(setup.RuntimeKitsuEmailEnv)
@@ -853,11 +847,16 @@ func main() {
 	}
 
 	loginHandler := func(w http.ResponseWriter, r *http.Request) {
-		h, _, _ := getKitsuCreds(db, conf)
-		setup.LoginHandler(h)(w, r)
+		setup.LoginHandlerWithDiscovery(func() (string, string) {
+			result := setup.DiscoverKitsuHost(db)
+			return result.RuntimeHost, result.Source
+		}, func(host string) {
+			model.SetSetting(db, "kitsu.hostname", host)
+		})(w, r)
 	}
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/bot/login", loginHandler)
+	mux.HandleFunc("/bot/", setup.BotRootHandler(runtime.ready))
 
 	mux.HandleFunc("/logout", setup.LogoutHandler())
 	mux.HandleFunc("/bot/logout", setup.LogoutHandler())

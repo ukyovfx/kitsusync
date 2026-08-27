@@ -134,14 +134,111 @@ func TestLoginHandlerFirstRunRejectsNonAdmin(t *testing.T) {
 	}
 }
 
-func TestLoginPageHasOnlyEmailAndPassword(t *testing.T) {
-	for _, lang := range []string{"ja", "en"} {
-		html := loginPageHTML(lang, "", "", true, nil)
-		if strings.Contains(html, "login-hostname") || strings.Contains(html, "Kitsu URL") || strings.Contains(html, "kitsu-hostname") {
-			t.Fatalf("%s login page exposes endpoint input", lang)
+func TestLoginHandlerAcceptsStudioManagerAndHigherRoles(t *testing.T) {
+	for _, role := range []string{"manager", " ADMIN "} {
+		t.Run(strings.TrimSpace(role), func(t *testing.T) {
+			resetSessions()
+			kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%q}}`, role)
+			}))
+			defer kitsu.Close()
+
+			form := url.Values{"email": {"manager@example.com"}, "password": {"not-returned"}}
+			req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rr := httptest.NewRecorder()
+			LoginHandler(kitsu.URL)(rr, req)
+			if rr.Code != http.StatusSeeOther {
+				t.Fatalf("expected %s role to be accepted, got %d", role, rr.Code)
+			}
+		})
+	}
+}
+
+func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *testing.T) {
+	resetSessions()
+	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			if r.URL.Path == "/api/" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			return
 		}
-		if strings.Count(html, `name="email"`) != 1 || strings.Count(html, `name="password"`) != 1 {
-			t.Fatalf("%s login page does not contain exactly email/password fields", lang)
-		}
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
+	}))
+	defer kitsu.Close()
+	var persisted string
+	form := url.Values{"hostname": {kitsu.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscovery(func() (string, string) { return "", "" }, func(host string) { persisted = host })(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected manual endpoint login to succeed, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if persisted != kitsu.URL+"/" {
+		t.Fatalf("expected validated manual endpoint to persist, got %q", persisted)
+	}
+}
+
+func TestLoginHandlerWithDiscoveryRejectsInvalidOrPlaceholderManualHost(t *testing.T) {
+	for _, hostname := range []string{"http://YOUR_KITSU_HOST/", "not a URL"} {
+		t.Run(hostname, func(t *testing.T) {
+			resetSessions()
+			form := url.Values{"hostname": {hostname}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+			req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rr := httptest.NewRecorder()
+			LoginHandlerWithDiscovery(func() (string, string) { return "", "" }, nil)(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("expected invalid manual endpoint to fail closed, got %d", rr.Code)
+			}
+		})
+	}
+}
+
+func TestLoginPageShowsManualHostOnlyForFreshInit(t *testing.T) {
+	fresh := loginPageHTML("en", "", "", true, nil)
+	if !strings.Contains(fresh, `name="hostname"`) {
+		t.Fatal("expected fresh-init login page to offer Kitsu base URL")
+	}
+	configured := loginPageHTML("en", "", "", false, nil)
+	if strings.Contains(configured, `name="hostname"`) {
+		t.Fatal("configured login page must not offer endpoint override")
+	}
+}
+
+func TestLoginHandlerWithDiscoveryHidesManualHostWhenEndpointIsAvailable(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/bot/login", nil)
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscovery(func() (string, string) { return "http://verified-kitsu/", "persisted" }, nil)(rr, req)
+	if strings.Contains(rr.Body.String(), `name="hostname"`) {
+		t.Fatal("verified discovered endpoint should not require manual URL input")
+	}
+}
+
+func TestLoginHandlerRejectsMissingOrBelowManagerRole(t *testing.T) {
+	for _, roleJSON := range []string{`"supervisor"`, `"user"`, `""`, `null`} {
+		t.Run(strings.Trim(roleJSON, `"`), func(t *testing.T) {
+			resetSessions()
+			kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%s}}`, roleJSON)
+			}))
+			defer kitsu.Close()
+
+			form := url.Values{"email": {"user@example.com"}, "password": {"not-returned"}}
+			req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rr := httptest.NewRecorder()
+			LoginHandler(kitsu.URL)(rr, req)
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("expected role %s to be rejected, got %d", roleJSON, rr.Code)
+			}
+		})
 	}
 }

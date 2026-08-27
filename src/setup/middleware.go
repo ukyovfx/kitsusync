@@ -266,6 +266,16 @@ func updateWizardState(r *http.Request, update func(*wizardState)) {
 }
 
 func LoginHandler(kitsuHostname string) http.HandlerFunc {
+	return loginHandlerWithPersist(kitsuHostname, nil, nil)
+}
+
+// LoginHandlerWithDiscovery persists a host selected by a successful,
+// authenticated login. Discovery itself remains read-only.
+func LoginHandlerWithDiscovery(resolve func() (string, string), persist func(string)) http.HandlerFunc {
+	return loginHandlerWithPersist("", resolve, persist)
+}
+
+func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, string), persist func(string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -274,6 +284,10 @@ func LoginHandler(kitsuHostname string) http.HandlerFunc {
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
 			hostname := configuredHostname
+			source := ""
+			if hostname == "" && resolve != nil {
+				hostname, source = resolve()
+			}
 			email := strings.TrimSpace(r.FormValue("email"))
 			password := r.FormValue("password")
 			next := strings.TrimSpace(r.FormValue("next"))
@@ -287,25 +301,42 @@ func LoginHandler(kitsuHostname string) http.HandlerFunc {
 			}
 
 			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
+				manualHostname := strings.TrimSpace(r.FormValue("hostname"))
+				if manualHostname != "" {
+					if normalized, err := validateKitsuEndpoint(manualHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
+						hostname = normalized
+						source = "operator-supplied"
+					}
+				}
+			}
+			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
 				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, loginPageHTML(lang, t(lang, "Kitsu URL は http:// または https:// で入力してください。", "Enter a Kitsu URL beginning with http:// or https://."), next, configuredHostname == "", r))
+				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu URLを確認できませんでした。KitsuのベースURLを確認してください。", "Kitsu could not be detected. Check the Kitsu base URL."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
 			loginURL := strings.TrimRight(hostname, "/") + "/api/auth/login"
 			role, kitsuToken, ok := kitsuLoginCheck(loginURL, email, password)
-			if !ok || (role != "admin" && role != "manager") {
+			if !ok || !isStudioManagerOrHigher(role) {
 				w.WriteHeader(http.StatusUnauthorized)
-				fmt.Fprint(w, loginPageHTML(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r))
+				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
 			token := newSessionToken(email, kitsuToken, role, next)
+			if persist != nil && (source == "local-discovered" || source == "operator-supplied") {
+				persist(hostname)
+			}
 			http.SetCookie(w, sessionCookie(r, token, int(sessionTTL.Seconds())))
 			http.Redirect(w, r, next, http.StatusSeeOther)
 			return
 		}
 
 		next := r.URL.Query().Get("next")
-		fmt.Fprint(w, loginPageHTML(lang, "", next, configuredHostname == "", r))
+		showHostname := configuredHostname == ""
+		if showHostname && resolve != nil {
+			resolved, _ := resolve()
+			showHostname = strings.TrimSpace(resolved) == ""
+		}
+		fmt.Fprint(w, loginPageHTML(lang, "", next, showHostname, r))
 	}
 }
 
@@ -316,6 +347,15 @@ func LogoutHandler() http.HandlerFunc {
 		}
 		http.SetCookie(w, sessionCookie(r, "", -1))
 		http.Redirect(w, r, withLang("/bot/login", r), http.StatusSeeOther)
+	}
+}
+
+func isStudioManagerOrHigher(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "manager", "admin":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -401,6 +441,10 @@ func legacyLoginPageHTML(lang, errMsg, next string, showHostname bool, r *http.R
 }
 
 func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
+	return loginPageHTMLWithHostname(lang, errMsg, next, showHostname, r, "")
+}
+
+func loginPageHTMLWithHostname(lang, errMsg, next string, showHostname bool, r *http.Request, hostnameValue string) string {
 	errHTML := ""
 	if errMsg != "" {
 		errHTML = `<div class="toast glass" role="alert" aria-live="assertive">` + html.EscapeString(errMsg) + `</div>`
@@ -409,7 +453,10 @@ func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request
 	if next != "" {
 		nextInput = `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">`
 	}
-	_ = showHostname
-	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass"><label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
+	hostnameInput := ""
+	if showHostname {
+		hostnameInput = `<label for="login-hostname">` + esc(t(lang, "KitsuベースURL", "Kitsu base URL")) + `</label><input id="login-hostname" type="url" name="hostname" value="` + esc(hostnameValue) + `" placeholder="https://kitsu.example.com" autocomplete="url" required><p class="field-help">` + esc(t(lang, "Kitsuを自動検出できない場合に入力します。検証に成功したURLだけを保存します。", "Use this only when Kitsu cannot be detected automatically. Only a successfully validated URL is saved.")) + `</p>`
+	}
+	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass">` + hostnameInput + `<label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
 	return appShell("KitsuSync", "", lang, r, "", body)
 }

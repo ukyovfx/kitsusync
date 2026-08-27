@@ -47,10 +47,11 @@ type NotificationReadiness struct {
 
 // KitsuStatusInfo holds the current Kitsu connectivity and auth state.
 type KitsuStatusInfo struct {
-	Configured    bool    `json:"configured"`
-	Reachable     bool    `json:"reachable"`
-	Authenticated bool    `json:"authenticated"`
-	Error         *string `json:"error"`
+	Configured      bool    `json:"configured"`
+	Reachable       bool    `json:"reachable"`
+	Authenticated   bool    `json:"authenticated"`
+	DiscoverySource string  `json:"discovery_source,omitempty"`
+	Error           *string `json:"error"`
 }
 
 // DiscordStatusInfo holds the current Discord bot and guild state.
@@ -315,8 +316,11 @@ func SetupStatusHandler(db *gorm.DB, pollIntervalSec int, refreshCreds func() (k
 		w.Header().Set("Content-Type", "application/json")
 		kitsuHost, botToken, guildID, _ := refreshCreds()
 		snapshot := BuildSetupDiagnostics(db, refreshCreds)
+		kitsuDiscovery := DiscoverKitsuHost(db)
+		kitsuStatus := checkKitsuStatus(kitsuHost)
+		kitsuStatus.DiscoverySource = kitsuDiscovery.Source
 		resp := SetupStatusResponse{
-			Kitsu:                checkKitsuStatus(kitsuHost),
+			Kitsu:                kitsuStatus,
 			Discord:              buildProjectAwareDiscordStatus(db, botToken, guildID),
 			Poller:               buildPollerStatus(pollIntervalSec),
 			Project:              buildProjectStatus(db),

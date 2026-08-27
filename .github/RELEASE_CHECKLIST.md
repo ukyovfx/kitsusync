@@ -1,10 +1,10 @@
-# KitsuSync v0.4.1 Release Checklist
+# KitsuSync v0.4.3 Release Checklist
 
-Use this as the v0.4.1 release gate. Any unchecked item in the `Must Pass` section is a release blocker.
+Use this as the v0.4.3 release gate. Any unchecked item in the `Must Pass` section is a release blocker.
 
 ## Must Pass
 
-- [ ] release tag/version matches the intended release (for example `v0.4.1`)
+- [ ] release tag/version matches the intended release (`v0.4.3`)
 - [ ] the current release notes are ready
 - [ ] README matches the current setup flow, scope, limitations, and roadmap
 - [ ] `.env.example` and `conf.toml.example` are up to date
@@ -18,6 +18,8 @@ Use this as the v0.4.1 release gate. Any unchecked item in the `Must Pass` secti
 - [ ] `docker compose ps` shows `app` healthy
 - [ ] `/api/setup/status` smoke test passes
 - [ ] auth session smoke test passes
+- [ ] `/bot/` redirects unauthenticated users to login and authenticated users to setup/admin without a loop
+- [ ] Kitsu endpoint discovery ignores placeholders, validates candidates, and preserves the manual URL fallback
 - [ ] notification routing regression test passes
 - [ ] log redaction test passes
 - [ ] polling logs still show `Connected to Kitsu`, `Got tasks`, and `Got taskStatuses`

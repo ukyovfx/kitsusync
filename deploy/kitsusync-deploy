@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Root-installed KitsuSync-only deployment boundary for vfxstudio.
+# This wrapper intentionally accepts no arguments and never touches shared
+# services. The root-owned allowlist selects the image; operators cannot pass
+# arbitrary Docker, Compose, path, or shell arguments through sudo.
+
+DEPLOY_ROOT="/home/ukyo_vfx/kitsusync"
+COMPOSE_FILE="${DEPLOY_ROOT}/docker-compose.yml"
+ENV_FILE="${DEPLOY_ROOT}/.env.local"
+POLICY_DIR="/etc/kitsusync-deploy"
+IMAGE_FILE="${POLICY_DIR}/approved-image"
+IMAGE_SHA_FILE="${POLICY_DIR}/approved-image.sha256"
+COMPOSE_SHA_FILE="${POLICY_DIR}/compose.sha256"
+IMAGE_ARCHIVE="${DEPLOY_ROOT}/.kitsusync-image.tar"
+SERVICE="app"
+
+die() { printf '%s\n' "ERROR: $*" >&2; logger -t kitsusync-deploy -- "failed: $*" || true; exit 1; }
+log() { logger -t kitsusync-deploy -- "$*" || true; }
+
+[[ "${EUID}" -eq 0 ]] || die "root execution required"
+[[ "$#" -eq 0 ]] || die "arguments are not accepted"
+[[ -x /usr/bin/docker ]] || die "docker is unavailable"
+[[ -x /usr/bin/sha256sum ]] || die "sha256sum is unavailable"
+[[ -x /usr/bin/curl ]] || die "curl is unavailable"
+[[ -f "${COMPOSE_FILE}" && -f "${ENV_FILE}" ]] || die "fixed KitsuSync deployment files are missing"
+[[ -f "${IMAGE_FILE}" && -f "${IMAGE_SHA_FILE}" && -f "${COMPOSE_SHA_FILE}" ]] || die "deployment policy is incomplete"
+[[ ! -L "${POLICY_DIR}" && "$(stat -c '%U:%G:%a' "${POLICY_DIR}")" == "root:root:700" ]] || die "deployment policy directory is not root-owned and private"
+[[ ! -L "${IMAGE_FILE}" && ! -L "${IMAGE_SHA_FILE}" && ! -L "${COMPOSE_SHA_FILE}" ]] || die "deployment policy symlinks are not allowed"
+[[ "$(stat -c '%U:%G:%a' "${IMAGE_FILE}")" == "root:root:600" ]] || die "approved image policy is not root-owned and private"
+[[ "$(stat -c '%U:%G:%a' "${IMAGE_SHA_FILE}")" == "root:root:600" ]] || die "image digest policy is not root-owned and private"
+[[ "$(stat -c '%U:%G:%a' "${COMPOSE_SHA_FILE}")" == "root:root:600" ]] || die "Compose digest policy is not root-owned and private"
+
+image="$(tr -d '\r\n' <"${IMAGE_FILE}")"
+[[ "${image}" =~ ^kitsusync:[a-z0-9][a-z0-9._-]{0,127}$ ]] || die "approved image reference is malformed"
+[[ -f "${IMAGE_ARCHIVE}" && ! -L "${IMAGE_ARCHIVE}" ]] || die "approved image archive is missing or unsafe"
+[[ "$(stat -c '%U:%G:%a' "${IMAGE_ARCHIVE}")" == "root:root:600" ]] || die "approved image archive is not root-owned and private"
+sha256sum -c "${IMAGE_SHA_FILE}" >/dev/null 2>&1 || die "approved image archive digest mismatch"
+sha256sum -c "${COMPOSE_SHA_FILE}" >/dev/null 2>&1 || die "KitsuSync Compose digest mismatch"
+/usr/bin/docker load -i "${IMAGE_ARCHIVE}" >/dev/null || die "approved image load failed"
+/usr/bin/docker image inspect "${image}" >/dev/null 2>&1 || die "approved image is not available"
+
+container_id="$(/usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps -q "${SERVICE}")"
+[[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
+current_image="$(/usr/bin/docker inspect --format '{{.Config.Image}}' "${container_id}")"
+/usr/bin/docker image inspect "${current_image}" >/dev/null 2>&1 || die "current image is not available for rollback"
+network_name="$(/usr/bin/docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "${container_id}" | head -n 1)"
+network_data="$(/usr/bin/docker network inspect "${network_name}" --format '{{with index .IPAM.Config 0}}{{.Gateway}} {{.Subnet}}{{end}}')"
+read -r gateway subnet <<<"${network_data}"
+[[ "${gateway}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "${subnet}" == */* ]] || die "Docker bridge gateway/CIDR could not be verified"
+
+run_dir="/run/kitsusync-deploy"
+backup_dir="/var/backups/kitsusync-deploy.$(date -u +%Y%m%dT%H%M%SZ)"
+install -d -o root -g root -m 0700 "${run_dir}" "${backup_dir}"
+printf '%s\n' "${container_id}" >"${backup_dir}/container-id"
+printf '%s\n' "${current_image}" >"${backup_dir}/previous-image"
+printf '%s\n' "${gateway} ${subnet}" >"${backup_dir}/network"
+sha256sum "${COMPOSE_FILE}" >"${backup_dir}/compose.sha256"
+sha256sum "${ENV_FILE}" >"${backup_dir}/env.sha256"
+
+override="${run_dir}/compose.override.yml"
+write_override() {
+  local selected_image="$1"
+  cat >"${override}" <<EOF
+services:
+  app:
+    image: ${selected_image}
+    build: !reset null
+    ports: !reset
+      - "127.0.0.1:8090:8090"
+    extra_hosts:
+      - "host.docker.internal:${gateway}"
+EOF
+}
+
+write_override "${image}"
+chmod 600 "${override}"
+
+rollback() {
+  log "rollback started previous_image=${current_image}"
+  write_override "${current_image}"
+  if /usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" up -d --no-deps --force-recreate "${SERVICE}" >/dev/null 2>&1; then
+    rollback_id="$(/usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" ps -q "${SERVICE}" || true)"
+    if [[ -n "${rollback_id}" ]] && validate_runtime "${rollback_id}"; then
+      log "rollback completed container=${rollback_id}"
+      return 0
+    fi
+  fi
+  log "rollback failed"
+  return 1
+}
+
+validate_runtime() {
+  local id="$1"
+  local port
+  port="$(/usr/bin/docker port "${id}" 8090/tcp 2>/dev/null || true)"
+  [[ "${port}" == "127.0.0.1:8090" ]] || return 1
+  /usr/bin/curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8090/health >/dev/null
+}
+
+if ! /usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" up -d --no-deps --force-recreate "${SERVICE}" >/dev/null; then
+  rollback || die "KitsuSync recreation failed and rollback validation failed"
+  die "KitsuSync recreation failed; rollback completed"
+fi
+
+new_id="$(/usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" ps -q "${SERVICE}")"
+[[ -n "${new_id}" ]] || { rollback; die "new KitsuSync container was not found"; }
+if ! validate_runtime "${new_id}"; then
+  rollback || die "KitsuSync recreation failed and rollback validation failed"
+  die "KitsuSync recreation failed; rollback completed"
+fi
+log "deployment completed image=${image} container=${new_id} backup=${backup_dir}"
+printf 'KitsuSync deployment completed: image=%s container=%s backup=%s\n' "${image}" "${new_id}" "${backup_dir}"

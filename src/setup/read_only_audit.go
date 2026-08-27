@@ -25,8 +25,7 @@ func readOnlyAuditSessionHasRole(r *http.Request) bool {
 	if !ok || strings.TrimSpace(token) == "" {
 		return false
 	}
-	role = strings.ToLower(strings.TrimSpace(role))
-	return role == "admin" || role == "manager"
+	return isStudioManagerOrHigher(role)
 }
 
 // ReadOnlyAuditRoute permits authenticated GET/HEAD inspection before the
