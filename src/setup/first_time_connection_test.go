@@ -39,12 +39,19 @@ func firstTimeTestPlan() TaskTypeChannelPlan {
 }
 
 func firstTimeTestRequest(action string, plan TaskTypeChannelPlan) *http.Request {
+	return firstTimeTestRequestWithLanguage(action, plan, "")
+}
+
+func firstTimeTestRequestWithLanguage(action string, plan TaskTypeChannelPlan, language string) *http.Request {
 	values := url.Values{
 		"action":           {action},
 		"confirm_plan":     {"yes"},
 		"project_id":       {plan.ProductionID},
 		"guild_id":         {plan.GuildID},
 		"plan_fingerprint": {plan.Fingerprint()},
+	}
+	if language != "" {
+		values.Set("notification_language", language)
 	}
 	for _, entry := range plan.Entries {
 		values.Add("included_task_type_id", entry.TaskTypeID)
@@ -130,8 +137,40 @@ func TestFirstTimeExecuteCreatesProjectAndRoutes(t *testing.T) {
 	if model.FindProjectByKitsuID(db, "p1") == nil || len(model.ListProductionChannelMappings(db, "p1")) != 2 || len(model.ListProductionNotificationRoutes(db, "p1")) != 2 {
 		t.Fatal("first-time execution did not activate all routes")
 	}
+	if project := model.FindProjectByKitsuID(db, "p1"); project.Language != "ja" {
+		t.Fatalf("missing notification language did not default to ja: %q", project.Language)
+	}
 	if len(createdChannels) != 2 || createdChannels[0] != "concept" || createdChannels[1] != "modeling" {
 		t.Fatalf("unexpected created channels: %#v", createdChannels)
+	}
+}
+
+func TestFirstTimeExecutionPersistsSelectedNotificationLanguage(t *testing.T) {
+	db := newIAViewDB(t)
+	previous := firstTimeOps
+	firstTimeOps = firstTimeTestOps(func(name string) (string, error) { return "channel-" + name, nil })
+	defer func() { firstTimeOps = previous }()
+
+	plan := firstTimeTestPlan()
+	w := httptest.NewRecorder()
+	if !handleFirstTimeConnectionAction(w, firstTimeTestRequestWithLanguage("execute_production_connection", plan, "en"), "en", "https://kitsu.invalid/", "bot-token", db) {
+		t.Fatal("language-selected execution was not handled")
+	}
+	project := model.FindProjectByKitsuID(db, "p1")
+	if project == nil || project.Language != "en" {
+		t.Fatalf("selected notification language was not persisted: %#v", project)
+	}
+}
+
+func TestProductionNotificationLanguageNormalizesUnknownValuesToJapanese(t *testing.T) {
+	for _, value := range []string{"", "ja", "fr", " EN "} {
+		want := "ja"
+		if strings.EqualFold(strings.TrimSpace(value), "en") {
+			want = "en"
+		}
+		if got := normalizedProductionNotificationLanguage(value); got != want {
+			t.Fatalf("normalize(%q) = %q, want %q", value, got, want)
+		}
 	}
 }
 

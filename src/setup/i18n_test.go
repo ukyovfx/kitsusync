@@ -225,6 +225,9 @@ func TestConnectedProductionSurfacesNotificationControlsAndSafeHierarchy(t *test
 		if !strings.Contains(body, advancedLabel) {
 			t.Fatalf("%s page is missing collapsed advanced details", lang)
 		}
+		if !strings.Contains(body, `name="notification_language"`) || !strings.Contains(body, "production-notification-language") {
+			t.Fatalf("%s page is missing the Production notification language control", lang)
+		}
 		if strings.Index(body, `class="btn-danger"`) < strings.Index(body, `class="advanced-details"`) {
 			t.Fatalf("%s destructive action is visible before advanced/edit sections", lang)
 		}

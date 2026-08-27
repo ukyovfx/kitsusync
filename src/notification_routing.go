@@ -1,6 +1,7 @@
 package main
 
 import (
+	"app/src/api/discord"
 	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
@@ -68,11 +69,14 @@ func planProductionNotification(db *gorm.DB, payload kitsu.MessagePayload) produ
 }
 
 func productionTaskLink(payload kitsu.MessagePayload) string {
-	host := strings.TrimRight(strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")), "/")
-	if host == "" || strings.TrimSpace(payload.Project.ID) == "" || strings.TrimSpace(payload.Task.ID) == "" {
+	host := strings.TrimSpace(os.Getenv("KITSU_HOSTNAME"))
+	if host == "" {
 		return "not supplied"
 	}
-	return fmt.Sprintf("%s/productions/%s/tasks/%s", host, strings.TrimSpace(payload.Project.ID), strings.TrimSpace(payload.Task.ID))
+	if link := discord.KitsuTaskURL(host, payload.Project.ID, payload.EntityType.Name, payload.Task.ID); link != "" {
+		return link
+	}
+	return "not supplied"
 }
 
 func renderProductionDryRunPreview(payload kitsu.MessagePayload) string {

@@ -30,10 +30,10 @@ KitsuSync needs a dedicated Kitsu account to poll for changes. This should be a 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create a new application, then go to the **Bot** tab.
 3. Click **Reset Token** and copy the bot token — save it securely.
-4. Under **Privileged Gateway Intents**, no special intents are needed.
+4. Under **Privileged Gateway Intents**, leave Presence Intent, Server Members Intent, and Message Content Intent turned off. KitsuSync does not require privileged gateway intents.
 5. Go to **OAuth2 → URL Generator**.
 6. Select scopes: `bot`
-7. Select permissions: `Manage Channels`, `Manage Webhooks`
+7. Select the bot permissions `Manage Channels` and `Manage Webhooks`. Administrator is not required.
 8. Copy the generated URL and open it in a browser to add the bot to your server.
 
 Note your **Discord Guild IDs** (Server IDs) for each production server:

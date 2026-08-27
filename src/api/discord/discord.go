@@ -96,6 +96,7 @@ type Template struct {
 	LinksLabel              string
 	ChannelName             string // 通知先の Discord チャンネル名（ルーティング確認用）
 	NotificationLanguage    string
+	CardContext             string // optional secondary context such as a test-notification marker
 	AllowedUserIDs          []string
 	Color                   int
 }
@@ -229,7 +230,7 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 		if normalizeNotificationLang(lang) == "en" {
 			return "Returned to rework"
 		}
-		return "🛠 修正作業に戻りました"
+		return "修正作業に戻りました"
 	case "WFA->READY":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Review is complete. Ready for the next step"
@@ -244,12 +245,12 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 		if normalizeNotificationLang(lang) == "en" {
 			return "Completed without additional work"
 		}
-		return "✅ 作業完了・承認されました"
+		return "作業完了・承認されました"
 	case "WIP->WFA":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Ready for review"
 		}
-		return "📩 チェック依頼が送られました"
+		return "チェック依頼が送られました"
 	case "WFA->DONE":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Review completed"
@@ -259,27 +260,27 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 		if normalizeNotificationLang(lang) == "en" {
 			return "Revision work has started"
 		}
-		return "🛠 リテイク対応を開始しました"
+		return "リテイク対応を開始しました"
 	case "WIP->RETAKE":
 		if normalizeNotificationLang(lang) == "en" {
 			return "A retake was requested"
 		}
-		return "🔁 リテイクが入りました"
+		return "リテイクが入りました"
 	case "TODO->WIP":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Work has started"
 		}
-		return "🚀 作業を開始しました"
+		return "作業を開始しました"
 	case "NONE->WIP":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Work has started"
 		}
-		return "🚀 作業を開始しました"
+		return "作業を開始しました"
 	case "TODO->DONE", "NONE->DONE", "WIP->DONE":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Work completed and approved"
 		}
-		return "✅ 作業完了・承認されました"
+		return "作業完了・承認されました"
 	default:
 		return ""
 	}
@@ -306,6 +307,22 @@ func parseKitsuStatusColor(raw string) int {
 		return neutralEmbedColor
 	}
 	return int(value)
+}
+
+// notificationStatusColor uses restrained semantic accents for the three
+// operator-facing review states. Kitsu's raw status color remains available
+// for diagnostics, but notification cards use a stable visual vocabulary.
+func notificationStatusColor(status string) int {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "WFA":
+		return 0xD4A72C
+	case "RETAKE":
+		return 0xC45656
+	case "DONE":
+		return 0x4FAF78
+	default:
+		return neutralEmbedColor
+	}
 }
 
 func isValidDiscordUserID(id string) bool {
@@ -389,6 +406,28 @@ func safeNotificationURL(raw string) string {
 		return ""
 	}
 	return raw
+}
+
+// KitsuTaskURL builds the task route used by the Kitsu frontend. The route
+// shape is intentionally limited to entity types whose task pages are part of
+// the verified frontend router; unknown entity types fail closed.
+func KitsuTaskURL(host, productionID, entityType, taskID string) string {
+	base := safeNotificationURL(host)
+	productionID = strings.TrimSpace(productionID)
+	taskID = strings.TrimSpace(taskID)
+	if base == "" || productionID == "" || taskID == "" {
+		return ""
+	}
+	var routeType string
+	switch strings.ToLower(strings.TrimSpace(entityType)) {
+	case "shot":
+		routeType = "shots"
+	case "asset":
+		routeType = "assets"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("%s/productions/%s/%s/tasks/%s", strings.TrimRight(base, "/"), url.PathEscape(productionID), routeType, url.PathEscape(taskID))
 }
 
 func statusTransitionMessage(prev, current string) string {
@@ -806,20 +845,8 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.StatusTransitionMessage = localizedStatusTransitionMessage(elem.PreviousStatusName, elem.TaskStatus.ShortName, notifLang)
 		}
 
-		// TaskURL を組み立て
-		category := "assets"
-		lowEntityType := strings.ToLower(placeholders.EntityType)
-		if strings.Contains(lowEntityType, "shot") || strings.Contains(lowEntityType, "sequence") || strings.Contains(lowEntityType, "episode") {
-			category = "shots"
-		}
 		host := safeNotificationURL(conf.Kitsu.Hostname)
-		if host != "" {
-			if !strings.HasSuffix(host, "/") {
-				host += "/"
-			}
-			// ショット一覧 or アセット一覧に飛ぶ
-			placeholders.TaskURL = fmt.Sprintf("%sproductions/%s/%s", host, url.PathEscape(elem.Project.ID), category)
-		}
+		placeholders.TaskURL = KitsuTaskURL(host, elem.Project.ID, placeholders.EntityType, elem.Task.ID)
 
 		// Kitsu プレビュー画像 URL を組み立て
 		// Entity.PreviewFileID は interface{} なので string にキャストする
@@ -832,7 +859,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		}
 
 		// カラーコードを変換（ステータスカラー → フォールバック用）
-		intColor := parseKitsuStatusColor(elem.TaskStatus.Color)
+		intColor := notificationStatusColor(elem.TaskStatus.ShortName)
 
 		// テンプレートを展開
 		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)

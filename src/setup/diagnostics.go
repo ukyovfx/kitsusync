@@ -37,6 +37,13 @@ type projectDeliveryItem struct {
 	Detail       string
 	LastVerified string
 	CanSend      bool
+	Destinations []projectDeliveryDestination
+}
+
+type projectDeliveryDestination struct {
+	WebhookID   uint   `json:"webhook_id"`
+	ChannelID   string `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
 }
 
 func renderDiagnosticsPanel(
@@ -698,8 +705,10 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 
 		for _, webhook := range model.ListProjectWebhooks(db, project.KitsuProjectID) {
 			if strings.TrimSpace(webhook.WebhookURL) != "" && strings.TrimSpace(webhook.DiscordChannelID) != "" {
+				item.Destinations = append(item.Destinations, projectDeliveryDestination{
+					WebhookID: webhook.ID, ChannelID: webhook.DiscordChannelID, ChannelName: strings.TrimPrefix(strings.TrimSpace(webhook.ChannelName), "#"),
+				})
 				item.Detail = t(lang, "Project webhook は作成済みです。通知配信は project-level webhook を使用します。", "Project webhooks are configured. Delivery uses project-level webhooks.")
-				break
 			}
 		}
 
@@ -830,6 +839,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 	selectedPillClass := "warn"
 	selectedCanSend := false
 	options := make([]string, 0, len(state.Projects))
+	destinationData := make(map[string][]projectDeliveryDestination, len(state.Projects))
 
 	for _, item := range state.Projects {
 		if item.Status == "ok" {
@@ -869,7 +879,10 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 			item.CanSend,
 			esc(item.ProjectName),
 		))
+		destinationData[item.ProjectID] = item.Destinations
 	}
+	destinationJSON, _ := json.Marshal(destinationData)
+	destinationJSONText := strings.ReplaceAll(string(destinationJSON), "</", "<\\/")
 
 	summaryChips := fmt.Sprintf(
 		`<div class="button-row" style="margin-top:12px"><span class="status-pill ok">%s</span><span class="status-pill %s">%s</span></div>`,
@@ -895,6 +908,9 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
     <div class="diag-project-item">
       <label for="diagProjectSelect">%s</label>
       <select id="diagProjectSelect">%s</select>
+      <label for="diagDestinationSelect">%s</label>
+      <select id="diagDestinationSelect"><option value="">%s</option></select>
+      <p class="diag-state-note">%s</p>
       <div class="diag-project-head">
         <div>
           <div class="diag-project-meta" id="diagProjectLastVerified">%s%s</div>
@@ -912,17 +928,26 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 (function(){
   var select = document.getElementById('diagProjectSelect');
   var button = document.getElementById('diagProjectTestButton');
+  var destination = document.getElementById('diagDestinationSelect');
   var badge = document.getElementById('diagProjectBadge');
   var verified = document.getElementById('diagProjectLastVerified');
   var feedback = document.getElementById('diagProjectFeedback');
-  if (!select || !button || !badge || !verified || !feedback) { return; }
+  if (!select || !destination || !button || !badge || !verified || !feedback) { return; }
+  var destinationData = %s;
   var original = button.textContent;
 
   function syncSelectedProject() {
     var option = select.options[select.selectedIndex];
     if (!option) { return; }
     button.setAttribute('data-project-id', option.value);
-    button.disabled = option.getAttribute('data-can-send') !== 'true';
+    destination.innerHTML = '<option value="">%s</option>';
+    (destinationData[option.value] || []).forEach(function(item){
+      var destinationOption = document.createElement('option');
+      destinationOption.value = String(item.webhook_id);
+      destinationOption.textContent = '#' + item.channel_name;
+      destination.appendChild(destinationOption);
+    });
+    button.disabled = option.getAttribute('data-can-send') !== 'true' || !destination.value;
     verified.textContent = %q + (option.getAttribute('data-last-verified') || '-');
     badge.className = 'status-pill ' + (option.getAttribute('data-pill-class') || 'warn');
     badge.textContent = option.getAttribute('data-summary') || '';
@@ -931,6 +956,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
   }
 
   select.addEventListener('change', syncSelectedProject);
+  destination.addEventListener('change', function(){ button.disabled = !destination.value || select.options[select.selectedIndex].getAttribute('data-can-send') !== 'true'; });
   syncSelectedProject();
 
   button.addEventListener('click', async function(){
@@ -944,7 +970,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: button.getAttribute('data-project-id') })
+        body: JSON.stringify({ project_id: button.getAttribute('data-project-id'), destination_webhook_id: Number(destination.value) })
       });
       var data = await resp.json();
       if (!resp.ok || data.error) {
@@ -974,7 +1000,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
   });
 })();
 </script>`,
-		esc(t(lang, "通知配信の確認", "Notification delivery verification")),
+		esc(t(lang, "テスト通知", "Test notification")),
 		esc(state.Detail),
 		fixHTML,
 		pillClass,
@@ -982,6 +1008,9 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 		summaryChips,
 		esc(t(lang, "確認するプロダクション", "Production to verify")),
 		strings.Join(options, ""),
+		esc(t(lang, "テスト送信先", "Test destination")),
+		t(lang, "送信先を選択", "Select a destination"),
+		esc(t(lang, "テスト通知だけを選択したDiscordチャンネルへ送信します。通常の通知ルーティングは変更しません。", "Sends one test notification only to the selected Discord channel. Normal notification routing is not changed.")),
 		esc(t(lang, "最終確認: ", "Last verified: ")),
 		esc(selectedLastVerified),
 		selectedPillClass,
@@ -989,6 +1018,8 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 		esc(selectedProjectID),
 		map[bool]string{true: "", false: " disabled"}[selectedCanSend],
 		esc(t(lang, "テスト通知を送信", "Send test notification")),
+		destinationJSONText,
+		t(lang, "送信先を選択", "Select a destination"),
 		t(lang, "最終確認: ", "Last verified: "),
 		t(lang, "送信中...", "Sending..."),
 		state.APIPath,

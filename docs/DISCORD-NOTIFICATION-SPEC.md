@@ -34,6 +34,8 @@ Other Kitsu task statuses are observed but are not notification events in the cu
 
 Notification language is a Production-level setting stored in `Project.Language`. `en` selects English; every other value currently fails closed to Japanese. The administrator's page language does not affect notification language. Missing or unsupported values therefore have deterministic Japanese output.
 
+New Productions choose this setting in the channel-plan step of the setup wizard. Existing Productions can change it from the notification settings section. A change applies to future notifications and does not change the admin UI language.
+
 The pure renderer is `src/api/discord/notification_foundation.go`. `RenderNotificationPayload` is used by the delivery path and can be tested without a Discord request. Template files remain the content source for the existing `rich` and `eng` presets.
 
 ## Mentions
@@ -56,7 +58,7 @@ The `Task` row stores the last observed task/comment state and the delivered Dis
 
 ## Links and rendering
 
-Kitsu task links are constructed only when the configured Kitsu host and stable Production/task IDs are available. Optional storage links are included only when the configured resolver returns one. Missing links are omitted or reported as unavailable; no URL is guessed from a display name.
+Kitsu links are included only when an authoritative, reliable task/entity URL is supplied by the notification data. KitsuSync does not construct a task link from a host plus IDs or display names. Optional Drive links are included only when the configured resolver returns a valid URL. Missing or invalid links are omitted; no URL is guessed.
 
 The renderer is deterministic for the same normalized data, language, preset, and template files. It does not perform network access. Discord delivery remains in `SendMessage`/`SendMessageBunch` and is not exercised by rendering tests.
 
@@ -106,12 +108,14 @@ Payload
   allowed_mentions.roles: empty
   embeds[0]
     title: entity/task title
-    description: status line, action message, transition, comment, and links
+    description: status line and action message
     color: current Kitsu Task Status color or neutral fallback
-    url: safe Kitsu link, when available
+    url: reliable Kitsu link, when supplied
     fields:
+      Comment: latest comment and author, when available
+      Links: Drive/Kitsu action links, when available
+      Status: current or previous → current status
       Assignee: human-readable assignee state
-      Production: only when useful and not duplicated
     image: preview image, only when available
     footer: secondary Production/channel context, when useful
 ```

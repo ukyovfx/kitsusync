@@ -294,8 +294,9 @@ type TestDiscordResponse struct {
 }
 
 type TestNotificationRequest struct {
-	ProjectID string `json:"project_id"`
-	Message   string `json:"message"`
+	ProjectID            string `json:"project_id"`
+	DestinationWebhookID uint   `json:"destination_webhook_id"`
+	Message              string `json:"message"`
 }
 
 type TestNotificationResponse struct {
@@ -593,29 +594,28 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
-
-		webhooks := model.ListProjectWebhooks(db, projectID)
-		targetURL := ""
-		for _, wh := range webhooks {
-			if strings.TrimSpace(wh.WebhookURL) != "" {
-				targetURL = strings.TrimSpace(wh.WebhookURL)
-				break
-			}
-		}
-		if targetURL == "" {
-			errStr := "no webhook configured for this project"
+		if strings.TrimSpace(project.DiscordGuildID) == "" {
+			errStr := "this project has no Discord Guild configured"
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
 
-		message := strings.TrimSpace(req.Message)
-		if message == "" {
-			message = "KitsuSync test notification"
+		_, botToken, _, _ := refreshCreds()
+		projectChannels, err := ListGuildChannels(strings.TrimSpace(project.DiscordGuildID), botToken)
+		if err != nil {
+			errStr := "could not verify Discord destinations for this project"
+			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
+			return
 		}
-		res := discord.SendMessage(discord.Payload{
-			Username: "KitsuSync",
-			Content:  message,
-		}, targetURL, "", "")
+		destination, err := validateTestNotificationDestination(db, projectID, req.DestinationWebhookID, projectChannels)
+		if err != nil {
+			errStr := err.Error()
+			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
+			return
+		}
+
+		payload := testNotificationPayload(*project, req.Message)
+		res := discord.SendMessage(payload, destination.WebhookURL, "", "")
 		if strings.TrimSpace(res.MessageID) == "" {
 			errStr := "test notification failed to send"
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
@@ -634,6 +634,61 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			NotificationVerified: true,
 		})
 	}
+}
+
+func testNotificationPayload(project model.Project, message string) discord.Payload {
+	notificationLanguage := discord.NotificationLanguage(project.Language)
+	comment := strings.TrimSpace(message)
+	comment = strings.ReplaceAll(comment, "@", "＠")
+	if notificationLanguage == "en" {
+		if comment == "" {
+			comment = "KitsuSync test notification"
+		}
+		return discord.RenderNotificationPayload(discord.Template{
+			ProjectName: project.Name, EntityType: "Production", ParentName: project.Name,
+			TaskType: "Animation", CardContext: "Test notification",
+			CurrentStatus: "WFA", StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "Please review this test notification.",
+			CommentContent: comment, CommentLabel: "Comment", AssigneesStr: "Unassigned", AssigneeLabel: "Assignee",
+			LinksLabel: "Links", NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
+		}, "rich")
+	}
+	if comment == "" {
+		comment = "KitsuSync テスト通知"
+	}
+	return discord.RenderNotificationPayload(discord.Template{
+		ProjectName: project.Name, EntityType: "プロダクション", ParentName: project.Name,
+		TaskType: "アニメーション", CardContext: "テスト通知",
+		CurrentStatus: "WFA", StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "テスト通知を確認してください。",
+		CommentContent: comment, CommentLabel: "コメント", AssigneesStr: "未割り当て", AssigneeLabel: "担当",
+		LinksLabel: "リンク", NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
+	}, "rich")
+}
+
+func validateTestNotificationDestination(db *gorm.DB, projectID string, destinationWebhookID uint, channels []DiscordGuildChannel) (*model.ProjectWebhook, error) {
+	if destinationWebhookID == 0 {
+		return nil, fmt.Errorf("select a test notification destination")
+	}
+	project := model.FindProjectByKitsuID(db, projectID)
+	if project == nil {
+		return nil, fmt.Errorf("project not found")
+	}
+	destination := model.FindProjectWebhookByID(db, destinationWebhookID)
+	if destination == nil || destination.KitsuProjectID != projectID || strings.TrimSpace(destination.WebhookURL) == "" || strings.TrimSpace(destination.DiscordChannelID) == "" {
+		return nil, fmt.Errorf("selected test destination is not configured for this project")
+	}
+	if strings.TrimSpace(project.DiscordGuildID) == "" {
+		return nil, fmt.Errorf("this project has no Discord Guild configured")
+	}
+	for _, channel := range channels {
+		if channel.ID != destination.DiscordChannelID {
+			continue
+		}
+		if strings.TrimSpace(project.DiscordCategoryID) != "" && channel.ParentID != project.DiscordCategoryID {
+			return nil, fmt.Errorf("selected test destination is outside this project's Discord category")
+		}
+		return destination, nil
+	}
+	return nil, fmt.Errorf("selected test destination is stale or not in this project's Discord Guild")
 }
 
 // TestKitsuHandler handles POST /api/setup/test-kitsu.

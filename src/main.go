@@ -694,6 +694,7 @@ func main() {
 		slog.Fatal("failed to connect database")
 		os.Exit(1)
 	}
+	setup.ConfigureSessionStore(db)
 	sqlDB, err := configureSQLite(db)
 	if err != nil {
 		slog.Fatal("failed to configure sqlite", "err", err)
@@ -712,6 +713,7 @@ func main() {
 		&model.UserMap{},
 		&model.CheckerMap{},
 		&model.Setting{},
+		&model.AdminSession{},
 		&model.AuditLog{},
 		&model.ProjectUserMap{},
 		&model.ProjectCheckerMap{},
@@ -876,7 +878,11 @@ func main() {
 		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.ApplyProjectHandler(db, setupCredsFunc)))))
 		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.TestKitsuHandler(db, onRuntimeConfigured)))
 		mux.HandleFunc(prefix+"/api/setup/test-discord", setup.RequireSession(setup.RejectValidationMutation(setup.TestDiscordHandler(db))))
-		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.TestNotificationHandler(db, setupCredsFunc)))))
+		// Test Notification is a synthetic Discord-only verification. It must remain
+		// available while Kitsu runtime polling is disconnected; the handler still
+		// verifies the selected project destination and uses the configured Discord
+		// credentials, without changing normal routing or sending Kitsu data.
+		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RejectValidationMutation(setup.TestNotificationHandler(db, setupCredsFunc))))
 		mux.HandleFunc(prefix+"/api/setup/mapping", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.MappingStateHandler(db))))
 		mux.HandleFunc(prefix+"/api/setup/mapping/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveUserMappingHandler(db)))))
 		mux.HandleFunc(prefix+"/api/setup/mapping/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveCheckerMappingHandler(db)))))

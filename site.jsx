@@ -205,7 +205,7 @@ function Site() {
           <span className={`lang-option ${lang === 'en' ? 'active' : ''}`}>EN</span>
         </button>
         {navigation('navgroup')}
-        <div className="meta">v0.4.2<br />Product guide</div>
+        <div className="meta">v0.4.4<br />Product guide</div>
       </aside>
       <details className="mobile-nav">
         <summary>{lang === 'ja' ? '目次' : 'Contents'} <span aria-hidden="true">⌄</span></summary>
@@ -224,7 +224,7 @@ function Site() {
           {items.filter((item) => item.id === active).map((item) => <Section key={item.id} section={item} lang={lang} />)}
         </div>
         <footer className="foot">
-          <div className="left">KitsuSync Documentation v0.4.2</div>
+          <div className="left">KitsuSync Documentation v0.4.4</div>
           <div>{lang === 'ja' ? 'KitsuSync公式ドキュメント' : 'Official KitsuSync documentation'}</div>
         </footer>
       </main>

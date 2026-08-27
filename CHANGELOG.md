@@ -4,7 +4,21 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- The next release will be documented here; v0.4.0, v0.4.1, and v0.4.2 remain historical.
+- The next release will be documented here; v0.4.0 through v0.4.3 remain historical.
+
+## v0.4.4
+
+### Added
+
+- Production-level Discord notification language selection during setup and from Production notifications settings.
+- Compact status-aware Discord cards with transition-aware Japanese and English messages, safe mentions, optional links/previews, and deterministic truncation.
+- Persistent opaque admin sessions in the existing SQLite runtime database, with no service credentials stored in session records.
+
+### Changed
+
+- Normal notification cards use Kitsu status colors as their embed accent, keep Task Type as plain text, and omit the duplicate Status metadata field.
+- WFA mentions the configured Checker, RETAKE mentions the assignee, and DONE remains unmentioned by default; recipient deduplication and AllowedMentions remain bounded and exact.
+- Discord setup requires the `bot` OAuth2 scope plus `Manage Channels` and `Manage Webhooks`; privileged Gateway Intents remain off.
 
 ## v0.4.3
 

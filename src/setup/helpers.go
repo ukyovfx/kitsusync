@@ -953,6 +953,24 @@ func CreateWebhook(channelID, name, botToken string) (string, error) {
 	return fmt.Sprintf("https://discord.com/api/webhooks/%s/%s", result.ID, result.Token), nil
 }
 
+// DeleteWebhook removes a webhook by its Discord ID using the bot credential.
+// It is intentionally separate from channel deletion so E2E cleanup cannot
+// accidentally remove a channel while rotating a webhook.
+func DeleteWebhook(webhookID, botToken string) error {
+	webhookID = strings.TrimSpace(webhookID)
+	if webhookID == "" {
+		return fmt.Errorf("discord webhook ID is required")
+	}
+	respBody, status, err := botDo(http.MethodDelete, fmt.Sprintf("%s/webhooks/%s", discordAPI, webhookID), nil, botToken)
+	if err != nil {
+		return err
+	}
+	if status >= 400 {
+		return discordBotAPIError("discord webhook delete failed", status, respBody)
+	}
+	return nil
+}
+
 func DeleteChannel(channelID, botToken string) error {
 	respBody, status, err := botDo(http.MethodDelete, fmt.Sprintf("%s/channels/%s", discordAPI, channelID), nil, botToken)
 	if err != nil {

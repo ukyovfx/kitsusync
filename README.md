@@ -4,11 +4,11 @@
 [![Docker](https://img.shields.io/badge/runtime-Docker-2496ED)](#quick-start)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](#license)
 [![Security Policy](https://img.shields.io/badge/security-policy-important)](#contributing-and-security)
-[![Release](https://img.shields.io/badge/release-v0.4.3-orange)](#current-baseline-v043-candidate)
+[![Release](https://img.shields.io/badge/release-v0.4.4-orange)](#current-baseline-v044-candidate)
 
 KitsuSync is a Kitsu x Discord pipeline bridge for VFX and animation teams. It polls Kitsu, detects task changes, and posts structured Discord notifications with setup and admin tools in the browser.
 
-**Current baseline: v0.4.3 candidate.** KitsuSync is currently focused on small/mid-size CG/VFX and indie animation team workflows. It is not intended to replace enterprise production tracking systems.
+**Current baseline: v0.4.4 candidate.** KitsuSync is currently focused on small/mid-size CG/VFX and indie animation team workflows. It is not intended to replace enterprise production tracking systems.
 
 ## Why This Repo Exists
 
@@ -40,7 +40,7 @@ Browser admin UI
   -> /bot/admin
 ```
 
-## Current Baseline (v0.4.3 candidate)
+## Current Baseline (v0.4.4 candidate)
 
 - v0.2.0: Setup Wizard/operator clarity and setup-surface role consistency
 - v0.2.1: repository rename/public URL alignment to `ukyovfx/kitsusync`
@@ -49,8 +49,9 @@ Browser admin UI
 - v0.4.1: release-candidate maintenance update for the v0.4.0 setup/admin flow, documentation alignment, and release asset cache refresh
 - v0.4.2: status-aware Discord notification cards, safe User Linking-based mentions, and bounded card rendering
 - v0.4.3: safe Kitsu endpoint auto-discovery and validated fresh-initialization URL fallback
+- v0.4.4: status-aware notification cards and Production-level Discord notification language selection
 
-For release history, see `CHANGELOG.md`. Per-version release notes should live in GitHub Releases going forward. The current candidate notes are in `RELEASE_NOTES_v0.4.3.md`.
+For release history, see `CHANGELOG.md`. Per-version release notes should live in GitHub Releases going forward. The current candidate notes are in `RELEASE_NOTES_v0.4.4.md`.
 
 ## Limitations (Current)
 
@@ -354,7 +355,7 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 - Contributor guide: `CONTRIBUTING.md`
 - Security reporting: `SECURITY.md`
 - Changelog: `CHANGELOG.md`
-- Latest release notes: `RELEASE_NOTES_v0.4.3.md`
+- Latest release notes: `RELEASE_NOTES_v0.4.4.md`
 - Screenshot guidance: `screenshots/CAPTURE_GUIDE.md`
 - Future per-version release notes: GitHub Releases
 

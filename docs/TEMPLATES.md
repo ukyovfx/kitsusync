@@ -6,7 +6,7 @@ KitsuSync uses Go templates to render Discord embeds. Templates live in `tpl/` a
 
 | Preset | Directory | Description |
 |--------|-----------|-------------|
-| `rich` | `tpl/rich/` | Japanese-first layout with emoji, status arrows, and Google Drive link (default) |
+| `rich` | `tpl/rich/` | Japanese-first layout with status icons and optional Drive/Kitsu links (default) |
 | `eng` | `tpl/eng/` | English-only plain layout |
 | `rus` | `tpl/rus/` | Russian layout (no `fields.tpl`) |
 
@@ -42,7 +42,7 @@ These variables are available in every template file.
 | `.TaskName` | string | `"Compositing"` | Kitsu task name |
 | `.TaskType` | string | `"Compositing"` | Kitsu task type name |
 | `.EntityType` | string | `"Shot"` | Entity type (same as GroupName in most cases) |
-| `.TaskURL` | string | `"https://kitsu.example.com/..."` | Direct Kitsu URL for the task |
+| `.TaskURL` | string | `"https://kitsu.example.com/productions/.../shots/tasks/..."` | Verified Kitsu task deep link; empty when the entity route is not known |
 
 ### Status
 
@@ -78,7 +78,7 @@ These variables are available in every template file.
 | Variable | Type | Example | Description |
 |----------|------|---------|-------------|
 | `.ProcessEmoji` | string | `"🎬"` | Emoji representing the task type |
-| `.GoogleDriveURL` | string | `"https://drive.google.com/..."` | Project-level file storage link (empty if not configured) |
+| `.GoogleDriveURL` | string | `"https://drive.google.com/..."` | Validated project-level Drive link (empty if not configured) |
 | `.PreviewImageURL` | string | `"https://kitsu.example.com/..."` | Kitsu preview thumbnail URL (empty if no preview) |
 | `.ChannelName` | string | `"kitsu-fx-lighting-comp"` | Discord channel name the notification was sent to |
 | `.IsAssignNotification` | bool | `true` | True when this is a new task assignment (status = TODO) |

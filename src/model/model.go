@@ -894,6 +894,20 @@ type Setting struct {
 	Value string
 }
 
+// AdminSession stores only the server-side session identity and lifetime.
+// The opaque browser token is stored as a digest; Kitsu access tokens are
+// intentionally never persisted in this table.
+type AdminSession struct {
+	ID           uint   `gorm:"primaryKey"`
+	TokenHash    string `gorm:"uniqueIndex;not null"`
+	Email        string
+	Role         string
+	Expiry       time.Time `gorm:"index"`
+	BotEditUntil time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 func ListUserMap(db *gorm.DB) []UserMap {
 	var rows []UserMap
 	db.Order("kitsu_name asc").Find(&rows)

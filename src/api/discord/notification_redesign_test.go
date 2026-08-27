@@ -70,23 +70,137 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 		AssigneeLabel:           "Assignee",
 		AssigneesStr:            "UKYO M",
 		NotificationLanguage:    "en",
+		TaskURL:                 "https://kitsu.example/tasks/cut009",
+		GoogleDriveURL:          "https://drive.example/cut009",
 	}
 	payload := RenderNotificationPayload(data, "rich")
 	if len(payload.Embeds) != 1 {
 		t.Fatalf("embed count = %d, want 1", len(payload.Embeds))
 	}
 	embed := payload.Embeds[0]
+	if embed.Title != "Shot / SC02 - cut009" {
+		t.Fatalf("task context title = %q", embed.Title)
+	}
 	if embed.Author.Name != "Compositing" {
 		t.Fatalf("task type author = %q", embed.Author.Name)
 	}
 	if strings.Contains(embed.Description, "Status") || strings.Contains(embed.Description, "<@") {
 		t.Fatalf("duplicate status or mention leaked into embed: %q", embed.Description)
 	}
-	if len(embed.Fields) != 1 || embed.Fields[0].Name != "Assignee" {
+	if strings.Contains(embed.Description, " → ") {
+		t.Fatalf("transition leaked into description: %q", embed.Description)
+	}
+	if len(embed.Fields) != 3 || embed.Fields[0].Name != "🔗" || embed.Fields[1].Name != "📊 Status" || embed.Fields[2].Name != "👤 Assignee" {
 		t.Fatalf("unexpected compact fields: %+v", embed.Fields)
+	}
+	if embed.Fields[0].Inline || !strings.Contains(embed.Fields[0].Value, "Drive") || !strings.Contains(embed.Fields[0].Value, "Kitsu") {
+		t.Fatalf("links are not compact or ordered: %+v", embed.Fields[1])
+	}
+	if embed.Fields[1].Value != "wfa → retake" || !embed.Fields[1].Inline || !embed.Fields[2].Inline {
+		t.Fatalf("bottom metadata is not inline or transition-aware: %+v", embed.Fields[1:])
 	}
 	if strings.HasPrefix(embed.Author.Name, "🧩") {
 		t.Fatalf("decorative task type emoji leaked into card: %q", embed.Author.Name)
+	}
+}
+
+func TestNotificationStatusColorUsesStableSemanticAccents(t *testing.T) {
+	if got := notificationStatusColor("WFA"); got != 0xD4A72C {
+		t.Fatalf("WFA color = %#x", got)
+	}
+	if got := notificationStatusColor("RETAKE"); got != 0xC45656 {
+		t.Fatalf("RETAKE color = %#x", got)
+	}
+	if got := notificationStatusColor("DONE"); got != 0x4FAF78 {
+		t.Fatalf("DONE color = %#x", got)
+	}
+	if got := notificationStatusColor("UNKNOWN"); got != neutralEmbedColor {
+		t.Fatalf("unknown color = %#x", got)
+	}
+}
+
+func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
+	useRepositoryRootForTemplates(t)
+	payload := RenderNotificationPayload(Template{
+		ProjectName:          "Escape",
+		EntityType:           "Shot",
+		ParentName:           "SC02",
+		TaskName:             "cut012",
+		TaskType:             "Color Grading",
+		StatusUpper:          "DONE",
+		StatusEmoji:          "✅",
+		StatusMessage:        "完了しました。必要に応じてご確認ください。",
+		CommentLabel:         "コメント",
+		CommentContent:       "確認をお願いします。",
+		CommentAuthorLabel:   "コメント投稿者",
+		CommentAuthor:        "USER A",
+		AssigneeLabel:        "担当",
+		AssigneesStr:         "KOTARO MITA",
+		LinksLabel:           "リンク",
+		TaskURL:              "https://kitsu.example/tasks/cut012",
+		GoogleDriveURL:       "https://drive.example/cut012",
+		NotificationLanguage: "ja",
+		CardContext:          "テスト通知",
+		Color:                0x4FAF78,
+	}, "rich")
+	embed := payload.Embeds[0]
+	if embed.Title != "Shot / SC02 - cut012" || embed.Author.Name != "Color Grading" {
+		t.Fatalf("unexpected title/task type hierarchy: %+v", embed)
+	}
+	if embed.Footer.Text != "テスト通知" {
+		t.Fatalf("test marker is not footer-only: %q", embed.Footer.Text)
+	}
+	if len(embed.Fields) != 4 {
+		t.Fatalf("field count = %d, want comment/links/status/assignee", len(embed.Fields))
+	}
+	if embed.Fields[0].Name != "コメント" || embed.Fields[1].Name != "🔗" {
+		t.Fatalf("supporting fields are not ordered: %+v", embed.Fields[:2])
+	}
+	if !strings.Contains(embed.Fields[1].Value, "Drive") || !strings.Contains(embed.Fields[1].Value, "Kitsu") {
+		t.Fatalf("links are incomplete: %q", embed.Fields[1].Value)
+	}
+	if embed.Fields[2].Name != "📊 ステータス" || embed.Fields[3].Name != "👤 担当" || embed.Fields[2].Value != "done" {
+		t.Fatalf("metadata labels are not localized/aligned: %+v", embed.Fields[2:])
+	}
+	for _, field := range embed.Fields[2:] {
+		if !field.Inline {
+			t.Fatalf("metadata field is not inline: %+v", field)
+		}
+	}
+}
+
+func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
+	useRepositoryRootForTemplates(t)
+	payload := RenderNotificationPayload(Template{
+		EntityType: "Shot", ParentName: "SC02", TaskName: "cut012", TaskType: "Color Grading",
+		StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "チェックをお願いします",
+		PreviousStatus: "TODO", NotificationLanguage: "ja", CardContext: "テスト通知",
+		AssigneeLabel: "担当", AssigneesStr: "未割り当て", Color: 0xD4A72C,
+	}, "rich")
+	if len(payload.Embeds) != 1 {
+		t.Fatalf("embed count = %d, want 1", len(payload.Embeds))
+	}
+	embed := payload.Embeds[0]
+	if embed.Author.Name != "Color Grading" {
+		t.Fatalf("author must contain only Task Type, got %q", embed.Author.Name)
+	}
+	if embed.Title != "Shot / SC02 - cut012" {
+		t.Fatalf("title must contain only shot context, got %q", embed.Title)
+	}
+	if embed.Description != "👀 WFA\n\nチェックをお願いします" {
+		t.Fatalf("description must be the separated status/body block, got %q", embed.Description)
+	}
+	if embed.Footer.Text != "テスト通知" {
+		t.Fatalf("test marker must be footer-only, got %q", embed.Footer.Text)
+	}
+	if len(embed.Fields) != 2 || !embed.Fields[0].Inline || !embed.Fields[1].Inline {
+		t.Fatalf("expected only two inline metadata fields without comment/links, got %+v", embed.Fields)
+	}
+	if embed.Fields[0].Name != "📊 ステータス" || embed.Fields[0].Value != "todo → wfa" {
+		t.Fatalf("status transition field mismatch: %+v", embed.Fields[0])
+	}
+	if embed.Fields[1].Name != "👤 担当" || embed.Fields[1].Value != "未割り当て" {
+		t.Fatalf("assignee field mismatch: %+v", embed.Fields[1])
 	}
 }
 
@@ -131,12 +245,73 @@ func TestNotificationCardFixturesCoverStatusCommentsLinksAndPreview(t *testing.T
 		if tc.commentOnly && strings.Contains(embed.Description, "A transition") {
 			t.Fatalf("%s fixture contains a fake transition: %q", tc.name, embed.Description)
 		}
+		if strings.Contains(embed.Description, "A transition") || strings.Contains(embed.Description, " → ") {
+			t.Fatalf("%s fixture contains transition text in description: %q", tc.name, embed.Description)
+		}
 		if (embed.Image != nil) != tc.preview {
 			t.Fatalf("%s preview presence = %v, want %v", tc.name, embed.Image != nil, tc.preview)
 		}
-		if tc.drive != strings.Contains(embed.Description, "Drive") {
-			t.Fatalf("%s drive presence mismatch: %q", tc.name, embed.Description)
+		fieldsText := ""
+		for _, field := range embed.Fields {
+			fieldsText += field.Name + " " + field.Value
 		}
+		if tc.drive != strings.Contains(fieldsText, "Drive") {
+			t.Fatalf("%s drive presence mismatch: %q", tc.name, fieldsText)
+		}
+	}
+}
+
+func TestNotificationCardLinksRequireValidURLsAndOmitUnavailableLinks(t *testing.T) {
+	useRepositoryRootForTemplates(t)
+	cases := []struct {
+		name, drive, kitsu, want string
+	}{
+		{"both", "https://drive.example/folder", "https://kitsu.example/tasks/1", "Drive"},
+		{"drive-only", "https://drive.example/folder", "", "Drive"},
+		{"kitsu-only", "", "https://kitsu.example/tasks/1", "Kitsu"},
+		{"neither", "", "", ""},
+		{"malformed-drive", "not a url", "https://kitsu.example/tasks/1", "Kitsu"},
+		{"unreliable-kitsu", "https://drive.example/folder", "", "Drive"},
+	}
+	for _, tc := range cases {
+		payload := RenderNotificationPayload(Template{
+			TaskType: "Animation", StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "Please review",
+			AssigneeLabel: "Assignee", AssigneesStr: "Unassigned", NotificationLanguage: "en",
+			GoogleDriveURL: tc.drive, TaskURL: tc.kitsu,
+		}, "rich")
+		var links string
+		for _, field := range payload.Embeds[0].Fields {
+			if field.Name == "🔗" {
+				links = field.Value
+			}
+		}
+		if tc.want == "" {
+			if links != "" {
+				t.Fatalf("%s links = %q, want omitted", tc.name, links)
+			}
+			continue
+		}
+		if !strings.Contains(links, tc.want) {
+			t.Fatalf("%s links = %q, want %q", tc.name, links, tc.want)
+		}
+	}
+}
+
+func TestKitsuTaskURLUsesVerifiedFrontendRoute(t *testing.T) {
+	if got := KitsuTaskURL("https://kitsu.example.com/", "production-1", "Shot", "task-1"); got != "https://kitsu.example.com/productions/production-1/shots/tasks/task-1" {
+		t.Fatalf("shot task URL = %q", got)
+	}
+	if got := KitsuTaskURL("https://kitsu.example.com", "production-1", "Asset", "task-1"); got != "https://kitsu.example.com/productions/production-1/assets/tasks/task-1" {
+		t.Fatalf("asset task URL = %q", got)
+	}
+	if got := KitsuTaskURL("https://kitsu.example.com", "production-1", "Sequence", "task-1"); got != "" {
+		t.Fatalf("unsupported entity type URL = %q, want omitted", got)
+	}
+	if got := KitsuTaskURL("not-a-url", "production-1", "Shot", "task-1"); got != "" {
+		t.Fatalf("malformed base URL = %q, want omitted", got)
+	}
+	if got := KitsuTaskURL("https://kitsu.example.com", "production-1", "Shot", ""); got != "" {
+		t.Fatalf("missing task ID URL = %q, want omitted", got)
 	}
 }
 

@@ -15,7 +15,7 @@ Before you begin, confirm you have:
 - [ ] One or more Discord **Guild IDs** — enable Developer Mode in Discord settings, then right-click each target server → Copy Server ID
 - [ ] A Kitsu manager/admin account for the browser setup flow
 
-> **Bot permissions required:** Manage Channels, Manage Webhooks.
+> **Bot permissions required:** Manage Channels, Manage Webhooks. Administrator is not required, and Presence Intent, Server Members Intent, and Message Content Intent should remain off.
 > Generate the invite URL from OAuth2 → URL Generator with scope `bot` and those two permissions.
 
 ---

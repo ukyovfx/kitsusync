@@ -1,15 +1,15 @@
 ---
 title: "KitsuSync Current State"
 status: maintenance
-updated: 2026-06-17
-release: v0.4.2 candidate
+updated: 2026-08-27
+release: v0.4.4 candidate
 ---
 
 # KitsuSync Current State
 
 ## Release Focus
 
-- current release: `v0.4.2 candidate`
+- current release: `v0.4.4 candidate`
 - current mode: maintenance with small cleanup and hardening PRs
 - scope rule: keep changes small, focused, and easy to verify
 

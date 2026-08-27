@@ -48,15 +48,15 @@ func TestLocalizedStatusTransitionMessage_CompactJA(t *testing.T) {
 	cases := []struct {
 		prev, current, want string
 	}{
-		{"WIP", "WFA", "📩 チェック依頼が送られました"},
+		{"WIP", "WFA", "チェック依頼が送られました"},
 		{"WFA", "RETAKE", "レビュー結果により修正が必要です"},
 		{"WFA", "DONE", "レビューが完了しました"},
-		{"WFA", "WIP", "🛠 修正作業に戻りました"},
-		{"RETAKE", "WIP", "🛠 リテイク対応を開始しました"},
-		{"WIP", "RETAKE", "🔁 リテイクが入りました"},
-		{"TODO", "WIP", "🚀 作業を開始しました"},
-		{"NONE", "WIP", "🚀 作業を開始しました"},
-		{"READY", "DONE", "✅ 作業完了・承認されました"},
+		{"WFA", "WIP", "修正作業に戻りました"},
+		{"RETAKE", "WIP", "リテイク対応を開始しました"},
+		{"WIP", "RETAKE", "リテイクが入りました"},
+		{"TODO", "WIP", "作業を開始しました"},
+		{"NONE", "WIP", "作業を開始しました"},
+		{"READY", "DONE", "作業完了・承認されました"},
 	}
 
 	for _, tc := range cases {
@@ -82,7 +82,7 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 			prev:       "WIP",
 			statusLine: "👀 WFA",
 			actionLine: "チェックをお願いします",
-			transLine:  "📩 チェック依頼が送られました",
+			transLine:  "チェック依頼が送られました",
 		},
 		{
 			name:       "retake",
@@ -121,8 +121,8 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 		mustContain(t, rendered, tc.actionLine)
 		mustContain(t, rendered, tc.transLine)
 		mustContain(t, rendered, "コメント投稿者: 山田太郎")
-		mustContain(t, rendered, "[🦊 KITSU](https://kitsu.example.com/task/1)")
-		mustContain(t, rendered, "[📁 Drive](https://drive.example.com/folder/1)")
+		mustContain(t, rendered, "[Kitsu](https://kitsu.example.com/task/1)")
+		mustContain(t, rendered, "[Drive](https://drive.example.com/folder/1)")
 	}
 }
 
@@ -131,7 +131,7 @@ func TestRichDescription_DriveAndCommentAreConditional(t *testing.T) {
 		StatusEmoji:             "👀",
 		StatusUpper:             "WFA",
 		StatusMessage:           "チェックをお願いします",
-		StatusTransitionMessage: "📩 チェック依頼が送られました",
+		StatusTransitionMessage: "チェック依頼が送られました",
 		CommentAuthor:           "田中花子",
 		CommentContent:          "",
 		TaskURL:                 "https://kitsu.example.com/task/2",
@@ -139,8 +139,8 @@ func TestRichDescription_DriveAndCommentAreConditional(t *testing.T) {
 	}
 
 	rendered := renderRichTemplate(t, "description.tpl", data)
-	mustContain(t, rendered, "[🦊 KITSU](https://kitsu.example.com/task/2)")
-	if strings.Contains(rendered, "📁 Drive") {
+	mustContain(t, rendered, "[Kitsu](https://kitsu.example.com/task/2)")
+	if strings.Contains(rendered, "[Drive]") {
 		t.Fatalf("drive link should not be rendered when storage URL is empty: %q", rendered)
 	}
 	if strings.Contains(rendered, "💬 ") {

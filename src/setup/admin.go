@@ -478,6 +478,21 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			if projectID != "" {
 				redirectURL += "&project=" + url.QueryEscape(projectID)
 			}
+			if action == "save_notification_language" {
+				language := normalizedProductionNotificationLanguage(r.FormValue("notification_language"))
+				var project model.Project
+				result := db.Where("kitsu_project_id = ?", projectID).First(&project)
+				if projectID != "" && result.Error == nil {
+					project.Language = language
+					result = db.Save(&project)
+				}
+				if projectID != "" && result.Error == nil {
+					http.Redirect(w, r, redirectURL+"&tab=notifications&msg=saved", http.StatusSeeOther)
+					return
+				}
+				http.Redirect(w, r, redirectURL+"&tab=notifications&msg=error", http.StatusSeeOther)
+				return
+			}
 			if action == "execute_current_ia_discord_delete" {
 				expected := t(lang, "削除", "DELETE")
 				if projectID == "" || strings.TrimSpace(r.FormValue("confirm_text")) != expected {
@@ -1103,7 +1118,9 @@ func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Pro
 		repairURL := withLang("/bot/setup?wizard_step=4&repair=1&project="+url.QueryEscape(project.KitsuProjectID)+"&plan_guild="+url.QueryEscape(project.DiscordGuildID), r)
 		actionHTML += `<a class="btn-ghost" href="` + esc(repairURL) + `">` + esc(t(lang, "修復計画を確認", "Review repair plan")) + `</a>`
 	}
-	return `<section class="section-card glass notification-controls" aria-labelledby="notification-controls-title"><div class="page-heading"><div><h3 id="notification-controls-title">` + esc(t(lang, "通知状態とテスト", "Notification state and testing")) + `</h3><p class="hint">` + esc(stateMessage+resourceNotice) + `</p></div><span class="status-pill ` + esc(statusClass) + `">` + esc(statusLabel) + `</span></div><div class="button-row">` + actionHTML + `</div><form method="post" action="` + esc(actionURL) + `" class="section-card glass" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="connected-production-dry-run">` + esc(t(lang, "dry-run 用 Task Type", "Task Type for dry-run")) + `</label><select id="connected-production-dry-run" name="dry_run_task_type_id">` + dryRunOptions.String() + `</select><div class="button-row"><button class="btn secondary" type="submit">` + esc(tr(lang, "production_routing.dry_run")) + `</button></div><p class="field-help" role="note">` + esc(t(lang, "dry-run はネットワーク通信を行わず、Discord メッセージも送信しません。結果には Production、Task Type、対象 channel、実行予定、skip reason を表示します。", "Dry-run is network-free and sends no Discord message. The result shows Production, Task Type, mapped channel, intended action, and skip reason.")) + `</p></form></section>`
+	productionLanguage := normalizedProductionNotificationLanguage(project.Language)
+	languageForm := `<form method="post" action="` + esc(withLang("/bot/admin/projects", r)) + `" class="notification-language-form"><input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="save_notification_language"><label for="production-notification-language">` + esc(t(lang, "Discord通知の言語", "Discord notification language")) + `</label><select id="production-notification-language" name="notification_language"><option value="ja"` + selectedAttr(productionLanguage == "ja") + `>` + esc(t(lang, "日本語", "Japanese")) + `</option><option value="en"` + selectedAttr(productionLanguage == "en") + `>English</option></select><p class="field-help">` + esc(t(lang, "今後のDiscord通知に使う言語です。管理画面の言語とは別に設定されます。", "Applies to future Discord notifications and is independent of the admin UI language.")) + `</p><button class="btn-ghost" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></form>`
+	return `<section class="section-card glass notification-controls" aria-labelledby="notification-controls-title"><div class="page-heading"><div><h3 id="notification-controls-title">` + esc(t(lang, "通知状態とテスト", "Notification state and testing")) + `</h3><p class="hint">` + esc(stateMessage+resourceNotice) + `</p></div><span class="status-pill ` + esc(statusClass) + `">` + esc(statusLabel) + `</span></div><div class="button-row">` + actionHTML + `</div>` + languageForm + `<form method="post" action="` + esc(actionURL) + `" class="section-card glass" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="connected-production-dry-run">` + esc(t(lang, "dry-run 用 Task Type", "Task Type for dry-run")) + `</label><select id="connected-production-dry-run" name="dry_run_task_type_id">` + dryRunOptions.String() + `</select><div class="button-row"><button class="btn secondary" type="submit">` + esc(tr(lang, "production_routing.dry_run")) + `</button></div><p class="field-help" role="note">` + esc(t(lang, "dry-run はネットワーク通信を行わず、Discord メッセージも送信しません。結果には Production、Task Type、対象 channel、実行予定、skip reason を表示します。", "Dry-run is network-free and sends no Discord message. The result shows Production, Task Type, mapped channel, intended action, and skip reason.")) + `</p></form></section>`
 }
 
 type connectedProductionChannelCandidate struct {
@@ -2746,6 +2763,10 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 				return
 			}
 			storageURL := strings.TrimSpace(r.FormValue("storage_url"))
+			if storageURL != "" && !validConfiguredStorageURL(storageURL) {
+				http.Error(w, "storage URL must be an absolute HTTP or HTTPS URL", http.StatusBadRequest)
+				return
+			}
 			if projectID != "" {
 				model.SetProjectStorageURL(db, projectID, storageURL)
 			}
@@ -2765,6 +2786,15 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 	}
 }
 
+func validConfiguredStorageURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "YOUR_FOLDER_ID") {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil
+}
+
 type connectionStatus struct {
 	Class string
 	Label string
@@ -2772,32 +2802,37 @@ type connectionStatus struct {
 
 func connectionSecretStatus(value, lang string) connectionStatus {
 	if strings.TrimSpace(value) == "" {
-		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not set")}
+		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
 	}
-	return connectionStatus{Class: "muted", Label: t(lang, "非表示", "Hidden")}
+	return connectionStatus{Class: "muted", Label: t(lang, "保存済み", "Saved")}
 }
 
 func connectionHealthStatus(lang string, configured, healthy bool) connectionStatus {
 	if !configured {
-		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not set")}
-	}
-	if healthy {
-		return connectionStatus{Class: "ok", Label: t(lang, "接続済", "Connected")}
-	}
-	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Check")}
-}
-
-func currentConnectionHealthStatus(lang string, configured, healthy bool) connectionStatus {
-	if lang == "en" && !configured {
-		return connectionStatus{Class: "warning", Label: "Not set"}
-	}
-	if !configured {
 		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
 	}
 	if healthy {
-		return connectionStatus{Class: "ok", Label: t(lang, "接続済", "Connected")}
+		return connectionStatus{Class: "ok", Label: t(lang, "接続済み", "Connected")}
 	}
-	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Needs review")}
+	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Needs attention")}
+}
+
+func connectionSecretState(lang string, configured bool) connectionStatus {
+	if !configured {
+		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
+	}
+	return connectionStatus{Class: "muted", Label: t(lang, "保存済み", "Saved")}
+}
+
+func connectionSaveLabel(lang string, service string, configured bool) string {
+	if configured {
+		return t(lang, "接続を再確認", "Recheck connection")
+	}
+	return t(lang, service+"接続を保存", "Save "+service+" connection")
+}
+
+func currentConnectionHealthStatus(lang string, configured, healthy bool) connectionStatus {
+	return connectionHealthStatus(lang, configured, healthy)
 }
 
 func currentConnectionPageStatus(lang string, readiness SharedBotRuntimeReadiness, kitsuHealthy, discordHealthy bool) connectionStatus {
@@ -2808,16 +2843,13 @@ func currentConnectionPageStatus(lang string, readiness SharedBotRuntimeReadines
 }
 
 func canonicalConnectionHealthStatus(lang string, configured, healthy bool) connectionStatus {
-	if lang == "en" && !configured {
-		return connectionStatus{Class: "warning", Label: "Not set"}
-	}
 	if !configured {
 		return connectionStatus{Class: "warning", Label: t(lang, "\u672a\u8a2d\u5b9a", "Not configured")}
 	}
 	if healthy {
-		return connectionStatus{Class: "ok", Label: t(lang, "\u63a5\u7d9a\u6e08", "Connected")}
+		return connectionStatus{Class: "ok", Label: t(lang, "\u63a5\u7d9a\u6e08\u307f", "Connected")}
 	}
-	return connectionStatus{Class: "warn", Label: t(lang, "\u8981\u78ba\u8a8d", "Needs review")}
+	return connectionStatus{Class: "warn", Label: t(lang, "\u8981\u78ba\u8a8d", "Needs attention")}
 }
 
 func canonicalConnectionPageStatus(lang string, readiness SharedBotRuntimeReadiness, kitsuHealthy, discordHealthy bool) connectionStatus {
@@ -2828,17 +2860,15 @@ func canonicalConnectionPageStatus(lang string, readiness SharedBotRuntimeReadin
 }
 
 func connectionPageStatus(lang string, readiness SharedBotRuntimeReadiness, kitsuHealthy, discordHealthy bool) connectionStatus {
-	if !readiness.KitsuConfigured || !readiness.DiscordConfigured {
-		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not set")}
-	}
-	if kitsuHealthy && discordHealthy {
-		return connectionStatus{Class: "ok", Label: t(lang, "接続済", "Connected")}
-	}
-	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Check")}
+	return canonicalConnectionPageStatus(lang, readiness, kitsuHealthy, discordHealthy)
 }
 
 func connectionStatusPill(value connectionStatus) string {
 	return `<span class="status-pill ` + esc(value.Class) + `" role="status">` + esc(value.Label) + `</span>`
+}
+
+func connectionStateText(value connectionStatus) string {
+	return `<span class="connection-state-value ` + esc(value.Class) + `" role="status">` + esc(value.Label) + `</span>`
 }
 
 func namedConnectionStatus(lang, service string, status connectionStatus) string {
@@ -2889,7 +2919,7 @@ func renderConnectionHealthPills(lang string, configured, healthy bool, secretVa
 	health := canonicalConnectionHealthStatus(lang, configured, healthy)
 	result := connectionStatusPill(health)
 	if strings.TrimSpace(secretValue) != "" {
-		result += connectionStatusPill(connectionStatus{Class: "muted", Label: t(lang, "非表示", "Hidden")})
+		result += connectionStatusPill(connectionStatus{Class: "muted", Label: t(lang, "保存済み", "Saved")})
 	}
 	return result
 }
@@ -2923,14 +2953,12 @@ func renderConnectionsEditFormLegacy(lang string, r *http.Request, db *gorm.DB, 
 }
 
 func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string, kitsuHealthy, discordHealthy bool) string {
-	kitsuEmail := storedRuntimeKitsuEmail(db)
-	kitsuToken := StoredRuntimeKitsuToken(db)
-	kitsuConfigured := strings.TrimSpace(kitsuEmail) != "" || kitsuToken != ""
+	kitsuConfigured := strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
 	kitsuStatus := canonicalConnectionHealthStatus(lang, kitsuConfigured, kitsuHealthy)
 	discordStatus := canonicalConnectionHealthStatus(lang, strings.TrimSpace(botToken) != "", discordHealthy)
 	return `<div class="connections-summary-grid">` +
-		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div><div class="connection-field-row"><dt>Kitsu Bot API Token</dt><dd>` + esc(t(lang, "保存済みTokenは表示されません。", "Saved token is not displayed.")) + `</dd></div></dl></section>` +
-		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>Discord Bot Token</dt><dd>` + esc(t(lang, "保存済みTokenは表示されません。", "Saved token is not displayed.")) + `</dd></div></dl></section>` +
+		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div></dl></section>` +
+		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div><dl class="connection-field-list"></dl></section>` +
 		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div>`
 }
 
@@ -2976,10 +3004,7 @@ func replaceConnectionFieldHelp(body, fieldName, value string) string {
 }
 
 func renderConnectionsDisplayBodyWithHealth(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string, kitsuHealthy, discordHealthy bool) string {
-	body := renderConnectionsDisplayBodyWithHealthRaw(lang, r, db, statusHint, statusClass, statusLabel, host, botToken, kitsuHealthy, discordHealthy)
-	body = replaceConnectionFieldValue(body, "Kitsu Bot API Token", secretMaskDisplay(lang, strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""))
-	body = replaceConnectionFieldValue(body, "Discord Bot Token", secretMaskDisplay(lang, strings.TrimSpace(botToken) != ""))
-	return body
+	return renderConnectionsDisplayBodyWithHealthRaw(lang, r, db, statusHint, statusClass, statusLabel, host, botToken, kitsuHealthy, discordHealthy)
 }
 
 func renderConnectionsEditFormLegacyCurrent(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, runtimeHost, kitsuEmail string) string {
@@ -3030,14 +3055,6 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 	}
 	kitsuConfigured := strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
 	discordConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
-	kitsuTokenPlaceholder := ""
-	if kitsuConfigured {
-		kitsuTokenPlaceholder = ` placeholder="` + esc(secretMaskDisplay(lang, true)) + `"`
-	}
-	discordTokenPlaceholder := ""
-	if discordConfigured {
-		discordTokenPlaceholder = ` placeholder="` + esc(secretMaskDisplay(lang, true)) + `"`
-	}
 	kitsuStatus := connectionHealthStatus(lang, kitsuConfigured, kitsuHealthy)
 	discordStatus := connectionHealthStatus(lang, discordConfigured, discordHealthy)
 	identity := strings.TrimSpace(discordBotName)
@@ -3045,18 +3062,43 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		identity = t(lang, "未検出", "Not detected")
 	}
 	return `<div class="section-stack connections-edit-stack">` + notice +
-		`<div class="connections-edit-summary"><p class="hint">` + esc(statusHint) + `</p><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div>` +
+		`<div class="connections-edit-summary"><p class="hint">` + esc(statusHint) + `</p></div>` +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><input id="kitsu-hostname" type="url" name="kitsu_hostname" value="` + esc(displayHost) + `"></div><div class="connection-form-field"><label for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot API Token", "Kitsu Bot API token")) + `</label><input id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password"` + kitsuTokenPlaceholder + `></div><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(func() string {
-		if name := strings.TrimSpace(model.GetSetting(db, RuntimeKitsuBotNameSettingKey)); name != "" {
-			return name
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot API Token", "Kitsu Bot API token")) + `</label><input id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help"` + func() string {
+		if kitsuConfigured {
+			return ` hidden style="display:none"`
 		}
-		return t(lang, "未検出", "Not detected")
-	}()) + `</dd></div><div class="button-row connections-actions"><button type="submit" class="btn">` + esc(t(lang, "Kitsu接続を保存", "Save Kitsu connection")) + `</button></div></form></section>` +
+		return ""
+	}() + `><p id="kitsu-token-help" class="field-help">` + esc(func() string {
+		if kitsuConfigured {
+			return t(lang, "保存済みtokenは表示しません。再確認では再入力不要です。変更する場合だけ「トークンを変更」を選びます。", "The saved token is never displayed. Recheck without entering it again; choose Change token only when rotating it.")
+		}
+		return t(lang, "読み取り専用で検証し、成功した場合だけ保存します。", "The token is validated read-only and saved only after success.")
+	}()) + `</p></div><div class="connection-form-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><input id="kitsu-hostname" type="url" name="kitsu_hostname" value="` + esc(displayHost) + `" aria-describedby="kitsu-host-help" data-initial-value="` + esc(displayHost) + `"><p id="kitsu-host-help" class="field-help">` + esc(tr(lang, "connections.host_help")) + `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button>` + func() string {
+		if !kitsuConfigured {
+			return ""
+		}
+		return `<button type="button" class="btn-ghost" data-reveal-secret="kitsu-bot-token" data-recheck-button="kitsu-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button>`
+	}() + `</div></form></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label for="discord-bot-token">Discord Bot Token</label><input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password"` + discordTokenPlaceholder + `></div><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions"><button type="submit" class="btn">` + esc(t(lang, "Discord Bot接続を保存", "Save Discord Bot connection")) + `</button></div></form></section>` +
-		`</div><div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div></div>`
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label for="discord-bot-token">Discord Bot Token</label><input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password" aria-describedby="discord-token-help"` + func() string {
+		if discordConfigured {
+			return ` hidden style="display:none"`
+		}
+		return ""
+	}() + `><p id="discord-token-help" class="field-help">` + esc(func() string {
+		if discordConfigured {
+			return t(lang, "保存済みtokenは表示しません。再確認では再入力不要です。変更する場合だけ「トークンを変更」を選びます。", "The saved token is never displayed. Recheck without entering it again; choose Change token only when rotating it.")
+		}
+		return tr(lang, "connections.token_help")
+	}()) + `</p></div><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions"><button id="discord-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Discord Bot", discordConfigured)) + `</button>` + func() string {
+		if !discordConfigured {
+			return ""
+		}
+		return `<button type="button" class="btn-ghost" data-reveal-secret="discord-bot-token" data-recheck-button="discord-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button>`
+	}() + `</div></form></section>` +
+		`</div><div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-reveal-secret]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.getAttribute('data-reveal-secret'));var submit=document.getElementById(button.getAttribute('data-recheck-button'));if(!input)return;input.hidden=false;input.style.display='';button.hidden=true;if(submit)submit.textContent=saveText;input.focus();});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}}());</script></div>`
 }
 
 func renderConnectionsEditFormWithHealthRaw(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, runtimeHost string, kitsuHealthy, discordHealthy bool, discordBotName string) string {
@@ -3171,7 +3213,11 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuホストを入力してください。", "Enter the Kitsu host.")))
 					return
 				}
-				botToken := strings.TrimSpace(r.FormValue("kitsu_bot_token"))
+				submittedBotToken := strings.TrimSpace(r.FormValue("kitsu_bot_token"))
+				botToken := submittedBotToken
+				if botToken == "" {
+					botToken = StoredRuntimeKitsuToken(db)
+				}
 				if botToken != "" {
 					validation := ValidateKitsuBotToken(db, hostForAuth, botToken, true)
 					slog.Info("Kitsu Bot token validation result",
@@ -3188,10 +3234,12 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 						fmt.Fprint(w, renderKitsuConnectionError(lang, botTokenValidationUserMessageSafe(lang, validation)))
 						return
 					}
-					if err := setRuntimeKitsuToken(db, botToken); err != nil {
-						w.WriteHeader(http.StatusInternalServerError)
-						fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu Bot tokenを安全に保存できませんでした。", "The Kitsu Bot token could not be stored safely.")))
-						return
+					if submittedBotToken != "" {
+						if err := setRuntimeKitsuToken(db, submittedBotToken); err != nil {
+							w.WriteHeader(http.StatusInternalServerError)
+							fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu Bot tokenを安全に保存できませんでした。", "The Kitsu Bot token could not be stored safely.")))
+							return
+						}
 					}
 					if err := StoreValidatedKitsuBotMetadata(db, validation); err != nil {
 						w.WriteHeader(http.StatusInternalServerError)
@@ -3352,16 +3400,13 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		guildID := strings.TrimSpace(model.GetSetting(db, "discord.guild_id"))
 		discordStatus := checkDiscordStatus(storedRuntimeDiscordBotToken(db), guildID)
 		discordHealthy := discordStatus.BotValid && (guildID == "" || discordStatus.GuildValid)
-		configured := sharedReadiness.OverallReady
-		statusClass := "bad"
-		statusLabel := tr(lang, "bot_runtime.action_required")
+		kitsuConfigured := strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
+		discordConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
+		pageStatus := canonicalConnectionHealthStatus(lang, kitsuConfigured && discordConfigured, kitsuHealthy && discordHealthy)
+		statusClass, statusLabel := pageStatus.Class, pageStatus.Label
 		primaryAction := tr(lang, "bot_runtime.complete_setup")
-		if strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != "" {
+		if discordConfigured {
 			primaryAction = tr(lang, "bot_runtime.reauthenticate")
-		}
-		if configured {
-			statusClass = "ok"
-			statusLabel = t(lang, "設定済み", "Configured")
 		}
 		statusHint := t(lang, "Kitsu接続とDiscord Bot接続をそれぞれ確認してください。", "Review Kitsu and Discord Bot connections separately.")
 		if !sharedReadiness.KitsuConfigured {

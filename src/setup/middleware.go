@@ -3,6 +3,7 @@ package setup
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"app/src/model"
 	"github.com/gookit/slog"
+	"gorm.io/gorm"
 )
 
 type sessionData struct {
@@ -34,12 +37,26 @@ type wizardState struct {
 }
 
 var (
-	sessionMu  sync.Mutex
-	sessions   = map[string]sessionData{}
-	sessionTTL = 15 * time.Minute
+	sessionMu      sync.Mutex
+	sessions       = map[string]sessionData{}
+	sessionStoreDB *gorm.DB
+	sessionTTL     = 15 * time.Minute
 )
 
 const sessionCookieName = "kitsu_admin_session"
+
+// ConfigureSessionStore enables SQLite-backed session validation. A nil DB
+// retains the in-memory mode used by isolated unit tests.
+func ConfigureSessionStore(db *gorm.DB) {
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	sessionStoreDB = db
+}
+
+func sessionTokenHash(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
+}
 
 func isHTTPSRequest(r *http.Request) bool {
 	if r == nil {
@@ -67,8 +84,15 @@ func sessionCookie(r *http.Request, value string, maxAge int) *http.Cookie {
 }
 
 func newSessionToken(email, kitsuToken, role, next string) string {
+	token, _ := newSessionTokenChecked(email, kitsuToken, role, next)
+	return token
+}
+
+func newSessionTokenChecked(email, kitsuToken, role, next string) (string, error) {
 	buffer := make([]byte, 16)
-	_, _ = rand.Read(buffer)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
 	token := hex.EncodeToString(buffer)
 	session := sessionData{
 		Expiry:     time.Now().Add(sessionTTL),
@@ -81,8 +105,23 @@ func newSessionToken(email, kitsuToken, role, next string) string {
 	}
 	sessionMu.Lock()
 	sessions[token] = session
+	db := sessionStoreDB
 	sessionMu.Unlock()
-	return token
+	if db != nil {
+		if err := db.Create(&model.AdminSession{
+			TokenHash:    sessionTokenHash(token),
+			Email:        session.Email,
+			Role:         session.Role,
+			Expiry:       session.Expiry,
+			BotEditUntil: session.BotEditUntil,
+		}).Error; err != nil {
+			sessionMu.Lock()
+			delete(sessions, token)
+			sessionMu.Unlock()
+			return "", fmt.Errorf("persist admin session: %w", err)
+		}
+	}
+	return token, nil
 }
 
 func validSession(token string) bool {
@@ -90,22 +129,41 @@ func validSession(token string) bool {
 		return false
 	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[token]
-	if !ok {
+	db := sessionStoreDB
+	sessionMu.Unlock()
+	if ok {
+		if time.Now().After(session.Expiry) {
+			destroySession(token)
+			return false
+		}
+		return true
+	}
+	if db == nil {
 		return false
 	}
-	if time.Now().After(session.Expiry) {
-		delete(sessions, token)
+	var persisted model.AdminSession
+	if err := db.Where("token_hash = ?", sessionTokenHash(token)).First(&persisted).Error; err != nil {
 		return false
 	}
+	if time.Now().After(persisted.Expiry) {
+		_ = db.Delete(&persisted).Error
+		return false
+	}
+	sessionMu.Lock()
+	sessions[token] = sessionData{Expiry: persisted.Expiry, Email: persisted.Email, Role: persisted.Role, BotEditUntil: persisted.BotEditUntil}
+	sessionMu.Unlock()
 	return true
 }
 
 func destroySession(token string) {
 	sessionMu.Lock()
 	delete(sessions, token)
+	db := sessionStoreDB
 	sessionMu.Unlock()
+	if db != nil {
+		_ = db.Where("token_hash = ?", sessionTokenHash(token)).Delete(&model.AdminSession{}).Error
+	}
 }
 
 func botEditAllowed(r *http.Request) bool {
@@ -117,8 +175,16 @@ func botEditAllowed(r *http.Request) bool {
 		return false
 	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[cookie.Value]
+	db := sessionStoreDB
+	sessionMu.Unlock()
+	if !ok && db != nil {
+		var persisted model.AdminSession
+		if db.Where("token_hash = ?", sessionTokenHash(cookie.Value)).First(&persisted).Error == nil {
+			session = sessionData{Expiry: persisted.Expiry, Email: persisted.Email, Role: persisted.Role, BotEditUntil: persisted.BotEditUntil}
+			ok = true
+		}
+	}
 	if !ok {
 		return false
 	}
@@ -223,8 +289,16 @@ func currentSessionData(r *http.Request) (sessionData, bool) {
 		return sessionData{}, false
 	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[cookie.Value]
+	db := sessionStoreDB
+	sessionMu.Unlock()
+	if !ok && db != nil {
+		var persisted model.AdminSession
+		if db.Where("token_hash = ?", sessionTokenHash(cookie.Value)).First(&persisted).Error == nil {
+			session = sessionData{Expiry: persisted.Expiry, Email: persisted.Email, Role: persisted.Role, BotEditUntil: persisted.BotEditUntil}
+			ok = true
+		}
+	}
 	if !ok || time.Now().After(session.Expiry) {
 		return sessionData{}, false
 	}
@@ -255,14 +329,24 @@ func updateWizardState(r *http.Request, update func(*wizardState)) {
 	if err != nil || cookie.Value == "" {
 		return
 	}
+	// Hydrate a persisted session into the process cache before applying the
+	// update, so wizard state remains available after a container replacement.
+	if _, ok := currentSessionData(r); !ok {
+		return
+	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[cookie.Value]
+	db := sessionStoreDB
 	if !ok || time.Now().After(session.Expiry) {
+		sessionMu.Unlock()
 		return
 	}
 	update(&session.Wizard)
 	sessions[cookie.Value] = session
+	sessionMu.Unlock()
+	if db != nil {
+		_ = db.Model(&model.AdminSession{}).Where("token_hash = ?", sessionTokenHash(cookie.Value)).Updates(map[string]interface{}{"updated_at": time.Now()}).Error
+	}
 }
 
 func LoginHandler(kitsuHostname string) http.HandlerFunc {
@@ -321,7 +405,13 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
-			token := newSessionToken(email, kitsuToken, role, next)
+			token, sessionErr := newSessionTokenChecked(email, kitsuToken, role, next)
+			if sessionErr != nil {
+				slog.Error("admin session persistence failed", "error_class", "session_store_unavailable")
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "ログイン状態を保存できませんでした。管理者に確認してください。", "The login session could not be saved. Contact the administrator."), next, configuredHostname == "", r, r.FormValue("hostname")))
+				return
+			}
 			if persist != nil && (source == "local-discovered" || source == "operator-supplied") {
 				persist(hostname)
 			}

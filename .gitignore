@@ -62,3 +62,8 @@ tests.bat
 /screenshots/*.png
 /screenshots/*.jpg
 /screenshots/*.jpeg
+
+# Local Codex/browser validation artifacts
+/.codex-artifacts/
+/e2e_v044_temp_state.json
+/send_v044_card_samples.go

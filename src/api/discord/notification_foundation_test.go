@@ -111,7 +111,7 @@ func TestSupportedEventsRenderInJapaneseAndEnglish(t *testing.T) {
 				TaskURL:              "https://kitsu.example/tasks/1",
 			}
 			payload := RenderNotificationPayload(data, "rich")
-			if len(payload.Embeds) != 1 || strings.TrimSpace(payload.Embeds[0].Description) == "" {
+			if len(payload.Embeds) != 1 || (!tc.assignment && (len(payload.Embeds[0].Fields) == 0 || strings.TrimSpace(payload.Embeds[0].Fields[0].Value) == "")) || (tc.assignment && strings.TrimSpace(payload.Embeds[0].Description) == "") {
 				t.Fatalf("%s/%s did not render a message", tc.name, lang)
 			}
 		}

@@ -22,7 +22,7 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.Setting{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -254,7 +254,30 @@ func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, r, db, "")
 	body := w.Body.String()
-	if strings.Contains(body, "<details") || strings.Contains(body, ">g<") || strings.Contains(body, ">c<") || strings.Contains(body, "Production ID") {
+	visibleBody := body
+	if start := strings.Index(visibleBody, "<main"); start >= 0 {
+		visibleBody = visibleBody[start:]
+	}
+	for {
+		styleStart := strings.Index(visibleBody, "<style")
+		scriptStart := strings.Index(visibleBody, "<script")
+		start := styleStart
+		if start < 0 || (scriptStart >= 0 && scriptStart < start) {
+			start = scriptStart
+		}
+		if start < 0 {
+			break
+		}
+		end := strings.Index(visibleBody[start:], "</style>")
+		if scriptStart == start {
+			end = strings.Index(visibleBody[start:], "</script>")
+		}
+		if end < 0 {
+			break
+		}
+		visibleBody = visibleBody[:start] + visibleBody[start+end+len("</style>"):]
+	}
+	if strings.Contains(visibleBody, "<details") || strings.Contains(visibleBody, ">g<") || strings.Contains(visibleBody, ">c<") || strings.Contains(visibleBody, "Production ID") {
 		t.Fatal("default Overview exposed advanced or destructive details")
 	}
 	for _, tab := range []string{"advanced", "danger-zone"} {
@@ -843,7 +866,7 @@ func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
 	w = httptest.NewRecorder()
 	renderBotSettingsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db)
 	body = w.Body.String()
-	for _, required := range []string{"Connections", "Kitsu connection", "Discord Bot connection", "Not set"} {
+	for _, required := range []string{"Connections", "Kitsu connection", "Discord Bot connection", "Not configured"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("normal English Bot Connection surface is missing %q", required)
 		}
@@ -929,8 +952,11 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if strings.Contains(body, "Authentication:") || strings.Contains(body, "KitsuSync") || strings.Contains(body, "Hidden") {
 		t.Fatal("summary exposes redundant identity or secret metadata")
 	}
-	if strings.Contains(body, "configured-token") || strings.Contains(body, "Saved token is not displayed.") || !strings.Contains(body, "••••••••••••") {
+	if strings.Contains(body, "configured-token") || strings.Contains(body, "Saved token is not displayed.") {
 		t.Fatal("summary secret handling is incorrect")
+	}
+	if strings.Contains(body, ">Token<") || strings.Contains(body, ">Connection<") || strings.Contains(body, "ステータス") || strings.Contains(body, "トークン") {
+		t.Fatal("summary should use the service-level status without redundant state rows")
 	}
 	if strings.Contains(body, `connections-card-header"><div>`) || strings.Contains(body, `role="status">Connected</span></div><section`) {
 		t.Fatal("summary retained the redundant combined status header")
@@ -974,6 +1000,25 @@ func TestConnectedProductionRepairLinkAllowsExistingProductionPlan(t *testing.T)
 	}
 	if !strings.Contains(setupWizardURL(repairRequest, 4, project.KitsuProjectID, project.DiscordGuildID, false), "wizard_step=4") {
 		t.Fatal("repair mode did not preserve the plan step")
+	}
+}
+
+func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "language-production", Name: "Language Production", Language: "ja"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader("action=save_notification_language&project_id=language-production&notification_language=en"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	AdminProjectsHandler(db, "", "")(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "tab=notifications&msg=saved") {
+		t.Fatalf("language save did not redirect as saved: status=%d location=%s", response.Code, response.Header().Get("Location"))
+	}
+	updated := model.FindProjectByKitsuID(db, project.KitsuProjectID)
+	if updated == nil || updated.Language != "en" {
+		t.Fatalf("language save did not persist on the selected Production: %#v", updated)
 	}
 }
 

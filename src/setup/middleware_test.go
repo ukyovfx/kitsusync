@@ -5,15 +5,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"app/src/model"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func resetSessions() {
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	sessions = map[string]sessionData{}
+	sessionStoreDB = nil
+	sessionMu.Unlock()
 }
 
 func TestRequireSessionRedirectsWithoutCookie(t *testing.T) {
@@ -89,6 +95,41 @@ func TestSessionCookieUsesSecureForForwardedHTTPS(t *testing.T) {
 	}
 	if cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("expected lax same-site cookie, got %v", cookie.SameSite)
+	}
+}
+
+func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	token := newSessionToken("manager@example.com", "short-lived-kitsu-token", "manager", "/bot/admin")
+	sessionMu.Lock()
+	sessions = map[string]sessionData{}
+	sessionMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	if !validSession(token) {
+		t.Fatal("expected persisted session to remain valid after process cache reset")
+	}
+	session, ok := currentSessionData(req)
+	if !ok || session.Email != "manager@example.com" || session.Role != "manager" {
+		t.Fatalf("expected persisted identity to hydrate, got %+v, ok=%v", session, ok)
+	}
+	if session.KitsuToken != "" {
+		t.Fatal("persistent session must not hydrate a Kitsu token")
+	}
+
+	LogoutHandler()(httptest.NewRecorder(), req)
+	if validSession(token) {
+		t.Fatal("logout must invalidate the persisted session")
 	}
 }
 

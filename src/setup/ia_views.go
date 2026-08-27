@@ -2741,6 +2741,9 @@ func renderWizardPlanPolished(lang string, r *http.Request, project KitsuProject
 	}
 	categoryOptions += `<option value="__create__"` + map[bool]string{true: " selected", false: ""}[plan.CategoryID == "__create__"] + `>` + esc(t(lang, "新しいカテゴリを作成", "Create a new category")) + `</option>`
 	body := `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div>` + statusBadge + `</div><form method="GET" class="wizard-plan-form" action="` + esc(withLang("/bot/setup", r)) + `"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><input type="hidden" name="wizard_step" value="4"><input type="hidden" name="exclude_task_type_id" id="wizard-task-type-action"><label for="wizard-plan-category">` + esc(categoryLabel) + `</label><select id="wizard-plan-category" name="plan_category" onchange="this.form.submit()">` + categoryOptions + `</select><p class="field-help">` + esc(t(lang, "既存カテゴリを確認するか、新しい管理対象カテゴリを作成します。", "Choose an existing category or explicitly create a new managed category.")) + `</p><div class="table-wrap wizard-plan-table"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th><th></th></tr></thead><tbody data-wizard-plan-sort>` + rows.String() + `</tbody></table></div>`
+	notificationLanguage := normalizedProductionNotificationLanguage(r.URL.Query().Get("notification_language"))
+	languageControl := `<div class="wizard-notification-language"><label for="wizard-notification-language">` + esc(t(lang, "Discord通知の言語", "Discord notification language")) + `</label><select id="wizard-notification-language" name="notification_language"><option value="ja"` + selectedAttr(notificationLanguage == "ja") + `>` + esc(t(lang, "日本語", "Japanese")) + `</option><option value="en"` + selectedAttr(notificationLanguage == "en") + `>English</option></select><p class="field-help">` + esc(t(lang, "このProductionの今後のDiscord通知に使う言語です。管理画面の言語とは別に設定できます。", "Used for future Discord notifications for this Production. It is independent of the admin UI language.")) + `</p></div>`
+	body = strings.Replace(body, `<input type="hidden" name="exclude_task_type_id" id="wizard-task-type-action">`, `<input type="hidden" name="exclude_task_type_id" id="wizard-task-type-action">`+languageControl, 1)
 	addDisabled := excluded.Len() == 0
 	selectAttrs := ""
 	addAttrs := ""
@@ -2783,6 +2786,7 @@ func renderWizardPlanReview(lang string, r *http.Request, project KitsuProject, 
 	}
 	var hidden strings.Builder
 	hidden.WriteString(`<input type="hidden" name="category_id" value="` + esc(plan.CategoryID) + `">`)
+	hidden.WriteString(`<input type="hidden" name="notification_language" value="` + esc(normalizedProductionNotificationLanguage(r.FormValue("notification_language"))) + `">`)
 	for _, entry := range plan.Entries {
 		hidden.WriteString(`<input type="hidden" name="included_task_type_id" value="` + esc(entry.TaskTypeID) + `"><input type="hidden" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `"><input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `">`)
 	}
