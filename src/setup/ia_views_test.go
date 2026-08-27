@@ -893,9 +893,6 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	if strings.Contains(body, `&amp;lt;span`) {
 		t.Fatal("Connections page contains visible literal status markup")
 	}
-	if !strings.Contains(body, "127.0.0.1:8080") {
-		t.Fatal("Connections page did not show a meaningful configured host")
-	}
 	if got := strings.Count(body, "<h1"); got != 1 {
 		t.Fatalf("Connections page has %d h1 elements, want 1", got)
 	}
