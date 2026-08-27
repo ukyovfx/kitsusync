@@ -199,3 +199,12 @@ When rotating `DISCORD_BOT_TOKEN` or other secrets:
 2. Restart the container: `docker compose -f deploy/docker-compose.yml up -d`
 
 No rebuild is needed for env-only changes.
+
+## Host-loopback Kitsu with zero-input discovery
+
+When Kitsu/Zou is intentionally bound to host loopback and KitsuSync runs in
+Docker, the deployment layer must provide a narrowly scoped internal endpoint
+for the app and inject that validated URL as `KITSU_HOSTNAME`. KitsuSync itself
+does not change Zou, nginx, public/Tailscale listeners, or shared databases.
+Deployments that cannot provide a safe internal endpoint retain the validated
+operator-entered URL fallback on `/bot/login`.

@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
@@ -21,6 +20,7 @@ type KitsuHostDiscoveryResult struct {
 	RuntimeHost string
 	DisplayHost string
 	Status      string
+	Source      string
 }
 
 type kitsuHostProbe struct {
@@ -29,56 +29,50 @@ type kitsuHostProbe struct {
 }
 
 func KitsuHostForUI(db *gorm.DB) string {
-	if db != nil {
-		if saved := strings.TrimSpace(model.GetSetting(db, "kitsu.hostname")); saved != "" {
-			return saved
-		}
-	}
-	if configured := strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")); configured != "" {
-		return configured
-	}
 	if discovered := DiscoverKitsuHost(db); discovered.RuntimeHost != "" {
 		return discovered.RuntimeHost
 	}
-	return LocalDevelopmentKitsuHostname()
+	return ""
 }
 
 var (
 	discoveryMu       sync.Mutex
 	discoveryAt       time.Time
 	discoveryResult   KitsuHostDiscoveryResult
+	discoveryCacheKey string
 	discoveryInterval = 30 * time.Second
 )
 
-// DiscoverKitsuHost uses saved/configured values first. Only an explicit local
-// development profile enables the small bounded probe set.
+// DiscoverKitsuHost validates the explicit endpoint first, then a saved
+// endpoint, then the small set of known local deployment endpoints. It never
+// scans arbitrary hosts or returns a placeholder as a usable endpoint.
 func DiscoverKitsuHost(db *gorm.DB) KitsuHostDiscoveryResult {
+	if configured := strings.TrimSpace(osKitsuHostname()); configured != "" {
+		if normalized, err := validateKitsuEndpoint(configured); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
+			return KitsuHostDiscoveryResult{RuntimeHost: normalized, DisplayHost: safeKitsuHostDisplay(normalized), Status: authenticatedKitsu, Source: "explicit"}
+		}
+	}
 	if db != nil {
 		if saved := strings.TrimSpace(model.GetSetting(db, "kitsu.hostname")); saved != "" {
-			if normalized, err := validateKitsuEndpoint(saved); err == nil {
-				return KitsuHostDiscoveryResult{RuntimeHost: normalized, DisplayHost: safeKitsuHostDisplay(normalized), Status: authenticatedKitsu}
+			if normalized, err := validateKitsuEndpoint(saved); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
+				return KitsuHostDiscoveryResult{RuntimeHost: normalized, DisplayHost: safeKitsuHostDisplay(normalized), Status: authenticatedKitsu, Source: "persisted"}
 			}
 		}
-	}
-	if configured := strings.TrimSpace(osKitsuHostname()); configured != "" {
-		if normalized, err := validateKitsuEndpoint(configured); err == nil {
-			return KitsuHostDiscoveryResult{RuntimeHost: normalized, DisplayHost: safeKitsuHostDisplay(normalized), Status: authenticatedKitsu}
-		}
-	}
-	if strings.TrimSpace(LocalDevelopmentKitsuHostname()) == "" {
-		return KitsuHostDiscoveryResult{}
 	}
 
 	discoveryMu.Lock()
 	defer discoveryMu.Unlock()
-	if time.Since(discoveryAt) < discoveryInterval {
+	candidates := discoveryCandidates()
+	cacheKey := discoveryCacheFingerprint(candidates)
+	if time.Since(discoveryAt) < discoveryInterval && discoveryCacheKey == cacheKey {
 		return discoveryResult
 	}
 	discoveryAt = time.Now()
+	discoveryCacheKey = cacheKey
 	discoveryResult = KitsuHostDiscoveryResult{}
 	var found []kitsuHostProbe
-	for _, candidate := range discoveryCandidates() {
-		if probeKitsu(candidate.RuntimeHost) {
+	for _, candidate := range candidates {
+		if normalized, err := validateKitsuEndpoint(candidate.RuntimeHost); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
 			found = append(found, candidate)
 		}
 	}
@@ -87,6 +81,7 @@ func DiscoverKitsuHost(db *gorm.DB) KitsuHostDiscoveryResult {
 			RuntimeHost: found[0].RuntimeHost,
 			DisplayHost: found[0].DisplayHost,
 			Status:      hostReachableKitsu,
+			Source:      "local-discovered",
 		}
 	}
 	return discoveryResult
@@ -94,6 +89,12 @@ func DiscoverKitsuHost(db *gorm.DB) KitsuHostDiscoveryResult {
 
 func osKitsuHostname() string {
 	return strings.TrimSpace(os.Getenv("KITSU_HOSTNAME"))
+}
+
+func isPlaceholderKitsuEndpoint(raw string) bool {
+	host := strings.ToLower(strings.TrimSpace(raw))
+	return host == "http://your_kitsu_host" || host == "https://your_kitsu_host" ||
+		host == "http://your_kitsu_host/" || host == "https://your_kitsu_host/"
 }
 
 func localKitsuHostCandidates() []kitsuHostProbe {
@@ -105,9 +106,20 @@ func localKitsuHostCandidates() []kitsuHostProbe {
 
 var discoveryCandidates = localKitsuHostCandidates
 
+func discoveryCacheFingerprint(candidates []kitsuHostProbe) string {
+	parts := []string{
+		strings.TrimSpace(os.Getenv(localProfileEnv)),
+		strings.TrimSpace(os.Getenv("KITSUSYNC_LOCAL_KITSU_HOST")),
+	}
+	for _, candidate := range candidates {
+		parts = append(parts, candidate.RuntimeHost, candidate.DisplayHost)
+	}
+	return strings.Join(parts, "\x00")
+}
+
 func probeKitsu(host string) bool {
 	client := &http.Client{Timeout: 750 * time.Millisecond}
-	for _, endpoint := range []string{"/api/auth/authenticated", "/api/data/projects/"} {
+	for _, endpoint := range []string{"/api/", "/api/auth/authenticated", "/api/data/projects/"} {
 		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(host, "/")+endpoint, nil)
 		if err != nil {
 			return false
@@ -117,12 +129,11 @@ func probeKitsu(host string) bool {
 		if err != nil {
 			return false
 		}
-		var marker struct {
-			Error string `json:"error"`
-		}
-		_ = json.NewDecoder(resp.Body).Decode(&marker)
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
+		if endpoint == "/api/" && resp.StatusCode != http.StatusOK {
+			return false
+		}
+		if endpoint != "/api/" && resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
 			return false
 		}
 	}

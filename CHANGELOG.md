@@ -4,7 +4,19 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- The current v0.4.2 candidate is documented below; v0.4.0 and v0.4.1 remain historical.
+- The next release will be documented here; v0.4.0, v0.4.1, and v0.4.2 remain historical.
+
+## v0.4.3
+
+### Fixed
+
+- Fresh deployments no longer fall back to a placeholder Kitsu hostname during administrator login.
+- Kitsu endpoint resolution now validates explicit, saved, supported local, and operator-supplied endpoints in a deterministic order.
+
+### Changed
+
+- When supported local Kitsu discovery is unavailable, the fresh-login page provides a validated Kitsu base URL field and saves it only after successful manager/admin authentication.
+- Discovery diagnostics identify the safe endpoint source without exposing credentials or tokens.
 
 ## v0.4.2
 

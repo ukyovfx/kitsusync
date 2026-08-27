@@ -420,7 +420,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			}
 
 			_, adminToken, role, ok := CurrentSessionKitsuAuth(r)
-			if !ok || (role != "admin" && role != "manager") {
+			if !ok || !isStudioManagerOrHigher(role) {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 管理者 session を確認できませんでした。再ログインしてください。", "The Kitsu administrator session is unavailable. Sign in again.")))
 				return

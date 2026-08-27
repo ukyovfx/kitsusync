@@ -1,11 +1,11 @@
 # Setup Flow Reference
 
-This document describes the current operator-facing setup flow for KitsuSync v0.4.2.
+This document describes the current operator-facing setup flow for KitsuSync v0.4.3.
 
 The normal setup path is now:
 
 1. Start KitsuSync; missing runtime credentials enter setup-required mode instead of stopping the process
-2. Open `/bot/login`, enter the Kitsu URL when requested, and authenticate as a Kitsu manager/admin
+2. Open `/bot/login`. KitsuSync first checks configured, saved, and supported local Kitsu endpoints. If none is reachable, enter the Kitsu base URL shown on the login page, then authenticate as a Kitsu manager/admin
 3. Configure the dedicated Kitsu runtime connection in `/bot/setup`
 4. Configure Discord in `/bot/admin/bot`, then create or manage each Production's linked Discord Guild and Task Type channels in `/bot/admin/projects` (Connected Productions)
 5. Use `/bot/admin/projects` only for review/edit of existing project guild assignment
@@ -38,6 +38,10 @@ This is the only normal first-time setup path operators should follow.
 - `setup_required`: the Web UI and `/health` are available, Kitsu is disconnected, and polling/notifications are paused.
 - `configured`: the dedicated runtime credentials were validated and polling may run; this does not by itself mean Discord notifications are ready.
 - `degraded`: a refresh or temporary Kitsu connection attempt failed; the process and saved configuration remain available for recovery.
+
+### Kitsu endpoint selection
+
+KitsuSync resolves the Kitsu base URL in this order: explicit `KITSU_HOSTNAME`, a previously verified saved endpoint, supported local deployment endpoints, and finally a URL entered by the operator on the fresh-login page. Every candidate is checked as a Kitsu API before it is used. A manually entered URL is saved only after Kitsu login succeeds. Placeholder values are never used; if no endpoint can be verified, login remains blocked with an actionable error.
 
 The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. The runtime password is encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
 
@@ -119,4 +123,4 @@ Historical docs and older releases may reference:
 - Manual Setup
 - Setup Status
 
-Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.2.
+Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.3.
