@@ -180,7 +180,7 @@ func readinessViewFor(lang string, r *http.Request, readiness SharedBotRuntimeRe
 		view.ActionURL = withLang("/bot/admin/bot", r)
 		view.ActionLabel = t(lang, "接続設定", "Connection settings")
 	case ReadinessProductionRequired:
-		view.Label = t(lang, "接続待ち", "Waiting for connection")
+		view.Label = t(lang, "接続待ち", "Not connected")
 		view.Hint = t(lang, "接続済みプロダクションがありません。", "No connected Productions yet.")
 		view.ActionURL = withLang("/bot/setup", r)
 		view.ActionLabel = tr(lang, "ia.new_connection")
