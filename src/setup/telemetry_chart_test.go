@@ -247,16 +247,33 @@ func TestSystemStatusVerticalRhythmUsesExplicitHierarchyTokens(t *testing.T) {
 }
 
 func TestSparklineYAxisLabelsUseSharedPlotBoundAlignment(t *testing.T) {
+	graph := apiObservationLineGraphWithDomain(
+		[]APIObservation{{Duration: 15 * time.Millisecond}, {Duration: 0}},
+		"en",
+		telemetryWindow60Seconds,
+		observationYDomain{Lower: 0, Upper: 15},
+	)
+	labelsEnd := strings.Index(graph, `</div><svg class="api-sparkline"`)
+	if labelsEnd < 0 || strings.Count(graph[:labelsEnd], `class="api-sparkline-y-label `) != 2 {
+		t.Fatalf("external max/min labels are not rendered as the chart-row siblings: %s", graph)
+	}
+	if strings.Index(graph, `class="api-sparkline-y-labels"`) > strings.Index(graph, `<svg class="api-sparkline"`) {
+		t.Fatal("external labels must precede, not nest inside, the visible chart box")
+	}
 	for _, fragment := range []string{
 		`--sparkline-chart-box-top:0px;--sparkline-chart-box-bottom:104px`,
 		`.api-observation-details .api-sparkline{margin-top:0}`,
 		`.api-sparkline-y-labels{margin-top:0}`,
-		`.api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:translateY(-50%)}`,
-		`.api-sparkline-y-label-min{top:var(--sparkline-chart-box-bottom);transform:translateY(-50%)}`,
+		`.api-observation-details .api-sparkline-row{margin-top:var(--sparkline-label-safe-gap)}`,
+		`.api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:none}`,
+		`.api-sparkline-y-label-min{top:calc(var(--sparkline-chart-box-bottom) - 1em);bottom:auto;transform:none}`,
 	} {
 		if !strings.Contains(adminThemeCSS, fragment) {
 			t.Fatalf("sparkline label alignment contract is missing %q", fragment)
 		}
+	}
+	if strings.Contains(adminThemeCSS, `.api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:translateY(-50%)}`) || strings.Contains(adminThemeCSS, `.api-sparkline-y-label-min{top:var(--sparkline-chart-box-bottom);transform:translateY(-50%)}`) {
+		t.Fatal("sparkline labels must use visible chart-box edge alignment, not center alignment")
 	}
 	for _, obsolete := range []string{
 		"--sparkline-plot-top",

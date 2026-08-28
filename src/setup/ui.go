@@ -701,12 +701,13 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .wizard-plan-table .wizard-channel-control input.wizard-channel-input{flex:1 1 auto;width:100%;min-width:0;min-height:calc(var(--control-height-standard) - 2px);padding:10px 12px 10px 4px;border:0;border-radius:0;background:transparent;box-shadow:none}
   .wizard-plan-table .wizard-channel-control input.wizard-channel-input:focus{border:0;border-radius:0;box-shadow:none}
   .wizard-channel-control:has(.wizard-channel-input:disabled){opacity:.72;cursor:not-allowed}
-  /* Shared telemetry geometry: center external labels on the visible chart box. */
-  :root{--sparkline-chart-box-top:0px;--sparkline-chart-box-bottom:104px}
+  /* Shared telemetry geometry: attach external labels to the visible chart-box edges. */
+  :root{--sparkline-chart-box-top:0px;--sparkline-chart-box-bottom:104px;--sparkline-label-safe-gap:8px}
   .api-observation-details .api-sparkline{margin-top:0}
+  .api-observation-details .api-sparkline-row{margin-top:var(--sparkline-label-safe-gap)}
   .api-sparkline-y-labels{margin-top:0}
-  .api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:translateY(-50%)}
-  .api-sparkline-y-label-min{top:var(--sparkline-chart-box-bottom);transform:translateY(-50%)}
+  .api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:none}
+  .api-sparkline-y-label-min{top:calc(var(--sparkline-chart-box-bottom) - 1em);bottom:auto;transform:none}
 `
 
 func shellHeadExtras() string {
