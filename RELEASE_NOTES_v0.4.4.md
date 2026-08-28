@@ -23,4 +23,4 @@ v0.4.4 improves normal Discord notification cards and makes the notification lan
 - Existing `Project.Language` values remain supported; missing or unsupported values resolve deterministically to Japanese.
 - Assignment notification rendering is unchanged.
 - The existing startup migration creates the admin-session table when needed; existing settings and runtime secrets remain compatible.
-- Discord setup requires the `bot` OAuth2 scope plus `Manage Channels` and `Manage Webhooks`. Administrator and privileged Gateway Intents are not required.
+- Discord setup requires the `bot` OAuth2 scope plus `Manage Channels` and `Manage Webhooks`; Administrator is not required. Presence Intent and Message Content Intent remain off. Server Members Intent is required only when User Linking needs to enumerate Guild members.

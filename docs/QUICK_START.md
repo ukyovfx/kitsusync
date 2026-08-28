@@ -10,12 +10,12 @@ Before you begin, confirm you have:
 
 - [ ] Docker and Docker Compose installed on the server
 - [ ] Kitsu running and reachable from the server (test: `curl http://YOUR_KITSU_HOST/api/`)
-- [ ] Discord server where you are an administrator
+- [ ] Discord server where the bot can be granted the required permissions
 - [ ] Discord **Bot Token** — create one at [discord.com/developers/applications](https://discord.com/developers/applications) (Bot tab → Reset Token)
 - [ ] One or more Discord **Guild IDs** — enable Developer Mode in Discord settings, then right-click each target server → Copy Server ID
 - [ ] A Kitsu manager/admin account for the browser setup flow
 
-> **Bot permissions required:** Manage Channels, Manage Webhooks. Administrator is not required, and Presence Intent, Server Members Intent, and Message Content Intent should remain off.
+> **Bot permissions required:** Manage Channels and Manage Webhooks. Administrator is not required. Keep Presence Intent and Message Content Intent off. Enable Server Members Intent when using User Linking, because KitsuSync reads the Guild member list to offer Discord users for linking.
 > Generate the invite URL from OAuth2 → URL Generator with scope `bot` and those two permissions.
 
 ---

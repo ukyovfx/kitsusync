@@ -5,7 +5,7 @@ This guide walks through the complete setup of KitsuSync for a studio that alrea
 ## What You Need Before Starting
 
 - **Kitsu** running and reachable from the server
-- **Discord server** where you are an administrator
+- A **Discord server** where the bot can be granted the required permissions
 - A **server or VM** with Docker and Docker Compose installed
 - A **Kitsu account** with `manager` or `admin` role (for logging into KitsuSync)
 - A **dedicated Kitsu runtime account** (a bot/service account used for polling — see below)
@@ -30,7 +30,7 @@ KitsuSync needs a dedicated Kitsu account to poll for changes. This should be a 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create a new application, then go to the **Bot** tab.
 3. Click **Reset Token** and copy the bot token — save it securely.
-4. Under **Privileged Gateway Intents**, leave Presence Intent, Server Members Intent, and Message Content Intent turned off. KitsuSync does not require privileged gateway intents.
+4. Under **Privileged Gateway Intents**, leave Presence Intent and Message Content Intent turned off. Enable Server Members Intent if you will use User Linking; KitsuSync reads the Guild member list for that screen.
 5. Go to **OAuth2 → URL Generator**.
 6. Select scopes: `bot`
 7. Select the bot permissions `Manage Channels` and `Manage Webhooks`. Administrator is not required.

@@ -241,7 +241,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		body, status, err := botDo("GET", discordAPI+"/users/@me", nil, botToken)
 		if err != nil {
 			checks = append(checks, diagCheck{
-				Label:  "Discord bot valid",
+				Label:  t(lang, "Discord Botの有効性", "Discord bot valid"),
 				Status: "fail",
 				Detail: "Request failed: " + err.Error(),
 				Fix:    "Check network connectivity to discord.com.",
@@ -254,13 +254,13 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 			if json.Unmarshal(body, &result) == nil {
 				botUserID = result.ID
 				checks = append(checks, diagCheck{
-					Label:  "Discord bot valid",
+					Label:  t(lang, "Discord Botの有効性", "Discord bot valid"),
 					Status: "ok",
 					Detail: fmt.Sprintf("Bot user: %s (ID: %s)", result.Username, result.ID),
 				})
 			} else {
 				checks = append(checks, diagCheck{
-					Label:  "Discord bot valid",
+					Label:  t(lang, "Discord Botの有効性", "Discord bot valid"),
 					Status: "ok",
 					Detail: "Bot token accepted.",
 				})
@@ -270,12 +270,12 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 			checks = append(checks, diagCheck{
 				Label:  "Discord bot valid",
 				Status: "fail",
-				Detail: "Token rejected (HTTP 401 Unauthorized).",
+				Detail: t(lang, "トークンが拒否されました（HTTP 401 Unauthorized）。", "Token rejected (HTTP 401 Unauthorized)."),
 				Fix:    botSettingsFix,
 			})
 		} else {
 			checks = append(checks, diagCheck{
-				Label:  "Discord bot valid",
+				Label:  t(lang, "Discord Botの有効性", "Discord bot valid"),
 				Status: "warn",
 				Detail: fmt.Sprintf("Unexpected response: HTTP %d.", status),
 				Fix:    "Check Discord API status at discordstatus.com.",
@@ -326,7 +326,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 				checks = append(checks, diagCheck{
 					Label:  "Discord guild accessible",
 					Status: "fail",
-					Detail: "HTTP 403 - bot is not a member of this guild.",
+					Detail: t(lang, "HTTP 403 - Botがこのサーバーに参加していません。", "HTTP 403 - bot is not a member of this guild."),
 					Fix:    "Invite the bot to your server using the OAuth2 URL from the Discord Developer Portal. Required scopes: bot. Required permissions: Manage Channels, Manage Webhooks.",
 				})
 			} else if status == 404 {
@@ -361,7 +361,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 				checks = append(checks, diagCheck{
 					Label:  "Discord permissions (channels)",
 					Status: "fail",
-					Detail: "HTTP 403 - bot cannot list channels.",
+					Detail: t(lang, "HTTP 403 - Botはチャンネル一覧を取得できません。", "HTTP 403 - bot cannot list channels."),
 					Fix:    "In Discord Developer Portal -> OAuth2, add Manage Channels and Manage Webhooks, then re-invite the bot if needed.",
 				})
 			} else {

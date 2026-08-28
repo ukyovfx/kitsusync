@@ -18,7 +18,7 @@ All notable changes to this project should be recorded here.
 
 - Normal notification cards use Kitsu status colors as their embed accent, keep Task Type as plain text, and omit the duplicate Status metadata field.
 - WFA mentions the configured Checker, RETAKE mentions the assignee, and DONE remains unmentioned by default; recipient deduplication and AllowedMentions remain bounded and exact.
-- Discord setup requires the `bot` OAuth2 scope plus `Manage Channels` and `Manage Webhooks`; privileged Gateway Intents remain off.
+- Discord setup requires the `bot` OAuth2 scope plus `Manage Channels` and `Manage Webhooks`; Administrator is not required. Presence Intent and Message Content Intent remain off, while Server Members Intent is required when User Linking enumerates Guild members.
 
 ## v0.4.3
 

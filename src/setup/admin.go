@@ -3065,7 +3065,7 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		`<div class="connections-edit-summary"><p class="hint">` + esc(statusHint) + `</p></div>` +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot API Token", "Kitsu Bot API token")) + `</label><input id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help"` + func() string {
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label><input id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help"` + func() string {
 		if kitsuConfigured {
 			return ` hidden style="display:none"`
 		}
@@ -3082,7 +3082,7 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		return `<button type="button" class="btn-ghost" data-reveal-secret="kitsu-bot-token" data-recheck-button="kitsu-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button>`
 	}() + `</div></form></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label for="discord-bot-token">Discord Bot Token</label><input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password" aria-describedby="discord-token-help"` + func() string {
+		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_discord"><div class="connection-form-field"><label for="discord-bot-token">` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</label><input id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password" aria-describedby="discord-token-help"` + func() string {
 		if discordConfigured {
 			return ` hidden style="display:none"`
 		}
@@ -4070,7 +4070,7 @@ func fallbackText(value, fallback string) string {
 func adminPage(lang, title string, r *http.Request, body string) string {
 	message := ""
 	if r != nil && r.URL.Query().Get("msg") != "" {
-		message = `<div class="toast glass">` + t(lang, "保存しました。", "Saved.") + `</div>`
+		message = `<div class="toast glass" role="status" aria-live="polite">` + t(lang, "保存しました。", "Saved.") + `</div>`
 	}
 	nav := `<div class="nav-card glass">` + iaNav(lang, r) + `</div>`
 	pageHeading := ""

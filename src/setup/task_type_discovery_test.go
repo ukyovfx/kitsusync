@@ -201,6 +201,24 @@ func TestWizardPlanPolishedRowsExposeExclusionWithoutPermanentReorderControls(t 
 	}
 }
 
+func TestWizardChannelPrefixStaysVisualAndOutsideFormValue(t *testing.T) {
+	r := httptest.NewRequest("GET", "/bot/setup?lang=en", nil)
+	plan := BuildTaskTypeChannelPlan("production-1", "guild-1", []kitsu.TaskType{{ID: "tt-animation", Name: "Animation"}}, nil)
+	body := renderWizardPlanPolished("en", r, KitsuProject{ID: "production-1", Name: "Example Production"}, "production-1", "guild-1", []kitsu.TaskType{{ID: "tt-animation", Name: "Animation"}}, plan)
+	if !strings.Contains(body, `class="wizard-channel-control"><span class="wizard-channel-prefix" aria-hidden="true">#</span><input`) {
+		t.Fatal("channel prefix is not attached to the input control")
+	}
+	if strings.Contains(body, `class="wizard-channel-prefix">#</span><input`) {
+		t.Fatal("standalone channel prefix remains")
+	}
+	if !strings.Contains(body, `name="channel_name_tt-animation" value="animation"`) {
+		t.Fatal("channel form value was changed or lost")
+	}
+	if !strings.Contains(adminThemeCSS, `.wizard-channel-control:focus-within`) || !strings.Contains(adminThemeCSS, `.wizard-plan-table .wizard-channel-control input.wizard-channel-input:focus{border:0;border-radius:0;box-shadow:none}`) {
+		t.Fatal("combined channel control focus contract is missing")
+	}
+}
+
 func TestWizardPlanPolishedAlwaysShowsAddTaskTypeControl(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/setup?lang=en", nil)
 	all := []kitsu.TaskType{{ID: "tt-1", Name: "Concept"}, {ID: "tt-2", Name: "Modeling"}}

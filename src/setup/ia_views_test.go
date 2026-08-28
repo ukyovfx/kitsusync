@@ -60,6 +60,44 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
+func TestSystemStatusUsesCompactHealthySummaryAndOperationalRows(t *testing.T) {
+	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Details"}
+	rendered := renderPipelineHealthItem("en", item, 0)
+	if strings.Contains(rendered, `class="field-help"`) {
+		t.Fatal("healthy operational row should not repeat a redundant explanation")
+	}
+	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
+		t.Fatal("operational row lost its compact structure")
+	}
+	for _, want := range []string{
+		`class="pipeline-health-details-content"`,
+		`class="details-label-collapsed">Details ▾</span>`,
+		`class="details-label-expanded">Hide details ▴</span>`,
+		`aria-expanded="false"`,
+		`aria-controls="pipeline-health-details-0"`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("operational row missing geometry/detail contract %q", want)
+		}
+	}
+	if !strings.Contains(rendered, `class="pipeline-health-details-toggle" type="button"`) {
+		t.Fatal("operational row is missing its keyboard disclosure button")
+	}
+
+	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
+	body := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{APIObservations: map[string][]APIObservation{"kitsu": {{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}, "discord": {{At: time.Now(), Duration: 12 * time.Millisecond, Success: true}}}}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
+	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, `>System</span>`) {
+		t.Fatal("healthy system status should not repeat a redundant aggregate summary")
+	}
+	degraded := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{LastPollErr: "poll failed"}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
+	if !strings.Contains(degraded, `class="system-overall-summary"`) || !strings.Contains(degraded, `>System</span>`) {
+		t.Fatal("degraded system status should retain an actionable aggregate summary")
+	}
+	if strings.Contains(body, "Recent runtime observations are healthy.") || strings.Contains(body, "Overall system health") {
+		t.Fatal("healthy overall state retains redundant explanatory copy")
+	}
+}
+
 func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	globalTaskTypeCalls := 0
 	personCalls := 0
@@ -219,8 +257,14 @@ func TestSystemStatusUsesOneAlignedReadinessGrid(t *testing.T) {
 	if got := strings.Count(body, `class="pipeline-health-item"`); got != 4 {
 		t.Fatalf("System Status rendered %d internal pipeline items, want 4", got)
 	}
-	if !strings.Contains(body, "Metrics that are not available are shown as unconfirmed.") {
-		t.Fatal("System Status did not disclose unavailable metrics")
+	for _, redundant := range []string{
+		"Shows real response times in chronological order.",
+		"Review each notification stage. Metrics that are not available are shown as unconfirmed.",
+		"Recent failure and recovery records.",
+	} {
+		if strings.Contains(body, redundant) {
+			t.Fatalf("System Status retained redundant helper copy %q", redundant)
+		}
 	}
 	if strings.Contains(body, "Overall problem:") || strings.Contains(body, "Next required action:") {
 		t.Fatal("System Status rendered the legacy duplicated guidance")
@@ -1369,8 +1413,8 @@ func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 	if strings.Contains(body, `dashboard-menu-icon`) || strings.Contains(body, `>1<`) || strings.Contains(body, `>2<`) {
 		t.Fatal("dashboard management cards contain numeric indicators")
 	}
-	if !strings.Contains(body, "Connect a Kitsu Production to a Discord server.") {
-		t.Fatal("dashboard CTA is missing its concise supporting description")
+	if strings.Contains(body, "Connect a Kitsu Production to a Discord server.") || strings.Contains(body, "Use Setup to start a new Production connection.") {
+		t.Fatal("dashboard CTA contains redundant supporting copy")
 	}
 	if strings.Count(body, `class="dashboard-status-chip warning">Unavailable<`) != 1 {
 		t.Fatal("system status card should expose one distinct notification state")
@@ -1401,14 +1445,14 @@ func TestStatusPolishUsesFixedSecretMaskAndRealSparkline(t *testing.T) {
 	}
 	items := []APIObservation{{Duration: 10 * time.Millisecond, Success: true}, {Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
-	if strings.Count(graph, "<rect") != 2 || !strings.Contains(graph, "bar-success") || !strings.Contains(graph, "bar-failure") || strings.Contains(graph, "<polyline") {
-		t.Fatal("bar graph did not reflect the recorded observations")
+	if strings.Contains(graph, "<circle") || !strings.Contains(graph, `class="telemetry-line"`) || strings.Contains(graph, "<rect") || strings.Contains(graph, "<polyline") {
+		t.Fatal("line graph did not reflect the recorded observations")
 	}
 	if strings.Contains(apiObservationGraph(nil), "polyline") {
 		t.Fatal("empty telemetry should not render a fake graph")
 	}
-	if strings.Count(apiObservationGraph([]APIObservation{{Duration: 10 * time.Millisecond}}), "<rect") != 1 {
-		t.Fatal("a single telemetry sample should render one bar")
+	if strings.Contains(apiObservationGraph([]APIObservation{{Duration: 10 * time.Millisecond}}), "<circle") {
+		t.Fatal("a single telemetry sample should not render a point marker")
 	}
 }
 
@@ -1417,7 +1461,7 @@ func TestDashboardRendersPrimaryContentBeforeManagementMenu(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
 	body := w.Body.String()
-	positions := []string{`<section class="dashboard-intro">`, `class="dashboard-summary-grid"`, `dashboard-queue"`, `dashboard-cta"`, `dashboard-menu"`}
+	positions := []string{`<section class="dashboard-intro">`, `dashboard-cta"`, `dashboard-queue"`, `class="dashboard-summary-grid"`, `dashboard-menu"`}
 	last := -1
 	for _, marker := range positions {
 		pos := strings.Index(body[last+1:], marker)
@@ -1465,13 +1509,36 @@ func TestConnectionsUseSharedActionSpacingToken(t *testing.T) {
 	}
 }
 
+func TestAdminFormSizingLeavesCheckboxesAndRadiosCompact(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `input:not([type="checkbox"]):not([type="radio"]),select{min-height:var(--control-height-standard);}`) {
+		t.Fatal("text input sizing does not exclude checkbox and radio controls")
+	}
+	if strings.Contains(adminThemeCSS, `input,select{min-height:44px;}`) {
+		t.Fatal("checkboxes and radios still inherit the tall generic input rule")
+	}
+}
+
+func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
+	for _, fragment := range []string{
+		`@media(max-width:760px){`,
+		`.mobile-nav{border-radius:var(--radius-md);overflow:visible}`,
+		`.mobile-nav[open]>.nav-card{margin-top:0;padding:4px 6px 8px;border:0;border-radius:0;background:transparent}`,
+		`.mobile-nav .nav-chip{border-radius:var(--radius-sm)}`,
+		`.mobile-nav .nav-chip.active,.mobile-nav .nav-chip[aria-current="page"]{border-radius:var(--radius-sm)}`,
+	} {
+		if !strings.Contains(adminThemeCSS, fragment) {
+			t.Fatalf("mobile navigation radius contract is missing %q", fragment)
+		}
+	}
+}
+
 func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Count(body, `<details class="pipeline-health-details">`) < 4 {
-		t.Fatalf("system status details are not expandable: %d", strings.Count(body, `<details class="pipeline-health-details">`))
+	if strings.Count(body, `class="pipeline-health-details-toggle"`) < 4 || strings.Count(body, `aria-expanded="false"`) < 4 {
+		t.Fatalf("system status details are not expandable: %d", strings.Count(body, `class="pipeline-health-details-toggle"`))
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
@@ -1479,17 +1546,14 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `window.setInterval(refresh,interval)`) {
 		t.Fatal("system status does not include the bounded snapshot interval")
 	}
-	if !strings.Contains(body, `new Date(item.at).getTime()`) || !strings.Contains(body, `windowMs=select.value`) {
-		t.Fatal("system status graph does not use timestamp-based positions")
+	if strings.Contains(body, `new Date(item.at).getTime()`) || strings.Contains(body, `windowMs=select.value`) || !strings.Contains(body, `function(item,index)`) {
+		t.Fatal("system status graph does not use equal sample positions")
 	}
-	if !strings.Contains(body, `function serviceScale(name,items)`) || !strings.Contains(body, `updateCard("kitsu",observations.kitsu||[],serviceScale("kitsu",observations.kitsu||[]))`) {
+	if !strings.Contains(body, `function stableDomain(name,items)`) || !strings.Contains(body, `domain=stableDomain(service,items)`) {
 		t.Fatal("system status refresh does not apply independent service Y scales")
 	}
-	if !strings.Contains(body, `30s`) {
-		t.Fatal("system status refresh is missing compact 30s label")
-	}
-	if !strings.Contains(body, `2m30s`) {
-		t.Fatal("system status refresh is missing compact 2m30s label")
+	if strings.Contains(body, `30s`) || strings.Contains(body, `2m30s`) || strings.Contains(body, `class='chart-time-label'`) {
+		t.Fatal("system status refresh retains removed time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
@@ -1497,11 +1561,11 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `.system-status-sections .api-observation-meta{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
-	if strings.Contains(body, `x1='2' y1='8' x2='28' y2='82`) || !strings.Contains(body, `x1='54' y1='8' x2='54' y2='82`) {
-		t.Fatal("system status refresh contains a diagonal or missing vertical axis")
+	if strings.Contains(body, `class='chart-axis'`) || strings.Contains(body, `class="chart-axis"`) {
+		t.Fatal("system status refresh retains axis chrome")
 	}
-	if !strings.Contains(body, `viewBox='0 0 466 104'`) || !strings.Contains(body, `x1='54' y1='82' x2='464' y2='82'`) {
-		t.Fatal("system status refresh does not use the full-width chart viewBox")
+	if !strings.Contains(body, `telemetry-line`) || strings.Contains(body, `telemetry-point`) {
+		t.Fatal("system status refresh does not use the marker-free line chart geometry")
 	}
 	if !strings.Contains(body, `class="api-observation-details"`) {
 		t.Fatal("system status cards do not reserve shared detail geometry")
@@ -1514,6 +1578,18 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-telemetry-meta`) || !strings.Contains(body, `Last updated`) {
 		t.Fatal("normal API card is missing the last-updated metadata")
+	}
+}
+
+func TestSystemStatusDetailsToggleIsBidirectional(t *testing.T) {
+	script := systemStatusDetailsScript()
+	for _, fragment := range []string{`aria-expanded`, `aria-controls`, `panel.hidden=expanded`, `toggle.setAttribute("aria-expanded",String(!expanded))`} {
+		if !strings.Contains(script, fragment) {
+			t.Fatalf("details toggle is missing %q", fragment)
+		}
+	}
+	if strings.Contains(script, `querySelector(".details-label-collapsed").hidden`) || strings.Contains(script, `querySelector(".details-label-expanded").hidden`) {
+		t.Fatal("details labels change intrinsic button geometry during toggling")
 	}
 }
 

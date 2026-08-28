@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,7 +30,14 @@ func iaNav(lang string, r *http.Request) string {
 	}
 	var b strings.Builder
 	for _, item := range items {
-		b.WriteString(`<a class="nav-chip" href="` + esc(withLang(item.path, r)) + `">` + esc(tr(lang, item.key)) + `</a>`)
+		active := r != nil && r.URL != nil && r.URL.Path == item.path
+		className := "nav-chip"
+		current := ""
+		if active {
+			className += " active"
+			current = ` aria-current="page"`
+		}
+		b.WriteString(`<a class="` + className + `" href="` + esc(withLang(item.path, r)) + `"` + current + `>` + esc(tr(lang, item.key)) + `</a>`)
 	}
 	return b.String()
 }
@@ -315,10 +323,19 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		quickActions = `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(tr(lang, "ia.production_list")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a>`
 	}
 	dashboardMenu := renderDashboardMenuRefined(lang, r, db, projects, attentionCount, readiness)
+	dashboardAction := ""
+	if start := strings.Index(dashboardMenu, `<section class="dashboard-cta"`); start >= 0 {
+		if end := strings.Index(dashboardMenu[start:], `</section>`); end >= 0 {
+			end += start + len(`</section>`)
+			dashboardAction = dashboardMenu[start:end]
+			dashboardMenu = dashboardMenu[:start] + dashboardMenu[end:]
+		}
+	}
 	body := `<div class="section-stack">` +
 		`<section class="dashboard-intro"><div><h1>` + esc(tr(lang, "ia.dashboard")) + `</h1><p class="hint">` + esc(t(lang, "KitsuSyncの接続状態と、対応が必要な項目を確認できます。", "Review KitsuSync connection state and items that need attention.")) + `</p></div><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin", r)) + `">` + esc(t(lang, "状態を更新", "Refresh status")) + `</a></div></section>` +
-		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "システム状態", "System status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
+		dashboardAction +
 		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なプロダクション", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
+		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "システム状態", "System status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
 		dashboardMenu +
 		`<div class="dashboard-lower-grid"><section class="section-card glass" aria-labelledby="dashboard-activity"><h2 id="dashboard-activity">` + esc(tr(lang, "ia.activity")) + `</h2><div class="activity-columns" aria-hidden="true"><span>` + esc(t(lang, "日時", "Date and time")) + `</span><span>` + esc(t(lang, "操作", "Action")) + `</span><span>` + esc(t(lang, "Production", "Production")) + `</span><span>` + esc(t(lang, "結果", "Result")) + `</span></div><ul class="activity-list" role="log">` + activityRows.String() + `</ul></section><div class="dashboard-side-stack"><section class="section-card glass" aria-labelledby="dashboard-system"><h2 id="dashboard-system">` + esc(t(lang, "通知システム", "Notification system")) + `</h2><div class="dashboard-status-list">` + dashboardStatusRow(t(lang, "Kitsu接続", "Kitsu connection"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured)) + dashboardStatusRow(t(lang, "Discord Bot", "Discord Bot"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], botState) + dashboardStatusRow(t(lang, "通知状態", "Notification state"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady)) + `</div><p class="field-help" role="status">` + esc(statusExplanation) + `</p>` + statusAction + `</section><section class="section-card glass dashboard-quick" aria-labelledby="dashboard-quick"><h2 id="dashboard-quick">` + esc(t(lang, "クイック操作", "Quick actions")) + `</h2><div class="button-row">` + ifNonEmpty(quickActions, quickActions) + `</div></section></div></div>`
 	body = replaceDashboardConnectedCount(body, len(projects), connectedProductionCount(projects))
@@ -341,56 +358,75 @@ func replaceSystemStatusRefreshScript(body string) string {
 		return body
 	}
 	end := start + relEnd + len(`</script>`)
-	return body[:start] + systemStatusRefreshScriptReadable() + body[end:]
+	script := systemStatusRefreshScriptReadable()
+	script = strings.ReplaceAll(script, "function updateCard", sparklineInteractionScript()+"Array.prototype.forEach.call(document.querySelectorAll(\"[data-telemetry-card]\"),function(card){bindSparkline(card,[])});function updateCard")
+	script = strings.ReplaceAll(script, `+graph(items,maxValue)}function refresh`, `+graph(items,maxValue);bindSparkline(card,items)}function refresh`)
+	script = strings.ReplaceAll(script, `+graph(items,domain)}function refresh`, `+graph(items,domain);bindSparkline(card,items)}function refresh`)
+	script = strings.NewReplacer(
+		"width=466,height=104,left=54,right=2", "width=394,height=104,left=0,right=2",
+		`x1="54"`, `x1="0"`,
+		`x="48"`, `x="66"`,
+		`var mid=(domain.lower+domain.upper)/2;`, "",
+		`<text class="chart-tick" text-anchor="end" x="66" y="48">"+tick(mid)+"</text>`, "",
+		`<text class="chart-tick" text-anchor="end" x="66" y="12">"+tick(domain.upper)+"</text>`, "",
+		`<text class="chart-tick" text-anchor="end" x="66" y="84">"+tick(domain.lower)+"</text>`, "",
+		`return "<svg class=\"api-sparkline\" viewBox=\"0 0 466 104\" role=\"img\" aria-label=\""+items.length+" observations, "+tick(domain.lower)+" to "+tick(domain.upper)+"\"><line`,
+		`return "<div class=\"api-sparkline-row\"><div class=\"api-sparkline-y-labels\" aria-hidden=\"true\"><span class=\"api-sparkline-y-label api-sparkline-y-label-max\">"+tick(domain.upper)+"</span><span class=\"api-sparkline-y-label api-sparkline-y-label-min\">"+tick(domain.lower)+"</span></div><svg class=\"api-sparkline\" viewBox=\"0 0 394 104\" role=\"img\" aria-label=\""+items.length+" observations, "+tick(domain.lower)+" to "+tick(domain.upper)+"\"><line`,
+		`</path></svg>"`, `</path></svg></div>"`,
+	).Replace(script)
+	// The refresh template is embedded JavaScript, so keep both quote forms
+	// normalized before the external label-column rewrite.
+	for _, replacement := range []struct{ old, new string }{
+		{`x1=\"54\"`, `x1=\"0\"`},
+		{`x2=\"464\"`, `x2=\"392\"`},
+		{`x1="54"`, `x1="0"`},
+		{`x2="464"`, `x2="392"`},
+		{`x=\"48\"`, `x=\"66\"`},
+		{`x="48"`, `x="66"`},
+		{`var mid=(domain.lower+domain.upper)/2;`, ""},
+		{`<text class=\"chart-tick\" text-anchor=\"end\" x=\"66\" y=\"48\">\"+tick(mid)+\"</text>`, ""},
+		{`<text class=\"chart-tick\" text-anchor=\"end\" x=\"66\" y=\"12\">\"+tick(domain.upper)+\"</text>`, ""},
+		{`<text class=\"chart-tick\" text-anchor=\"end\" x=\"66\" y=\"84\">\"+tick(domain.lower)+\"</text>`, ""},
+		{`<text class="chart-tick" text-anchor="end" x="66" y="48">"+tick(mid)+"</text>`, ""},
+		{`<text class="chart-tick" text-anchor="end" x="66" y="12">"+tick(domain.upper)+"</text>`, ""},
+		{`<text class="chart-tick" text-anchor="end" x="66" y="84">"+tick(domain.lower)+"</text>`, ""},
+	} {
+		script = strings.ReplaceAll(script, replacement.old, replacement.new)
+	}
+	for {
+		start := strings.Index(script, `<text class=\"chart-tick\"`)
+		if start < 0 {
+			start = strings.Index(script, `<text class="chart-tick"`)
+		}
+		if start < 0 {
+			break
+		}
+		relEnd := strings.Index(script[start:], `</text>`)
+		if relEnd < 0 {
+			break
+		}
+		script = script[:start] + script[start+relEnd+len(`</text>`):]
+	}
+	script = strings.ReplaceAll(script, "var mid=(domain.lower+domain.upper)/2;", "")
+	return body[:start] + script + body[end:]
 }
 
-func systemStatusRefreshScript() string {
-	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,timer,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function graph(items){if(!items.length){return ""}var width=320,height=104,left=42,right=8,top=8,bottom=82,windowMs=select.value==="5m"?300000:60000,now=Date.now(),max=1,positions=[];items.forEach(function(item){max=Math.max(max,Number(item.duration_ms)||0);var ratio=1-(now-new Date(item.at).getTime())/windowMs;ratio=Math.max(0,Math.min(1,ratio));positions.push(left+ratio*(width-left-right))});var bars="";items.forEach(function(item,i){var bar=8;if(i>0)bar=Math.min(bar,positions[i]-positions[i-1]-2);if(i+1<items.length)bar=Math.min(bar,positions[i+1]-positions[i]-2);bar=Math.max(2,bar);var value=Number(item.duration_ms)||0,h=Math.max(2,(bottom-top)*value/max),x=Math.max(left,Math.min(width-right-bar,positions[i]-bar/2)),cls=item.success?"bar-success":"bar-failure";bars+="<rect class=\""+cls+"\" x=\""+x.toFixed(1)+"\" y=\""+(bottom-h).toFixed(1)+"\" width=\""+bar.toFixed(1)+"\" height=\""+h.toFixed(1)+"\" rx=\"2\"><title>"+value+" ms</title></rect>"});var label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds");return "<svg class=\"api-sparkline api-bar-chart\" viewBox=\"0 0 320 104\" role=\"img\" aria-label=\""+items.length+" observations, "+label+"\"><line class=\"chart-axis\" x1=\"42\" y1=\"82\" x2=\"312\" y2=\"82\"></line><line class=\"chart-axis\" x1=\"42\" y1=\"8\" x2=\"42\" y2=\"82\"></line><text class=\"chart-axis-label\" x=\"2\" y=\"12\">"+text("応答時間 (ms)","Response time (ms)")+"</text><text class=\"chart-tick\" x=\"3\" y=\"84\">0</text><text class=\"chart-tick\" x=\"3\" y=\"12\">"+Math.round(max)+"</text>"+bars+"<text class=\"chart-time-label\" x=\"42\" y=\"100\">"+label+"</text><text class=\"chart-time-label\" x=\"270\" y=\"100\">"+text("今","Now")+"</text></svg>"}function setLive(value){if(live){live.textContent=value}}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds");status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+value+" ms</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+items.length+" / 20 "+text("観測","observations")+" · "+label+" · "+text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()+"</span></div>"+graph(items)}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")};return response.json()}).then(function(payload){updateCard("kitsu",payload.observations.kitsu||[]);updateCard("discord",payload.observations.discord||[]);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});refresh()})();</script>`
+func sparklineInteractionScript() string {
+	return `function bindSparkline(card,items){var svg=card&&card.querySelector(".api-sparkline");if(!svg){return}if(!items||!items.length){var values=(svg.getAttribute("data-sparkline-values")||"").split(",").filter(Boolean),times=(svg.getAttribute("data-sparkline-times")||"").split(",");items=values.map(function(value,index){return {duration_ms:Number(value)||0,at:times[index]||""}})}if(!items.length){return}var ns="http://www.w3.org/2000/svg",left=0,right=392,top=8,bottom=82,plotWidth=right-left,selected=-1,originalLabel=svg.getAttribute("aria-label")||"";svg.setAttribute("tabindex","0");svg.setAttribute("focusable","true");var overlay=document.createElementNS(ns,"rect");overlay.setAttribute("x",String(left));overlay.setAttribute("y",String(top));overlay.setAttribute("width",String(plotWidth));overlay.setAttribute("height",String(bottom-top));overlay.setAttribute("fill","transparent");overlay.setAttribute("data-sparkline-hit-area","true");overlay.style.cursor="crosshair";var indicator=document.createElementNS(ns,"g"),guide=document.createElementNS(ns,"line"),marker=document.createElementNS(ns,"circle"),tooltip=document.createElementNS(ns,"g"),tipBackground=document.createElementNS(ns,"rect"),tipText=document.createElementNS(ns,"text");indicator.setAttribute("data-sparkline-hover-indicator","true");guide.setAttribute("class","sparkline-hover-guide");guide.setAttribute("y1",String(top));guide.setAttribute("y2",String(bottom));marker.setAttribute("class","sparkline-hover-marker");marker.setAttribute("r","3");tooltip.setAttribute("data-sparkline-tooltip","true");tipBackground.setAttribute("class","sparkline-tooltip-background");tipText.setAttribute("class","sparkline-tooltip-text");tipText.setAttribute("y","24");tooltip.appendChild(tipBackground);tooltip.appendChild(tipText);indicator.appendChild(guide);indicator.appendChild(marker);svg.appendChild(overlay);svg.appendChild(indicator);svg.appendChild(tooltip);indicator.style.display="none";tooltip.style.display="none";function xFor(index){return items.length===1?left+plotWidth/2:left+index*plotWidth/(items.length-1)}function inspect(index){selected=Math.max(0,Math.min(items.length-1,index));var item=items[selected],x=xFor(selected),value=Number(item.duration_ms)||0,time=item.at?new Date(item.at).toLocaleTimeString():"",label=value+" ms"+(time?"  "+time:"");guide.setAttribute("x1",x.toFixed(1));guide.setAttribute("x2",x.toFixed(1));marker.setAttribute("cx",x.toFixed(1));var tooltipWidth=Math.max(58,label.length*6.2+12),tooltipX=x>left+plotWidth/2?Math.max(left,x-tooltipWidth-8):Math.min(right-tooltipWidth,x+8);tipBackground.setAttribute("x",tooltipX.toFixed(1));tipBackground.setAttribute("y","8");tipBackground.setAttribute("width",tooltipWidth.toFixed(1));tipBackground.setAttribute("height","24");tipText.setAttribute("x",(tooltipX+6).toFixed(1));tipText.textContent=label;indicator.style.display="block";tooltip.style.display="block";svg.setAttribute("aria-label",originalLabel+", "+label)}function hide(){selected=-1;indicator.style.display="none";tooltip.style.display="none";svg.setAttribute("aria-label",originalLabel)}function nearest(event){var rect=svg.getBoundingClientRect(),x=(event.clientX-rect.left)/rect.width*394,ratio=(x-left)/plotWidth;inspect(Math.round(Math.max(0,Math.min(1,ratio))*(items.length-1)))}overlay.addEventListener("pointermove",nearest);overlay.addEventListener("pointerleave",hide);svg.addEventListener("keydown",function(event){if(event.key!=="ArrowLeft"&&event.key!=="ArrowRight"){return}event.preventDefault();if(selected<0){selected=event.key==="ArrowLeft"?items.length-1:0}else{selected+=event.key==="ArrowLeft"?-1:1}inspect(selected)});}`
 }
 
-func systemStatusRefreshScriptSharedScale() string {
-	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,timer,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function scale(value){for(var i=0,values=[10,25,50,100,250,500,1000];i<values.length;i++){if(value<=values[i]){return values[i]}}return Math.ceil(value/100)*100}function graph(items,maxValue){if(!items.length){return ""}var width=320,height=104,left=42,right=8,top=8,bottom=82,windowMs=select.value==="5m"?300000:60000,now=Date.now(),positions=[];items.forEach(function(item){var ratio=1-(now-new Date(item.at).getTime())/windowMs;ratio=Math.max(0,Math.min(1,ratio));positions.push(left+ratio*(width-left-right))});var bars="";items.forEach(function(item,i){var bar=8;if(i>0){bar=Math.min(bar,positions[i]-positions[i-1]-2)}if(i+1<items.length){bar=Math.min(bar,positions[i+1]-positions[i]-2)}bar=Math.max(2,bar);var value=Number(item.duration_ms)||0,h=Math.max(2,(bottom-top)*value/maxValue),x=Math.max(left,Math.min(width-right-bar,positions[i]-bar/2)),cls=item.success?"bar-success":"bar-failure";bars+="<rect class=\""+cls+"\" x=\""+x.toFixed(1)+"\" y=\""+(bottom-h).toFixed(1)+"\" width=\""+bar.toFixed(1)+"\" height=\""+h.toFixed(1)+"\" rx=\"2\"><title>"+value+" ms</title></rect>"});var label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds");return "<svg class=\"api-sparkline api-bar-chart\" viewBox=\"0 0 320 104\" role=\"img\" aria-label=\""+items.length+" observations, "+label+"\"><line class=\"chart-axis\" x1=\"42\" y1=\"82\" x2=\"312\" y2=\"82\"></line><line class=\"chart-axis\" x1=\"42\" y1=\"8\" x2=\"42\" y2=\"82\"></line><text class=\"chart-axis-label\" x=\"2\" y=\"12\">"+text("応答時間 (ms)","Response time (ms)")+"</text><text class=\"chart-tick\" x=\"3\" y=\"84\">0</text><text class=\"chart-tick\" x=\"3\" y=\"12\">"+Math.round(maxValue)+"</text>"+bars+"<text class=\"chart-time-label\" x=\"42\" y=\"100\">"+label+"</text><text class=\"chart-time-label\" x=\"270\" y=\"100\">"+text("今","Now")+"</text></svg>"}function setLive(value){if(live){live.textContent=value}}function updateCard(service,items,maxValue){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds");status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+value+" ms</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+items.length+" / 20 "+text("観測","observations")+" · "+label+" · "+text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()+"</span></div>"+graph(items,maxValue)}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")}return response.json()}).then(function(payload){var observations=payload.observations||{},maxValue=1;["kitsu","discord"].forEach(function(service){(observations[service]||[]).forEach(function(item){maxValue=Math.max(maxValue,Number(item.duration_ms)||0)})});maxValue=scale(maxValue);updateCard("kitsu",observations.kitsu||[],maxValue);updateCard("discord",observations.discord||[],maxValue);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});refresh()})();</script>`
+func sparklineDataAttributes(items []APIObservation) string {
+	values := make([]string, 0, len(items))
+	times := make([]string, 0, len(items))
+	for _, item := range items {
+		values = append(values, strconv.FormatInt(item.Duration.Milliseconds(), 10))
+		times = append(times, item.At.UTC().Format(time.RFC3339))
+	}
+	return ` data-sparkline-values="` + esc(strings.Join(values, ",")) + `" data-sparkline-times="` + esc(strings.Join(times, ",")) + `"`
 }
 
 func systemStatusRefreshScriptReadable() string {
-	script := systemStatusRefreshScriptSharedScale()
-	start := strings.Index(script, "function graph(items,maxValue){")
-	endRel := strings.Index(script[start:], "function setLive")
-	end := start + endRel
-	if start < 0 || endRel < 0 {
-		return script
-	}
-	graph := `function graph(items,maxValue){if(!items.length){return ""}var width=320,height=104,left=2,right=2,top=8,bottom=82,windowMs=select.value==="5m"?300000:60000,now=Date.now(),positions=[];items.forEach(function(item){var ratio=1-(now-new Date(item.at).getTime())/windowMs;ratio=Math.max(0,Math.min(1,ratio));positions.push(left+ratio*(width-left-right))});var bars="";items.forEach(function(item,i){var bar=8;if(i>0){bar=Math.min(bar,positions[i]-positions[i-1]-2)}if(i+1<items.length){bar=Math.min(bar,positions[i+1]-positions[i]-2)}bar=Math.max(2,bar);var value=Number(item.duration_ms)||0,h=Math.max(2,(bottom-top)*value/maxValue),x=Math.max(left,Math.min(width-right-bar,positions[i]-bar/2)),cls=item.success?"bar-success":"bar-failure";bars+="<rect class='"+cls+"' x='"+x.toFixed(1)+"' y='"+(bottom-h).toFixed(1)+"' width='"+bar.toFixed(1)+"' height='"+h.toFixed(1)+"' rx='2'><title>"+value+" ms</title></rect>"});var oldLabel=select.value==="5m"?text("5分前","5 min ago"):text("60秒前","60 sec ago"),middleLabel=select.value==="5m"?text("2分30秒前","2 min 30 sec ago"):text("30秒前","30 sec ago"),label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds"),midValue=maxValue/2;return "<svg class='api-sparkline api-bar-chart' viewBox='0 0 320 104' role='img' aria-label='"+items.length+" observations, "+label+"'><line class='chart-axis' x1='2' y1='82' x2='318' y2='82'></line><line class='chart-axis' x1='2' y1='8' x2='2' y2='82'></line><line class='chart-guide' x1='2' y1='45' x2='318' y2='45'></line><text class='chart-axis-label' x='2' y='12'>"+text("応答時間 (ms)","Response time (ms)")+"</text><text class='chart-tick' x='3' y='12'>"+Math.round(maxValue)+"</text><text class='chart-tick' x='3' y='48'>"+Math.round(midValue)+"</text><text class='chart-tick' x='3' y='84'>0</text>"+bars+"<text class='chart-time-label' text-anchor='start' x='2' y='100'>"+oldLabel+"</text><text class='chart-time-label' text-anchor='middle' x='160' y='100'>"+middleLabel+"</text><text class='chart-time-label' text-anchor='end' x='318' y='100'>"+text("今","Now")+"</text></svg>"}`
-	graph = strings.NewReplacer(
-		"left=2,right=2", "left=54,right=2",
-		"width=320,height=104", "width=466,height=104",
-		"viewBox='0 0 320 104'", "viewBox='0 0 466 104'",
-		"x2='318'", "x2='464'",
-		"x='160'", "x='233'",
-		"x='318'", "x='464'",
-		"x1='2' y1='82'", "x1='54' y1='82'",
-		"x1='2' y1='8'", "x1='54' y1='8'",
-		"x2='2' y2='82'", "x2='54' y2='82'",
-		"x1='2' y1='45'", "x1='54' y1='45'",
-		"x='2' y='100'", "x='54' y='100'",
-		"x='3' y='12'", "x='0' y='12'",
-		"x='3' y='48'", "x='0' y='48'",
-		"x='3' y='84'", "x='0' y='84'",
-		`text("60秒前","60 sec ago")`, `text("60秒","60s")`,
-		`text("30秒前","30 sec ago")`, `text("30秒","30s")`,
-		`text("5分前","5 min ago")`, `text("5分","5m")`,
-		`text("2分30秒前","2 min 30 sec ago")`, `text("2分30秒","2m30s")`,
-	).Replace(graph)
-	graph = strings.ReplaceAll(graph, `<text class='chart-tick' x='0'`, `<text class='chart-tick' text-anchor='end' x='48'`)
-	graph = addDynamicObservationAccessibility(graph)
-	graph = addLatencyTickUnits(removeChartAxisTitle(graph))
-	script = script[:start] + graph + script[end:]
-	script = strings.ReplaceAll(script, "values=[10,25,50,100,250,500,1000]", "values=[10,25,50,100,250,500,1000,2000]")
-	script = strings.ReplaceAll(script, `+graph(items,maxValue)}function refresh`, `+graph(items,maxValue);var telemetryMeta=details.querySelector("[data-telemetry-meta]");if(telemetryMeta){telemetryMeta.textContent=text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()}}function refresh`)
-	script = strings.ReplaceAll(script, `+graph(items)}function refresh`, `+graph(items);var telemetryMeta=details.querySelector("[data-telemetry-meta]");if(telemetryMeta){telemetryMeta.textContent=text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()}}function refresh`)
-	script = strings.ReplaceAll(script, `function updateCard`, `var serviceScales={};function serviceScale(name,items){var max=1;items.forEach(function(item){max=Math.max(max,Number(item.duration_ms)||0)});var required=scale(max),state=serviceScales[name]||{ceiling:0,downSince:0},now=Date.now();if(!state.ceiling||required>state.ceiling){state.ceiling=required;state.downSince=0}else if(required<state.ceiling){if(!state.downSince){state.downSince=now}else if(now-state.downSince>=15000){state.ceiling=required;state.downSince=0}}serviceScales[name]=state;return state.ceiling}function updateCard`)
-	script = strings.ReplaceAll(script, `updateCard("kitsu",observations.kitsu||[],maxValue);updateCard("discord",observations.discord||[],maxValue);`, `updateCard("kitsu",observations.kitsu||[],serviceScale("kitsu",observations.kitsu||[]));updateCard("discord",observations.discord||[],serviceScale("discord",observations.discord||[]));`)
-	return script
+	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,timer,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function niceStep(value){if(!isFinite(value)||value<=0){return 1}var magnitude=Math.pow(10,Math.floor(Math.log(value)/Math.LN10)),normalized=value/magnitude;return (normalized>5?10:normalized>2?5:normalized>1?2:1)*magnitude}function requiredDomain(items){if(!items.length){return {lower:0,upper:10}}var min=Infinity,max=0;items.forEach(function(item){var value=Number(item.duration_ms);if(isFinite(value)&&value>=0){min=Math.min(min,value);max=Math.max(max,value)}});if(!isFinite(min)){return {lower:0,upper:10}}var span=max-min,minSpan=Math.max(10,max*.25);span=Math.max(span,minSpan);var lower=Math.max(0,min-Math.max(span*.15,minSpan*.4)),upper=max+Math.max(span*.15,minSpan*.6),step=niceStep((upper-lower)/4);lower=Math.max(0,Math.floor(lower/step)*step);upper=Math.ceil(upper/step)*step;if(upper-lower<minSpan){upper=lower+Math.ceil(minSpan/step)*step}return {lower:lower,upper:upper}}var domains={};function stableDomain(name,items){var required=requiredDomain(items),state=domains[name]||{lower:0,upper:0,downSince:0},now=Date.now();if(!state.upper||required.lower<state.lower||required.upper>state.upper){state.lower=Math.min(state.lower||required.lower,required.lower);state.upper=Math.max(state.upper,required.upper);state.downSince=0}else if(required.lower>state.lower||required.upper<state.upper){if(!state.downSince){state.downSince=now}else if(now-state.downSince>=15000){state.lower=required.lower;state.upper=required.upper;state.downSince=0}}domains[name]=state;return state}function tick(value){return Math.max(0,Math.round(value))+"ms"}function graph(items,domain){if(!items.length){return ""}var width=466,height=104,left=54,right=2,top=8,bottom=82,plotWidth=width-left-right,points=[];items.forEach(function(item,index){var x=items.length>1?left+index*plotWidth/(items.length-1):left+plotWidth/2,value=Number(item.duration_ms)||0,y=bottom-(bottom-top)*(value-domain.lower)/(domain.upper-domain.lower);y=Math.max(top,Math.min(bottom,y));points.push(x.toFixed(1)+","+y.toFixed(1))});var mid=(domain.lower+domain.upper)/2;return "<svg class=\"api-sparkline\" viewBox=\"0 0 466 104\" role=\"img\" aria-label=\""+items.length+" observations, "+tick(domain.lower)+" to "+tick(domain.upper)+"\"><line class=\"chart-guide\" x1=\"54\" y1=\"45\" x2=\"464\" y2=\"45\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"12\">"+tick(domain.upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"84\">"+tick(domain.lower)+"</text><path class=\"telemetry-line\" d=\"M"+points.join(" L")+"\"></path></svg>"}function setLive(value){if(live){live.textContent=value}}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds"),domain=stableDomain(service,items);status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+value+" ms</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+label+" · "+text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()+"</span></div>"+graph(items,domain)}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")}return response.json()}).then(function(payload){var observations=payload.observations||{};updateCard("kitsu",observations.kitsu||[]);updateCard("discord",observations.discord||[]);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});refresh()})();</script>`
 }
 
 func addDynamicObservationAccessibility(graph string) string {
@@ -470,7 +506,7 @@ func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCo
 		}
 		cards.WriteString(`<a class="dashboard-menu-card" href="` + esc(withLang(item.path, r)) + `"><span class="dashboard-menu-icon" aria-hidden="true">` + strconv.Itoa(i+1) + `</span><span class="dashboard-menu-copy"><strong>` + esc(tr(lang, item.key)) + `</strong><span class="field-help">` + esc(description) + `</span></span><span class="dashboard-menu-status"><span class="dashboard-status-chip ` + esc(item.statusAClass) + `">` + esc(item.statusA) + `</span><span class="dashboard-status-chip ` + esc(item.statusBClass) + `">` + esc(item.statusB) + `</span></span></a>`)
 	}
-	return `<div class="dashboard-menu-wrap"><section class="dashboard-cta" aria-labelledby="dashboard-new-connection"><div><span class="dashboard-cta-kicker">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</span><h2 id="dashboard-new-connection">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</h2><p class="hint">` + esc(t(lang, "新しいプロダクション接続はセットアップから進めます。", "Start a new Production connection from the setup flow.")) + `</p></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しいプロダクションを接続", "Open setup")) + `</a></section><section class="dashboard-menu" aria-labelledby="dashboard-menu-title"><div class="page-heading"><div><h2 id="dashboard-menu-title">` + esc(t(lang, "管理メニュー", "Management")) + `</h2><p class="hint">` + esc(t(lang, "主要な管理機能へアクセスします。", "Access the main management areas.")) + `</p></div></div><div class="dashboard-menu-grid">` + cards.String() + `</div></section></div>`
+	return `<div class="dashboard-menu-wrap"><section class="dashboard-cta" aria-labelledby="dashboard-new-connection"><div><span class="dashboard-cta-kicker">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</span><h2 id="dashboard-new-connection">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</h2></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しいプロダクションを接続", "Open setup")) + `</a></section><section class="dashboard-menu" aria-labelledby="dashboard-menu-title"><div class="page-heading"><div><h2 id="dashboard-menu-title">` + esc(t(lang, "管理メニュー", "Management")) + `</h2></div></div><div class="dashboard-menu-grid">` + cards.String() + `</div></section></div>`
 }
 
 func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB, fallbackGuildID string) {
@@ -494,7 +530,7 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 	if rows.Len() == 0 {
 		rows.WriteString(emptyState("-", t(lang, "プロダクションがありません", "No Productions"), t(lang, "新しいプロダクションを接続してください。", "Connect a new Production.")))
 	}
-	body := `<div class="section-stack"><section class="section-card glass"><p class="hint">` + esc(t(lang, "プロダクション一覧で状態を確認し、選択したプロダクションを開きます。設定は選択後に表示されます。", "Use this list to review states and open one Production. Settings appear only after selection.")) + `</p></section>` + rows.String() + `</div>`
+	body := `<div class="section-stack"><p class="production-list-intro">` + esc(t(lang, "設定はProductionを選択した後に表示します", "Settings appear after you select a Production")) + `</p><div class="production-list" aria-label="` + esc(t(lang, "プロダクション一覧", "Production list")) + `">` + rows.String() + `</div></div>`
 	body = strings.Replace(body, rows.String(), simplifyProductionListRows(rows.String()), 1)
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.production_list"), r, body))
 }
@@ -782,7 +818,7 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 				break
 			}
 		}
-		users.WriteString(`<li class="production-user-simple-row"><span><strong>` + esc(user.KitsuName) + `</strong><small>` + esc(discord) + `</small></span><span class="status-pill success">` + esc(userText("関連付け済み", "Associated")) + `</span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="user_id" value="` + strconv.FormatUint(uint64(user.ID), 10) + `"><input type="hidden" name="action" value="remove_production_user"><button class="btn-ghost" type="submit">` + esc(userText("解除", "Remove")) + `</button></form></li>`)
+		users.WriteString(`<li class="production-user-simple-row"><span><strong>` + esc(user.KitsuName) + `</strong><small>` + esc(discord) + `</small></span><span class="status-pill success">` + esc(userText("関連付け済み", "Associated")) + `</span><form method="post" class="delete-form" data-confirm="` + esc(userText("ユーザー「"+user.KitsuName+"」をこのプロダクションから外します。", "Remove user \""+user.KitsuName+"\" from this Production.")) + `" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="user_id" value="` + strconv.FormatUint(uint64(user.ID), 10) + `"><input type="hidden" name="action" value="remove_production_user"><button class="btn-ghost" type="submit">` + esc(userText("解除", "Remove")) + `</button></form></li>`)
 	}
 	if users.Len() == 0 {
 		users.WriteString(`<li class="empty-state"><strong>` + esc(userText("プロダクションユーザーはまだいません", "No Production users yet")) + `</strong><span class="field-help">` + esc(userText("グローバルにリンク済みの人間ユーザーを追加してください。", "Add a globally linked human user to this Production.")) + `</span></li>`)
@@ -808,7 +844,7 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 
 	var assignmentRows strings.Builder
 	for _, assignment := range assignments {
-		assignmentRows.WriteString(`<li class="production-user-simple-row"><span><strong>` + esc(assignment.KitsuName) + `</strong><small>` + esc(assignment.TaskType) + `</small></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type" value="` + esc(assignment.TaskType) + `"><input type="hidden" name="action" value="remove_production_checker"><button class="btn-ghost" type="submit">` + esc(userText("解除", "Remove")) + `</button></form></li>`)
+		assignmentRows.WriteString(`<li class="production-user-simple-row"><span><strong>` + esc(assignment.KitsuName) + `</strong><small>` + esc(assignment.TaskType) + `</small></span><form method="post" class="delete-form" data-confirm="` + esc(userText("「"+assignment.KitsuName+"」の"+assignment.TaskType+" Reviewer / Checker割り当てを解除します。", "Remove the "+assignment.TaskType+" Reviewer / Checker assignment for \""+assignment.KitsuName+"\".")) + `" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type" value="` + esc(assignment.TaskType) + `"><input type="hidden" name="action" value="remove_production_checker"><button class="btn-ghost" type="submit">` + esc(userText("解除", "Remove")) + `</button></form></li>`)
 	}
 	assignmentSection := ""
 	if len(assignments) > 0 {
@@ -1344,28 +1380,70 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	items := []pipelineHealthItem{
 		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "詳細", "Details")},
 		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "詳細", "Details")},
-		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success", explanation: t(lang, "ローカル設定と履歴を読み取れます。", "Local configuration and history can be read."), details: pipelineInternalDetails(lang), detailsLabel: t(lang, "詳細", "Details")},
+		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success", details: pipelineInternalDetails(lang), detailsLabel: t(lang, "詳細", "Details")},
 		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "詳細", "Details")},
 	}
 	var healthRows strings.Builder
-	for _, item := range items {
-		healthRows.WriteString(renderPipelineHealthItem(item))
+	for index, item := range items {
+		healthRows.WriteString(renderPipelineHealthItem(lang, item, index))
 	}
 	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section><section class="section-card glass" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + recentSystemIssues(lang, db) + `</section></div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
-	body += `<script data-system-status-refresh>(function(){var interval=5000;var busy=false;var timer;var select=document.querySelector("[data-system-status-window]");var root=document.querySelector(".system-status-sections");var live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function setLive(value){if(live){live.textContent=value}}function graph(items){if(!items.length){return ""}var width=320,height=104,left=42,right=8,top=8,bottom=82,max=1;items.forEach(function(item){max=Math.max(max,Number(item.duration_ms)||0)});var slot=(width-left-right)/items.length,bar=Math.max(3,slot*.64),bars="";items.forEach(function(item,i){var value=Number(item.duration_ms)||0,h=Math.max(2,(bottom-top)*value/max),x=left+slot*i+(slot-bar)/2,cls=item.success?"bar-success":"bar-failure";bars+="<rect class=\""+cls+"\" x=\""+x.toFixed(1)+"\" y=\""+(bottom-h).toFixed(1)+"\" width=\""+bar.toFixed(1)+"\" height=\""+h.toFixed(1)+"\" rx=\"2\"><title>"+value+" ms</title></rect>"});var label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds");return "<svg class=\"api-sparkline api-bar-chart\" viewBox=\"0 0 320 104\" role=\"img\" aria-label=\""+items.length+" observations, "+label+"\"><line class=\"chart-axis\" x1=\"42\" y1=\"82\" x2=\"312\" y2=\"82\"></line><line class=\"chart-axis\" x1=\"42\" y1=\"8\" x2=\"42\" y2=\"82\"></line><text class=\"chart-axis-label\" x=\"2\" y=\"12\">"+text("応答時間 (ms)","Response time (ms)")+"</text><text class=\"chart-tick\" x=\"3\" y=\"84\">0</text><text class=\"chart-tick\" x=\"3\" y=\"12\">"+Math.round(max)+"</text>"+bars+"<text class=\"chart-time-label\" x=\"42\" y=\"100\">"+label+"</text><text class=\"chart-time-label\" x=\"270\" y=\"100\">"+text("今","Now")+"</text></svg>"}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]");if(!card){return}var status=card.querySelector("[data-telemetry-status]");var details=card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,windowLabel=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds");status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+value+" ms</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+items.length+" / 20 "+text("観測","observations")+" · "+windowLabel+" · "+text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()+"</span></div>"+graph(items)}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")}return response.json()}).then(function(payload){updateCard("kitsu",payload.observations.kitsu||[]);updateCard("discord",payload.observations.discord||[]);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});refresh()})();</script>`
+	body = strings.Replace(body, `<section class="section-card glass" aria-labelledby="system-issues-title">`, `<section class="section-card glass system-issues" aria-labelledby="system-issues-title">`, 1)
+	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
+	body = stripSystemStatusRedundantCopy(body)
+	body += systemStatusDetailsScript()
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
 func renderRuntimeObservabilitySummary(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness, windowName, body string) string {
 	statusLabel, statusClass, statusHint := overallRuntimeStatus(lang, readiness, stats)
-	overall := `<section class="section-card glass system-overall-summary" aria-labelledby="system-overall-title"><div class="page-heading"><div><h2 id="system-overall-title">` + esc(t(lang, "システム全体", "Overall system health")) + `</h2><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div></section>`
 	body = renderRuntimeObservabilitySummaryRaw(lang, stats, windowName, body)
+	body = stripSystemStatusRedundantCopy(body)
 	body = addTelemetryViewerLocalTimes(body, stats, windowName)
 	body = replaceElementTextByID(body, "system-observability-title", t(lang, "API応答状態", "API response status"))
 	body = replaceElementTextByID(body, "pipeline-health-title", t(lang, "KitsuSync処理状態", "KitsuSync operational status"))
+	if statusClass == "success" {
+		return `<div class="section-stack system-status-sections">` + body + `</div>`
+	}
+	overall := `<div class="system-overall-summary" aria-labelledby="system-overall-title"><span id="system-overall-title" class="system-overall-label">` + esc(t(lang, "システム", "System")) + `</span><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span><span class="system-overall-hint">` + esc(statusHint) + `</span></div>`
 	return `<div class="section-stack system-status-sections">` + overall + body + `</div>`
+}
+
+func stripSystemStatusRedundantCopy(body string) string {
+	for _, copy := range []string{
+		"実測できた応答時間を時間順に表示します。",
+		"Shows real response times in chronological order.",
+		"通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。",
+		"Review each notification stage. Metrics that are not available are shown as unconfirmed.",
+		"直近の失敗と復旧記録を表示します。",
+		"Recent failure and recovery records.",
+	} {
+		body = strings.ReplaceAll(body, `<p class="hint">`+copy+`</p>`, "")
+	}
+	body = strings.ReplaceAll(body, `items.length+" / 20 "+text("観測","observations")+" · "+label+" · "+text("最終更新","Last updated")+" "`, `label+" · "+text("最終更新","Last updated")+" "`)
+	body = strings.ReplaceAll(body, `items.length+" / 20 "+text("観測","observations")+" · "+windowLabel+" · "+text("最終更新","Last updated")+" "`, `windowLabel+" · "+text("最終更新","Last updated")+" "`)
+	return removePipelineReadinessPill(body)
+}
+
+func removePipelineReadinessPill(body string) string {
+	sectionStart := strings.Index(body, `<section class="section-card glass pipeline-health"`)
+	gridStart := strings.Index(body, `<div class="pipeline-health-grid">`)
+	if sectionStart < 0 || gridStart < 0 || gridStart <= sectionStart {
+		return body
+	}
+	spanStart := strings.Index(body[sectionStart:gridStart], `<span class="status-pill `)
+	if spanStart < 0 {
+		return body
+	}
+	spanStart += sectionStart
+	spanEnd := strings.Index(body[spanStart:], `</span>`)
+	if spanEnd < 0 {
+		return body
+	}
+	spanEnd += spanStart + len(`</span>`)
+	return body[:spanStart] + body[spanEnd:]
 }
 
 func replaceElementTextByID(body, id, text string) string {
@@ -1411,16 +1489,25 @@ func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, wi
 	return `<section class="section-card glass system-observability" aria-labelledby="system-observability-title"><div class="page-heading"><div><h2 id="system-observability-title">` + esc(t(lang, "外部APIの健全性", "External API health")) + `</h2><p class="hint">` + esc(t(lang, "実測できた応答時間を時間順に表示します。", "Shows real response times in chronological order.")) + `</p></div><div class="telemetry-window-actions">` + windowControl + `<span class="system-live-indicator" role="status"><i aria-hidden="true"></i><span data-system-live-label>` + esc(t(lang, "自動更新", "Auto-refresh")) + `</span></span></div></div><div class="system-observability-grid"><article class="api-observation-card" data-telemetry-card="kitsu"><div class="api-observation-summary"><h3>Kitsu API</h3><span class="status-pill ` + apiObservationStatusClass(stats, "kitsu") + `" role="status" data-telemetry-status>` + esc(apiObservationStatus(lang, stats, "kitsu")) + `</span></div><div class="api-observation-details" data-telemetry-details="kitsu">` + apiObservationDetails(lang, stats, "kitsu", windowName, sharedMax) + `</div></article><article class="api-observation-card" data-telemetry-card="discord"><div class="api-observation-summary"><h3>Discord API</h3><span class="status-pill ` + apiObservationStatusClass(stats, "discord") + `" role="status" data-telemetry-status>` + esc(apiObservationStatus(lang, stats, "discord")) + `</span></div><div class="api-observation-details" data-telemetry-details="discord">` + apiObservationDetails(lang, stats, "discord", windowName, sharedMax) + `</div></article></div></section>` + body
 }
 
-func renderPipelineHealthItem(item pipelineHealthItem) string {
-	action := `<span class="pipeline-health-action" aria-hidden="true"></span>`
+func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) string {
+	action := ""
 	if item.action != "" && item.actionLabel != "" {
 		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
 	}
 	details := ""
 	if item.details != "" {
-		details = `<details class="pipeline-health-details"><summary>` + esc(item.detailsLabel) + `</summary><div>` + item.details + `</div></details>`
+		id := "pipeline-health-details-" + strconv.Itoa(index)
+		details = `<button class="pipeline-health-details-toggle" type="button" aria-expanded="false" aria-controls="` + id + `"><span class="details-label-collapsed">` + esc(item.detailsLabel) + ` ▾</span><span class="details-label-expanded">` + esc(t(lang, "詳細を隠す", "Hide details")) + ` ▴</span></button><div id="` + id + `" class="pipeline-health-details-content" hidden>` + item.details + `</div>`
 	}
-	return `<article class="pipeline-health-item"><div class="pipeline-health-heading"><h3>` + esc(item.label) + `</h3><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span></div><p class="field-help">` + esc(item.explanation) + `</p>` + details + action + `</article>`
+	explanation := ""
+	if strings.TrimSpace(item.explanation) != "" {
+		explanation = `<p class="field-help">` + esc(item.explanation) + `</p>`
+	}
+	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + `</div><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + details + action + `</article>`
+}
+
+func systemStatusDetailsScript() string {
+	return `<script data-system-status-details>(function(){var root=document.querySelector(".system-status-sections");if(!root){return}root.addEventListener("click",function(event){var toggle=event.target.closest(".pipeline-health-details-toggle");if(!toggle||!root.contains(toggle)){return}var panelId=toggle.getAttribute("aria-controls"),panel=panelId&&document.getElementById(panelId),expanded=toggle.getAttribute("aria-expanded")==="true";if(!panel){return}toggle.setAttribute("aria-expanded",String(!expanded));panel.hidden=expanded})})();</script>`
 }
 
 func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string, sharedMax ...float64) string {
@@ -1435,10 +1522,9 @@ func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowNa
 	}
 	value := strconv.FormatInt(last.Duration.Milliseconds(), 10) + " ms"
 	normalMeta := fmt.Sprintf("%s %s", t(lang, "最終更新", "Last updated"), last.At.Local().Format("15:04:05"))
-	meta := fmt.Sprintf("%d / %d %s · %s · %s %s", len(items), maxAPIObservations, t(lang, "観測", "observations"), windowLabel, t(lang, "最終更新", "Last updated"), last.At.Format("15:04:05"))
-	meta = normalMeta
-	maxValue := stableObservationScale(service, windowName, items)
-	return `<div class="api-observation-latency"><strong data-telemetry-value>` + esc(value) + `</strong><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span><span class="api-observation-meta" data-telemetry-meta>` + esc(meta) + `</span></div>` + apiObservationBarGraphWithScale(items, lang, windowName, maxValue)
+	meta := normalMeta + " · " + windowLabel
+	domain := stableObservationYDomain(service, windowName, items)
+	return `<div class="api-observation-latency"><strong data-telemetry-value>` + esc(value) + `</strong><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span><span class="api-observation-meta" data-telemetry-meta>` + esc(meta) + `</span></div>` + apiObservationLineGraphWithDomain(items, lang, windowName, domain)
 }
 
 func apiObservationGraph(items []APIObservation) string {
@@ -1450,78 +1536,40 @@ func apiObservationBarGraph(items []APIObservation, lang, windowName string) str
 }
 
 func apiObservationBarGraphWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
-	return rewriteLatencyGraph(apiObservationBarGraphWithScaleRaw(items, lang, windowName, maxValue))
+	return apiObservationLineGraphWithDomain(items, lang, windowName, observationYDomain{Lower: 0, Upper: maxValue})
 }
 
-func apiObservationBarGraphWithScaleRaw(items []APIObservation, lang, windowName string, maxValue float64) string {
+func apiObservationLineGraphWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
+	return apiObservationLineGraphWithDomain(items, lang, windowName, observationYDomain{Lower: 0, Upper: maxValue})
+}
+
+func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName string, domain observationYDomain) string {
 	if len(items) == 0 {
 		return ""
 	}
 	geometry := telemetryChartGeometry()
-	width, height := geometry.Width, geometry.Height
-	plotLeft, plotRight, plotTop, plotBottom := geometry.PlotLeft, geometry.PlotRight, geometry.PlotTop, geometry.PlotBottom
-	window := telemetryWindowDuration(windowName)
-	now := time.Now()
-	positions := make([]float64, len(items))
-	for i, item := range items {
-		age := now.Sub(item.At)
-		ratio := 1 - age.Seconds()/window.Seconds()
-		if ratio < 0 {
-			ratio = 0
-		}
-		if ratio > 1 {
-			ratio = 1
-		}
-		positions[i] = plotLeft + ratio*(width-plotLeft-plotRight)
+	if domain.Upper <= domain.Lower {
+		domain = observationYDomain{Lower: 0, Upper: 1}
 	}
-	var bars strings.Builder
-	for i, item := range items {
-		barWidth := 8.0
-		if i > 0 && positions[i]-positions[i-1]-2 < barWidth {
-			barWidth = positions[i] - positions[i-1] - 2
-		}
-		if i+1 < len(items) && positions[i+1]-positions[i]-2 < barWidth {
-			barWidth = positions[i+1] - positions[i] - 2
-		}
-		if barWidth < 2 {
-			barWidth = 2
+	points := make([]string, 0, len(items))
+	plotWidth := geometry.Width - geometry.PlotLeft - geometry.PlotRight
+	for index, item := range items {
+		x := geometry.PlotLeft + plotWidth/2
+		if len(items) > 1 {
+			x = geometry.PlotLeft + float64(index)*plotWidth/float64(len(items)-1)
 		}
 		value := float64(item.Duration.Milliseconds())
-		barHeight := (plotBottom - plotTop) * value / maxValue
-		if barHeight < 2 {
-			barHeight = 2
+		y := geometry.PlotBottom - (geometry.PlotBottom-geometry.PlotTop)*(value-domain.Lower)/(domain.Upper-domain.Lower)
+		if y < geometry.PlotTop {
+			y = geometry.PlotTop
 		}
-		class := "bar-success"
-		if !item.Success {
-			class = "bar-failure"
+		if y > geometry.PlotBottom {
+			y = geometry.PlotBottom
 		}
-		x := positions[i] - barWidth/2
-		if x < plotLeft {
-			x = plotLeft
-		}
-		if x+barWidth > width-plotRight {
-			x = width - plotRight - barWidth
-		}
-		statusLabel := t(lang, "正常", "Healthy")
-		if !item.Success {
-			statusLabel = t(lang, "リクエスト失敗", "Request failed")
-		}
-		durationLabel := ""
-		if item.Success {
-			durationLabel = fmt.Sprintf("%d ms", item.Duration.Milliseconds())
-		}
-		tooltip := strings.TrimSpace(fmt.Sprintf("%s %s %s", item.At.Local().Format("15:04:05"), durationLabel, statusLabel))
-		bars.WriteString(fmt.Sprintf(`<rect class="%s" tabindex="0" role="img" aria-label="%s" x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2"><title>%s</title></rect>`, class, esc(tooltip), x, plotBottom-barHeight, barWidth, barHeight, esc(tooltip)))
+		points = append(points, fmt.Sprintf("%.1f,%.1f", x, y))
 	}
-	windowLabel := t(lang, "60秒", "60s")
-	middleLabel := t(lang, "30秒", "30s")
-	if windowName == telemetryWindow5Minutes {
-		windowLabel = t(lang, "5分", "5m")
-		middleLabel = t(lang, "2分30秒", "2m30s")
-	}
-	middleValue := maxValue / 2
-	plotMid := plotLeft + (width-plotLeft-plotRight)/2
-	return `<svg class="api-sparkline api-bar-chart" viewBox="0 0 ` + strconv.FormatFloat(width, 'f', 0, 64) + ` ` + strconv.FormatFloat(height, 'f', 0, 64) + `" role="img" aria-label="` + esc(fmt.Sprintf("%d observations, %s", len(items), windowLabel)) + `"><line class="chart-axis" x1="` + strconv.FormatFloat(plotLeft, 'f', 0, 64) + `" y1="82" x2="` + strconv.FormatFloat(width-plotRight, 'f', 0, 64) + `" y2="82"></line><line class="chart-axis" x1="` + strconv.FormatFloat(plotLeft, 'f', 0, 64) + `" y1="8" x2="` + strconv.FormatFloat(plotLeft, 'f', 0, 64) + `" y2="82"></line><line class="chart-guide" x1="` + strconv.FormatFloat(plotLeft, 'f', 0, 64) + `" y1="45" x2="` + strconv.FormatFloat(width-plotRight, 'f', 0, 64) + `" y2="45"></line><text class="chart-axis-label" x="2" y="12">` + esc(t(lang, "応答時間 (ms)", "Response time (ms)")) + `</text><text class="chart-tick" x="3" y="12">` + esc(strconv.FormatFloat(maxValue, 'f', 0, 64)) + `</text><text class="chart-tick" x="3" y="48">` + esc(strconv.FormatFloat(middleValue, 'f', 0, 64)) + `</text><text class="chart-tick" x="3" y="84">0</text>` + bars.String() + `<text class="chart-time-label" text-anchor="start" x="` + strconv.FormatFloat(plotLeft, 'f', 0, 64) + `" y="100">` + esc(windowLabel) + `</text><text class="chart-time-label" text-anchor="middle" x="` + strconv.FormatFloat(plotMid, 'f', 0, 64) + `" y="100">` + esc(middleLabel) + `</text><text class="chart-time-label" text-anchor="end" x="` + strconv.FormatFloat(width-plotRight, 'f', 0, 64) + `" y="100">` + esc(t(lang, "今", "Now")) + `</text></svg>`
+	path := "M" + strings.Join(points, " L")
+	return `<div class="api-sparkline-row"><div class="api-sparkline-y-labels" aria-hidden="true"><span class="api-sparkline-y-label api-sparkline-y-label-max">` + esc(formatLatencyTick(domain.Upper)) + `</span><span class="api-sparkline-y-label api-sparkline-y-label-min">` + esc(formatLatencyTick(domain.Lower)) + `</span></div><svg class="api-sparkline" viewBox="0 0 394 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations, %s–%s", len(items), formatLatencyTick(domain.Lower), formatLatencyTick(domain.Upper))) + `"` + sparklineDataAttributes(items) + `><line class="chart-guide" x1="0" y1="45" x2="392" y2="45"></line><path class="telemetry-line" d="` + path + `"></path></svg></div>`
 }
 
 func rewriteLatencyGraph(graph string) string {
@@ -1535,8 +1583,8 @@ func rewriteLatencyGraph(graph string) string {
 }
 
 func alignLatencyTickLabels(graph string) string {
-	graph = strings.ReplaceAll(graph, `<text class="chart-tick" x="0"`, `<text class="chart-tick" text-anchor="end" x="48"`)
-	graph = strings.ReplaceAll(graph, `<text class='chart-tick' x='0'`, `<text class='chart-tick' text-anchor='end' x='48'`)
+	graph = strings.ReplaceAll(graph, `<text class="chart-tick" x="0"`, `<text class="chart-tick" text-anchor="end" x="66"`)
+	graph = strings.ReplaceAll(graph, `<text class='chart-tick' x='0'`, `<text class='chart-tick' text-anchor='end' x='66'`)
 	return graph
 }
 
@@ -1601,8 +1649,66 @@ type telemetryChartLayout struct {
 	Width, Height, PlotLeft, PlotRight, PlotTop, PlotMiddle, PlotBottom float64
 }
 
+type observationYDomain struct {
+	Lower float64
+	Upper float64
+}
+
+func formatLatencyTick(value float64) string {
+	return strconv.FormatInt(int64(math.Round(math.Max(0, value))), 10) + "ms"
+}
+
+func observationYDomainForItems(items []APIObservation) observationYDomain {
+	if len(items) == 0 {
+		return observationYDomain{Lower: 0, Upper: 10}
+	}
+	minValue, maxValue := math.Inf(1), 0.0
+	for _, item := range items {
+		value := float64(item.Duration.Milliseconds())
+		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		minValue = math.Min(minValue, value)
+		maxValue = math.Max(maxValue, value)
+	}
+	if math.IsInf(minValue, 1) {
+		return observationYDomain{Lower: 0, Upper: 10}
+	}
+	rangeValue := maxValue - minValue
+	minimumSpan := math.Max(10, maxValue*0.25)
+	if rangeValue < minimumSpan {
+		rangeValue = minimumSpan
+	}
+	lower := math.Max(0, minValue-math.Max(rangeValue*0.15, minimumSpan*0.4))
+	upper := maxValue + math.Max(rangeValue*0.15, minimumSpan*0.6)
+	step := niceObservationStep((upper - lower) / 4)
+	lower = math.Max(0, math.Floor(lower/step)*step)
+	upper = math.Ceil(upper/step) * step
+	if upper-lower < minimumSpan {
+		upper = lower + math.Ceil(minimumSpan/step)*step
+	}
+	return observationYDomain{Lower: lower, Upper: upper}
+}
+
+func niceObservationStep(value float64) float64 {
+	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 1
+	}
+	magnitude := math.Pow(10, math.Floor(math.Log10(value)))
+	normalized := value / magnitude
+	step := 1.0
+	if normalized > 5 {
+		step = 10
+	} else if normalized > 2 {
+		step = 5
+	} else if normalized > 1 {
+		step = 2
+	}
+	return step * magnitude
+}
+
 func telemetryChartGeometry() telemetryChartLayout {
-	return telemetryChartLayout{Width: 466, Height: 104, PlotLeft: 54, PlotRight: 2, PlotTop: 8, PlotMiddle: 45, PlotBottom: 82}
+	return telemetryChartLayout{Width: 394, Height: 104, PlotLeft: 0, PlotRight: 2, PlotTop: 8, PlotMiddle: 45, PlotBottom: 82}
 }
 
 func observationScaleForItems(items []APIObservation) float64 {
@@ -1643,10 +1749,49 @@ type observationScaleState struct {
 	downSince time.Time
 }
 
+type observationDomainState struct {
+	domain    observationYDomain
+	downSince time.Time
+}
+
 var observationScaleStates = struct {
 	sync.Mutex
 	values map[string]observationScaleState
 }{values: make(map[string]observationScaleState)}
+
+var observationDomainStates = struct {
+	sync.Mutex
+	values map[string]observationDomainState
+}{values: make(map[string]observationDomainState)}
+
+func stableObservationYDomain(service, windowName string, items []APIObservation) observationYDomain {
+	required := observationYDomainForItems(items)
+	now := time.Now()
+	key := service + ":" + windowName
+	observationDomainStates.Lock()
+	defer observationDomainStates.Unlock()
+	state := observationDomainStates.values[key]
+	if state.domain.Upper <= state.domain.Lower {
+		state.domain = required
+		state.downSince = time.Time{}
+	} else {
+		expand := required.Upper > state.domain.Upper
+		if expand {
+			state.domain.Lower = math.Min(state.domain.Lower, required.Lower)
+			state.domain.Upper = math.Max(state.domain.Upper, required.Upper)
+			state.downSince = time.Time{}
+		} else if required.Lower > state.domain.Lower || required.Upper < state.domain.Upper {
+			if state.downSince.IsZero() {
+				state.downSince = now
+			} else if now.Sub(state.downSince) >= 15*time.Second {
+				state.domain = required
+				state.downSince = time.Time{}
+			}
+		}
+	}
+	observationDomainStates.values[key] = state
+	return state.domain
+}
 
 func stableObservationScale(service, windowName string, items []APIObservation) float64 {
 	key := service + ":" + windowName
@@ -1668,45 +1813,6 @@ func stableObservationScale(service, windowName string, items []APIObservation) 
 	}
 	observationScaleStates.values[key] = state
 	return state.ceiling
-}
-
-func apiObservationBarGraphIndexed(items []APIObservation, lang, windowName string) string {
-	if len(items) == 0 {
-		return ""
-	}
-	width, height := 320.0, 104.0
-	_ = height
-	plotLeft, plotRight, plotTop, plotBottom := 42.0, 8.0, 8.0, 82.0
-	maxValue := 1.0
-	for _, item := range items {
-		if value := float64(item.Duration.Milliseconds()); value > maxValue {
-			maxValue = value
-		}
-	}
-	barSlot := (width - plotLeft - plotRight) / float64(len(items))
-	barWidth := barSlot * 0.64
-	if barWidth < 3 {
-		barWidth = 3
-	}
-	var bars strings.Builder
-	for i, item := range items {
-		value := float64(item.Duration.Milliseconds())
-		x := plotLeft + barSlot*float64(i) + (barSlot-barWidth)/2
-		barHeight := (plotBottom - plotTop) * value / maxValue
-		if barHeight < 2 {
-			barHeight = 2
-		}
-		class := "bar-success"
-		if !item.Success {
-			class = "bar-failure"
-		}
-		bars.WriteString(fmt.Sprintf(`<rect class="%s" x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2"><title>%d ms</title></rect>`, class, x, plotBottom-barHeight, barWidth, barHeight, item.Duration.Milliseconds()))
-	}
-	windowLabel := t(lang, "直近60秒", "Last 60 seconds")
-	if windowName == telemetryWindow5Minutes {
-		windowLabel = t(lang, "直近5分", "Last 5 minutes")
-	}
-	return `<svg class="api-sparkline api-bar-chart" viewBox="0 0 320 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations, %s", len(items), windowLabel)) + `"><line class="chart-axis" x1="42" y1="82" x2="312" y2="82"></line><line class="chart-axis" x1="42" y1="8" x2="42" y2="82"></line><text class="chart-axis-label" x="2" y="12">` + esc(t(lang, "応答時間 (ms)", "Response time (ms)")) + `</text><text class="chart-tick" x="3" y="84">0</text><text class="chart-tick" x="3" y="12">` + esc(strconv.FormatInt(int64(maxValue), 10)) + `</text>` + bars.String() + `<text class="chart-time-label" x="42" y="100">` + esc(windowLabel) + `</text><text class="chart-time-label" x="270" y="100">` + esc(t(lang, "今", "Now")) + `</text></svg>`
 }
 
 func apiObservationStatusClass(stats RuntimeSnapshot, service string) string {
@@ -1773,7 +1879,7 @@ func pipelineProcessingHint(lang string, stats RuntimeSnapshot) string {
 	if stats.LastPollTime.IsZero() {
 		return t(lang, "処理メトリクスはまだ確認できません。", "Processing metrics are not available yet.")
 	}
-	return t(lang, "直近の処理が正常に記録されています。", "A recent processing cycle was recorded successfully.")
+	return ""
 }
 
 func pipelineProcessingDetails(lang string, stats RuntimeSnapshot) string {
@@ -1795,7 +1901,7 @@ func pipelineRoutingValue(lang string, readiness SharedBotRuntimeReadiness) stri
 
 func pipelineRoutingHint(lang string, readiness SharedBotRuntimeReadiness) string {
 	if readiness.RoutingReady {
-		return t(lang, "有効な通知先設定を確認済みです。", "A valid enabled route is available.")
+		return ""
 	}
 	return t(lang, "有効な通知先設定がありません。", "No valid enabled route is available.")
 }
@@ -1823,7 +1929,7 @@ func pipelineNotificationValue(lang string, readiness SharedBotRuntimeReadiness)
 
 func pipelineNotificationHint(lang string, readiness SharedBotRuntimeReadiness) string {
 	if readiness.OverallReady {
-		return t(lang, "通知処理を利用できます。", "Notification processing is available.")
+		return ""
 	}
 	return t(lang, "設定が完了するまで通知は停止しています。", "Notifications remain blocked until setup is complete.")
 }
@@ -1944,9 +2050,9 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		rows.WriteString(`<tr><td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td>` + esc(log.ProjectName) + `</td><td>` + esc(iaActivityAction(lang, log)) + `</td><td>` + esc(t(lang, "記録なし", "Not recorded")) + `</td><td><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[log.Success] + `">` + esc(result) + `</span></td></tr>`)
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません。", "No audit log entries.")) + `</td></tr>`)
+		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません", "No audit log entries")) + `</td></tr>`)
 	}
-	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	for _, log := range logs {
 		oldTime := `<td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td>`
 		newTime := `<td><time class="audit-time" datetime="` + esc(log.CreatedAt.UTC().Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time></td>`
@@ -1968,7 +2074,7 @@ func renderIAUsers(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><a class="btn-ghost" href="` + esc(edit) + `">` + esc(t(lang, "変更", "Change")) + `</a></td></tr>`)
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="3" class="muted">` + esc(t(lang, "ユーザー紐づけはありません。", "No user links yet.")) + `</td></tr>`)
+		rows.WriteString(`<tr><td colspan="3" class="muted">` + esc(t(lang, "ユーザー紐づけはありません", "No user links yet")) + `</td></tr>`)
 	}
 	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。Reviewer / CheckerはProductionのユーザー設定で管理します。", "Link Kitsu users to Discord users. Reviewer / Checker belongs in the selected Production's user settings.")) + `</p><table><thead><tr><th>Kitsu` + esc(t(lang, "ユーザー", " user")) + `</th><th>Discord` + esc(t(lang, "ユーザー", " user")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></section>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.user_mapping"), r, body))
@@ -2115,7 +2221,6 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 	message := ""
 	if len(options) == 0 {
 		disabled = " disabled"
-		message = `<p class="field-help" role="status">` + esc(t(lang, "Discordユーザーを選択すると保存できます。", "Select a Discord user to enable saving.")) + `</p>`
 	}
 	if loadErr != nil {
 		disabled = " disabled"
@@ -2127,9 +2232,6 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 		}
 	}
 	body := `<section class="section-stack"><h1>` + esc(t(lang, user.KitsuName+"の対応付けを変更", "Change link for "+user.KitsuName)) + `</h1><section class="section-card glass"><p class="hint">` + esc(t(lang, "Kitsuユーザーに、接続済みDiscordサーバーで利用できるユーザーを選択します。", "Choose a Discord user available in a connected server for this Kitsu user.")) + `</p>` + message + `<form method="POST" class="form-stack"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(user.ID) + `"><p class="field-label">` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</p><p><strong>` + esc(user.KitsuName) + `</strong></p><label for="global-discord-user">` + esc(t(lang, "Discordユーザー", "Discord user")) + `</label><select id="global-discord-user" name="discord_user_id" required>` + optionHTML.String() + `</select><div class="button-row"><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></form></section></section>`
-	if len(options) == 0 {
-		body = strings.Replace(body, `</select><div class="button-row">`, `</select><p class="field-help" role="status">`+esc(t(lang, "Discordユーザーを選択すると保存できます。", "Select a Discord user to enable saving."))+`</p><div class="button-row">`, 1)
-	}
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
@@ -2194,7 +2296,7 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		}
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません。", "No user links yet.")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
+		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません", "No user links yet")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
 	}
 	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。", "Link Kitsu users to Discord users.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
@@ -2270,7 +2372,6 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		}
 		return b.String()
 	}
-	canSave := loadErr == nil && directory.SelectedGuild.ID != "" && len(directory.Options) > 0
 	var rows strings.Builder
 	for _, person := range people {
 		if strings.TrimSpace(person.FullName) == "" {
@@ -2306,21 +2407,17 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 			}
 		}
 		disabled := " disabled"
-		actionMessage := ""
-		if !canSave {
-			actionMessage = `<p class="field-help" role="status">` + esc(t(lang, "Discordユーザーを選択すると保存できます。", "Select a Discord user to enable saving.")) + `</p>`
-		}
-		form := `<form method="POST" class="inline-form user-link-form"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + esc(userID) + `"><input type="hidden" name="kitsu_id" value="` + esc(kitsuID) + `"><input type="hidden" name="kitsu_name" value="` + esc(kitsuName) + `"><input type="hidden" name="kitsu_email" value="` + esc(kitsuEmail) + `"><input type="hidden" name="discord_guild_id" value="` + esc(directory.SelectedGuild.ID) + `"><select name="discord_user_id" aria-label="` + esc(kitsuName+" - "+t(lang, "Discordユーザー", "Discord user")) + `">` + memberOptions(currentDiscordID) + `</select><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button>` + actionMessage + `</form>`
+		form := `<form method="POST" class="inline-form user-link-form"><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="user_id" value="` + esc(userID) + `"><input type="hidden" name="kitsu_id" value="` + esc(kitsuID) + `"><input type="hidden" name="kitsu_name" value="` + esc(kitsuName) + `"><input type="hidden" name="kitsu_email" value="` + esc(kitsuEmail) + `"><input type="hidden" name="discord_guild_id" value="` + esc(directory.SelectedGuild.ID) + `"><select name="discord_user_id" aria-label="` + esc(kitsuName+" - "+t(lang, "Discordユーザー", "Discord user")) + `">` + memberOptions(currentDiscordID) + `</select><button class="btn" type="submit"` + disabled + `>` + esc(t(lang, "保存", "Save")) + `</button></form>`
 		form = strings.Replace(form, `<select name="discord_user_id"`, `<select data-initial-index="`+strconv.Itoa(initialIndex)+`" name="discord_user_id" onchange="this.form.querySelector('button[type=submit]').disabled = this.value === '' || this.selectedIndex === Number(this.dataset.initialIndex)"`, 1)
 		if mapped != nil && mapped.ID > 0 {
-			form += `<form method="POST" class="inline-form"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + esc(fmt.Sprint(mapped.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Unlink")) + `</button></form>`
+			form += `<form method="POST" class="inline-form delete-form" data-confirm="` + esc(t(lang, "Kitsuユーザー「"+kitsuName+"」とDiscordユーザー「"+identity+"」の紐づけを解除します。", "Unlink the Kitsu user \""+kitsuName+"\" from Discord user \""+identity+"\".")) + `"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + esc(fmt.Sprint(mapped.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Unlink")) + `</button></form>`
 		}
 		rows.WriteString(`<tr class="user-link-grid-row"><td data-label="` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `">` + esc(person.FullName) + `</td><td data-label="` + esc(t(lang, "Discordユーザー", "Discord user")) + `">` + esc(identity) + `</td><td data-label="` + esc(t(lang, "状態", "Status")) + `"><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td data-label="` + esc(t(lang, "操作", "Actions")) + `"><div class="user-link-actions">` + form + `</div></td></tr>`)
 	}
 	if len(people) == 0 {
 		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "Kitsuユーザーが見つかりません", "No Kitsu users were returned")) + `</strong></td></tr>`)
 	}
-	body := `<section class="section-stack"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + serverForm + message + `</section><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	body := `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + serverForm + message + `</section><div class="table-wrap user-linking-table"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
@@ -2695,7 +2792,7 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 		if showStatus {
 			status = `<span class="wizard-plan-status wizard-plan-status-` + esc(entry.Action) + `">` + esc(wizardPlanActionLabel(lang, entry.Action)) + `</span>`
 		}
-		rows.WriteString(`<tr draggable="true" data-task-type="` + esc(entry.TaskTypeID) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><span class="wizard-drag-handle" aria-hidden="true">↕</span><strong>` + esc(entry.DisplayName()) + `</strong><div class="wizard-move-controls"><button type="button" class="wizard-move" data-move="up" aria-label="` + esc(t(lang, "上へ移動", "Move up")) + `">↑</button><button type="button" class="wizard-move" data-move="down" aria-label="` + esc(t(lang, "下へ移動", "Move down")) + `">↓</button></div></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-prefix">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required>` + status + `<input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td></tr>`)
+		rows.WriteString(`<tr draggable="true" data-task-type="` + esc(entry.TaskTypeID) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><span class="wizard-drag-handle" aria-hidden="true">↕</span><strong>` + esc(entry.DisplayName()) + `</strong><div class="wizard-move-controls"><button type="button" class="wizard-move" data-move="up" aria-label="` + esc(t(lang, "上へ移動", "Move up")) + `">↑</button><button type="button" class="wizard-move" data-move="down" aria-label="` + esc(t(lang, "下へ移動", "Move down")) + `">↓</button></div></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-control"><span class="wizard-channel-prefix" aria-hidden="true">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required></span>` + status + `<input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td></tr>`)
 	}
 	body := `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[plan.Valid()] + `">` + esc(wizardPlanStateLabel(lang, plan.Valid())) + `</span></div><form method="GET" action="` + esc(withLang("/bot/setup", r)) + `"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><div class="table-wrap wizard-plan-table"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th></tr></thead><tbody data-wizard-plan-sort>` + rows.String() + `</tbody></table></div>`
 	if !plan.Valid() {
@@ -2713,7 +2810,7 @@ func renderWizardPlanPolished(lang string, r *http.Request, project KitsuProject
 	included := map[string]bool{}
 	for _, entry := range plan.Entries {
 		included[entry.TaskTypeID] = true
-		rows.WriteString(`<tr draggable="true" tabindex="0" data-task-type="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(trf(lang, "wizard.row_move_hint", entry.DisplayName())) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><strong>` + esc(entry.DisplayName()) + `</strong><input type="hidden" name="included_task_type_id" value="` + esc(entry.TaskTypeID) + `"></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-prefix">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required><input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td><td><button type="submit" name="action" value="exclude" class="wizard-exclude" data-exclude="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(tr(lang, "wizard.exclude")) + `">×</button></td></tr>`)
+		rows.WriteString(`<tr draggable="true" tabindex="0" data-task-type="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(trf(lang, "wizard.row_move_hint", entry.DisplayName())) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><strong>` + esc(entry.DisplayName()) + `</strong><input type="hidden" name="included_task_type_id" value="` + esc(entry.TaskTypeID) + `"></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-control"><span class="wizard-channel-prefix" aria-hidden="true">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required></span><input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td><td><button type="submit" name="action" value="exclude" class="wizard-exclude" data-exclude="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(tr(lang, "wizard.exclude")) + `">×</button></td></tr>`)
 	}
 	var excluded strings.Builder
 	for _, taskType := range allTaskTypes {
@@ -2874,7 +2971,7 @@ func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, proje
 	type card struct{ label, path, description, first, second, firstClass, secondClass string }
 	cards := []card{
 		{tr(lang, "connections.title"), "/bot/admin/bot", t(lang, "KitsuとDiscordの接続状態を確認します。", "Kitsu and Discord connection health."), dashboardConnectionLabel(lang, "Kitsu", readiness.KitsuConfigured), dashboardConnectionLabel(lang, "Discord", readiness.DiscordConfigured), map[bool]string{true: "ok", false: "warning"}[readiness.KitsuConfigured], map[bool]string{true: "ok", false: "warning"}[readiness.DiscordConfigured]},
-		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みプロダクションの状態と設定を確認します。", "Connected Production state and settings. Productions needing attention: "+strconv.Itoa(attentionCount)+". Needs attention is shown here when applicable."), strconv.Itoa(connectedProductionCount(projects)), strconv.Itoa(attentionCount), "ok", map[bool]string{true: "warning", false: "ok"}[attentionCount > 0]},
+		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みプロダクションの状態と設定を確認します。", "Connected Production state and settings."), strconv.Itoa(connectedProductionCount(projects)), strconv.Itoa(attentionCount), "ok", map[bool]string{true: "warning", false: "ok"}[attentionCount > 0]},
 		{tr(lang, "ia.user_mapping"), "/bot/admin/users", t(lang, "人間のKitsuユーザーとDiscordユーザーの紐づけを管理します。", "Human Kitsu-to-Discord links."), t(lang, "設定済", "Configured"), "", "ok", ""},
 		{tr(lang, "ia.system_status"), "/bot/admin/health", t(lang, "未設定の場合は接続設定が必要です。システム状態と通知の利用可否を確認します。", "Setup required when a connection is not configured. System health and notification availability."), readinessViewFor(lang, r, readiness).Label, t(lang, "利用不可", "Unavailable"), "warning", "warning"},
 		{tr(lang, "ia.audit_log"), "/bot/admin/audit", t(lang, "操作履歴と通知イベントを確認します。", "Action history and notification events."), t(lang, "記録なし", "No records"), "", "muted", ""},
@@ -2888,7 +2985,7 @@ func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, proje
 	cards[1].first = fmt.Sprintf("%s %d", t(lang, "接続済", "Connected"), connectedProductionCount(projects))
 	cards[1].second = productionAttention
 	var body strings.Builder
-	body.WriteString(`<section class="dashboard-cta"><div><h2>` + esc(tr(lang, "ia.new_connection")) + `</h2><p class="hint">` + esc(t(lang, "新しいプロダクションを接続", "Connect a Kitsu Production to a Discord server.")) + `</p></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しい接続を開始", "Open setup")) + `</a></section><section class="dashboard-menu"><h2>` + esc(t(lang, "管理メニュー", "Management")) + `</h2><div class="dashboard-menu-grid">`)
+	body.WriteString(`<section class="dashboard-cta"><div><h2>` + esc(tr(lang, "ia.new_connection")) + `</h2></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しい接続を開始", "Open setup")) + `</a></section><section class="dashboard-menu"><h2>` + esc(t(lang, "管理メニュー", "Management")) + `</h2><div class="dashboard-menu-grid">`)
 	for _, item := range cards {
 		statusMarkup := `<span class="dashboard-status-chip ` + item.firstClass + `">` + esc(item.first) + `</span>`
 		if item.label == tr(lang, "connections.title") {

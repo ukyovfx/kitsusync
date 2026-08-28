@@ -118,6 +118,8 @@ docs/archive/diagrams/    Archived legacy docs source fragments retained in-repo
 - A Discord server where you can create webhooks
 - A reverse proxy in production if you want `/bot/*` under the same public host
 
+For the Discord bot, use the `bot` OAuth2 scope with `Manage Channels` and `Manage Webhooks`. Administrator is not required. Keep Presence Intent and Message Content Intent off. Enable Server Members Intent when using User Linking, because that screen reads the Guild member list to offer Discord users for linking.
+
 ## Quick Start
 
 ### 1. Clone and prepare config
