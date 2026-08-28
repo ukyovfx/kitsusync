@@ -1,6 +1,9 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: "0.4.4"
     restart: unless-stopped
     env_file:
       - .env.local
