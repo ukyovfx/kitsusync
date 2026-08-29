@@ -81,12 +81,20 @@ func TestUnmatchedTaskTypeFailsClosedAndRecordsDiagnosis(t *testing.T) {
 
 func TestSameNameTaskTypesRemainIsolatedByID(t *testing.T) {
 	db := newNotificationRoutingTestDB(t)
-	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil { t.Fatal(err) }
-	if err := model.CreateProjectWebhook(db, "p1", "A", "", "https://example.invalid/a", "11111111111111111"); err != nil { t.Fatal(err) }
+	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, "p1", "A", "", "https://example.invalid/a", "11111111111111111"); err != nil {
+		t.Fatal(err)
+	}
 	webhook := model.ListProjectWebhooks(db, "p1")[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: "p1", Enabled: true}, []model.ProductionNotificationRoute{{TaskTypeID: "tt1", TaskTypeName: "Same Name", DestinationWebhookID: webhook.ID}}); err != nil { t.Fatal(err) }
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: "p1", Enabled: true}, []model.ProductionNotificationRoute{{TaskTypeID: "tt1", TaskTypeName: "Same Name", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
 	plan := planProductionNotification(db, notificationPayload("p1", "P", "tt2", "Same Name"))
-	if plan.ShouldSend { t.Fatal("same-name Task Type with a different ID was incorrectly routed") }
+	if plan.ShouldSend {
+		t.Fatal("same-name Task Type with a different ID was incorrectly routed")
+	}
 }
 
 func TestDryRunDetectsStaleTaskTypeID(t *testing.T) {
