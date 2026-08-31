@@ -50,3 +50,38 @@ func TestGetProjectTeamUsesProductionScopedReadEndpoint(t *testing.T) {
 		t.Fatalf("unexpected project team response: %+v", got)
 	}
 }
+
+func TestGetTasksWithErrorReportsHTTPFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
+	t.Setenv("KitsuJWTToken", "test-token")
+
+	got, err := GetTasksWithError()
+	if err == nil {
+		t.Fatal("expected Kitsu request failure")
+	}
+	if len(got.Each) != 0 {
+		t.Fatalf("failed request must not produce tasks: %+v", got.Each)
+	}
+}
+
+func TestGetTasksWithErrorAcceptsLegitimateEmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
+	t.Setenv("KitsuJWTToken", "test-token")
+
+	got, err := GetTasksWithError()
+	if err != nil {
+		t.Fatalf("legitimate empty response returned an error: %v", err)
+	}
+	if len(got.Each) != 0 {
+		t.Fatalf("expected no tasks, got %+v", got.Each)
+	}
+}

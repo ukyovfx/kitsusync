@@ -131,6 +131,13 @@ func ReadFromPath(path string) (Config, error) {
 func (c *Config) Validate() []string {
 	var issues []string
 
+	if c.Discord.EmbedsPerRequests <= 0 {
+		issues = append(issues, "[FATAL] discord.embedsPerRequests must be greater than zero")
+	}
+	if c.Discord.RequestsPerMinute <= 0 {
+		issues = append(issues, "[FATAL] discord.requestsPerMinute must be greater than zero")
+	}
+
 	// --- 必須フィールド ---
 	if strings.TrimSpace(c.Kitsu.Hostname) == "" {
 		issues = append(issues, "[SETUP] kitsu.hostname is empty — configure it in the Web UI or conf.toml")

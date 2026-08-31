@@ -30,3 +30,32 @@ func TestReadFromPathExpandsEnvironmentWithoutPersistingValues(t *testing.T) {
 		t.Fatalf("expected expanded hostname, got %q", loaded.Kitsu.Hostname)
 	}
 }
+
+func TestValidateRejectsNonPositiveDiscordBatchAndRateValues(t *testing.T) {
+	for _, value := range []int{0, -1} {
+		config := Config{}
+		config.Discord.EmbedsPerRequests = value
+		config.Discord.RequestsPerMinute = value
+
+		issues := config.Validate()
+		joined := strings.Join(issues, "\n")
+		if !strings.Contains(joined, "[FATAL] discord.embedsPerRequests must be greater than zero") {
+			t.Fatalf("value %d: expected batch validation issue, got %v", value, issues)
+		}
+		if !strings.Contains(joined, "[FATAL] discord.requestsPerMinute must be greater than zero") {
+			t.Fatalf("value %d: expected rate validation issue, got %v", value, issues)
+		}
+	}
+}
+
+func TestValidateAcceptsPositiveDiscordBatchAndRateValues(t *testing.T) {
+	config := Config{}
+	config.Discord.EmbedsPerRequests = 10
+	config.Discord.RequestsPerMinute = 30
+
+	for _, issue := range config.Validate() {
+		if strings.Contains(issue, "discord.embedsPerRequests") || strings.Contains(issue, "discord.requestsPerMinute") {
+			t.Fatalf("positive values should not produce divisor/rate issue: %v", issue)
+		}
+	}
+}

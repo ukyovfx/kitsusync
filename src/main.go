@@ -34,46 +34,70 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func MakeKitsuResponse(conf config.Config) []kitsu.MessagePayload {
+func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 
-	tasks := kitsu.GetTasks()
+	tasks, err := kitsu.GetTasksWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch tasks: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got tasks: " + strconv.Itoa(len(tasks.Each)))
 	}
 
-	taskStatuses := kitsu.GetTaskStatuses()
+	taskStatuses, err := kitsu.GetTaskStatusesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch task statuses: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got taskStatuses: " + strconv.Itoa(len(taskStatuses.Each)))
 	}
 
-	entities := kitsu.GetEntities()
+	entities, err := kitsu.GetEntitiesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch entities: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got entities: " + strconv.Itoa(len(entities.Each)))
 	}
 
-	enitityTypes := kitsu.GetEntityTypes()
+	enitityTypes, err := kitsu.GetEntityTypesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch entity types: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got enitityTypes: " + strconv.Itoa(len(enitityTypes.Each)))
 	}
 
-	projects := kitsu.GetProjects()
+	projects, err := kitsu.GetProjectsWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch projects: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got projects: " + strconv.Itoa(len(projects.Each)))
 	}
 
-	taskTypes := kitsu.GetTaskTypes()
+	taskTypes, err := kitsu.GetTaskTypesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch task types: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got taskTypes: " + strconv.Itoa(len(taskTypes.Each)))
 	}
 
-	persons := kitsu.GetPersons()
+	persons, err := kitsu.GetPersonsWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch persons: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got persons: " + strconv.Itoa(len(persons.Each)))
 	}
 
 	var comments kitsu.Comments
 	if conf.Kitsu.SkipComments == false {
-		comments = kitsu.GetComments()
+		comments, err = kitsu.GetCommentsWithError()
+		if err != nil {
+			return nil, fmt.Errorf("fetch comments: %w", err)
+		}
 		if conf.Log {
 			slog.Info("Got comments: " + strconv.Itoa(len(comments.Each)))
 		}
@@ -208,7 +232,7 @@ func MakeKitsuResponse(conf config.Config) []kitsu.MessagePayload {
 		log.Printf("Done secondary loop in %s", time.Since(start))
 	}
 
-	return out
+	return out, nil
 }
 
 type notificationRouteStats struct {
@@ -550,6 +574,7 @@ var pollMu sync.Mutex
 // notificationDispatch is replaceable in tests so routing behavior can be
 // verified without making a Discord request.
 var notificationDispatch = DiscordQueueSend
+var makeKitsuResponse = MakeKitsuResponse
 
 func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) {
 	model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
@@ -568,7 +593,12 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	started := time.Now()
 
 	// Poll Kitsu with runtime credentials from DB/env/conf priority.
-	kitsuResponse := MakeKitsuResponse(conf)
+	kitsuResponse, err := makeKitsuResponse(conf)
+	if err != nil {
+		setup.Stats.RecordPollError(err.Error())
+		slog.Error("Kitsu poll failed", "error_class", "kitsu_fetch_failed", "err", err)
+		return
+	}
 	if conf.Log {
 		slog.Info("Done MakeKitsuResponse")
 	}
@@ -674,12 +704,17 @@ func main() {
 	}
 
 	if issues := conf.Validate(); len(issues) > 0 {
+		fatalConfig := false
 		for _, msg := range issues {
 			if strings.HasPrefix(msg, "[FATAL]") {
+				fatalConfig = true
 				slog.Error("config validation: " + msg)
 			} else {
 				slog.Warn("config validation: " + msg)
 			}
+		}
+		if fatalConfig {
+			log.Fatal("configuration validation failed")
 		}
 	}
 

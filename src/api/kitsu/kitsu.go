@@ -209,11 +209,16 @@ type MessagePayload struct {
 }
 
 func GetComments() Comments {
+	response, _ := GetCommentsWithError()
+	return response
+}
+
+func GetCommentsWithError() (Comments, error) {
 	path := kitsuBase() + "api/data/comments"
 	response := Comments{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
-	return response
+	return response, err
 }
 
 func GetComment(objectID string) Comments {
@@ -225,11 +230,16 @@ func GetComment(objectID string) Comments {
 }
 
 func GetTasks() Tasks {
+	response, _ := GetTasksWithError()
+	return response
+}
+
+func GetTasksWithError() (Tasks, error) {
 	path := kitsuBase() + "api/data/tasks?relations=true"
 	response := Tasks{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
-	return response
+	return response, err
 }
 
 func GetTask(taskID string) Task {
@@ -249,19 +259,29 @@ func GetPerson(personID string) Person {
 }
 
 func GetPersons() Persons {
-	path := kitsuBase() + "api/data/persons/"
-	response := Persons{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
-
+	response, _ := GetPersonsWithError()
 	return response
 }
 
+func GetPersonsWithError() (Persons, error) {
+	path := kitsuBase() + "api/data/persons/"
+	response := Persons{}
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+
+	return response, err
+}
+
 func GetEntities() Entities {
+	response, _ := GetEntitiesWithError()
+	return response
+}
+
+func GetEntitiesWithError() (Entities, error) {
 	path := kitsuBase() + "api/data/entities/"
 	response := Entities{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
-	return response
+	return response, err
 }
 
 func GetEntity(EntityID string) Entity {
@@ -273,11 +293,16 @@ func GetEntity(EntityID string) Entity {
 }
 
 func GetEntityTypes() EntityTypes {
+	response, _ := GetEntityTypesWithError()
+	return response
+}
+
+func GetEntityTypesWithError() (EntityTypes, error) {
 	path := kitsuBase() + "api/data/entity-types/"
 	response := EntityTypes{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
-	return response
+	return response, err
 }
 
 func GetEntityType(entityTypeID string) EntityType {
@@ -289,11 +314,16 @@ func GetEntityType(entityTypeID string) EntityType {
 }
 
 func GetTaskStatuses() TaskStatuses {
+	response, _ := GetTaskStatusesWithError()
+	return response
+}
+
+func GetTaskStatusesWithError() (TaskStatuses, error) {
 	path := kitsuBase() + "api/data/task-status/"
 	response := TaskStatuses{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
-	return response
+	return response, err
 }
 
 func GetTaskStatus(taskStatusID string) TaskStatus {
@@ -313,11 +343,16 @@ func GetTaskType(taskID string) TaskType {
 }
 
 func GetTaskTypes() TaskTypes {
+	response, _ := GetTaskTypesWithError()
+	return response
+}
+
+func GetTaskTypesWithError() (TaskTypes, error) {
 	path := kitsuBase() + "api/data/task-types/"
 	response := TaskTypes{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
-	return response
+	return response, err
 }
 
 // GetProjectTaskTypes returns only the Task Types associated with a selected
@@ -357,11 +392,16 @@ func GetProjectTeam(projectID string) []Person {
 }
 
 func GetProjects() Projects {
+	response, _ := GetProjectsWithError()
+	return response
+}
+
+func GetProjectsWithError() (Projects, error) {
 	path := kitsuBase() + "api/data/projects/"
 	response := Projects{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
-	return response
+	return response, err
 }
 
 func GetProjectStatus(projectStatusID string) ProjectStatus {
