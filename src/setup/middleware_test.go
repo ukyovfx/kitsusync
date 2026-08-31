@@ -103,6 +103,11 @@ func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
 	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
 		t.Fatal(err)
 	}

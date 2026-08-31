@@ -115,6 +115,11 @@ func TestProductionNotificationConfigPersistsAcrossDatabaseRestart(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	restartedSQLDB, err := restarted.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restartedSQLDB.Close()
 	config := FindProductionNotificationConfig(restarted, "p1")
 	if config == nil || !config.Enabled || len(ListProductionNotificationRoutes(restarted, "p1")) != 1 {
 		t.Fatal("routing configuration did not persist across restart")
