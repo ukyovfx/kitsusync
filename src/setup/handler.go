@@ -312,21 +312,9 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 		logs = append(logs, "deleted category")
 	}
 
-	if project != nil {
-		model.DeleteProjectScopedData(db, project.ID)
-	}
-	if err := model.DeleteProductionOperationalState(db, kitsuProjectID); err != nil {
-		logs = append(logs, "failed to delete production routing state")
-		return logs, fmt.Errorf("db delete production routing state: %w", err)
-	}
-
-	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
+	if err := DeleteProjectConnectionOnly(kitsuProjectID, db); err != nil {
 		logs = append(logs, "failed to delete project records from database")
-		return logs, fmt.Errorf("db delete webhooks: %w", err)
-	}
-	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.Project{}).Error; err != nil {
-		logs = append(logs, "failed to delete project record from database")
-		return logs, fmt.Errorf("db delete project: %w", err)
+		return logs, err
 	}
 	logs = append(logs, "deleted project records")
 	return logs, nil
@@ -342,18 +330,41 @@ func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 		if project == nil {
 			return fmt.Errorf("project not found: %s", kitsuProjectID)
 		}
-		model.DeleteProjectScopedData(tx, project.ID)
+		if err := model.DeleteProjectScopedData(tx, project.ID); err != nil {
+			return fmt.Errorf("db delete project-scoped data: %w", err)
+		}
 		if err := model.DeleteProductionOperationalState(tx, kitsuProjectID); err != nil {
 			return fmt.Errorf("db delete production routing state: %w", err)
 		}
 		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 			return fmt.Errorf("db delete webhooks: %w", err)
 		}
-		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.Project{}).Error; err != nil {
-			return fmt.Errorf("db delete project: %w", err)
+		result := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.Project{})
+		if result.Error != nil {
+			return fmt.Errorf("db delete project: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("db delete project: expected one row, removed %d", result.RowsAffected)
+		}
+		if model.FindProjectByKitsuID(tx, kitsuProjectID) != nil ||
+			len(model.ListProjectWebhooks(tx, kitsuProjectID)) != 0 ||
+			model.HasProductionOperationalState(tx, kitsuProjectID) {
+			return fmt.Errorf("db delete verification failed for project: %s", kitsuProjectID)
 		}
 		return nil
 	})
+}
+
+func isReadinessRecoveryAction(r *http.Request) bool {
+	if r == nil || r.Method != http.MethodPost {
+		return false
+	}
+	switch strings.TrimSpace(r.FormValue("action")) {
+	case "delete", "delete_final":
+		return true
+	default:
+		return false
+	}
 }
 
 func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeReady func() bool, onRuntimeConfigured func()) http.HandlerFunc {
@@ -453,7 +464,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			return
 		}
 
-		if runtimeReady != nil && !runtimeReady() {
+		if runtimeReady != nil && !runtimeReady() && !isReadinessRecoveryAction(r) {
 			fmt.Fprint(w, renderSetupRequiredPage(lang, r))
 			return
 		}

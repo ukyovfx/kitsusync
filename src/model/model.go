@@ -1246,10 +1246,23 @@ func resolveProjectCheckerDiscordID(db *gorm.DB, row ProjectCheckerMap) string {
 
 // DeleteProjectScopedData removes all project-scoped mapping rows for the given Project row ID.
 // Call this before deleting the Project record itself.
-func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) {
-	db.Where("project_id = ?", projectRowID).Delete(&ProjectUserMap{})
-	db.Where("project_id = ?", projectRowID).Delete(&ProjectCheckerMap{})
-	db.Where("project_id = ?", projectRowID).Delete(&ProjectSetting{})
+func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) error {
+	if db == nil || projectRowID == 0 {
+		return gorm.ErrInvalidData
+	}
+	for _, table := range []interface{}{
+		&ProjectUserMap{},
+		&ProjectCheckerMap{},
+		&ProjectSetting{},
+	} {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Where("project_id = ?", projectRowID).Delete(table).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListProjectUserMaps returns all user mappings for the given project row ID.

@@ -509,6 +509,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					effectiveGuildID = fallbackGuildID
 				}
 				execResult := executeConnectedProductionStrongDelete(lang, *project, effectiveGuildID, botToken, db)
+				if !execResult.ConnectionDeleted {
+					w.WriteHeader(http.StatusConflict)
+				}
 				fmt.Fprint(w, renderIAConnectedProductionDeleteResultRefined(lang, r, *project, execResult))
 				return
 			}
@@ -544,6 +547,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					effectiveGuildID = fallbackGuildID
 				}
 				execResult := executeConnectedProductionStrongDelete(lang, *project, effectiveGuildID, botToken, db)
+				if !execResult.ConnectionDeleted {
+					w.WriteHeader(http.StatusConflict)
+				}
 				fmt.Fprint(w, renderConnectedProductionStrongDeleteResultPage(lang, r, *project, execResult))
 				return
 			}
