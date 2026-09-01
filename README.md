@@ -89,7 +89,6 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 - `/bot/admin/health` — single System Status surface for status, verification, and diagnostics
 - `/bot/admin` — operational dashboard: system health, active projects, warnings
 - `/bot/admin/users` — map Kitsu users to Discord IDs for @mentions
-- `/bot/admin/checkers` — compatibility URL that redirects to User Linking
 
 Screenshot placeholders live in `screenshots/README.md`. Capture guidance lives in `screenshots/CAPTURE_GUIDE.md`.
 
@@ -104,10 +103,9 @@ See `docs/SETUP_WIZARD.md` for the current Project Management-first setup flow r
 docker-compose.yml        App + optional FileBrowser(debug profile only)
 .env.example              Environment variable template
 conf.toml.example         App configuration template
-docs.html / site.jsx      Browser docs page content
 src/                      Go application source
 tpl/                      Discord message templates
-docs/archive/diagrams/    Archived legacy docs source fragments retained in-repo
+docs/                     Current development, operations, and release procedures
 ```
 
 ## Requirements
@@ -346,11 +344,13 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 
 ## Documentation
 
+User documentation is maintained at https://rigoo.jp/.
+
 - Template variables and custom preset guide: `docs/TEMPLATES.md`
 - Dev vs production environment setup: `docs/ENVIRONMENTS.md`
 - First-time studio setup walkthrough: `docs/SETUP_FOR_STUDIOS.md`
 - Error messages and System Status troubleshooting: `docs/TROUBLESHOOTING.md`
-- Repo-local release notes and scope sync: `docs/notes/`
+- Authenticated release E2E: `docs/V044-AUTHENTICATED-E2E.md`
 
 ## Contributing and Security
 

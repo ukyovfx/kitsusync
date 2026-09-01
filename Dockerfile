@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y ca-certificates curl tzdata && rm -rf /
 WORKDIR /app
 COPY --from=builder /app/kitsu-discord .
 COPY --from=builder /app/tpl ./tpl
-COPY --from=builder /app/docs.html /app/site.jsx ./
 ARG COMMIT_SHA=unknown
 ARG WORKTREE_DIRTY=false
 ARG BUILD_SOURCE_ID=unknown

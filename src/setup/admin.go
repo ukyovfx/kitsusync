@@ -327,22 +327,6 @@ func AdminIndexWithRuntime(db *gorm.DB, runtimeHealthy func() bool) http.Handler
 			statusChip(map[bool]string{true: "ok", false: "bad"}[runtimeConfigured], t(lang, map[bool]string{true: "Runtime設定済み", false: "Runtime未設定"}[runtimeConfigured], map[bool]string{true: "Runtime set", false: "Runtime unset"}[runtimeConfigured])),
 		)
 
-		storageConfiguredCount := 0
-		for _, project := range projects {
-			if strings.TrimSpace(project.StorageURL) != "" {
-				storageConfiguredCount++
-			}
-		}
-		storageStatus := tileStatus(
-			statusChip(map[bool]string{true: "ok", false: "bad"}[storageConfiguredCount > 0], fmt.Sprintf(t(lang, "保存先設定: %d", "Storage set: %d"), storageConfiguredCount)),
-		)
-		if projectCount > storageConfiguredCount {
-			storageStatus = tileStatus(
-				statusChip(map[bool]string{true: "ok", false: "bad"}[storageConfiguredCount > 0], fmt.Sprintf(t(lang, "保存先設定: %d", "Storage set: %d"), storageConfiguredCount)),
-				statusChip("warn", fmt.Sprintf(t(lang, "未設定: %d", "Unset: %d"), projectCount-storageConfiguredCount)),
-			)
-		}
-
 		systemStatus := tileStatus(
 			statusChip(map[bool]string{true: "ok", false: "bad"}[pollingActive], t(lang, map[bool]string{true: "稼働中", false: "未ポーリング"}[pollingActive], map[bool]string{true: "Running", false: "No polls"}[pollingActive])),
 		)
@@ -376,7 +360,6 @@ func AdminIndexWithRuntime(db *gorm.DB, runtimeHealthy func() bool) http.Handler
 			{"\U0001F5C2", "/bot/admin/projects", "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions", connectedStatus},
 			{"\U0001F464", "/bot/admin/users", "\u30e6\u30fc\u30b6\u30fc\u5272\u308a\u5f53\u3066", "Users", usersStatus},
 			{"\U0001F916", "/bot/admin/bot", "Bot\u8a2d\u5b9a", "Bot Settings", botStatus},
-			{"\U0001F4C1", "/bot/admin/drive", "\u30b9\u30c8\u30ec\u30fc\u30b8", "Storage", storageStatus},
 			{"\u2764", "/bot/admin/health", "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "System Status", systemStatus},
 			{"\U0001F9FE", "/bot/admin/audit", "\u76e3\u67fb\u30ed\u30b0", "Audit Log", auditStatus},
 		}
@@ -1090,7 +1073,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 }
 
 func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Project, lang string, r *http.Request, statusClass, statusLabel, statusHint string, issues []string) string {
-	actionURL := withLang("/bot/admin/production-routing?project="+url.QueryEscape(project.KitsuProjectID), r)
+	actionURL := withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
 	config := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
 	taskTypes := routingTaskTypesForProduction(project.KitsuProjectID)
 	stateMessage := statusHint
@@ -2752,43 +2735,29 @@ document.addEventListener('DOMContentLoaded', function(){
 	}
 }
 
-func CheckersHandler(_ *gorm.DB, _ string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, withLang("/bot/admin/users", r), http.StatusSeeOther)
-	}
-}
-
 func DriveHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		lang := currentLang(r)
-		if r.Method == http.MethodPost {
-			projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
-			if model.IsValidationOnlyProject(db, projectID) {
-				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
-				return
-			}
-			storageURL := strings.TrimSpace(r.FormValue("storage_url"))
-			if storageURL != "" && !validConfiguredStorageURL(storageURL) {
-				http.Error(w, "storage URL must be an absolute HTTP or HTTPS URL", http.StatusBadRequest)
-				return
-			}
-			if projectID != "" {
-				model.SetProjectStorageURL(db, projectID, storageURL)
-			}
-			http.Redirect(w, r, withLang("/bot/admin/drive", r)+"&msg=saved", http.StatusSeeOther)
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
 			return
 		}
-		var blocks strings.Builder
-		for _, project := range model.ListProjects(db) {
-			blocks.WriteString(fmt.Sprintf(`<div class="section-card glass"><h3>%s</h3><form method="POST"><input type="hidden" name="kitsu_project_id" value="%s"><label>%s</label><input type="url" name="storage_url" value="%s" placeholder="https://drive.google.com/..."><div class="button-row"><button type="submit" class="btn">%s</button></div></form></div>`,
-				esc(project.Name), esc(project.KitsuProjectID), t(lang, "補助リンク", "Helper link"), esc(project.StorageURL), t(lang, "保存", "Save")))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
+		if model.IsValidationOnlyProject(db, projectID) {
+			http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
+			return
 		}
-		if blocks.Len() == 0 {
-			blocks.WriteString(emptyState("📁", t(lang, "まだプロジェクトがありません", "No projects yet"), t(lang, "先に新規連携セットアップで project routing を作成してから補助リンクを設定してください。", "Create project routing in New Connection Setup first, then add helper links here.")))
+		storageURL := strings.TrimSpace(r.FormValue("storage_url"))
+		if storageURL != "" && !validConfiguredStorageURL(storageURL) {
+			http.Error(w, "storage URL must be an absolute HTTP or HTTPS URL", http.StatusBadRequest)
+			return
 		}
-		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + t(lang, "プロジェクトごとの補助リンク（Drive など）を設定します。", "Set helper links per project (Drive, etc.).") + `</p></div>` + blocks.String() + `</div>`
-		fmt.Fprint(w, adminPage(lang, t(lang, "ストレージリンク", "Storage Links"), r, body))
+		if projectID != "" {
+			model.SetProjectStorageURL(db, projectID, storageURL)
+		}
+		target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings", r)
+		http.Redirect(w, r, target, http.StatusSeeOther)
+		return
 	}
 }
 
@@ -2820,7 +2789,7 @@ func connectionHealthStatus(lang string, configured, healthy bool) connectionSta
 	if healthy {
 		return connectionStatus{Class: "ok", Label: t(lang, "接続済み", "Connected")}
 	}
-	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Needs attention")}
+	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Needs review")}
 }
 
 func connectionSecretState(lang string, configured bool) connectionStatus {
@@ -2855,7 +2824,7 @@ func canonicalConnectionHealthStatus(lang string, configured, healthy bool) conn
 	if healthy {
 		return connectionStatus{Class: "ok", Label: t(lang, "\u63a5\u7d9a\u6e08\u307f", "Connected")}
 	}
-	return connectionStatus{Class: "warn", Label: t(lang, "\u8981\u78ba\u8a8d", "Needs attention")}
+	return connectionStatus{Class: "warn", Label: t(lang, "要確認", "Needs review")}
 }
 
 func canonicalConnectionPageStatus(lang string, readiness SharedBotRuntimeReadiness, kitsuHealthy, discordHealthy bool) connectionStatus {
@@ -2867,6 +2836,20 @@ func canonicalConnectionPageStatus(lang string, readiness SharedBotRuntimeReadin
 
 func connectionPageStatus(lang string, readiness SharedBotRuntimeReadiness, kitsuHealthy, discordHealthy bool) connectionStatus {
 	return canonicalConnectionPageStatus(lang, readiness, kitsuHealthy, discordHealthy)
+}
+
+func canonicalConnectionStatuses(lang string, db *gorm.DB, readiness SharedBotRuntimeReadiness, runtimeHealthy func() bool) (connectionStatus, connectionStatus) {
+	kitsuHealthy := false
+	if runtimeHealthy != nil {
+		kitsuHealthy = runtimeHealthy()
+	} else {
+		kitsuHealthy = checkKitsuStatus(normalizeKitsuHostname(KitsuHostForUI(db))).Authenticated
+	}
+	guildID := strings.TrimSpace(model.GetSetting(db, "discord.guild_id"))
+	botToken := storedRuntimeDiscordBotToken(db)
+	discord := checkDiscordStatus(botToken, guildID)
+	discordHealthy := discord.BotValid && (guildID == "" || discord.GuildValid)
+	return canonicalConnectionHealthStatus(lang, readiness.KitsuConfigured, kitsuHealthy), canonicalConnectionHealthStatus(lang, readiness.DiscordConfigured, discordHealthy)
 }
 
 func connectionStatusPill(value connectionStatus) string {
@@ -2895,15 +2878,9 @@ func renderConnectionsPageSafeWithRuntime(w http.ResponseWriter, r *http.Request
 	}
 	botToken := storedRuntimeDiscordBotToken(db)
 	readiness := sharedBotRuntimeReadiness(db, readinessHost, botToken)
-	guildID := strings.TrimSpace(model.GetSetting(db, "discord.guild_id"))
-	discordStatus := checkDiscordStatus(botToken, guildID)
-	kitsuHealthy := false
-	if runtimeHealthy != nil {
-		kitsuHealthy = runtimeHealthy()
-	} else {
-		kitsuHealthy = checkKitsuStatus(readinessHost).Authenticated
-	}
-	discordHealthy := discordStatus.BotValid && (guildID == "" || discordStatus.GuildValid)
+	kitsuStatus, discordStatus := canonicalConnectionStatuses(lang, db, readiness, runtimeHealthy)
+	kitsuHealthy := kitsuStatus.Class == "ok"
+	discordHealthy := discordStatus.Class == "ok"
 	pageStatus := canonicalConnectionPageStatus(lang, readiness, kitsuHealthy, discordHealthy)
 	statusClass, statusLabel := pageStatus.Class, pageStatus.Label
 	statusHint := t(lang, "Kitsu接続とDiscord Bot接続の状態を確認してください。", "Review the Kitsu and Discord Bot connection states.")

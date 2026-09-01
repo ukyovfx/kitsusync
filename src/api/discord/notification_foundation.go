@@ -97,7 +97,7 @@ func notificationCardDescription(data Template) string {
 	}
 	parts := make([]string, 0, 2)
 	if status != "" {
-		parts = append(parts, status)
+		parts = append(parts, "## "+status)
 	}
 	if message != "" {
 		parts = append(parts, message)

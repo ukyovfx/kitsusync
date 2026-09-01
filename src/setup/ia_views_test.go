@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -483,7 +484,7 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	if mainStart := strings.Index(body, `<main id="main-content">`); mainStart >= 0 {
 		body = body[mainStart:]
 	}
-	for _, want := range []string{"Setup required", "Configure the Kitsu connection before continuing.", "Needs attention", "Productions needing attention", "dashboard-menu-status", "dashboard-menu-card"} {
+	for _, want := range []string{"Not set", "Configure the Kitsu connection before continuing.", "Productions needing attention", "dashboard-menu-status", "dashboard-menu-card"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing readiness copy %q", want)
 		}
@@ -647,6 +648,42 @@ func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
 	}
 	if strings.Contains(body, "Dashboard Production") {
 		t.Fatal("dashboard activity data remains visible after removing the lower panels")
+	}
+}
+
+func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
+	for _, tc := range []struct {
+		lang, countLabel, recentLabel, emptyLabel, action string
+	}{
+		{"ja", "3件の記録", "最近の記録", "記録なし", "通知送信"},
+		{"en", "3 records", "Recent entries", "No records", "Notification sent"},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			db := newIAViewDB(t)
+			r := httptest.NewRequest("GET", "/bot/admin/audit?lang="+tc.lang, nil)
+			empty := renderDashboardMenuRefined(tc.lang, r, db, nil, 0, SharedBotRuntimeReadiness{}, nil)
+			if !strings.Contains(empty, tc.emptyLabel) {
+				t.Fatalf("dashboard omitted empty audit summary: %q", empty)
+			}
+			for i := 0; i < 3; i++ {
+				model.WriteAuditLog(db, model.AuditLog{ProjectID: "audit-p", ProjectName: "Audit Production", DiscordMsgID: fmt.Sprintf("message-%d", i), Success: true})
+			}
+			if got := model.CountAuditLogs(db); got != 3 {
+				t.Fatalf("canonical audit count = %d, want 3", got)
+			}
+			auditPage := httptest.NewRecorder()
+			renderIAAudit(auditPage, r, db)
+			if !strings.Contains(auditPage.Body.String(), tc.action) {
+				t.Fatalf("audit page omitted notification-send entry: %q", auditPage.Body.String())
+			}
+			dashboard := renderDashboardMenuRefined(tc.lang, r, db, nil, 0, SharedBotRuntimeReadiness{}, nil)
+			if !strings.Contains(dashboard, tc.countLabel) || !strings.Contains(dashboard, tc.recentLabel) {
+				t.Fatalf("dashboard omitted canonical audit summary: %q", dashboard)
+			}
+			if strings.Contains(dashboard, tc.emptyLabel) {
+				t.Fatalf("dashboard reported empty audit log despite entries: %q", dashboard)
+			}
+		})
 	}
 }
 
@@ -1400,7 +1437,7 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 	db := newIAViewDB(t)
 	readiness := SharedBotRuntimeReadiness{}
-	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, nil, 0, readiness)
+	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, nil, 0, readiness, nil)
 	order := []string{"Connections", "Production list", "User Linking", "System Status", "Audit Log"}
 	last := -1
 	for _, label := range order {
@@ -1416,9 +1453,6 @@ func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 	if strings.Contains(body, "Connect a Kitsu Production to a Discord server.") || strings.Contains(body, "Use Setup to start a new Production connection.") {
 		t.Fatal("dashboard CTA contains redundant supporting copy")
 	}
-	if strings.Count(body, `class="dashboard-status-chip warning">Unavailable<`) != 1 {
-		t.Fatal("system status card should expose one distinct notification state")
-	}
 	if strings.Contains(body, `class="dashboard-status-chip warning">Waiting<`) {
 		t.Fatal("system status card should not duplicate its overall state as a second badge")
 	}
@@ -1426,13 +1460,78 @@ func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 
 func TestDashboardRefinedMenuUsesConfiguredStateAndConnectedCount(t *testing.T) {
 	db := newIAViewDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatalf("store Kitsu token: %v", err)
+	}
+	model.SetSetting(db, "discord.guild_id", "guild-1")
+	setRuntimeDiscordBotToken(db, "configured-discord-token")
+	installDiscordAPIStub(t, "guild-1")
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true, OverallReady: true}
-	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, []model.Project{{Name: "Connected", KitsuProjectID: "connected"}}, 0, readiness)
+	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, []model.Project{{Name: "Connected", KitsuProjectID: "connected"}}, 0, readiness, func() bool { return true })
 	if !strings.Contains(body, `class="dashboard-status-chip ok">Configured<`) {
 		t.Fatal("configured User Linking state should use the positive status class")
 	}
 	if !strings.Contains(body, `Kitsu Connected`) || !strings.Contains(body, `Discord Connected`) {
 		t.Fatal("Connections card should label Kitsu and Discord statuses independently")
+	}
+}
+
+func TestDashboardConnectionStatusesMatchConnectionsPage(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatalf("store Kitsu token: %v", err)
+	}
+	model.SetSetting(db, "discord.guild_id", "guild-1")
+	setRuntimeDiscordBotToken(db, "configured-discord-token")
+	installDiscordAPIStub(t, "guild-1")
+	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
+	dashboard := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, nil, 0, readiness, func() bool { return false })
+	connections := renderConnectionsDisplayBodyWithHealthRaw("en", httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", "configured-discord-token", false, true)
+	if !strings.Contains(dashboard, `aria-label="Kitsu Needs review"`) || !strings.Contains(connections, `class="status-pill warn" role="status">Needs review</span>`) {
+		t.Fatal("Dashboard and Connections do not expose the same Kitsu review status")
+	}
+	if !strings.Contains(dashboard, `aria-label="Discord Connected"`) || !strings.Contains(connections, `class="status-pill ok" role="status">Connected</span>`) {
+		t.Fatal("Dashboard and Connections do not expose the same Discord connected status")
+	}
+}
+
+func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *testing.T) {
+	db := newIAViewDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatalf("store Kitsu token: %v", err)
+	}
+	model.SetSetting(db, "discord.guild_id", "guild-1")
+	setRuntimeDiscordBotToken(db, "configured-discord-token")
+	installDiscordAPIStub(t, "guild-1")
+	for _, tc := range []struct {
+		lang, label, hint string
+	}{
+		{"ja", "利用不可", "通知可能なプロダクションがありません。"},
+		{"en", "Unavailable", "No Production is currently available for notifications."},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			renderIADashboardWithRuntime(w, httptest.NewRequest("GET", "/bot/admin?lang="+tc.lang, nil), db, func() bool { return false })
+			body := w.Body.String()
+			if !strings.Contains(body, `Notification status`) && tc.lang == "en" {
+				t.Fatal("English dashboard is missing Notification status")
+			}
+			if !strings.Contains(body, `通知状態`) && tc.lang == "ja" {
+				t.Fatal("Japanese dashboard is missing 通知状態")
+			}
+			if !strings.Contains(body, tc.label) || !strings.Contains(body, tc.hint) {
+				t.Fatalf("dashboard missing unavailable notification copy: %q", body)
+			}
+			if strings.Contains(body, "Waiting for connection") || strings.Contains(body, "Waiting") || strings.Contains(body, "接続待ち") {
+				t.Fatal("dashboard retained ambiguous waiting language")
+			}
+		})
 	}
 }
 

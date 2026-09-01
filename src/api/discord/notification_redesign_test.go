@@ -119,6 +119,24 @@ func TestNotificationStatusColorUsesStableSemanticAccents(t *testing.T) {
 	}
 }
 
+func TestNotificationCardUsesDiscordMarkdownHierarchy(t *testing.T) {
+	useRepositoryRootForTemplates(t)
+	for _, status := range []string{"WFA", "RETAKE", "DONE"} {
+		payload := RenderNotificationPayload(Template{
+			EntityType: "Shot", TaskName: "cut001", TaskType: "Animation",
+			StatusUpper: status, StatusEmoji: "•", StatusMessage: "Review body",
+			NotificationLanguage: "en", Color: notificationStatusColor(status),
+		}, "rich")
+		description := payload.Embeds[0].Description
+		if !strings.HasPrefix(description, "## • "+status) {
+			t.Fatalf("%s status is not a Discord heading: %q", status, description)
+		}
+		if strings.Contains(description, "###") || strings.Contains(description, "-#") {
+			t.Fatalf("%s body hierarchy changed unexpectedly: %q", status, description)
+		}
+	}
+}
+
 func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 	useRepositoryRootForTemplates(t)
 	payload := RenderNotificationPayload(Template{
@@ -187,7 +205,7 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	if embed.Title != "Shot / SC02 - cut012" {
 		t.Fatalf("title must contain only shot context, got %q", embed.Title)
 	}
-	if embed.Description != "👀 WFA\n\nチェックをお願いします" {
+	if embed.Description != "## 👀 WFA\n\nチェックをお願いします" {
 		t.Fatalf("description must be the separated status/body block, got %q", embed.Description)
 	}
 	if embed.Footer.Text != "テスト通知" {

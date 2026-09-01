@@ -48,6 +48,15 @@ func ListAuditLogs(db *gorm.DB, limit int) []AuditLog {
 	return logs
 }
 
+func CountAuditLogs(db *gorm.DB) int64 {
+	if db == nil {
+		return 0
+	}
+	var count int64
+	db.Model(&AuditLog{}).Count(&count)
+	return count
+}
+
 func PurgeOldAuditLogs(db *gorm.DB, keepDays int) int64 {
 	cutoff := time.Now().AddDate(0, 0, -keepDays)
 	return db.Where("created_at < ?", cutoff).Delete(&AuditLog{}).RowsAffected

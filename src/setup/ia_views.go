@@ -180,8 +180,8 @@ func readinessViewFor(lang string, r *http.Request, readiness SharedBotRuntimeRe
 		view.ActionURL = withLang("/bot/admin/bot", r)
 		view.ActionLabel = t(lang, "接続設定", "Connection settings")
 	case ReadinessProductionRequired:
-		view.Label = t(lang, "接続待ち", "Not connected")
-		view.Hint = t(lang, "接続済みプロダクションがありません。", "No connected Productions yet.")
+		view.Label = t(lang, "利用不可", "Unavailable")
+		view.Hint = t(lang, "通知可能なプロダクションがありません。", "No Production is currently available for notifications.")
 		view.ActionURL = withLang("/bot/setup", r)
 		view.ActionLabel = tr(lang, "ia.new_connection")
 	case ReadinessRoutingRequired:
@@ -248,6 +248,10 @@ func dashboardProblemAction(r *http.Request, p model.Project, lang, hint string)
 }
 
 func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+	renderIADashboardWithRuntime(w, r, db, nil)
+}
+
+func renderIADashboardWithRuntime(w http.ResponseWriter, r *http.Request, db *gorm.DB, runtimeHealthy func() bool) {
 	lang := currentLang(r)
 	projects := availableProjects(db)
 	var attentionRows, activityRows strings.Builder
@@ -297,6 +301,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	readinessClass, readinessLabel, readinessHint := iaReadiness(db, lang)
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
 	readinessView := readinessViewFor(lang, r, readiness)
+	kitsuConnectionStatus, discordConnectionStatus := canonicalConnectionStatuses(lang, db, readiness, runtimeHealthy)
 	readinessClass = readinessView.Class
 	readinessLabel = readinessView.Label
 	readinessHint = readinessView.Hint
@@ -312,7 +317,6 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	}
 	nextActionURL = readinessView.ActionURL
 	nextActionLabel = readinessView.ActionLabel
-	botState := statusText(lang, readiness.DiscordConfigured)
 	statusExplanation := readinessHint
 	statusAction := ""
 	if !readiness.OverallReady {
@@ -322,7 +326,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if readiness.OverallReady {
 		quickActions = `<a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(tr(lang, "ia.production_list")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a>`
 	}
-	dashboardMenu := renderDashboardMenuRefined(lang, r, db, projects, attentionCount, readiness)
+	dashboardMenu := renderDashboardMenuRefined(lang, r, db, projects, attentionCount, readiness, runtimeHealthy)
 	dashboardAction := ""
 	if start := strings.Index(dashboardMenu, `<section class="dashboard-cta"`); start >= 0 {
 		if end := strings.Index(dashboardMenu[start:], `</section>`); end >= 0 {
@@ -335,9 +339,9 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		`<section class="dashboard-intro"><div><h1>` + esc(tr(lang, "ia.dashboard")) + `</h1><p class="hint">` + esc(t(lang, "KitsuSyncの接続状態と、対応が必要な項目を確認できます。", "Review KitsuSync connection state and items that need attention.")) + `</p></div><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin", r)) + `">` + esc(t(lang, "状態を更新", "Refresh status")) + `</a></div></section>` +
 		dashboardAction +
 		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なプロダクション", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
-		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "システム状態", "System status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
+		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "通知状態", "Notification status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
 		dashboardMenu +
-		`<div class="dashboard-lower-grid"><section class="section-card glass" aria-labelledby="dashboard-activity"><h2 id="dashboard-activity">` + esc(tr(lang, "ia.activity")) + `</h2><div class="activity-columns" aria-hidden="true"><span>` + esc(t(lang, "日時", "Date and time")) + `</span><span>` + esc(t(lang, "操作", "Action")) + `</span><span>` + esc(t(lang, "Production", "Production")) + `</span><span>` + esc(t(lang, "結果", "Result")) + `</span></div><ul class="activity-list" role="log">` + activityRows.String() + `</ul></section><div class="dashboard-side-stack"><section class="section-card glass" aria-labelledby="dashboard-system"><h2 id="dashboard-system">` + esc(t(lang, "通知システム", "Notification system")) + `</h2><div class="dashboard-status-list">` + dashboardStatusRow(t(lang, "Kitsu接続", "Kitsu connection"), map[bool]string{true: "success", false: "danger"}[readiness.KitsuConfigured], statusText(lang, readiness.KitsuConfigured)) + dashboardStatusRow(t(lang, "Discord Bot", "Discord Bot"), map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], botState) + dashboardStatusRow(t(lang, "通知状態", "Notification state"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], statusTextOverall(lang, readiness.OverallReady)) + `</div><p class="field-help" role="status">` + esc(statusExplanation) + `</p>` + statusAction + `</section><section class="section-card glass dashboard-quick" aria-labelledby="dashboard-quick"><h2 id="dashboard-quick">` + esc(t(lang, "クイック操作", "Quick actions")) + `</h2><div class="button-row">` + ifNonEmpty(quickActions, quickActions) + `</div></section></div></div>`
+		`<div class="dashboard-lower-grid"><section class="section-card glass" aria-labelledby="dashboard-activity"><h2 id="dashboard-activity">` + esc(tr(lang, "ia.activity")) + `</h2><div class="activity-columns" aria-hidden="true"><span>` + esc(t(lang, "日時", "Date and time")) + `</span><span>` + esc(t(lang, "操作", "Action")) + `</span><span>` + esc(t(lang, "Production", "Production")) + `</span><span>` + esc(t(lang, "結果", "Result")) + `</span></div><ul class="activity-list" role="log">` + activityRows.String() + `</ul></section><div class="dashboard-side-stack"><section class="section-card glass" aria-labelledby="dashboard-system"><h2 id="dashboard-system">` + esc(t(lang, "通知システム", "Notification system")) + `</h2><div class="dashboard-status-list">` + dashboardStatusRow(t(lang, "Kitsu接続", "Kitsu connection"), kitsuConnectionStatus.Class, kitsuConnectionStatus.Label) + dashboardStatusRow(t(lang, "Discord Bot", "Discord Bot"), discordConnectionStatus.Class, discordConnectionStatus.Label) + dashboardStatusRow(t(lang, "通知状態", "Notification status"), readinessView.NotificationClass, readinessView.Notification) + `</div><p class="field-help" role="status">` + esc(statusExplanation) + `</p>` + statusAction + `</section><section class="section-card glass dashboard-quick" aria-labelledby="dashboard-quick"><h2 id="dashboard-quick">` + esc(t(lang, "クイック操作", "Quick actions")) + `</h2><div class="button-row">` + ifNonEmpty(quickActions, quickActions) + `</div></section></div></div>`
 	body = replaceDashboardConnectedCount(body, len(projects), connectedProductionCount(projects))
 	body = removeDashboardSubtitle(body)
 	body = applyDashboardMetricSemantics(body, attentionCount, failureCount, readinessClass)
@@ -489,6 +493,7 @@ func removeDashboardSubtitle(body string) string {
 }
 
 func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCount, attentionCount int, readiness SharedBotRuntimeReadiness) string {
+	auditFirst, auditSecond, auditClass := dashboardAuditSummary(lang, db)
 	items := []struct {
 		key, path, ja, en, statusA, statusB, statusAClass, statusBClass string
 	}{
@@ -496,7 +501,7 @@ func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCo
 		{"ia.user_mapping", "/bot/admin/users", "KitsuユーザーとDiscordユーザーの紐づけを管理します。", "Manage Kitsu-to-Discord user links.", fmt.Sprintf("%d件", len(model.ListUserMap(db))), "ローカル設定", map[bool]string{true: "ok", false: "muted"}[len(model.ListUserMap(db)) > 0], "muted"},
 		{"connections.title", "/bot/admin/bot", "Kitsu接続とDiscord Bot接続を設定します。", "Configure the Kitsu and Discord Bot connections.", statusText(lang, readiness.KitsuConfigured), statusText(lang, readiness.DiscordConfigured), map[bool]string{true: "ok", false: "warning"}[readiness.KitsuConfigured], map[bool]string{true: "ok", false: "warning"}[readiness.DiscordConfigured]},
 		{"ia.system_status", "/bot/admin/health", "接続状態と通知の利用可否を確認します。", "Review connection state and notification availability.", readinessViewFor(lang, r, readiness).Label, statusTextOverall(lang, readiness.OverallReady), map[bool]string{true: "ok", false: "warning"}[readiness.OverallReady], map[bool]string{true: "ok", false: "warning"}[readiness.OverallReady]},
-		{"ia.audit_log", "/bot/admin/audit", "操作履歴と通知イベントを確認します。", "Review action history and notification events.", fmt.Sprintf("%d件", len(model.ListAuditLogs(db, 5))), "最近の記録", map[bool]string{true: "ok", false: "muted"}[len(model.ListAuditLogs(db, 5)) > 0], "muted"},
+		{"ia.audit_log", "/bot/admin/audit", "操作履歴と通知イベントを確認します。", "Review action history and notification events.", auditFirst, auditSecond, auditClass, "muted"},
 	}
 	var cards strings.Builder
 	for i, item := range items {
@@ -507,6 +512,14 @@ func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCo
 		cards.WriteString(`<a class="dashboard-menu-card" href="` + esc(withLang(item.path, r)) + `"><span class="dashboard-menu-icon" aria-hidden="true">` + strconv.Itoa(i+1) + `</span><span class="dashboard-menu-copy"><strong>` + esc(tr(lang, item.key)) + `</strong><span class="field-help">` + esc(description) + `</span></span><span class="dashboard-menu-status"><span class="dashboard-status-chip ` + esc(item.statusAClass) + `">` + esc(item.statusA) + `</span><span class="dashboard-status-chip ` + esc(item.statusBClass) + `">` + esc(item.statusB) + `</span></span></a>`)
 	}
 	return `<div class="dashboard-menu-wrap"><section class="dashboard-cta" aria-labelledby="dashboard-new-connection"><div><span class="dashboard-cta-kicker">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</span><h2 id="dashboard-new-connection">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</h2></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しいプロダクションを接続", "Open setup")) + `</a></section><section class="dashboard-menu" aria-labelledby="dashboard-menu-title"><div class="page-heading"><div><h2 id="dashboard-menu-title">` + esc(t(lang, "管理メニュー", "Management")) + `</h2></div></div><div class="dashboard-menu-grid">` + cards.String() + `</div></section></div>`
+}
+
+func dashboardAuditSummary(lang string, db *gorm.DB) (string, string, string) {
+	count := model.CountAuditLogs(db)
+	if count == 0 {
+		return t(lang, "記録なし", "No records"), "", "muted"
+	}
+	return fmt.Sprintf(t(lang, "%d件の記録", "%d records"), count), t(lang, "最近の記録", "Recent entries"), "ok"
 }
 
 func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB, fallbackGuildID string) {
@@ -2963,25 +2976,27 @@ func renderWizardComplete(lang string, r *http.Request, db *gorm.DB, target inte
 	return `<section class="section-card glass" role="status" aria-live="polite"><h2>` + esc(tr(lang, "wizard.complete_title")) + `</h2><p>` + esc(trf(lang, "wizard.complete_message", name)) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(projectID), r)) + `">` + esc(tr(lang, "wizard.open_production")) + `</a></section>`
 }
 
-func renderIADashboardWithRuntime(w http.ResponseWriter, r *http.Request, db *gorm.DB, runtimeHealthy func() bool) {
-	renderIADashboard(w, r, db)
-}
-
-func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, projects []model.Project, attentionCount int, readiness SharedBotRuntimeReadiness) string {
+func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, projects []model.Project, attentionCount int, readiness SharedBotRuntimeReadiness, runtimeHealthy func() bool) string {
 	type card struct{ label, path, description, first, second, firstClass, secondClass string }
+	systemLabel, systemClass, _ := overallRuntimeStatus(lang, readiness, Stats.Snapshot())
+	auditFirst, auditSecond, auditClass := dashboardAuditSummary(lang, db)
 	cards := []card{
-		{tr(lang, "connections.title"), "/bot/admin/bot", t(lang, "KitsuとDiscordの接続状態を確認します。", "Kitsu and Discord connection health."), dashboardConnectionLabel(lang, "Kitsu", readiness.KitsuConfigured), dashboardConnectionLabel(lang, "Discord", readiness.DiscordConfigured), map[bool]string{true: "ok", false: "warning"}[readiness.KitsuConfigured], map[bool]string{true: "ok", false: "warning"}[readiness.DiscordConfigured]},
+		{tr(lang, "connections.title"), "/bot/admin/bot", t(lang, "KitsuとDiscordの接続状態を確認します。", "Kitsu and Discord connection health."), "", "", "", ""},
 		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みプロダクションの状態と設定を確認します。", "Connected Production state and settings."), strconv.Itoa(connectedProductionCount(projects)), strconv.Itoa(attentionCount), "ok", map[bool]string{true: "warning", false: "ok"}[attentionCount > 0]},
 		{tr(lang, "ia.user_mapping"), "/bot/admin/users", t(lang, "人間のKitsuユーザーとDiscordユーザーの紐づけを管理します。", "Human Kitsu-to-Discord links."), t(lang, "設定済", "Configured"), "", "ok", ""},
-		{tr(lang, "ia.system_status"), "/bot/admin/health", t(lang, "未設定の場合は接続設定が必要です。システム状態と通知の利用可否を確認します。", "Setup required when a connection is not configured. System health and notification availability."), readinessViewFor(lang, r, readiness).Label, t(lang, "利用不可", "Unavailable"), "warning", "warning"},
+		{tr(lang, "ia.system_status"), "/bot/admin/health", t(lang, "実測されたシステム健全性を確認します。", "Review measured system health."), systemLabel, "", systemClass, ""},
 		{tr(lang, "ia.audit_log"), "/bot/admin/audit", t(lang, "操作履歴と通知イベントを確認します。", "Action history and notification events."), t(lang, "記録なし", "No records"), "", "muted", ""},
 	}
+	cards[4].first, cards[4].second, cards[4].firstClass = auditFirst, auditSecond, auditClass
+	kitsuStatus, discordStatus := canonicalConnectionStatuses(lang, db, readiness, runtimeHealthy)
 	productionAttention := ""
 	if attentionCount > 0 {
 		productionAttention = fmt.Sprintf("%s %d", t(lang, "要確認", "Needs review"), attentionCount)
 	}
-	cards[0].first = statusText(lang, readiness.KitsuConfigured)
-	cards[0].second = statusText(lang, readiness.DiscordConfigured)
+	cards[0].first = kitsuStatus.Label
+	cards[0].second = discordStatus.Label
+	cards[0].firstClass = kitsuStatus.Class
+	cards[0].secondClass = discordStatus.Class
 	cards[1].first = fmt.Sprintf("%s %d", t(lang, "接続済", "Connected"), connectedProductionCount(projects))
 	cards[1].second = productionAttention
 	var body strings.Builder
@@ -3000,14 +3015,6 @@ func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, proje
 	}
 	body.WriteString(`</div></section>`)
 	return body.String()
-}
-
-func dashboardConnectionLabel(lang, service string, configured bool) string {
-	status := t(lang, "未設定", "Not configured")
-	if configured {
-		status = t(lang, "接続済", "Connected")
-	}
-	return service + " " + status
 }
 
 func connectedProductionCount(projects []model.Project) int {

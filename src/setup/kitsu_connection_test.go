@@ -205,8 +205,8 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	}
 	setRuntimeDiscordBotToken(db, "discord-test-token")
 
-	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil), db, "", "warn", "Needs attention", "https://kitsu.example.test", false, false, "Test Bot")
-	for _, want := range []string{"Needs attention", "Recheck connection", "Change token", `hidden style="display:none"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
+	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", false, false, "Test Bot")
+	for _, want := range []string{"Needs review", "Recheck connection", "Change token", `hidden style="display:none"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("saved-secret form missing %q", want)
 		}
@@ -249,7 +249,7 @@ func TestConnectionsPageStatusUsesOnlyConnectionHealth(t *testing.T) {
 			t.Fatalf("%s missing connections status = %+v", lang, missing)
 		}
 		failed := connectionPageStatus(lang, configured, false, true)
-		if failed.Class != "warn" || failed.Label != map[string]string{"ja": "要確認", "en": "Needs attention"}[lang] {
+		if failed.Class != "warn" || failed.Label != map[string]string{"ja": "要確認", "en": "Needs review"}[lang] {
 			t.Fatalf("%s failed connections status = %+v", lang, failed)
 		}
 		pills := renderConnectionHealthPills(lang, true, true, "configured-secret")
@@ -261,7 +261,17 @@ func TestConnectionsPageStatusUsesOnlyConnectionHealth(t *testing.T) {
 
 func TestConnectionsUsesCanonicalRuntimeHealthForKitsu(t *testing.T) {
 	db := newSetupStateTestDB(t)
-	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	t.Setenv("KITSU_HOSTNAME", server.URL)
+	model.SetSetting(db, "kitsu.hostname", server.URL)
 	model.SetSetting(db, RuntimeKitsuEmailSettingKey, "runtime@example.test")
 	if err := setRuntimeKitsuToken(db, "configured-token"); err != nil {
 		t.Fatalf("store test token: %v", err)

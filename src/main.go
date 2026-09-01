@@ -853,8 +853,6 @@ func main() {
 
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
-	registerDocsRoutes(mux)
-
 	mux.HandleFunc("/health", healthHandler(runtime))
 
 	onRuntimeConfigured := func() {
@@ -931,10 +929,6 @@ func main() {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/checkers", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
-			h, _, _ := getKitsuCreds(db, conf)
-			setup.CheckersHandler(db, h)(w, r)
-		})))
 		mux.HandleFunc(prefix+"/admin/drive", setup.RequireSession(setup.DriveHandler(db)))
 		// BotHandler persists shared runtime credentials and triggers reconnect.
 		kitsuReconnect := func() { onRuntimeConfigured() }
@@ -947,29 +941,8 @@ func main() {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/production-routing", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				setup.ProductionRoutingCompatibilityHandler()(w, r)
-				return
-			}
-			setup.ProductionRoutingHandler(db)(w, r)
-		}))
-		mux.HandleFunc(prefix+"/admin/workflow-diagnosis", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				setup.WorkflowDiagnosisCompatibilityHandler()(w, r)
-				return
-			}
-			setup.WorkflowDiagnosisHandler(db, func() (string, string) {
-				host, _, _ := getKitsuCreds(db, conf)
-				return host, strings.TrimSpace(os.Getenv("KitsuJWTToken"))
-			})(w, r)
-		}))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
-		mux.HandleFunc(prefix+"/admin/provenance", setup.RequireSession(setup.ReadModelProvenanceHandler(db)))
-		mux.HandleFunc(prefix+"/admin/diagnostics", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/bot/admin/health", http.StatusFound)
-		}))
 	}
 	registerAdminRoutes("")
 	registerAdminRoutes("/bot")

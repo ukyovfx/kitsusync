@@ -2,8 +2,6 @@ package setup
 
 import (
 	"app/src/model"
-	"encoding/json"
-	"net/http"
 	"strings"
 
 	"gorm.io/gorm"
@@ -127,14 +125,4 @@ func containsKitsuPerson(people []KitsuPerson, id string) bool {
 		}
 	}
 	return false
-}
-
-func ReadModelProvenanceHandler(db *gorm.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		if err := json.NewEncoder(w).Encode(ReadModelProvenanceSnapshot(db)); err != nil {
-			http.Error(w, "diagnostic unavailable", http.StatusInternalServerError)
-		}
-	}
 }
