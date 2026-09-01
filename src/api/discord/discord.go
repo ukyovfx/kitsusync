@@ -371,6 +371,13 @@ func mentionContent(ids []string) string {
 	return strings.Join(mentions, " ")
 }
 
+func assigneeDisplayName(name, discordID string) string {
+	if isValidDiscordUserID(discordID) {
+		return "<@" + discordID + ">"
+	}
+	return sanitizeDiscordText(name)
+}
+
 func notificationRecipientCandidates(status string, assignNotification bool, assignees, checkers []string, conf config.Config) []string {
 	if assignNotification {
 		var candidates []string
@@ -735,6 +742,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// 同じ Kitsu 名が userMap に複数行で書かれていても 1 回しか mention しないよう、
 		// 既に追加した DiscordID を seen で重複排除する。
 		var assigneeNames []string
+		var assigneeMentionIDs []string
 		var artistMentions []string
 		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
 		for i := 0; i < len(elem.Assignees); i++ {
@@ -745,14 +753,15 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			fullName := elem.Assignees[i].FullName
 			placeholders.Assignees[i].Fullname = sanitizeDiscordText(fullName)
 			placeholders.Assignees[i].Email = elem.Assignees[i].Email
-			assigneeNames = append(assigneeNames, sanitizeDiscordText(fullName))
+			displayName := sanitizeDiscordText(fullName)
+			var linkedDiscordID string
 
 			matched := false
 			// DB 優先: UserMapResolver が注入されていれば使う（プロジェクトスコープ → グローバル フォールバック対応）
 			if UserMapResolver != nil {
 				assigneeEmail := elem.Assignees[i].Email
 				if did := UserMapResolver(elem.Project.ID, fullName, assigneeEmail); did != "" {
-					artistMentions = append(artistMentions, did)
+					linkedDiscordID = strings.TrimSpace(did)
 					matched = true
 				}
 			}
@@ -760,7 +769,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			if !matched {
 				for _, u := range conf.Mention.UserMap {
 					if u.KitsuName == fullName {
-						artistMentions = append(artistMentions, u.DiscordID)
+						linkedDiscordID = strings.TrimSpace(u.DiscordID)
 						matched = true
 						break
 					}
@@ -772,6 +781,12 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 					"taskID", elem.Task.ID,
 					"hint", "add this person via /bot/admin/users")
 			}
+			if isValidDiscordUserID(linkedDiscordID) && len(assigneeMentionIDs) < maxNotificationRecipients {
+				assigneeMentionIDs = append(assigneeMentionIDs, linkedDiscordID)
+				displayName = assigneeDisplayName(fullName, linkedDiscordID)
+				artistMentions = append(artistMentions, linkedDiscordID)
+			}
+			assigneeNames = append(assigneeNames, displayName)
 		}
 		if len(assigneeNames) > 0 {
 			placeholders.AssigneesStr = strings.Join(assigneeNames, ", ")
@@ -873,7 +888,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)
 
 		placeholders.NotificationLanguage = notifLang
-		placeholders.AllowedUserIDs = recipientIDs
+		placeholders.AllowedUserIDs = uniqueDiscordIDs(append(append([]string{}, recipientIDs...), assigneeMentionIDs...))
 		placeholders.Color = int(intColor)
 		payload := RenderNotificationPayload(placeholders, tplPreset)
 

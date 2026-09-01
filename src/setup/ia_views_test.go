@@ -455,6 +455,9 @@ func TestCurrentIADeleteResultSuccessIsCompactAndDoesNotRenderFollowUp(t *testin
 				t.Fatalf("%s success result missing summary or return link %q", lang, want)
 			}
 		}
+		if strings.Count(body, `class="status-list delete-result-summary"`) != 1 || !strings.Contains(body, `class="status-list delete-result-summary"><div><dt>Production</dt><dd>`) {
+			t.Fatalf("%s delete summary does not use aligned row structure", lang)
+		}
 	}
 }
 

@@ -146,6 +146,30 @@ func TestNotificationCardUsesDiscordMarkdownHierarchy(t *testing.T) {
 	}
 }
 
+func TestAssigneeDisplayUsesOnlyValidatedLinkedUserMentions(t *testing.T) {
+	if got := assigneeDisplayName("Artist A", "123456789012345678"); got != "<@123456789012345678>" {
+		t.Fatalf("linked assignee = %q", got)
+	}
+	if got := assigneeDisplayName("Artist <A>", "not-an-id"); got != "Artist ＜A＞" {
+		t.Fatalf("unlinked assignee = %q", got)
+	}
+	data := Template{
+		EntityType: "Shot", TaskName: "cut001", StatusUpper: "WFA", StatusEmoji: "•",
+		StatusMessage: "Please review", AssigneesStr: "<@123456789012345678>",
+		AllowedUserIDs: []string{"123456789012345678"}, NotificationLanguage: "en",
+	}
+	payload := RenderNotificationPayload(data, "rich")
+	if !strings.Contains(payload.Embeds[0].Fields[1].Value, "<@123456789012345678>") {
+		t.Fatalf("linked mention missing from assignee field: %+v", payload.Embeds)
+	}
+	if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123456789012345678" {
+		t.Fatalf("allowed mentions = %v", payload.AllowedMentions.Users)
+	}
+	if len(payload.AllowedMentions.Parse) != 0 || len(payload.AllowedMentions.Roles) != 0 {
+		t.Fatalf("broad mention parsing enabled: %+v", payload.AllowedMentions)
+	}
+}
+
 func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 	useRepositoryRootForTemplates(t)
 	payload := RenderNotificationPayload(Template{
@@ -217,7 +241,7 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	if embed.Title != "Shot / SC02 - cut012" {
 		t.Fatalf("title must contain only shot context, got %q", embed.Title)
 	}
-	if embed.Description != "## 👀 WFA\nチェックをお願いします" {
+	if embed.Description != "## 👀 WFA\n\nチェックをお願いします" {
 		t.Fatalf("description must be the separated status/body block, got %q", embed.Description)
 	}
 	if embed.Footer.Text != "テスト通知" {

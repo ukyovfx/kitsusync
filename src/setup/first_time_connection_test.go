@@ -94,6 +94,9 @@ func TestFirstTimeExecutionUsesWizardShellAndSelectedGuildName(t *testing.T) {
 	if !strings.Contains(body, `class="setup-step active"`) || !strings.Contains(body, "Test Guild") {
 		t.Fatal("Step 6 did not render the wizard shell or selected guild name")
 	}
+	if strings.Count(body, `class="step-connector"`) != 6 {
+		t.Fatalf("Step 6 should retain all setup step connectors: %d", strings.Count(body, `class="step-connector"`))
+	}
 	if strings.Contains(body, `type="checkbox"`) || strings.Contains(body, "wizard-confirm") {
 		t.Fatal("Step 6 duplicated the confirmation UI")
 	}
@@ -113,6 +116,9 @@ func TestFirstTimeCompletionUsesWizardShellAndProductionSummary(t *testing.T) {
 	}
 	if !strings.Contains(body, "Open Production") || strings.Contains(body, "<html") {
 		t.Fatal("Step 7 did not render the styled completion CTA")
+	}
+	if strings.Count(body, `class="step-connector"`) != 6 {
+		t.Fatalf("Step 7 should retain all setup step connectors: %d", strings.Count(body, `class="step-connector"`))
 	}
 }
 

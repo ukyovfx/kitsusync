@@ -1421,8 +1421,18 @@ func DeleteProjectCheckerMapByID(db *gorm.DB, id uint) {
 	db.Delete(&ProjectCheckerMap{}, id)
 }
 
-func SetProjectStorageURL(db *gorm.DB, kitsuProjectID, storageURL string) {
-	db.Model(&Project{}).Where("kitsu_project_id = ?", kitsuProjectID).Update("storage_url", storageURL)
+func SetProjectStorageURL(db *gorm.DB, kitsuProjectID, storageURL string) error {
+	if db == nil {
+		return errors.New("database is unavailable")
+	}
+	result := db.Model(&Project{}).Where("kitsu_project_id = ?", kitsuProjectID).Update("storage_url", storageURL)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("project was not found")
+	}
+	return nil
 }
 
 func GetProjectStorageURL(db *gorm.DB, kitsuProjectID string) string {

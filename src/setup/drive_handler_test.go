@@ -29,6 +29,52 @@ func TestDriveHandlerAcceptsAndPersistsValidatedURL(t *testing.T) {
 	if res.Code != http.StatusSeeOther || model.GetProjectStorageURL(db, "p1") != "https://drive.google.com/drive/folders/123" {
 		t.Fatalf("valid Drive URL was not persisted: status=%d url=%q", res.Code, model.GetProjectStorageURL(db, "p1"))
 	}
+	var reloaded model.Project
+	if err := db.Where("kitsu_project_id = ?", "p1").First(&reloaded).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.StorageURL != "https://drive.google.com/drive/folders/123" {
+		t.Fatalf("reloaded project lost storage URL: %q", reloaded.StorageURL)
+	}
+}
+
+func TestDriveHandlerKeepsStorageURLsScopedToTheirProduction(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:drive-handler-scope?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"p1", "p2"} {
+		if err := model.CreateProject(db, id, id, "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/drive", strings.NewReader("kitsu_project_id=p1&storage_url=https%3A%2F%2Fdrive.google.com%2Fdrive%2Ffolders%2Fp1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	DriveHandler(db)(res, req)
+	if res.Code != http.StatusSeeOther || model.GetProjectStorageURL(db, "p1") == "" || model.GetProjectStorageURL(db, "p2") != "" {
+		t.Fatalf("storage URL crossed Production boundary: status=%d p1=%q p2=%q", res.Code, model.GetProjectStorageURL(db, "p1"), model.GetProjectStorageURL(db, "p2"))
+	}
+}
+
+func TestDriveHandlerDoesNotReturnSuccessForMissingProduction(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:drive-handler-missing?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/drive", strings.NewReader("kitsu_project_id=missing&storage_url=https%3A%2F%2Fdrive.google.com%2Fdrive%2Ffolders%2F123"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	DriveHandler(db)(res, req)
+	if res.Code == http.StatusSeeOther {
+		t.Fatal("missing Production was reported as successfully saved")
+	}
 }
 
 func TestDriveHandlerRejectsInvalidURLWithoutChangingStoredValue(t *testing.T) {

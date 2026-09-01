@@ -2608,30 +2608,7 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 			step = 2
 		}
 	}
-	labels := []string{tr(lang, "wizard.step_prerequisites"), tr(lang, "wizard.step_production"), tr(lang, "wizard.step_server"), tr(lang, "wizard.step_plan"), tr(lang, "wizard.step_review"), tr(lang, "wizard.step_execute"), tr(lang, "wizard.step_complete")}
-	var steps strings.Builder
-	for i, label := range labels {
-		n := i + 1
-		state := "pending"
-		if n < step {
-			state = "done"
-		}
-		if n == step {
-			state = "active"
-		}
-		if n > step && step == 1 {
-			state = "blocked"
-		}
-		aria := ""
-		if n == step {
-			aria = ` aria-current="step"`
-		}
-		steps.WriteString(`<span class="setup-step ` + state + `"` + aria + `><span class="step-num">` + strconv.Itoa(n) + `</span><span class="step-label">` + esc(label) + `</span></span>`)
-		if n < len(labels) {
-			steps.WriteString(`<span class="step-connector" aria-hidden="true"></span>`)
-		}
-	}
-	body := `<div class="section-stack"><section class="section-card glass"><p class="hint">` + esc(tr(lang, "wizard.description")) + `</p><div class="setup-steps" aria-label="` + esc(tr(lang, "wizard.progress")) + `">` + steps.String() + `</div></section>`
+	body := `<div class="section-stack"><section class="section-card glass"><p class="hint">` + esc(tr(lang, "wizard.description")) + `</p>` + renderSetupSteps(lang, step, true) + `</section>`
 	switch step {
 	case 1:
 		body += renderWizardPrerequisitesShared(lang, r, readiness)
@@ -2986,6 +2963,10 @@ func wizardPlanDetails(lang, action string) string {
 	}
 }
 func renderWizardFrame(lang string, step int, body string) string {
+	return `<div class="section-stack"><section class="section-card glass">` + renderSetupSteps(lang, step, false) + `</section>` + body + `</div>`
+}
+
+func renderSetupSteps(lang string, step int, blockFuture bool) string {
 	labels := []string{tr(lang, "wizard.step_prerequisites"), tr(lang, "wizard.step_production"), tr(lang, "wizard.step_server"), tr(lang, "wizard.step_plan"), tr(lang, "wizard.step_review"), tr(lang, "wizard.step_execute"), tr(lang, "wizard.step_complete")}
 	var steps strings.Builder
 	for i, label := range labels {
@@ -2997,9 +2978,15 @@ func renderWizardFrame(lang string, step int, body string) string {
 		if n == step {
 			state = "active"
 		}
+		if blockFuture && n > step && step == 1 {
+			state = "blocked"
+		}
 		steps.WriteString(`<span class="setup-step ` + state + `"` + map[bool]string{true: ` aria-current="step"`, false: ""}[n == step] + `><span class="step-num">` + strconv.Itoa(n) + `</span><span class="step-label">` + esc(label) + `</span></span>`)
+		if n < len(labels) {
+			steps.WriteString(`<span class="step-connector" aria-hidden="true"></span>`)
+		}
 	}
-	return `<div class="section-stack"><section class="section-card glass"><div class="setup-steps" aria-label="` + esc(tr(lang, "wizard.progress")) + `">` + steps.String() + `</div></section>` + body + `</div>`
+	return `<div class="setup-steps" aria-label="` + esc(tr(lang, "wizard.progress")) + `">` + steps.String() + `</div>`
 }
 
 func renderWizardComplete(lang string, r *http.Request, db *gorm.DB, target interface{}) string {

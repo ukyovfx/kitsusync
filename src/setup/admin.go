@@ -2743,6 +2743,10 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
+		if projectID == "" {
+			http.Error(w, "a connected Production is required", http.StatusBadRequest)
+			return
+		}
 		if model.IsValidationOnlyProject(db, projectID) {
 			http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
 			return
@@ -2752,8 +2756,9 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 			http.Error(w, "storage URL must be an absolute HTTP or HTTPS URL", http.StatusBadRequest)
 			return
 		}
-		if projectID != "" {
-			model.SetProjectStorageURL(db, projectID, storageURL)
+		if err := model.SetProjectStorageURL(db, projectID, storageURL); err != nil {
+			http.Error(w, "storage settings could not be saved", http.StatusInternalServerError)
+			return
 		}
 		target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings", r)
 		http.Redirect(w, r, target, http.StatusSeeOther)

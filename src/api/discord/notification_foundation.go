@@ -101,7 +101,7 @@ func notificationCardDescription(data Template) string {
 	if message != "" {
 		parts = append(parts, message)
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "\n\n")
 }
 
 func notificationCardTitle(data Template) string {
