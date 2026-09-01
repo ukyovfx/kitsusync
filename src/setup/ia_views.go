@@ -493,7 +493,7 @@ func removeDashboardSubtitle(body string) string {
 }
 
 func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCount, attentionCount int, readiness SharedBotRuntimeReadiness) string {
-	auditFirst, auditSecond, auditClass := dashboardAuditSummary(lang, db)
+	auditFirst, auditSecond, auditClass, auditSecondClass := dashboardAuditSummaryCanonical(lang, db)
 	items := []struct {
 		key, path, ja, en, statusA, statusB, statusAClass, statusBClass string
 	}{
@@ -501,7 +501,7 @@ func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCo
 		{"ia.user_mapping", "/bot/admin/users", "KitsuユーザーとDiscordユーザーの紐づけを管理します。", "Manage Kitsu-to-Discord user links.", fmt.Sprintf("%d件", len(model.ListUserMap(db))), "ローカル設定", map[bool]string{true: "ok", false: "muted"}[len(model.ListUserMap(db)) > 0], "muted"},
 		{"connections.title", "/bot/admin/bot", "Kitsu接続とDiscord Bot接続を設定します。", "Configure the Kitsu and Discord Bot connections.", statusText(lang, readiness.KitsuConfigured), statusText(lang, readiness.DiscordConfigured), map[bool]string{true: "ok", false: "warning"}[readiness.KitsuConfigured], map[bool]string{true: "ok", false: "warning"}[readiness.DiscordConfigured]},
 		{"ia.system_status", "/bot/admin/health", "接続状態と通知の利用可否を確認します。", "Review connection state and notification availability.", readinessViewFor(lang, r, readiness).Label, statusTextOverall(lang, readiness.OverallReady), map[bool]string{true: "ok", false: "warning"}[readiness.OverallReady], map[bool]string{true: "ok", false: "warning"}[readiness.OverallReady]},
-		{"ia.audit_log", "/bot/admin/audit", "操作履歴と通知イベントを確認します。", "Review action history and notification events.", auditFirst, auditSecond, auditClass, "muted"},
+		{"ia.audit_log", "/bot/admin/audit", "操作履歴と通知イベントを確認します。", "Review action history and notification events.", auditFirst, auditSecond, auditClass, auditSecondClass},
 	}
 	var cards strings.Builder
 	for i, item := range items {
@@ -514,12 +514,41 @@ func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCo
 	return `<div class="dashboard-menu-wrap"><section class="dashboard-cta" aria-labelledby="dashboard-new-connection"><div><span class="dashboard-cta-kicker">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</span><h2 id="dashboard-new-connection">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</h2></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しいプロダクションを接続", "Open setup")) + `</a></section><section class="dashboard-menu" aria-labelledby="dashboard-menu-title"><div class="page-heading"><div><h2 id="dashboard-menu-title">` + esc(t(lang, "管理メニュー", "Management")) + `</h2></div></div><div class="dashboard-menu-grid">` + cards.String() + `</div></section></div>`
 }
 
-func dashboardAuditSummary(lang string, db *gorm.DB) (string, string, string) {
+func dashboardAuditSummaryCanonical(lang string, db *gorm.DB) (string, string, string, string) {
 	count := model.CountAuditLogs(db)
+	healthLabel, healthClass := dashboardAuditHealthLabel(lang, model.RecentAuditHealth(db, time.Now()))
 	if count == 0 {
-		return t(lang, "記録なし", "No records"), "", "muted"
+		return t(lang, "記録なし", "No records"), healthLabel, "muted", healthClass
 	}
-	return fmt.Sprintf(t(lang, "%d件の記録", "%d records"), count), t(lang, "最近の記録", "Recent entries"), "ok"
+	return fmt.Sprintf(t(lang, "%d件の記録", "%d records"), count), healthLabel, "ok", healthClass
+}
+
+func dashboardAuditHealthLabel(lang string, health model.AuditHealth) (string, string) {
+	switch health {
+	case model.AuditHealthAbnormal:
+		return t(lang, "異常", "Abnormal"), "bad"
+	case model.AuditHealthNeedsReview:
+		return t(lang, "要確認", "Needs review"), "warn"
+	case model.AuditHealthNormal:
+		return t(lang, "正常", "Normal"), "ok"
+	default:
+		return t(lang, "記録なし", "No records"), "muted"
+	}
+}
+
+func canonicalDashboardBadgeClass(class string) string {
+	switch class {
+	case "warning":
+		return "warn"
+	case "success":
+		return "ok"
+	case "danger", "blocked":
+		return "bad"
+	case "neutral":
+		return "muted"
+	default:
+		return class
+	}
 }
 
 func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB, fallbackGuildID string) {
@@ -2979,7 +3008,8 @@ func renderWizardComplete(lang string, r *http.Request, db *gorm.DB, target inte
 func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, projects []model.Project, attentionCount int, readiness SharedBotRuntimeReadiness, runtimeHealthy func() bool) string {
 	type card struct{ label, path, description, first, second, firstClass, secondClass string }
 	systemLabel, systemClass, _ := overallRuntimeStatus(lang, readiness, Stats.Snapshot())
-	auditFirst, auditSecond, auditClass := dashboardAuditSummary(lang, db)
+	systemClass = canonicalDashboardBadgeClass(systemClass)
+	auditFirst, auditSecond, auditClass, auditSecondClass := dashboardAuditSummaryCanonical(lang, db)
 	cards := []card{
 		{tr(lang, "connections.title"), "/bot/admin/bot", t(lang, "KitsuとDiscordの接続状態を確認します。", "Kitsu and Discord connection health."), "", "", "", ""},
 		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みプロダクションの状態と設定を確認します。", "Connected Production state and settings."), strconv.Itoa(connectedProductionCount(projects)), strconv.Itoa(attentionCount), "ok", map[bool]string{true: "warning", false: "ok"}[attentionCount > 0]},
@@ -2987,7 +3017,7 @@ func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, proje
 		{tr(lang, "ia.system_status"), "/bot/admin/health", t(lang, "実測されたシステム健全性を確認します。", "Review measured system health."), systemLabel, "", systemClass, ""},
 		{tr(lang, "ia.audit_log"), "/bot/admin/audit", t(lang, "操作履歴と通知イベントを確認します。", "Action history and notification events."), t(lang, "記録なし", "No records"), "", "muted", ""},
 	}
-	cards[4].first, cards[4].second, cards[4].firstClass = auditFirst, auditSecond, auditClass
+	cards[4].first, cards[4].second, cards[4].firstClass, cards[4].secondClass = auditFirst, auditSecond, auditClass, auditSecondClass
 	kitsuStatus, discordStatus := canonicalConnectionStatuses(lang, db, readiness, runtimeHealthy)
 	productionAttention := ""
 	if attentionCount > 0 {
