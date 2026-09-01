@@ -366,6 +366,7 @@ func executeFirstTimeConnection(plan firstTimeConnectionPlan, botToken, lang str
 		}
 	}
 	rows := make([]model.ProductionChannelMapping, 0, len(plan.Plan.Entries))
+	projectWebhooks := model.ListProjectWebhooks(db, plan.Project.ID)
 	owned.CategoryID = categoryID
 	for _, entry := range plan.Plan.Entries {
 		channelID := strings.TrimSpace(entry.ExistingID)
@@ -386,7 +387,7 @@ func executeFirstTimeConnection(plan firstTimeConnectionPlan, botToken, lang str
 		rows = append(rows, row)
 		webhookURL := ""
 		hasExistingWebhook := false
-		for _, webhook := range model.ListProjectWebhooks(db, plan.Project.ID) {
+		for _, webhook := range projectWebhooks {
 			if strings.TrimSpace(webhook.DiscordChannelID) == channelID && strings.TrimSpace(webhook.WebhookURL) != "" {
 				webhookURL = strings.TrimSpace(webhook.WebhookURL)
 				hasExistingWebhook = true
