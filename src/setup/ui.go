@@ -466,6 +466,9 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
 .sot-badge strong{color:#6dc3ff}
 .notice-box{padding:8px 11px;border-radius:10px;background:rgba(142,207,139,.09);border:1px solid rgba(142,207,139,.25);color:var(--text);font-size:.77rem;line-height:1.45;margin-bottom:9px}
 .notice-box strong{color:#8ecf8b}
+.notice{margin:12px 0;padding:12px 14px;border:1px solid transparent;border-radius:10px;font-size:.875rem;line-height:1.45}
+.notice-success{background:rgba(142,207,139,.12);border-color:rgba(142,207,139,.32);color:#d7f4d4}
+.notice-error{background:rgba(255,106,80,.10);border-color:rgba(255,106,80,.30);color:#ffd3ca}
 .setup-steps{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding:12px 0 4px}
 .setup-step{display:flex;align-items:center;gap:8px;flex:0 1 auto;min-width:0;font-size:.875rem}
 .step-label{min-width:0;overflow-wrap:anywhere}

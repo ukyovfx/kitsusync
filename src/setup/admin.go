@@ -3058,7 +3058,7 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 	publicURL := PublicKitsuURL(db)
 	publicURLField := `<div class="connection-form-field"><label for="kitsu-public-url">` + esc(t(lang, "公開Kitsu URL", "Public Kitsu URL")) + `</label><input id="kitsu-public-url" type="url" name="kitsu_public_url" value="` + esc(publicURL) + `" aria-describedby="kitsu-public-url-help"><p id="kitsu-public-url-help" class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに使用する、ユーザーがアクセス可能なURLです。", "The user-accessible Kitsu URL used for links in Discord notifications.")) + `</p>`
 	if publicURL == "" {
-		publicURLField += `<p class="field-help">` + esc(t(lang, "未設定の場合、Discord通知からKitsuリンクは表示されません。", "When unset, Discord notifications omit the Kitsu link.")) + `</p>`
+		publicURLField += `<p class="field-help"><span class="status-pill warning" role="status">` + esc(t(lang, "要確認", "Needs review")) + `</span> ` + esc(t(lang, "公開Kitsu URLが設定されていません。", "Public Kitsu URL is not configured.")) + `</p><p class="field-help">` + esc(t(lang, "未設定の場合、Discord通知からKitsuリンクは表示されません。", "When unset, Discord notifications omit the Kitsu link.")) + `</p>`
 	}
 	publicURLField += `</div>`
 	body := `<div class="section-stack connections-edit-stack">` + notice +

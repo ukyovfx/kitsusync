@@ -176,6 +176,11 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 			t.Fatalf("public Kitsu URL field missing %q", want)
 		}
 	}
+	for _, want := range []string{`class="status-pill warning"`, "Needs review", "Public Kitsu URL is not configured."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing public URL review state %q", want)
+		}
+	}
 	if strings.Contains(body, `name="kitsu_runtime_email"`) || strings.Contains(body, `name="kitsu_runtime_password"`) {
 		t.Fatal("did not expect human Kitsu credential controls in the current Connections form")
 	}
@@ -225,11 +230,31 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `<div class="connections-edit-summary"><p class="hint">Review connections separately.</p><span class="status-pill`) {
 		t.Fatal("did not expect a page-level status pill in edit mode")
 	}
-	if got := strings.Count(body, `class="status-pill `); got != 2 {
-		t.Fatalf("expected one service status pill per card, got %d", got)
+	if got := strings.Count(body, `class="status-pill `); got != 3 {
+		t.Fatalf("expected one service status pill per card plus the public URL review state, got %d", got)
 	}
 	if strings.Contains(body, `class="connection-state-row"`) || strings.Contains(body, `>Token<`) || strings.Contains(body, `>Connection<`) {
 		t.Fatal("edit form should not duplicate token and connection state rows")
+	}
+}
+
+func TestConnectionsEditPublicKitsuURLNeedsReviewIsLocalized(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	for _, tc := range []struct {
+		lang string
+		want []string
+	}{
+		{lang: "ja", want: []string{"要確認", "公開Kitsu URLが設定されていません。"}},
+		{lang: "en", want: []string{"Needs review", "Public Kitsu URL is not configured."}},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			body := renderConnectionsEditForm(tc.lang, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang="+tc.lang, nil), db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", "")
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Fatalf("missing localized review state %q", want)
+				}
+			}
+		})
 	}
 }
 

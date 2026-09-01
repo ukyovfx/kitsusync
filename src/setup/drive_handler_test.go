@@ -136,3 +136,41 @@ func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
 		t.Fatal("Drive save form is missing localized saving feedback behavior")
 	}
 }
+
+func TestDriveStorageSuccessFeedbackIsStyledInRenderedDocument(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Project{},
+		&model.ProjectWebhook{},
+		&model.ProductionChannelMapping{},
+		&model.ProductionNotificationConfig{},
+		&model.ProductionNotificationRoute{},
+		&model.NotificationRoutingDiagnosis{},
+		&model.UserMap{},
+		&model.CheckerMap{},
+		&model.AuditLog{},
+		&model.ProjectUserMap{},
+		&model.ProjectCheckerMap{},
+		&model.ProjectSetting{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang=ja&drive_saved=1", nil)
+	w := httptest.NewRecorder()
+	AdminProjectsHandler(db, "", "")(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Storage Settings response status = %d", w.Code)
+	}
+	html := w.Body.String()
+	if !strings.Contains(html, `class="notice notice-success"`) || !strings.Contains(html, "保存しました。") {
+		t.Fatalf("rendered Storage Settings document is missing the success notice: %s", html)
+	}
+	for _, css := range []string{".notice{", ".notice-success{", "background:rgba(142,207,139,.12)", "border-radius:10px"} {
+		if !strings.Contains(html, css) {
+			t.Fatalf("rendered document is missing canonical success-notice CSS %q", css)
+		}
+	}
+}

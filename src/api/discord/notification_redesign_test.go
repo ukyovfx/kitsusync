@@ -2,6 +2,7 @@ package discord
 
 import (
 	"app/src/api/kitsu"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -266,6 +267,63 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	}
 	if embed.Fields[1].Name != "👤 担当" || embed.Fields[1].Value != "未割り当て" {
 		t.Fatalf("assignee field mismatch: %+v", embed.Fields[1])
+	}
+}
+
+func TestNotificationCardSerializedPayloadMatchesFinalDiscordContract(t *testing.T) {
+	useRepositoryRootForTemplates(t)
+	payload := RenderNotificationPayload(Template{
+		EntityType:           "Shot",
+		ParentName:           "sc001",
+		TaskName:             "sh001",
+		TaskType:             "Compositing",
+		StatusUpper:          "RETAKE",
+		StatusEmoji:          "🔄",
+		StatusMessage:        "修正をお願いします",
+		PreviousStatus:       "WFA",
+		AssigneeLabel:        "担当",
+		AssigneesStr:         "松尾 侑恭",
+		TaskURL:              "https://kitsu.example.com/productions/p/shots/s/tasks/t",
+		GoogleDriveURL:       "https://drive.example.com/folder",
+		NotificationLanguage: "ja",
+		Color:                notificationStatusColor("RETAKE"),
+	}, "rich")
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Embeds []struct {
+			Author      EmbedAuthor  `json:"author"`
+			Title       string       `json:"title"`
+			URL         string       `json:"url"`
+			Description string       `json:"description"`
+			Footer      EmbedFooter  `json:"footer"`
+			Fields      []EmbedField `json:"fields"`
+		} `json:"embeds"`
+		AllowedMentions AllowedMentions `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Embeds) != 1 {
+		t.Fatalf("serialized embed count = %d", len(got.Embeds))
+	}
+	embed := got.Embeds[0]
+	if embed.Author.Name != "Compositing" || embed.Title != "Shot / sc001 - sh001" || embed.URL != "" {
+		t.Fatalf("serialized author/title contract mismatch: %+v", embed)
+	}
+	if embed.Description != "## 🔄 RETAKE\n修正をお願いします" {
+		t.Fatalf("serialized status/body contract mismatch: %q", embed.Description)
+	}
+	if embed.Footer.Text != "" {
+		t.Fatalf("serialized Production footer must be absent: %q", embed.Footer.Text)
+	}
+	if len(embed.Fields) != 3 || !strings.Contains(embed.Fields[0].Value, "📁 [Drive]") || !strings.Contains(embed.Fields[0].Value, "🦊 [Kitsu]") || !embed.Fields[1].Inline || !embed.Fields[2].Inline {
+		t.Fatalf("serialized fields contract mismatch: %+v", embed.Fields)
+	}
+	if strings.Contains(string(raw), "<@") || len(got.AllowedMentions.Users) != 0 || len(got.AllowedMentions.Parse) != 0 || len(got.AllowedMentions.Roles) != 0 {
+		t.Fatalf("serialized payload permits an assignee mention: %s", raw)
 	}
 }
 
