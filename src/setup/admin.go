@@ -3044,7 +3044,13 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 	if identity == "" {
 		identity = t(lang, "未検出", "Not detected")
 	}
-	return `<div class="section-stack connections-edit-stack">` + notice +
+	publicURL := PublicKitsuURL(db)
+	publicURLField := `<div class="connection-form-field"><label for="kitsu-public-url">` + esc(t(lang, "公開Kitsu URL", "Public Kitsu URL")) + `</label><input id="kitsu-public-url" type="url" name="kitsu_public_url" value="` + esc(publicURL) + `" aria-describedby="kitsu-public-url-help"><p id="kitsu-public-url-help" class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに使用する、ユーザーがアクセス可能なURLです。", "The user-accessible Kitsu URL used for links in Discord notifications.")) + `</p>`
+	if publicURL == "" {
+		publicURLField += `<p class="field-help">` + esc(t(lang, "未設定の場合、Discord通知からKitsuリンクは表示されません。", "When unset, Discord notifications omit the Kitsu link.")) + `</p>`
+	}
+	publicURLField += `</div>`
+	body := `<div class="section-stack connections-edit-stack">` + notice +
 		`<div class="connections-edit-summary"><p class="hint">` + esc(statusHint) + `</p></div>` +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
@@ -3082,6 +3088,8 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		return `<button type="button" class="btn-ghost" data-reveal-secret="discord-bot-token" data-recheck-button="discord-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button>`
 	}() + `</div></form></section>` +
 		`</div><div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-reveal-secret]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.getAttribute('data-reveal-secret'));var submit=document.getElementById(button.getAttribute('data-recheck-button'));if(!input)return;input.hidden=false;input.style.display='';button.hidden=true;if(submit)submit.textContent=saveText;input.focus();});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}}());</script></div>`
+	body = strings.Replace(body, `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck"`, `</p></div>`+publicURLField+`<div class="button-row connections-actions"><button id="kitsu-recheck"`, 1)
+	return body
 }
 
 func renderConnectionsEditFormWithHealthRaw(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, runtimeHost string, kitsuHealthy, discordHealthy bool, discordBotName string) string {
@@ -3196,6 +3204,24 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuホストを入力してください。", "Enter the Kitsu host.")))
 					return
 				}
+				publicURLToSave := ""
+				publicURLWasSubmitted := false
+				if publicRaw, present := r.PostForm["kitsu_public_url"]; present {
+					publicURLWasSubmitted = true
+					publicURL := ""
+					if len(publicRaw) > 0 {
+						publicURL = strings.TrimSpace(publicRaw[0])
+					}
+					if publicURL != "" {
+						normalizedPublicURL, err := validateKitsuEndpoint(publicURL)
+						if err != nil {
+							w.WriteHeader(http.StatusBadRequest)
+							fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "公開Kitsu URLを確認してください。", "Check the Public Kitsu URL.")))
+							return
+						}
+						publicURLToSave = normalizedPublicURL
+					}
+				}
 				submittedBotToken := strings.TrimSpace(r.FormValue("kitsu_bot_token"))
 				botToken := submittedBotToken
 				if botToken == "" {
@@ -3228,6 +3254,13 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 						w.WriteHeader(http.StatusInternalServerError)
 						fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu Bot tokenの検証情報を保存できませんでした。", "The Kitsu Bot validation metadata could not be stored.")))
 						return
+					}
+					if publicURLWasSubmitted {
+						if publicURLToSave == "" {
+							model.DeleteSetting(db, PublicKitsuURLSettingKey)
+						} else {
+							model.SetSetting(db, PublicKitsuURLSettingKey, publicURLToSave)
+						}
 					}
 					model.SetSetting(db, "kitsu.hostname", hostForAuth)
 					os.Setenv("KITSU_HOSTNAME", hostForAuth)

@@ -31,6 +31,7 @@ const (
 	RuntimeKitsuEmailEnv        = "KITSU_RUNTIME_EMAIL"
 	RuntimeKitsuPasswordEnv     = "KITSU_RUNTIME_PASSWORD"
 	RuntimeDiscordBotTokenKey   = "discord.runtime_bot_token"
+	PublicKitsuURLSettingKey    = "kitsu.public_url"
 	runtimeBotEmail             = "kitsusync-bot@google.com"
 	runtimeBotFirstName         = "KitsuSync"
 	runtimeBotLastName          = "Bot"
@@ -137,6 +138,23 @@ func safeKitsuHostDisplay(raw string) string {
 	}
 	u.Path, u.RawQuery, u.Fragment = "", "", ""
 	return strings.TrimRight(u.String(), "/")
+}
+
+// PublicKitsuURL returns the optional user-reachable base URL used in
+// notification links. It is not used for server-side Kitsu requests.
+func PublicKitsuURL(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(model.GetSetting(db, PublicKitsuURLSettingKey))
+	if raw == "" {
+		return ""
+	}
+	publicURL, err := validateKitsuEndpoint(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(publicURL, "/")
 }
 
 // effectiveRuntimeKitsuEndpoint resolves the address used by server-side Kitsu

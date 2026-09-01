@@ -127,6 +127,11 @@ var CheckerResolver func(projectID, taskType string) []string
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
 var GoogleDriveURLResolver func(projectID string) string
 
+// KitsuPublicURLResolver supplies the user-reachable Kitsu base URL for
+// notification links. It is separate from the runtime endpoint, which may
+// use container-only addressing.
+var KitsuPublicURLResolver func() string
+
 // SendResult は SendMessage / SendMessageBunch の戻り値
 type SendResult struct {
 	MessageID       string // Discord メッセージID
@@ -845,7 +850,10 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.StatusTransitionMessage = localizedStatusTransitionMessage(elem.PreviousStatusName, elem.TaskStatus.ShortName, notifLang)
 		}
 
-		host := safeNotificationURL(conf.Kitsu.Hostname)
+		host := ""
+		if KitsuPublicURLResolver != nil {
+			host = safeNotificationURL(KitsuPublicURLResolver())
+		}
 		placeholders.TaskURL = KitsuTaskURL(host, elem.Project.ID, placeholders.EntityType, elem.Task.ID)
 
 		// Kitsu プレビュー画像 URL を組み立て

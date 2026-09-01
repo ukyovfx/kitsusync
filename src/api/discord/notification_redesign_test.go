@@ -81,6 +81,9 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 	if embed.Title != "Shot / SC02 - cut009" {
 		t.Fatalf("task context title = %q", embed.Title)
 	}
+	if embed.Url != "" {
+		t.Fatalf("task title must not be a hyperlink: %q", embed.Url)
+	}
 	if embed.Author.Name != "Compositing" {
 		t.Fatalf("task type author = %q", embed.Author.Name)
 	}
@@ -90,8 +93,11 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 	if strings.Contains(embed.Description, " → ") {
 		t.Fatalf("transition leaked into description: %q", embed.Description)
 	}
-	if len(embed.Fields) != 3 || embed.Fields[0].Name != "Links" || embed.Fields[1].Name != "📊 Status" || embed.Fields[2].Name != "👤 Assignee" {
+	if len(embed.Fields) != 3 || embed.Fields[0].Name != "\u200b" || embed.Fields[1].Name != "📊 Status" || embed.Fields[2].Name != "👤 Assignee" {
 		t.Fatalf("unexpected compact fields: %+v", embed.Fields)
+	}
+	if strings.Contains(embed.Fields[0].Name, "Links") || strings.Contains(embed.Fields[0].Name, "リンク") {
+		t.Fatalf("generic links heading must be omitted: %+v", embed.Fields[0])
 	}
 	if strings.Contains(embed.Fields[0].Name, "🔗") || !strings.Contains(embed.Fields[0].Value, "📁 [Drive]") || !strings.Contains(embed.Fields[0].Value, "🦊 [Kitsu]") {
 		t.Fatalf("service link hierarchy is incorrect: %+v", embed.Fields[0])
@@ -174,8 +180,11 @@ func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 	if len(embed.Fields) != 4 {
 		t.Fatalf("field count = %d, want comment/links/status/assignee", len(embed.Fields))
 	}
-	if embed.Fields[0].Name != "コメント" || embed.Fields[1].Name != "リンク" {
+	if embed.Fields[0].Name != "コメント" || embed.Fields[1].Name != "\u200b" {
 		t.Fatalf("supporting fields are not ordered: %+v", embed.Fields[:2])
+	}
+	if embed.Url != "" {
+		t.Fatalf("task title must not be a hyperlink: %q", embed.Url)
 	}
 	if !strings.Contains(embed.Fields[1].Value, "Drive") || !strings.Contains(embed.Fields[1].Value, "Kitsu") {
 		t.Fatalf("links are incomplete: %q", embed.Fields[1].Value)
@@ -302,8 +311,11 @@ func TestNotificationCardLinksRequireValidURLsAndOmitUnavailableLinks(t *testing
 		}, "rich")
 		var links string
 		for _, field := range payload.Embeds[0].Fields {
-			if field.Name == "Links" || field.Name == "リンク" {
+			if strings.Contains(field.Value, "Drive") || strings.Contains(field.Value, "Kitsu") {
 				links = field.Value
+			}
+			if field.Name == "Links" || field.Name == "リンク" {
+				t.Fatalf("generic links heading must be absent: %q", field.Name)
 			}
 		}
 		if tc.want == "" {

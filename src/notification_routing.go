@@ -5,7 +5,6 @@ import (
 	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
-	"os"
 	"strings"
 
 	"gorm.io/gorm"
@@ -69,7 +68,10 @@ func planProductionNotification(db *gorm.DB, payload kitsu.MessagePayload) produ
 }
 
 func productionTaskLink(payload kitsu.MessagePayload) string {
-	host := strings.TrimSpace(os.Getenv("KITSU_HOSTNAME"))
+	host := ""
+	if discord.KitsuPublicURLResolver != nil {
+		host = strings.TrimSpace(discord.KitsuPublicURLResolver())
+	}
 	if host == "" {
 		return "not supplied"
 	}

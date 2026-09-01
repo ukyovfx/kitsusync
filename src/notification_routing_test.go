@@ -1,6 +1,7 @@
 package main
 
 import (
+	"app/src/api/discord"
 	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
@@ -94,6 +95,25 @@ func TestSameNameTaskTypesRemainIsolatedByID(t *testing.T) {
 	plan := planProductionNotification(db, notificationPayload("p1", "P", "tt2", "Same Name"))
 	if plan.ShouldSend {
 		t.Fatal("same-name Task Type with a different ID was incorrectly routed")
+	}
+}
+
+func TestProductionTaskLinkUsesPublicKitsuURLOnly(t *testing.T) {
+	previous := discord.KitsuPublicURLResolver
+	discord.KitsuPublicURLResolver = func() string { return "https://kitsu.example.test" }
+	defer func() { discord.KitsuPublicURLResolver = previous }()
+	payload := notificationPayload("production-1", "P", "task-type-1", "Animation")
+	payload.EntityType.Name = "Shot"
+	if got := productionTaskLink(payload); got != "https://kitsu.example.test/productions/production-1/shots/tasks/task-1" {
+		t.Fatalf("public task link = %q", got)
+	}
+	discord.KitsuPublicURLResolver = func() string { return "http://host.docker.internal:8080" }
+	if got := productionTaskLink(payload); got != "http://host.docker.internal:8080/productions/production-1/shots/tasks/task-1" {
+		t.Fatalf("explicitly configured public URL should remain usable, got %q", got)
+	}
+	discord.KitsuPublicURLResolver = func() string { return "" }
+	if got := productionTaskLink(payload); got != "not supplied" {
+		t.Fatalf("missing public URL = %q, want not supplied", got)
 	}
 }
 

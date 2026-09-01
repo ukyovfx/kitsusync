@@ -97,6 +97,41 @@ func TestConnectionsSaveKitsuRetainsStoredPassword(t *testing.T) {
 	}
 }
 
+func TestConnectionsSaveKitsuStoresPublicURLSeparately(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/auth/authenticated" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	db := newSetupStateTestDB(t)
+	form := url.Values{
+		"action":           {"save_kitsu"},
+		"kitsu_hostname":   {server.URL},
+		"kitsu_bot_token":  {"test-bot-token"},
+		"kitsu_public_url": {"https://kitsu.example.test/"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	BotHandler(db, nil)(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected Kitsu save redirect, got %d", rr.Code)
+	}
+	if got := PublicKitsuURL(db); got != "https://kitsu.example.test" {
+		t.Fatalf("public URL = %q, want normalized public URL", got)
+	}
+	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(server.URL, "/") {
+		t.Fatalf("internal host = %q, public URL overwrote it", got)
+	}
+}
+
 func TestConnectionsRecheckKitsuUsesStoredTokenWithoutRenderingIt(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +170,11 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
+	}
+	for _, want := range []string{`name="kitsu_public_url"`, "Public Kitsu URL", "The user-accessible Kitsu URL used for links in Discord notifications.", "When unset, Discord notifications omit the Kitsu link."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("public Kitsu URL field missing %q", want)
+		}
 	}
 	if strings.Contains(body, `name="kitsu_runtime_email"`) || strings.Contains(body, `name="kitsu_runtime_password"`) {
 		t.Fatal("did not expect human Kitsu credential controls in the current Connections form")
@@ -303,6 +343,13 @@ func TestRuntimeKitsuEndpointSeparatesInternalAndDisplayAddresses(t *testing.T) 
 	if got, err := runtimeEndpointFromDisplay(db, "https://kitsu.example.test"); err != nil || strings.TrimRight(got, "/") != "https://kitsu.example.test" {
 		t.Fatalf("expected remote endpoint to remain unchanged, got %q, %v", got, err)
 	}
+	model.SetSetting(db, PublicKitsuURLSettingKey, "https://public.kitsu.example.test/")
+	if got := PublicKitsuURL(db); got != "https://public.kitsu.example.test" {
+		t.Fatalf("public URL = %q, want normalized public URL", got)
+	}
+	if got := strings.TrimRight(effectiveRuntimeKitsuEndpoint(db), "/"); got != "http://host.docker.internal:8080" {
+		t.Fatalf("public URL changed internal runtime endpoint: %q", got)
+	}
 	if _, err := validateKitsuEndpoint("not a URL"); err == nil {
 		t.Fatal("expected malformed endpoint to be rejected")
 	}
@@ -326,5 +373,17 @@ func TestRuntimeKitsuEndpointDoesNotReuseStaleLocalSavedEndpoint(t *testing.T) {
 	got, err := runtimeEndpointFromDisplay(db, "http://127.0.0.1:8080")
 	if err != nil || strings.TrimRight(got, "/") != "http://host.docker.internal:8080" {
 		t.Fatalf("expected local display endpoint to replace stale saved endpoint, got %q, %v", got, err)
+	}
+}
+
+func TestConnectionsPublicURLDoesNotOverwriteInternalHost(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, "kitsu.hostname", "http://host.docker.internal:8080")
+	model.SetSetting(db, PublicKitsuURLSettingKey, "https://kitsu.example.test")
+	if got := strings.TrimRight(effectiveRuntimeKitsuEndpoint(db), "/"); got != "http://host.docker.internal:8080" {
+		t.Fatalf("internal host changed when public URL was set: %q", got)
+	}
+	if got := PublicKitsuURL(db); got != "https://kitsu.example.test" {
+		t.Fatalf("public URL = %q", got)
 	}
 }

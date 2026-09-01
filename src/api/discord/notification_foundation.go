@@ -50,7 +50,6 @@ func RenderNotificationPayload(data Template, preset string) Payload {
 		Title:       truncate.TruncateString(title, 256),
 		Description: truncate.TruncateString(description, 4096),
 		Color:       data.Color,
-		Url:         truncate.TruncateString(data.TaskURL, 2000),
 		Author:      EmbedAuthor{Name: truncate.TruncateString(author, 256)},
 		Footer:      EmbedFooter{Text: truncate.TruncateString(footer, 2048)},
 	}
@@ -149,15 +148,7 @@ func notificationCardFields(data Template) []EmbedField {
 		links = append(links, "🦊 [Kitsu]("+kitsuURL+")")
 	}
 	if len(links) > 0 {
-		linksLabel := strings.TrimSpace(data.LinksLabel)
-		if linksLabel == "" {
-			if normalizeNotificationLang(data.NotificationLanguage) == "ja" {
-				linksLabel = "リンク"
-			} else {
-				linksLabel = "Links"
-			}
-		}
-		fields = append(fields, EmbedField{Name: truncate.TruncateString(linksLabel, 256), Value: truncate.TruncateString(strings.Join(links, " · "), 1024), Inline: false})
+		fields = append(fields, EmbedField{Name: "​", Value: truncate.TruncateString(strings.Join(links, " · "), 1024), Inline: false})
 	}
 	metadata := make([]EmbedField, 0, 2)
 	statusLabel := "📊 Status"

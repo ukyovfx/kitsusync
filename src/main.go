@@ -798,6 +798,9 @@ func main() {
 	discord.GoogleDriveURLResolver = func(projectID string) string {
 		return model.GetProjectStorageURL(db, projectID)
 	}
+	discord.KitsuPublicURLResolver = func() string {
+		return setup.PublicKitsuURL(db)
+	}
 
 	if conf.Log {
 		slog.Info("Connected to database in %s", time.Since(start))
