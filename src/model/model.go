@@ -57,6 +57,42 @@ func CountAuditLogs(db *gorm.DB) int64 {
 	return count
 }
 
+type AuditHealth string
+
+const (
+	AuditHealthNormal      AuditHealth = "normal"
+	AuditHealthNeedsReview AuditHealth = "needs_review"
+	AuditHealthAbnormal    AuditHealth = "abnormal"
+	AuditHealthNoRecords   AuditHealth = "no_records"
+)
+
+// RecentAuditHealth summarizes persisted audit outcomes in the canonical
+// recent window. Severity is evaluated across all events.
+func RecentAuditHealth(db *gorm.DB, now time.Time) AuditHealth {
+	if db == nil {
+		return AuditHealthNoRecords
+	}
+	var logs []AuditLog
+	if err := db.Where("created_at >= ?", now.Add(-24*time.Hour)).Find(&logs).Error; err != nil || len(logs) == 0 {
+		return AuditHealthNoRecords
+	}
+	health := AuditHealthNoRecords
+	for _, log := range logs {
+		text := strings.ToLower(strings.Join([]string{log.ErrorMessage, log.OldStatus, log.NewStatus, log.EntityName}, " "))
+		if !log.Success || strings.Contains(text, "failure") || strings.Contains(text, "failed") || strings.Contains(text, "error") {
+			return AuditHealthAbnormal
+		}
+		if log.RetryCount > 0 || strings.Contains(text, "warning") || strings.Contains(text, "retry") || strings.Contains(text, "partial") || strings.Contains(text, "degraded") {
+			health = AuditHealthNeedsReview
+			continue
+		}
+		if log.Success && health == AuditHealthNoRecords {
+			health = AuditHealthNormal
+		}
+	}
+	return health
+}
+
 func PurgeOldAuditLogs(db *gorm.DB, keepDays int) int64 {
 	cutoff := time.Now().AddDate(0, 0, -keepDays)
 	return db.Where("created_at < ?", cutoff).Delete(&AuditLog{}).RowsAffected

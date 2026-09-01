@@ -653,10 +653,10 @@ func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
 
 func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
 	for _, tc := range []struct {
-		lang, countLabel, recentLabel, emptyLabel, action string
+		lang, countLabel, healthLabel, emptyLabel, action string
 	}{
-		{"ja", "3件の記録", "最近の記録", "記録なし", "通知送信"},
-		{"en", "3 records", "Recent entries", "No records", "Notification sent"},
+		{"ja", "3件の記録", "正常", "記録なし", "通知送信"},
+		{"en", "3 records", "Normal", "No records", "Notification sent"},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
 			db := newIAViewDB(t)
@@ -677,8 +677,11 @@ func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
 				t.Fatalf("audit page omitted notification-send entry: %q", auditPage.Body.String())
 			}
 			dashboard := renderDashboardMenuRefined(tc.lang, r, db, nil, 0, SharedBotRuntimeReadiness{}, nil)
-			if !strings.Contains(dashboard, tc.countLabel) || !strings.Contains(dashboard, tc.recentLabel) {
+			if !strings.Contains(dashboard, tc.countLabel) || !strings.Contains(dashboard, tc.healthLabel) {
 				t.Fatalf("dashboard omitted canonical audit summary: %q", dashboard)
+			}
+			if strings.Contains(dashboard, "最新の記録") || strings.Contains(dashboard, "Latest record") || strings.Contains(dashboard, "最近の記録") || strings.Contains(dashboard, "Recent entries") {
+				t.Fatalf("dashboard retained vague audit badge: %q", dashboard)
 			}
 			if strings.Contains(dashboard, tc.emptyLabel) {
 				t.Fatalf("dashboard reported empty audit log despite entries: %q", dashboard)
@@ -1494,8 +1497,23 @@ func TestDashboardConnectionStatusesMatchConnectionsPage(t *testing.T) {
 	if !strings.Contains(dashboard, `aria-label="Kitsu Needs review"`) || !strings.Contains(connections, `class="status-pill warn" role="status">Needs review</span>`) {
 		t.Fatal("Dashboard and Connections do not expose the same Kitsu review status")
 	}
+	if !strings.Contains(dashboard, `class="dashboard-status-chip warn">Needs review</span>`) {
+		t.Fatal("Dashboard Kitsu Needs review badge did not use the canonical warning tone")
+	}
 	if !strings.Contains(dashboard, `aria-label="Discord Connected"`) || !strings.Contains(connections, `class="status-pill ok" role="status">Connected</span>`) {
 		t.Fatal("Dashboard and Connections do not expose the same Discord connected status")
+	}
+}
+
+func TestDashboardAndSystemNeedsReviewUseCanonicalWarningTone(t *testing.T) {
+	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
+	_, class, _ := overallRuntimeStatus("en", readiness, RuntimeSnapshot{LastPollErr: "transient"})
+	if got := canonicalDashboardBadgeClass(class); got != "warn" {
+		t.Fatalf("System Status Needs review class = %q, want warn", got)
+	}
+	_, auditClass := dashboardAuditHealthLabel("en", model.AuditHealthNeedsReview)
+	if auditClass != "warn" {
+		t.Fatalf("Audit Needs review class = %q, want warn", auditClass)
 	}
 }
 
