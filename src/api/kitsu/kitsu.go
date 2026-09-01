@@ -124,13 +124,14 @@ type TaskStatus struct {
 }
 
 type Comment struct {
-	ID        string      `json:"id,omitempty"`
-	CreatedAt string      `json:"created_at,omitempty"`
-	UpdatedAt string      `json:"updated_at,omitempty"`
-	ShotgunID interface{} `json:"shotgun_id,omitempty"`
-	ObjectID  string      `json:"object_id,omitempty"`
-	PersonID  string      `json:"person_id,omitempty"`
-	Text      string      `json:"text,omitempty"`
+	ID           string      `json:"id,omitempty"`
+	CreatedAt    string      `json:"created_at,omitempty"`
+	UpdatedAt    string      `json:"updated_at,omitempty"`
+	ShotgunID    interface{} `json:"shotgun_id,omitempty"`
+	ObjectID     string      `json:"object_id,omitempty"`
+	PersonID     string      `json:"person_id,omitempty"`
+	TaskStatusID string      `json:"task_status_id,omitempty"`
+	Text         string      `json:"text,omitempty"`
 }
 
 type Comments struct {
@@ -204,6 +205,9 @@ type MessagePayload struct {
 		Author struct {
 			Person
 		}
+	}
+	StatusChangeAuthor struct {
+		Person
 	}
 	Assignees []Person
 }

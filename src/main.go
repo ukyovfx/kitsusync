@@ -193,6 +193,15 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 					response[i].LatestComment.Comment.Comment = taskComments.Each[0]
 				}
 
+				if statusComment, ok := statusChangeComment(tasks.Each[i], taskComments.Each); ok {
+					for _, elem := range persons.Each {
+						if elem.ID == statusComment.PersonID {
+							response[i].StatusChangeAuthor.Person = elem
+							break
+						}
+					}
+				}
+
 				for _, elem := range persons.Each {
 					if len(taskComments.Each) > 0 {
 						if elem.ID == taskComments.Each[0].PersonID {
@@ -233,6 +242,43 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	}
 
 	return out, nil
+}
+
+// statusChangeComment returns only a comment that Zou deterministically ties
+// to the task's current status transition. A merely recent comment is not
+// sufficient evidence of who changed the status.
+func statusChangeComment(task kitsu.Task, comments []kitsu.Comment) (kitsu.Comment, bool) {
+	if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.TaskStatusID) == "" || strings.TrimSpace(task.LastCommentDate) == "" {
+		return kitsu.Comment{}, false
+	}
+	for _, comment := range comments {
+		if strings.TrimSpace(comment.ObjectID) != strings.TrimSpace(task.ID) || strings.TrimSpace(comment.TaskStatusID) != strings.TrimSpace(task.TaskStatusID) || strings.TrimSpace(comment.PersonID) == "" {
+			continue
+		}
+		if timestampsEqual(comment.CreatedAt, task.LastCommentDate) || timestampsEqual(comment.UpdatedAt, task.LastCommentDate) {
+			return comment, true
+		}
+	}
+	return kitsu.Comment{}, false
+}
+
+func timestampsEqual(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05"} {
+		a, aErr := time.Parse(layout, left)
+		b, bErr := time.Parse(layout, right)
+		if aErr == nil && bErr == nil && a.Equal(b) {
+			return true
+		}
+	}
+	return false
 }
 
 type notificationRouteStats struct {
@@ -589,6 +635,16 @@ func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) {
 // status payload does not expose its changer, so it remains unknown rather
 // than being guessed from an assignee or an unrelated comment.
 func auditActorFromPayload(payload kitsu.MessagePayload) (kind, id, name string) {
+	statusAuthor := payload.StatusChangeAuthor.Person
+	if strings.TrimSpace(statusAuthor.ID) != "" {
+		if statusAuthor.IsBot {
+			return model.AuditActorSystem, strings.TrimSpace(statusAuthor.ID), ""
+		}
+		if strings.TrimSpace(statusAuthor.FullName) == "" {
+			return model.AuditActorUnknown, "", ""
+		}
+		return model.AuditActorHuman, strings.TrimSpace(statusAuthor.ID), strings.TrimSpace(statusAuthor.FullName)
+	}
 	if !payload.IsCommentOnly {
 		return model.AuditActorUnknown, "", ""
 	}
