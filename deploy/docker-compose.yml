@@ -9,8 +9,6 @@ services:
       - APP_ENV=production
     volumes:
       - "../conf.toml:/app/conf.toml"
-      - "../docs.html:/app/docs.html"
-      - "../site.jsx:/app/site.jsx"
       - "../tpl:/app/tpl"
       - "../data:/app/data"
       - "../data/sqlite.db:/app/sqlite.db"
