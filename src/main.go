@@ -984,7 +984,7 @@ func main() {
 	// Setup diagnostic JSON API — registered under both root and /bot prefix.
 	setupAPIRoutes := func(prefix string) {
 		mux.HandleFunc(prefix+"/api/setup/status", setup.RequireSession(setup.SetupStatusHandler(
-			db, conf.Kitsu.RequestInterval, setupCredsFunc,
+			db, conf.PollIntervalSeconds(), setupCredsFunc,
 		)))
 		mux.HandleFunc(prefix+"/api/setup/observability", setup.RequireSession(setup.TelemetrySnapshotHandler()))
 		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, setup.ProjectsHandler(db))))
@@ -1070,7 +1070,7 @@ func main() {
 		discordToken, _, _ := getDiscordSettings(db, conf)
 		setup.ObserveDiscordRuntime(discordToken)
 	})
-	c.AddFunc("@every "+strconv.Itoa(conf.Kitsu.RequestInterval)+"m", func() {
+	c.AddFunc("@every "+conf.PollInterval().String(), func() {
 		if !runtime.ready() && !refreshRuntime() {
 			return
 		}

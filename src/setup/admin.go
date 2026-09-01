@@ -2757,10 +2757,16 @@ func DriveHandler(db *gorm.DB) http.HandlerFunc {
 			return
 		}
 		if err := model.SetProjectStorageURL(db, projectID, storageURL); err != nil {
-			http.Error(w, "storage settings could not be saved", http.StatusInternalServerError)
+			target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings&drive_error=save", r)
+			http.Redirect(w, r, target, http.StatusSeeOther)
 			return
 		}
-		target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings", r)
+		if model.GetProjectStorageURL(db, projectID) != storageURL {
+			target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings&drive_error=readback", r)
+			http.Redirect(w, r, target, http.StatusSeeOther)
+			return
+		}
+		target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings&drive_saved=1", r)
 		http.Redirect(w, r, target, http.StatusSeeOther)
 		return
 	}

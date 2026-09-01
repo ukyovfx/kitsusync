@@ -59,3 +59,32 @@ func TestValidateAcceptsPositiveDiscordBatchAndRateValues(t *testing.T) {
 		}
 	}
 }
+
+func TestPollIntervalUsesExplicitSecondsWithinSafeRange(t *testing.T) {
+	config := Config{}
+	config.Kitsu.PollIntervalSeconds = 10
+	if got := config.PollIntervalSeconds(); got != 10 || config.PollInterval().Seconds() != 10 {
+		t.Fatalf("explicit poll interval = %d/%s, want 10 seconds", got, config.PollInterval())
+	}
+	for _, value := range []int{1, 61, -1} {
+		config := Config{}
+		config.Kitsu.PollIntervalSeconds = value
+		if len(config.Validate()) == 0 {
+			t.Fatalf("poll interval %d should be rejected", value)
+		}
+	}
+}
+
+func TestPollIntervalPreservesLegacyMinuteSemantics(t *testing.T) {
+	config := Config{}
+	config.Kitsu.RequestInterval = 1
+	if got := config.PollIntervalSeconds(); got != 60 || config.PollInterval().Seconds() != 60 {
+		t.Fatalf("legacy requestInterval = %d/%s, want 60 seconds", got, config.PollInterval())
+	}
+}
+
+func TestPollIntervalDefaultsToTenSecondsWhenUnset(t *testing.T) {
+	if got := (Config{}).PollIntervalSeconds(); got != 10 {
+		t.Fatalf("unset poll interval = %d, want 10 seconds", got)
+	}
+}

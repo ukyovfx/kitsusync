@@ -137,11 +137,14 @@ func TestNotificationCardUsesDiscordMarkdownHierarchy(t *testing.T) {
 			NotificationLanguage: "en", Color: notificationStatusColor(status),
 		}, "rich")
 		description := payload.Embeds[0].Description
-		if !strings.HasPrefix(description, "## • "+status) {
-			t.Fatalf("%s status is not a Discord heading: %q", status, description)
+		if !strings.HasPrefix(description, "**• "+status+"**") {
+			t.Fatalf("%s status is not a compact emphasized line: %q", status, description)
 		}
-		if strings.Contains(description, "###") || strings.Contains(description, "-#") {
+		if strings.Contains(description, "##") || strings.Contains(description, "###") || strings.Contains(description, "-#") {
 			t.Fatalf("%s body hierarchy changed unexpectedly: %q", status, description)
+		}
+		if !strings.Contains(description, "**• "+status+"**\nReview body") {
+			t.Fatalf("%s status/body spacing is not compact: %q", status, description)
 		}
 	}
 }
@@ -241,7 +244,7 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	if embed.Title != "Shot / SC02 - cut012" {
 		t.Fatalf("title must contain only shot context, got %q", embed.Title)
 	}
-	if embed.Description != "## 👀 WFA\n\nチェックをお願いします" {
+	if embed.Description != "**👀 WFA**\nチェックをお願いします" {
 		t.Fatalf("description must be the separated status/body block, got %q", embed.Description)
 	}
 	if embed.Footer.Text != "テスト通知" {

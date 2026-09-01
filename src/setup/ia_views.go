@@ -741,7 +741,16 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		if p.ValidationOnly || p.ReadOnlyPreview {
 			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionではストレージ設定を変更できません。", "Storage settings are read-only for validation-only Productions.")) + `</p></section>`
 		}
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p><form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></div></form></section>`
+		feedback := ""
+		switch {
+		case r.URL.Query().Get("drive_saved") == "1":
+			feedback = `<div class="notice notice-success" role="status">` + esc(t(lang, "Drive設定を保存しました。", "Drive settings saved.")) + `</div>`
+		case r.URL.Query().Get("drive_error") == "save":
+			feedback = `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定を保存できませんでした。Productionを確認して、もう一度お試しください。", "Drive settings could not be saved. Verify the Production and try again.")) + `</div>`
+		case r.URL.Query().Get("drive_error") == "readback":
+			feedback = `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定の保存結果を確認できませんでした。もう一度お試しください。", "Drive settings were not confirmed after saving. Please try again.")) + `</div>`
+		}
+		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p>` + feedback + `<form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack drive-storage-form"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit" data-drive-save>` + esc(t(lang, "保存", "Save")) + `</button></div></form><script>(function(){var form=document.querySelector('.drive-storage-form'),button=form&&form.querySelector('[data-drive-save]');if(!form||!button)return;form.addEventListener('submit',function(){button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='` + esc(t(lang, "保存中...", "Saving...")) + `';});}());</script></section>`
 	case "activity":
 		return renderSelectedProductionActivity(db, p, lang)
 	case "troubleshooting":

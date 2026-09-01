@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/gookit/slog"
@@ -57,11 +58,12 @@ type Config struct {
 	Debug                 bool
 	Log                   bool
 	Kitsu                 struct {
-		Hostname        string
-		Email           string
-		Password        string
-		SkipComments    bool
-		RequestInterval int
+		Hostname            string
+		Email               string
+		Password            string
+		SkipComments        bool
+		RequestInterval     int
+		PollIntervalSeconds int `toml:"pollIntervalSeconds"`
 	}
 	Discord struct {
 		EmbedsPerRequests int
@@ -78,6 +80,31 @@ type Config struct {
 	GoogleDrive  struct {
 		URL string `toml:"url"`
 	} `toml:"googleDrive"`
+}
+
+const (
+	minPollIntervalSeconds     = 5
+	maxPollIntervalSeconds     = 60
+	defaultPollIntervalSeconds = 10
+)
+
+// PollInterval returns the configured polling cadence. The explicit seconds
+// setting takes precedence; older configurations continue to interpret
+// requestInterval as minutes so requestInterval=1 never becomes one-second
+// polling.
+func (c Config) PollInterval() time.Duration {
+	seconds := c.PollIntervalSeconds()
+	return time.Duration(seconds) * time.Second
+}
+
+func (c Config) PollIntervalSeconds() int {
+	if c.Kitsu.PollIntervalSeconds > 0 {
+		return c.Kitsu.PollIntervalSeconds
+	}
+	if c.Kitsu.RequestInterval > 0 {
+		return c.Kitsu.RequestInterval * 60
+	}
+	return defaultPollIntervalSeconds
 }
 
 // Read loads conf.toml, expanding ${VAR} placeholders from environment variables.
@@ -136,6 +163,9 @@ func (c *Config) Validate() []string {
 	}
 	if c.Discord.RequestsPerMinute <= 0 {
 		issues = append(issues, "[FATAL] discord.requestsPerMinute must be greater than zero")
+	}
+	if c.Kitsu.PollIntervalSeconds != 0 && (c.Kitsu.PollIntervalSeconds < minPollIntervalSeconds || c.Kitsu.PollIntervalSeconds > maxPollIntervalSeconds) {
+		issues = append(issues, fmt.Sprintf("[FATAL] kitsu.pollIntervalSeconds must be between %d and %d", minPollIntervalSeconds, maxPollIntervalSeconds))
 	}
 
 	// --- 必須フィールド ---
