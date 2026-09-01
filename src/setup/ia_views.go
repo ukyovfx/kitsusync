@@ -744,7 +744,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		feedback := ""
 		switch {
 		case r.URL.Query().Get("drive_saved") == "1":
-			feedback = `<div class="notice notice-success" role="status">` + esc(t(lang, "Drive設定を保存しました。", "Drive settings saved.")) + `</div>`
+			feedback = `<div class="notice notice-success" role="status">` + esc(t(lang, "保存しました。", "Saved.")) + `</div>`
 		case r.URL.Query().Get("drive_error") == "save":
 			feedback = `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定を保存できませんでした。Productionを確認して、もう一度お試しください。", "Drive settings could not be saved. Verify the Production and try again.")) + `</div>`
 		case r.URL.Query().Get("drive_error") == "readback":

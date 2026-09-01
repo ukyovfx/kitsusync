@@ -111,8 +111,8 @@ func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
 	for _, tc := range []struct {
 		name, query, lang, want string
 	}{
-		{"success-ja", "drive_saved=1", "ja", "Drive設定を保存しました。"},
-		{"success-en", "drive_saved=1", "en", "Drive settings saved."},
+		{"success-ja", "drive_saved=1", "ja", "保存しました。"},
+		{"success-en", "drive_saved=1", "en", "Saved."},
 		{"error-ja", "drive_error=save", "ja", "Drive設定を保存できませんでした。"},
 		{"error-en", "drive_error=readback", "en", "Drive settings were not confirmed after saving."},
 	} {
@@ -123,6 +123,13 @@ func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
 				t.Fatalf("feedback %q missing from %s", tc.want, body)
 			}
 		})
+	}
+	for _, lang := range []string{"ja", "en"} {
+		r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang="+lang+"&drive_saved=1", nil)
+		body := renderSelectedProductionPanel(db, r, project, lang, "storage-settings", "success", "Connected", "", "")
+		if !strings.Contains(body, `class="notice notice-success"`) {
+			t.Fatalf("success feedback for %s does not use the canonical success banner: %s", lang, body)
+		}
 	}
 	body := renderSelectedProductionPanel(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang=ja", nil), project, "ja", "storage-settings", "success", "Connected", "", "")
 	if !strings.Contains(body, "保存中...") || !strings.Contains(body, "drive-storage-form") {

@@ -108,8 +108,8 @@ func TestProductionTaskLinkUsesPublicKitsuURLOnly(t *testing.T) {
 		t.Fatalf("public task link = %q", got)
 	}
 	discord.KitsuPublicURLResolver = func() string { return "http://host.docker.internal:8080" }
-	if got := productionTaskLink(payload); got != "http://host.docker.internal:8080/productions/production-1/shots/tasks/task-1" {
-		t.Fatalf("explicitly configured public URL should remain usable, got %q", got)
+	if got := productionTaskLink(payload); got != "not supplied" {
+		t.Fatalf("internal configured URL must not be exposed publicly, got %q", got)
 	}
 	discord.KitsuPublicURLResolver = func() string { return "" }
 	if got := productionTaskLink(payload); got != "not supplied" {

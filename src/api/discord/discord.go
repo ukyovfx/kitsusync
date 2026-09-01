@@ -371,11 +371,16 @@ func mentionContent(ids []string) string {
 	return strings.Join(mentions, " ")
 }
 
-func assigneeDisplayName(name, discordID string) string {
-	if isValidDiscordUserID(discordID) {
-		return "<@" + discordID + ">"
+func kitsuPersonDisplayName(person kitsu.Person, lang string) string {
+	first := strings.TrimSpace(person.FirstName)
+	last := strings.TrimSpace(person.LastName)
+	if normalizeNotificationLang(lang) == "ja" && first != "" && last != "" {
+		return sanitizeDiscordText(last + " " + first)
 	}
-	return sanitizeDiscordText(name)
+	if normalizeNotificationLang(lang) == "en" && first != "" && last != "" && strings.TrimSpace(person.FullName) == "" {
+		return sanitizeDiscordText(first + " " + last)
+	}
+	return sanitizeDiscordText(person.FullName)
 }
 
 func notificationRecipientCandidates(status string, assignNotification bool, assignees, checkers []string, conf config.Config) []string {
@@ -420,11 +425,27 @@ func safeNotificationURL(raw string) string {
 	return raw
 }
 
+func safePublicNotificationURL(raw string) string {
+	raw = safeNotificationURL(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "localhost" || host == "host.docker.internal" || host == "127.0.0.1" || host == "::1" {
+		return ""
+	}
+	return raw
+}
+
 // KitsuTaskURL builds the task route used by the Kitsu frontend. The route
 // shape is intentionally limited to entity types whose task pages are part of
 // the verified frontend router; unknown entity types fail closed.
 func KitsuTaskURL(host, productionID, entityType, taskID string) string {
-	base := safeNotificationURL(host)
+	base := safePublicNotificationURL(host)
 	productionID = strings.TrimSpace(productionID)
 	taskID = strings.TrimSpace(taskID)
 	if base == "" || productionID == "" || taskID == "" {
@@ -742,8 +763,6 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// 同じ Kitsu 名が userMap に複数行で書かれていても 1 回しか mention しないよう、
 		// 既に追加した DiscordID を seen で重複排除する。
 		var assigneeNames []string
-		var assigneeMentionIDs []string
-		var artistMentions []string
 		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
 		for i := 0; i < len(elem.Assignees); i++ {
 			if elem.Assignees[i].IsBot {
@@ -751,41 +770,13 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 				continue
 			}
 			fullName := elem.Assignees[i].FullName
-			placeholders.Assignees[i].Fullname = sanitizeDiscordText(fullName)
+			displayPersonName := kitsuPersonDisplayName(elem.Assignees[i], notifLang)
+			if displayPersonName == "" {
+				displayPersonName = sanitizeDiscordText(fullName)
+			}
+			placeholders.Assignees[i].Fullname = displayPersonName
 			placeholders.Assignees[i].Email = elem.Assignees[i].Email
-			displayName := sanitizeDiscordText(fullName)
-			var linkedDiscordID string
-
-			matched := false
-			// DB 優先: UserMapResolver が注入されていれば使う（プロジェクトスコープ → グローバル フォールバック対応）
-			if UserMapResolver != nil {
-				assigneeEmail := elem.Assignees[i].Email
-				if did := UserMapResolver(elem.Project.ID, fullName, assigneeEmail); did != "" {
-					linkedDiscordID = strings.TrimSpace(did)
-					matched = true
-				}
-			}
-			// フォールバック: conf.toml の userMap
-			if !matched {
-				for _, u := range conf.Mention.UserMap {
-					if u.KitsuName == fullName {
-						linkedDiscordID = strings.TrimSpace(u.DiscordID)
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
-				slog.Warn("Kitsu user not registered; will not be @-mentioned",
-					"kitsuName", fullName,
-					"taskID", elem.Task.ID,
-					"hint", "add this person via /bot/admin/users")
-			}
-			if isValidDiscordUserID(linkedDiscordID) && len(assigneeMentionIDs) < maxNotificationRecipients {
-				assigneeMentionIDs = append(assigneeMentionIDs, linkedDiscordID)
-				displayName = assigneeDisplayName(fullName, linkedDiscordID)
-				artistMentions = append(artistMentions, linkedDiscordID)
-			}
+			displayName := displayPersonName
 			assigneeNames = append(assigneeNames, displayName)
 		}
 		if len(assigneeNames) > 0 {
@@ -819,7 +810,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
 		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
-		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, artistMentions, checkerIDs, conf)
+		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, nil, checkerIDs, conf)
 		if len(recipientIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
 			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
 				"taskType", elem.TaskType.Name,
@@ -888,7 +879,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)
 
 		placeholders.NotificationLanguage = notifLang
-		placeholders.AllowedUserIDs = uniqueDiscordIDs(append(append([]string{}, recipientIDs...), assigneeMentionIDs...))
+		placeholders.AllowedUserIDs = uniqueDiscordIDs(recipientIDs)
 		placeholders.Color = int(intColor)
 		payload := RenderNotificationPayload(placeholders, tplPreset)
 

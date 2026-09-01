@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"app/src/api/kitsu"
 	"strings"
 	"testing"
 
@@ -137,39 +138,46 @@ func TestNotificationCardUsesDiscordMarkdownHierarchy(t *testing.T) {
 			NotificationLanguage: "en", Color: notificationStatusColor(status),
 		}, "rich")
 		description := payload.Embeds[0].Description
-		if !strings.HasPrefix(description, "**• "+status+"**") {
-			t.Fatalf("%s status is not a compact emphasized line: %q", status, description)
+		if !strings.HasPrefix(description, "## • "+status) {
+			t.Fatalf("%s status is not a level-two heading: %q", status, description)
 		}
-		if strings.Contains(description, "##") || strings.Contains(description, "###") || strings.Contains(description, "-#") {
+		if strings.Contains(description, "-#") {
 			t.Fatalf("%s body hierarchy changed unexpectedly: %q", status, description)
 		}
-		if !strings.Contains(description, "**• "+status+"**\nReview body") {
+		if !strings.Contains(description, "## • "+status+"\nReview body") {
 			t.Fatalf("%s status/body spacing is not compact: %q", status, description)
 		}
 	}
 }
 
-func TestAssigneeDisplayUsesOnlyValidatedLinkedUserMentions(t *testing.T) {
-	if got := assigneeDisplayName("Artist A", "123456789012345678"); got != "<@123456789012345678>" {
-		t.Fatalf("linked assignee = %q", got)
-	}
-	if got := assigneeDisplayName("Artist <A>", "not-an-id"); got != "Artist ＜A＞" {
-		t.Fatalf("unlinked assignee = %q", got)
-	}
+func TestAssigneeDisplayNeverRendersOrAllowsAssigneeMentions(t *testing.T) {
 	data := Template{
 		EntityType: "Shot", TaskName: "cut001", StatusUpper: "WFA", StatusEmoji: "•",
-		StatusMessage: "Please review", AssigneesStr: "<@123456789012345678>",
-		AllowedUserIDs: []string{"123456789012345678"}, NotificationLanguage: "en",
+		StatusMessage: "Please review", AssigneesStr: "Artist A",
+		NotificationLanguage: "en",
 	}
 	payload := RenderNotificationPayload(data, "rich")
-	if !strings.Contains(payload.Embeds[0].Fields[1].Value, "<@123456789012345678>") {
-		t.Fatalf("linked mention missing from assignee field: %+v", payload.Embeds)
+	if strings.Contains(payload.Embeds[0].Fields[1].Value, "<@123456789012345678>") || !strings.Contains(payload.Embeds[0].Fields[1].Value, "Artist A") {
+		t.Fatalf("assignee field should contain only the plain Kitsu name: %+v", payload.Embeds)
 	}
-	if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123456789012345678" {
-		t.Fatalf("allowed mentions = %v", payload.AllowedMentions.Users)
+	if len(payload.AllowedMentions.Users) != 0 {
+		t.Fatalf("assignee mention was allowed: %v", payload.AllowedMentions.Users)
 	}
 	if len(payload.AllowedMentions.Parse) != 0 || len(payload.AllowedMentions.Roles) != 0 {
 		t.Fatalf("broad mention parsing enabled: %+v", payload.AllowedMentions)
+	}
+}
+
+func TestKitsuPersonDisplayNameUsesStructuredJapaneseOrderSafely(t *testing.T) {
+	person := kitsu.Person{FirstName: "侑恭", LastName: "松尾", FullName: "侑恭 松尾"}
+	if got := kitsuPersonDisplayName(person, "ja"); got != "松尾 侑恭" {
+		t.Fatalf("Japanese structured name = %q", got)
+	}
+	if got := kitsuPersonDisplayName(person, "en"); got != "侑恭 松尾" {
+		t.Fatalf("English display-name convention changed = %q", got)
+	}
+	if got := kitsuPersonDisplayName(kitsu.Person{FullName: "Unknown order"}, "ja"); got != "Unknown order" {
+		t.Fatalf("unstructured name was guessed = %q", got)
 	}
 }
 
@@ -244,7 +252,7 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	if embed.Title != "Shot / SC02 - cut012" {
 		t.Fatalf("title must contain only shot context, got %q", embed.Title)
 	}
-	if embed.Description != "**👀 WFA**\nチェックをお願いします" {
+	if embed.Description != "## 👀 WFA\nチェックをお願いします" {
 		t.Fatalf("description must be the separated status/body block, got %q", embed.Description)
 	}
 	if embed.Footer.Text != "テスト通知" {
@@ -258,6 +266,21 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	}
 	if embed.Fields[1].Name != "👤 担当" || embed.Fields[1].Value != "未割り当て" {
 		t.Fatalf("assignee field mismatch: %+v", embed.Fields[1])
+	}
+}
+
+func TestNotificationCardOmitsProductionFooterWithoutTestContext(t *testing.T) {
+	useRepositoryRootForTemplates(t)
+	payload := RenderNotificationPayload(Template{
+		ProjectName: "KitsuSync Local Test", EntityType: "Shot", TaskName: "cut001",
+		TaskType: "Animation", StatusUpper: "DONE", StatusEmoji: "✅", StatusMessage: "Completed",
+		TaskURL: "https://kitsu.example.com/tasks/cut001", NotificationLanguage: "en",
+	}, "rich")
+	if payload.Embeds[0].Footer.Text != "" {
+		t.Fatalf("Production footer was not omitted: %q", payload.Embeds[0].Footer.Text)
+	}
+	if !strings.Contains(payload.Embeds[0].Fields[0].Value, "🦊 [Kitsu]") {
+		t.Fatalf("configured Public Kitsu link was not rendered: %+v", payload.Embeds[0].Fields)
 	}
 }
 
@@ -369,6 +392,11 @@ func TestKitsuTaskURLUsesVerifiedFrontendRoute(t *testing.T) {
 	}
 	if got := KitsuTaskURL("not-a-url", "production-1", "Shot", "task-1"); got != "" {
 		t.Fatalf("malformed base URL = %q, want omitted", got)
+	}
+	for _, internal := range []string{"http://localhost:8090", "http://127.0.0.1:8080", "http://host.docker.internal:8080"} {
+		if got := KitsuTaskURL(internal, "production-1", "Shot", "task-1"); got != "" {
+			t.Fatalf("internal public URL leaked into card: %q -> %q", internal, got)
+		}
 	}
 	if got := KitsuTaskURL("https://kitsu.example.com", "production-1", "Shot", ""); got != "" {
 		t.Fatalf("missing task ID URL = %q, want omitted", got)

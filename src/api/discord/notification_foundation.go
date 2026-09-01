@@ -61,6 +61,10 @@ func RenderNotificationPayload(data Template, preset string) Payload {
 		author = strings.TrimSpace(data.TaskType)
 		if strings.TrimSpace(data.CardContext) != "" {
 			footer = strings.TrimSpace(data.CardContext)
+		} else {
+			// Production is already represented by routing/context and should not
+			// consume space in the notification card footer.
+			footer = ""
 		}
 		embed.Title = truncate.TruncateString(title, 256)
 		embed.Author = EmbedAuthor{Name: truncate.TruncateString(author, 256)}
@@ -96,7 +100,7 @@ func notificationCardDescription(data Template) string {
 	}
 	parts := make([]string, 0, 2)
 	if status != "" {
-		parts = append(parts, "**"+status+"**")
+		parts = append(parts, "## "+status)
 	}
 	if message != "" {
 		parts = append(parts, message)
