@@ -102,7 +102,7 @@ func notificationCardDescription(data Template) string {
 	if message != "" {
 		parts = append(parts, message)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n")
 }
 
 func notificationCardTitle(data Template) string {
@@ -149,7 +149,15 @@ func notificationCardFields(data Template) []EmbedField {
 		links = append(links, "🦊 [Kitsu]("+kitsuURL+")")
 	}
 	if len(links) > 0 {
-		fields = append(fields, EmbedField{Name: "🔗", Value: truncate.TruncateString(strings.Join(links, " · "), 1024), Inline: false})
+		linksLabel := strings.TrimSpace(data.LinksLabel)
+		if linksLabel == "" {
+			if normalizeNotificationLang(data.NotificationLanguage) == "ja" {
+				linksLabel = "リンク"
+			} else {
+				linksLabel = "Links"
+			}
+		}
+		fields = append(fields, EmbedField{Name: truncate.TruncateString(linksLabel, 256), Value: truncate.TruncateString(strings.Join(links, " · "), 1024), Inline: false})
 	}
 	metadata := make([]EmbedField, 0, 2)
 	statusLabel := "📊 Status"

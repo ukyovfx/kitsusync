@@ -90,8 +90,11 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 	if strings.Contains(embed.Description, " → ") {
 		t.Fatalf("transition leaked into description: %q", embed.Description)
 	}
-	if len(embed.Fields) != 3 || embed.Fields[0].Name != "🔗" || embed.Fields[1].Name != "📊 Status" || embed.Fields[2].Name != "👤 Assignee" {
+	if len(embed.Fields) != 3 || embed.Fields[0].Name != "Links" || embed.Fields[1].Name != "📊 Status" || embed.Fields[2].Name != "👤 Assignee" {
 		t.Fatalf("unexpected compact fields: %+v", embed.Fields)
+	}
+	if strings.Contains(embed.Fields[0].Name, "🔗") || !strings.Contains(embed.Fields[0].Value, "📁 [Drive]") || !strings.Contains(embed.Fields[0].Value, "🦊 [Kitsu]") {
+		t.Fatalf("service link hierarchy is incorrect: %+v", embed.Fields[0])
 	}
 	if embed.Fields[0].Inline || !strings.Contains(embed.Fields[0].Value, "Drive") || !strings.Contains(embed.Fields[0].Value, "Kitsu") {
 		t.Fatalf("links are not compact or ordered: %+v", embed.Fields[1])
@@ -171,7 +174,7 @@ func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 	if len(embed.Fields) != 4 {
 		t.Fatalf("field count = %d, want comment/links/status/assignee", len(embed.Fields))
 	}
-	if embed.Fields[0].Name != "コメント" || embed.Fields[1].Name != "🔗" {
+	if embed.Fields[0].Name != "コメント" || embed.Fields[1].Name != "リンク" {
 		t.Fatalf("supporting fields are not ordered: %+v", embed.Fields[:2])
 	}
 	if !strings.Contains(embed.Fields[1].Value, "Drive") || !strings.Contains(embed.Fields[1].Value, "Kitsu") {
@@ -205,7 +208,7 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	if embed.Title != "Shot / SC02 - cut012" {
 		t.Fatalf("title must contain only shot context, got %q", embed.Title)
 	}
-	if embed.Description != "## 👀 WFA\n\nチェックをお願いします" {
+	if embed.Description != "## 👀 WFA\nチェックをお願いします" {
 		t.Fatalf("description must be the separated status/body block, got %q", embed.Description)
 	}
 	if embed.Footer.Text != "テスト通知" {
@@ -299,7 +302,7 @@ func TestNotificationCardLinksRequireValidURLsAndOmitUnavailableLinks(t *testing
 		}, "rich")
 		var links string
 		for _, field := range payload.Embeds[0].Fields {
-			if field.Name == "🔗" {
+			if field.Name == "Links" || field.Name == "リンク" {
 				links = field.Value
 			}
 		}

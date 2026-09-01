@@ -624,6 +624,18 @@ func iaActivityAction(lang string, log model.AuditLog) string {
 	return t(lang, "設定変更", "Configuration changed")
 }
 
+func auditActorLabel(lang string, log model.AuditLog) string {
+	switch log.ActorKind {
+	case model.AuditActorHuman:
+		if strings.TrimSpace(log.ActorName) != "" {
+			return log.ActorName
+		}
+	case model.AuditActorSystem:
+		return t(lang, "システム", "System")
+	}
+	return t(lang, "不明", "Unknown")
+}
+
 func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm.DB, p model.Project, fallbackGuildID string) {
 	lang := currentLang(r)
 	if p.ReadOnlyPreview {
@@ -2089,7 +2101,7 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		if !log.Success {
 			result = t(lang, "失敗", "Failed")
 		}
-		rows.WriteString(`<tr><td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td>` + esc(log.ProjectName) + `</td><td>` + esc(iaActivityAction(lang, log)) + `</td><td>` + esc(t(lang, "記録なし", "Not recorded")) + `</td><td><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[log.Success] + `">` + esc(result) + `</span></td></tr>`)
+		rows.WriteString(`<tr><td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td>` + esc(log.ProjectName) + `</td><td>` + esc(iaActivityAction(lang, log)) + `</td><td>` + esc(auditActorLabel(lang, log)) + `</td><td><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[log.Success] + `">` + esc(result) + `</span></td></tr>`)
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません", "No audit log entries")) + `</td></tr>`)

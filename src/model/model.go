@@ -29,7 +29,16 @@ type AuditLog struct {
 	Success            bool
 	ErrorMessage       string
 	RetryCount         int
+	ActorKind          string
+	ActorID            string
+	ActorName          string
 }
+
+const (
+	AuditActorHuman   = "human"
+	AuditActorSystem  = "system"
+	AuditActorUnknown = "unknown"
+)
 
 func WriteAuditLog(db *gorm.DB, log AuditLog) {
 	if db == nil {

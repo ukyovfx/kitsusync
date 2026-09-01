@@ -690,6 +690,36 @@ func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
 	}
 }
 
+func TestAuditLogRendersPersistedActorInJapaneseAndEnglish(t *testing.T) {
+	db := newIAViewDB(t)
+	for _, actor := range []model.AuditLog{
+		{ProjectName: "Human", ActorKind: model.AuditActorHuman, ActorID: "person-1", ActorName: "Ukyo Matsuo", Success: true},
+		{ProjectName: "System", ActorKind: model.AuditActorSystem, ActorID: "bot-1", Success: true},
+		{ProjectName: "Unknown", ActorKind: model.AuditActorUnknown, Success: true},
+	} {
+		model.WriteAuditLog(db, actor)
+	}
+	for _, tc := range []struct{ lang, human, system, unknown string }{
+		{"ja", "Ukyo Matsuo", "システム", "不明"},
+		{"en", "Ukyo Matsuo", "System", "Unknown"},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", "/bot/admin/audit?lang="+tc.lang, nil)
+			renderIAAudit(w, r, db)
+			body := w.Body.String()
+			for _, want := range []string{tc.human, tc.system, tc.unknown} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("audit page omitted actor %q: %s", want, body)
+				}
+			}
+			if strings.Contains(body, "記録なし") || strings.Contains(body, "Not recorded") {
+				t.Fatal("audit page still renders the old missing-actor label")
+			}
+		})
+	}
+}
+
 func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "selected-advanced-p", Name: "Selected Advanced P", DiscordGuildID: "synthetic-guild", DiscordCategoryID: "synthetic-category"}

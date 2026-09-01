@@ -464,6 +464,7 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 				if projectRow := model.FindProjectByKitsuID(db, task.Project.ID); projectRow != nil {
 					projectGuildID = projectRow.DiscordGuildID
 				}
+				actorKind, actorID, actorName := auditActorFromPayload(task)
 				model.WriteAuditLog(db, model.AuditLog{
 					TaskID:       taskID,
 					ProjectID:    task.Project.ID,
@@ -476,6 +477,9 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 					WebhookURL:   webhookURL,
 					Success:      res.MessageID != "",
 					ErrorMessage: res.FailureCategory,
+					ActorKind:    actorKind,
+					ActorID:      actorID,
+					ActorName:    actorName,
 				})
 				if res.MessageID != "" {
 					sentCount++
@@ -578,6 +582,24 @@ var makeKitsuResponse = MakeKitsuResponse
 
 func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) {
 	model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
+}
+
+// auditActorFromPayload uses only actor data tied to the event we can prove.
+// The latest comment author is an actor for comment-only changes. A task
+// status payload does not expose its changer, so it remains unknown rather
+// than being guessed from an assignee or an unrelated comment.
+func auditActorFromPayload(payload kitsu.MessagePayload) (kind, id, name string) {
+	if !payload.IsCommentOnly {
+		return model.AuditActorUnknown, "", ""
+	}
+	author := payload.LatestComment.Author.Person
+	if author.IsBot {
+		return model.AuditActorSystem, author.ID, ""
+	}
+	if strings.TrimSpace(author.ID) == "" || strings.TrimSpace(author.FullName) == "" {
+		return model.AuditActorUnknown, "", ""
+	}
+	return model.AuditActorHuman, strings.TrimSpace(author.ID), strings.TrimSpace(author.FullName)
 }
 
 func runOnePoll(conf config.Config, db *gorm.DB) {
