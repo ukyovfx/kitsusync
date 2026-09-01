@@ -175,12 +175,10 @@ func runtimeEndpointFromDisplay(db *gorm.DB, displayed string) (string, error) {
 	}
 	if strings.EqualFold(strings.TrimRight(normalized, "/"), "http://127.0.0.1:8080") {
 		// The normal UI intentionally displays a safe host summary. Resolve that
-		// summary back to the configured runtime endpoint before making a request.
-		// This must not depend on the optional local-profile flag: saved settings
-		// may already point at the container-to-host address.
-		if runtime := effectiveRuntimeKitsuEndpoint(db); runtime != "" {
-			return runtime, nil
-		}
+		// summary to the persistent local Kitsu address before making a request.
+		// Do not reuse the saved endpoint here: it may be a stale disposable or
+		// otherwise different local instance that the operator is replacing.
+		return "http://host.docker.internal:8080/", nil
 	}
 	return normalized, nil
 }

@@ -318,3 +318,13 @@ func TestRuntimeKitsuEndpointResolvesSafeDisplayWithoutLocalProfile(t *testing.T
 		t.Fatalf("expected saved runtime endpoint to resolve from safe display value, got %q, %v", got, err)
 	}
 }
+
+func TestRuntimeKitsuEndpointDoesNotReuseStaleLocalSavedEndpoint(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, "kitsu.hostname", "http://host.docker.internal:18080")
+
+	got, err := runtimeEndpointFromDisplay(db, "http://127.0.0.1:8080")
+	if err != nil || strings.TrimRight(got, "/") != "http://host.docker.internal:8080" {
+		t.Fatalf("expected local display endpoint to replace stale saved endpoint, got %q, %v", got, err)
+	}
+}
