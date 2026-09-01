@@ -9,8 +9,6 @@ services:
       - .env.local
     volumes:
       - ./conf.toml:/app/conf.toml
-      - ./docs.html:/app/docs.html
-      - ./site.jsx:/app/site.jsx
       - ./tpl:/app/tpl
       - ./data:/app/data
     environment:
@@ -37,8 +35,6 @@ services:
     volumes:
       - filebrowser_data:/database
       - ./README.md:/srv/README.md:ro
-      - ./docs.html:/srv/docs.html:ro
-      - ./site.jsx:/srv/site.jsx:ro
       - ./tpl:/srv/tpl:ro
     environment:
       - PUID=1000
