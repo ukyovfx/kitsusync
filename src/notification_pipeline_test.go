@@ -5,6 +5,7 @@ import (
 	"app/src/model"
 	"app/src/utils/config"
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -21,6 +22,29 @@ func newNotificationPipelineDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func reopenNotificationPipelineDB(t *testing.T, path string) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func closeNotificationPipelineDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func pipelinePayload(status string) kitsu.MessagePayload {
@@ -120,5 +144,87 @@ func TestFilterTasksReachesConfiguredAssignmentNotification(t *testing.T) {
 	FilterTasks([]kitsu.MessagePayload{pipelinePayload("none")}, pipelineConfig(), db)
 	if !assigned {
 		t.Fatal("configured assignment notification did not reach dispatch")
+	}
+}
+
+func TestFilterTasksPersistsStatusTransitionsAcrossPollsAndRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notification-state.db")
+	db := reopenNotificationPipelineDB(t, path)
+	configurePipelineRoute(t, db)
+	original := notificationDispatch
+	t.Cleanup(func() { notificationDispatch = original })
+	var transitions []string
+	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, db *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
+		for _, payload := range data {
+			transitions = append(transitions, payload.PreviousStatusName+" -> "+payload.TaskStatus.TaskStatus.ShortName)
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "")
+		}
+		return data
+	}
+
+	wfa := pipelinePayload("WFA")
+	FilterTasks([]kitsu.MessagePayload{wfa}, pipelineConfig(), db)
+	for i := 0; i < 8; i++ {
+		FilterTasks([]kitsu.MessagePayload{wfa}, pipelineConfig(), db)
+	}
+	closeNotificationPipelineDB(t, db)
+
+	db = reopenNotificationPipelineDB(t, path)
+	retake := pipelinePayload("RETAKE")
+	retake.Task.UpdatedAt = "2026-08-07T00:10:00"
+	FilterTasks([]kitsu.MessagePayload{retake}, pipelineConfig(), db)
+	closeNotificationPipelineDB(t, db)
+
+	db = reopenNotificationPipelineDB(t, path)
+	done := pipelinePayload("DONE")
+	done.Task.UpdatedAt = "2026-08-07T00:20:00"
+	FilterTasks([]kitsu.MessagePayload{done}, pipelineConfig(), db)
+	closeNotificationPipelineDB(t, db)
+
+	want := []string{" -> WFA", "WFA -> RETAKE", "RETAKE -> DONE"}
+	if fmt.Sprint(transitions) != fmt.Sprint(want) {
+		t.Fatalf("unexpected persisted transitions: got %v, want %v", transitions, want)
+	}
+}
+
+func TestFilterTasksRetriesKnownTransitionAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retry-state.db")
+	db := reopenNotificationPipelineDB(t, path)
+	configurePipelineRoute(t, db)
+	original := notificationDispatch
+	t.Cleanup(func() { notificationDispatch = original })
+	var transitions []string
+	failRetake := true
+	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, db *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
+		for _, payload := range data {
+			transitions = append(transitions, payload.PreviousStatusName+" -> "+payload.TaskStatus.TaskStatus.ShortName)
+			if payload.TaskStatus.TaskStatus.ShortName == "RETAKE" && failRetake {
+				failRetake = false
+				continue
+			}
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "")
+		}
+		return data
+	}
+
+	wfa := pipelinePayload("WFA")
+	FilterTasks([]kitsu.MessagePayload{wfa}, pipelineConfig(), db)
+	retake := pipelinePayload("RETAKE")
+	retake.Task.UpdatedAt = "2026-08-07T00:10:00"
+	FilterTasks([]kitsu.MessagePayload{retake}, pipelineConfig(), db)
+	closeNotificationPipelineDB(t, db)
+
+	db = reopenNotificationPipelineDB(t, path)
+	FilterTasks([]kitsu.MessagePayload{retake}, pipelineConfig(), db)
+	closeNotificationPipelineDB(t, db)
+	want := []string{" -> WFA", "WFA -> RETAKE", "WFA -> RETAKE"}
+	if fmt.Sprint(transitions) != fmt.Sprint(want) {
+		t.Fatalf("retry lost durable previous status: got %v, want %v", transitions, want)
+	}
+}
+
+func TestPreviousTaskStatusHasNoInventedFallback(t *testing.T) {
+	if got := model.PreviousTaskStatus(model.Task{}, "WFA"); got != "" {
+		t.Fatalf("unknown prior status must remain empty, got %q", got)
 	}
 }

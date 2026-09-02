@@ -108,18 +108,23 @@ func PurgeOldAuditLogs(db *gorm.DB, keepDays int) int64 {
 }
 
 type Task struct {
-	ID               uint `gorm:"primaryKey"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        gorm.DeletedAt `gorm:"index"`
-	TaskID           string         `gorm:"index"`
-	TaskUpdatedAt    string
-	TaskStatus       string `gorm:"index"`
-	CommentID        string
-	CommentUpdatedAt string
-	DiscordMessageID string
-	WebhookURL       string
-	DiscordThreadID  string
+	ID            uint `gorm:"primaryKey"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	DeletedAt     gorm.DeletedAt `gorm:"index"`
+	TaskID        string         `gorm:"index"`
+	TaskUpdatedAt string
+	TaskStatus    string `gorm:"index"`
+	// LastObservedStatus and PreviousObservedStatus retain the actual Kitsu
+	// status sequence independently from delivery state. TaskStatus remains the
+	// last successfully handled status so transient delivery failures retry.
+	LastObservedStatus     string `gorm:"index"`
+	PreviousObservedStatus string
+	CommentID              string
+	CommentUpdatedAt       string
+	DiscordMessageID       string
+	WebhookURL             string
+	DiscordThreadID        string
 }
 
 func CreateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
@@ -144,6 +149,7 @@ func UpdateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, comme
 // MarkTaskObserved records a non-deliverable or permanently failed event
 // without clearing a previously delivered Discord message.
 func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
+	ObserveTaskStatus(db, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt)
 	updates := map[string]interface{}{
 		"task_updated_at":    taskUpdatedAt,
 		"task_status":        taskStatus,
@@ -156,7 +162,55 @@ func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID,
 	}
 }
 
+// PreviousTaskStatus returns the deterministic status immediately before the
+// supplied observation. It uses durable observation state first so a retry or
+// process restart cannot turn a known transition into an invented one.
+func PreviousTaskStatus(task Task, currentStatus string) string {
+	currentStatus = strings.TrimSpace(currentStatus)
+	previous := strings.TrimSpace(task.LastObservedStatus)
+	if previous == "" {
+		previous = strings.TrimSpace(task.TaskStatus)
+	}
+	if previous == currentStatus {
+		return strings.TrimSpace(task.PreviousObservedStatus)
+	}
+	return previous
+}
+
+// ObserveTaskStatus durably records Kitsu status order without marking the
+// notification delivered. This preserves retry behavior while retaining a
+// real previous status across poll cycles and process recreation.
+func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return
+	}
+	var existing Task
+	result := db.Where("task_id = ?", taskID).First(&existing)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		db.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: existing.TaskStatus, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt})
+		return
+	}
+	if result.Error != nil {
+		return
+	}
+	last := strings.TrimSpace(existing.LastObservedStatus)
+	if last == "" {
+		last = strings.TrimSpace(existing.TaskStatus)
+	}
+	updates := map[string]interface{}{
+		"task_updated_at":      taskUpdatedAt,
+		"last_observed_status": taskStatus,
+		"comment_id":           commentID,
+		"comment_updated_at":   commentUpdatedAt,
+	}
+	if last != "" && !strings.EqualFold(last, taskStatus) {
+		updates["previous_observed_status"] = last
+	}
+	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+}
+
 func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID string) {
+	ObserveTaskStatus(db, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt)
 	updates := map[string]interface{}{
 		"task_updated_at":    taskUpdatedAt,
 		"task_status":        taskStatus,

@@ -118,7 +118,7 @@ func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang="+tc.lang+"&"+tc.query, nil)
-			body := renderSelectedProductionPanel(db, r, project, tc.lang, "storage-settings", "success", "Connected", "", "")
+			body := renderStorageSettingsFeedback(r, tc.lang) + renderSelectedProductionPanel(db, r, project, tc.lang, "storage-settings", "success", "Connected", "", "")
 			if !strings.Contains(body, tc.want) {
 				t.Fatalf("feedback %q missing from %s", tc.want, body)
 			}
@@ -126,7 +126,7 @@ func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
 	}
 	for _, lang := range []string{"ja", "en"} {
 		r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang="+lang+"&drive_saved=1", nil)
-		body := renderSelectedProductionPanel(db, r, project, lang, "storage-settings", "success", "Connected", "", "")
+		body := renderStorageSettingsFeedback(r, lang) + renderSelectedProductionPanel(db, r, project, lang, "storage-settings", "success", "Connected", "", "")
 		if !strings.Contains(body, `class="notice notice-success"`) {
 			t.Fatalf("success feedback for %s does not use the canonical success banner: %s", lang, body)
 		}
@@ -172,5 +172,17 @@ func TestDriveStorageSuccessFeedbackIsStyledInRenderedDocument(t *testing.T) {
 		if !strings.Contains(html, css) {
 			t.Fatalf("rendered document is missing canonical success-notice CSS %q", css)
 		}
+	}
+	for _, marker := range []string{`class="notice notice-success"`, `class="production-context"`, `class="section-nav production-tabs"`, `class="form-stack drive-storage-form"`} {
+		if !strings.Contains(html, marker) {
+			t.Fatalf("rendered Storage Settings document is missing %q", marker)
+		}
+	}
+	noticeAt := strings.Index(html, `class="notice notice-success"`)
+	headerAt := strings.Index(html, `class="production-context"`)
+	tabsAt := strings.Index(html, `class="section-nav production-tabs"`)
+	formAt := strings.Index(html, `class="form-stack drive-storage-form"`)
+	if !(noticeAt < headerAt && headerAt < tabsAt && tabsAt < formAt) {
+		t.Fatalf("Storage Settings DOM order is wrong: notice=%d header=%d tabs=%d form=%d", noticeAt, headerAt, tabsAt, formAt)
 	}
 }

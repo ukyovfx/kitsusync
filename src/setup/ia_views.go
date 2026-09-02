@@ -661,9 +661,32 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 		tabLinks.WriteString(`<a id="tab-` + esc(item.id) + `" role="tab" aria-selected="` + selectedAttr + `" aria-controls="panel-` + esc(item.id) + `" class="section-link` + map[bool]string{true: " active", false: ""}[selected] + `" href="` + esc(link) + `" tabindex="` + map[bool]string{true: "0", false: "-1"}[selected] + `">` + esc(tr(lang, item.key)) + `</a>`)
 	}
 	header := `<div class="production-context"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "ia.productions")) + `</div><h1>` + esc(p.Name) + `</h1><p class="hint">` + esc(t(lang, "選択中のプロダクション", "Selected Production")) + `</p></div><span class="status-pill ` + esc(headerClass) + `">` + esc(headerLabel) + `</span></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "プロダクションのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
-	body := header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
+	// Storage feedback belongs to the selected-Production page, rather than the
+	// Storage panel, so it is announced before the Production context and tabs.
+	// The panel itself remains the single renderer for the Storage form.
+	feedback := ""
+	if tab == "storage-settings" && !p.ValidationOnly && !p.ReadOnlyPreview {
+		feedback = renderStorageSettingsFeedback(r, lang)
+	}
+	body := feedback + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
 	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
+}
+
+func renderStorageSettingsFeedback(r *http.Request, lang string) string {
+	if r == nil {
+		return ""
+	}
+	switch {
+	case r.URL.Query().Get("drive_saved") == "1":
+		return `<div class="notice notice-success" role="status">` + esc(t(lang, "保存しました。", "Saved.")) + `</div>`
+	case r.URL.Query().Get("drive_error") == "save":
+		return `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定を保存できませんでした。Productionを確認して、もう一度お試しください。", "Drive settings could not be saved. Verify the Production and try again.")) + `</div>`
+	case r.URL.Query().Get("drive_error") == "readback":
+		return `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定の保存結果を確認できませんでした。もう一度お試しください。", "Drive settings were not confirmed after saving. Please try again.")) + `</div>`
+	default:
+		return ""
+	}
 }
 
 func renderIAUnconnectedProduction(r *http.Request, p model.Project, lang string) string {
@@ -741,16 +764,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		if p.ValidationOnly || p.ReadOnlyPreview {
 			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionではストレージ設定を変更できません。", "Storage settings are read-only for validation-only Productions.")) + `</p></section>`
 		}
-		feedback := ""
-		switch {
-		case r.URL.Query().Get("drive_saved") == "1":
-			feedback = `<div class="notice notice-success" role="status">` + esc(t(lang, "保存しました。", "Saved.")) + `</div>`
-		case r.URL.Query().Get("drive_error") == "save":
-			feedback = `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定を保存できませんでした。Productionを確認して、もう一度お試しください。", "Drive settings could not be saved. Verify the Production and try again.")) + `</div>`
-		case r.URL.Query().Get("drive_error") == "readback":
-			feedback = `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定の保存結果を確認できませんでした。もう一度お試しください。", "Drive settings were not confirmed after saving. Please try again.")) + `</div>`
-		}
-		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p>` + feedback + `<form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack drive-storage-form"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit" data-drive-save>` + esc(t(lang, "保存", "Save")) + `</button></div></form><script>(function(){var form=document.querySelector('.drive-storage-form'),button=form&&form.querySelector('[data-drive-save]');if(!form||!button)return;form.addEventListener('submit',function(){button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='` + esc(t(lang, "保存中...", "Saving...")) + `';});}());</script></section>`
+		return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p><form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack drive-storage-form"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit" data-drive-save>` + esc(t(lang, "保存", "Save")) + `</button></div></form><script>(function(){var form=document.querySelector('.drive-storage-form'),button=form&&form.querySelector('[data-drive-save]');if(!form||!button)return;form.addEventListener('submit',function(){button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='` + esc(t(lang, "保存中...", "Saving...")) + `';});}());</script></section>`
 	case "activity":
 		return renderSelectedProductionActivity(db, p, lang)
 	case "troubleshooting":

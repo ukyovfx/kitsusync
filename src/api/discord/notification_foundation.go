@@ -41,6 +41,52 @@ func NotificationLanguage(projectLanguage string) string {
 // this function only reads local template files and builds a Discord payload.
 func RenderNotificationPayload(data Template, preset string) Payload {
 	preset = localizedTemplatePreset(preset, data.NotificationLanguage)
+	// Current WFA / RETAKE / DONE delivery always uses this card renderer,
+	// regardless of the selected legacy preset. Do not read legacy template
+	// files first: normal status delivery must not depend on them.
+	if !data.IsAssignNotification && isCurrentStatusNotification(data) {
+		return renderCurrentNotificationCardPayload(data)
+	}
+
+	return renderTemplateNotificationPayload(data, preset)
+}
+
+func isCurrentStatusNotification(data Template) bool {
+	status := strings.ToUpper(strings.TrimSpace(data.StatusUpper))
+	if status == "" {
+		status = strings.ToUpper(strings.TrimSpace(data.CurrentStatus))
+	}
+	switch status {
+	case "WFA", "RETAKE", "DONE":
+		return true
+	default:
+		return false
+	}
+}
+
+func renderCurrentNotificationCardPayload(data Template) Payload {
+	author := strings.TrimSpace(data.TaskType)
+	footer := strings.TrimSpace(data.CardContext)
+	embed := Embed{
+		Description: truncate.TruncateString(notificationCardDescription(data), 4096),
+		Color:       data.Color,
+		Author:      EmbedAuthor{Name: truncate.TruncateString(author, 256)},
+		Footer:      EmbedFooter{Text: truncate.TruncateString(footer, 2048)},
+	}
+	if data.PreviewImageURL != "" {
+		embed.Image = &EmbedImage{URL: data.PreviewImageURL}
+	}
+	fitEmbedTextLimits(&embed)
+	return Payload{
+		Content: data.MentionContent,
+		Embeds:  []Embed{embed},
+		AllowedMentions: &AllowedMentions{
+			Users: uniqueDiscordIDs(data.AllowedUserIDs),
+		},
+	}
+}
+
+func renderTemplateNotificationPayload(data Template, preset string) Payload {
 	author := parseTaskTemplate("tpl/"+preset+"/author.tpl", data)
 	title := parseTaskTemplate("tpl/"+preset+"/title.tpl", data)
 	description := parseTaskTemplate("tpl/"+preset+"/description.tpl", data)
@@ -56,22 +102,7 @@ func RenderNotificationPayload(data Template, preset string) Payload {
 	if data.PreviewImageURL != "" {
 		embed.Image = &EmbedImage{URL: data.PreviewImageURL}
 	}
-	if !data.IsAssignNotification && (preset == "rich" || preset == "eng") {
-		title = notificationCardTitle(data)
-		author = strings.TrimSpace(data.TaskType)
-		if strings.TrimSpace(data.CardContext) != "" {
-			footer = strings.TrimSpace(data.CardContext)
-		} else {
-			// Production is already represented by routing/context and should not
-			// consume space in the notification card footer.
-			footer = ""
-		}
-		embed.Title = truncate.TruncateString(title, 256)
-		embed.Author = EmbedAuthor{Name: truncate.TruncateString(author, 256)}
-		embed.Footer = EmbedFooter{Text: truncate.TruncateString(footer, 2048)}
-		embed.Description = truncate.TruncateString(notificationCardDescription(data), 4096)
-		embed.Fields = notificationCardFields(data)
-	} else if fieldsRaw := parseTaskTemplate("tpl/"+preset+"/fields.tpl", data); strings.TrimSpace(fieldsRaw) != "" {
+	if fieldsRaw := parseTaskTemplate("tpl/"+preset+"/fields.tpl", data); strings.TrimSpace(fieldsRaw) != "" {
 		var fields []EmbedField
 		if json.Unmarshal([]byte(fieldsRaw), &fields) == nil {
 			for i := range fields {
@@ -98,14 +129,59 @@ func notificationCardDescription(data Template) string {
 	if data.IsCommentOnly && strings.TrimSpace(data.CommentOnlyMessage) != "" {
 		message = strings.TrimSpace(data.CommentOnlyMessage)
 	}
-	parts := make([]string, 0, 2)
-	if status != "" {
-		parts = append(parts, "## "+status)
+	parts := make([]string, 0, 3)
+	if title := strings.TrimSpace(notificationCardTitle(data)); title != "" {
+		parts = append(parts, "## "+title)
 	}
-	if message != "" {
-		parts = append(parts, message)
+	if status != "" || message != "" {
+		statusBlock := ""
+		if status != "" {
+			statusBlock = "### " + status
+		}
+		if message != "" {
+			if statusBlock != "" {
+				statusBlock += "\n"
+			}
+			statusBlock += message
+		}
+		parts = append(parts, statusBlock)
 	}
-	return strings.Join(parts, "\n")
+	if strings.TrimSpace(data.CommentContent) != "" {
+		commentLabel := strings.TrimSpace(data.CommentLabel)
+		if commentLabel == "" {
+			commentLabel = "Comment"
+			if normalizeNotificationLang(data.NotificationLanguage) == "ja" {
+				commentLabel = "コメント"
+			}
+		}
+		comment := "**" + commentLabel + "**\n> " + strings.TrimSpace(data.CommentContent)
+		if author := strings.TrimSpace(data.CommentAuthor); author != "" {
+			comment += "\nby " + author
+		}
+		parts = append(parts, comment)
+	}
+
+	links := make([]string, 0, 2)
+	if kitsuURL := safeNotificationURL(data.TaskURL); kitsuURL != "" {
+		links = append(links, "[🦊 Kitsu]("+kitsuURL+")")
+	}
+	if driveURL := safeNotificationURL(data.GoogleDriveURL); driveURL != "" {
+		links = append(links, "[📁 Drive]("+driveURL+")")
+	}
+	if len(links) > 0 {
+		parts = append(parts, strings.Join(links, "　　"))
+	}
+
+	statusLabel := "Status"
+	if normalizeNotificationLang(data.NotificationLanguage) == "ja" {
+		statusLabel = "ステータス"
+	}
+	assigneeLabel := strings.TrimSpace(data.AssigneeLabel)
+	if assigneeLabel == "" {
+		assigneeLabel = "Assignee"
+	}
+	parts = append(parts, "**📊 "+statusLabel+"**　　　**👤 "+assigneeLabel+"**\n"+notificationCardStatusValue(data)+"　　　　"+strings.TrimSpace(data.AssigneesStr))
+	return strings.Join(parts, "\n\n")
 }
 
 func notificationCardTitle(data Template) string {
@@ -129,45 +205,6 @@ func notificationCardTitle(data Template) string {
 	default:
 		return task
 	}
-}
-
-func notificationCardFields(data Template) []EmbedField {
-	fields := make([]EmbedField, 0, 4)
-	if strings.TrimSpace(data.CommentContent) != "" {
-		comment := "> " + strings.TrimSpace(data.CommentContent)
-		if author := strings.TrimSpace(data.CommentAuthor); author != "" {
-			comment += "\n— " + author
-		}
-		fields = append(fields, EmbedField{
-			Name:   truncate.TruncateString(data.CommentLabel, 256),
-			Value:  truncate.TruncateString(comment, 1024),
-			Inline: false,
-		})
-	}
-	links := make([]string, 0, 2)
-	if driveURL := safeNotificationURL(data.GoogleDriveURL); driveURL != "" {
-		links = append(links, "📁 [Drive]("+driveURL+")")
-	}
-	if kitsuURL := safeNotificationURL(data.TaskURL); kitsuURL != "" {
-		links = append(links, "🦊 [Kitsu]("+kitsuURL+")")
-	}
-	if len(links) > 0 {
-		fields = append(fields, EmbedField{Name: "​", Value: truncate.TruncateString(strings.Join(links, " · "), 1024), Inline: false})
-	}
-	metadata := make([]EmbedField, 0, 2)
-	statusLabel := "📊 Status"
-	if normalizeNotificationLang(data.NotificationLanguage) == "ja" {
-		statusLabel = "📊 ステータス"
-	}
-	statusValue := notificationCardStatusValue(data)
-	metadata = append(metadata, EmbedField{Name: truncate.TruncateString(statusLabel, 256), Value: truncate.TruncateString(statusValue, 1024), Inline: true})
-	assigneeLabel := strings.TrimSpace(data.AssigneeLabel)
-	if assigneeLabel == "" {
-		assigneeLabel = "Assignee"
-	}
-	metadata = append(metadata, EmbedField{Name: truncate.TruncateString("👤 "+assigneeLabel, 256), Value: truncate.TruncateString(data.AssigneesStr, 1024), Inline: true})
-	fields = append(fields, metadata...)
-	return fields
 }
 
 func notificationCardStatusValue(data Template) string {

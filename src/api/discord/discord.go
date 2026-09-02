@@ -400,17 +400,24 @@ func notificationRecipientCandidates(status string, assignNotification bool, ass
 	case "RETAKE":
 		return uniqueDiscordIDs(assignees)
 	case "DONE":
-		var candidates []string
-		if containsIgnoreCase(conf.Mention.CheckerStatuses, status) {
-			candidates = append(candidates, checkers...)
-		}
-		if containsIgnoreCase(conf.Mention.ArtistStatuses, status) {
-			candidates = append(candidates, assignees...)
-		}
-		return uniqueDiscordIDs(candidates)
+		return uniqueDiscordIDs(assignees)
 	default:
 		return nil
 	}
+}
+
+func resolveAssigneeDiscordID(projectID string, person kitsu.Person, displayName string, conf config.Config) string {
+	if UserMapResolver != nil {
+		if id := UserMapResolver(projectID, person.FullName, person.Email); id != "" {
+			return id
+		}
+	}
+	for _, entry := range conf.Mention.UserMap {
+		if strings.EqualFold(strings.TrimSpace(entry.KitsuName), strings.TrimSpace(person.FullName)) || strings.EqualFold(strings.TrimSpace(entry.KitsuName), strings.TrimSpace(displayName)) {
+			return entry.DiscordID
+		}
+	}
+	return ""
 }
 
 func safeNotificationURL(raw string) string {
@@ -434,8 +441,11 @@ func safePublicNotificationURL(raw string) string {
 	if err != nil {
 		return ""
 	}
+	// Local/private addresses can be intentional human-facing Kitsu URLs in
+	// OSS deployments. Only reject the container-only address synthesized by
+	// KitsuSync's runtime normalization.
 	host := strings.ToLower(parsed.Hostname())
-	if host == "localhost" || host == "host.docker.internal" || host == "127.0.0.1" || host == "::1" {
+	if host == "host.docker.internal" {
 		return ""
 	}
 	return raw
@@ -460,7 +470,11 @@ func KitsuTaskURL(host, productionID, entityType, taskID string) string {
 	default:
 		return ""
 	}
-	return fmt.Sprintf("%s/productions/%s/%s/tasks/%s", strings.TrimRight(base, "/"), url.PathEscape(productionID), routeType, url.PathEscape(taskID))
+	joined, err := url.JoinPath(base, "productions", productionID, routeType, "tasks", taskID)
+	if err != nil {
+		return ""
+	}
+	return joined
 }
 
 func statusTransitionMessage(prev, current string) string {
@@ -763,6 +777,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// 同じ Kitsu 名が userMap に複数行で書かれていても 1 回しか mention しないよう、
 		// 既に追加した DiscordID を seen で重複排除する。
 		var assigneeNames []string
+		var assigneeIDs []string
 		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
 		for i := 0; i < len(elem.Assignees); i++ {
 			if elem.Assignees[i].IsBot {
@@ -778,6 +793,9 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.Assignees[i].Email = elem.Assignees[i].Email
 			displayName := displayPersonName
 			assigneeNames = append(assigneeNames, displayName)
+			if id := resolveAssigneeDiscordID(elem.Project.ID, elem.Assignees[i], displayPersonName, conf); id != "" {
+				assigneeIDs = append(assigneeIDs, id)
+			}
 		}
 		if len(assigneeNames) > 0 {
 			placeholders.AssigneesStr = strings.Join(assigneeNames, ", ")
@@ -810,7 +828,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
 		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
-		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, nil, checkerIDs, conf)
+		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
 		if len(recipientIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
 			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
 				"taskType", elem.TaskType.Name,

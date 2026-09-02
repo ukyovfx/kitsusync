@@ -97,7 +97,7 @@ func TestConnectionsSaveKitsuRetainsStoredPassword(t *testing.T) {
 	}
 }
 
-func TestConnectionsSaveKitsuStoresPublicURLSeparately(t *testing.T) {
+func TestConnectionsSaveKitsuStoresExternalURLSeparately(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/auth/authenticated" {
@@ -112,10 +112,10 @@ func TestConnectionsSaveKitsuStoresPublicURLSeparately(t *testing.T) {
 
 	db := newSetupStateTestDB(t)
 	form := url.Values{
-		"action":           {"save_kitsu"},
-		"kitsu_hostname":   {server.URL},
-		"kitsu_bot_token":  {"test-bot-token"},
-		"kitsu_public_url": {"https://kitsu.example.test/"},
+		"action":             {"save_kitsu"},
+		"kitsu_hostname":     {server.URL},
+		"kitsu_bot_token":    {"test-bot-token"},
+		"kitsu_external_url": {"https://kitsu.example.test/"},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -124,8 +124,11 @@ func TestConnectionsSaveKitsuStoresPublicURLSeparately(t *testing.T) {
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected Kitsu save redirect, got %d", rr.Code)
 	}
-	if got := PublicKitsuURL(db); got != "https://kitsu.example.test" {
-		t.Fatalf("public URL = %q, want normalized public URL", got)
+	if got := ExternalKitsuURL(db); got != "https://kitsu.example.test" {
+		t.Fatalf("external URL = %q, want normalized external URL", got)
+	}
+	if got := model.GetSetting(db, KitsuDisplayURLSettingKey); got != server.URL {
+		t.Fatalf("display URL = %q, want original submitted URL", got)
 	}
 	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(server.URL, "/") {
 		t.Fatalf("internal host = %q, public URL overwrote it", got)
@@ -165,21 +168,20 @@ func TestConnectionsRecheckKitsuUsesStoredTokenWithoutRenderingIt(t *testing.T) 
 func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	t.Setenv("DISCORD_BOT_TOKEN", "")
 	db := newSetupStateTestDB(t)
+	model.SetSetting(db, ExternalKitsuURLSettingKey, "https://external.kitsu.example.test")
 	req := httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil)
 	body := renderConnectionsEditForm("en", req, db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", "")
 
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
 	}
-	for _, want := range []string{`name="kitsu_public_url"`, "Public Kitsu URL", "The user-accessible Kitsu URL used for links in Discord notifications.", "When unset, Discord notifications omit the Kitsu link."} {
+	for _, want := range []string{`name="kitsu_external_url"`, "External Kitsu URL (optional)", "The URL used for Kitsu links in Discord notifications.", "Check link"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("public Kitsu URL field missing %q", want)
+			t.Fatalf("external Kitsu URL field missing %q", want)
 		}
 	}
-	for _, want := range []string{`class="status-pill warning"`, "Needs review", "Public Kitsu URL is not configured."} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("missing public URL review state %q", want)
-		}
+	if !strings.Contains(body, "When empty, the Kitsu URL is used.") {
+		t.Fatal("missing external URL fallback copy")
 	}
 	if strings.Contains(body, `name="kitsu_runtime_email"`) || strings.Contains(body, `name="kitsu_runtime_password"`) {
 		t.Fatal("did not expect human Kitsu credential controls in the current Connections form")
@@ -230,29 +232,21 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `<div class="connections-edit-summary"><p class="hint">Review connections separately.</p><span class="status-pill`) {
 		t.Fatal("did not expect a page-level status pill in edit mode")
 	}
-	if got := strings.Count(body, `class="status-pill `); got != 3 {
-		t.Fatalf("expected one service status pill per card plus the public URL review state, got %d", got)
+	if got := strings.Count(body, `class="status-pill `); got != 2 {
+		t.Fatalf("expected one service status pill per card, got %d", got)
 	}
 	if strings.Contains(body, `class="connection-state-row"`) || strings.Contains(body, `>Token<`) || strings.Contains(body, `>Connection<`) {
 		t.Fatal("edit form should not duplicate token and connection state rows")
 	}
 }
 
-func TestConnectionsEditPublicKitsuURLNeedsReviewIsLocalized(t *testing.T) {
+func TestConnectionsEditExternalKitsuURLDoesNotAffectHealth(t *testing.T) {
 	db := newSetupStateTestDB(t)
-	for _, tc := range []struct {
-		lang string
-		want []string
-	}{
-		{lang: "ja", want: []string{"要確認", "公開Kitsu URLが設定されていません。"}},
-		{lang: "en", want: []string{"Needs review", "Public Kitsu URL is not configured."}},
-	} {
-		t.Run(tc.lang, func(t *testing.T) {
-			body := renderConnectionsEditForm(tc.lang, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang="+tc.lang, nil), db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", "")
-			for _, want := range tc.want {
-				if !strings.Contains(body, want) {
-					t.Fatalf("missing localized review state %q", want)
-				}
+	for _, lang := range []string{"ja", "en"} {
+		t.Run(lang, func(t *testing.T) {
+			body := renderConnectionsEditForm(lang, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang="+lang, nil), db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", "")
+			if strings.Contains(body, "Public Kitsu URL is not configured.") || strings.Contains(body, "公開Kitsu URLが設定されていません。") {
+				t.Fatalf("empty external URL must not create a public-link warning: %s", body)
 			}
 		})
 	}
@@ -410,5 +404,43 @@ func TestConnectionsPublicURLDoesNotOverwriteInternalHost(t *testing.T) {
 	}
 	if got := PublicKitsuURL(db); got != "https://kitsu.example.test" {
 		t.Fatalf("public URL = %q", got)
+	}
+}
+
+func TestExternalKitsuURLPrecedesOriginalDisplayURLAndFallsBackSafely(t *testing.T) {
+	legacyLocal := newSetupStateTestDB(t)
+	model.SetSetting(legacyLocal, "kitsu.hostname", "http://host.docker.internal:8080/")
+	if got := PublicKitsuURL(legacyLocal); got != "http://127.0.0.1:8080" {
+		t.Fatalf("legacy generated local endpoint did not recover its human-facing URL: %q", got)
+	}
+
+	for _, original := range []string{"http://localhost:8080/", "http://127.0.0.1:8080/", "http://192.168.1.20:8080/", "http://kitsu.lan:8080/base/"} {
+		t.Run(original, func(t *testing.T) {
+			db := newSetupStateTestDB(t)
+			model.SetSetting(db, "kitsu.hostname", "http://host.docker.internal:8080")
+			model.SetSetting(db, KitsuDisplayURLSettingKey, original)
+			if got := PublicKitsuURL(db); got == "" || strings.Contains(got, "host.docker.internal") {
+				t.Fatalf("original display URL fallback = %q", got)
+			}
+		})
+	}
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, "kitsu.hostname", "http://host.docker.internal:8080")
+	model.SetSetting(db, KitsuDisplayURLSettingKey, "https://kitsu.example.test/base/")
+	if got := PublicKitsuURL(db); got != "https://kitsu.example.test/base" {
+		t.Fatalf("original display URL fallback = %q", got)
+	}
+	model.SetSetting(db, ExternalKitsuURLSettingKey, "https://external.example.test/kitsu/")
+	if got := PublicKitsuURL(db); got != "https://external.example.test/kitsu" {
+		t.Fatalf("external URL precedence = %q", got)
+	}
+	if got := strings.TrimRight(effectiveRuntimeKitsuEndpoint(db), "/"); got != "http://host.docker.internal:8080" {
+		t.Fatalf("external URL changed runtime endpoint = %q", got)
+	}
+}
+
+func TestExternalKitsuURLRejectsUnsupportedScheme(t *testing.T) {
+	if _, err := validateKitsuEndpoint("ftp://kitsu.example.test"); err == nil {
+		t.Fatal("expected unsupported external URL scheme to be rejected")
 	}
 }

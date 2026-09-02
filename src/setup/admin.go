@@ -3055,12 +3055,13 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 	if identity == "" {
 		identity = t(lang, "未検出", "Not detected")
 	}
-	publicURL := PublicKitsuURL(db)
-	publicURLField := `<div class="connection-form-field"><label for="kitsu-public-url">` + esc(t(lang, "公開Kitsu URL", "Public Kitsu URL")) + `</label><input id="kitsu-public-url" type="url" name="kitsu_public_url" value="` + esc(publicURL) + `" aria-describedby="kitsu-public-url-help"><p id="kitsu-public-url-help" class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに使用する、ユーザーがアクセス可能なURLです。", "The user-accessible Kitsu URL used for links in Discord notifications.")) + `</p>`
-	if publicURL == "" {
-		publicURLField += `<p class="field-help"><span class="status-pill warning" role="status">` + esc(t(lang, "要確認", "Needs review")) + `</span> ` + esc(t(lang, "公開Kitsu URLが設定されていません。", "Public Kitsu URL is not configured.")) + `</p><p class="field-help">` + esc(t(lang, "未設定の場合、Discord通知からKitsuリンクは表示されません。", "When unset, Discord notifications omit the Kitsu link.")) + `</p>`
+	externalURL := ExternalKitsuURL(db)
+	effectiveURL := PublicKitsuURL(db)
+	checkLink := ""
+	if effectiveURL != "" {
+		checkLink = `<a class="btn-ghost" href="` + esc(effectiveURL) + `" target="_blank" rel="noopener noreferrer">` + esc(t(lang, "リンクを確認", "Check link")) + `</a>`
 	}
-	publicURLField += `</div>`
+	externalURLField := `<div class="connection-form-field"><label for="kitsu-external-url">` + esc(t(lang, "外部Kitsu URL（任意）", "External Kitsu URL (optional)")) + `</label><input id="kitsu-external-url" type="url" name="kitsu_external_url" value="` + esc(externalURL) + `" aria-describedby="kitsu-external-url-help"><p id="kitsu-external-url-help" class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに使用するURLです。未設定時はKitsu URLを使用します。", "The URL used for Kitsu links in Discord notifications. When empty, the Kitsu URL is used.")) + `</p>` + checkLink + `</div>`
 	body := `<div class="section-stack connections-edit-stack">` + notice +
 		`<div class="connections-edit-summary"><p class="hint">` + esc(statusHint) + `</p></div>` +
 		`<div class="connections-edit-grid">` +
@@ -3099,7 +3100,7 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		return `<button type="button" class="btn-ghost" data-reveal-secret="discord-bot-token" data-recheck-button="discord-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button>`
 	}() + `</div></form></section>` +
 		`</div><div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-reveal-secret]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.getAttribute('data-reveal-secret'));var submit=document.getElementById(button.getAttribute('data-recheck-button'));if(!input)return;input.hidden=false;input.style.display='';button.hidden=true;if(submit)submit.textContent=saveText;input.focus();});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}}());</script></div>`
-	body = strings.Replace(body, `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck"`, `</p></div>`+publicURLField+`<div class="button-row connections-actions"><button id="kitsu-recheck"`, 1)
+	body = strings.Replace(body, `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck"`, `</p></div>`+externalURLField+`<div class="button-row connections-actions"><button id="kitsu-recheck"`, 1)
 	return body
 }
 
@@ -3215,22 +3216,28 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuホストを入力してください。", "Enter the Kitsu host.")))
 					return
 				}
-				publicURLToSave := ""
-				publicURLWasSubmitted := false
-				if publicRaw, present := r.PostForm["kitsu_public_url"]; present {
-					publicURLWasSubmitted = true
-					publicURL := ""
+				externalURLToSave := ""
+				externalURLWasSubmitted := false
+				publicRaw, externalPresent := r.PostForm["kitsu_external_url"]
+				if !externalPresent {
+					// Accept the previous field name for bookmarked/forms from older
+					// installations, while storing the value under the new key.
+					publicRaw, externalPresent = r.PostForm["kitsu_public_url"]
+				}
+				if externalPresent {
+					externalURLWasSubmitted = true
+					externalURL := ""
 					if len(publicRaw) > 0 {
-						publicURL = strings.TrimSpace(publicRaw[0])
+						externalURL = strings.TrimSpace(publicRaw[0])
 					}
-					if publicURL != "" {
-						normalizedPublicURL, err := validateKitsuEndpoint(publicURL)
+					if externalURL != "" {
+						normalizedExternalURL, err := validateKitsuEndpoint(externalURL)
 						if err != nil {
 							w.WriteHeader(http.StatusBadRequest)
-							fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "公開Kitsu URLを確認してください。", "Check the Public Kitsu URL.")))
+							fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "外部Kitsu URLを確認してください。", "Check the External Kitsu URL.")))
 							return
 						}
-						publicURLToSave = normalizedPublicURL
+						externalURLToSave = normalizedExternalURL
 					}
 				}
 				submittedBotToken := strings.TrimSpace(r.FormValue("kitsu_bot_token"))
@@ -3266,13 +3273,15 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 						fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu Bot tokenの検証情報を保存できませんでした。", "The Kitsu Bot validation metadata could not be stored.")))
 						return
 					}
-					if publicURLWasSubmitted {
-						if publicURLToSave == "" {
+					if externalURLWasSubmitted {
+						if externalURLToSave == "" {
+							model.DeleteSetting(db, ExternalKitsuURLSettingKey)
 							model.DeleteSetting(db, PublicKitsuURLSettingKey)
 						} else {
-							model.SetSetting(db, PublicKitsuURLSettingKey, publicURLToSave)
+							model.SetSetting(db, ExternalKitsuURLSettingKey, externalURLToSave)
 						}
 					}
+					model.SetSetting(db, KitsuDisplayURLSettingKey, displayedHost)
 					model.SetSetting(db, "kitsu.hostname", hostForAuth)
 					os.Setenv("KITSU_HOSTNAME", hostForAuth)
 					if kitsuReconnect != nil {

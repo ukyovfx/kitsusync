@@ -362,7 +362,8 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 
 		dbResult := model.FindTask(db, data[i].Task.ID)
 
-		data[i].PreviousStatusName = dbResult.TaskStatus
+		currentStatus := data[i].TaskStatus.TaskStatus.ShortName
+		data[i].PreviousStatusName = model.PreviousTaskStatus(dbResult, currentStatus)
 
 		if len(dbResult.TaskID) > 0 {
 			statusChanged := dbResult.TaskStatus != data[i].TaskStatus.TaskStatus.ShortName
@@ -386,7 +387,6 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			continue
 		}
 		// StatusFilter: only notify on WFA, RETAKE, DONE.
-		currentStatus := data[i].TaskStatus.TaskStatus.ShortName
 		// Treat "none" status as an assign notification when enabled.
 		if strings.EqualFold(currentStatus, "none") {
 			if !conf.Notification.NotifyOnAssign {
@@ -415,6 +415,11 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			stats.Dropped++
 			continue
 		}
+		// Persist the observed Kitsu sequence only after the event has an
+		// explicit route. Delivery state remains separate so transient failures
+		// retry with the same real transition, while unrouted events stay
+		// available if a route is configured later.
+		model.ObserveTaskStatus(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
 		webhooks[plan.DestinationID] = plan.WebhookURL
 		routes[plan.DestinationID] = append(routes[plan.DestinationID], payload)
 		if labels[plan.DestinationID] == nil {
