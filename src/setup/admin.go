@@ -3135,7 +3135,6 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 				}
 				slog.Info("Discord save token received",
 					"token_present", token != "",
-					"token_fingerprint", DiscordBotTokenFingerprint(token),
 				)
 				if token == "" {
 					w.WriteHeader(http.StatusBadRequest)
@@ -3147,11 +3146,15 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Discord Botに接続できませんでした。Tokenと接続状態を確認してください。", "Discord Bot connection failed. Check the token and connection status.")))
 					return
 				}
-				setRuntimeDiscordBotToken(db, token)
+				if err := setRuntimeDiscordBotToken(db, token); err != nil {
+					slog.Warn("Discord save token persistence failed", "error_class", "credential_persistence_failed")
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Discord Bot Tokenを安全に保存できませんでした。", "The Discord Bot Token could not be stored securely.")))
+					return
+				}
 				storedToken := storedRuntimeDiscordBotToken(db)
 				slog.Info("Discord save token persisted",
 					"stored_token_present", storedToken != "",
-					"stored_token_fingerprint", DiscordBotTokenFingerprint(storedToken),
 					"fingerprint_match", storedToken == token,
 				)
 				http.Redirect(w, r, withLang("/bot/admin/bot", r)+"&msg=discord_saved", http.StatusSeeOther)
@@ -3202,7 +3205,12 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 				os.Setenv("KITSU_HOSTNAME", runtimeHost)
 			}
 			if value := strings.TrimSpace(r.FormValue("bot_token")); value != "" {
-				setRuntimeDiscordBotToken(db, value)
+				if err := setRuntimeDiscordBotToken(db, value); err != nil {
+					slog.Warn("legacy Discord save token persistence failed", "error_class", "credential_persistence_failed")
+					w.WriteHeader(http.StatusInternalServerError)
+					fmt.Fprint(w, adminPage(lang, t(lang, "保存に失敗しました", "Save failed"), r, `<div class="section-card glass"><p>`+t(lang, "Discord Bot Tokenを安全に保存できませんでした。", "The Discord Bot Token could not be stored securely.")+`</p></div>`))
+					return
+				}
 			}
 			// Keep accepting this for backward compatibility with legacy fallback configuration.
 			if value := strings.TrimSpace(r.FormValue("guild_id")); value != "" {

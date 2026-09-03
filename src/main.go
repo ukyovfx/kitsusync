@@ -601,11 +601,8 @@ func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password s
 }
 
 func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, webhookURL string) {
-	botToken = strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey))
-	if botToken == "" {
-		botToken = os.Getenv("DISCORD_BOT_TOKEN")
-	}
-	if botToken == "" {
+	botToken = setup.RuntimeDiscordBotToken(db)
+	if botToken == "" && strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenSettingKey)) == "" {
 		botToken = conf.Discord.BotToken
 	}
 	guildID = model.GetSetting(db, "discord.guildID")
@@ -840,11 +837,13 @@ func main() {
 	model.PurgeLegacySensitiveData(db)
 
 	setup.SeedConfigIfFixture(db, conf)
-	if persistedDiscordToken := strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey)); persistedDiscordToken != "" {
+	if err := setup.MigrateRuntimeDiscordBotToken(db); err != nil {
+		slog.Warn("Discord runtime token migration deferred", "error_class", "credential_migration_failed")
+	}
+	if persistedDiscordToken := setup.StoredRuntimeDiscordBotToken(db); persistedDiscordToken != "" {
 		os.Setenv("DISCORD_BOT_TOKEN", persistedDiscordToken)
 		slog.Debug("Discord runtime token loaded",
 			"token_present", true,
-			"token_fingerprint", setup.DiscordBotTokenFingerprint(persistedDiscordToken),
 		)
 	}
 	_, seedGuildID, _ := getDiscordSettings(db, conf)

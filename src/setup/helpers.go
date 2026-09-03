@@ -429,12 +429,7 @@ func setRuntimeKitsuEmail(db *gorm.DB, email string) {
 }
 
 func storedRuntimeDiscordBotToken(db *gorm.DB) string {
-	if db != nil {
-		if value := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenKey)); value != "" {
-			return value
-		}
-	}
-	return strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+	return RuntimeDiscordBotToken(db)
 }
 
 // DiscordBotTokenFingerprint returns a short, secret-safe diagnostic identity.
@@ -465,15 +460,8 @@ func validateDiscordBotToken(token string) error {
 	return nil
 }
 
-func setRuntimeDiscordBotToken(db *gorm.DB, token string) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return
-	}
-	if db != nil {
-		model.SetSecretSetting(db, RuntimeDiscordBotTokenKey, token)
-	}
-	os.Setenv("DISCORD_BOT_TOKEN", token)
+func setRuntimeDiscordBotToken(db *gorm.DB, token string) error {
+	return SetRuntimeDiscordBotToken(db, token)
 }
 
 func runtimeBotFullName() string {
