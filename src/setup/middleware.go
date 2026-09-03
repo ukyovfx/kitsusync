@@ -202,6 +202,100 @@ func RequireSession(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// CSRFProtection rejects cross-site browser mutations for authenticated
+// administration and setup routes. SameSite=Lax remains an additional
+// defense, while Origin/Fetch Metadata checks protect cookie-authenticated
+// POST forms without adding a token to every existing form.
+func CSRFProtection(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r == nil || !csrfProtectedPath(r.URL.Path) || !csrfUnsafeMethod(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, ok := currentSessionData(r); !ok {
+			// Preserve the existing unauthenticated behavior; RequireSession
+			// remains responsible for redirecting or rejecting the request.
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+			http.Error(w, "cross-site request rejected", http.StatusForbidden)
+			return
+		}
+		effective := requestOrigin(r)
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+			if !sameOrigin(origin, effective) {
+				http.Error(w, "origin mismatch", http.StatusForbidden)
+				return
+			}
+		} else if referer := strings.TrimSpace(r.Header.Get("Referer")); referer != "" {
+			if !sameOriginReferer(referer, effective) {
+				http.Error(w, "referer mismatch", http.StatusForbidden)
+				return
+			}
+		} else {
+			http.Error(w, "origin or referer required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func csrfUnsafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return false
+	default:
+		return true
+	}
+}
+
+func csrfProtectedPath(path string) bool {
+	return path == "/setup" || path == "/bot/setup" ||
+		path == "/admin" || path == "/bot/admin" ||
+		strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/bot/admin/") ||
+		strings.HasPrefix(path, "/api/setup/") || strings.HasPrefix(path, "/bot/api/setup/") ||
+		path == "/logout" || path == "/bot/logout"
+}
+
+func requestOrigin(r *http.Request) string {
+	if r == nil || strings.TrimSpace(r.Host) == "" {
+		return ""
+	}
+	scheme := "http"
+	if isHTTPSRequest(r) {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func sameOrigin(candidate, expected string) bool {
+	candidateURL, err := url.Parse(candidate)
+	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" ||
+		candidateURL.User != nil || candidateURL.Path != "" ||
+		candidateURL.RawQuery != "" || candidateURL.Fragment != "" {
+		return false
+	}
+	return sameOriginURL(candidateURL, expected)
+}
+
+func sameOriginReferer(candidate, expected string) bool {
+	candidateURL, err := url.Parse(candidate)
+	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" || candidateURL.User != nil || candidateURL.RawQuery != "" || candidateURL.Fragment != "" {
+		return false
+	}
+	return sameOriginURL(candidateURL, expected)
+}
+
+func sameOriginURL(candidateURL *url.URL, expected string) bool {
+	expectedURL, err := url.Parse(expected)
+	if err != nil || expectedURL.Scheme == "" || expectedURL.Host == "" {
+		return false
+	}
+	return strings.EqualFold(candidateURL.Scheme, expectedURL.Scheme) &&
+		strings.EqualFold(candidateURL.Host, expectedURL.Host)
+}
+
 // RequestTrace wraps the current admin/setup routes with secret-safe request
 // diagnostics. It deliberately records only routing metadata and the final
 // HTTP status; request bodies and credential-bearing fields are never logged.
@@ -432,6 +526,11 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 
 func LogoutHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "logout requires POST", http.StatusMethodNotAllowed)
+			return
+		}
 		if cookie, err := r.Cookie(sessionCookieName); err == nil {
 			destroySession(cookie.Value)
 		}

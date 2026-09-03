@@ -1035,7 +1035,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:    ":8090",
-		Handler: setup.RequestTrace(mux),
+		Handler: setup.RequestTrace(setup.CSRFProtection(mux)),
 	}
 	go func() {
 		slog.Info("HTTP server listening on :8090  (/health, /login, /setup, /admin/*)")

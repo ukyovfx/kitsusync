@@ -67,7 +67,7 @@ func TestLogoutClearsSessionCookie(t *testing.T) {
 	resetSessions()
 
 	token := newSessionToken("manager@example.com", "jwt-token", "manager", "/bot/admin")
-	req := httptest.NewRequest(http.MethodGet, "/bot/logout", nil)
+	req := httptest.NewRequest(http.MethodPost, "/bot/logout", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
 	rr := httptest.NewRecorder()
 
@@ -82,6 +82,105 @@ func TestLogoutClearsSessionCookie(t *testing.T) {
 	cookieHeader := rr.Header().Get("Set-Cookie")
 	if !strings.Contains(cookieHeader, sessionCookieName+"=") || !strings.Contains(cookieHeader, "Max-Age=0") {
 		t.Fatalf("expected clearing cookie, got %s", cookieHeader)
+	}
+}
+
+func TestLogoutRejectsStateChangingGET(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/bot/logout", nil)
+	rr := httptest.NewRecorder()
+	LogoutHandler()(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected GET logout to be rejected, got %d", rr.Code)
+	}
+}
+
+func TestCSRFProtectionAllowsSameOriginPOST(t *testing.T) {
+	resetSessions()
+	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+	req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	req.Header.Set("Origin", "http://admin.example")
+	rr := httptest.NewRecorder()
+	called := false
+	CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !called {
+		t.Fatalf("same-origin POST must be allowed, status=%d called=%v", rr.Code, called)
+	}
+}
+
+func TestCSRFProtectionRejectsCrossSiteFetchMetadata(t *testing.T) {
+	resetSessions()
+	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+	req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Origin", "http://admin.example")
+	rr := httptest.NewRecorder()
+	called := false
+	CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden || called {
+		t.Fatalf("cross-site Fetch Metadata must be rejected, status=%d called=%v", rr.Code, called)
+	}
+}
+
+func TestCSRFProtectionOriginAndRefererValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		origin     string
+		referer    string
+		forwarded  string
+		wantStatus int
+	}{
+		{name: "wrong origin", origin: "https://evil.example", wantStatus: http.StatusForbidden},
+		{name: "correct origin", origin: "https://admin.example", forwarded: "https", wantStatus: http.StatusOK},
+		{name: "same origin referer fallback", referer: "http://admin.example/bot/admin", wantStatus: http.StatusOK},
+		{name: "wrong referer fallback", referer: "http://evil.example/bot/admin", wantStatus: http.StatusForbidden},
+		{name: "missing browser origin headers", wantStatus: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetSessions()
+			token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+			req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+			if tt.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.forwarded)
+			}
+			rr := httptest.NewRecorder()
+			called := false
+			CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+			if rr.Code != tt.wantStatus || called != (tt.wantStatus == http.StatusOK) {
+				t.Fatalf("status=%d called=%v, want status=%d", rr.Code, called, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestCSRFProtectionLeavesGETAndUnauthenticatedRequestsUnchanged(t *testing.T) {
+	resetSessions()
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		req := httptest.NewRequest(method, "http://admin.example/bot/admin", nil)
+		rr := httptest.NewRecorder()
+		called := false
+		CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+		if !called || rr.Code != http.StatusOK {
+			t.Fatalf("%s should remain unchanged, status=%d called=%v", method, rr.Code, called)
+		}
+	}
+	// An unauthenticated mutation is passed through so RequireSession can
+	// preserve its existing redirect behavior.
+	req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+	rr := httptest.NewRecorder()
+	called := false
+	CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+	if !called || rr.Code != http.StatusOK {
+		t.Fatalf("unauthenticated request should remain available to auth middleware")
 	}
 }
 
@@ -132,7 +231,9 @@ func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t
 		t.Fatal("persistent session must not hydrate a Kitsu token")
 	}
 
-	LogoutHandler()(httptest.NewRecorder(), req)
+	logoutReq := httptest.NewRequest(http.MethodPost, "/bot/logout", nil)
+	logoutReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	LogoutHandler()(httptest.NewRecorder(), logoutReq)
 	if validSession(token) {
 		t.Fatal("logout must invalidate the persisted session")
 	}
