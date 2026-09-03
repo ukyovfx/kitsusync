@@ -8,8 +8,8 @@ services:
     environment:
       - APP_ENV=production
     volumes:
-      - "../conf.toml:/app/conf.toml"
-      - "../tpl:/app/tpl"
+      - "../conf.toml:/app/conf.toml:ro"
+      - "../tpl:/app/tpl:ro"
       - "../data:/app/data"
       - "../data/sqlite.db:/app/sqlite.db"
     networks:
