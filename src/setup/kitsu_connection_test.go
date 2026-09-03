@@ -170,7 +170,7 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, ExternalKitsuURLSettingKey, "https://external.kitsu.example.test")
 	req := httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil)
-	body := renderConnectionsEditForm("en", req, db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", "")
+	body := renderConnectionsEditFormWithHealth("en", req, db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", false, false, "")
 
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
@@ -244,7 +244,7 @@ func TestConnectionsEditExternalKitsuURLDoesNotAffectHealth(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	for _, lang := range []string{"ja", "en"} {
 		t.Run(lang, func(t *testing.T) {
-			body := renderConnectionsEditForm(lang, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang="+lang, nil), db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", "")
+			body := renderConnectionsEditFormWithHealth(lang, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang="+lang, nil), db, "Review connections separately.", "bad", "Action required", "http://host.docker.internal:8080", false, false, "")
 			if strings.Contains(body, "Public Kitsu URL is not configured.") || strings.Contains(body, "公開Kitsu URLが設定されていません。") {
 				t.Fatalf("empty external URL must not create a public-link warning: %s", body)
 			}
@@ -299,21 +299,21 @@ func TestConnectionsDisplayUsesSharedFieldRows(t *testing.T) {
 func TestConnectionsPageStatusUsesOnlyConnectionHealth(t *testing.T) {
 	configured := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true, ProductionConnected: false, OverallReady: false}
 	for _, lang := range []string{"ja", "en"} {
-		status := connectionPageStatus(lang, configured, true, true)
+		status := canonicalConnectionPageStatus(lang, configured, true, true)
 		if status.Class != "ok" || status.Label != map[string]string{"ja": "接続済み", "en": "Connected"}[lang] {
 			t.Fatalf("%s healthy connections status = %+v", lang, status)
 		}
-		missing := connectionPageStatus(lang, SharedBotRuntimeReadiness{}, true, true)
+		missing := canonicalConnectionPageStatus(lang, SharedBotRuntimeReadiness{}, true, true)
 		if missing.Class != "warning" || missing.Label != map[string]string{"ja": "未設定", "en": "Not configured"}[lang] {
 			t.Fatalf("%s missing connections status = %+v", lang, missing)
 		}
-		failed := connectionPageStatus(lang, configured, false, true)
+		failed := canonicalConnectionPageStatus(lang, configured, false, true)
 		if failed.Class != "warn" || failed.Label != map[string]string{"ja": "要確認", "en": "Needs review"}[lang] {
 			t.Fatalf("%s failed connections status = %+v", lang, failed)
 		}
-		pills := renderConnectionHealthPills(lang, true, true, "configured-secret")
-		if !strings.Contains(pills, `class="status-pill ok"`) || !strings.Contains(pills, map[string]string{"ja": "保存済み", "en": "Saved"}[lang]) || strings.Contains(pills, "Configured") {
-			t.Fatalf("%s connection health and hidden metadata are not separated: %s", lang, pills)
+		secret := connectionSecretStatus("configured-secret", lang)
+		if secret.Class != "muted" || secret.Label != map[string]string{"ja": "保存済み", "en": "Saved"}[lang] {
+			t.Fatalf("%s saved-secret status = %+v", lang, secret)
 		}
 	}
 }

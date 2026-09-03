@@ -219,7 +219,6 @@ func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 		CommentAuthor:        "USER A",
 		AssigneeLabel:        "担当",
 		AssigneesStr:         "KOTARO MITA",
-		LinksLabel:           "リンク",
 		TaskURL:              "https://kitsu.example/tasks/cut012",
 		GoogleDriveURL:       "https://drive.example/cut012",
 		NotificationLanguage: "ja",

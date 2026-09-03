@@ -112,7 +112,6 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 			CommentContent:          "確認をお願いします",
 			CommentLabel:            "コメント",
 			CommentAuthorLabel:      "コメント投稿者",
-			LinksLabel:              "リンク",
 			TaskURL:                 "https://kitsu.example.com/task/1",
 			GoogleDriveURL:          "https://drive.example.com/folder/1",
 		}

@@ -93,7 +93,6 @@ type Template struct {
 	CommentLabel            string
 	CommentAuthorLabel      string
 	AssigneeLabel           string
-	LinksLabel              string
 	ChannelName             string // 通知先の Discord チャンネル名（ルーティング確認用）
 	NotificationLanguage    string
 	CardContext             string // optional secondary context such as a test-notification marker
@@ -861,12 +860,10 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.CommentLabel = "Comment"
 			placeholders.CommentAuthorLabel = "Comment by"
 			placeholders.AssigneeLabel = "Assignee"
-			placeholders.LinksLabel = "Links"
 		} else {
 			placeholders.CommentLabel = "コメント"
 			placeholders.CommentAuthorLabel = "コメント投稿者"
 			placeholders.AssigneeLabel = "担当"
-			placeholders.LinksLabel = "リンク"
 		}
 		if elem.IsCommentOnly {
 			placeholders.StatusTransitionMessage = ""

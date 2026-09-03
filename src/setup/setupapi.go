@@ -649,7 +649,7 @@ func testNotificationPayload(project model.Project, message string) discord.Payl
 			TaskType: "Animation", CardContext: "Test notification",
 			CurrentStatus: "WFA", StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "Please review this test notification.",
 			CommentContent: comment, CommentLabel: "Comment", AssigneesStr: "Unassigned", AssigneeLabel: "Assignee",
-			LinksLabel: "Links", NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
+			NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
 		}, "rich")
 	}
 	if comment == "" {
@@ -660,7 +660,7 @@ func testNotificationPayload(project model.Project, message string) discord.Payl
 		TaskType: "アニメーション", CardContext: "テスト通知",
 		CurrentStatus: "WFA", StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "テスト通知を確認してください。",
 		CommentContent: comment, CommentLabel: "コメント", AssigneesStr: "未割り当て", AssigneeLabel: "担当",
-		LinksLabel: "リンク", NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
+		NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
 	}, "rich")
 }
 

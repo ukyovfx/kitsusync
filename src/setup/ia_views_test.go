@@ -968,7 +968,7 @@ func TestGlobalUserLinkingUsesTruthfulUnavailableState(t *testing.T) {
 func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	renderBotSettingsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
+	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
 	body := w.Body.String()
 	for _, forbidden := range []string{"Bot設定", "Discord設定", "Kitsu Runtime", "Runtimeメール", "Runtimeパスワード", "preview_not_connected", "not_set"} {
 		if strings.Contains(body, forbidden) {
@@ -981,7 +981,7 @@ func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
 		}
 	}
 	w = httptest.NewRecorder()
-	renderBotSettingsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db)
+	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db)
 	body = w.Body.String()
 	for _, required := range []string{"Connections", "Kitsu connection", "Discord Bot connection", "Not configured"} {
 		if !strings.Contains(body, required) {
@@ -993,7 +993,7 @@ func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
 func checkConnectionsPageUsesSafeNameAndUnescapedStatusMarkup(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	renderConnectionsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
+	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
 	body := w.Body.String()
 	for _, want := range []string{"接続設定", "Kitsu接続", "Discord Bot接続", "未設定"} {
 		if !strings.Contains(body, want) {
@@ -1586,13 +1586,7 @@ func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *tes
 	}
 }
 
-func TestStatusPolishUsesFixedSecretMaskAndRealSparkline(t *testing.T) {
-	if got := secretMaskDisplay("en", true); got != "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" {
-		t.Fatalf("unexpected secret mask %q", got)
-	}
-	if got := secretMaskDisplay("en", false); got != "Not configured" {
-		t.Fatalf("unexpected unconfigured secret label %q", got)
-	}
+func TestStatusPolishUsesRealSparkline(t *testing.T) {
 	items := []APIObservation{{Duration: 10 * time.Millisecond, Success: true}, {Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
 	if strings.Contains(graph, "<circle") || !strings.Contains(graph, `class="telemetry-line"`) || strings.Contains(graph, "<rect") || strings.Contains(graph, "<polyline") {
