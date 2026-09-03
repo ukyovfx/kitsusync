@@ -389,7 +389,6 @@ func executeFirstTimeConnection(plan firstTimeConnectionPlan, botToken, lang str
 		hasExistingWebhook := false
 		for _, webhook := range projectWebhooks {
 			if strings.TrimSpace(webhook.DiscordChannelID) == channelID && strings.TrimSpace(webhook.WebhookURL) != "" {
-				webhookURL = strings.TrimSpace(webhook.WebhookURL)
 				hasExistingWebhook = true
 				break
 			}
