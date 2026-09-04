@@ -7,12 +7,18 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 )
 
 // kitsuBase は Kitsu ベース URL を返す。
 // 環境変数 KITSU_HOSTNAME が設定されている場合はそちらを優先する。
 // これにより管理画面（/bot/admin/bot）で設定した Hostname が反映される。
 func kitsuBase() string {
+	if h := os.Getenv("KITSU_API_BASE_URL"); h != "" {
+		h = strings.TrimRight(h, "/")
+		h = strings.TrimSuffix(h, "/api")
+		return h + "/"
+	}
 	if h := os.Getenv("KITSU_HOSTNAME"); h != "" {
 		return h
 	}

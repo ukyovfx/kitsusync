@@ -34,6 +34,7 @@ const (
 	ExternalKitsuURLSettingKey  = "kitsu.external_url"
 	PublicKitsuURLSettingKey    = "kitsu.public_url"
 	KitsuDisplayURLSettingKey   = "kitsu.display_url"
+	KitsuAPIBaseURLSettingKey   = "kitsu.api_base_url"
 	runtimeBotEmail             = "kitsusync-bot@google.com"
 	runtimeBotFirstName         = "KitsuSync"
 	runtimeBotLastName          = "Bot"
@@ -107,17 +108,11 @@ var AssetTypesByProjectType = map[string][]string{
 const discordAPI = "https://discord.com/api/v10"
 
 func normalizeKitsuHostname(raw string) string {
-	host := strings.TrimSpace(raw)
-	if host == "" {
+	model, err := NormalizeKitsuURL(raw, APISourceLegacy)
+	if err != nil {
 		return ""
 	}
-	if !strings.Contains(host, "://") {
-		host = "http://" + host
-	}
-	if !strings.HasSuffix(host, "/") {
-		host += "/"
-	}
-	return host
+	return strings.TrimRight(model.RuntimeBaseURL, "/") + "/"
 }
 
 // safeKitsuHostDisplay keeps container-only addressing out of normal UI while
@@ -216,15 +211,11 @@ func effectiveRuntimeKitsuEndpoint(db *gorm.DB) string {
 }
 
 func validateKitsuEndpoint(raw string) (string, error) {
-	normalized := normalizeKitsuHostname(raw)
-	if normalized == "" {
-		return "", errors.New("kitsu endpoint is empty")
+	model, err := NormalizeKitsuURL(raw, APISourceLegacy)
+	if err != nil {
+		return "", err
 	}
-	u, err := url.Parse(normalized)
-	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-		return "", errors.New("kitsu endpoint is invalid")
-	}
-	return normalized, nil
+	return strings.TrimRight(model.RuntimeBaseURL, "/") + "/", nil
 }
 
 // runtimeEndpointFromDisplay accepts the safe local display value without

@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,7 +31,11 @@ func RecoverRuntimeCredentials(db *gorm.DB, kitsuHost, email, password string) e
 		slog.Warn("Kitsu credential recovery failed", "stage", "credential_validation", "success", false)
 		return errors.New("runtime recovery credentials are incomplete")
 	}
-	authURL := strings.TrimRight(kitsuHost, "/") + "/api/auth/login"
+	connection, err := ResolveAndProbeKitsu(context.Background(), kitsuHost, APISourceExplicit)
+	if err != nil {
+		return errors.New(connectionErrorClass(err))
+	}
+	authURL := connection.ResolvedAPIBaseURL + "/auth/login"
 	slog.Debug("Kitsu credential authentication attempted", "attempted", true)
 	token, diagnostics := basicauth.AuthForJWTTokenDetailed(authURL, email, password)
 	slog.Debug("Kitsu credential authentication result", "success", token != "", "status_code", diagnostics.StatusCode, "error_class", diagnostics.Category)

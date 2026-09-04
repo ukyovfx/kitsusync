@@ -3,6 +3,7 @@ package setup
 import (
 	"app/src/api/kitsu"
 	"app/src/model"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -2927,6 +2928,7 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		checkLink = `<a class="btn-ghost" href="` + esc(effectiveURL) + `" target="_blank" rel="noopener noreferrer">` + esc(t(lang, "リンクを確認", "Check link")) + `</a>`
 	}
 	externalURLField := `<div class="connection-form-field"><label for="kitsu-external-url">` + esc(t(lang, "外部Kitsu URL（任意）", "External Kitsu URL (optional)")) + `</label><input id="kitsu-external-url" type="url" name="kitsu_external_url" value="` + esc(externalURL) + `" aria-describedby="kitsu-external-url-help"><p id="kitsu-external-url-help" class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに使用するURLです。未設定時はKitsu URLを使用します。", "The URL used for Kitsu links in Discord notifications. When empty, the Kitsu URL is used.")) + `</p>` + checkLink + `</div>`
+	apiOverrideField := `<details class="connection-advanced"><summary>` + esc(t(lang, "詳細設定（任意）", "Advanced (optional)")) + `</summary><label for="kitsu-internal-url">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="kitsu-internal-url" type="url" name="kitsu_internal_url" autocomplete="url"><p class="field-help">` + esc(t(lang, "KitsuSyncだけが使う内部経路です。画面やDiscordリンクの表示は変わりません。", "An internal route used only by KitsuSync; it does not change human-facing or Discord URLs.")) + `</p><details class="connection-expert"><summary>` + esc(t(lang, "Expert: API Base URL", "Expert: API Base URL")) + `</summary><label for="kitsu-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="kitsu-api-base-url" type="url" name="kitsu_api_base_url" value="` + esc(model.GetSetting(db, KitsuAPIBaseURLSettingKey)) + `" autocomplete="url"><p class="field-help">` + esc(t(lang, "Kitsu URLとAPIの起点が異なる特殊なリバースプロキシ用です。", "Only needed for unusual reverse proxy setups where the API is not under the Kitsu URL.")) + `</p></details></details>`
 	body := `<div class="section-stack connections-edit-stack">` + notice +
 		`<div class="connections-edit-summary"><p class="hint">` + esc(statusHint) + `</p></div>` +
 		`<div class="connections-edit-grid">` +
@@ -2965,7 +2967,9 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		return `<button type="button" class="btn-ghost" data-reveal-secret="discord-bot-token" data-recheck-button="discord-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button>`
 	}() + `</div></form></section>` +
 		`</div><div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-reveal-secret]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.getAttribute('data-reveal-secret'));var submit=document.getElementById(button.getAttribute('data-recheck-button'));if(!input)return;input.hidden=false;input.style.display='';button.hidden=true;if(submit)submit.textContent=saveText;input.focus();});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}}());</script></div>`
-	body = strings.Replace(body, `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck"`, `</p></div>`+externalURLField+`<div class="button-row connections-actions"><button id="kitsu-recheck"`, 1)
+	body = strings.Replace(body, `<div class="connection-form-field"><label for="kitsu-bot-token">`, `<details class="connection-expert"><summary>`+esc(t(lang, "サービス資格情報（任意）", "Service credential (optional)"))+`</summary><div class="connection-form-field"><label for="kitsu-bot-token">`, 1)
+	body = strings.Replace(body, `</p></div><div class="connection-form-field"><label for="kitsu-hostname">`, `</p></div></details><div class="connection-form-field"><label for="kitsu-hostname">`, 1)
+	body = strings.Replace(body, `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck"`, `</p></div>`+externalURLField+apiOverrideField+`<div class="button-row connections-actions"><button id="kitsu-recheck"`, 1)
 	return body
 }
 
@@ -3037,7 +3041,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		}
 		if r.Method == http.MethodPost {
 			if action == "save_kitsu" {
-				displayedHost := strings.TrimSpace(r.FormValue("kitsu_hostname"))
+					displayedHost := strings.TrimSpace(r.FormValue("kitsu_hostname"))
 				slog.Debug("Kitsu save_kitsu handler reached",
 					"handler_reached", true,
 					"hostname_present", displayedHost != "",
@@ -3045,10 +3049,27 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					"submitted_password_present", strings.TrimSpace(r.FormValue("kitsu_runtime_password")) != "",
 				)
 				hostForAuth, endpointErr := runtimeEndpointFromDisplay(db, displayedHost)
+				if internalRaw := strings.TrimSpace(r.FormValue("kitsu_internal_url")); internalRaw != "" {
+					if normalized, err := NormalizeKitsuURL(internalRaw, APISourceExplicit); err != nil {
+						endpointErr = err
+					} else {
+						hostForAuth = normalized.DisplayBaseURL
+					}
+				}
 				if endpointErr != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuホストを入力してください。", "Enter the Kitsu host.")))
 					return
+				}
+				apiOverride := strings.TrimSpace(r.FormValue("kitsu_api_base_url"))
+				if apiOverride != "" {
+					override, err := NormalizeKitsuURL(apiOverride, APISourceExplicit)
+					if err != nil || ProbeKitsuZou(context.Background(), override) != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "API URLを確認できませんでした。", "The API Base URL could not be verified.")))
+						return
+					}
+					apiOverride = override.ResolvedAPIBaseURL
 				}
 				externalURLToSave := ""
 				externalURLWasSubmitted := false
@@ -3117,6 +3138,13 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					}
 					model.SetSetting(db, KitsuDisplayURLSettingKey, displayedHost)
 					model.SetSetting(db, "kitsu.hostname", hostForAuth)
+					if apiOverride != "" {
+						model.SetSetting(db, KitsuAPIBaseURLSettingKey, apiOverride)
+						os.Setenv("KITSU_API_BASE_URL", apiOverride)
+					} else {
+						model.DeleteSetting(db, KitsuAPIBaseURLSettingKey)
+						os.Unsetenv("KITSU_API_BASE_URL")
+					}
 					os.Setenv("KITSU_HOSTNAME", hostForAuth)
 					if kitsuReconnect != nil {
 						go kitsuReconnect()

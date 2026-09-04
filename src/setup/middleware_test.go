@@ -261,19 +261,30 @@ func TestClassifySessionPersistenceError(t *testing.T) {
 	}
 }
 
+func zouFixture(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
+		next(w, r)
+	}
+}
+
 func TestLoginReportsAuthenticatedButSessionPersistenceFailure(t *testing.T) {
 	resetSessions()
 	db := newSetupStateTestDB(t) // Deliberately has no admin_sessions table.
 	ConfigureSessionStore(db)
 	t.Cleanup(resetSessions)
 
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/auth/login" {
 			t.Fatalf("unexpected Kitsu path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"admin"}}`)
-	}))
+	})))
 	defer kitsu.Close()
 
 	form := url.Values{"email": {"admin@example.com"}, "password": {"not-returned"}}
@@ -298,10 +309,10 @@ func TestLoginReportsAuthenticatedButSessionPersistenceFailure(t *testing.T) {
 
 func TestLoginHandlerUsesConfiguredHostAndAcceptsAdmin(t *testing.T) {
 	resetSessions()
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"admin"}}`)
-	}))
+	})))
 	defer kitsu.Close()
 
 	form := url.Values{"hostname": {"https://unexpected.example.invalid"}, "email": {"admin@example.com"}, "password": {"not-returned"}}
@@ -320,10 +331,10 @@ func TestLoginHandlerUsesConfiguredHostAndAcceptsAdmin(t *testing.T) {
 
 func TestLoginHandlerFirstRunRejectsNonAdmin(t *testing.T) {
 	resetSessions()
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"user"}}`)
-	}))
+	})))
 	defer kitsu.Close()
 
 	called := false
@@ -342,10 +353,10 @@ func TestLoginHandlerAcceptsStudioManagerAndHigherRoles(t *testing.T) {
 	for _, role := range []string{"manager", " ADMIN "} {
 		t.Run(strings.TrimSpace(role), func(t *testing.T) {
 			resetSessions()
-			kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%q}}`, role)
-			}))
+			})))
 			defer kitsu.Close()
 
 			form := url.Values{"email": {"manager@example.com"}, "password": {"not-returned"}}
@@ -362,7 +373,7 @@ func TestLoginHandlerAcceptsStudioManagerAndHigherRoles(t *testing.T) {
 
 func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *testing.T) {
 	resetSessions()
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
 			if r.URL.Path == "/api/" {
@@ -373,7 +384,7 @@ func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *tes
 			return
 		}
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
-	}))
+	})))
 	defer kitsu.Close()
 	var persisted string
 	form := url.Values{"hostname": {kitsu.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
@@ -384,7 +395,7 @@ func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *tes
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected manual endpoint login to succeed, got %d: %s", rr.Code, rr.Body.String())
 	}
-	if persisted != kitsu.URL+"/" {
+	if strings.TrimRight(persisted, "/") != strings.TrimRight(kitsu.URL, "/") {
 		t.Fatalf("expected validated manual endpoint to persist, got %q", persisted)
 	}
 }
@@ -429,10 +440,10 @@ func TestLoginHandlerRejectsMissingOrBelowManagerRole(t *testing.T) {
 	for _, roleJSON := range []string{`"supervisor"`, `"user"`, `""`, `null`} {
 		t.Run(strings.Trim(roleJSON, `"`), func(t *testing.T) {
 			resetSessions()
-			kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%s}}`, roleJSON)
-			}))
+			})))
 			defer kitsu.Close()
 
 			form := url.Values{"email": {"user@example.com"}, "password": {"not-returned"}}

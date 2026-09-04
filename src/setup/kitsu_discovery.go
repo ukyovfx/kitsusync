@@ -98,10 +98,10 @@ func isPlaceholderKitsuEndpoint(raw string) bool {
 }
 
 func localKitsuHostCandidates() []kitsuHostProbe {
-	return []kitsuHostProbe{
-		{RuntimeHost: "http://host.docker.internal:8080/", DisplayHost: "http://127.0.0.1:8080"},
-		{RuntimeHost: "http://host.docker.internal/", DisplayHost: "http://127.0.0.1"},
-	}
+	// Deliberately empty: setup must not scan localhost or guess ports. A
+	// saved endpoint, KITSU_HOSTNAME, an explicit setup URL, or an installer
+	// supplied hint is required before any network request is made.
+	return nil
 }
 
 var discoveryCandidates = localKitsuHostCandidates

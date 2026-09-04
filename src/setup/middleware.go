@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -505,11 +506,14 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 					next = withLang("/bot/admin", r)
 				}
 			}
+			if internalHostname := strings.TrimSpace(r.FormValue("internal_hostname")); internalHostname != "" {
+				hostname = internalHostname
+			}
 
 			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
 				manualHostname := strings.TrimSpace(r.FormValue("hostname"))
 				if manualHostname != "" {
-					if normalized, err := validateKitsuEndpoint(manualHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
+					if normalized, err := validateKitsuEndpoint(manualHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) {
 						hostname = normalized
 						source = "operator-supplied"
 					}
@@ -520,7 +524,28 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu URLを確認できませんでした。KitsuのベースURLを確認してください。", "Kitsu could not be detected. Check the Kitsu base URL."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
-			loginURL := strings.TrimRight(hostname, "/") + "/api/auth/login"
+			connection, connectionErr := NormalizeKitsuURL(hostname, APISourceExplicit)
+			if connectionErr == nil {
+				if apiOverride := strings.TrimSpace(r.FormValue("api_base_url")); apiOverride != "" {
+					override, overrideErr := NormalizeKitsuURL(apiOverride, APISourceExplicit)
+					if overrideErr != nil {
+						connectionErr = overrideErr
+					} else {
+						connection.ResolvedAPIBaseURL = override.ResolvedAPIBaseURL
+						connection.APISource = APISourceExplicit
+					}
+				}
+			}
+			if connectionErr == nil {
+				connectionErr = ProbeKitsuZou(context.Background(), connection)
+			}
+			if connectionErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu 接続先を確認できませんでした。", "Kitsu could not be verified before sign-in.")+" ("+connectionErrorClass(connectionErr)+")", next, configuredHostname == "", r, r.FormValue("hostname")))
+				return
+			}
+			hostname = connection.RuntimeBaseURL
+			loginURL := connection.ResolvedAPIBaseURL + "/auth/login"
 			role, kitsuToken, ok := kitsuLoginCheck(loginURL, email, password)
 			if !ok || !isStudioManagerOrHigher(role) {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -587,7 +612,7 @@ func kitsuLoginCheck(loginURL, email, password string) (role, kitsuToken string,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
 	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
 		return "", "", false
 	}
@@ -674,6 +699,7 @@ func loginPageHTMLWithHostname(lang, errMsg, next string, showHostname bool, r *
 	if showHostname {
 		hostnameInput = `<label for="login-hostname">` + esc(t(lang, "KitsuベースURL", "Kitsu base URL")) + `</label><input id="login-hostname" type="url" name="hostname" value="` + esc(hostnameValue) + `" placeholder="https://kitsu.example.com" autocomplete="url" required><p class="field-help">` + esc(t(lang, "Kitsuを自動検出できない場合に入力します。検証に成功したURLだけを保存します。", "Use this only when Kitsu cannot be detected automatically. Only a successfully validated URL is saved.")) + `</p>`
 	}
-	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass">` + hostnameInput + `<label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
+	advanced := `<details class="connection-advanced"><summary>` + esc(t(lang, "詳細設定（任意）", "Advanced (optional)")) + `</summary><label for="login-internal-hostname">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="login-internal-hostname" type="url" name="internal_hostname" autocomplete="url"><p class="field-help">` + esc(t(lang, "KitsuSyncが別の内部経路を使う場合だけ必要です。", "Only needed when KitsuSync must use a different internal route to reach Kitsu.")) + `</p><details class="connection-expert"><summary>` + esc(t(lang, "Expert: API URL", "Expert: API URL")) + `</summary><label for="login-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="login-api-base-url" type="url" name="api_base_url" autocomplete="url"><p class="field-help">` + esc(t(lang, "Kitsu URLとAPIの起点が異なる特殊なリバースプロキシ用です。", "Only needed for unusual reverse proxy setups where the API is not under the Kitsu URL.")) + `</p></details></details>`
+	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass">` + hostnameInput + advanced + `<label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
 	return appShell("KitsuSync", "", lang, r, "", body)
 }

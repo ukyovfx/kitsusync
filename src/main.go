@@ -496,7 +496,7 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 
 		if (i+1)%conf.Discord.EmbedsPerRequests == 0 || (i+1)%len(data) == 0 {
 			if conf.Log {
-				log.Printf("Sending bunch of messages: " + strconv.Itoa(len(payload)))
+				log.Printf("Sending bunch of messages: %d", len(payload))
 			}
 
 			newResults := discord.SendMessageBunch(conf, payload, webhookURL, previousMessageIDs, previousWebhookURLs, previousThreadIDs, projectNotificationLanguages, db)
@@ -581,6 +581,11 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password string) {
 	if strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) == "" && strings.TrimSpace(conf.Kitsu.Hostname) != "" {
 		os.Setenv("KITSU_HOSTNAME", conf.Kitsu.Hostname)
+	}
+	if apiBase := strings.TrimSpace(model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); apiBase != "" {
+		if normalized, err := setup.NormalizeKitsuURL(apiBase, setup.APISourceExplicit); err == nil {
+			os.Setenv("KITSU_API_BASE_URL", normalized.ResolvedAPIBaseURL)
+		}
 	}
 	hostname = setup.DiscoverKitsuHost(db).RuntimeHost
 	email = model.GetSetting(db, setup.RuntimeKitsuEmailSettingKey)

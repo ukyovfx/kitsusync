@@ -13,6 +13,11 @@ import (
 func TestRecoverRuntimeCredentialsAuthenticatesAndPersists(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
 		if r.URL.Path != "/api/auth/login" {
 			w.WriteHeader(http.StatusNotFound)
 			return

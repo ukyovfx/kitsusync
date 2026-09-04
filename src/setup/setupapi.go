@@ -2,13 +2,16 @@ package setup
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"app/src/api/discord"
@@ -275,6 +278,39 @@ type TestKitsuResponse struct {
 	Reachable     bool    `json:"reachable"`
 	Authenticated bool    `json:"authenticated"`
 	Error         *string `json:"error"`
+}
+
+var setupProbeLimiter = struct {
+	sync.Mutex
+	started map[string][]time.Time
+}{started: make(map[string][]time.Time)}
+
+func allowSetupProbe(r *http.Request) bool {
+	key := "local"
+	if r != nil {
+		key = strings.TrimSpace(r.RemoteAddr)
+		if host, _, err := net.SplitHostPort(key); err == nil {
+			key = host
+		}
+		if key == "" {
+			key = "local"
+		}
+	}
+	now := time.Now()
+	setupProbeLimiter.Lock()
+	defer setupProbeLimiter.Unlock()
+	entries := setupProbeLimiter.started[key][:0]
+	for _, at := range setupProbeLimiter.started[key] {
+		if now.Sub(at) < time.Minute {
+			entries = append(entries, at)
+		}
+	}
+	if len(entries) >= 6 {
+		setupProbeLimiter.started[key] = entries
+		return false
+	}
+	setupProbeLimiter.started[key] = append(entries, now)
+	return true
 }
 
 // TestDiscordRequest is the request body for POST /api/setup/test-discord.
@@ -696,6 +732,11 @@ func validateTestNotificationDestination(db *gorm.DB, projectID string, destinat
 func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if !allowSetupProbe(r) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			writeTestKitsuError(w, "probe rate limit exceeded")
+			return
+		}
 
 		var req TestKitsuRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1048,7 +1089,11 @@ func writeTestDiscordError(w http.ResponseWriter, msg string) {
 }
 
 func tryKitsuLogin(hostname, email, password string) (bool, string) {
-	loginURL := strings.TrimRight(hostname, "/") + "/api/auth/login"
+	connection, err := ResolveAndProbeKitsu(context.Background(), hostname, APISourceExplicit)
+	if err != nil {
+		return false, connectionErrorClass(err)
+	}
+	loginURL := connection.ResolvedAPIBaseURL + "/auth/login"
 	payload := map[string]string{
 		"email":    email,
 		"password": password,
@@ -1062,7 +1107,7 @@ func tryKitsuLogin(hostname, email, password string) (bool, string) {
 		return false, "failed to build auth request"
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 12 * time.Second}
+	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
 		return false, "authentication request failed: " + err.Error()
@@ -1071,6 +1116,9 @@ func tryKitsuLogin(hostname, email, password string) (bool, string) {
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	bodyText := strings.TrimSpace(string(respBody))
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return false, "auth_redirect_blocked"
+	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		var authResp struct {
 			Token string `json:"access_token"`

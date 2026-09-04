@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+func TestKitsuBaseUsesExplicitAPIOverrideWithoutDuplicateAPIPath(t *testing.T) {
+	t.Setenv("KITSU_API_BASE_URL", "https://api.example.test/studio/api/")
+	t.Setenv("KITSU_HOSTNAME", "https://display.example.test")
+	if got := kitsuBase(); got != "https://api.example.test/studio/" {
+		t.Fatalf("kitsuBase() = %q, want explicit API parent", got)
+	}
+}
+
 func TestGetProjectTaskTypesUsesProductionScopedEndpointAndPreservesContext(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/data/projects/production-1/task-types" {
