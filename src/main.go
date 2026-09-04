@@ -743,6 +743,40 @@ func configureSQLite(db *gorm.DB) (*sql.DB, error) {
 	return sqlDB, nil
 }
 
+// migrateApplicationSchema applies the complete persistent schema before any
+// handler can accept an authenticated request. In particular, AdminSession was
+// added after earlier installations already had SQLite data, so migration
+// failures must stop startup instead of surfacing later as a generic login
+// persistence error.
+func migrateApplicationSchema(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database is unavailable")
+	}
+	if err := db.Exec("DROP INDEX IF EXISTS idx_checker_maps_task_type").Error; err != nil {
+		return fmt.Errorf("remove legacy checker map index: %w", err)
+	}
+	if err := db.AutoMigrate(
+		&model.Task{},
+		&model.Project{},
+		&model.ProjectWebhook{},
+		&model.ProductionChannelMapping{},
+		&model.ProductionNotificationConfig{},
+		&model.ProductionNotificationRoute{},
+		&model.NotificationRoutingDiagnosis{},
+		&model.UserMap{},
+		&model.CheckerMap{},
+		&model.Setting{},
+		&model.AdminSession{},
+		&model.AuditLog{},
+		&model.ProjectUserMap{},
+		&model.ProjectCheckerMap{},
+		&model.ProjectSetting{},
+	); err != nil {
+		return fmt.Errorf("migrate application schema: %w", err)
+	}
+	return nil
+}
+
 func main() {
 	slog.Configure(func(logger *slog.SugaredLogger) {
 		f := logger.Formatter.(*slog.TextFormatter)
@@ -815,25 +849,10 @@ func main() {
 		slog.Fatal("failed to configure sqlite", "err", err)
 		os.Exit(1)
 	}
-	// Remove the legacy single-column unique index before the composite migration.
-	db.Exec("DROP INDEX IF EXISTS idx_checker_maps_task_type")
-	db.AutoMigrate(
-		&model.Task{},
-		&model.Project{},
-		&model.ProjectWebhook{},
-		&model.ProductionChannelMapping{},
-		&model.ProductionNotificationConfig{},
-		&model.ProductionNotificationRoute{},
-		&model.NotificationRoutingDiagnosis{},
-		&model.UserMap{},
-		&model.CheckerMap{},
-		&model.Setting{},
-		&model.AdminSession{},
-		&model.AuditLog{},
-		&model.ProjectUserMap{},
-		&model.ProjectCheckerMap{},
-		&model.ProjectSetting{},
-	)
+	if err := migrateApplicationSchema(db); err != nil {
+		slog.Fatal("failed to migrate SQLite schema", "error_class", "schema_migration_failed")
+		os.Exit(1)
+	}
 	model.PurgeLegacySensitiveData(db)
 
 	setup.SeedConfigIfFixture(db, conf)

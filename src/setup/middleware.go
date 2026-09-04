@@ -124,6 +124,34 @@ func newSessionTokenChecked(email, kitsuToken, role, next string) (string, error
 	return token, nil
 }
 
+// classifySessionPersistenceError intentionally returns only a stable,
+// non-sensitive category suitable for logs and diagnostics. SQLite errors can
+// include SQL text, paths, or values, so callers must not log the raw error.
+func classifySessionPersistenceError(err error) string {
+	return classifySQLitePersistenceError(err)
+}
+
+func classifySQLitePersistenceError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "no such table"):
+		return "schema_table_missing"
+	case strings.Contains(message, "no such column"), strings.Contains(message, "has no column"), strings.Contains(message, "database schema"):
+		return "schema_incompatible"
+	case strings.Contains(message, "readonly"):
+		return "database_readonly"
+	case strings.Contains(message, "database is locked"), strings.Contains(message, "database is busy"), strings.Contains(message, "sqlite_busy"):
+		return "database_busy"
+	case strings.Contains(message, "constraint failed"), strings.Contains(message, "unique constraint"):
+		return "constraint_failed"
+	default:
+		return "persistence_failed"
+	}
+}
+
 func validSession(token string) bool {
 	if token == "" {
 		return false
@@ -501,9 +529,9 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 			}
 			token, sessionErr := newSessionTokenChecked(email, kitsuToken, role, next)
 			if sessionErr != nil {
-				slog.Error("admin session persistence failed", "error_class", "session_store_unavailable")
+				slog.Error("admin session persistence failed", "error_class", classifySessionPersistenceError(sessionErr))
 				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "ログイン状態を保存できませんでした。管理者に確認してください。", "The login session could not be saved. Contact the administrator."), next, configuredHostname == "", r, r.FormValue("hostname")))
+				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu認証は成功しましたが、KitsuSyncは管理者ログイン状態を保存できませんでした。管理者に確認してください。", "Kitsu authentication succeeded, but KitsuSync could not save the admin session. Contact the administrator."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
 			if persist != nil && (source == "local-discovered" || source == "operator-supplied") {

@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -236,6 +237,62 @@ func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t
 	LogoutHandler()(httptest.NewRecorder(), logoutReq)
 	if validSession(token) {
 		t.Fatal("logout must invalidate the persisted session")
+	}
+}
+
+func TestClassifySessionPersistenceError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"missing table", errors.New("no such table: admin_sessions"), "schema_table_missing"},
+		{"incompatible schema", errors.New("table admin_sessions has no column named token_hash"), "schema_incompatible"},
+		{"readonly", errors.New("attempt to write a readonly database"), "database_readonly"},
+		{"busy", errors.New("database is locked"), "database_busy"},
+		{"constraint", errors.New("UNIQUE constraint failed: admin_sessions.token_hash"), "constraint_failed"},
+		{"other", errors.New("driver failure"), "persistence_failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifySessionPersistenceError(tc.err); got != tc.want {
+				t.Fatalf("classification = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoginReportsAuthenticatedButSessionPersistenceFailure(t *testing.T) {
+	resetSessions()
+	db := newSetupStateTestDB(t) // Deliberately has no admin_sessions table.
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			t.Fatalf("unexpected Kitsu path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"admin"}}`)
+	}))
+	defer kitsu.Close()
+
+	form := url.Values{"email": {"admin@example.com"}, "password": {"not-returned"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login?lang=en", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandler(kitsu.URL)(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("login status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Kitsu authentication succeeded, but KitsuSync could not save the admin session.") {
+		t.Fatalf("missing safe post-auth persistence message: %s", body)
+	}
+	for _, secret := range []string{"not-returned", "browser-session-token"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("login response exposed secret-like test value %q", secret)
+		}
 	}
 }
 
