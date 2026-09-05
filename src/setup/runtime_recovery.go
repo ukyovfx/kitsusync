@@ -31,14 +31,13 @@ func RecoverRuntimeCredentials(db *gorm.DB, kitsuHost, email, password string) e
 		slog.Warn("Kitsu credential recovery failed", "stage", "credential_validation", "success", false)
 		return errors.New("runtime recovery credentials are incomplete")
 	}
-	connection, err := ResolveAndProbeKitsu(context.Background(), kitsuHost, APISourceExplicit)
+	connection, err := ResolveKitsuConnection(context.Background(), kitsuHost, model.GetSetting(db, KitsuAPIBaseURLSettingKey))
 	if err != nil {
 		return errors.New(connectionErrorClass(err))
 	}
-	authURL := connection.ResolvedAPIBaseURL + "/auth/login"
 	slog.Debug("Kitsu credential authentication attempted", "attempted", true)
-	token, diagnostics := basicauth.AuthForJWTTokenDetailed(authURL, email, password)
-	slog.Debug("Kitsu credential authentication result", "success", token != "", "status_code", diagnostics.StatusCode, "error_class", diagnostics.Category)
+	token, _, authErr := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
+	slog.Debug("Kitsu credential authentication result", "success", token != "", "error_class", connectionErrorClass(authErr))
 	if token == "" {
 		return errors.New("Kitsu connection could not be verified")
 	}

@@ -3,6 +3,7 @@ package kitsu
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -11,6 +12,17 @@ func TestKitsuBaseUsesExplicitAPIOverrideWithoutDuplicateAPIPath(t *testing.T) {
 	t.Setenv("KITSU_HOSTNAME", "https://display.example.test")
 	if got := kitsuBase(); got != "https://api.example.test/studio/" {
 		t.Fatalf("kitsuBase() = %q, want explicit API parent", got)
+	}
+}
+
+func TestExplicitAPIOverrideLeavesDisplayURLUnchanged(t *testing.T) {
+	t.Setenv("KITSU_API_BASE_URL", "https://private.example.test/api")
+	t.Setenv("KITSU_HOSTNAME", "https://public.example.test/studio")
+	if got := os.Getenv("KITSU_HOSTNAME"); got != "https://public.example.test/studio" {
+		t.Fatalf("display URL changed to %q", got)
+	}
+	if got := kitsuBase(); got != "https://private.example.test/" {
+		t.Fatalf("runtime API base = %q", got)
 	}
 }
 

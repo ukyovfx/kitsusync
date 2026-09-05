@@ -3,7 +3,7 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG APP_VERSION=0.4.4
+ARG APP_VERSION=0.4.5
 ARG COMMIT_SHA=unknown
 ARG BUILD_TIMESTAMP=unknown
 ARG SCHEMA_VERSION=1

@@ -45,6 +45,11 @@ type KitsuURLModel struct {
 	ResolvedAPIBaseURL string
 	APISource          string
 	TargetScope        string
+	VerifiedIPs        []netip.Addr
+}
+
+var kitsuLookupNetIP = func(ctx context.Context, host string) ([]netip.Addr, error) {
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
 func NormalizeKitsuURL(raw, source string) (KitsuURLModel, error) {
@@ -130,7 +135,7 @@ func resolveKitsuIPs(ctx context.Context, host string) ([]netip.Addr, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	addresses, err := kitsuLookupNetIP(ctx, host)
 	if err != nil || len(addresses) == 0 {
 		return nil, connectionError("dns_resolution_failed")
 	}
@@ -142,16 +147,55 @@ func resolveKitsuIPs(ctx context.Context, host string) ([]netip.Addr, error) {
 	return addresses, nil
 }
 
-func safeKitsuClient(model KitsuURLModel) *http.Client {
+func resolvedKitsuScope(ips []netip.Addr) (string, error) {
+	if len(ips) == 0 {
+		return "", connectionError("dns_resolution_failed")
+	}
+	scope := classifyKitsuIP(ips[0])
+	if scope == "special" {
+		return "", connectionError("forbidden_metadata_target")
+	}
+	for _, ip := range ips[1:] {
+		other := classifyKitsuIP(ip)
+		if other == "special" {
+			return "", connectionError("forbidden_metadata_target")
+		}
+		if other != scope {
+			return "", connectionError("dns_scope_mixed")
+		}
+	}
+	return scope, nil
+}
+
+func sameKitsuIPs(a, b []netip.Addr) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[netip.Addr]struct{}, len(a))
+	for _, ip := range a {
+		seen[ip] = struct{}{}
+	}
+	for _, ip := range b {
+		if _, ok := seen[ip]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func safeKitsuClient(model KitsuURLModel, pinned []netip.Addr) *http.Client {
 	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
 		}
-		ips, err := resolveKitsuIPs(ctx, host)
-		if err != nil {
-			return nil, err
+		ips := pinned
+		if len(ips) == 0 {
+			ips, err = resolveKitsuIPs(ctx, host)
+			if err != nil {
+				return nil, err
+			}
 		}
 		for _, ip := range ips {
 			if model.TargetScope == "public" && classifyKitsuIP(ip) != "public" {
@@ -168,8 +212,10 @@ func safeKitsuClient(model KitsuURLModel) *http.Client {
 	return &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
-// ProbeKitsuZou verifies identity and health before any credential POST.
-func ProbeKitsuZou(ctx context.Context, model KitsuURLModel) error {
+func ensureKitsuTargetStable(ctx context.Context, model KitsuURLModel) error {
+	if len(model.VerifiedIPs) == 0 {
+		return connectionError("dns_resolution_failed")
+	}
 	u, err := url.Parse(model.ResolvedAPIBaseURL)
 	if err != nil {
 		return connectionError("url_parse_invalid")
@@ -178,36 +224,57 @@ func ProbeKitsuZou(ctx context.Context, model KitsuURLModel) error {
 	if err != nil {
 		return err
 	}
-	for _, ip := range ips {
-		if model.TargetScope == "public" && classifyKitsuIP(ip) != "public" {
-			return connectionError("dns_scope_changed")
-		}
+	if !sameKitsuIPs(ips, model.VerifiedIPs) {
+		return connectionError("dns_scope_changed")
 	}
+	return nil
+}
+
+// ProbeKitsuZou verifies identity and health before any credential POST.
+func ProbeKitsuZou(ctx context.Context, model KitsuURLModel) error {
+	_, err := verifyKitsuZou(ctx, model)
+	return err
+}
+
+func verifyKitsuZou(ctx context.Context, model KitsuURLModel) (KitsuURLModel, error) {
+	u, err := url.Parse(model.ResolvedAPIBaseURL)
+	if err != nil {
+		return KitsuURLModel{}, connectionError("url_parse_invalid")
+	}
+	ips, err := resolveKitsuIPs(ctx, u.Hostname())
+	if err != nil {
+		return KitsuURLModel{}, err
+	}
+	scope, err := resolvedKitsuScope(ips)
+	if err != nil {
+		return KitsuURLModel{}, err
+	}
+	model.TargetScope, model.VerifiedIPs = scope, ips
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, model.ResolvedAPIBaseURL+"/status", nil)
 	if err != nil {
-		return connectionError("url_parse_invalid")
+		return KitsuURLModel{}, connectionError("url_parse_invalid")
 	}
 	req.Header.Set("Accept", "application/json")
-	resp, err := safeKitsuClient(model).Do(req)
+	resp, err := safeKitsuClient(model, ips).Do(req)
 	if err != nil {
-		return classifyKitsuTransportError(err)
+		return KitsuURLModel{}, classifyKitsuTransportError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		if location, err := req.URL.Parse(resp.Header.Get("Location")); err == nil && req.URL.Scheme == "https" && location.Scheme == "http" {
-			return connectionError("tls_downgrade_blocked")
+			return KitsuURLModel{}, connectionError("tls_downgrade_blocked")
 		}
-		return connectionError("redirect_origin_changed")
+		return KitsuURLModel{}, connectionError("redirect_origin_changed")
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return connectionError("zou_status_not_found")
+		return KitsuURLModel{}, connectionError("zou_status_not_found")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return connectionError("zou_unhealthy")
+		return KitsuURLModel{}, connectionError("zou_unhealthy")
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if err != nil {
-		return connectionError("zou_identity_mismatch")
+		return KitsuURLModel{}, connectionError("zou_identity_mismatch")
 	}
 	var status struct {
 		Name            string `json:"name"`
@@ -218,12 +285,12 @@ func ProbeKitsuZou(ctx context.Context, model KitsuURLModel) error {
 		Version         string `json:"version"`
 	}
 	if json.Unmarshal(body, &status) != nil || !strings.EqualFold(status.Name, "Zou") || status.Version == "" {
-		return connectionError("zou_identity_mismatch")
+		return KitsuURLModel{}, connectionError("zou_identity_mismatch")
 	}
 	if status.DatabaseUp == nil || status.EventStreamUp == nil || status.JobQueueUp == nil || status.KeyValueStoreUp == nil || !*status.DatabaseUp || !*status.EventStreamUp || !*status.JobQueueUp || !*status.KeyValueStoreUp {
-		return connectionError("zou_unhealthy")
+		return KitsuURLModel{}, connectionError("zou_unhealthy")
 	}
-	return nil
+	return model, nil
 }
 
 func classifyKitsuTransportError(err error) error {
@@ -254,8 +321,93 @@ func ResolveAndProbeKitsu(ctx context.Context, raw, source string) (KitsuURLMode
 	if err != nil {
 		return KitsuURLModel{}, err
 	}
-	if err := ProbeKitsuZou(ctx, model); err != nil {
+	return verifyKitsuZou(ctx, model)
+}
+
+// ResolveKitsuConnection keeps the browser/runtime base distinct from an
+// optional API endpoint. The API endpoint owns DNS scope and verification.
+func ResolveKitsuConnection(ctx context.Context, displayRaw, apiOverride string) (KitsuURLModel, error) {
+	display, err := NormalizeKitsuURL(displayRaw, APISourceDerived)
+	if err != nil {
 		return KitsuURLModel{}, err
 	}
-	return model, nil
+	target := display
+	if strings.TrimSpace(apiOverride) != "" {
+		target, err = NormalizeKitsuURL(apiOverride, APISourceExplicit)
+		if err != nil {
+			return KitsuURLModel{}, err
+		}
+	}
+	verified, err := verifyKitsuZou(ctx, target)
+	if err != nil {
+		return KitsuURLModel{}, err
+	}
+	verified.DisplayBaseURL = display.DisplayBaseURL
+	verified.RuntimeBaseURL = display.RuntimeBaseURL
+	return verified, nil
+}
+
+// AuthenticateKitsuCredentials posts only through the pinned, verified
+// transport. It rechecks DNS equality before each credential delivery.
+func AuthenticateKitsuCredentials(ctx context.Context, model KitsuURLModel, email, password string) (string, string, error) {
+	if err := ensureKitsuTargetStable(ctx, model); err != nil {
+		return "", "", err
+	}
+	payload, err := json.Marshal(map[string]string{"email": strings.TrimSpace(email), "password": password})
+	if err != nil {
+		return "", "", connectionError("auth_request_invalid")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, model.ResolvedAPIBaseURL+"/auth/login", strings.NewReader(string(payload)))
+	if err != nil {
+		return "", "", connectionError("auth_request_invalid")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := safeKitsuClient(model, model.VerifiedIPs).Do(req)
+	if err != nil {
+		return "", "", classifyKitsuTransportError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return "", "", connectionError("auth_redirect_blocked")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", connectionError("auth_failed")
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return "", "", connectionError("auth_response_invalid")
+	}
+	var result struct {
+		AccessToken string `json:"access_token"`
+		User        struct {
+			Role string `json:"role"`
+		} `json:"user"`
+	}
+	if json.Unmarshal(body, &result) != nil || strings.TrimSpace(result.AccessToken) == "" {
+		return "", "", connectionError("auth_response_invalid")
+	}
+	return result.AccessToken, result.User.Role, nil
+}
+
+func VerifyKitsuToken(ctx context.Context, model KitsuURLModel, token string) error {
+	if err := ensureKitsuTargetStable(ctx, model); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, model.ResolvedAPIBaseURL+"/auth/authenticated", nil)
+	if err != nil {
+		return connectionError("auth_request_invalid")
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	resp, err := safeKitsuClient(model, model.VerifiedIPs).Do(req)
+	if err != nil {
+		return classifyKitsuTransportError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return connectionError("auth_redirect_blocked")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return connectionError("auth_failed")
+	}
+	return nil
 }

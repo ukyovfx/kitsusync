@@ -60,6 +60,31 @@ func TestRecoverRuntimeCredentialsStopsOnAuthenticationFailure(t *testing.T) {
 	}
 }
 
+func TestRecoverRuntimeCredentialsRejectsAuthRedirect(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
+		if r.URL.Path == "/api/auth/login" {
+			w.Header().Set("Location", server.URL+"/capture")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+		if r.URL.Path == "/capture" {
+			t.Fatal("credentials were replayed to redirect target")
+		}
+	}))
+	defer server.Close()
+	db := newSetupStateTestDB(t)
+	if err := RecoverRuntimeCredentials(db, server.URL, "bot@example.com", "secret"); err == nil {
+		t.Fatal("expected redirect to be rejected")
+	}
+}
+
 func TestRecoverRuntimeCredentialsStopsOnPersistenceFailure(t *testing.T) {
 	keyDir := t.TempDir()
 	t.Setenv(RuntimeSecretKeyFileEnv, keyDir)

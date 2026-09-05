@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 
+	"app/src/setup"
 	"app/src/utils/basicauth"
 )
 
@@ -88,10 +90,10 @@ func (m *runtimeManager) authenticate(hostname, email, password string) bool {
 	return true
 }
 
-func (m *runtimeManager) authenticateToken(hostname, token string) bool {
+func (m *runtimeManager) authenticateToken(connection setup.KitsuURLModel, token string) bool {
 	m.authMu.Lock()
 	defer m.authMu.Unlock()
-	hostname = strings.TrimSpace(hostname)
+	hostname := strings.TrimSpace(connection.RuntimeBaseURL)
 	token = strings.TrimSpace(token)
 	if hostname == "" || token == "" {
 		m.mu.Lock()
@@ -100,10 +102,7 @@ func (m *runtimeManager) authenticateToken(hostname, token string) bool {
 		m.mu.Unlock()
 		return false
 	}
-	if !strings.HasSuffix(hostname, "/") {
-		hostname += "/"
-	}
-	if !basicauth.ValidateJWTToken(hostname+"api/auth/authenticated", token) {
+	if err := setup.VerifyKitsuToken(context.Background(), connection, token); err != nil {
 		m.mu.Lock()
 		if m.hadToken {
 			m.mode = runtimeDegraded

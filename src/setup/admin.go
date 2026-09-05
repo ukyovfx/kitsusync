@@ -3041,7 +3041,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		}
 		if r.Method == http.MethodPost {
 			if action == "save_kitsu" {
-					displayedHost := strings.TrimSpace(r.FormValue("kitsu_hostname"))
+				displayedHost := strings.TrimSpace(r.FormValue("kitsu_hostname"))
 				slog.Debug("Kitsu save_kitsu handler reached",
 					"handler_reached", true,
 					"hostname_present", displayedHost != "",
@@ -3062,14 +3062,14 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					return
 				}
 				apiOverride := strings.TrimSpace(r.FormValue("kitsu_api_base_url"))
+				connection, connectionErr := ResolveKitsuConnection(context.Background(), hostForAuth, apiOverride)
+				if connectionErr != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu API URLを確認できませんでした。", "The Kitsu API URL could not be verified.")))
+					return
+				}
 				if apiOverride != "" {
-					override, err := NormalizeKitsuURL(apiOverride, APISourceExplicit)
-					if err != nil || ProbeKitsuZou(context.Background(), override) != nil {
-						w.WriteHeader(http.StatusBadRequest)
-						fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "API URLを確認できませんでした。", "The API Base URL could not be verified.")))
-						return
-					}
-					apiOverride = override.ResolvedAPIBaseURL
+					apiOverride = connection.ResolvedAPIBaseURL
 				}
 				externalURLToSave := ""
 				externalURLWasSubmitted := false
@@ -3101,7 +3101,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					botToken = StoredRuntimeKitsuToken(db)
 				}
 				if botToken != "" {
-					validation := ValidateKitsuBotToken(db, hostForAuth, botToken, true)
+					validation := ValidateKitsuBotToken(db, strings.TrimSuffix(connection.ResolvedAPIBaseURL, "/api"), botToken, true)
 					slog.Info("Kitsu Bot token validation result",
 						"classification", validation.Classification,
 						"stage", validation.Stage,

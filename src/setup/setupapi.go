@@ -755,30 +755,9 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 			writeTestKitsuError(w, "hostname(auto), email, and password are required")
 			return
 		}
-		if !strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://") {
-			writeTestKitsuError(w, "hostname must start with http:// or https://")
-			return
-		}
-		if !strings.HasSuffix(hostname, "/") {
-			hostname += "/"
-		}
-
-		client := &http.Client{Timeout: 10 * time.Second}
-		pingURL := strings.TrimRight(hostname, "/") + "/api/"
-		resp, err := client.Get(pingURL)
-		if err != nil {
-			writeTestKitsuError(w, "Kitsu server not reachable: "+err.Error())
-			return
-		}
-		resp.Body.Close()
-		if resp.StatusCode >= 500 {
-			writeTestKitsuError(w, fmt.Sprintf("Kitsu server returned HTTP %d", resp.StatusCode))
-			return
-		}
-
 		loginOK, loginReason := tryKitsuLogin(hostname, email, password)
 		if !loginOK {
-			errStr := loginReason
+			errStr := "Kitsu verification failed: " + safeKitsuConnectionMessage(loginReason)
 			json.NewEncoder(w).Encode(TestKitsuResponse{Reachable: true, Error: &errStr})
 			return
 		}
@@ -794,6 +773,15 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 		}
 
 		json.NewEncoder(w).Encode(TestKitsuResponse{Reachable: true, Authenticated: true})
+	}
+}
+
+func safeKitsuConnectionMessage(class string) string {
+	switch class {
+	case "url_parse_invalid", "scheme_not_allowed", "forbidden_metadata_target", "dns_scope_changed", "dns_resolution_failed", "redirect_origin_changed", "tls_downgrade_blocked", "zou_identity_mismatch", "zou_unhealthy", "auth_redirect_blocked", "auth_failed":
+		return class
+	default:
+		return "network_failed"
 	}
 }
 

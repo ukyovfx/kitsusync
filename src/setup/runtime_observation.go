@@ -1,10 +1,25 @@
 package setup
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
 )
+
+func ObserveKitsuRuntimeConnection(connection KitsuURLModel, token string) {
+	started := time.Now()
+	classification := "not_configured"
+	if strings.TrimSpace(token) != "" {
+		if err := VerifyKitsuToken(context.Background(), connection, token); err == nil {
+			Stats.RecordAPIObservation("kitsu", started, true, "success")
+			return
+		} else {
+			classification = connectionErrorClass(err)
+		}
+	}
+	Stats.RecordAPIObservation("kitsu", started, false, classification)
+}
 
 // ObserveKitsuRuntime records one bounded read-only authenticated health observation.
 func ObserveKitsuRuntime(hostname, token string) {

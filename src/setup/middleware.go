@@ -479,10 +479,20 @@ func LoginHandler(kitsuHostname string) http.HandlerFunc {
 // LoginHandlerWithDiscovery persists a host selected by a successful,
 // authenticated login. Discovery itself remains read-only.
 func LoginHandlerWithDiscovery(resolve func() (string, string), persist func(string)) http.HandlerFunc {
+	return LoginHandlerWithDiscoveryAndConnection(resolve, func(host, _ string) {
+		if persist != nil {
+			persist(host)
+		}
+	})
+}
+
+// LoginHandlerWithDiscoveryAndConnection persists the display/runtime host and
+// optional independently verified API base after a successful sign-in.
+func LoginHandlerWithDiscoveryAndConnection(resolve func() (string, string), persist func(string, string)) http.HandlerFunc {
 	return loginHandlerWithPersist("", resolve, persist)
 }
 
-func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, string), persist func(string)) http.HandlerFunc {
+func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, string), persist func(string, string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -524,30 +534,16 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu URLを確認できませんでした。KitsuのベースURLを確認してください。", "Kitsu could not be detected. Check the Kitsu base URL."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
-			connection, connectionErr := NormalizeKitsuURL(hostname, APISourceExplicit)
-			if connectionErr == nil {
-				if apiOverride := strings.TrimSpace(r.FormValue("api_base_url")); apiOverride != "" {
-					override, overrideErr := NormalizeKitsuURL(apiOverride, APISourceExplicit)
-					if overrideErr != nil {
-						connectionErr = overrideErr
-					} else {
-						connection.ResolvedAPIBaseURL = override.ResolvedAPIBaseURL
-						connection.APISource = APISourceExplicit
-					}
-				}
-			}
-			if connectionErr == nil {
-				connectionErr = ProbeKitsuZou(context.Background(), connection)
-			}
+			apiOverride := strings.TrimSpace(r.FormValue("api_base_url"))
+			connection, connectionErr := ResolveKitsuConnection(context.Background(), hostname, apiOverride)
 			if connectionErr != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu 接続先を確認できませんでした。", "Kitsu could not be verified before sign-in.")+" ("+connectionErrorClass(connectionErr)+")", next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
 			hostname = connection.RuntimeBaseURL
-			loginURL := connection.ResolvedAPIBaseURL + "/auth/login"
-			role, kitsuToken, ok := kitsuLoginCheck(loginURL, email, password)
-			if !ok || !isStudioManagerOrHigher(role) {
+			kitsuToken, role, authErr := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
+			if authErr != nil || !isStudioManagerOrHigher(role) {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
@@ -559,8 +555,8 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu認証は成功しましたが、KitsuSyncは管理者ログイン状態を保存できませんでした。管理者に確認してください。", "Kitsu authentication succeeded, but KitsuSync could not save the admin session. Contact the administrator."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
-			if persist != nil && (source == "local-discovered" || source == "operator-supplied") {
-				persist(hostname)
+			if persist != nil && (source == "local-discovered" || source == "operator-supplied" || apiOverride != "") {
+				persist(hostname, apiOverride)
 			}
 			http.SetCookie(w, sessionCookie(r, token, int(sessionTTL.Seconds())))
 			http.Redirect(w, r, next, http.StatusSeeOther)

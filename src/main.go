@@ -934,8 +934,13 @@ func main() {
 			"bot_token_present", setup.StoredRuntimeKitsuToken(db) != "",
 		)
 		if token := setup.StoredRuntimeKitsuToken(db); token != "" {
+			connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
+			if connectionErr != nil {
+				setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", "connection_unverified")
+				return false
+			}
 			validationStarted := time.Now()
-			validation := setup.ValidateKitsuBotToken(db, hostname, token, true)
+			validation := setup.ValidateKitsuBotToken(db, strings.TrimSuffix(connection.ResolvedAPIBaseURL, "/api"), token, true)
 			setup.Stats.RecordAPIObservation("kitsu", validationStarted, validation.Compatible(), validation.Classification)
 			slog.Debug("Kitsu Bot token runtime validation",
 				"classification", validation.Classification,
@@ -947,7 +952,7 @@ func main() {
 			)
 			if validation.Compatible() {
 				setup.RecordKitsuRuntimeAuthMode(db, "bot_token", "")
-				return runtime.authenticateToken(hostname, token)
+				return runtime.authenticateToken(connection, token)
 			}
 			setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", validation.Classification)
 			return false
@@ -991,11 +996,18 @@ func main() {
 	}
 
 	loginHandler := func(w http.ResponseWriter, r *http.Request) {
-		setup.LoginHandlerWithDiscovery(func() (string, string) {
+		setup.LoginHandlerWithDiscoveryAndConnection(func() (string, string) {
 			result := setup.DiscoverKitsuHost(db)
 			return result.RuntimeHost, result.Source
-		}, func(host string) {
+		}, func(host, apiOverride string) {
 			model.SetSetting(db, "kitsu.hostname", host)
+			if strings.TrimSpace(apiOverride) == "" {
+				model.DeleteSetting(db, setup.KitsuAPIBaseURLSettingKey)
+				os.Unsetenv("KITSU_API_BASE_URL")
+			} else if normalized, err := setup.NormalizeKitsuURL(apiOverride, setup.APISourceExplicit); err == nil {
+				model.SetSetting(db, setup.KitsuAPIBaseURLSettingKey, normalized.ResolvedAPIBaseURL)
+				os.Setenv("KITSU_API_BASE_URL", normalized.ResolvedAPIBaseURL)
+			}
 		})(w, r)
 	}
 	mux.HandleFunc("/login", loginHandler)
@@ -1094,7 +1106,11 @@ func main() {
 	c.AddFunc("@every 20s", func() {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		kitsuToken := setup.StoredRuntimeKitsuToken(db)
-		setup.ObserveKitsuRuntime(hostname, kitsuToken)
+		if connection, err := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); err == nil {
+			setup.ObserveKitsuRuntimeConnection(connection, kitsuToken)
+		} else {
+			setup.Stats.RecordAPIObservation("kitsu", time.Now(), false, "connection_unverified")
+		}
 		discordToken, _, _ := getDiscordSettings(db, conf)
 		setup.ObserveDiscordRuntime(discordToken)
 	})

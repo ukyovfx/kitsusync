@@ -73,6 +73,11 @@ func TestConnectionsSaveDiscordEmptyIsDiscordSpecific(t *testing.T) {
 func TestConnectionsSaveKitsuRetainsStoredPassword(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
 		if r.URL.Path == "/api/auth/authenticated" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true}`))
@@ -100,6 +105,11 @@ func TestConnectionsSaveKitsuRetainsStoredPassword(t *testing.T) {
 func TestConnectionsSaveKitsuStoresExternalURLSeparately(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
 		if r.URL.Path == "/api/auth/authenticated" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true}`))
@@ -138,6 +148,11 @@ func TestConnectionsSaveKitsuStoresExternalURLSeparately(t *testing.T) {
 func TestConnectionsRecheckKitsuUsesStoredTokenWithoutRenderingIt(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
 		if r.URL.Path == "/api/auth/authenticated" {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true}`))
