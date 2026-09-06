@@ -34,46 +34,70 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func MakeKitsuResponse(conf config.Config) []kitsu.MessagePayload {
+func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 
-	tasks := kitsu.GetTasks()
+	tasks, err := kitsu.GetTasksWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch tasks: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got tasks: " + strconv.Itoa(len(tasks.Each)))
 	}
 
-	taskStatuses := kitsu.GetTaskStatuses()
+	taskStatuses, err := kitsu.GetTaskStatusesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch task statuses: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got taskStatuses: " + strconv.Itoa(len(taskStatuses.Each)))
 	}
 
-	entities := kitsu.GetEntities()
+	entities, err := kitsu.GetEntitiesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch entities: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got entities: " + strconv.Itoa(len(entities.Each)))
 	}
 
-	enitityTypes := kitsu.GetEntityTypes()
+	enitityTypes, err := kitsu.GetEntityTypesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch entity types: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got enitityTypes: " + strconv.Itoa(len(enitityTypes.Each)))
 	}
 
-	projects := kitsu.GetProjects()
+	projects, err := kitsu.GetProjectsWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch projects: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got projects: " + strconv.Itoa(len(projects.Each)))
 	}
 
-	taskTypes := kitsu.GetTaskTypes()
+	taskTypes, err := kitsu.GetTaskTypesWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch task types: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got taskTypes: " + strconv.Itoa(len(taskTypes.Each)))
 	}
 
-	persons := kitsu.GetPersons()
+	persons, err := kitsu.GetPersonsWithError()
+	if err != nil {
+		return nil, fmt.Errorf("fetch persons: %w", err)
+	}
 	if conf.Log {
 		slog.Info("Got persons: " + strconv.Itoa(len(persons.Each)))
 	}
 
 	var comments kitsu.Comments
 	if conf.Kitsu.SkipComments == false {
-		comments = kitsu.GetComments()
+		comments, err = kitsu.GetCommentsWithError()
+		if err != nil {
+			return nil, fmt.Errorf("fetch comments: %w", err)
+		}
 		if conf.Log {
 			slog.Info("Got comments: " + strconv.Itoa(len(comments.Each)))
 		}
@@ -169,6 +193,15 @@ func MakeKitsuResponse(conf config.Config) []kitsu.MessagePayload {
 					response[i].LatestComment.Comment.Comment = taskComments.Each[0]
 				}
 
+				if statusComment, ok := statusChangeComment(tasks.Each[i], taskComments.Each); ok {
+					for _, elem := range persons.Each {
+						if elem.ID == statusComment.PersonID {
+							response[i].StatusChangeAuthor.Person = elem
+							break
+						}
+					}
+				}
+
 				for _, elem := range persons.Each {
 					if len(taskComments.Each) > 0 {
 						if elem.ID == taskComments.Each[0].PersonID {
@@ -208,7 +241,44 @@ func MakeKitsuResponse(conf config.Config) []kitsu.MessagePayload {
 		log.Printf("Done secondary loop in %s", time.Since(start))
 	}
 
-	return out
+	return out, nil
+}
+
+// statusChangeComment returns only a comment that Zou deterministically ties
+// to the task's current status transition. A merely recent comment is not
+// sufficient evidence of who changed the status.
+func statusChangeComment(task kitsu.Task, comments []kitsu.Comment) (kitsu.Comment, bool) {
+	if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(task.TaskStatusID) == "" || strings.TrimSpace(task.LastCommentDate) == "" {
+		return kitsu.Comment{}, false
+	}
+	for _, comment := range comments {
+		if strings.TrimSpace(comment.ObjectID) != strings.TrimSpace(task.ID) || strings.TrimSpace(comment.TaskStatusID) != strings.TrimSpace(task.TaskStatusID) || strings.TrimSpace(comment.PersonID) == "" {
+			continue
+		}
+		if timestampsEqual(comment.CreatedAt, task.LastCommentDate) || timestampsEqual(comment.UpdatedAt, task.LastCommentDate) {
+			return comment, true
+		}
+	}
+	return kitsu.Comment{}, false
+}
+
+func timestampsEqual(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05"} {
+		a, aErr := time.Parse(layout, left)
+		b, bErr := time.Parse(layout, right)
+		if aErr == nil && bErr == nil && a.Equal(b) {
+			return true
+		}
+	}
+	return false
 }
 
 type notificationRouteStats struct {
@@ -292,7 +362,8 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 
 		dbResult := model.FindTask(db, data[i].Task.ID)
 
-		data[i].PreviousStatusName = dbResult.TaskStatus
+		currentStatus := data[i].TaskStatus.TaskStatus.ShortName
+		data[i].PreviousStatusName = model.PreviousTaskStatus(dbResult, currentStatus)
 
 		if len(dbResult.TaskID) > 0 {
 			statusChanged := dbResult.TaskStatus != data[i].TaskStatus.TaskStatus.ShortName
@@ -316,7 +387,6 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			continue
 		}
 		// StatusFilter: only notify on WFA, RETAKE, DONE.
-		currentStatus := data[i].TaskStatus.TaskStatus.ShortName
 		// Treat "none" status as an assign notification when enabled.
 		if strings.EqualFold(currentStatus, "none") {
 			if !conf.Notification.NotifyOnAssign {
@@ -345,6 +415,11 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			stats.Dropped++
 			continue
 		}
+		// Persist the observed Kitsu sequence only after the event has an
+		// explicit route. Delivery state remains separate so transient failures
+		// retry with the same real transition, while unrouted events stay
+		// available if a route is configured later.
+		model.ObserveTaskStatus(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
 		webhooks[plan.DestinationID] = plan.WebhookURL
 		routes[plan.DestinationID] = append(routes[plan.DestinationID], payload)
 		if labels[plan.DestinationID] == nil {
@@ -421,7 +496,7 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 
 		if (i+1)%conf.Discord.EmbedsPerRequests == 0 || (i+1)%len(data) == 0 {
 			if conf.Log {
-				log.Printf("Sending bunch of messages: " + strconv.Itoa(len(payload)))
+				log.Printf("Sending bunch of messages: %d", len(payload))
 			}
 
 			newResults := discord.SendMessageBunch(conf, payload, webhookURL, previousMessageIDs, previousWebhookURLs, previousThreadIDs, projectNotificationLanguages, db)
@@ -440,6 +515,7 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 				if projectRow := model.FindProjectByKitsuID(db, task.Project.ID); projectRow != nil {
 					projectGuildID = projectRow.DiscordGuildID
 				}
+				actorKind, actorID, actorName := auditActorFromPayload(task)
 				model.WriteAuditLog(db, model.AuditLog{
 					TaskID:       taskID,
 					ProjectID:    task.Project.ID,
@@ -452,6 +528,9 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 					WebhookURL:   webhookURL,
 					Success:      res.MessageID != "",
 					ErrorMessage: res.FailureCategory,
+					ActorKind:    actorKind,
+					ActorID:      actorID,
+					ActorName:    actorName,
 				})
 				if res.MessageID != "" {
 					sentCount++
@@ -503,6 +582,11 @@ func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password s
 	if strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) == "" && strings.TrimSpace(conf.Kitsu.Hostname) != "" {
 		os.Setenv("KITSU_HOSTNAME", conf.Kitsu.Hostname)
 	}
+	if apiBase := strings.TrimSpace(model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); apiBase != "" {
+		if normalized, err := setup.NormalizeKitsuURL(apiBase, setup.APISourceExplicit); err == nil {
+			os.Setenv("KITSU_API_BASE_URL", normalized.ResolvedAPIBaseURL)
+		}
+	}
 	hostname = setup.DiscoverKitsuHost(db).RuntimeHost
 	email = model.GetSetting(db, setup.RuntimeKitsuEmailSettingKey)
 	if email == "" {
@@ -522,11 +606,8 @@ func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password s
 }
 
 func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, webhookURL string) {
-	botToken = strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey))
-	if botToken == "" {
-		botToken = os.Getenv("DISCORD_BOT_TOKEN")
-	}
-	if botToken == "" {
+	botToken = setup.RuntimeDiscordBotToken(db)
+	if botToken == "" && strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenSettingKey)) == "" {
 		botToken = conf.Discord.BotToken
 	}
 	guildID = model.GetSetting(db, "discord.guildID")
@@ -550,9 +631,38 @@ var pollMu sync.Mutex
 // notificationDispatch is replaceable in tests so routing behavior can be
 // verified without making a Discord request.
 var notificationDispatch = DiscordQueueSend
+var makeKitsuResponse = MakeKitsuResponse
 
 func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) {
 	model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
+}
+
+// auditActorFromPayload uses only actor data tied to the event we can prove.
+// The latest comment author is an actor for comment-only changes. A task
+// status payload does not expose its changer, so it remains unknown rather
+// than being guessed from an assignee or an unrelated comment.
+func auditActorFromPayload(payload kitsu.MessagePayload) (kind, id, name string) {
+	statusAuthor := payload.StatusChangeAuthor.Person
+	if strings.TrimSpace(statusAuthor.ID) != "" {
+		if statusAuthor.IsBot {
+			return model.AuditActorSystem, strings.TrimSpace(statusAuthor.ID), ""
+		}
+		if strings.TrimSpace(statusAuthor.FullName) == "" {
+			return model.AuditActorUnknown, "", ""
+		}
+		return model.AuditActorHuman, strings.TrimSpace(statusAuthor.ID), strings.TrimSpace(statusAuthor.FullName)
+	}
+	if !payload.IsCommentOnly {
+		return model.AuditActorUnknown, "", ""
+	}
+	author := payload.LatestComment.Author.Person
+	if author.IsBot {
+		return model.AuditActorSystem, author.ID, ""
+	}
+	if strings.TrimSpace(author.ID) == "" || strings.TrimSpace(author.FullName) == "" {
+		return model.AuditActorUnknown, "", ""
+	}
+	return model.AuditActorHuman, strings.TrimSpace(author.ID), strings.TrimSpace(author.FullName)
 }
 
 func runOnePoll(conf config.Config, db *gorm.DB) {
@@ -568,7 +678,12 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	started := time.Now()
 
 	// Poll Kitsu with runtime credentials from DB/env/conf priority.
-	kitsuResponse := MakeKitsuResponse(conf)
+	kitsuResponse, err := makeKitsuResponse(conf)
+	if err != nil {
+		setup.Stats.RecordPollError(err.Error())
+		slog.Error("Kitsu poll failed", "error_class", "kitsu_fetch_failed", "err", err)
+		return
+	}
 	if conf.Log {
 		slog.Info("Done MakeKitsuResponse")
 	}
@@ -633,6 +748,40 @@ func configureSQLite(db *gorm.DB) (*sql.DB, error) {
 	return sqlDB, nil
 }
 
+// migrateApplicationSchema applies the complete persistent schema before any
+// handler can accept an authenticated request. In particular, AdminSession was
+// added after earlier installations already had SQLite data, so migration
+// failures must stop startup instead of surfacing later as a generic login
+// persistence error.
+func migrateApplicationSchema(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("database is unavailable")
+	}
+	if err := db.Exec("DROP INDEX IF EXISTS idx_checker_maps_task_type").Error; err != nil {
+		return fmt.Errorf("remove legacy checker map index: %w", err)
+	}
+	if err := db.AutoMigrate(
+		&model.Task{},
+		&model.Project{},
+		&model.ProjectWebhook{},
+		&model.ProductionChannelMapping{},
+		&model.ProductionNotificationConfig{},
+		&model.ProductionNotificationRoute{},
+		&model.NotificationRoutingDiagnosis{},
+		&model.UserMap{},
+		&model.CheckerMap{},
+		&model.Setting{},
+		&model.AdminSession{},
+		&model.AuditLog{},
+		&model.ProjectUserMap{},
+		&model.ProjectCheckerMap{},
+		&model.ProjectSetting{},
+	); err != nil {
+		return fmt.Errorf("migrate application schema: %w", err)
+	}
+	return nil
+}
+
 func main() {
 	slog.Configure(func(logger *slog.SugaredLogger) {
 		f := logger.Formatter.(*slog.TextFormatter)
@@ -674,12 +823,17 @@ func main() {
 	}
 
 	if issues := conf.Validate(); len(issues) > 0 {
+		fatalConfig := false
 		for _, msg := range issues {
 			if strings.HasPrefix(msg, "[FATAL]") {
+				fatalConfig = true
 				slog.Error("config validation: " + msg)
 			} else {
 				slog.Warn("config validation: " + msg)
 			}
+		}
+		if fatalConfig {
+			log.Fatal("configuration validation failed")
 		}
 	}
 
@@ -694,37 +848,26 @@ func main() {
 		slog.Fatal("failed to connect database")
 		os.Exit(1)
 	}
+	setup.ConfigureSessionStore(db)
 	sqlDB, err := configureSQLite(db)
 	if err != nil {
 		slog.Fatal("failed to configure sqlite", "err", err)
 		os.Exit(1)
 	}
-	// Remove the legacy single-column unique index before the composite migration.
-	db.Exec("DROP INDEX IF EXISTS idx_checker_maps_task_type")
-	db.AutoMigrate(
-		&model.Task{},
-		&model.Project{},
-		&model.ProjectWebhook{},
-		&model.ProductionChannelMapping{},
-		&model.ProductionNotificationConfig{},
-		&model.ProductionNotificationRoute{},
-		&model.NotificationRoutingDiagnosis{},
-		&model.UserMap{},
-		&model.CheckerMap{},
-		&model.Setting{},
-		&model.AuditLog{},
-		&model.ProjectUserMap{},
-		&model.ProjectCheckerMap{},
-		&model.ProjectSetting{},
-	)
+	if err := migrateApplicationSchema(db); err != nil {
+		slog.Fatal("failed to migrate SQLite schema", "error_class", "schema_migration_failed")
+		os.Exit(1)
+	}
 	model.PurgeLegacySensitiveData(db)
 
 	setup.SeedConfigIfFixture(db, conf)
-	if persistedDiscordToken := strings.TrimSpace(model.GetSetting(db, setup.RuntimeDiscordBotTokenKey)); persistedDiscordToken != "" {
+	if err := setup.MigrateRuntimeDiscordBotToken(db); err != nil {
+		slog.Warn("Discord runtime token migration deferred", "error_class", "credential_migration_failed")
+	}
+	if persistedDiscordToken := setup.StoredRuntimeDiscordBotToken(db); persistedDiscordToken != "" {
 		os.Setenv("DISCORD_BOT_TOKEN", persistedDiscordToken)
 		slog.Debug("Discord runtime token loaded",
 			"token_present", true,
-			"token_fingerprint", setup.DiscordBotTokenFingerprint(persistedDiscordToken),
 		)
 	}
 	_, seedGuildID, _ := getDiscordSettings(db, conf)
@@ -738,6 +881,9 @@ func main() {
 	}
 	discord.GoogleDriveURLResolver = func(projectID string) string {
 		return model.GetProjectStorageURL(db, projectID)
+	}
+	discord.KitsuPublicURLResolver = func() string {
+		return setup.PublicKitsuURL(db)
 	}
 
 	if conf.Log {
@@ -788,8 +934,13 @@ func main() {
 			"bot_token_present", setup.StoredRuntimeKitsuToken(db) != "",
 		)
 		if token := setup.StoredRuntimeKitsuToken(db); token != "" {
+			connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
+			if connectionErr != nil {
+				setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", "connection_unverified")
+				return false
+			}
 			validationStarted := time.Now()
-			validation := setup.ValidateKitsuBotToken(db, hostname, token, true)
+			validation := setup.ValidateKitsuBotToken(db, strings.TrimSuffix(connection.ResolvedAPIBaseURL, "/api"), token, true)
 			setup.Stats.RecordAPIObservation("kitsu", validationStarted, validation.Compatible(), validation.Classification)
 			slog.Debug("Kitsu Bot token runtime validation",
 				"classification", validation.Classification,
@@ -801,7 +952,7 @@ func main() {
 			)
 			if validation.Compatible() {
 				setup.RecordKitsuRuntimeAuthMode(db, "bot_token", "")
-				return runtime.authenticateToken(hostname, token)
+				return runtime.authenticateToken(connection, token)
 			}
 			setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", validation.Classification)
 			return false
@@ -816,8 +967,6 @@ func main() {
 
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
-	registerDocsRoutes(mux)
-
 	mux.HandleFunc("/health", healthHandler(runtime))
 
 	onRuntimeConfigured := func() {
@@ -847,11 +996,24 @@ func main() {
 	}
 
 	loginHandler := func(w http.ResponseWriter, r *http.Request) {
-		setup.LoginHandlerWithDiscovery(func() (string, string) {
+		setup.LoginHandlerWithDiscoveryAndStoredDisplay(func() (string, string) {
 			result := setup.DiscoverKitsuHost(db)
 			return result.RuntimeHost, result.Source
-		}, func(host string) {
-			model.SetSetting(db, "kitsu.hostname", host)
+		}, func() string {
+			if display := strings.TrimSpace(model.GetSetting(db, setup.KitsuDisplayURLSettingKey)); display != "" {
+				return display
+			}
+			return model.GetSetting(db, "kitsu.hostname")
+		}, func(displayHost, runtimeHost, apiOverride string) {
+			model.SetSetting(db, setup.KitsuDisplayURLSettingKey, displayHost)
+			model.SetSetting(db, "kitsu.hostname", runtimeHost)
+			if strings.TrimSpace(apiOverride) == "" {
+				model.DeleteSetting(db, setup.KitsuAPIBaseURLSettingKey)
+				os.Unsetenv("KITSU_API_BASE_URL")
+			} else if normalized, err := setup.NormalizeKitsuURL(apiOverride, setup.APISourceExplicit); err == nil {
+				model.SetSetting(db, setup.KitsuAPIBaseURLSettingKey, normalized.ResolvedAPIBaseURL)
+				os.Setenv("KITSU_API_BASE_URL", normalized.ResolvedAPIBaseURL)
+			}
 		})(w, r)
 	}
 	mux.HandleFunc("/login", loginHandler)
@@ -868,7 +1030,7 @@ func main() {
 	// Setup diagnostic JSON API — registered under both root and /bot prefix.
 	setupAPIRoutes := func(prefix string) {
 		mux.HandleFunc(prefix+"/api/setup/status", setup.RequireSession(setup.SetupStatusHandler(
-			db, conf.Kitsu.RequestInterval, setupCredsFunc,
+			db, conf.PollIntervalSeconds(), setupCredsFunc,
 		)))
 		mux.HandleFunc(prefix+"/api/setup/observability", setup.RequireSession(setup.TelemetrySnapshotHandler()))
 		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, setup.ProjectsHandler(db))))
@@ -876,7 +1038,11 @@ func main() {
 		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.ApplyProjectHandler(db, setupCredsFunc)))))
 		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.TestKitsuHandler(db, onRuntimeConfigured)))
 		mux.HandleFunc(prefix+"/api/setup/test-discord", setup.RequireSession(setup.RejectValidationMutation(setup.TestDiscordHandler(db))))
-		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.TestNotificationHandler(db, setupCredsFunc)))))
+		// Test Notification is a synthetic Discord-only verification. It must remain
+		// available while Kitsu runtime polling is disconnected; the handler still
+		// verifies the selected project destination and uses the configured Discord
+		// credentials, without changing normal routing or sending Kitsu data.
+		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RejectValidationMutation(setup.TestNotificationHandler(db, setupCredsFunc))))
 		mux.HandleFunc(prefix+"/api/setup/mapping", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.MappingStateHandler(db))))
 		mux.HandleFunc(prefix+"/api/setup/mapping/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveUserMappingHandler(db)))))
 		mux.HandleFunc(prefix+"/api/setup/mapping/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveCheckerMappingHandler(db)))))
@@ -890,10 +1056,6 @@ func main() {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/checkers", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
-			h, _, _ := getKitsuCreds(db, conf)
-			setup.CheckersHandler(db, h)(w, r)
-		})))
 		mux.HandleFunc(prefix+"/admin/drive", setup.RequireSession(setup.DriveHandler(db)))
 		// BotHandler persists shared runtime credentials and triggers reconnect.
 		kitsuReconnect := func() { onRuntimeConfigured() }
@@ -906,36 +1068,15 @@ func main() {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/production-routing", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				setup.ProductionRoutingCompatibilityHandler()(w, r)
-				return
-			}
-			setup.ProductionRoutingHandler(db)(w, r)
-		}))
-		mux.HandleFunc(prefix+"/admin/workflow-diagnosis", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				setup.WorkflowDiagnosisCompatibilityHandler()(w, r)
-				return
-			}
-			setup.WorkflowDiagnosisHandler(db, func() (string, string) {
-				host, _, _ := getKitsuCreds(db, conf)
-				return host, strings.TrimSpace(os.Getenv("KitsuJWTToken"))
-			})(w, r)
-		}))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
-		mux.HandleFunc(prefix+"/admin/provenance", setup.RequireSession(setup.ReadModelProvenanceHandler(db)))
-		mux.HandleFunc(prefix+"/admin/diagnostics", setup.RequireSession(func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "/bot/admin/health", http.StatusFound)
-		}))
 	}
 	registerAdminRoutes("")
 	registerAdminRoutes("/bot")
 
 	server := &http.Server{
 		Addr:    ":8090",
-		Handler: setup.RequestTrace(mux),
+		Handler: setup.RequestTrace(setup.CSRFProtection(mux)),
 	}
 	go func() {
 		slog.Info("HTTP server listening on :8090  (/health, /login, /setup, /admin/*)")
@@ -971,11 +1112,15 @@ func main() {
 	c.AddFunc("@every 20s", func() {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		kitsuToken := setup.StoredRuntimeKitsuToken(db)
-		setup.ObserveKitsuRuntime(hostname, kitsuToken)
+		if connection, err := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); err == nil {
+			setup.ObserveKitsuRuntimeConnection(connection, kitsuToken)
+		} else {
+			setup.Stats.RecordAPIObservation("kitsu", time.Now(), false, "connection_unverified")
+		}
 		discordToken, _, _ := getDiscordSettings(db, conf)
 		setup.ObserveDiscordRuntime(discordToken)
 	})
-	c.AddFunc("@every "+strconv.Itoa(conf.Kitsu.RequestInterval)+"m", func() {
+	c.AddFunc("@every "+conf.PollInterval().String(), func() {
 		if !runtime.ready() && !refreshRuntime() {
 			return
 		}

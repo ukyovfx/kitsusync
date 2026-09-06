@@ -1,9 +1,9 @@
-FROM golang:1.21-bookworm AS builder
+FROM golang:1.26-bookworm AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG APP_VERSION=dev
+ARG APP_VERSION=0.4.5
 ARG COMMIT_SHA=unknown
 ARG BUILD_TIMESTAMP=unknown
 ARG SCHEMA_VERSION=1
@@ -14,14 +14,18 @@ RUN CGO_ENABLED=1 go build -ldflags "-X main.BuildVersion=${APP_VERSION} -X main
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates curl tzdata && rm -rf /var/lib/apt/lists/*
+RUN groupadd --gid 10001 kitsusync \
+    && useradd --uid 10001 --gid 10001 --home-dir /app --no-create-home --shell /usr/sbin/nologin kitsusync
 WORKDIR /app
-COPY --from=builder /app/kitsu-discord .
-COPY --from=builder /app/tpl ./tpl
-COPY --from=builder /app/docs.html /app/site.jsx ./
+RUN mkdir -p /app/data /app/logs /app/dump \
+    && chown -R 10001:10001 /app/data /app/logs /app/dump
+COPY --from=builder --chown=10001:10001 /app/kitsu-discord .
+COPY --from=builder --chown=10001:10001 /app/tpl ./tpl
 ARG COMMIT_SHA=unknown
 ARG WORKTREE_DIRTY=false
 ARG BUILD_SOURCE_ID=unknown
 LABEL org.opencontainers.image.revision="${COMMIT_SHA}" \
       org.opencontainers.image.source-id="${BUILD_SOURCE_ID}" \
       org.opencontainers.image.dirty="${WORKTREE_DIRTY}"
+USER 10001:10001
 CMD ["./kitsu-discord"]

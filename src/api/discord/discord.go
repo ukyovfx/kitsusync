@@ -93,9 +93,9 @@ type Template struct {
 	CommentLabel            string
 	CommentAuthorLabel      string
 	AssigneeLabel           string
-	LinksLabel              string
 	ChannelName             string // 通知先の Discord チャンネル名（ルーティング確認用）
 	NotificationLanguage    string
+	CardContext             string // optional secondary context such as a test-notification marker
 	AllowedUserIDs          []string
 	Color                   int
 }
@@ -125,6 +125,11 @@ var CheckerResolver func(projectID, taskType string) []string
 // GoogleDriveURLResolver はプロジェクト ID に対応するファイルストレージ URL を返すフック。
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
 var GoogleDriveURLResolver func(projectID string) string
+
+// KitsuPublicURLResolver supplies the user-reachable Kitsu base URL for
+// notification links. It is separate from the runtime endpoint, which may
+// use container-only addressing.
+var KitsuPublicURLResolver func() string
 
 // SendResult は SendMessage / SendMessageBunch の戻り値
 type SendResult struct {
@@ -229,7 +234,7 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 		if normalizeNotificationLang(lang) == "en" {
 			return "Returned to rework"
 		}
-		return "🛠 修正作業に戻りました"
+		return "修正作業に戻りました"
 	case "WFA->READY":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Review is complete. Ready for the next step"
@@ -244,12 +249,12 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 		if normalizeNotificationLang(lang) == "en" {
 			return "Completed without additional work"
 		}
-		return "✅ 作業完了・承認されました"
+		return "作業完了・承認されました"
 	case "WIP->WFA":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Ready for review"
 		}
-		return "📩 チェック依頼が送られました"
+		return "チェック依頼が送られました"
 	case "WFA->DONE":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Review completed"
@@ -259,27 +264,27 @@ func localizedStatusTransitionMessage(prev, current, lang string) string {
 		if normalizeNotificationLang(lang) == "en" {
 			return "Revision work has started"
 		}
-		return "🛠 リテイク対応を開始しました"
+		return "リテイク対応を開始しました"
 	case "WIP->RETAKE":
 		if normalizeNotificationLang(lang) == "en" {
 			return "A retake was requested"
 		}
-		return "🔁 リテイクが入りました"
+		return "リテイクが入りました"
 	case "TODO->WIP":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Work has started"
 		}
-		return "🚀 作業を開始しました"
+		return "作業を開始しました"
 	case "NONE->WIP":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Work has started"
 		}
-		return "🚀 作業を開始しました"
+		return "作業を開始しました"
 	case "TODO->DONE", "NONE->DONE", "WIP->DONE":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Work completed and approved"
 		}
-		return "✅ 作業完了・承認されました"
+		return "作業完了・承認されました"
 	default:
 		return ""
 	}
@@ -306,6 +311,22 @@ func parseKitsuStatusColor(raw string) int {
 		return neutralEmbedColor
 	}
 	return int(value)
+}
+
+// notificationStatusColor uses restrained semantic accents for the three
+// operator-facing review states. Kitsu's raw status color remains available
+// for diagnostics, but notification cards use a stable visual vocabulary.
+func notificationStatusColor(status string) int {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "WFA":
+		return 0xD4A72C
+	case "RETAKE":
+		return 0xC45656
+	case "DONE":
+		return 0x4FAF78
+	default:
+		return neutralEmbedColor
+	}
 }
 
 func isValidDiscordUserID(id string) bool {
@@ -349,6 +370,18 @@ func mentionContent(ids []string) string {
 	return strings.Join(mentions, " ")
 }
 
+func kitsuPersonDisplayName(person kitsu.Person, lang string) string {
+	first := strings.TrimSpace(person.FirstName)
+	last := strings.TrimSpace(person.LastName)
+	if normalizeNotificationLang(lang) == "ja" && first != "" && last != "" {
+		return sanitizeDiscordText(last + " " + first)
+	}
+	if normalizeNotificationLang(lang) == "en" && first != "" && last != "" && strings.TrimSpace(person.FullName) == "" {
+		return sanitizeDiscordText(first + " " + last)
+	}
+	return sanitizeDiscordText(person.FullName)
+}
+
 func notificationRecipientCandidates(status string, assignNotification bool, assignees, checkers []string, conf config.Config) []string {
 	if assignNotification {
 		var candidates []string
@@ -366,17 +399,24 @@ func notificationRecipientCandidates(status string, assignNotification bool, ass
 	case "RETAKE":
 		return uniqueDiscordIDs(assignees)
 	case "DONE":
-		var candidates []string
-		if containsIgnoreCase(conf.Mention.CheckerStatuses, status) {
-			candidates = append(candidates, checkers...)
-		}
-		if containsIgnoreCase(conf.Mention.ArtistStatuses, status) {
-			candidates = append(candidates, assignees...)
-		}
-		return uniqueDiscordIDs(candidates)
+		return uniqueDiscordIDs(assignees)
 	default:
 		return nil
 	}
+}
+
+func resolveAssigneeDiscordID(projectID string, person kitsu.Person, displayName string, conf config.Config) string {
+	if UserMapResolver != nil {
+		if id := UserMapResolver(projectID, person.FullName, person.Email); id != "" {
+			return id
+		}
+	}
+	for _, entry := range conf.Mention.UserMap {
+		if strings.EqualFold(strings.TrimSpace(entry.KitsuName), strings.TrimSpace(person.FullName)) || strings.EqualFold(strings.TrimSpace(entry.KitsuName), strings.TrimSpace(displayName)) {
+			return entry.DiscordID
+		}
+	}
+	return ""
 }
 
 func safeNotificationURL(raw string) string {
@@ -389,6 +429,51 @@ func safeNotificationURL(raw string) string {
 		return ""
 	}
 	return raw
+}
+
+func safePublicNotificationURL(raw string) string {
+	raw = safeNotificationURL(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	// Local/private addresses can be intentional human-facing Kitsu URLs in
+	// OSS deployments. Only reject the container-only address synthesized by
+	// KitsuSync's runtime normalization.
+	host := strings.ToLower(parsed.Hostname())
+	if host == "host.docker.internal" {
+		return ""
+	}
+	return raw
+}
+
+// KitsuTaskURL builds the task route used by the Kitsu frontend. The route
+// shape is intentionally limited to entity types whose task pages are part of
+// the verified frontend router; unknown entity types fail closed.
+func KitsuTaskURL(host, productionID, entityType, taskID string) string {
+	base := safePublicNotificationURL(host)
+	productionID = strings.TrimSpace(productionID)
+	taskID = strings.TrimSpace(taskID)
+	if base == "" || productionID == "" || taskID == "" {
+		return ""
+	}
+	var routeType string
+	switch strings.ToLower(strings.TrimSpace(entityType)) {
+	case "shot":
+		routeType = "shots"
+	case "asset":
+		routeType = "assets"
+	default:
+		return ""
+	}
+	joined, err := url.JoinPath(base, "productions", productionID, routeType, "tasks", taskID)
+	if err != nil {
+		return ""
+	}
+	return joined
 }
 
 func statusTransitionMessage(prev, current string) string {
@@ -691,7 +776,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// 同じ Kitsu 名が userMap に複数行で書かれていても 1 回しか mention しないよう、
 		// 既に追加した DiscordID を seen で重複排除する。
 		var assigneeNames []string
-		var artistMentions []string
+		var assigneeIDs []string
 		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
 		for i := 0; i < len(elem.Assignees); i++ {
 			if elem.Assignees[i].IsBot {
@@ -699,34 +784,16 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 				continue
 			}
 			fullName := elem.Assignees[i].FullName
-			placeholders.Assignees[i].Fullname = sanitizeDiscordText(fullName)
+			displayPersonName := kitsuPersonDisplayName(elem.Assignees[i], notifLang)
+			if displayPersonName == "" {
+				displayPersonName = sanitizeDiscordText(fullName)
+			}
+			placeholders.Assignees[i].Fullname = displayPersonName
 			placeholders.Assignees[i].Email = elem.Assignees[i].Email
-			assigneeNames = append(assigneeNames, sanitizeDiscordText(fullName))
-
-			matched := false
-			// DB 優先: UserMapResolver が注入されていれば使う（プロジェクトスコープ → グローバル フォールバック対応）
-			if UserMapResolver != nil {
-				assigneeEmail := elem.Assignees[i].Email
-				if did := UserMapResolver(elem.Project.ID, fullName, assigneeEmail); did != "" {
-					artistMentions = append(artistMentions, did)
-					matched = true
-				}
-			}
-			// フォールバック: conf.toml の userMap
-			if !matched {
-				for _, u := range conf.Mention.UserMap {
-					if u.KitsuName == fullName {
-						artistMentions = append(artistMentions, u.DiscordID)
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
-				slog.Warn("Kitsu user not registered; will not be @-mentioned",
-					"kitsuName", fullName,
-					"taskID", elem.Task.ID,
-					"hint", "add this person via /bot/admin/users")
+			displayName := displayPersonName
+			assigneeNames = append(assigneeNames, displayName)
+			if id := resolveAssigneeDiscordID(elem.Project.ID, elem.Assignees[i], displayPersonName, conf); id != "" {
+				assigneeIDs = append(assigneeIDs, id)
 			}
 		}
 		if len(assigneeNames) > 0 {
@@ -760,7 +827,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
 		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
-		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, artistMentions, checkerIDs, conf)
+		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
 		if len(recipientIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
 			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
 				"taskType", elem.TaskType.Name,
@@ -793,12 +860,10 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.CommentLabel = "Comment"
 			placeholders.CommentAuthorLabel = "Comment by"
 			placeholders.AssigneeLabel = "Assignee"
-			placeholders.LinksLabel = "Links"
 		} else {
 			placeholders.CommentLabel = "コメント"
 			placeholders.CommentAuthorLabel = "コメント投稿者"
 			placeholders.AssigneeLabel = "担当"
-			placeholders.LinksLabel = "リンク"
 		}
 		if elem.IsCommentOnly {
 			placeholders.StatusTransitionMessage = ""
@@ -806,20 +871,11 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.StatusTransitionMessage = localizedStatusTransitionMessage(elem.PreviousStatusName, elem.TaskStatus.ShortName, notifLang)
 		}
 
-		// TaskURL を組み立て
-		category := "assets"
-		lowEntityType := strings.ToLower(placeholders.EntityType)
-		if strings.Contains(lowEntityType, "shot") || strings.Contains(lowEntityType, "sequence") || strings.Contains(lowEntityType, "episode") {
-			category = "shots"
+		host := ""
+		if KitsuPublicURLResolver != nil {
+			host = safeNotificationURL(KitsuPublicURLResolver())
 		}
-		host := safeNotificationURL(conf.Kitsu.Hostname)
-		if host != "" {
-			if !strings.HasSuffix(host, "/") {
-				host += "/"
-			}
-			// ショット一覧 or アセット一覧に飛ぶ
-			placeholders.TaskURL = fmt.Sprintf("%sproductions/%s/%s", host, url.PathEscape(elem.Project.ID), category)
-		}
+		placeholders.TaskURL = KitsuTaskURL(host, elem.Project.ID, placeholders.EntityType, elem.Task.ID)
 
 		// Kitsu プレビュー画像 URL を組み立て
 		// Entity.PreviewFileID は interface{} なので string にキャストする
@@ -832,13 +888,13 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		}
 
 		// カラーコードを変換（ステータスカラー → フォールバック用）
-		intColor := parseKitsuStatusColor(elem.TaskStatus.Color)
+		intColor := notificationStatusColor(elem.TaskStatus.ShortName)
 
 		// テンプレートを展開
 		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)
 
 		placeholders.NotificationLanguage = notifLang
-		placeholders.AllowedUserIDs = recipientIDs
+		placeholders.AllowedUserIDs = uniqueDiscordIDs(recipientIDs)
 		placeholders.Color = int(intColor)
 		payload := RenderNotificationPayload(placeholders, tplPreset)
 

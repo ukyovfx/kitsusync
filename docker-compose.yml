@@ -1,20 +1,21 @@
 services:
   app:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: "0.4.5"
     restart: unless-stopped
     env_file:
       - .env.local
     volumes:
-      - ./conf.toml:/app/conf.toml
-      - ./docs.html:/app/docs.html
-      - ./site.jsx:/app/site.jsx
-      - ./tpl:/app/tpl
+      - ./conf.toml:/app/conf.toml:ro
+      - ./tpl:/app/tpl:ro
       - ./data:/app/data
     environment:
       - APP_ENV=development
       - TZ=Asia/Tokyo
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -30,12 +31,10 @@ services:
     restart: unless-stopped
     user: "1000:1000"
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     volumes:
       - filebrowser_data:/database
       - ./README.md:/srv/README.md:ro
-      - ./docs.html:/srv/docs.html:ro
-      - ./site.jsx:/srv/site.jsx:ro
       - ./tpl:/srv/tpl:ro
     environment:
       - PUID=1000

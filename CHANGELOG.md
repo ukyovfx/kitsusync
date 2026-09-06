@@ -4,7 +4,29 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- The next release will be documented here; v0.4.0, v0.4.1, and v0.4.2 remain historical.
+- The next release will be documented here; v0.4.0 through v0.4.3 remain historical.
+
+## v0.4.4
+
+### Added
+
+- Production-level Discord notification language selection during setup and from Production notifications settings.
+- Compact status-aware Discord cards with transition-aware Japanese and English messages, safe mentions, optional links/previews, and deterministic truncation.
+- Persistent opaque admin sessions in the existing SQLite runtime database, with no service credentials stored in session records.
+- Test Notification uses the same bounded notification-card renderer as normal delivery, including safe Kitsu Task and Google Drive task links when available.
+- UI/UX visual consolidation across the admin surfaces, including responsive/mobile navigation and consistent Connections/User Linking workflows.
+- System Status redesign with adaptive live sparklines, external Y labels, hover/focus inspection, and keyboard sample navigation.
+- Setup Wizard Discord `#` channel-name prefix presentation and cleanup of obsolete UI implementation paths.
+
+### Changed
+
+- Normal notification cards use Kitsu status colors as their embed accent, keep Task Type as plain text, and omit the duplicate Status metadata field.
+- WFA mentions the configured Checker, RETAKE mentions the assignee, and DONE remains unmentioned by default; recipient deduplication and AllowedMentions remain bounded and exact.
+- Discord setup requires the `bot` OAuth2 scope plus `Manage Channels` and `Manage Webhooks`; Administrator is not required. Presence Intent and Message Content Intent remain off, while Server Members Intent is required when User Linking enumerates Guild members.
+
+### Remaining release gate
+
+- Controlled Discord E2E, real notification-card verification, and human Discord visual approval remain pending. No Discord E2E completion is claimed by this candidate.
 
 ## v0.4.3
 

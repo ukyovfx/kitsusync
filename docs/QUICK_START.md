@@ -10,12 +10,12 @@ Before you begin, confirm you have:
 
 - [ ] Docker and Docker Compose installed on the server
 - [ ] Kitsu running and reachable from the server (test: `curl http://YOUR_KITSU_HOST/api/`)
-- [ ] Discord server where you are an administrator
+- [ ] Discord server where the bot can be granted the required permissions
 - [ ] Discord **Bot Token** — create one at [discord.com/developers/applications](https://discord.com/developers/applications) (Bot tab → Reset Token)
 - [ ] One or more Discord **Guild IDs** — enable Developer Mode in Discord settings, then right-click each target server → Copy Server ID
 - [ ] A Kitsu manager/admin account for the browser setup flow
 
-> **Bot permissions required:** Manage Channels, Manage Webhooks.
+> **Bot permissions required:** Manage Channels and Manage Webhooks. Administrator is not required. Keep Presence Intent and Message Content Intent off. Enable Server Members Intent when using User Linking, because KitsuSync reads the Guild member list to offer Discord users for linking.
 > Generate the invite URL from OAuth2 → URL Generator with scope `bot` and those two permissions.
 
 ---
@@ -78,7 +78,7 @@ If you get a 502 or connection refused, the app is still starting — wait a mom
 2. If no Kitsu host is configured, enter the Kitsu URL.
 3. Sign in with your Kitsu manager or admin account.
 4. Complete the dedicated Kitsu runtime connection in `/bot/setup`. Until it succeeds, polling and notifications remain paused.
-5. Configure Discord in Bot Settings, then manage each selected Production from `/bot/admin/projects`. Notifications, Task Type channel settings, pause/resume, and `Check without sending` remain on that single Production surface. The older `/bot/admin/production-routing` URL is compatibility-only.
+5. Configure Discord in Bot Settings, then manage each selected Production from `/bot/admin/projects`. Notifications, Task Type channel settings, pause/resume, and `Check without sending` remain on that single Production surface.
 
 Invalid credentials or a temporary Kitsu outage do not stop the Web UI. Reauthenticate from the setup flow; saved configuration is retained. Browser session tokens are not reused by background polling. Do not expose port 8090 directly to the public internet.
 
@@ -115,8 +115,8 @@ If Project Setup fails after partial Discord provisioning, rollback is best-effo
 | Create a new Production connection | `/bot/setup` |
 | Manage an existing Production | `/bot/admin/projects?project=<production-id>` |
 | Review/edit guild per project | `/bot/admin/projects` |
-| Add more user/checker mappings | `/bot/admin/users`, `/bot/admin/checkers` |
-| Set per-project storage links | `/bot/admin/drive` |
+| Add more user/checker mappings | `/bot/admin/users` |
+| Set per-project storage links | `/bot/admin/projects?project=<production-id>&tab=storage-settings` |
 | Detailed setup flow reference | `docs/SETUP_WIZARD.md` |
 | Troubleshooting | `docs/TROUBLESHOOTING.md` |
 

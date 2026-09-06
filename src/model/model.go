@@ -29,7 +29,16 @@ type AuditLog struct {
 	Success            bool
 	ErrorMessage       string
 	RetryCount         int
+	ActorKind          string
+	ActorID            string
+	ActorName          string
 }
+
+const (
+	AuditActorHuman   = "human"
+	AuditActorSystem  = "system"
+	AuditActorUnknown = "unknown"
+)
 
 func WriteAuditLog(db *gorm.DB, log AuditLog) {
 	if db == nil {
@@ -48,24 +57,74 @@ func ListAuditLogs(db *gorm.DB, limit int) []AuditLog {
 	return logs
 }
 
+func CountAuditLogs(db *gorm.DB) int64 {
+	if db == nil {
+		return 0
+	}
+	var count int64
+	db.Model(&AuditLog{}).Count(&count)
+	return count
+}
+
+type AuditHealth string
+
+const (
+	AuditHealthNormal      AuditHealth = "normal"
+	AuditHealthNeedsReview AuditHealth = "needs_review"
+	AuditHealthAbnormal    AuditHealth = "abnormal"
+	AuditHealthNoRecords   AuditHealth = "no_records"
+)
+
+// RecentAuditHealth summarizes persisted audit outcomes in the canonical
+// recent window. Severity is evaluated across all events.
+func RecentAuditHealth(db *gorm.DB, now time.Time) AuditHealth {
+	if db == nil {
+		return AuditHealthNoRecords
+	}
+	var logs []AuditLog
+	if err := db.Where("created_at >= ?", now.Add(-24*time.Hour)).Find(&logs).Error; err != nil || len(logs) == 0 {
+		return AuditHealthNoRecords
+	}
+	health := AuditHealthNoRecords
+	for _, log := range logs {
+		text := strings.ToLower(strings.Join([]string{log.ErrorMessage, log.OldStatus, log.NewStatus, log.EntityName}, " "))
+		if !log.Success || strings.Contains(text, "failure") || strings.Contains(text, "failed") || strings.Contains(text, "error") {
+			return AuditHealthAbnormal
+		}
+		if log.RetryCount > 0 || strings.Contains(text, "warning") || strings.Contains(text, "retry") || strings.Contains(text, "partial") || strings.Contains(text, "degraded") {
+			health = AuditHealthNeedsReview
+			continue
+		}
+		if log.Success && health == AuditHealthNoRecords {
+			health = AuditHealthNormal
+		}
+	}
+	return health
+}
+
 func PurgeOldAuditLogs(db *gorm.DB, keepDays int) int64 {
 	cutoff := time.Now().AddDate(0, 0, -keepDays)
 	return db.Where("created_at < ?", cutoff).Delete(&AuditLog{}).RowsAffected
 }
 
 type Task struct {
-	ID               uint `gorm:"primaryKey"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	DeletedAt        gorm.DeletedAt `gorm:"index"`
-	TaskID           string         `gorm:"index"`
-	TaskUpdatedAt    string
-	TaskStatus       string `gorm:"index"`
-	CommentID        string
-	CommentUpdatedAt string
-	DiscordMessageID string
-	WebhookURL       string
-	DiscordThreadID  string
+	ID            uint `gorm:"primaryKey"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	DeletedAt     gorm.DeletedAt `gorm:"index"`
+	TaskID        string         `gorm:"index"`
+	TaskUpdatedAt string
+	TaskStatus    string `gorm:"index"`
+	// LastObservedStatus and PreviousObservedStatus retain the actual Kitsu
+	// status sequence independently from delivery state. TaskStatus remains the
+	// last successfully handled status so transient delivery failures retry.
+	LastObservedStatus     string `gorm:"index"`
+	PreviousObservedStatus string
+	CommentID              string
+	CommentUpdatedAt       string
+	DiscordMessageID       string
+	WebhookURL             string
+	DiscordThreadID        string
 }
 
 func CreateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
@@ -90,6 +149,7 @@ func UpdateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, comme
 // MarkTaskObserved records a non-deliverable or permanently failed event
 // without clearing a previously delivered Discord message.
 func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
+	ObserveTaskStatus(db, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt)
 	updates := map[string]interface{}{
 		"task_updated_at":    taskUpdatedAt,
 		"task_status":        taskStatus,
@@ -102,7 +162,55 @@ func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID,
 	}
 }
 
+// PreviousTaskStatus returns the deterministic status immediately before the
+// supplied observation. It uses durable observation state first so a retry or
+// process restart cannot turn a known transition into an invented one.
+func PreviousTaskStatus(task Task, currentStatus string) string {
+	currentStatus = strings.TrimSpace(currentStatus)
+	previous := strings.TrimSpace(task.LastObservedStatus)
+	if previous == "" {
+		previous = strings.TrimSpace(task.TaskStatus)
+	}
+	if previous == currentStatus {
+		return strings.TrimSpace(task.PreviousObservedStatus)
+	}
+	return previous
+}
+
+// ObserveTaskStatus durably records Kitsu status order without marking the
+// notification delivered. This preserves retry behavior while retaining a
+// real previous status across poll cycles and process recreation.
+func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return
+	}
+	var existing Task
+	result := db.Where("task_id = ?", taskID).First(&existing)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		db.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: existing.TaskStatus, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt})
+		return
+	}
+	if result.Error != nil {
+		return
+	}
+	last := strings.TrimSpace(existing.LastObservedStatus)
+	if last == "" {
+		last = strings.TrimSpace(existing.TaskStatus)
+	}
+	updates := map[string]interface{}{
+		"task_updated_at":      taskUpdatedAt,
+		"last_observed_status": taskStatus,
+		"comment_id":           commentID,
+		"comment_updated_at":   commentUpdatedAt,
+	}
+	if last != "" && !strings.EqualFold(last, taskStatus) {
+		updates["previous_observed_status"] = last
+	}
+	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+}
+
 func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID string) {
+	ObserveTaskStatus(db, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt)
 	updates := map[string]interface{}{
 		"task_updated_at":    taskUpdatedAt,
 		"task_status":        taskStatus,
@@ -894,6 +1002,20 @@ type Setting struct {
 	Value string
 }
 
+// AdminSession stores only the server-side session identity and lifetime.
+// The opaque browser token is stored as a digest; Kitsu access tokens are
+// intentionally never persisted in this table.
+type AdminSession struct {
+	ID           uint   `gorm:"primaryKey"`
+	TokenHash    string `gorm:"uniqueIndex;not null"`
+	Email        string
+	Role         string
+	Expiry       time.Time `gorm:"index"`
+	BotEditUntil time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 func ListUserMap(db *gorm.DB) []UserMap {
 	var rows []UserMap
 	db.Order("kitsu_name asc").Find(&rows)
@@ -1232,10 +1354,23 @@ func resolveProjectCheckerDiscordID(db *gorm.DB, row ProjectCheckerMap) string {
 
 // DeleteProjectScopedData removes all project-scoped mapping rows for the given Project row ID.
 // Call this before deleting the Project record itself.
-func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) {
-	db.Where("project_id = ?", projectRowID).Delete(&ProjectUserMap{})
-	db.Where("project_id = ?", projectRowID).Delete(&ProjectCheckerMap{})
-	db.Where("project_id = ?", projectRowID).Delete(&ProjectSetting{})
+func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) error {
+	if db == nil || projectRowID == 0 {
+		return gorm.ErrInvalidData
+	}
+	for _, table := range []interface{}{
+		&ProjectUserMap{},
+		&ProjectCheckerMap{},
+		&ProjectSetting{},
+	} {
+		if !db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.Where("project_id = ?", projectRowID).Delete(table).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListProjectUserMaps returns all user mappings for the given project row ID.
@@ -1340,8 +1475,18 @@ func DeleteProjectCheckerMapByID(db *gorm.DB, id uint) {
 	db.Delete(&ProjectCheckerMap{}, id)
 }
 
-func SetProjectStorageURL(db *gorm.DB, kitsuProjectID, storageURL string) {
-	db.Model(&Project{}).Where("kitsu_project_id = ?", kitsuProjectID).Update("storage_url", storageURL)
+func SetProjectStorageURL(db *gorm.DB, kitsuProjectID, storageURL string) error {
+	if db == nil {
+		return errors.New("database is unavailable")
+	}
+	result := db.Model(&Project{}).Where("kitsu_project_id = ?", kitsuProjectID).Update("storage_url", storageURL)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("project was not found")
+	}
+	return nil
 }
 
 func GetProjectStorageURL(db *gorm.DB, kitsuProjectID string) string {
@@ -1392,7 +1537,7 @@ func DeleteSetting(db *gorm.DB, key string) {
 
 func IsSecretSettingKey(key string) bool {
 	switch key {
-	case "kitsu.password", "kitsu.runtime_password_encrypted", "kitsu.runtime_token_encrypted", "discord.botToken", "discord.webhookURL", "discord.runtime_bot_token":
+	case "kitsu.password", "kitsu.runtime_password_encrypted", "kitsu.runtime_token_encrypted", "discord.botToken", "discord.webhookURL", "discord.runtime_bot_token", "discord.runtime_bot_token_encrypted":
 		return true
 	default:
 		return false

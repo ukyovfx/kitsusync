@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"app/src/model"
 	"gorm.io/gorm"
@@ -96,13 +96,19 @@ type botTokenAuthenticatedResponse struct {
 
 func ValidateKitsuBotToken(db *gorm.DB, hostname, token string, includeComments bool) BotTokenValidationResult {
 	result := BotTokenValidationResult{Classification: BotTokenInvalid, Stage: "host_resolution"}
-	base := strings.TrimRight(strings.TrimSpace(hostname), "/")
 	token = strings.TrimSpace(token)
-	if base == "" || token == "" {
+	if strings.TrimSpace(hostname) == "" || token == "" {
 		result.Classification = BotTokenInvalid
 		return result
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	connection, err := ResolveAndProbeKitsu(context.Background(), hostname, APISourceExplicit)
+	if err != nil {
+		result.Classification = KitsuUnreachable
+		result.Failure = BotTokenReadResult{ErrorClass: connectionErrorClass(err)}
+		return result
+	}
+	base := strings.TrimSuffix(connection.ResolvedAPIBaseURL, "/api")
+	client := safeKitsuClient(connection, connection.VerifiedIPs)
 	identityBody, read := botTokenGET(client, base+"/api/auth/authenticated", token, nil)
 	result.Stage = "token_authentication"
 	recordBotTokenRead(&result, result.Stage, read)

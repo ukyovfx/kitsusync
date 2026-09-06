@@ -60,7 +60,6 @@ func TestPrimaryRouteLocalizationDoesNotMixCatalogCopy(t *testing.T) {
 	ja := strings.Join([]string{
 		adminPage("ja", "KitsuSync", r, ""),
 		loginPageHTML("ja", "ログインに失敗しました。", "", false, r),
-		renderWorkflowDiagnosis(workflowDiagnosisData{Lang: "ja", Disconnected: true}, r),
 		renderExplicitTaskTypeChannelPlan(model.Project{KitsuProjectID: "p1"}, nil, "", r, "ja", nil),
 	}, "\n")
 	for _, unexpected := range []string{"New Connection Setup", "Logout", "Sign in with a Kitsu manager or admin account.", "The selected Guild could not be read."} {
@@ -68,7 +67,7 @@ func TestPrimaryRouteLocalizationDoesNotMixCatalogCopy(t *testing.T) {
 			t.Fatalf("Japanese primary surfaces contain unexpected English %q", unexpected)
 		}
 	}
-	if !strings.Contains(ja, "新規連携セットアップ") || !strings.Contains(ja, "ログアウト") || !strings.Contains(ja, "Workflow Diagnosis") {
+	if !strings.Contains(ja, "新規連携セットアップ") || !strings.Contains(ja, "ログアウト") {
 		t.Fatal("Japanese primary surfaces are missing expected localized copy")
 	}
 
@@ -76,7 +75,6 @@ func TestPrimaryRouteLocalizationDoesNotMixCatalogCopy(t *testing.T) {
 	en := strings.Join([]string{
 		adminPage("en", "KitsuSync", enRequest, ""),
 		loginPageHTML("en", "Login failed.", "", false, enRequest),
-		renderWorkflowDiagnosis(workflowDiagnosisData{Lang: "en", Disconnected: true}, enRequest),
 		renderExplicitTaskTypeChannelPlan(model.Project{KitsuProjectID: "p1"}, nil, "", enRequest, "en", nil),
 	}, "\n")
 	for _, unexpected := range []string{"新規連携セットアップ", "ログアウト", "Kitsu runtime は接続されていません。"} {
@@ -86,23 +84,6 @@ func TestPrimaryRouteLocalizationDoesNotMixCatalogCopy(t *testing.T) {
 	}
 	if !strings.Contains(en, tr("en", "ia.new_connection")) || !strings.Contains(en, tr("en", "ia.audit_log")) || !strings.Contains(en, tr("en", "ia.system_status")) {
 		t.Fatal("English primary surfaces are missing expected localized copy")
-	}
-}
-
-func TestProductionRoutingMessagesPreserveSelectedLanguage(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file:i18n-routing?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Project{}); err != nil {
-		t.Fatal(err)
-	}
-	for _, lang := range []string{"ja", "en"} {
-		r := httptest.NewRequest("GET", "/bot/admin/production-routing?lang="+lang, nil)
-		body := renderProductionRouting(db, r, "", "")
-		if !strings.Contains(body, tr(lang, "production_routing.no_selection")) {
-			t.Fatalf("%s routing empty state did not use selected language", lang)
-		}
 	}
 }
 
@@ -224,6 +205,9 @@ func TestConnectedProductionSurfacesNotificationControlsAndSafeHierarchy(t *test
 		advancedLabel := `class="advanced-details"`
 		if !strings.Contains(body, advancedLabel) {
 			t.Fatalf("%s page is missing collapsed advanced details", lang)
+		}
+		if !strings.Contains(body, `name="notification_language"`) || !strings.Contains(body, "production-notification-language") {
+			t.Fatalf("%s page is missing the Production notification language control", lang)
 		}
 		if strings.Index(body, `class="btn-danger"`) < strings.Index(body, `class="advanced-details"`) {
 			t.Fatalf("%s destructive action is visible before advanced/edit sections", lang)

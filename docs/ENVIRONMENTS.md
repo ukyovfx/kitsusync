@@ -128,7 +128,7 @@ curl http://localhost:8090/health
 ```bash
 curl -I http://localhost:8090/bot/admin
 curl -I http://localhost:8090/bot/admin/health
-curl -I http://localhost:8090/bot/admin/diagnostics
+curl -I http://localhost:8090/bot/admin/health
 ```
 
 For the current stack, the expected compose service name is `app` and the expected running container name is `app-app-1`. Avoid checking a non-existent service label when verifying the deploy.
@@ -149,8 +149,6 @@ If those post-deploy checks all pass, hash drift across the recreate can still b
 /your-deployment-dir/
 ├── .env.production          ← required
 ├── conf.toml                ← required
-├── docs.html
-├── site.jsx
 ├── tpl/
 ├── data/
 │   └── sqlite.db

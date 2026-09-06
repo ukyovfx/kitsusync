@@ -1,0 +1,188 @@
+package setup
+
+import (
+	"app/src/model"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func TestDriveHandlerAcceptsAndPersistsValidatedURL(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:drive-handler-valid?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/drive", strings.NewReader("kitsu_project_id=p1&storage_url=https%3A%2F%2Fdrive.google.com%2Fdrive%2Ffolders%2F123"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	DriveHandler(db)(res, req)
+	if res.Code != http.StatusSeeOther || model.GetProjectStorageURL(db, "p1") != "https://drive.google.com/drive/folders/123" {
+		t.Fatalf("valid Drive URL was not persisted: status=%d url=%q", res.Code, model.GetProjectStorageURL(db, "p1"))
+	}
+	var reloaded model.Project
+	if err := db.Where("kitsu_project_id = ?", "p1").First(&reloaded).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.StorageURL != "https://drive.google.com/drive/folders/123" {
+		t.Fatalf("reloaded project lost storage URL: %q", reloaded.StorageURL)
+	}
+}
+
+func TestDriveHandlerKeepsStorageURLsScopedToTheirProduction(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:drive-handler-scope?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"p1", "p2"} {
+		if err := model.CreateProject(db, id, id, "", "", "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/drive", strings.NewReader("kitsu_project_id=p1&storage_url=https%3A%2F%2Fdrive.google.com%2Fdrive%2Ffolders%2Fp1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	DriveHandler(db)(res, req)
+	if res.Code != http.StatusSeeOther || model.GetProjectStorageURL(db, "p1") == "" || model.GetProjectStorageURL(db, "p2") != "" {
+		t.Fatalf("storage URL crossed Production boundary: status=%d p1=%q p2=%q", res.Code, model.GetProjectStorageURL(db, "p1"), model.GetProjectStorageURL(db, "p2"))
+	}
+}
+
+func TestDriveHandlerDoesNotReturnSuccessForMissingProduction(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:drive-handler-missing?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/drive", strings.NewReader("kitsu_project_id=missing&storage_url=https%3A%2F%2Fdrive.google.com%2Fdrive%2Ffolders%2F123"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	DriveHandler(db)(res, req)
+	location := res.Header().Get("Location")
+	if res.Code != http.StatusSeeOther || !strings.Contains(location, "drive_error=save") {
+		t.Fatalf("missing Production did not return an actionable save error: status=%d location=%q", res.Code, location)
+	}
+}
+
+func TestDriveHandlerRejectsInvalidURLWithoutChangingStoredValue(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:drive-handler-invalid?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	model.SetProjectStorageURL(db, "p1", "https://drive.google.com/drive/folders/old")
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/drive", strings.NewReader("kitsu_project_id=p1&storage_url=not-a-url"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	DriveHandler(db)(res, req)
+	if res.Code != http.StatusBadRequest || model.GetProjectStorageURL(db, "p1") != "https://drive.google.com/drive/folders/old" {
+		t.Fatalf("invalid Drive URL changed stored value: status=%d url=%q", res.Code, model.GetProjectStorageURL(db, "p1"))
+	}
+}
+
+func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:drive-panel-feedback?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	project := model.Project{KitsuProjectID: "p1", Name: "P"}
+	for _, tc := range []struct {
+		name, query, lang, want string
+	}{
+		{"success-ja", "drive_saved=1", "ja", "保存しました。"},
+		{"success-en", "drive_saved=1", "en", "Saved."},
+		{"error-ja", "drive_error=save", "ja", "Drive設定を保存できませんでした。"},
+		{"error-en", "drive_error=readback", "en", "Drive settings were not confirmed after saving."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang="+tc.lang+"&"+tc.query, nil)
+			body := renderStorageSettingsFeedback(r, tc.lang) + renderSelectedProductionPanel(db, r, project, tc.lang, "storage-settings", "success", "Connected", "", "")
+			if !strings.Contains(body, tc.want) {
+				t.Fatalf("feedback %q missing from %s", tc.want, body)
+			}
+		})
+	}
+	for _, lang := range []string{"ja", "en"} {
+		r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang="+lang+"&drive_saved=1", nil)
+		body := renderStorageSettingsFeedback(r, lang) + renderSelectedProductionPanel(db, r, project, lang, "storage-settings", "success", "Connected", "", "")
+		if !strings.Contains(body, `class="notice notice-success"`) {
+			t.Fatalf("success feedback for %s does not use the canonical success banner: %s", lang, body)
+		}
+	}
+	body := renderSelectedProductionPanel(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang=ja", nil), project, "ja", "storage-settings", "success", "Connected", "", "")
+	if !strings.Contains(body, "保存中...") || !strings.Contains(body, "drive-storage-form") {
+		t.Fatal("Drive save form is missing localized saving feedback behavior")
+	}
+}
+
+func TestDriveStorageSuccessFeedbackIsStyledInRenderedDocument(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	if err := db.AutoMigrate(
+		&model.Project{},
+		&model.ProjectWebhook{},
+		&model.ProductionChannelMapping{},
+		&model.ProductionNotificationConfig{},
+		&model.ProductionNotificationRoute{},
+		&model.NotificationRoutingDiagnosis{},
+		&model.UserMap{},
+		&model.CheckerMap{},
+		&model.AuditLog{},
+		&model.ProjectUserMap{},
+		&model.ProjectCheckerMap{},
+		&model.ProjectSetting{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang=ja&drive_saved=1", nil)
+	w := httptest.NewRecorder()
+	AdminProjectsHandler(db, "", "")(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Storage Settings response status = %d", w.Code)
+	}
+	html := w.Body.String()
+	if !strings.Contains(html, `class="notice notice-success"`) || !strings.Contains(html, "保存しました。") {
+		t.Fatalf("rendered Storage Settings document is missing the success notice: %s", html)
+	}
+	for _, css := range []string{".notice{", ".notice-success{", "background:rgba(142,207,139,.12)", "border-radius:10px"} {
+		if !strings.Contains(html, css) {
+			t.Fatalf("rendered document is missing canonical success-notice CSS %q", css)
+		}
+	}
+	for _, marker := range []string{`class="notice notice-success"`, `class="production-context"`, `class="section-nav production-tabs"`, `class="form-stack drive-storage-form"`} {
+		if !strings.Contains(html, marker) {
+			t.Fatalf("rendered Storage Settings document is missing %q", marker)
+		}
+	}
+	noticeAt := strings.Index(html, `class="notice notice-success"`)
+	headerAt := strings.Index(html, `class="production-context"`)
+	tabsAt := strings.Index(html, `class="section-nav production-tabs"`)
+	formAt := strings.Index(html, `class="form-stack drive-storage-form"`)
+	if !(noticeAt < headerAt && headerAt < tabsAt && tabsAt < formAt) {
+		t.Fatalf("Storage Settings DOM order is wrong: notice=%d header=%d tabs=%d form=%d", noticeAt, headerAt, tabsAt, formAt)
+	}
+}

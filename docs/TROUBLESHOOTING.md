@@ -2,7 +2,7 @@
 
 ## Current notification routing model
 
-Notifications are fail-closed. An enabled route must match the Kitsu Production ID and Task Type ID and must point to a valid channel mapping in that Production's linked Discord Guild. Unmatched, paused, stale, incomplete, cross-Guild, or ambiguous routes are diagnosed without dispatching. Manage mappings in Connected Productions (`/bot/admin/projects`); the older `/bot/admin/production-routing` bookmark redirects there. A connected Production alone is not sufficient, and global fallback webhooks are not used for new routing.
+Notifications are fail-closed. An enabled route must match the Kitsu Production ID and Task Type ID and must point to a valid channel mapping in that Production's linked Discord Guild. Unmatched, paused, stale, incomplete, cross-Guild, or ambiguous routes are diagnosed without dispatching. Manage mappings in Connected Productions (`/bot/admin/projects`). A connected Production alone is not sufficient, and global fallback webhooks are not used for new routing.
 
 Channel names are deterministic display metadata derived from the original Task Type name. Names are never used to guess or remap routing identity: routing uses stable Production, Guild, Task Type, and channel IDs. Before creating channels, KitsuSync shows the full create/reuse/conflict plan and requires explicit confirmation. No Discord write occurs during dry-run or preview.
 

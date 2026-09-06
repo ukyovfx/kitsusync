@@ -18,11 +18,117 @@ import (
 )
 
 const (
-	RuntimeKitsuPasswordSettingKey = "kitsu.runtime_password_encrypted"
-	RuntimeKitsuTokenSettingKey    = "kitsu.runtime_token_encrypted"
-	RuntimeSecretKeyFileEnv        = "KITSUSYNC_SECRET_KEY_FILE"
-	defaultRuntimeSecretKeyFile    = "data/runtime-secret.key"
+	RuntimeKitsuPasswordSettingKey   = "kitsu.runtime_password_encrypted"
+	RuntimeKitsuTokenSettingKey      = "kitsu.runtime_token_encrypted"
+	RuntimeDiscordBotTokenSettingKey = "discord.runtime_bot_token_encrypted"
+	RuntimeSecretKeyFileEnv          = "KITSUSYNC_SECRET_KEY_FILE"
+	defaultRuntimeSecretKeyFile      = "data/runtime-secret.key"
 )
+
+// StoredRuntimeDiscordBotToken reads the encrypted Discord token. The legacy
+// setting is consulted only when no encrypted value exists, allowing existing
+// installations to migrate without making the plaintext value authoritative.
+func StoredRuntimeDiscordBotToken(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	if ciphertext := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenSettingKey)); ciphertext != "" {
+		token, err := decryptRuntimeSecret(ciphertext)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(token)
+	}
+	return strings.TrimSpace(model.GetSetting(db, "discord.runtime_bot_token"))
+}
+
+// RuntimeDiscordBotToken returns the configured runtime token without falling
+// back to another source when an encrypted setting exists but cannot be read.
+// That fail-closed behavior prevents a stale environment/config token from
+// masking a broken persisted credential.
+func RuntimeDiscordBotToken(db *gorm.DB) string {
+	if db != nil && strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenSettingKey)) != "" {
+		return StoredRuntimeDiscordBotToken(db)
+	}
+	if db != nil {
+		if token := strings.TrimSpace(model.GetSetting(db, "discord.runtime_bot_token")); token != "" {
+			return token
+		}
+	}
+	return strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+}
+
+// MigrateRuntimeDiscordBotToken upgrades the legacy plaintext setting only
+// after encryption and a decrypt/read-back check have succeeded. The old
+// value remains intact if any database or cryptographic step fails.
+func MigrateRuntimeDiscordBotToken(db *gorm.DB) error {
+	if db == nil {
+		return errors.New("database unavailable")
+	}
+	if ciphertext := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenSettingKey)); ciphertext != "" {
+		if _, err := decryptRuntimeSecret(ciphertext); err != nil {
+			return fmt.Errorf("encrypted Discord token is unavailable: %w", err)
+		}
+		return nil
+	}
+	legacy := strings.TrimSpace(model.GetSetting(db, "discord.runtime_bot_token"))
+	if legacy == "" {
+		return nil
+	}
+	ciphertext, err := encryptRuntimeSecret(legacy)
+	if err != nil {
+		return fmt.Errorf("encrypt legacy Discord token: %w", err)
+	}
+	verified, err := decryptRuntimeSecret(ciphertext)
+	if err != nil || verified != legacy {
+		return errors.New("encrypted Discord token read-back verification failed")
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := model.SetSecretSettingWithError(tx, RuntimeDiscordBotTokenSettingKey, ciphertext); err != nil {
+			return fmt.Errorf("save encrypted Discord token: %w", err)
+		}
+		stored := strings.TrimSpace(model.GetSetting(tx, RuntimeDiscordBotTokenSettingKey))
+		readBack, err := decryptRuntimeSecret(stored)
+		if err != nil || readBack != legacy {
+			return errors.New("encrypted Discord token database read-back failed")
+		}
+		return tx.Where("key = ?", "discord.runtime_bot_token").Delete(&model.Setting{}).Error
+	}); err != nil {
+		return err
+	}
+	if strings.TrimSpace(model.GetSetting(db, "discord.runtime_bot_token")) != "" {
+		return errors.New("legacy Discord token remained after migration")
+	}
+	stored, err := decryptRuntimeSecret(strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenSettingKey)))
+	if err != nil || stored != legacy {
+		return errors.New("encrypted Discord token post-migration verification failed")
+	}
+	return nil
+}
+
+func SetRuntimeDiscordBotToken(db *gorm.DB, token string) error {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return errors.New("Discord Bot Token is empty")
+	}
+	ciphertext, err := encryptRuntimeSecret(token)
+	if err != nil {
+		return err
+	}
+	if db != nil {
+		if err := model.SetSecretSettingWithError(db, RuntimeDiscordBotTokenSettingKey, ciphertext); err != nil {
+			return fmt.Errorf("save encrypted Discord token: %w", err)
+		}
+		stored := StoredRuntimeDiscordBotToken(db)
+		if stored != token {
+			return errors.New("encrypted Discord token persistence verification failed")
+		}
+	}
+	if err := os.Setenv("DISCORD_BOT_TOKEN", token); err != nil {
+		return fmt.Errorf("set Discord runtime token: %w", err)
+	}
+	return nil
+}
 
 type RuntimeKitsuCredentialState struct {
 	EmailPresent      bool

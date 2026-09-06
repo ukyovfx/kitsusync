@@ -1,6 +1,6 @@
 # Setup Flow Reference
 
-This document describes the current operator-facing setup flow for KitsuSync v0.4.3.
+This document describes the current operator-facing setup flow for KitsuSync v0.4.4.
 
 The normal setup path is now:
 
@@ -105,7 +105,7 @@ System Status is intentionally secondary to `/bot/setup`.
 
 ## Discord Resource Creation Notes
 
-New Connection Setup fetches the selected Production's Task Types and shows a complete create/reuse/conflict plan before any Discord write. Discord channel creation is limited to the selected Guild and only missing channels listed in the confirmed plan. Connected Productions is the normal surface for reviewing mappings, previewing missing channels, pausing/resuming notifications, dry-run, and diagnosis. Compatibility route `/bot/admin/production-routing` redirects there and remains available only for old bookmarks.
+New Connection Setup fetches the selected Production's Task Types and shows a complete create/reuse/conflict plan before any Discord write. Discord channel creation is limited to the selected Guild and only missing channels listed in the confirmed plan. Connected Productions is the normal surface for reviewing mappings, previewing missing channels, pausing/resuming notifications, dry-run, and diagnosis.
 
 If setup fails partway through:
 
@@ -123,4 +123,4 @@ Historical docs and older releases may reference:
 - Manual Setup
 - Setup Status
 
-Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.3.
+Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.4.

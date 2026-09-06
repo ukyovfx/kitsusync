@@ -1,14 +1,15 @@
 package setup
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"app/src/api/discord"
@@ -277,6 +278,39 @@ type TestKitsuResponse struct {
 	Error         *string `json:"error"`
 }
 
+var setupProbeLimiter = struct {
+	sync.Mutex
+	started map[string][]time.Time
+}{started: make(map[string][]time.Time)}
+
+func allowSetupProbe(r *http.Request) bool {
+	key := "local"
+	if r != nil {
+		key = strings.TrimSpace(r.RemoteAddr)
+		if host, _, err := net.SplitHostPort(key); err == nil {
+			key = host
+		}
+		if key == "" {
+			key = "local"
+		}
+	}
+	now := time.Now()
+	setupProbeLimiter.Lock()
+	defer setupProbeLimiter.Unlock()
+	entries := setupProbeLimiter.started[key][:0]
+	for _, at := range setupProbeLimiter.started[key] {
+		if now.Sub(at) < time.Minute {
+			entries = append(entries, at)
+		}
+	}
+	if len(entries) >= 6 {
+		setupProbeLimiter.started[key] = entries
+		return false
+	}
+	setupProbeLimiter.started[key] = append(entries, now)
+	return true
+}
+
 // TestDiscordRequest is the request body for POST /api/setup/test-discord.
 type TestDiscordRequest struct {
 	BotToken string `json:"bot_token"`
@@ -294,8 +328,9 @@ type TestDiscordResponse struct {
 }
 
 type TestNotificationRequest struct {
-	ProjectID string `json:"project_id"`
-	Message   string `json:"message"`
+	ProjectID            string `json:"project_id"`
+	DestinationWebhookID uint   `json:"destination_webhook_id"`
+	Message              string `json:"message"`
 }
 
 type TestNotificationResponse struct {
@@ -593,29 +628,28 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
-
-		webhooks := model.ListProjectWebhooks(db, projectID)
-		targetURL := ""
-		for _, wh := range webhooks {
-			if strings.TrimSpace(wh.WebhookURL) != "" {
-				targetURL = strings.TrimSpace(wh.WebhookURL)
-				break
-			}
-		}
-		if targetURL == "" {
-			errStr := "no webhook configured for this project"
+		if strings.TrimSpace(project.DiscordGuildID) == "" {
+			errStr := "this project has no Discord Guild configured"
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
 
-		message := strings.TrimSpace(req.Message)
-		if message == "" {
-			message = "KitsuSync test notification"
+		_, botToken, _, _ := refreshCreds()
+		projectChannels, err := ListGuildChannels(strings.TrimSpace(project.DiscordGuildID), botToken)
+		if err != nil {
+			errStr := "could not verify Discord destinations for this project"
+			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
+			return
 		}
-		res := discord.SendMessage(discord.Payload{
-			Username: "KitsuSync",
-			Content:  message,
-		}, targetURL, "", "")
+		destination, err := validateTestNotificationDestination(db, projectID, req.DestinationWebhookID, projectChannels)
+		if err != nil {
+			errStr := err.Error()
+			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
+			return
+		}
+
+		payload := testNotificationPayload(*project, req.Message)
+		res := discord.SendMessage(payload, destination.WebhookURL, "", "")
 		if strings.TrimSpace(res.MessageID) == "" {
 			errStr := "test notification failed to send"
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
@@ -636,11 +670,71 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 	}
 }
 
+func testNotificationPayload(project model.Project, message string) discord.Payload {
+	notificationLanguage := discord.NotificationLanguage(project.Language)
+	comment := strings.TrimSpace(message)
+	comment = strings.ReplaceAll(comment, "@", "＠")
+	if notificationLanguage == "en" {
+		if comment == "" {
+			comment = "KitsuSync test notification"
+		}
+		return discord.RenderNotificationPayload(discord.Template{
+			ProjectName: project.Name, EntityType: "Production", ParentName: project.Name,
+			TaskType: "Animation", CardContext: "Test notification",
+			CurrentStatus: "WFA", StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "Please review this test notification.",
+			CommentContent: comment, CommentLabel: "Comment", AssigneesStr: "Unassigned", AssigneeLabel: "Assignee",
+			NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
+		}, "rich")
+	}
+	if comment == "" {
+		comment = "KitsuSync テスト通知"
+	}
+	return discord.RenderNotificationPayload(discord.Template{
+		ProjectName: project.Name, EntityType: "プロダクション", ParentName: project.Name,
+		TaskType: "アニメーション", CardContext: "テスト通知",
+		CurrentStatus: "WFA", StatusUpper: "WFA", StatusEmoji: "👀", StatusMessage: "テスト通知を確認してください。",
+		CommentContent: comment, CommentLabel: "コメント", AssigneesStr: "未割り当て", AssigneeLabel: "担当",
+		NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
+	}, "rich")
+}
+
+func validateTestNotificationDestination(db *gorm.DB, projectID string, destinationWebhookID uint, channels []DiscordGuildChannel) (*model.ProjectWebhook, error) {
+	if destinationWebhookID == 0 {
+		return nil, fmt.Errorf("select a test notification destination")
+	}
+	project := model.FindProjectByKitsuID(db, projectID)
+	if project == nil {
+		return nil, fmt.Errorf("project not found")
+	}
+	destination := model.FindProjectWebhookByID(db, destinationWebhookID)
+	if destination == nil || destination.KitsuProjectID != projectID || strings.TrimSpace(destination.WebhookURL) == "" || strings.TrimSpace(destination.DiscordChannelID) == "" {
+		return nil, fmt.Errorf("selected test destination is not configured for this project")
+	}
+	if strings.TrimSpace(project.DiscordGuildID) == "" {
+		return nil, fmt.Errorf("this project has no Discord Guild configured")
+	}
+	for _, channel := range channels {
+		if channel.ID != destination.DiscordChannelID {
+			continue
+		}
+		if strings.TrimSpace(project.DiscordCategoryID) != "" && channel.ParentID != project.DiscordCategoryID {
+			return nil, fmt.Errorf("selected test destination is outside this project's Discord category")
+		}
+		return destination, nil
+	}
+	return nil, fmt.Errorf("selected test destination is stale or not in this project's Discord Guild")
+}
+
 // TestKitsuHandler handles POST /api/setup/test-kitsu.
 // Verifies connectivity and authentication against a provided Kitsu endpoint.
 func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if !allowSetupProbe(r) {
+			w.WriteHeader(http.StatusTooManyRequests)
+			writeTestKitsuError(w, "probe rate limit exceeded")
+			return
+		}
 
 		var req TestKitsuRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -659,30 +753,9 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 			writeTestKitsuError(w, "hostname(auto), email, and password are required")
 			return
 		}
-		if !strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://") {
-			writeTestKitsuError(w, "hostname must start with http:// or https://")
-			return
-		}
-		if !strings.HasSuffix(hostname, "/") {
-			hostname += "/"
-		}
-
-		client := &http.Client{Timeout: 10 * time.Second}
-		pingURL := strings.TrimRight(hostname, "/") + "/api/"
-		resp, err := client.Get(pingURL)
-		if err != nil {
-			writeTestKitsuError(w, "Kitsu server not reachable: "+err.Error())
-			return
-		}
-		resp.Body.Close()
-		if resp.StatusCode >= 500 {
-			writeTestKitsuError(w, fmt.Sprintf("Kitsu server returned HTTP %d", resp.StatusCode))
-			return
-		}
-
 		loginOK, loginReason := tryKitsuLogin(hostname, email, password)
 		if !loginOK {
-			errStr := loginReason
+			errStr := "Kitsu verification failed: " + safeKitsuConnectionMessage(loginReason)
 			json.NewEncoder(w).Encode(TestKitsuResponse{Reachable: true, Error: &errStr})
 			return
 		}
@@ -698,6 +771,15 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 		}
 
 		json.NewEncoder(w).Encode(TestKitsuResponse{Reachable: true, Authenticated: true})
+	}
+}
+
+func safeKitsuConnectionMessage(class string) string {
+	switch class {
+	case "url_parse_invalid", "scheme_not_allowed", "forbidden_metadata_target", "dns_scope_changed", "dns_resolution_failed", "redirect_origin_changed", "tls_downgrade_blocked", "zou_identity_mismatch", "zou_unhealthy", "auth_redirect_blocked", "auth_failed":
+		return class
+	default:
+		return "network_failed"
 	}
 }
 
@@ -993,48 +1075,15 @@ func writeTestDiscordError(w http.ResponseWriter, msg string) {
 }
 
 func tryKitsuLogin(hostname, email, password string) (bool, string) {
-	loginURL := strings.TrimRight(hostname, "/") + "/api/auth/login"
-	payload := map[string]string{
-		"email":    email,
-		"password": password,
-	}
-	b, err := json.Marshal(payload)
+	connection, err := ResolveAndProbeKitsu(context.Background(), hostname, APISourceExplicit)
 	if err != nil {
-		return false, "failed to build auth request"
+		return false, connectionErrorClass(err)
 	}
-	req, err := http.NewRequest(http.MethodPost, loginURL, bytes.NewReader(b))
+	token, _, err := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
 	if err != nil {
-		return false, "failed to build auth request"
+		return false, connectionErrorClass(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 12 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, "authentication request failed: " + err.Error()
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	bodyText := strings.TrimSpace(string(respBody))
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		var authResp struct {
-			Token string `json:"access_token"`
-		}
-		if err := json.Unmarshal(respBody, &authResp); err != nil || strings.TrimSpace(authResp.Token) == "" {
-			return false, "authentication endpoint returned success but token payload was invalid"
-		}
-		return true, ""
-	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		if bodyText != "" {
-			return false, fmt.Sprintf("authentication failed (HTTP %d): %s", resp.StatusCode, bodyText)
-		}
-		return false, fmt.Sprintf("authentication failed (HTTP %d): email/password mismatch, SSO-only account, or local password not set", resp.StatusCode)
-	}
-	if bodyText != "" {
-		return false, fmt.Sprintf("authentication failed (HTTP %d): %s", resp.StatusCode, bodyText)
-	}
-	return false, fmt.Sprintf("authentication failed (HTTP %d)", resp.StatusCode)
+	return token != "", ""
 }
 
 // --- Mapping API types ---

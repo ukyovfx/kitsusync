@@ -1,19 +1,26 @@
 package setup
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"app/src/model"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func resetSessions() {
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	sessions = map[string]sessionData{}
+	sessionStoreDB = nil
+	sessionMu.Unlock()
 }
 
 func TestRequireSessionRedirectsWithoutCookie(t *testing.T) {
@@ -61,7 +68,7 @@ func TestLogoutClearsSessionCookie(t *testing.T) {
 	resetSessions()
 
 	token := newSessionToken("manager@example.com", "jwt-token", "manager", "/bot/admin")
-	req := httptest.NewRequest(http.MethodGet, "/bot/logout", nil)
+	req := httptest.NewRequest(http.MethodPost, "/bot/logout", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
 	rr := httptest.NewRecorder()
 
@@ -79,6 +86,105 @@ func TestLogoutClearsSessionCookie(t *testing.T) {
 	}
 }
 
+func TestLogoutRejectsStateChangingGET(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/bot/logout", nil)
+	rr := httptest.NewRecorder()
+	LogoutHandler()(rr, req)
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected GET logout to be rejected, got %d", rr.Code)
+	}
+}
+
+func TestCSRFProtectionAllowsSameOriginPOST(t *testing.T) {
+	resetSessions()
+	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+	req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	req.Header.Set("Origin", "http://admin.example")
+	rr := httptest.NewRecorder()
+	called := false
+	CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !called {
+		t.Fatalf("same-origin POST must be allowed, status=%d called=%v", rr.Code, called)
+	}
+}
+
+func TestCSRFProtectionRejectsCrossSiteFetchMetadata(t *testing.T) {
+	resetSessions()
+	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+	req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Origin", "http://admin.example")
+	rr := httptest.NewRecorder()
+	called := false
+	CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden || called {
+		t.Fatalf("cross-site Fetch Metadata must be rejected, status=%d called=%v", rr.Code, called)
+	}
+}
+
+func TestCSRFProtectionOriginAndRefererValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		origin     string
+		referer    string
+		forwarded  string
+		wantStatus int
+	}{
+		{name: "wrong origin", origin: "https://evil.example", wantStatus: http.StatusForbidden},
+		{name: "correct origin", origin: "https://admin.example", forwarded: "https", wantStatus: http.StatusOK},
+		{name: "same origin referer fallback", referer: "http://admin.example/bot/admin", wantStatus: http.StatusOK},
+		{name: "wrong referer fallback", referer: "http://evil.example/bot/admin", wantStatus: http.StatusForbidden},
+		{name: "missing browser origin headers", wantStatus: http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetSessions()
+			token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+			req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+			if tt.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tt.forwarded)
+			}
+			rr := httptest.NewRecorder()
+			called := false
+			CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+			if rr.Code != tt.wantStatus || called != (tt.wantStatus == http.StatusOK) {
+				t.Fatalf("status=%d called=%v, want status=%d", rr.Code, called, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestCSRFProtectionLeavesGETAndUnauthenticatedRequestsUnchanged(t *testing.T) {
+	resetSessions()
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {
+		req := httptest.NewRequest(method, "http://admin.example/bot/admin", nil)
+		rr := httptest.NewRecorder()
+		called := false
+		CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+		if !called || rr.Code != http.StatusOK {
+			t.Fatalf("%s should remain unchanged, status=%d called=%v", method, rr.Code, called)
+		}
+	}
+	// An unauthenticated mutation is passed through so RequireSession can
+	// preserve its existing redirect behavior.
+	req := httptest.NewRequest(http.MethodPost, "http://admin.example/bot/admin", nil)
+	rr := httptest.NewRecorder()
+	called := false
+	CSRFProtection(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(rr, req)
+	if !called || rr.Code != http.StatusOK {
+		t.Fatalf("unauthenticated request should remain available to auth middleware")
+	}
+}
+
 func TestSessionCookieUsesSecureForForwardedHTTPS(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/bot/login", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
@@ -92,12 +198,121 @@ func TestSessionCookieUsesSecureForForwardedHTTPS(t *testing.T) {
 	}
 }
 
-func TestLoginHandlerUsesConfiguredHostAndAcceptsAdmin(t *testing.T) {
+func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	token := newSessionToken("manager@example.com", "short-lived-kitsu-token", "manager", "/bot/admin")
+	sessionMu.Lock()
+	sessions = map[string]sessionData{}
+	sessionMu.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	if !validSession(token) {
+		t.Fatal("expected persisted session to remain valid after process cache reset")
+	}
+	session, ok := currentSessionData(req)
+	if !ok || session.Email != "manager@example.com" || session.Role != "manager" {
+		t.Fatalf("expected persisted identity to hydrate, got %+v, ok=%v", session, ok)
+	}
+	if session.KitsuToken != "" {
+		t.Fatal("persistent session must not hydrate a Kitsu token")
+	}
+
+	logoutReq := httptest.NewRequest(http.MethodPost, "/bot/logout", nil)
+	logoutReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	LogoutHandler()(httptest.NewRecorder(), logoutReq)
+	if validSession(token) {
+		t.Fatal("logout must invalidate the persisted session")
+	}
+}
+
+func TestClassifySessionPersistenceError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"missing table", errors.New("no such table: admin_sessions"), "schema_table_missing"},
+		{"incompatible schema", errors.New("table admin_sessions has no column named token_hash"), "schema_incompatible"},
+		{"readonly", errors.New("attempt to write a readonly database"), "database_readonly"},
+		{"busy", errors.New("database is locked"), "database_busy"},
+		{"constraint", errors.New("UNIQUE constraint failed: admin_sessions.token_hash"), "constraint_failed"},
+		{"other", errors.New("driver failure"), "persistence_failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifySessionPersistenceError(tc.err); got != tc.want {
+				t.Fatalf("classification = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func zouFixture(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
+		next(w, r)
+	}
+}
+
+func TestLoginReportsAuthenticatedButSessionPersistenceFailure(t *testing.T) {
 	resetSessions()
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	db := newSetupStateTestDB(t) // Deliberately has no admin_sessions table.
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			t.Fatalf("unexpected Kitsu path: %s", r.URL.Path)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"admin"}}`)
-	}))
+	})))
+	defer kitsu.Close()
+
+	form := url.Values{"email": {"admin@example.com"}, "password": {"not-returned"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login?lang=en", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandler(kitsu.URL)(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("login status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Kitsu authentication succeeded, but KitsuSync could not save the admin session.") {
+		t.Fatalf("missing safe post-auth persistence message: %s", body)
+	}
+	for _, secret := range []string{"not-returned", "browser-session-token"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("login response exposed secret-like test value %q", secret)
+		}
+	}
+}
+
+func TestLoginHandlerUsesConfiguredHostAndAcceptsAdmin(t *testing.T) {
+	resetSessions()
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"admin"}}`)
+	})))
 	defer kitsu.Close()
 
 	form := url.Values{"hostname": {"https://unexpected.example.invalid"}, "email": {"admin@example.com"}, "password": {"not-returned"}}
@@ -116,10 +331,10 @@ func TestLoginHandlerUsesConfiguredHostAndAcceptsAdmin(t *testing.T) {
 
 func TestLoginHandlerFirstRunRejectsNonAdmin(t *testing.T) {
 	resetSessions()
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"user"}}`)
-	}))
+	})))
 	defer kitsu.Close()
 
 	called := false
@@ -138,10 +353,10 @@ func TestLoginHandlerAcceptsStudioManagerAndHigherRoles(t *testing.T) {
 	for _, role := range []string{"manager", " ADMIN "} {
 		t.Run(strings.TrimSpace(role), func(t *testing.T) {
 			resetSessions()
-			kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%q}}`, role)
-			}))
+			})))
 			defer kitsu.Close()
 
 			form := url.Values{"email": {"manager@example.com"}, "password": {"not-returned"}}
@@ -158,7 +373,7 @@ func TestLoginHandlerAcceptsStudioManagerAndHigherRoles(t *testing.T) {
 
 func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *testing.T) {
 	resetSessions()
-	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet {
 			if r.URL.Path == "/api/" {
@@ -169,7 +384,7 @@ func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *tes
 			return
 		}
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
-	}))
+	})))
 	defer kitsu.Close()
 	var persisted string
 	form := url.Values{"hostname": {kitsu.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
@@ -180,8 +395,199 @@ func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *tes
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("expected manual endpoint login to succeed, got %d: %s", rr.Code, rr.Body.String())
 	}
-	if persisted != kitsu.URL+"/" {
+	if strings.TrimRight(persisted, "/") != strings.TrimRight(kitsu.URL, "/") {
 		t.Fatalf("expected validated manual endpoint to persist, got %q", persisted)
+	}
+}
+
+func TestLoginWithInternalKitsuURLPersistsDistinctDisplayAndRuntimeURLs(t *testing.T) {
+	resetSessions()
+	db := newSetupStateTestDB(t)
+	runtime := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
+	})))
+	defer runtime.Close()
+
+	display := "https://public.kitsu.example.test/studio"
+	form := url.Values{
+		"hostname":          {display},
+		"internal_hostname": {runtime.URL},
+		"email":             {"manager@example.com"},
+		"password":          {"not-returned"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscoveryAndURLs(func() (string, string) { return "", "" }, func(savedDisplay, savedRuntime, apiOverride string) {
+		model.SetSetting(db, KitsuDisplayURLSettingKey, savedDisplay)
+		model.SetSetting(db, "kitsu.hostname", savedRuntime)
+		model.SetSetting(db, KitsuAPIBaseURLSettingKey, apiOverride)
+	})(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := strings.TrimRight(model.GetSetting(db, KitsuDisplayURLSettingKey), "/"); got != display {
+		t.Fatalf("display URL = %q, want %q", got, display)
+	}
+	if got := model.GetSetting(db, "kitsu.hostname"); strings.TrimRight(got, "/") != strings.TrimRight(runtime.URL, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, runtime.URL)
+	}
+	if got := PublicKitsuURL(db); got != display || strings.Contains(got, runtime.URL) {
+		t.Fatalf("human-facing URL = %q", got)
+	}
+}
+
+func TestLoginHostnameOnlyPersistsLegacyDisplayAndRuntimeURL(t *testing.T) {
+	resetSessions()
+	db := newSetupStateTestDB(t)
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
+	})))
+	defer kitsu.Close()
+
+	form := url.Values{"hostname": {kitsu.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscoveryAndURLs(func() (string, string) { return "", "" }, func(display, runtime, _ string) {
+		model.SetSetting(db, KitsuDisplayURLSettingKey, display)
+		model.SetSetting(db, "kitsu.hostname", runtime)
+	})(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := model.GetSetting(db, KitsuDisplayURLSettingKey); strings.TrimRight(got, "/") != strings.TrimRight(kitsu.URL, "/") {
+		t.Fatalf("display URL = %q", got)
+	}
+	if got := model.GetSetting(db, "kitsu.hostname"); strings.TrimRight(got, "/") != strings.TrimRight(kitsu.URL, "/") {
+		t.Fatalf("runtime URL = %q", got)
+	}
+}
+
+func newLoginPersistenceKitsuServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
+	})))
+}
+
+func runStoredDisplayUpdateLogin(t *testing.T, initialDisplay, initialRuntime string, form func(runtime, internal, api string) url.Values) *gorm.DB {
+	t.Helper()
+	resetSessions()
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, KitsuDisplayURLSettingKey, initialDisplay)
+	model.SetSetting(db, "kitsu.hostname", initialRuntime)
+	runtimeServer := newLoginPersistenceKitsuServer(t)
+	internalServer := newLoginPersistenceKitsuServer(t)
+	apiServer := newLoginPersistenceKitsuServer(t)
+	t.Cleanup(func() {
+		runtimeServer.Close()
+		internalServer.Close()
+		apiServer.Close()
+	})
+	values := form(runtimeServer.URL, internalServer.URL, apiServer.URL)
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscoveryAndStoredDisplay(func() (string, string) {
+		return runtimeServer.URL, "persisted"
+	}, func() string {
+		if display := strings.TrimSpace(model.GetSetting(db, KitsuDisplayURLSettingKey)); display != "" {
+			return display
+		}
+		return model.GetSetting(db, "kitsu.hostname")
+	}, func(display, runtime, api string) {
+		model.SetSetting(db, KitsuDisplayURLSettingKey, display)
+		model.SetSetting(db, "kitsu.hostname", runtime)
+		if strings.TrimSpace(api) == "" {
+			model.DeleteSetting(db, KitsuAPIBaseURLSettingKey)
+			return
+		}
+		normalized, err := NormalizeKitsuURL(api, APISourceExplicit)
+		if err != nil {
+			t.Fatalf("test API override normalization failed: %v", err)
+		}
+		model.SetSetting(db, KitsuAPIBaseURLSettingKey, normalized.ResolvedAPIBaseURL)
+	})(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
+	}
+	return db
+}
+
+func TestExistingDisplayURLSurvivesInternalHostnameUpdate(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	var expectedInternal string
+	db := runStoredDisplayUpdateLogin(t, display, "", func(runtime, internal, _ string) url.Values {
+		expectedInternal = internal
+		return url.Values{"internal_hostname": {internal}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != display {
+		t.Fatalf("public URL = %q, want %q", got, display)
+	}
+	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedInternal, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, expectedInternal)
+	}
+}
+
+func TestExistingDisplayURLSurvivesAPIOverrideUpdate(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	var expectedRuntime string
+	db := runStoredDisplayUpdateLogin(t, display, "", func(runtime, _, api string) url.Values {
+		expectedRuntime = runtime
+		return url.Values{"api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != display {
+		t.Fatalf("public URL = %q, want %q", got, display)
+	}
+	if got := model.GetSetting(db, KitsuAPIBaseURLSettingKey); got == "" {
+		t.Fatal("API override was not persisted")
+	}
+	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedRuntime, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, expectedRuntime)
+	}
+}
+
+func TestExistingDisplayURLSurvivesInternalAndAPIOverrideUpdates(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	var expectedInternal string
+	db := runStoredDisplayUpdateLogin(t, display, "", func(_, internal, api string) url.Values {
+		expectedInternal = internal
+		return url.Values{"internal_hostname": {internal}, "api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != display {
+		t.Fatalf("public URL = %q, want %q", got, display)
+	}
+	if model.GetSetting(db, KitsuAPIBaseURLSettingKey) == "" || model.GetSetting(db, "kitsu.hostname") == "" {
+		t.Fatal("runtime and API override were not both persisted")
+	}
+	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedInternal, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, expectedInternal)
+	}
+}
+
+func TestExplicitDisplayURLReplacesStoredDisplayDuringInternalUpdate(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	const replacement = "https://new-public.kitsu.example.test/studio"
+	db := runStoredDisplayUpdateLogin(t, display, "", func(_, internal, api string) url.Values {
+		return url.Values{"hostname": {replacement}, "internal_hostname": {internal}, "api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != replacement {
+		t.Fatalf("public URL = %q, want %q", got, replacement)
 	}
 }
 
@@ -225,10 +631,10 @@ func TestLoginHandlerRejectsMissingOrBelowManagerRole(t *testing.T) {
 	for _, roleJSON := range []string{`"supervisor"`, `"user"`, `""`, `null`} {
 		t.Run(strings.Trim(roleJSON, `"`), func(t *testing.T) {
 			resetSessions()
-			kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%s}}`, roleJSON)
-			}))
+			})))
 			defer kitsu.Close()
 
 			form := url.Values{"email": {"user@example.com"}, "password": {"not-returned"}}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"app/src/api/discord"
 	"app/src/api/kitsu"
 	"app/src/model"
 	"fmt"
@@ -81,12 +82,39 @@ func TestUnmatchedTaskTypeFailsClosedAndRecordsDiagnosis(t *testing.T) {
 
 func TestSameNameTaskTypesRemainIsolatedByID(t *testing.T) {
 	db := newNotificationRoutingTestDB(t)
-	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil { t.Fatal(err) }
-	if err := model.CreateProjectWebhook(db, "p1", "A", "", "https://example.invalid/a", "11111111111111111"); err != nil { t.Fatal(err) }
+	if err := model.CreateProject(db, "p1", "P", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, "p1", "A", "", "https://example.invalid/a", "11111111111111111"); err != nil {
+		t.Fatal(err)
+	}
 	webhook := model.ListProjectWebhooks(db, "p1")[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: "p1", Enabled: true}, []model.ProductionNotificationRoute{{TaskTypeID: "tt1", TaskTypeName: "Same Name", DestinationWebhookID: webhook.ID}}); err != nil { t.Fatal(err) }
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: "p1", Enabled: true}, []model.ProductionNotificationRoute{{TaskTypeID: "tt1", TaskTypeName: "Same Name", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
 	plan := planProductionNotification(db, notificationPayload("p1", "P", "tt2", "Same Name"))
-	if plan.ShouldSend { t.Fatal("same-name Task Type with a different ID was incorrectly routed") }
+	if plan.ShouldSend {
+		t.Fatal("same-name Task Type with a different ID was incorrectly routed")
+	}
+}
+
+func TestProductionTaskLinkUsesPublicKitsuURLOnly(t *testing.T) {
+	previous := discord.KitsuPublicURLResolver
+	discord.KitsuPublicURLResolver = func() string { return "https://kitsu.example.test" }
+	defer func() { discord.KitsuPublicURLResolver = previous }()
+	payload := notificationPayload("production-1", "P", "task-type-1", "Animation")
+	payload.EntityType.Name = "Shot"
+	if got := productionTaskLink(payload); got != "https://kitsu.example.test/productions/production-1/shots/tasks/task-1" {
+		t.Fatalf("public task link = %q", got)
+	}
+	discord.KitsuPublicURLResolver = func() string { return "http://host.docker.internal:8080" }
+	if got := productionTaskLink(payload); got != "not supplied" {
+		t.Fatalf("internal configured URL must not be exposed publicly, got %q", got)
+	}
+	discord.KitsuPublicURLResolver = func() string { return "" }
+	if got := productionTaskLink(payload); got != "not supplied" {
+		t.Fatalf("missing public URL = %q, want not supplied", got)
+	}
 }
 
 func TestDryRunDetectsStaleTaskTypeID(t *testing.T) {

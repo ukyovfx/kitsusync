@@ -4,6 +4,7 @@ import (
 	"app/src/utils/debug"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -18,6 +19,14 @@ import (
 // 一時的なネットワーク障害・5xx・429 に対してはリトライ＋指数バックオフを行う。
 // 4xx（429 を除く）は永続的エラーとみなし即座に返る。
 func Do(token, method, url string, payload, unmarshal interface{}) string {
+	body, _ := DoWithError(token, method, url, payload, unmarshal)
+	return body
+}
+
+// DoWithError executes the same bounded-retry request as Do, while preserving
+// the failure outcome for callers that must distinguish an empty response from
+// an unsuccessful request.
+func DoWithError(token, method, url string, payload, unmarshal interface{}) (string, error) {
 	const maxAttempts = 3
 	// 試行間の待機時間: 2s → 6s
 	retryDelays := []time.Duration{2 * time.Second, 6 * time.Second}
@@ -29,10 +38,11 @@ func Do(token, method, url string, payload, unmarshal interface{}) string {
 		payloadBytes, err = json.Marshal(payload)
 		if err != nil {
 			slog.Error("request.Do: marshal payload failed", "err", err, "url", url)
-			return ""
+			return "", fmt.Errorf("marshal payload: %w", err)
 		}
 	}
 
+	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			delay := retryDelays[attempt-1]
@@ -53,18 +63,19 @@ func Do(token, method, url string, payload, unmarshal interface{}) string {
 		result := attemptOnce(token, method, url, body, unmarshal)
 		switch result.status {
 		case statusSuccess:
-			return result.body
+			return result.body, nil
 		case statusPermanent:
 			// 4xx 等の永続エラーはリトライ不要
-			return ""
+			return "", result.err
 		case statusTransient:
 			// 次のループでリトライ
+			lastErr = result.err
 			continue
 		}
 	}
 
 	slog.Error("request.Do: all attempts exhausted", "url", url, "maxAttempts", maxAttempts)
-	return ""
+	return "", fmt.Errorf("request failed after %d attempts: %w", maxAttempts, lastErr)
 }
 
 type attemptStatus int
@@ -78,6 +89,7 @@ const (
 type attemptResult struct {
 	status attemptStatus
 	body   string
+	err    error
 }
 
 func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interface{}) attemptResult {
@@ -92,7 +104,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	}
 	if err != nil {
 		slog.Error("request.Do: NewRequest failed", "err", err, "url", url)
-		return attemptResult{status: statusPermanent}
+		return attemptResult{status: statusPermanent, err: fmt.Errorf("create request: %w", err)}
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -103,14 +115,14 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Error("request.Do: client.Do failed", "err", err, "method", method, "url", url)
-		return attemptResult{status: statusTransient}
+		return attemptResult{status: statusTransient, err: fmt.Errorf("send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		slog.Error("request.Do: read body failed", "err", err, "url", url)
-		return attemptResult{status: statusTransient}
+		return attemptResult{status: statusTransient, err: fmt.Errorf("read response: %w", err)}
 	}
 
 	if os.Getenv("Debug") == "true" {
@@ -122,7 +134,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 		slog.Warn("request.Do: rate limited (429)",
 			"url", url,
 			"retryAfter", resp.Header.Get("Retry-After"))
-		return attemptResult{status: statusTransient}
+		return attemptResult{status: statusTransient, err: fmt.Errorf("HTTP status %d", resp.StatusCode)}
 	}
 
 	// 5xx — サーバーサイドの一時障害
@@ -140,14 +152,14 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 			"status", resp.StatusCode,
 			"method", method,
 			"url", url)
-		return attemptResult{status: statusPermanent}
+		return attemptResult{status: statusPermanent, err: fmt.Errorf("HTTP status %d", resp.StatusCode)}
 	}
 
 	// 成功
 	if unmarshal != nil {
 		if err := json.Unmarshal(respBody, &unmarshal); err != nil {
 			slog.Error("request.Do: unmarshal failed", "err", err, "url", url)
-			return attemptResult{status: statusPermanent}
+			return attemptResult{status: statusPermanent, err: fmt.Errorf("decode response: %w", err)}
 		}
 	}
 

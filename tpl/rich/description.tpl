@@ -1,16 +1,17 @@
 {{if .IsAssignNotification}}📋 タスクがアサインされました
 
-{{end}}{{.StatusEmoji}} {{.StatusUpper}}
+{{end}}{{.StatusEmoji}} {{.StatusUpper}}{{if .EntityType}}{{if .TaskName}}
+{{.EntityType}} / {{.TaskName}}{{end}}{{else if .ParentName}}
+{{.ParentName}}{{if .TaskName}} / {{.TaskName}}{{end}}{{else if .GroupName}}
+{{.GroupName}}{{if .TaskName}} / {{.TaskName}}{{end}}{{else if .TaskName}}
+{{.TaskName}}{{end}}
 {{if .IsCommentOnly}}{{.CommentOnlyMessage}}{{else}}{{.StatusMessage}}{{if .StatusTransitionMessage}}
 {{.StatusTransitionMessage}}{{end}}{{if .PreviousStatus}}
 {{.PreviousStatus}} → {{.StatusUpper}}{{end}}{{end}}{{if .CommentContent}}
 
 {{.CommentLabel}}
-{{.CommentContent}}{{if .CommentAuthor}}
+> {{.CommentContent}}{{if .CommentAuthor}}
 — {{.CommentAuthorLabel}}: {{.CommentAuthor}}{{end}}{{end}}{{if .TaskURL}}
 
-{{.LinksLabel}}
-[🦊 KITSU]({{.TaskURL}}){{if .GoogleDriveURL}} ・ [📁 Drive]({{.GoogleDriveURL}}){{end}}{{else if .GoogleDriveURL}}
-
-{{.LinksLabel}}
-[📁 Drive]({{.GoogleDriveURL}}){{end}}
+🦊 [Kitsu]({{.TaskURL}}){{if .GoogleDriveURL}} · 📁 [Drive]({{.GoogleDriveURL}}){{end}}{{else if .GoogleDriveURL}}
+📁 [Drive]({{.GoogleDriveURL}}){{end}}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +19,12 @@ import (
 
 func newIAViewDB(t *testing.T) *gorm.DB {
 	t.Helper()
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.Setting{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -57,6 +59,44 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 	if strings.Contains(body, "name=\"guild_id\"") {
 		t.Fatal("selected Production view exposes manual server ID editing")
+	}
+}
+
+func TestSystemStatusUsesCompactHealthySummaryAndOperationalRows(t *testing.T) {
+	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Details"}
+	rendered := renderPipelineHealthItem("en", item, 0)
+	if strings.Contains(rendered, `class="field-help"`) {
+		t.Fatal("healthy operational row should not repeat a redundant explanation")
+	}
+	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
+		t.Fatal("operational row lost its compact structure")
+	}
+	for _, want := range []string{
+		`class="pipeline-health-details-content"`,
+		`class="details-label-collapsed">Details ▾</span>`,
+		`class="details-label-expanded">Hide details ▴</span>`,
+		`aria-expanded="false"`,
+		`aria-controls="pipeline-health-details-0"`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("operational row missing geometry/detail contract %q", want)
+		}
+	}
+	if !strings.Contains(rendered, `class="pipeline-health-details-toggle" type="button"`) {
+		t.Fatal("operational row is missing its keyboard disclosure button")
+	}
+
+	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
+	body := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{APIObservations: map[string][]APIObservation{"kitsu": {{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}, "discord": {{At: time.Now(), Duration: 12 * time.Millisecond, Success: true}}}}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
+	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, `>System</span>`) {
+		t.Fatal("healthy system status should not repeat a redundant aggregate summary")
+	}
+	degraded := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{LastPollErr: "poll failed"}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
+	if !strings.Contains(degraded, `class="system-overall-summary"`) || !strings.Contains(degraded, `>System</span>`) {
+		t.Fatal("degraded system status should retain an actionable aggregate summary")
+	}
+	if strings.Contains(body, "Recent runtime observations are healthy.") || strings.Contains(body, "Overall system health") {
+		t.Fatal("healthy overall state retains redundant explanatory copy")
 	}
 }
 
@@ -219,8 +259,14 @@ func TestSystemStatusUsesOneAlignedReadinessGrid(t *testing.T) {
 	if got := strings.Count(body, `class="pipeline-health-item"`); got != 4 {
 		t.Fatalf("System Status rendered %d internal pipeline items, want 4", got)
 	}
-	if !strings.Contains(body, "Metrics that are not available are shown as unconfirmed.") {
-		t.Fatal("System Status did not disclose unavailable metrics")
+	for _, redundant := range []string{
+		"Shows real response times in chronological order.",
+		"Review each notification stage. Metrics that are not available are shown as unconfirmed.",
+		"Recent failure and recovery records.",
+	} {
+		if strings.Contains(body, redundant) {
+			t.Fatalf("System Status retained redundant helper copy %q", redundant)
+		}
 	}
 	if strings.Contains(body, "Overall problem:") || strings.Contains(body, "Next required action:") {
 		t.Fatal("System Status rendered the legacy duplicated guidance")
@@ -254,7 +300,30 @@ func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, r, db, "")
 	body := w.Body.String()
-	if strings.Contains(body, "<details") || strings.Contains(body, ">g<") || strings.Contains(body, ">c<") || strings.Contains(body, "Production ID") {
+	visibleBody := body
+	if start := strings.Index(visibleBody, "<main"); start >= 0 {
+		visibleBody = visibleBody[start:]
+	}
+	for {
+		styleStart := strings.Index(visibleBody, "<style")
+		scriptStart := strings.Index(visibleBody, "<script")
+		start := styleStart
+		if start < 0 || (scriptStart >= 0 && scriptStart < start) {
+			start = scriptStart
+		}
+		if start < 0 {
+			break
+		}
+		end := strings.Index(visibleBody[start:], "</style>")
+		if scriptStart == start {
+			end = strings.Index(visibleBody[start:], "</script>")
+		}
+		if end < 0 {
+			break
+		}
+		visibleBody = visibleBody[:start] + visibleBody[start+end+len("</style>"):]
+	}
+	if strings.Contains(visibleBody, "<details") || strings.Contains(visibleBody, ">g<") || strings.Contains(visibleBody, ">c<") || strings.Contains(visibleBody, "Production ID") {
 		t.Fatal("default Overview exposed advanced or destructive details")
 	}
 	for _, tab := range []string{"advanced", "danger-zone"} {
@@ -387,6 +456,9 @@ func TestCurrentIADeleteResultSuccessIsCompactAndDoesNotRenderFollowUp(t *testin
 				t.Fatalf("%s success result missing summary or return link %q", lang, want)
 			}
 		}
+		if strings.Count(body, `class="status-list delete-result-summary"`) != 1 || !strings.Contains(body, `class="status-list delete-result-summary"><div><dt>Production</dt><dd>`) {
+			t.Fatalf("%s delete summary does not use aligned row structure", lang)
+		}
 	}
 }
 
@@ -416,7 +488,7 @@ func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
 	if mainStart := strings.Index(body, `<main id="main-content">`); mainStart >= 0 {
 		body = body[mainStart:]
 	}
-	for _, want := range []string{"Setup required", "Configure the Kitsu connection before continuing.", "Needs attention", "Productions needing attention", "dashboard-menu-status", "dashboard-menu-card"} {
+	for _, want := range []string{"Not set", "Configure the Kitsu connection before continuing.", "Productions needing attention", "dashboard-menu-status", "dashboard-menu-card"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard missing readiness copy %q", want)
 		}
@@ -580,6 +652,75 @@ func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
 	}
 	if strings.Contains(body, "Dashboard Production") {
 		t.Fatal("dashboard activity data remains visible after removing the lower panels")
+	}
+}
+
+func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
+	for _, tc := range []struct {
+		lang, countLabel, healthLabel, emptyLabel, action string
+	}{
+		{"ja", "3件の記録", "正常", "記録なし", "通知送信"},
+		{"en", "3 records", "Normal", "No records", "Notification sent"},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			db := newIAViewDB(t)
+			r := httptest.NewRequest("GET", "/bot/admin/audit?lang="+tc.lang, nil)
+			empty := renderDashboardMenuRefined(tc.lang, r, db, nil, 0, SharedBotRuntimeReadiness{}, nil)
+			if !strings.Contains(empty, tc.emptyLabel) {
+				t.Fatalf("dashboard omitted empty audit summary: %q", empty)
+			}
+			for i := 0; i < 3; i++ {
+				model.WriteAuditLog(db, model.AuditLog{ProjectID: "audit-p", ProjectName: "Audit Production", DiscordMsgID: fmt.Sprintf("message-%d", i), Success: true})
+			}
+			if got := model.CountAuditLogs(db); got != 3 {
+				t.Fatalf("canonical audit count = %d, want 3", got)
+			}
+			auditPage := httptest.NewRecorder()
+			renderIAAudit(auditPage, r, db)
+			if !strings.Contains(auditPage.Body.String(), tc.action) {
+				t.Fatalf("audit page omitted notification-send entry: %q", auditPage.Body.String())
+			}
+			dashboard := renderDashboardMenuRefined(tc.lang, r, db, nil, 0, SharedBotRuntimeReadiness{}, nil)
+			if !strings.Contains(dashboard, tc.countLabel) || !strings.Contains(dashboard, tc.healthLabel) {
+				t.Fatalf("dashboard omitted canonical audit summary: %q", dashboard)
+			}
+			if strings.Contains(dashboard, "最新の記録") || strings.Contains(dashboard, "Latest record") || strings.Contains(dashboard, "最近の記録") || strings.Contains(dashboard, "Recent entries") {
+				t.Fatalf("dashboard retained vague audit badge: %q", dashboard)
+			}
+			if strings.Contains(dashboard, tc.emptyLabel) {
+				t.Fatalf("dashboard reported empty audit log despite entries: %q", dashboard)
+			}
+		})
+	}
+}
+
+func TestAuditLogRendersPersistedActorInJapaneseAndEnglish(t *testing.T) {
+	db := newIAViewDB(t)
+	for _, actor := range []model.AuditLog{
+		{ProjectName: "Human", ActorKind: model.AuditActorHuman, ActorID: "person-1", ActorName: "Ukyo Matsuo", Success: true},
+		{ProjectName: "System", ActorKind: model.AuditActorSystem, ActorID: "bot-1", Success: true},
+		{ProjectName: "Unknown", ActorKind: model.AuditActorUnknown, Success: true},
+	} {
+		model.WriteAuditLog(db, actor)
+	}
+	for _, tc := range []struct{ lang, human, system, unknown string }{
+		{"ja", "Ukyo Matsuo", "システム", "不明"},
+		{"en", "Ukyo Matsuo", "System", "Unknown"},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("GET", "/bot/admin/audit?lang="+tc.lang, nil)
+			renderIAAudit(w, r, db)
+			body := w.Body.String()
+			for _, want := range []string{tc.human, tc.system, tc.unknown} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("audit page omitted actor %q: %s", want, body)
+				}
+			}
+			if strings.Contains(body, "記録なし") || strings.Contains(body, "Not recorded") {
+				t.Fatal("audit page still renders the old missing-actor label")
+			}
+		})
 	}
 }
 
@@ -828,7 +969,7 @@ func TestGlobalUserLinkingUsesTruthfulUnavailableState(t *testing.T) {
 func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	renderBotSettingsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
+	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
 	body := w.Body.String()
 	for _, forbidden := range []string{"Bot設定", "Discord設定", "Kitsu Runtime", "Runtimeメール", "Runtimeパスワード", "preview_not_connected", "not_set"} {
 		if strings.Contains(body, forbidden) {
@@ -841,9 +982,9 @@ func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
 		}
 	}
 	w = httptest.NewRecorder()
-	renderBotSettingsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db)
+	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db)
 	body = w.Body.String()
-	for _, required := range []string{"Connections", "Kitsu connection", "Discord Bot connection", "Not set"} {
+	for _, required := range []string{"Connections", "Kitsu connection", "Discord Bot connection", "Not configured"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("normal English Bot Connection surface is missing %q", required)
 		}
@@ -853,7 +994,7 @@ func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
 func checkConnectionsPageUsesSafeNameAndUnescapedStatusMarkup(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	renderConnectionsPage(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
+	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
 	body := w.Body.String()
 	for _, want := range []string{"接続設定", "Kitsu接続", "Discord Bot接続", "未設定"} {
 		if !strings.Contains(body, want) {
@@ -929,8 +1070,11 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if strings.Contains(body, "Authentication:") || strings.Contains(body, "KitsuSync") || strings.Contains(body, "Hidden") {
 		t.Fatal("summary exposes redundant identity or secret metadata")
 	}
-	if strings.Contains(body, "configured-token") || strings.Contains(body, "Saved token is not displayed.") || !strings.Contains(body, "••••••••••••") {
+	if strings.Contains(body, "configured-token") || strings.Contains(body, "Saved token is not displayed.") {
 		t.Fatal("summary secret handling is incorrect")
+	}
+	if strings.Contains(body, ">Token<") || strings.Contains(body, ">Connection<") || strings.Contains(body, "ステータス") || strings.Contains(body, "トークン") {
+		t.Fatal("summary should use the service-level status without redundant state rows")
 	}
 	if strings.Contains(body, `connections-card-header"><div>`) || strings.Contains(body, `role="status">Connected</span></div><section`) {
 		t.Fatal("summary retained the redundant combined status header")
@@ -974,6 +1118,25 @@ func TestConnectedProductionRepairLinkAllowsExistingProductionPlan(t *testing.T)
 	}
 	if !strings.Contains(setupWizardURL(repairRequest, 4, project.KitsuProjectID, project.DiscordGuildID, false), "wizard_step=4") {
 		t.Fatal("repair mode did not preserve the plan step")
+	}
+}
+
+func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "language-production", Name: "Language Production", Language: "ja"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader("action=save_notification_language&project_id=language-production&notification_language=en"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	AdminProjectsHandler(db, "", "")(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "tab=notifications&msg=saved") {
+		t.Fatalf("language save did not redirect as saved: status=%d location=%s", response.Code, response.Header().Get("Location"))
+	}
+	updated := model.FindProjectByKitsuID(db, project.KitsuProjectID)
+	if updated == nil || updated.Language != "en" {
+		t.Fatalf("language save did not persist on the selected Production: %#v", updated)
 	}
 }
 
@@ -1311,7 +1474,7 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 	db := newIAViewDB(t)
 	readiness := SharedBotRuntimeReadiness{}
-	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, nil, 0, readiness)
+	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, nil, 0, readiness, nil)
 	order := []string{"Connections", "Production list", "User Linking", "System Status", "Audit Log"}
 	last := -1
 	for _, label := range order {
@@ -1324,11 +1487,8 @@ func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 	if strings.Contains(body, `dashboard-menu-icon`) || strings.Contains(body, `>1<`) || strings.Contains(body, `>2<`) {
 		t.Fatal("dashboard management cards contain numeric indicators")
 	}
-	if !strings.Contains(body, "Connect a Kitsu Production to a Discord server.") {
-		t.Fatal("dashboard CTA is missing its concise supporting description")
-	}
-	if strings.Count(body, `class="dashboard-status-chip warning">Unavailable<`) != 1 {
-		t.Fatal("system status card should expose one distinct notification state")
+	if strings.Contains(body, "Connect a Kitsu Production to a Discord server.") || strings.Contains(body, "Use Setup to start a new Production connection.") {
+		t.Fatal("dashboard CTA contains redundant supporting copy")
 	}
 	if strings.Contains(body, `class="dashboard-status-chip warning">Waiting<`) {
 		t.Fatal("system status card should not duplicate its overall state as a second badge")
@@ -1337,8 +1497,16 @@ func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 
 func TestDashboardRefinedMenuUsesConfiguredStateAndConnectedCount(t *testing.T) {
 	db := newIAViewDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatalf("store Kitsu token: %v", err)
+	}
+	model.SetSetting(db, "discord.guild_id", "guild-1")
+	setRuntimeDiscordBotToken(db, "configured-discord-token")
+	installDiscordAPIStub(t, "guild-1")
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true, OverallReady: true}
-	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, []model.Project{{Name: "Connected", KitsuProjectID: "connected"}}, 0, readiness)
+	body := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, []model.Project{{Name: "Connected", KitsuProjectID: "connected"}}, 0, readiness, func() bool { return true })
 	if !strings.Contains(body, `class="dashboard-status-chip ok">Configured<`) {
 		t.Fatal("configured User Linking state should use the positive status class")
 	}
@@ -1347,23 +1515,89 @@ func TestDashboardRefinedMenuUsesConfiguredStateAndConnectedCount(t *testing.T) 
 	}
 }
 
-func TestStatusPolishUsesFixedSecretMaskAndRealSparkline(t *testing.T) {
-	if got := secretMaskDisplay("en", true); got != "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" {
-		t.Fatalf("unexpected secret mask %q", got)
+func TestDashboardConnectionStatusesMatchConnectionsPage(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatalf("store Kitsu token: %v", err)
 	}
-	if got := secretMaskDisplay("en", false); got != "Not configured" {
-		t.Fatalf("unexpected unconfigured secret label %q", got)
+	model.SetSetting(db, "discord.guild_id", "guild-1")
+	setRuntimeDiscordBotToken(db, "configured-discord-token")
+	installDiscordAPIStub(t, "guild-1")
+	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
+	dashboard := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, nil, 0, readiness, func() bool { return false })
+	connections := renderConnectionsDisplayBodyWithHealthRaw("en", httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", "configured-discord-token", false, true)
+	if !strings.Contains(dashboard, `aria-label="Kitsu Needs review"`) || !strings.Contains(connections, `class="status-pill warn" role="status">Needs review</span>`) {
+		t.Fatal("Dashboard and Connections do not expose the same Kitsu review status")
 	}
+	if !strings.Contains(dashboard, `class="dashboard-status-chip warn">Needs review</span>`) {
+		t.Fatal("Dashboard Kitsu Needs review badge did not use the canonical warning tone")
+	}
+	if !strings.Contains(dashboard, `aria-label="Discord Connected"`) || !strings.Contains(connections, `class="status-pill ok" role="status">Connected</span>`) {
+		t.Fatal("Dashboard and Connections do not expose the same Discord connected status")
+	}
+}
+
+func TestDashboardAndSystemNeedsReviewUseCanonicalWarningTone(t *testing.T) {
+	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
+	_, class, _ := overallRuntimeStatus("en", readiness, RuntimeSnapshot{LastPollErr: "transient"})
+	if got := canonicalDashboardBadgeClass(class); got != "warn" {
+		t.Fatalf("System Status Needs review class = %q, want warn", got)
+	}
+	_, auditClass := dashboardAuditHealthLabel("en", model.AuditHealthNeedsReview)
+	if auditClass != "warn" {
+		t.Fatalf("Audit Needs review class = %q, want warn", auditClass)
+	}
+}
+
+func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *testing.T) {
+	db := newIAViewDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatalf("store Kitsu token: %v", err)
+	}
+	model.SetSetting(db, "discord.guild_id", "guild-1")
+	setRuntimeDiscordBotToken(db, "configured-discord-token")
+	installDiscordAPIStub(t, "guild-1")
+	for _, tc := range []struct {
+		lang, label, hint string
+	}{
+		{"ja", "利用不可", "通知可能なプロダクションがありません。"},
+		{"en", "Unavailable", "No Production is currently available for notifications."},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			renderIADashboardWithRuntime(w, httptest.NewRequest("GET", "/bot/admin?lang="+tc.lang, nil), db, func() bool { return false })
+			body := w.Body.String()
+			if !strings.Contains(body, `Notification status`) && tc.lang == "en" {
+				t.Fatal("English dashboard is missing Notification status")
+			}
+			if !strings.Contains(body, `通知状態`) && tc.lang == "ja" {
+				t.Fatal("Japanese dashboard is missing 通知状態")
+			}
+			if !strings.Contains(body, tc.label) || !strings.Contains(body, tc.hint) {
+				t.Fatalf("dashboard missing unavailable notification copy: %q", body)
+			}
+			if strings.Contains(body, "Waiting for connection") || strings.Contains(body, "Waiting") || strings.Contains(body, "接続待ち") {
+				t.Fatal("dashboard retained ambiguous waiting language")
+			}
+		})
+	}
+}
+
+func TestStatusPolishUsesRealSparkline(t *testing.T) {
 	items := []APIObservation{{Duration: 10 * time.Millisecond, Success: true}, {Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
-	if strings.Count(graph, "<rect") != 2 || !strings.Contains(graph, "bar-success") || !strings.Contains(graph, "bar-failure") || strings.Contains(graph, "<polyline") {
-		t.Fatal("bar graph did not reflect the recorded observations")
+	if strings.Contains(graph, "<circle") || !strings.Contains(graph, `class="telemetry-line"`) || strings.Contains(graph, "<rect") || strings.Contains(graph, "<polyline") {
+		t.Fatal("line graph did not reflect the recorded observations")
 	}
 	if strings.Contains(apiObservationGraph(nil), "polyline") {
 		t.Fatal("empty telemetry should not render a fake graph")
 	}
-	if strings.Count(apiObservationGraph([]APIObservation{{Duration: 10 * time.Millisecond}}), "<rect") != 1 {
-		t.Fatal("a single telemetry sample should render one bar")
+	if strings.Contains(apiObservationGraph([]APIObservation{{Duration: 10 * time.Millisecond}}), "<circle") {
+		t.Fatal("a single telemetry sample should not render a point marker")
 	}
 }
 
@@ -1372,7 +1606,7 @@ func TestDashboardRendersPrimaryContentBeforeManagementMenu(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
 	body := w.Body.String()
-	positions := []string{`<section class="dashboard-intro">`, `class="dashboard-summary-grid"`, `dashboard-queue"`, `dashboard-cta"`, `dashboard-menu"`}
+	positions := []string{`<section class="dashboard-intro">`, `dashboard-cta"`, `dashboard-queue"`, `class="dashboard-summary-grid"`, `dashboard-menu"`}
 	last := -1
 	for _, marker := range positions {
 		pos := strings.Index(body[last+1:], marker)
@@ -1420,13 +1654,36 @@ func TestConnectionsUseSharedActionSpacingToken(t *testing.T) {
 	}
 }
 
+func TestAdminFormSizingLeavesCheckboxesAndRadiosCompact(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `input:not([type="checkbox"]):not([type="radio"]),select{min-height:var(--control-height-standard);}`) {
+		t.Fatal("text input sizing does not exclude checkbox and radio controls")
+	}
+	if strings.Contains(adminThemeCSS, `input,select{min-height:44px;}`) {
+		t.Fatal("checkboxes and radios still inherit the tall generic input rule")
+	}
+}
+
+func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
+	for _, fragment := range []string{
+		`@media(max-width:760px){`,
+		`.mobile-nav{border-radius:var(--radius-md);overflow:visible}`,
+		`.mobile-nav[open]>.nav-card{margin-top:0;padding:4px 6px 8px;border:0;border-radius:0;background:transparent}`,
+		`.mobile-nav .nav-chip{border-radius:var(--radius-sm)}`,
+		`.mobile-nav .nav-chip.active,.mobile-nav .nav-chip[aria-current="page"]{border-radius:var(--radius-sm)}`,
+	} {
+		if !strings.Contains(adminThemeCSS, fragment) {
+			t.Fatalf("mobile navigation radius contract is missing %q", fragment)
+		}
+	}
+}
+
 func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Count(body, `<details class="pipeline-health-details">`) < 4 {
-		t.Fatalf("system status details are not expandable: %d", strings.Count(body, `<details class="pipeline-health-details">`))
+	if strings.Count(body, `class="pipeline-health-details-toggle"`) < 4 || strings.Count(body, `aria-expanded="false"`) < 4 {
+		t.Fatalf("system status details are not expandable: %d", strings.Count(body, `class="pipeline-health-details-toggle"`))
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
@@ -1434,17 +1691,14 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `window.setInterval(refresh,interval)`) {
 		t.Fatal("system status does not include the bounded snapshot interval")
 	}
-	if !strings.Contains(body, `new Date(item.at).getTime()`) || !strings.Contains(body, `windowMs=select.value`) {
-		t.Fatal("system status graph does not use timestamp-based positions")
+	if strings.Contains(body, `new Date(item.at).getTime()`) || strings.Contains(body, `windowMs=select.value`) || !strings.Contains(body, `function(item,index)`) {
+		t.Fatal("system status graph does not use equal sample positions")
 	}
-	if !strings.Contains(body, `function serviceScale(name,items)`) || !strings.Contains(body, `updateCard("kitsu",observations.kitsu||[],serviceScale("kitsu",observations.kitsu||[]))`) {
+	if !strings.Contains(body, `function stableDomain(name,items)`) || !strings.Contains(body, `domain=stableDomain(service,items)`) {
 		t.Fatal("system status refresh does not apply independent service Y scales")
 	}
-	if !strings.Contains(body, `30s`) {
-		t.Fatal("system status refresh is missing compact 30s label")
-	}
-	if !strings.Contains(body, `2m30s`) {
-		t.Fatal("system status refresh is missing compact 2m30s label")
+	if strings.Contains(body, `30s`) || strings.Contains(body, `2m30s`) || strings.Contains(body, `class='chart-time-label'`) {
+		t.Fatal("system status refresh retains removed time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
@@ -1452,11 +1706,11 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `.system-status-sections .api-observation-meta{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
-	if strings.Contains(body, `x1='2' y1='8' x2='28' y2='82`) || !strings.Contains(body, `x1='54' y1='8' x2='54' y2='82`) {
-		t.Fatal("system status refresh contains a diagonal or missing vertical axis")
+	if strings.Contains(body, `class='chart-axis'`) || strings.Contains(body, `class="chart-axis"`) {
+		t.Fatal("system status refresh retains axis chrome")
 	}
-	if !strings.Contains(body, `viewBox='0 0 466 104'`) || !strings.Contains(body, `x1='54' y1='82' x2='464' y2='82'`) {
-		t.Fatal("system status refresh does not use the full-width chart viewBox")
+	if !strings.Contains(body, `telemetry-line`) || strings.Contains(body, `telemetry-point`) {
+		t.Fatal("system status refresh does not use the marker-free line chart geometry")
 	}
 	if !strings.Contains(body, `class="api-observation-details"`) {
 		t.Fatal("system status cards do not reserve shared detail geometry")
@@ -1469,6 +1723,18 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-telemetry-meta`) || !strings.Contains(body, `Last updated`) {
 		t.Fatal("normal API card is missing the last-updated metadata")
+	}
+}
+
+func TestSystemStatusDetailsToggleIsBidirectional(t *testing.T) {
+	script := systemStatusDetailsScript()
+	for _, fragment := range []string{`aria-expanded`, `aria-controls`, `panel.hidden=expanded`, `toggle.setAttribute("aria-expanded",String(!expanded))`} {
+		if !strings.Contains(script, fragment) {
+			t.Fatalf("details toggle is missing %q", fragment)
+		}
+	}
+	if strings.Contains(script, `querySelector(".details-label-collapsed").hidden`) || strings.Contains(script, `querySelector(".details-label-expanded").hidden`) {
+		t.Fatal("details labels change intrinsic button geometry during toggling")
 	}
 }
 

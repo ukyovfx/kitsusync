@@ -59,12 +59,13 @@ func firstTimeConnectionErrorMessage(lang string, err error) string {
 }
 
 type firstTimeConnectionPlan struct {
-	Project      KitsuProject
-	GuildID      string
-	GuildName    string
-	TaskTypes    []kitsu.TaskType
-	Plan         TaskTypeChannelPlan
-	GuildChannel []DiscordGuildChannel
+	Project              KitsuProject
+	GuildID              string
+	GuildName            string
+	NotificationLanguage string
+	TaskTypes            []kitsu.TaskType
+	Plan                 TaskTypeChannelPlan
+	GuildChannel         []DiscordGuildChannel
 }
 
 type firstTimeOwnedResources struct {
@@ -137,6 +138,10 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 	if project.ID == "" {
 		return firstTimeConnectionPlan{}, fmt.Errorf("The selected Production could not be verified")
 	}
+	notificationLanguage := strings.TrimSpace(r.FormValue("notification_language"))
+	if notificationLanguage != "en" {
+		notificationLanguage = "ja"
+	}
 	if strings.TrimSpace(botToken) == "" {
 		return firstTimeConnectionPlan{}, fmt.Errorf("Discord Bot is not configured")
 	}
@@ -188,7 +193,7 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 			return firstTimeConnectionPlan{}, fmt.Errorf("An existing Discord channel has no provable KitsuSync ownership")
 		}
 	}
-	return firstTimeConnectionPlan{Project: project, GuildID: guildID, GuildName: status.GuildName, TaskTypes: taskTypes, Plan: plan, GuildChannel: channels}, nil
+	return firstTimeConnectionPlan{Project: project, GuildID: guildID, GuildName: status.GuildName, NotificationLanguage: notificationLanguage, TaskTypes: taskTypes, Plan: plan, GuildChannel: channels}, nil
 }
 
 func isIncompleteFirstTimeProject(db *gorm.DB, projectID string) bool {
@@ -248,12 +253,19 @@ func firstTimeGuildName(lang, guildName string) string {
 	return tr(lang, "wizard.server_summary")
 }
 
+func normalizedProductionNotificationLanguage(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "en") {
+		return "en"
+	}
+	return "ja"
+}
+
 func renderWizardExecutionCard(lang string, r *http.Request, plan firstTimeConnectionPlan) string {
 	var hidden strings.Builder
 	for _, entry := range plan.Plan.Entries {
 		hidden.WriteString(`<input type="hidden" name="included_task_type_id" value="` + html.EscapeString(entry.TaskTypeID) + `"><input type="hidden" name="channel_name_` + html.EscapeString(entry.TaskTypeID) + `" value="` + html.EscapeString(entry.ChannelName) + `"><input type="hidden" name="channel_order_` + html.EscapeString(entry.TaskTypeID) + `" value="` + fmt.Sprint(entry.Order) + `">`)
 	}
-	form := `<form id="wizard-execution-form" method="POST" action="` + html.EscapeString(withLang("/bot/setup", r)) + `"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="confirm_plan" value="yes"><input type="hidden" name="project_id" value="` + html.EscapeString(plan.Project.ID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(plan.GuildID) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Plan.Fingerprint()) + `">` + hidden.String() + `<noscript><div class="button-row"><a class="btn-ghost" href="` + html.EscapeString(setupWizardURL(r, 5, plan.Project.ID, plan.GuildID, true)) + `">` + html.EscapeString(tr(lang, "wizard.back_to_review")) + `</a><button class="btn" type="submit">` + html.EscapeString(tr(lang, "wizard.execute")) + `</button></div></noscript></form>`
+	form := `<form id="wizard-execution-form" method="POST" action="` + html.EscapeString(withLang("/bot/setup", r)) + `"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="confirm_plan" value="yes"><input type="hidden" name="project_id" value="` + html.EscapeString(plan.Project.ID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(plan.GuildID) + `"><input type="hidden" name="notification_language" value="` + html.EscapeString(normalizedProductionNotificationLanguage(plan.NotificationLanguage)) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Plan.Fingerprint()) + `">` + hidden.String() + `<noscript><div class="button-row"><a class="btn-ghost" href="` + html.EscapeString(setupWizardURL(r, 5, plan.Project.ID, plan.GuildID, true)) + `">` + html.EscapeString(tr(lang, "wizard.back_to_review")) + `</a><button class="btn" type="submit">` + html.EscapeString(tr(lang, "wizard.execute")) + `</button></div></noscript></form>`
 	targets := `<dl class="wizard-connection-summary"><div><dt>` + html.EscapeString(tr(lang, "wizard.production_summary")) + `</dt><dd>` + html.EscapeString(plan.Project.Name) + `</dd></div><div><dt>` + html.EscapeString(tr(lang, "wizard.server_summary")) + `</dt><dd>` + html.EscapeString(firstTimeGuildName(lang, plan.GuildName)) + `</dd></div><div><dt>` + html.EscapeString(tr(lang, "wizard.area_summary")) + `</dt><dd>` + html.EscapeString(KitsuSyncCategoryName(plan.Project.Name)) + `</dd></div></dl>`
 	return `<section class="section-card glass" aria-labelledby="wizard-execute-title" role="status" aria-live="polite"><h2 id="wizard-execute-title">` + html.EscapeString(tr(lang, "wizard.execute_title")) + `</h2><p class="hint">` + html.EscapeString(tr(lang, "wizard.execute_hint")) + `</p>` + targets + `<p class="field-help">` + html.EscapeString(tr(lang, "wizard.execute_started")) + `</p>` + form + `<script>(function(){var form=document.getElementById('wizard-execution-form');if(form){form.submit();}})();</script></section>`
 }
@@ -349,11 +361,12 @@ func executeFirstTimeConnection(plan firstTimeConnectionPlan, botToken, lang str
 			return renderFirstTimeExecutionError(lang, r, "Discordカテゴリを作成できませんでした。変更は保存されていません。")
 		}
 		owned.CategoryID = categoryID
-		if err := model.CreateProject(db, plan.Project.ID, plan.Project.Name, "kitsu", plan.GuildID, categoryID, lang); err != nil {
+		if err := model.CreateProject(db, plan.Project.ID, plan.Project.Name, "kitsu", plan.GuildID, categoryID, normalizedProductionNotificationLanguage(plan.NotificationLanguage)); err != nil {
 			return renderFirstTimeExecutionError(lang, r, "Production接続を保存できませんでした。作成したDiscordカテゴリは削除しました。")
 		}
 	}
 	rows := make([]model.ProductionChannelMapping, 0, len(plan.Plan.Entries))
+	projectWebhooks := model.ListProjectWebhooks(db, plan.Project.ID)
 	owned.CategoryID = categoryID
 	for _, entry := range plan.Plan.Entries {
 		channelID := strings.TrimSpace(entry.ExistingID)
@@ -374,9 +387,8 @@ func executeFirstTimeConnection(plan firstTimeConnectionPlan, botToken, lang str
 		rows = append(rows, row)
 		webhookURL := ""
 		hasExistingWebhook := false
-		for _, webhook := range model.ListProjectWebhooks(db, plan.Project.ID) {
+		for _, webhook := range projectWebhooks {
 			if strings.TrimSpace(webhook.DiscordChannelID) == channelID && strings.TrimSpace(webhook.WebhookURL) != "" {
-				webhookURL = strings.TrimSpace(webhook.WebhookURL)
 				hasExistingWebhook = true
 				break
 			}

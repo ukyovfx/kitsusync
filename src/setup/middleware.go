@@ -2,7 +2,9 @@ package setup
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,7 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"app/src/model"
 	"github.com/gookit/slog"
+	"gorm.io/gorm"
 )
 
 type sessionData struct {
@@ -34,12 +38,26 @@ type wizardState struct {
 }
 
 var (
-	sessionMu  sync.Mutex
-	sessions   = map[string]sessionData{}
-	sessionTTL = 15 * time.Minute
+	sessionMu      sync.Mutex
+	sessions       = map[string]sessionData{}
+	sessionStoreDB *gorm.DB
+	sessionTTL     = 15 * time.Minute
 )
 
 const sessionCookieName = "kitsu_admin_session"
+
+// ConfigureSessionStore enables SQLite-backed session validation. A nil DB
+// retains the in-memory mode used by isolated unit tests.
+func ConfigureSessionStore(db *gorm.DB) {
+	sessionMu.Lock()
+	defer sessionMu.Unlock()
+	sessionStoreDB = db
+}
+
+func sessionTokenHash(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
+}
 
 func isHTTPSRequest(r *http.Request) bool {
 	if r == nil {
@@ -67,8 +85,15 @@ func sessionCookie(r *http.Request, value string, maxAge int) *http.Cookie {
 }
 
 func newSessionToken(email, kitsuToken, role, next string) string {
+	token, _ := newSessionTokenChecked(email, kitsuToken, role, next)
+	return token
+}
+
+func newSessionTokenChecked(email, kitsuToken, role, next string) (string, error) {
 	buffer := make([]byte, 16)
-	_, _ = rand.Read(buffer)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
 	token := hex.EncodeToString(buffer)
 	session := sessionData{
 		Expiry:     time.Now().Add(sessionTTL),
@@ -81,8 +106,51 @@ func newSessionToken(email, kitsuToken, role, next string) string {
 	}
 	sessionMu.Lock()
 	sessions[token] = session
+	db := sessionStoreDB
 	sessionMu.Unlock()
-	return token
+	if db != nil {
+		if err := db.Create(&model.AdminSession{
+			TokenHash:    sessionTokenHash(token),
+			Email:        session.Email,
+			Role:         session.Role,
+			Expiry:       session.Expiry,
+			BotEditUntil: session.BotEditUntil,
+		}).Error; err != nil {
+			sessionMu.Lock()
+			delete(sessions, token)
+			sessionMu.Unlock()
+			return "", fmt.Errorf("persist admin session: %w", err)
+		}
+	}
+	return token, nil
+}
+
+// classifySessionPersistenceError intentionally returns only a stable,
+// non-sensitive category suitable for logs and diagnostics. SQLite errors can
+// include SQL text, paths, or values, so callers must not log the raw error.
+func classifySessionPersistenceError(err error) string {
+	return classifySQLitePersistenceError(err)
+}
+
+func classifySQLitePersistenceError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "no such table"):
+		return "schema_table_missing"
+	case strings.Contains(message, "no such column"), strings.Contains(message, "has no column"), strings.Contains(message, "database schema"):
+		return "schema_incompatible"
+	case strings.Contains(message, "readonly"):
+		return "database_readonly"
+	case strings.Contains(message, "database is locked"), strings.Contains(message, "database is busy"), strings.Contains(message, "sqlite_busy"):
+		return "database_busy"
+	case strings.Contains(message, "constraint failed"), strings.Contains(message, "unique constraint"):
+		return "constraint_failed"
+	default:
+		return "persistence_failed"
+	}
 }
 
 func validSession(token string) bool {
@@ -90,22 +158,41 @@ func validSession(token string) bool {
 		return false
 	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[token]
-	if !ok {
+	db := sessionStoreDB
+	sessionMu.Unlock()
+	if ok {
+		if time.Now().After(session.Expiry) {
+			destroySession(token)
+			return false
+		}
+		return true
+	}
+	if db == nil {
 		return false
 	}
-	if time.Now().After(session.Expiry) {
-		delete(sessions, token)
+	var persisted model.AdminSession
+	if err := db.Where("token_hash = ?", sessionTokenHash(token)).First(&persisted).Error; err != nil {
 		return false
 	}
+	if time.Now().After(persisted.Expiry) {
+		_ = db.Delete(&persisted).Error
+		return false
+	}
+	sessionMu.Lock()
+	sessions[token] = sessionData{Expiry: persisted.Expiry, Email: persisted.Email, Role: persisted.Role, BotEditUntil: persisted.BotEditUntil}
+	sessionMu.Unlock()
 	return true
 }
 
 func destroySession(token string) {
 	sessionMu.Lock()
 	delete(sessions, token)
+	db := sessionStoreDB
 	sessionMu.Unlock()
+	if db != nil {
+		_ = db.Where("token_hash = ?", sessionTokenHash(token)).Delete(&model.AdminSession{}).Error
+	}
 }
 
 func botEditAllowed(r *http.Request) bool {
@@ -117,8 +204,16 @@ func botEditAllowed(r *http.Request) bool {
 		return false
 	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[cookie.Value]
+	db := sessionStoreDB
+	sessionMu.Unlock()
+	if !ok && db != nil {
+		var persisted model.AdminSession
+		if db.Where("token_hash = ?", sessionTokenHash(cookie.Value)).First(&persisted).Error == nil {
+			session = sessionData{Expiry: persisted.Expiry, Email: persisted.Email, Role: persisted.Role, BotEditUntil: persisted.BotEditUntil}
+			ok = true
+		}
+	}
 	if !ok {
 		return false
 	}
@@ -134,6 +229,100 @@ func RequireSession(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// CSRFProtection rejects cross-site browser mutations for authenticated
+// administration and setup routes. SameSite=Lax remains an additional
+// defense, while Origin/Fetch Metadata checks protect cookie-authenticated
+// POST forms without adding a token to every existing form.
+func CSRFProtection(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r == nil || !csrfProtectedPath(r.URL.Path) || !csrfUnsafeMethod(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, ok := currentSessionData(r); !ok {
+			// Preserve the existing unauthenticated behavior; RequireSession
+			// remains responsible for redirecting or rejecting the request.
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+			http.Error(w, "cross-site request rejected", http.StatusForbidden)
+			return
+		}
+		effective := requestOrigin(r)
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+			if !sameOrigin(origin, effective) {
+				http.Error(w, "origin mismatch", http.StatusForbidden)
+				return
+			}
+		} else if referer := strings.TrimSpace(r.Header.Get("Referer")); referer != "" {
+			if !sameOriginReferer(referer, effective) {
+				http.Error(w, "referer mismatch", http.StatusForbidden)
+				return
+			}
+		} else {
+			http.Error(w, "origin or referer required", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func csrfUnsafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return false
+	default:
+		return true
+	}
+}
+
+func csrfProtectedPath(path string) bool {
+	return path == "/setup" || path == "/bot/setup" ||
+		path == "/admin" || path == "/bot/admin" ||
+		strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/bot/admin/") ||
+		strings.HasPrefix(path, "/api/setup/") || strings.HasPrefix(path, "/bot/api/setup/") ||
+		path == "/logout" || path == "/bot/logout"
+}
+
+func requestOrigin(r *http.Request) string {
+	if r == nil || strings.TrimSpace(r.Host) == "" {
+		return ""
+	}
+	scheme := "http"
+	if isHTTPSRequest(r) {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
+}
+
+func sameOrigin(candidate, expected string) bool {
+	candidateURL, err := url.Parse(candidate)
+	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" ||
+		candidateURL.User != nil || candidateURL.Path != "" ||
+		candidateURL.RawQuery != "" || candidateURL.Fragment != "" {
+		return false
+	}
+	return sameOriginURL(candidateURL, expected)
+}
+
+func sameOriginReferer(candidate, expected string) bool {
+	candidateURL, err := url.Parse(candidate)
+	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" || candidateURL.User != nil || candidateURL.RawQuery != "" || candidateURL.Fragment != "" {
+		return false
+	}
+	return sameOriginURL(candidateURL, expected)
+}
+
+func sameOriginURL(candidateURL *url.URL, expected string) bool {
+	expectedURL, err := url.Parse(expected)
+	if err != nil || expectedURL.Scheme == "" || expectedURL.Host == "" {
+		return false
+	}
+	return strings.EqualFold(candidateURL.Scheme, expectedURL.Scheme) &&
+		strings.EqualFold(candidateURL.Host, expectedURL.Host)
 }
 
 // RequestTrace wraps the current admin/setup routes with secret-safe request
@@ -223,8 +412,16 @@ func currentSessionData(r *http.Request) (sessionData, bool) {
 		return sessionData{}, false
 	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[cookie.Value]
+	db := sessionStoreDB
+	sessionMu.Unlock()
+	if !ok && db != nil {
+		var persisted model.AdminSession
+		if db.Where("token_hash = ?", sessionTokenHash(cookie.Value)).First(&persisted).Error == nil {
+			session = sessionData{Expiry: persisted.Expiry, Email: persisted.Email, Role: persisted.Role, BotEditUntil: persisted.BotEditUntil}
+			ok = true
+		}
+	}
 	if !ok || time.Now().After(session.Expiry) {
 		return sessionData{}, false
 	}
@@ -255,27 +452,63 @@ func updateWizardState(r *http.Request, update func(*wizardState)) {
 	if err != nil || cookie.Value == "" {
 		return
 	}
+	// Hydrate a persisted session into the process cache before applying the
+	// update, so wizard state remains available after a container replacement.
+	if _, ok := currentSessionData(r); !ok {
+		return
+	}
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
 	session, ok := sessions[cookie.Value]
+	db := sessionStoreDB
 	if !ok || time.Now().After(session.Expiry) {
+		sessionMu.Unlock()
 		return
 	}
 	update(&session.Wizard)
 	sessions[cookie.Value] = session
+	sessionMu.Unlock()
+	if db != nil {
+		_ = db.Model(&model.AdminSession{}).Where("token_hash = ?", sessionTokenHash(cookie.Value)).Updates(map[string]interface{}{"updated_at": time.Now()}).Error
+	}
 }
 
 func LoginHandler(kitsuHostname string) http.HandlerFunc {
-	return loginHandlerWithPersist(kitsuHostname, nil, nil)
+	return loginHandlerWithPersist(kitsuHostname, nil, nil, nil)
 }
 
 // LoginHandlerWithDiscovery persists a host selected by a successful,
 // authenticated login. Discovery itself remains read-only.
 func LoginHandlerWithDiscovery(resolve func() (string, string), persist func(string)) http.HandlerFunc {
-	return loginHandlerWithPersist("", resolve, persist)
+	return LoginHandlerWithDiscoveryAndConnection(resolve, func(host, _ string) {
+		if persist != nil {
+			persist(host)
+		}
+	})
 }
 
-func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, string), persist func(string)) http.HandlerFunc {
+// LoginHandlerWithDiscoveryAndConnection persists the display/runtime host and
+// optional independently verified API base after a successful sign-in.
+func LoginHandlerWithDiscoveryAndConnection(resolve func() (string, string), persist func(string, string)) http.HandlerFunc {
+	return LoginHandlerWithDiscoveryAndURLs(resolve, func(_, runtimeHost, apiOverride string) {
+		if persist != nil {
+			persist(runtimeHost, apiOverride)
+		}
+	})
+}
+
+// LoginHandlerWithDiscoveryAndURLs persists distinct user-facing, runtime,
+// and API override URLs after a verified sign-in.
+func LoginHandlerWithDiscoveryAndURLs(resolve func() (string, string), persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
+	return LoginHandlerWithDiscoveryAndStoredDisplay(resolve, nil, persist)
+}
+
+// LoginHandlerWithDiscoveryAndStoredDisplay preserves an existing human-facing
+// display URL while an operator updates only the runtime or API endpoint.
+func LoginHandlerWithDiscoveryAndStoredDisplay(resolve func() (string, string), currentDisplay func() string, persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
+	return loginHandlerWithPersist("", currentDisplay, resolve, persist)
+}
+
+func loginHandlerWithPersist(kitsuHostname string, currentDisplay func() string, resolve func() (string, string), persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -283,10 +516,17 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
-			hostname := configuredHostname
+			runtimeHostname := configuredHostname
+			displayHostname := configuredHostname
+			if currentDisplay != nil {
+				displayHostname = normalizeKitsuHostname(currentDisplay())
+			}
 			source := ""
-			if hostname == "" && resolve != nil {
-				hostname, source = resolve()
+			if runtimeHostname == "" && resolve != nil {
+				runtimeHostname, source = resolve()
+				if displayHostname == "" {
+					displayHostname = runtimeHostname
+				}
 			}
 			email := strings.TrimSpace(r.FormValue("email"))
 			password := r.FormValue("password")
@@ -299,31 +539,52 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 					next = withLang("/bot/admin", r)
 				}
 			}
-
-			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
-				manualHostname := strings.TrimSpace(r.FormValue("hostname"))
-				if manualHostname != "" {
-					if normalized, err := validateKitsuEndpoint(manualHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
-						hostname = normalized
-						source = "operator-supplied"
+			if manualHostname := strings.TrimSpace(r.FormValue("hostname")); manualHostname != "" {
+				if normalized, err := validateKitsuEndpoint(manualHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) {
+					displayHostname = normalized
+					if runtimeHostname == "" || configuredHostname == "" {
+						runtimeHostname = normalized
 					}
+					source = "operator-supplied"
 				}
 			}
-			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
+			if internalHostname := strings.TrimSpace(r.FormValue("internal_hostname")); internalHostname != "" {
+				if normalized, err := validateKitsuEndpoint(internalHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) {
+					runtimeHostname = normalized
+					source = "operator-supplied"
+				} else {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "内部 Kitsu URLを確認してください。", "Check the Internal Kitsu URL."), next, configuredHostname == "", r, r.FormValue("hostname")))
+					return
+				}
+			}
+			if runtimeHostname == "" || (!strings.HasPrefix(runtimeHostname, "http://") && !strings.HasPrefix(runtimeHostname, "https://")) {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu URLを確認できませんでした。KitsuのベースURLを確認してください。", "Kitsu could not be detected. Check the Kitsu base URL."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
-			loginURL := strings.TrimRight(hostname, "/") + "/api/auth/login"
-			role, kitsuToken, ok := kitsuLoginCheck(loginURL, email, password)
-			if !ok || !isStudioManagerOrHigher(role) {
+			apiOverride := strings.TrimSpace(r.FormValue("api_base_url"))
+			connection, connectionErr := ResolveKitsuConnection(context.Background(), runtimeHostname, apiOverride)
+			if connectionErr != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu 接続先を確認できませんでした。", "Kitsu could not be verified before sign-in.")+" ("+connectionErrorClass(connectionErr)+")", next, configuredHostname == "", r, r.FormValue("hostname")))
+				return
+			}
+			kitsuToken, role, authErr := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
+			if authErr != nil || !isStudioManagerOrHigher(role) {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
-			token := newSessionToken(email, kitsuToken, role, next)
-			if persist != nil && (source == "local-discovered" || source == "operator-supplied") {
-				persist(hostname)
+			token, sessionErr := newSessionTokenChecked(email, kitsuToken, role, next)
+			if sessionErr != nil {
+				slog.Error("admin session persistence failed", "error_class", classifySessionPersistenceError(sessionErr))
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu認証は成功しましたが、KitsuSyncは管理者ログイン状態を保存できませんでした。管理者に確認してください。", "Kitsu authentication succeeded, but KitsuSync could not save the admin session. Contact the administrator."), next, configuredHostname == "", r, r.FormValue("hostname")))
+				return
+			}
+			if persist != nil && (source == "local-discovered" || source == "operator-supplied" || apiOverride != "") {
+				persist(displayHostname, connection.RuntimeBaseURL, apiOverride)
 			}
 			http.SetCookie(w, sessionCookie(r, token, int(sessionTTL.Seconds())))
 			http.Redirect(w, r, next, http.StatusSeeOther)
@@ -342,6 +603,11 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 
 func LogoutHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "logout requires POST", http.StatusMethodNotAllowed)
+			return
+		}
 		if cookie, err := r.Cookie(sessionCookieName); err == nil {
 			destroySession(cookie.Value)
 		}
@@ -370,7 +636,7 @@ func kitsuLoginCheck(loginURL, email, password string) (role, kitsuToken string,
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := (&http.Client{Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
 	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
 		return "", "", false
 	}
@@ -457,6 +723,7 @@ func loginPageHTMLWithHostname(lang, errMsg, next string, showHostname bool, r *
 	if showHostname {
 		hostnameInput = `<label for="login-hostname">` + esc(t(lang, "KitsuベースURL", "Kitsu base URL")) + `</label><input id="login-hostname" type="url" name="hostname" value="` + esc(hostnameValue) + `" placeholder="https://kitsu.example.com" autocomplete="url" required><p class="field-help">` + esc(t(lang, "Kitsuを自動検出できない場合に入力します。検証に成功したURLだけを保存します。", "Use this only when Kitsu cannot be detected automatically. Only a successfully validated URL is saved.")) + `</p>`
 	}
-	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass">` + hostnameInput + `<label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
+	advanced := `<details class="connection-advanced"><summary>` + esc(t(lang, "詳細設定（任意）", "Advanced (optional)")) + `</summary><label for="login-internal-hostname">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="login-internal-hostname" type="url" name="internal_hostname" autocomplete="url"><p class="field-help">` + esc(t(lang, "KitsuSyncが別の内部経路を使う場合だけ必要です。", "Only needed when KitsuSync must use a different internal route to reach Kitsu.")) + `</p><details class="connection-expert"><summary>` + esc(t(lang, "Expert: API URL", "Expert: API URL")) + `</summary><label for="login-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="login-api-base-url" type="url" name="api_base_url" autocomplete="url"><p class="field-help">` + esc(t(lang, "Kitsu URLとAPIの起点が異なる特殊なリバースプロキシ用です。", "Only needed for unusual reverse proxy setups where the API is not under the Kitsu URL.")) + `</p></details></details>`
+	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass">` + hostnameInput + advanced + `<label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
 	return appShell("KitsuSync", "", lang, r, "", body)
 }
