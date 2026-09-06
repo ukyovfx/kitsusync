@@ -400,6 +400,80 @@ func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *tes
 	}
 }
 
+func TestLoginWithInternalKitsuURLPersistsDistinctDisplayAndRuntimeURLs(t *testing.T) {
+	resetSessions()
+	db := newSetupStateTestDB(t)
+	runtime := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
+	})))
+	defer runtime.Close()
+
+	display := "https://public.kitsu.example.test/studio"
+	form := url.Values{
+		"hostname":          {display},
+		"internal_hostname": {runtime.URL},
+		"email":             {"manager@example.com"},
+		"password":          {"not-returned"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscoveryAndURLs(func() (string, string) { return "", "" }, func(savedDisplay, savedRuntime, apiOverride string) {
+		model.SetSetting(db, KitsuDisplayURLSettingKey, savedDisplay)
+		model.SetSetting(db, "kitsu.hostname", savedRuntime)
+		model.SetSetting(db, KitsuAPIBaseURLSettingKey, apiOverride)
+	})(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := strings.TrimRight(model.GetSetting(db, KitsuDisplayURLSettingKey), "/"); got != display {
+		t.Fatalf("display URL = %q, want %q", got, display)
+	}
+	if got := model.GetSetting(db, "kitsu.hostname"); strings.TrimRight(got, "/") != strings.TrimRight(runtime.URL, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, runtime.URL)
+	}
+	if got := PublicKitsuURL(db); got != display || strings.Contains(got, runtime.URL) {
+		t.Fatalf("human-facing URL = %q", got)
+	}
+}
+
+func TestLoginHostnameOnlyPersistsLegacyDisplayAndRuntimeURL(t *testing.T) {
+	resetSessions()
+	db := newSetupStateTestDB(t)
+	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
+	})))
+	defer kitsu.Close()
+
+	form := url.Values{"hostname": {kitsu.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscoveryAndURLs(func() (string, string) { return "", "" }, func(display, runtime, _ string) {
+		model.SetSetting(db, KitsuDisplayURLSettingKey, display)
+		model.SetSetting(db, "kitsu.hostname", runtime)
+	})(rr, req)
+
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
+	}
+	if got := model.GetSetting(db, KitsuDisplayURLSettingKey); strings.TrimRight(got, "/") != strings.TrimRight(kitsu.URL, "/") {
+		t.Fatalf("display URL = %q", got)
+	}
+	if got := model.GetSetting(db, "kitsu.hostname"); strings.TrimRight(got, "/") != strings.TrimRight(kitsu.URL, "/") {
+		t.Fatalf("runtime URL = %q", got)
+	}
+}
+
 func TestLoginHandlerWithDiscoveryRejectsInvalidOrPlaceholderManualHost(t *testing.T) {
 	for _, hostname := range []string{"http://YOUR_KITSU_HOST/", "not a URL"} {
 		t.Run(hostname, func(t *testing.T) {

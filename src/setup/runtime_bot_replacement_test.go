@@ -13,6 +13,9 @@ func TestPrepareRuntimeBotReplacementUsesPublicPersonAPI(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"access_token":"admin-token"}`))
@@ -27,6 +30,8 @@ func TestPrepareRuntimeBotReplacementUsesPublicPersonAPI(t *testing.T) {
 				return
 			}
 			_, _ = w.Write([]byte(`{"id":"replacement-id","email":"temp@example.com","is_bot":true,"active":true,"archived":false,"role":"admin","access_token":"replacement-token"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/data/persons/replacement-id":
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}

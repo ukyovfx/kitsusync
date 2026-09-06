@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"app/src/model"
-	"app/src/utils/basicauth"
 	"gorm.io/gorm"
 )
 
@@ -80,7 +79,11 @@ func RecoverRuntimeToken(db *gorm.DB, kitsuHost, email, token string) error {
 	if email == "" || token == "" {
 		return errors.New("runtime token credentials are incomplete")
 	}
-	if !basicauth.ValidateJWTToken(strings.TrimRight(kitsuHost, "/")+"/api/auth/authenticated", token) {
+	connection, err := ResolveKitsuConnection(context.Background(), kitsuHost, model.GetSetting(db, KitsuAPIBaseURLSettingKey))
+	if err != nil {
+		return errors.New(connectionErrorClass(err))
+	}
+	if err := VerifyKitsuToken(context.Background(), connection, token); err != nil {
 		return errors.New("runtime bot token authentication failed")
 	}
 	ciphertext, err := encryptRuntimeSecret(token)

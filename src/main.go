@@ -996,11 +996,12 @@ func main() {
 	}
 
 	loginHandler := func(w http.ResponseWriter, r *http.Request) {
-		setup.LoginHandlerWithDiscoveryAndConnection(func() (string, string) {
+		setup.LoginHandlerWithDiscoveryAndURLs(func() (string, string) {
 			result := setup.DiscoverKitsuHost(db)
 			return result.RuntimeHost, result.Source
-		}, func(host, apiOverride string) {
-			model.SetSetting(db, "kitsu.hostname", host)
+		}, func(displayHost, runtimeHost, apiOverride string) {
+			model.SetSetting(db, setup.KitsuDisplayURLSettingKey, displayHost)
+			model.SetSetting(db, "kitsu.hostname", runtimeHost)
 			if strings.TrimSpace(apiOverride) == "" {
 				model.DeleteSetting(db, setup.KitsuAPIBaseURLSettingKey)
 				os.Unsetenv("KITSU_API_BASE_URL")

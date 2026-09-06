@@ -489,10 +489,20 @@ func LoginHandlerWithDiscovery(resolve func() (string, string), persist func(str
 // LoginHandlerWithDiscoveryAndConnection persists the display/runtime host and
 // optional independently verified API base after a successful sign-in.
 func LoginHandlerWithDiscoveryAndConnection(resolve func() (string, string), persist func(string, string)) http.HandlerFunc {
+	return LoginHandlerWithDiscoveryAndURLs(resolve, func(_, runtimeHost, apiOverride string) {
+		if persist != nil {
+			persist(runtimeHost, apiOverride)
+		}
+	})
+}
+
+// LoginHandlerWithDiscoveryAndURLs persists distinct user-facing, runtime,
+// and API override URLs after a verified sign-in.
+func LoginHandlerWithDiscoveryAndURLs(resolve func() (string, string), persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
 	return loginHandlerWithPersist("", resolve, persist)
 }
 
-func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, string), persist func(string, string)) http.HandlerFunc {
+func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, string), persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -500,10 +510,12 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 
 		if r.Method == http.MethodPost {
 			_ = r.ParseForm()
-			hostname := configuredHostname
+			runtimeHostname := configuredHostname
+			displayHostname := configuredHostname
 			source := ""
-			if hostname == "" && resolve != nil {
-				hostname, source = resolve()
+			if runtimeHostname == "" && resolve != nil {
+				runtimeHostname, source = resolve()
+				displayHostname = runtimeHostname
 			}
 			email := strings.TrimSpace(r.FormValue("email"))
 			password := r.FormValue("password")
@@ -516,32 +528,37 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 					next = withLang("/bot/admin", r)
 				}
 			}
-			if internalHostname := strings.TrimSpace(r.FormValue("internal_hostname")); internalHostname != "" {
-				hostname = internalHostname
-			}
-
-			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
-				manualHostname := strings.TrimSpace(r.FormValue("hostname"))
-				if manualHostname != "" {
-					if normalized, err := validateKitsuEndpoint(manualHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) {
-						hostname = normalized
-						source = "operator-supplied"
+			if manualHostname := strings.TrimSpace(r.FormValue("hostname")); manualHostname != "" {
+				if normalized, err := validateKitsuEndpoint(manualHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) {
+					displayHostname = normalized
+					if runtimeHostname == "" || configuredHostname == "" {
+						runtimeHostname = normalized
 					}
+					source = "operator-supplied"
 				}
 			}
-			if hostname == "" || (!strings.HasPrefix(hostname, "http://") && !strings.HasPrefix(hostname, "https://")) {
+			if internalHostname := strings.TrimSpace(r.FormValue("internal_hostname")); internalHostname != "" {
+				if normalized, err := validateKitsuEndpoint(internalHostname); err == nil && !isPlaceholderKitsuEndpoint(normalized) {
+					runtimeHostname = normalized
+					source = "operator-supplied"
+				} else {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "内部 Kitsu URLを確認してください。", "Check the Internal Kitsu URL."), next, configuredHostname == "", r, r.FormValue("hostname")))
+					return
+				}
+			}
+			if runtimeHostname == "" || (!strings.HasPrefix(runtimeHostname, "http://") && !strings.HasPrefix(runtimeHostname, "https://")) {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu URLを確認できませんでした。KitsuのベースURLを確認してください。", "Kitsu could not be detected. Check the Kitsu base URL."), next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
 			apiOverride := strings.TrimSpace(r.FormValue("api_base_url"))
-			connection, connectionErr := ResolveKitsuConnection(context.Background(), hostname, apiOverride)
+			connection, connectionErr := ResolveKitsuConnection(context.Background(), runtimeHostname, apiOverride)
 			if connectionErr != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, loginPageHTMLWithHostname(lang, t(lang, "Kitsu 接続先を確認できませんでした。", "Kitsu could not be verified before sign-in.")+" ("+connectionErrorClass(connectionErr)+")", next, configuredHostname == "", r, r.FormValue("hostname")))
 				return
 			}
-			hostname = connection.RuntimeBaseURL
 			kitsuToken, role, authErr := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
 			if authErr != nil || !isStudioManagerOrHigher(role) {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -556,7 +573,7 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 				return
 			}
 			if persist != nil && (source == "local-discovered" || source == "operator-supplied" || apiOverride != "") {
-				persist(hostname, apiOverride)
+				persist(displayHostname, connection.RuntimeBaseURL, apiOverride)
 			}
 			http.SetCookie(w, sessionCookie(r, token, int(sessionTTL.Seconds())))
 			http.Redirect(w, r, next, http.StatusSeeOther)

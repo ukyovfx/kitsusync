@@ -1,11 +1,9 @@
 package setup
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -1081,51 +1079,11 @@ func tryKitsuLogin(hostname, email, password string) (bool, string) {
 	if err != nil {
 		return false, connectionErrorClass(err)
 	}
-	loginURL := connection.ResolvedAPIBaseURL + "/auth/login"
-	payload := map[string]string{
-		"email":    email,
-		"password": password,
-	}
-	b, err := json.Marshal(payload)
+	token, _, err := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
 	if err != nil {
-		return false, "failed to build auth request"
+		return false, connectionErrorClass(err)
 	}
-	req, err := http.NewRequest(http.MethodPost, loginURL, bytes.NewReader(b))
-	if err != nil {
-		return false, "failed to build auth request"
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, "authentication request failed: " + err.Error()
-	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	bodyText := strings.TrimSpace(string(respBody))
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		return false, "auth_redirect_blocked"
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		var authResp struct {
-			Token string `json:"access_token"`
-		}
-		if err := json.Unmarshal(respBody, &authResp); err != nil || strings.TrimSpace(authResp.Token) == "" {
-			return false, "authentication endpoint returned success but token payload was invalid"
-		}
-		return true, ""
-	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		if bodyText != "" {
-			return false, fmt.Sprintf("authentication failed (HTTP %d): %s", resp.StatusCode, bodyText)
-		}
-		return false, fmt.Sprintf("authentication failed (HTTP %d): email/password mismatch, SSO-only account, or local password not set", resp.StatusCode)
-	}
-	if bodyText != "" {
-		return false, fmt.Sprintf("authentication failed (HTTP %d): %s", resp.StatusCode, bodyText)
-	}
-	return false, fmt.Sprintf("authentication failed (HTTP %d)", resp.StatusCode)
+	return token != "", ""
 }
 
 // --- Mapping API types ---
