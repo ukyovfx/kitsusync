@@ -474,6 +474,123 @@ func TestLoginHostnameOnlyPersistsLegacyDisplayAndRuntimeURL(t *testing.T) {
 	}
 }
 
+func newLoginPersistenceKitsuServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
+	})))
+}
+
+func runStoredDisplayUpdateLogin(t *testing.T, initialDisplay, initialRuntime string, form func(runtime, internal, api string) url.Values) *gorm.DB {
+	t.Helper()
+	resetSessions()
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, KitsuDisplayURLSettingKey, initialDisplay)
+	model.SetSetting(db, "kitsu.hostname", initialRuntime)
+	runtimeServer := newLoginPersistenceKitsuServer(t)
+	internalServer := newLoginPersistenceKitsuServer(t)
+	apiServer := newLoginPersistenceKitsuServer(t)
+	t.Cleanup(func() {
+		runtimeServer.Close()
+		internalServer.Close()
+		apiServer.Close()
+	})
+	values := form(runtimeServer.URL, internalServer.URL, apiServer.URL)
+	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	LoginHandlerWithDiscoveryAndStoredDisplay(func() (string, string) {
+		return runtimeServer.URL, "persisted"
+	}, func() string {
+		if display := strings.TrimSpace(model.GetSetting(db, KitsuDisplayURLSettingKey)); display != "" {
+			return display
+		}
+		return model.GetSetting(db, "kitsu.hostname")
+	}, func(display, runtime, api string) {
+		model.SetSetting(db, KitsuDisplayURLSettingKey, display)
+		model.SetSetting(db, "kitsu.hostname", runtime)
+		if strings.TrimSpace(api) == "" {
+			model.DeleteSetting(db, KitsuAPIBaseURLSettingKey)
+			return
+		}
+		normalized, err := NormalizeKitsuURL(api, APISourceExplicit)
+		if err != nil {
+			t.Fatalf("test API override normalization failed: %v", err)
+		}
+		model.SetSetting(db, KitsuAPIBaseURLSettingKey, normalized.ResolvedAPIBaseURL)
+	})(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
+	}
+	return db
+}
+
+func TestExistingDisplayURLSurvivesInternalHostnameUpdate(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	var expectedInternal string
+	db := runStoredDisplayUpdateLogin(t, display, "", func(runtime, internal, _ string) url.Values {
+		expectedInternal = internal
+		return url.Values{"internal_hostname": {internal}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != display {
+		t.Fatalf("public URL = %q, want %q", got, display)
+	}
+	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedInternal, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, expectedInternal)
+	}
+}
+
+func TestExistingDisplayURLSurvivesAPIOverrideUpdate(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	var expectedRuntime string
+	db := runStoredDisplayUpdateLogin(t, display, "", func(runtime, _, api string) url.Values {
+		expectedRuntime = runtime
+		return url.Values{"api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != display {
+		t.Fatalf("public URL = %q, want %q", got, display)
+	}
+	if got := model.GetSetting(db, KitsuAPIBaseURLSettingKey); got == "" {
+		t.Fatal("API override was not persisted")
+	}
+	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedRuntime, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, expectedRuntime)
+	}
+}
+
+func TestExistingDisplayURLSurvivesInternalAndAPIOverrideUpdates(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	var expectedInternal string
+	db := runStoredDisplayUpdateLogin(t, display, "", func(_, internal, api string) url.Values {
+		expectedInternal = internal
+		return url.Values{"internal_hostname": {internal}, "api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != display {
+		t.Fatalf("public URL = %q, want %q", got, display)
+	}
+	if model.GetSetting(db, KitsuAPIBaseURLSettingKey) == "" || model.GetSetting(db, "kitsu.hostname") == "" {
+		t.Fatal("runtime and API override were not both persisted")
+	}
+	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedInternal, "/") {
+		t.Fatalf("runtime URL = %q, want %q", got, expectedInternal)
+	}
+}
+
+func TestExplicitDisplayURLReplacesStoredDisplayDuringInternalUpdate(t *testing.T) {
+	const display = "https://public.kitsu.example.test/studio"
+	const replacement = "https://new-public.kitsu.example.test/studio"
+	db := runStoredDisplayUpdateLogin(t, display, "", func(_, internal, api string) url.Values {
+		return url.Values{"hostname": {replacement}, "internal_hostname": {internal}, "api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+	})
+	if got := PublicKitsuURL(db); got != replacement {
+		t.Fatalf("public URL = %q, want %q", got, replacement)
+	}
+}
+
 func TestLoginHandlerWithDiscoveryRejectsInvalidOrPlaceholderManualHost(t *testing.T) {
 	for _, hostname := range []string{"http://YOUR_KITSU_HOST/", "not a URL"} {
 		t.Run(hostname, func(t *testing.T) {

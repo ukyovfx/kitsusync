@@ -473,7 +473,7 @@ func updateWizardState(r *http.Request, update func(*wizardState)) {
 }
 
 func LoginHandler(kitsuHostname string) http.HandlerFunc {
-	return loginHandlerWithPersist(kitsuHostname, nil, nil)
+	return loginHandlerWithPersist(kitsuHostname, nil, nil, nil)
 }
 
 // LoginHandlerWithDiscovery persists a host selected by a successful,
@@ -499,10 +499,16 @@ func LoginHandlerWithDiscoveryAndConnection(resolve func() (string, string), per
 // LoginHandlerWithDiscoveryAndURLs persists distinct user-facing, runtime,
 // and API override URLs after a verified sign-in.
 func LoginHandlerWithDiscoveryAndURLs(resolve func() (string, string), persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
-	return loginHandlerWithPersist("", resolve, persist)
+	return LoginHandlerWithDiscoveryAndStoredDisplay(resolve, nil, persist)
 }
 
-func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, string), persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
+// LoginHandlerWithDiscoveryAndStoredDisplay preserves an existing human-facing
+// display URL while an operator updates only the runtime or API endpoint.
+func LoginHandlerWithDiscoveryAndStoredDisplay(resolve func() (string, string), currentDisplay func() string, persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
+	return loginHandlerWithPersist("", currentDisplay, resolve, persist)
+}
+
+func loginHandlerWithPersist(kitsuHostname string, currentDisplay func() string, resolve func() (string, string), persist func(displayHost, runtimeHost, apiOverride string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -512,10 +518,15 @@ func loginHandlerWithPersist(kitsuHostname string, resolve func() (string, strin
 			_ = r.ParseForm()
 			runtimeHostname := configuredHostname
 			displayHostname := configuredHostname
+			if currentDisplay != nil {
+				displayHostname = normalizeKitsuHostname(currentDisplay())
+			}
 			source := ""
 			if runtimeHostname == "" && resolve != nil {
 				runtimeHostname, source = resolve()
-				displayHostname = runtimeHostname
+				if displayHostname == "" {
+					displayHostname = runtimeHostname
+				}
 			}
 			email := strings.TrimSpace(r.FormValue("email"))
 			password := r.FormValue("password")

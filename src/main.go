@@ -996,9 +996,14 @@ func main() {
 	}
 
 	loginHandler := func(w http.ResponseWriter, r *http.Request) {
-		setup.LoginHandlerWithDiscoveryAndURLs(func() (string, string) {
+		setup.LoginHandlerWithDiscoveryAndStoredDisplay(func() (string, string) {
 			result := setup.DiscoverKitsuHost(db)
 			return result.RuntimeHost, result.Source
+		}, func() string {
+			if display := strings.TrimSpace(model.GetSetting(db, setup.KitsuDisplayURLSettingKey)); display != "" {
+				return display
+			}
+			return model.GetSetting(db, "kitsu.hostname")
 		}, func(displayHost, runtimeHost, apiOverride string) {
 			model.SetSetting(db, setup.KitsuDisplayURLSettingKey, displayHost)
 			model.SetSetting(db, "kitsu.hostname", runtimeHost)
