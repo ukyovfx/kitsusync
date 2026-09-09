@@ -1,23 +1,23 @@
 # KitsuSync AGENTS.md
 
 ## Agent knowledge entry point
-- Read `docs/agent/START-HERE.md` before repository work, then verify technical claims against the current repository state.
+- Read `docs/agent/START-HERE.md` before repository work.
+- Use `docs/agent/CURRENT-STATE.md` for accepted default-branch state and `docs/agent/plans/active/` for durable active-task state.
+- Verify technical claims against the current repository, tests, configuration, CI, PRs, and runtime evidence before relying on chat history or memory.
 
 ## Workspace scope
 - This workspace is exclusively for KitsuSync: its Go application, backend/frontend, setup wizard, Discord integration, Kitsu/Zou integration required by KitsuSync, Docker/Compose, tests, CI, releases, and documentation.
 - Vatler, general Kitsu host/server administration, host firewall/network/SSH/Tailscale administration, Kitsu Server Console, unrelated repositories, and unrelated infrastructure are out of scope. Do not inspect, modify, or operate on them; respond `OUT_OF_SCOPE_FOR_KITSUSYNC` with the best matching workspace (or `unknown`).
 - Kitsu/Zou server behavior may be inspected when necessary to diagnose KitsuSync integration, but host-level changes belong to the Kitsu Server workspace unless explicitly authorized as cross-project work.
 
+## Repository truth
+- The authoritative repository is `ukyovfx/kitsusync`.
+- The current checked-out branch/worktree is authoritative for the task being executed; `master` is authoritative for accepted default-branch state.
+- Code, tests, CI, configuration, PR state, and runtime evidence outrank summaries in `docs/agent/` when they disagree.
+- Historical local paths, old branch conventions, old Obsidian logs, and chat history are not authoritative project state.
+
 ## Purpose
 This repo prioritizes runtime safety and beginner onboarding clarity over clever cleanup. Keep changes small, explicit, and reviewable.
-
-## Repo Truth
-- Treat the GCP repo at `/home/ukyovfx/kitsu-discord-custom/app` as the source of truth.
-- Keep work split by branch purpose:
-  - `feature/v0.1.0-release-gate-final` for release hardening
-  - `feature/v0.1.0-uiux-polish` for onboarding and setup UX polish
-  - `feature/v0.1.0-cleanup-phase1` for low-risk cleanup only
-- Do not mix release gate, UIUX, and cleanup into one PR.
 
 ## Highest Risk Areas
 - Beginner setup flow under `/bot/setup-wizard`, `/bot/setup`, `/bot/admin/setup`
@@ -39,23 +39,28 @@ This repo prioritizes runtime safety and beginner onboarding clarity over clever
 - Preserve beginner UX even when code could be cleaner.
 
 ## Required Verification
-Run these after meaningful repo changes:
+Run these after meaningful repo changes when applicable:
 - `go test ./src/... -count=1 -timeout=120s`
 - `go vet ./src/...`
 - `docker compose config -q`
 
-## Decision Logging
-- Leave rationale for risky or scope-limiting decisions in commit messages, PR text, or the Obsidian knowledge log.
-- Continue append-only updates in `Obsidian_ukyo/02_Domains/KitsuSync/log.md` for release, UIUX, and cleanup milestones.
+Never claim verification was run if it was not.
+
+## Knowledge write-back
+- Do not write back merely because something was discussed.
+- Record durable active-task state, blockers, verification results, and next actions in `docs/agent/plans/active/` when they must survive the current session.
+- Update `docs/agent/CURRENT-STATE.md` only when accepted default-branch project state materially changes or its verification basis needs refresh.
+- Move completed durable task plans to `docs/agent/plans/archive/` when useful.
+- Keep reusable cross-project AI workflow rules in the separate `AI-Knowledge` repository; do not duplicate them here.
+- Do not store secrets, credentials, private keys, session tokens, raw logs, or full chat transcripts in project knowledge files.
 
 ## Not Yet
-These are intentionally out of scope for now:
+These remain intentionally out of scope unless explicitly requested:
 - fully autonomous agents
 - auto-merge
 - automatic setup rewrites
 - autonomous cleanup passes
 - self-modifying prompts
-- orchestration automation
 
 ## Current IA UI Guardrails
 - Before changing Current IA UI, read `docs/CURRENT-IA-UI-SPEC.md`.
