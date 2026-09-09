@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"app/src/api/kitsu"
 	"app/src/model"
+	"app/src/utils/request"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -124,7 +126,11 @@ func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
+	t.Setenv("KITSU_API_BASE_URL", "")
 	t.Setenv("KitsuJWTToken", "test-token")
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
 
 	db := newIAViewDB(t)
 	projects := availableProjects(db)
