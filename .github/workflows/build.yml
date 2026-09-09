@@ -29,7 +29,13 @@ jobs:
           go-version: 1.21
 
       - name: Install SQLite build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libsqlite3-dev
+        run: |
+          # The hosted runner's optional Chrome source can be temporarily
+          # inconsistent. It is unrelated to this Go/SQLite build and must not
+          # prevent the authoritative CGO validation from starting.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
 
       - name: Mojibake regression check
         shell: bash
