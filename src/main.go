@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	stdslog "log/slog"
 	"net/http"
 	"path/filepath"
 
@@ -782,7 +783,23 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	return nil
 }
 
+func newApplicationHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              ":8090",
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      90 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+	}
+}
+
 func main() {
+	// The standard library logger writes to stderr and is used by the CLI
+	// paths. Keep it on the same redacting boundary as the application logger.
+	log.SetOutput(logutil.NewRedactingWriter(os.Stderr))
+	stdslog.SetDefault(stdslog.New(stdslog.NewTextHandler(logutil.NewRedactingWriter(os.Stderr), nil)))
 	slog.Configure(func(logger *slog.SugaredLogger) {
 		f := logger.Formatter.(*slog.TextFormatter)
 		f.EnableColor = true
@@ -995,10 +1012,14 @@ func main() {
 		return h, tok, gid, wh
 	}
 
-	loginHandler := func(w http.ResponseWriter, r *http.Request) {
-		setup.LoginHandlerWithDiscoveryAndStoredDisplay(func() (string, string) {
+	loginHandler := setup.LoginRateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setup.LoginHandlerWithTrustedAuthority(func() setup.KitsuLoginAuthority {
 			result := setup.DiscoverKitsuHost(db)
-			return result.RuntimeHost, result.Source
+			apiBaseURL := strings.TrimSpace(model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
+			if apiBaseURL == "" {
+				apiBaseURL = strings.TrimSpace(os.Getenv("KITSU_API_BASE_URL"))
+			}
+			return setup.KitsuLoginAuthority{RuntimeHost: result.RuntimeHost, APIBaseURL: apiBaseURL, Source: result.Source}
 		}, func() string {
 			if display := strings.TrimSpace(model.GetSetting(db, setup.KitsuDisplayURLSettingKey)); display != "" {
 				return display
@@ -1015,9 +1036,9 @@ func main() {
 				os.Setenv("KITSU_API_BASE_URL", normalized.ResolvedAPIBaseURL)
 			}
 		})(w, r)
-	}
-	mux.HandleFunc("/login", loginHandler)
-	mux.HandleFunc("/bot/login", loginHandler)
+	}))
+	mux.Handle("/login", loginHandler)
+	mux.Handle("/bot/login", loginHandler)
 	mux.HandleFunc("/bot/", setup.BotRootHandler(runtime.ready))
 
 	mux.HandleFunc("/logout", setup.LogoutHandler())
@@ -1074,10 +1095,7 @@ func main() {
 	registerAdminRoutes("")
 	registerAdminRoutes("/bot")
 
-	server := &http.Server{
-		Addr:    ":8090",
-		Handler: setup.RequestTrace(setup.CSRFProtection(mux)),
-	}
+	server := newApplicationHTTPServer(setup.RequestBodyLimit(setup.RequestTrace(setup.CSRFProtection(mux))))
 	go func() {
 		slog.Info("HTTP server listening on :8090  (/health, /login, /setup, /admin/*)")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

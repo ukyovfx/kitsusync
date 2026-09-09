@@ -3,15 +3,51 @@ package request
 import (
 	"app/src/utils/debug"
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gookit/slog"
 )
+
+type VerifiedOrigin struct {
+	BaseURL   string
+	PinnedIPs []netip.Addr
+}
+
+var verifiedOrigin = struct {
+	sync.RWMutex
+	origin VerifiedOrigin
+}{}
+
+// ConfigureVerifiedOrigin installs the authority already verified by setup.
+// Credential-bearing polling fails closed when its target leaves this origin.
+func ConfigureVerifiedOrigin(origin VerifiedOrigin) error {
+	u, err := url.Parse(strings.TrimSpace(origin.BaseURL))
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || len(origin.PinnedIPs) == 0 {
+		return fmt.Errorf("verified Kitsu origin is invalid")
+	}
+	verifiedOrigin.Lock()
+	verifiedOrigin.origin = VerifiedOrigin{BaseURL: u.Scheme + "://" + u.Host, PinnedIPs: append([]netip.Addr(nil), origin.PinnedIPs...)}
+	verifiedOrigin.Unlock()
+	return nil
+}
+
+func configuredVerifiedOrigin() VerifiedOrigin {
+	verifiedOrigin.RLock()
+	defer verifiedOrigin.RUnlock()
+	return VerifiedOrigin{BaseURL: verifiedOrigin.origin.BaseURL, PinnedIPs: append([]netip.Addr(nil), verifiedOrigin.origin.PinnedIPs...)}
+}
 
 // Do は JWT 付き HTTP リクエストを実行し、レスポンスボディを文字列で返す。
 //
@@ -93,10 +129,27 @@ type attemptResult struct {
 }
 
 func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interface{}) attemptResult {
-	client := &http.Client{Timeout: 30 * time.Second}
+	origin := configuredVerifiedOrigin()
+	target, err := urlpkgParse(url)
+	if err != nil {
+		return attemptResult{status: statusPermanent, err: fmt.Errorf("create request: invalid URL")}
+	}
+	if token != "" && (origin.BaseURL == "" || !sameOrigin(origin.BaseURL, target)) {
+		return attemptResult{status: statusPermanent, err: fmt.Errorf("verified Kitsu origin required")}
+	}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			Proxy:           nil,
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+			DialContext:     pinnedDialer(origin.PinnedIPs),
+		},
+		// Legacy Kitsu callers must never replay bearer credentials to a
+		// redirect target. Callers receive the original 3xx as a failure.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	}
 
 	var req *http.Request
-	var err error
 	if body != nil {
 		req, err = http.NewRequest(method, url, body)
 	} else {
@@ -119,7 +172,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		slog.Error("request.Do: read body failed", "err", err, "url", url)
 		return attemptResult{status: statusTransient, err: fmt.Errorf("read response: %w", err)}
@@ -164,4 +217,24 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	}
 
 	return attemptResult{status: statusSuccess, body: string(respBody)}
+}
+
+func urlpkgParse(raw string) (*url.URL, error) { return url.Parse(raw) }
+
+func sameOrigin(raw string, target *url.URL) bool {
+	origin, err := url.Parse(raw)
+	return err == nil && origin.Scheme == target.Scheme && strings.EqualFold(origin.Host, target.Host)
+}
+
+func pinnedDialer(ips []netip.Addr) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("verified Kitsu origin required")
+		}
+		_, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+	}
 }

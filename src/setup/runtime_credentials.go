@@ -353,11 +353,17 @@ func StoreValidatedKitsuBotMetadata(db *gorm.DB, result BotTokenValidationResult
 	if db == nil || !result.Compatible() {
 		return errors.New("Kitsu Bot validation is not successful")
 	}
-	model.SetSetting(db, RuntimeKitsuAuthModeSettingKey, "bot_token")
-	model.SetSetting(db, RuntimeKitsuBotIDSettingKey, strings.TrimSpace(result.IdentityID))
-	model.SetSetting(db, RuntimeKitsuBotNameSettingKey, strings.TrimSpace(result.IdentityName))
-	model.SetSetting(db, RuntimeKitsuTokenValidatedAtSettingKey, time.Now().UTC().Format(time.RFC3339))
-	model.SetSetting(db, RuntimeKitsuTokenErrorSettingKey, "")
+	for _, setting := range []struct{ key, value string }{
+		{RuntimeKitsuAuthModeSettingKey, "bot_token"},
+		{RuntimeKitsuBotIDSettingKey, strings.TrimSpace(result.IdentityID)},
+		{RuntimeKitsuBotNameSettingKey, strings.TrimSpace(result.IdentityName)},
+		{RuntimeKitsuTokenValidatedAtSettingKey, time.Now().UTC().Format(time.RFC3339)},
+		{RuntimeKitsuTokenErrorSettingKey, ""},
+	} {
+		if err := model.SetSettingWithError(db, setting.key, setting.value); err != nil {
+			return fmt.Errorf("save Kitsu Bot metadata: %w", err)
+		}
+	}
 	return nil
 }
 

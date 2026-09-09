@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -19,8 +20,18 @@ import (
 func resetSessions() {
 	sessionMu.Lock()
 	sessions = map[string]sessionData{}
+	revokedSessions = map[string]time.Time{}
 	sessionStoreDB = nil
 	sessionMu.Unlock()
+}
+
+func addRecentBotEditSession(t *testing.T, req *http.Request) string {
+	t.Helper()
+	resetSessions()
+	token := newSessionToken("manager@example.com", "jwt-token", "manager", "/bot/admin/bot?edit=1")
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	t.Cleanup(resetSessions)
+	return token
 }
 
 func TestRequireSessionRedirectsWithoutCookie(t *testing.T) {
@@ -234,9 +245,177 @@ func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t
 
 	logoutReq := httptest.NewRequest(http.MethodPost, "/bot/logout", nil)
 	logoutReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	LogoutHandler()(httptest.NewRecorder(), logoutReq)
+	logoutRecorder := httptest.NewRecorder()
+	LogoutHandler()(logoutRecorder, logoutReq)
+	if logoutRecorder.Code != http.StatusSeeOther {
+		t.Fatalf("persistent logout status = %d, want %d", logoutRecorder.Code, http.StatusSeeOther)
+	}
 	if validSession(token) {
 		t.Fatal("logout must invalidate the persisted session")
+	}
+	var sessionCount int64
+	if err := db.Model(&model.AdminSession{}).Where("token_hash = ?", sessionTokenHash(token)).Count(&sessionCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sessionCount != 0 {
+		t.Fatalf("persistent logout left %d session rows", sessionCount)
+	}
+}
+
+func TestPersistentSessionLogoutReportsDeleteFailureAndFailsClosed(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	sqlDB.SetMaxOpenConns(1)
+	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	token, err := newSessionTokenChecked("manager@example.com", "", "manager", "/bot/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("PRAGMA query_only=ON").Error; err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/bot/logout", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	rr := httptest.NewRecorder()
+	LogoutHandler()(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("logout status = %d, want %d", rr.Code, http.StatusInternalServerError)
+	}
+	if validSession(token) {
+		t.Fatal("session remained valid in the process after revocation failure")
+	}
+	if cookie := rr.Header().Get("Set-Cookie"); !strings.Contains(cookie, "Max-Age=0") {
+		t.Fatalf("logout failure did not clear the browser cookie: %q", cookie)
+	}
+}
+
+func TestPersistentSessionCacheObservesDatabaseRevocation(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	token, err := newSessionTokenChecked("manager@example.com", "", "manager", "/bot/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validSession(token) {
+		t.Fatal("new persistent session was not valid")
+	}
+	if err := db.Where("token_hash = ?", sessionTokenHash(token)).Delete(&model.AdminSession{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if validSession(token) {
+		t.Fatal("database-revoked session remained valid from cache")
+	}
+}
+
+func TestDatabaseRevocationSurvivesSessionStoreTransition(t *testing.T) {
+	firstDB, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "first.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDB, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "second.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, db := range []*gorm.DB{firstDB, secondDB} {
+		if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ConfigureSessionStore(firstDB)
+	t.Cleanup(resetSessions)
+
+	token, err := newSessionTokenChecked("manager@example.com", "", "manager", "/bot/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staleRow model.AdminSession
+	if err := firstDB.Where("token_hash = ?", sessionTokenHash(token)).First(&staleRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := secondDB.Create(&staleRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := firstDB.Where("token_hash = ?", sessionTokenHash(token)).Delete(&model.AdminSession{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if validSession(token) {
+		t.Fatal("database-revoked session remained valid from cache")
+	}
+
+	ConfigureSessionStore(secondDB)
+	if validSession(token) {
+		t.Fatal("database-revoked session became valid after switching to stale store state")
+	}
+}
+
+func TestPersistentSessionExpiryOverridesCachedSession(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	token, err := newSessionTokenChecked("manager@example.com", "", "manager", "/bot/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.AdminSession{}).Where("token_hash = ?", sessionTokenHash(token)).Update("expiry", time.Now().Add(-time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if validSession(token) {
+		t.Fatal("persistently expired session remained valid from cache")
+	}
+}
+
+func TestPersistentRevocationSurvivesCacheReset(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	token, err := newSessionTokenChecked("manager@example.com", "", "manager", "/bot/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := destroySession(token); err != nil {
+		t.Fatal(err)
+	}
+	sessionMu.Lock()
+	sessions = map[string]sessionData{}
+	revokedSessions = map[string]time.Time{}
+	sessionMu.Unlock()
+	if validSession(token) {
+		t.Fatal("revoked session became valid after process cache reset")
 	}
 }
 
@@ -371,223 +550,140 @@ func TestLoginHandlerAcceptsStudioManagerAndHigherRoles(t *testing.T) {
 	}
 }
 
-func TestLoginHandlerWithDiscoveryAcceptsValidatedManualHostAndPersistsIt(t *testing.T) {
-	resetSessions()
-	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodGet {
-			if r.URL.Path == "/api/" {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
-	})))
-	defer kitsu.Close()
-	var persisted string
-	form := url.Values{"hostname": {kitsu.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
-	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
-	LoginHandlerWithDiscovery(func() (string, string) { return "", "" }, func(host string) { persisted = host })(rr, req)
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("expected manual endpoint login to succeed, got %d: %s", rr.Code, rr.Body.String())
-	}
-	if strings.TrimRight(persisted, "/") != strings.TrimRight(kitsu.URL, "/") {
-		t.Fatalf("expected validated manual endpoint to persist, got %q", persisted)
-	}
-}
-
-func TestLoginWithInternalKitsuURLPersistsDistinctDisplayAndRuntimeURLs(t *testing.T) {
-	resetSessions()
-	db := newSetupStateTestDB(t)
-	runtime := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func newCountingLoginKitsuServer(t *testing.T) (*httptest.Server, *int) {
+	t.Helper()
+	calls := 0
+	fixture := zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/auth/login" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
-	})))
-	defer runtime.Close()
-
-	display := "https://public.kitsu.example.test/studio"
-	form := url.Values{
-		"hostname":          {display},
-		"internal_hostname": {runtime.URL},
-		"email":             {"manager@example.com"},
-		"password":          {"not-returned"},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
-	LoginHandlerWithDiscoveryAndURLs(func() (string, string) { return "", "" }, func(savedDisplay, savedRuntime, apiOverride string) {
-		model.SetSetting(db, KitsuDisplayURLSettingKey, savedDisplay)
-		model.SetSetting(db, "kitsu.hostname", savedRuntime)
-		model.SetSetting(db, KitsuAPIBaseURLSettingKey, apiOverride)
-	})(rr, req)
-
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
-	}
-	if got := strings.TrimRight(model.GetSetting(db, KitsuDisplayURLSettingKey), "/"); got != display {
-		t.Fatalf("display URL = %q, want %q", got, display)
-	}
-	if got := model.GetSetting(db, "kitsu.hostname"); strings.TrimRight(got, "/") != strings.TrimRight(runtime.URL, "/") {
-		t.Fatalf("runtime URL = %q, want %q", got, runtime.URL)
-	}
-	if got := PublicKitsuURL(db); got != display || strings.Contains(got, runtime.URL) {
-		t.Fatalf("human-facing URL = %q", got)
-	}
-}
-
-func TestLoginHostnameOnlyPersistsLegacyDisplayAndRuntimeURL(t *testing.T) {
-	resetSessions()
-	db := newSetupStateTestDB(t)
-	kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/auth/login" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
-	})))
-	defer kitsu.Close()
-
-	form := url.Values{"hostname": {kitsu.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
-	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
-	LoginHandlerWithDiscoveryAndURLs(func() (string, string) { return "", "" }, func(display, runtime, _ string) {
-		model.SetSetting(db, KitsuDisplayURLSettingKey, display)
-		model.SetSetting(db, "kitsu.hostname", runtime)
-	})(rr, req)
-
-	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
-	}
-	if got := model.GetSetting(db, KitsuDisplayURLSettingKey); strings.TrimRight(got, "/") != strings.TrimRight(kitsu.URL, "/") {
-		t.Fatalf("display URL = %q", got)
-	}
-	if got := model.GetSetting(db, "kitsu.hostname"); strings.TrimRight(got, "/") != strings.TrimRight(kitsu.URL, "/") {
-		t.Fatalf("runtime URL = %q", got)
-	}
+	}))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fixture(w, r)
+	}))
+	return server, &calls
 }
 
 func newLoginPersistenceKitsuServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/auth/login" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		fmt.Fprint(w, `{"access_token":"browser-session-token","user":{"role":"manager"}}`)
-	})))
+	server, _ := newCountingLoginKitsuServer(t)
+	return server
 }
 
-func runStoredDisplayUpdateLogin(t *testing.T, initialDisplay, initialRuntime string, form func(runtime, internal, api string) url.Values) *gorm.DB {
-	t.Helper()
-	resetSessions()
-	db := newSetupStateTestDB(t)
-	model.SetSetting(db, KitsuDisplayURLSettingKey, initialDisplay)
-	model.SetSetting(db, "kitsu.hostname", initialRuntime)
-	runtimeServer := newLoginPersistenceKitsuServer(t)
-	internalServer := newLoginPersistenceKitsuServer(t)
-	apiServer := newLoginPersistenceKitsuServer(t)
-	t.Cleanup(func() {
-		runtimeServer.Close()
-		internalServer.Close()
-		apiServer.Close()
-	})
-	values := form(runtimeServer.URL, internalServer.URL, apiServer.URL)
+func loginRequest(values url.Values) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/bot/login", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
+}
+
+func TestLoginHandlerConfiguredAuthorityIgnoresCallerSelectedEndpoints(t *testing.T) {
+	resetSessions()
+	trusted, trustedCalls := newCountingLoginKitsuServer(t)
+	attacker, attackerCalls := newCountingLoginKitsuServer(t)
+	defer trusted.Close()
+	defer attacker.Close()
+
+	form := url.Values{
+		"hostname":          {attacker.URL},
+		"internal_hostname": {attacker.URL},
+		"api_base_url":      {attacker.URL},
+		"email":             {"manager@example.com"},
+		"password":          {"not-returned"},
+	}
 	rr := httptest.NewRecorder()
-	LoginHandlerWithDiscoveryAndStoredDisplay(func() (string, string) {
-		return runtimeServer.URL, "persisted"
-	}, func() string {
-		if display := strings.TrimSpace(model.GetSetting(db, KitsuDisplayURLSettingKey)); display != "" {
-			return display
-		}
-		return model.GetSetting(db, "kitsu.hostname")
-	}, func(display, runtime, api string) {
-		model.SetSetting(db, KitsuDisplayURLSettingKey, display)
-		model.SetSetting(db, "kitsu.hostname", runtime)
-		if strings.TrimSpace(api) == "" {
-			model.DeleteSetting(db, KitsuAPIBaseURLSettingKey)
-			return
-		}
-		normalized, err := NormalizeKitsuURL(api, APISourceExplicit)
-		if err != nil {
-			t.Fatalf("test API override normalization failed: %v", err)
-		}
-		model.SetSetting(db, KitsuAPIBaseURLSettingKey, normalized.ResolvedAPIBaseURL)
-	})(rr, req)
+	LoginHandler(trusted.URL)(rr, loginRequest(form))
+	if rr.Code != http.StatusSeeOther || len(rr.Result().Cookies()) == 0 {
+		t.Fatalf("trusted login status=%d cookies=%d", rr.Code, len(rr.Result().Cookies()))
+	}
+	if *trustedCalls == 0 || *attackerCalls != 0 {
+		t.Fatalf("trusted requests=%d attacker requests=%d", *trustedCalls, *attackerCalls)
+	}
+}
+
+func TestLoginHandlerSetupRequiredRejectsCallerSelectedFakeZou(t *testing.T) {
+	for _, field := range []string{"hostname", "internal_hostname", "api_base_url"} {
+		t.Run(field, func(t *testing.T) {
+			resetSessions()
+			fake, fakeCalls := newCountingLoginKitsuServer(t)
+			defer fake.Close()
+			persisted := false
+			form := url.Values{field: {fake.URL}, "email": {"manager@example.com"}, "password": {"not-returned"}}
+			rr := httptest.NewRecorder()
+			LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
+				return KitsuLoginAuthority{}
+			}, nil, func(_, _, _ string) { persisted = true })(rr, loginRequest(form))
+			if rr.Code != http.StatusServiceUnavailable || persisted || len(rr.Result().Cookies()) != 0 {
+				t.Fatalf("field=%s status=%d persisted=%v cookies=%d", field, rr.Code, persisted, len(rr.Result().Cookies()))
+			}
+			if *fakeCalls != 0 {
+				t.Fatalf("field=%s contacted attacker authority %d times", field, *fakeCalls)
+			}
+		})
+	}
+}
+
+func TestLoginHandlerRejectsStatusDiscoveredAuthorityWithoutOperatorTrust(t *testing.T) {
+	resetSessions()
+	fake, fakeCalls := newCountingLoginKitsuServer(t)
+	defer fake.Close()
+	rr := httptest.NewRecorder()
+	LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
+		return KitsuLoginAuthority{RuntimeHost: fake.URL, Source: "local-discovered"}
+	}, nil, nil)(rr, loginRequest(url.Values{"email": {"manager@example.com"}, "password": {"not-returned"}}))
+	if rr.Code != http.StatusServiceUnavailable || len(rr.Result().Cookies()) != 0 {
+		t.Fatalf("status=%d cookies=%d", rr.Code, len(rr.Result().Cookies()))
+	}
+	if *fakeCalls != 0 {
+		t.Fatalf("status discovery contacted untrusted authority %d times", *fakeCalls)
+	}
+}
+
+func TestLoginHandlerAcceptsOperatorEstablishedPrivateAndTailscaleAuthority(t *testing.T) {
+	if got := classifyKitsuIP(netip.MustParseAddr("100.114.77.117")); got != "vpn/shared" {
+		t.Fatalf("Tailscale address scope=%q", got)
+	}
+	resetSessions()
+	private := newLoginPersistenceKitsuServer(t)
+	defer private.Close()
+	rr := httptest.NewRecorder()
+	LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
+		return KitsuLoginAuthority{RuntimeHost: private.URL, Source: "explicit"}
+	}, nil, nil)(rr, loginRequest(url.Values{"email": {"manager@example.com"}, "password": {"not-returned"}}))
+	if rr.Code != http.StatusSeeOther || len(rr.Result().Cookies()) == 0 {
+		t.Fatalf("private authority status=%d cookies=%d", rr.Code, len(rr.Result().Cookies()))
+	}
+}
+
+func TestLoginHandlerUsesOperatorEstablishedAPIOverride(t *testing.T) {
+	resetSessions()
+	trustedAPI, trustedCalls := newCountingLoginKitsuServer(t)
+	attacker, attackerCalls := newCountingLoginKitsuServer(t)
+	defer trustedAPI.Close()
+	defer attacker.Close()
+	const display = "https://public.kitsu.example.test/studio"
+	var savedDisplay, savedRuntime, savedAPI string
+	rr := httptest.NewRecorder()
+	LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
+		return KitsuLoginAuthority{RuntimeHost: display, APIBaseURL: trustedAPI.URL, Source: "persisted"}
+	}, func() string { return display }, func(gotDisplay, gotRuntime, gotAPI string) {
+		savedDisplay, savedRuntime, savedAPI = gotDisplay, gotRuntime, gotAPI
+	})(rr, loginRequest(url.Values{
+		"internal_hostname": {attacker.URL},
+		"api_base_url":      {attacker.URL},
+		"email":             {"manager@example.com"},
+		"password":          {"not-returned"},
+	}))
 	if rr.Code != http.StatusSeeOther {
-		t.Fatalf("login status = %d: %s", rr.Code, rr.Body.String())
+		t.Fatalf("login status=%d: %s", rr.Code, rr.Body.String())
 	}
-	return db
-}
-
-func TestExistingDisplayURLSurvivesInternalHostnameUpdate(t *testing.T) {
-	const display = "https://public.kitsu.example.test/studio"
-	var expectedInternal string
-	db := runStoredDisplayUpdateLogin(t, display, "", func(runtime, internal, _ string) url.Values {
-		expectedInternal = internal
-		return url.Values{"internal_hostname": {internal}, "email": {"manager@example.com"}, "password": {"not-returned"}}
-	})
-	if got := PublicKitsuURL(db); got != display {
-		t.Fatalf("public URL = %q, want %q", got, display)
+	if strings.TrimRight(savedDisplay, "/") != display || savedRuntime != display || savedAPI != trustedAPI.URL {
+		t.Fatalf("persisted display=%q runtime=%q api=%q", savedDisplay, savedRuntime, savedAPI)
 	}
-	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedInternal, "/") {
-		t.Fatalf("runtime URL = %q, want %q", got, expectedInternal)
-	}
-}
-
-func TestExistingDisplayURLSurvivesAPIOverrideUpdate(t *testing.T) {
-	const display = "https://public.kitsu.example.test/studio"
-	var expectedRuntime string
-	db := runStoredDisplayUpdateLogin(t, display, "", func(runtime, _, api string) url.Values {
-		expectedRuntime = runtime
-		return url.Values{"api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
-	})
-	if got := PublicKitsuURL(db); got != display {
-		t.Fatalf("public URL = %q, want %q", got, display)
-	}
-	if got := model.GetSetting(db, KitsuAPIBaseURLSettingKey); got == "" {
-		t.Fatal("API override was not persisted")
-	}
-	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedRuntime, "/") {
-		t.Fatalf("runtime URL = %q, want %q", got, expectedRuntime)
-	}
-}
-
-func TestExistingDisplayURLSurvivesInternalAndAPIOverrideUpdates(t *testing.T) {
-	const display = "https://public.kitsu.example.test/studio"
-	var expectedInternal string
-	db := runStoredDisplayUpdateLogin(t, display, "", func(_, internal, api string) url.Values {
-		expectedInternal = internal
-		return url.Values{"internal_hostname": {internal}, "api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
-	})
-	if got := PublicKitsuURL(db); got != display {
-		t.Fatalf("public URL = %q, want %q", got, display)
-	}
-	if model.GetSetting(db, KitsuAPIBaseURLSettingKey) == "" || model.GetSetting(db, "kitsu.hostname") == "" {
-		t.Fatal("runtime and API override were not both persisted")
-	}
-	if got := strings.TrimRight(model.GetSetting(db, "kitsu.hostname"), "/"); got != strings.TrimRight(expectedInternal, "/") {
-		t.Fatalf("runtime URL = %q, want %q", got, expectedInternal)
-	}
-}
-
-func TestExplicitDisplayURLReplacesStoredDisplayDuringInternalUpdate(t *testing.T) {
-	const display = "https://public.kitsu.example.test/studio"
-	const replacement = "https://new-public.kitsu.example.test/studio"
-	db := runStoredDisplayUpdateLogin(t, display, "", func(_, internal, api string) url.Values {
-		return url.Values{"hostname": {replacement}, "internal_hostname": {internal}, "api_base_url": {api}, "email": {"manager@example.com"}, "password": {"not-returned"}}
-	})
-	if got := PublicKitsuURL(db); got != replacement {
-		t.Fatalf("public URL = %q, want %q", got, replacement)
+	if *trustedCalls == 0 || *attackerCalls != 0 {
+		t.Fatalf("trusted API requests=%d attacker requests=%d", *trustedCalls, *attackerCalls)
 	}
 }
 
@@ -600,21 +696,22 @@ func TestLoginHandlerWithDiscoveryRejectsInvalidOrPlaceholderManualHost(t *testi
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			rr := httptest.NewRecorder()
 			LoginHandlerWithDiscovery(func() (string, string) { return "", "" }, nil)(rr, req)
-			if rr.Code != http.StatusBadRequest {
+			if rr.Code != http.StatusServiceUnavailable {
 				t.Fatalf("expected invalid manual endpoint to fail closed, got %d", rr.Code)
 			}
 		})
 	}
 }
 
-func TestLoginPageShowsManualHostOnlyForFreshInit(t *testing.T) {
+func TestLoginPageNeverOffersAuthorityOverride(t *testing.T) {
 	fresh := loginPageHTML("en", "", "", true, nil)
-	if !strings.Contains(fresh, `name="hostname"`) {
-		t.Fatal("expected fresh-init login page to offer Kitsu base URL")
-	}
 	configured := loginPageHTML("en", "", "", false, nil)
-	if strings.Contains(configured, `name="hostname"`) {
-		t.Fatal("configured login page must not offer endpoint override")
+	for _, body := range []string{fresh, configured} {
+		for _, field := range []string{`name="hostname"`, `name="internal_hostname"`, `name="api_base_url"`} {
+			if strings.Contains(body, field) {
+				t.Fatalf("login page exposed authority field %s", field)
+			}
+		}
 	}
 }
 

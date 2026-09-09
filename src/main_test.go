@@ -2,12 +2,25 @@ package main
 
 import (
 	"errors"
+	"net/http"
 	"testing"
+	"time"
 
 	"app/src/api/kitsu"
 	"app/src/setup"
 	"app/src/utils/config"
 )
+
+func TestApplicationHTTPServerHasBoundedResourceTimeouts(t *testing.T) {
+	server := newApplicationHTTPServer(http.NotFoundHandler())
+	if server.ReadHeaderTimeout != 10*time.Second ||
+		server.ReadTimeout != 30*time.Second ||
+		server.WriteTimeout != 90*time.Second ||
+		server.IdleTimeout != 120*time.Second ||
+		server.MaxHeaderBytes != 32<<10 {
+		t.Fatalf("unexpected HTTP resource limits: %+v", server)
+	}
+}
 
 func TestRunOnePollRecordsFailureAndRecoversOnSuccessfulEmptyPoll(t *testing.T) {
 	oldFactory := makeKitsuResponse

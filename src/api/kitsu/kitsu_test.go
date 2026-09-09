@@ -1,11 +1,20 @@
 package kitsu
 
 import (
+	"app/src/utils/request"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"testing"
 )
+
+func configureTestOrigin(t *testing.T, raw string) {
+	t.Helper()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: raw, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestKitsuBaseUsesExplicitAPIOverrideWithoutDuplicateAPIPath(t *testing.T) {
 	t.Setenv("KITSU_API_BASE_URL", "https://api.example.test/studio/api/")
@@ -26,6 +35,31 @@ func TestExplicitAPIOverrideLeavesDisplayURLUnchanged(t *testing.T) {
 	}
 }
 
+func TestConfiguredAPIOverrideUsesVerifiedOriginForCredentialRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/tasks" {
+			t.Fatalf("unexpected override path: %s", r.URL.Path)
+		}
+		if r.Host == "127.0.0.1" || r.Header.Get("Authorization") != "Bearer override-canary-token" {
+			t.Fatalf("override request lost verified host or bearer: host=%q auth=%q", r.Host, r.Header.Get("Authorization"))
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	t.Setenv("KITSU_API_BASE_URL", server.URL+"/api/")
+	t.Setenv("KITSU_HOSTNAME", "https://display-only.example.test")
+	t.Setenv("KitsuJWTToken", "override-canary-token")
+	configureTestOrigin(t, server.URL)
+
+	got, err := GetTasksWithError()
+	if err != nil {
+		t.Fatalf("configured API override request failed: %v", err)
+	}
+	if len(got.Each) != 0 {
+		t.Fatalf("expected empty task response, got %+v", got.Each)
+	}
+}
+
 func TestGetProjectTaskTypesUsesProductionScopedEndpointAndPreservesContext(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/data/projects/production-1/task-types" {
@@ -40,6 +74,7 @@ func TestGetProjectTaskTypesUsesProductionScopedEndpointAndPreservesContext(t *t
 	defer server.Close()
 	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
 	t.Setenv("KitsuJWTToken", "test-token")
+	configureTestOrigin(t, server.URL)
 
 	got := GetProjectTaskTypes("production-1").Each
 	if len(got) != 2 {
@@ -64,6 +99,7 @@ func TestGetProjectTeamUsesProductionScopedReadEndpoint(t *testing.T) {
 	defer server.Close()
 	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
 	t.Setenv("KitsuJWTToken", "test-token")
+	configureTestOrigin(t, server.URL)
 
 	got := GetProjectTeam("production-1")
 	if len(got) != 1 || got[0].ID != "person-1" || got[0].FullName != "Artist A" || got[0].IsBot {
@@ -78,6 +114,7 @@ func TestGetTasksWithErrorReportsHTTPFailure(t *testing.T) {
 	defer server.Close()
 	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
 	t.Setenv("KitsuJWTToken", "test-token")
+	configureTestOrigin(t, server.URL)
 
 	got, err := GetTasksWithError()
 	if err == nil {
@@ -96,6 +133,7 @@ func TestGetTasksWithErrorAcceptsLegitimateEmptyResponse(t *testing.T) {
 	defer server.Close()
 	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
 	t.Setenv("KitsuJWTToken", "test-token")
+	configureTestOrigin(t, server.URL)
 
 	got, err := GetTasksWithError()
 	if err != nil {

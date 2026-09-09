@@ -41,7 +41,7 @@ This is the only normal first-time setup path operators should follow.
 
 ### Kitsu endpoint selection
 
-KitsuSync resolves the Kitsu base URL in this order: explicit `KITSU_HOSTNAME`, a previously verified saved endpoint, supported local deployment endpoints, and finally a URL entered by the operator on the fresh-login page. Every candidate is checked as a Kitsu API before it is used. A manually entered URL is saved only after Kitsu login succeeds. Placeholder values are never used; if no endpoint can be verified, login remains blocked with an actionable error.
+KitsuSync accepts the Kitsu authentication authority only from operator-managed `KITSU_HOSTNAME`, a previously saved trusted endpoint, or an installer-supplied hint. A saved or environment-provided API base override remains supported. Login form values never select or replace the authentication authority, even during first-time setup or recovery. Every trusted candidate still passes the Kitsu connection, DNS, redirect, TLS, and network-scope checks before credentials are sent. If no trusted authority is configured, login remains blocked with an actionable error.
 
 The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. The runtime password is encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
 

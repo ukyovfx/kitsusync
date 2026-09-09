@@ -10,6 +10,7 @@ import (
 
 	"app/src/setup"
 	"app/src/utils/basicauth"
+	"app/src/utils/request"
 )
 
 type runtimeMode string
@@ -111,6 +112,13 @@ func (m *runtimeManager) authenticateToken(connection setup.KitsuURLModel, token
 			m.mode = runtimeSetupRequired
 			m.canPoll = false
 		}
+		m.mu.Unlock()
+		return false
+	}
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: connection.ResolvedAPIBaseURL, PinnedIPs: connection.VerifiedIPs}); err != nil {
+		m.mu.Lock()
+		m.mode = runtimeSetupRequired
+		m.canPoll = false
 		m.mu.Unlock()
 		return false
 	}

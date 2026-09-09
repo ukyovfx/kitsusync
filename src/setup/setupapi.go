@@ -832,17 +832,9 @@ func checkKitsuStatus(kitsuHost string) (info KitsuStatusInfo) {
 	}
 	info = KitsuStatusInfo{Configured: true}
 
-	client := &http.Client{Timeout: 8 * time.Second}
-	pingURL := strings.TrimRight(kitsuHost, "/") + "/api/"
-	resp, err := client.Get(pingURL)
+	connection, err := ResolveAndProbeKitsu(context.Background(), kitsuHost, APISourceLegacy)
 	if err != nil {
-		errStr := "server not reachable: " + err.Error()
-		info.Error = &errStr
-		return info
-	}
-	resp.Body.Close()
-	if resp.StatusCode >= 500 {
-		errStr := fmt.Sprintf("server returned HTTP %d", resp.StatusCode)
+		errStr := "server not reachable: " + connectionErrorClass(err)
 		info.Error = &errStr
 		return info
 	}
@@ -855,25 +847,10 @@ func checkKitsuStatus(kitsuHost string) (info KitsuStatusInfo) {
 		return info
 	}
 
-	authURL := strings.TrimRight(kitsuHost, "/") + "/api/auth/user"
-	req, err := http.NewRequest("GET", authURL, nil)
-	if err != nil {
-		errStr := "could not build auth check request"
-		info.Error = &errStr
-		return info
-	}
-	req.Header.Set("Authorization", "Bearer "+jwtToken)
-	authResp, err := client.Do(req)
-	if err != nil {
-		errStr := "auth check failed: " + err.Error()
-		info.Error = &errStr
-		return info
-	}
-	authResp.Body.Close()
-	if authResp.StatusCode == 200 {
+	if err := VerifyKitsuToken(context.Background(), connection, jwtToken); err == nil {
 		info.Authenticated = true
 	} else {
-		errStr := fmt.Sprintf("session token rejected (HTTP %d)", authResp.StatusCode)
+		errStr := "session token rejected: " + connectionErrorClass(err)
 		info.Error = &errStr
 	}
 	return info

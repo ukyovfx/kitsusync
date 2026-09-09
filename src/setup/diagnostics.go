@@ -429,20 +429,19 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		})
 	}
 
-	testPath := "./data/.diag_write_test"
-	if err := os.WriteFile(testPath, []byte("ok"), 0600); err != nil {
+	dataInfo, err := os.Stat("./data")
+	if err != nil || !dataInfo.IsDir() {
 		checks = append(checks, diagCheck{
-			Label:  "data/ directory writable",
+			Label:  "data/ directory available",
 			Status: "fail",
-			Detail: "Write test failed: " + err.Error(),
-			Fix:    "Ensure the data/ directory is mounted with write permissions in docker-compose.yml.",
+			Detail: "Data directory is not available for inspection.",
+			Fix:    "Ensure the data/ directory is mounted in docker-compose.yml.",
 		})
 	} else {
-		os.Remove(testPath)
 		checks = append(checks, diagCheck{
-			Label:  "data/ directory writable",
+			Label:  "data/ directory available",
 			Status: "ok",
-			Detail: "Write test passed.",
+			Detail: "Data directory is available for read-only inspection.",
 		})
 	}
 
@@ -777,7 +776,7 @@ func renderDiagGroups(lang string, checks []diagCheck) string {
 		switch c.Label {
 		case "Kitsu hostname", "Kitsu server reachable", "Kitsu runtime check":
 			kitsuChecks = append(kitsuChecks, c)
-		case "Database (SQLite)", "data/ directory writable":
+		case "Database (SQLite)", "data/ directory available":
 			storageChecks = append(storageChecks, c)
 		default:
 			if strings.Contains(c.Label, "Discord") || strings.Contains(c.Label, "Production Discord") {

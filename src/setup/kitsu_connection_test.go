@@ -43,6 +43,7 @@ func TestConnectionsSaveDiscordDoesNotValidateKitsu(t *testing.T) {
 	form := url.Values{"action": {"save_discord"}, "bot_token": {"new-token-for-test"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
 	rr := httptest.NewRecorder()
 	BotHandler(db, nil)(rr, req)
 	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "discord_saved") {
@@ -60,6 +61,7 @@ func TestConnectionsSaveDiscordEmptyIsDiscordSpecific(t *testing.T) {
 	form := url.Values{"action": {"save_discord"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?lang=en", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
 	rr := httptest.NewRecorder()
 	BotHandler(db, nil)(rr, req)
 	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Discord Bot Token") {
@@ -92,6 +94,7 @@ func TestConnectionsSaveKitsuRetainsStoredPassword(t *testing.T) {
 	form := url.Values{"action": {"save_kitsu"}, "kitsu_hostname": {server.URL}, "kitsu_bot_token": {"test-bot-token"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
 	rr := httptest.NewRecorder()
 	BotHandler(db, nil)(rr, req)
 	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "kitsu_bot_saved") {
@@ -129,6 +132,7 @@ func TestConnectionsSaveKitsuStoresExternalURLSeparately(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
 	rr := httptest.NewRecorder()
 	BotHandler(db, nil)(rr, req)
 	if rr.Code != http.StatusSeeOther {
@@ -170,6 +174,7 @@ func TestConnectionsRecheckKitsuUsesStoredTokenWithoutRenderingIt(t *testing.T) 
 	form := url.Values{"action": {"save_kitsu"}, "kitsu_hostname": {server.URL}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
 	rr := httptest.NewRecorder()
 	BotHandler(db, nil)(rr, req)
 	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "kitsu_bot_saved") {

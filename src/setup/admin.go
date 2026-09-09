@@ -3006,6 +3006,30 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 	return BotHandlerWithRuntime(db, kitsuReconnect, nil)
 }
 
+func botMutationRequiresRecentAuthentication(r *http.Request, action string) bool {
+	if r == nil || r.Method != http.MethodPost {
+		return false
+	}
+	switch action {
+	case "save_kitsu", "save_discord":
+		return true
+	default:
+		return r.URL.Query().Get("legacy") == "1"
+	}
+}
+
+func recentBotAuthenticationLoginURL(r *http.Request, lang string) string {
+	nextQuery := url.Values{"edit": {"1"}}
+	if r != nil && r.URL.Query().Get("legacy") == "1" {
+		nextQuery.Set("legacy", "1")
+	}
+	if lang != "" {
+		nextQuery.Set("lang", lang)
+	}
+	next := "/bot/admin/bot?" + nextQuery.Encode()
+	return appendLang("/bot/login?next="+url.QueryEscape(next), lang)
+}
+
 func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("BotHandler entered", "method", r.Method, "path", r.URL.Path)
@@ -3035,8 +3059,8 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 			"parse_error", parseErr != nil,
 			"action_class", actionClass,
 		)
-		if editMode && !botEditAllowed(r) {
-			http.Redirect(w, r, appendLang("/bot/login?next="+url.QueryEscape(r.URL.RequestURI()), lang), http.StatusSeeOther)
+		if (editMode || botMutationRequiresRecentAuthentication(r, action)) && !botEditAllowed(r) {
+			http.Redirect(w, r, recentBotAuthenticationLoginURL(r, lang), http.StatusSeeOther)
 			return
 		}
 		if r.Method == http.MethodPost {
@@ -3116,33 +3140,15 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 						fmt.Fprint(w, renderKitsuConnectionError(lang, botTokenValidationUserMessageSafe(lang, validation)))
 						return
 					}
-					if submittedBotToken != "" {
-						if err := setRuntimeKitsuToken(db, submittedBotToken); err != nil {
-							w.WriteHeader(http.StatusInternalServerError)
-							fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu Bot tokenを安全に保存できませんでした。", "The Kitsu Bot token could not be stored safely.")))
-							return
-						}
-					}
-					if err := StoreValidatedKitsuBotMetadata(db, validation); err != nil {
+					if err := persistKitsuConnection(db, submittedBotToken, validation, externalURLWasSubmitted, externalURLToSave, displayedHost, hostForAuth, apiOverride); err != nil {
+						slog.Warn("Kitsu connection persistence failed", "error_class", "connection_persistence_failed")
 						w.WriteHeader(http.StatusInternalServerError)
-						fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu Bot tokenの検証情報を保存できませんでした。", "The Kitsu Bot validation metadata could not be stored.")))
+						fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続設定を安全に保存できませんでした。", "The Kitsu connection settings could not be saved safely.")))
 						return
 					}
-					if externalURLWasSubmitted {
-						if externalURLToSave == "" {
-							model.DeleteSetting(db, ExternalKitsuURLSettingKey)
-							model.DeleteSetting(db, PublicKitsuURLSettingKey)
-						} else {
-							model.SetSetting(db, ExternalKitsuURLSettingKey, externalURLToSave)
-						}
-					}
-					model.SetSetting(db, KitsuDisplayURLSettingKey, displayedHost)
-					model.SetSetting(db, "kitsu.hostname", hostForAuth)
 					if apiOverride != "" {
-						model.SetSetting(db, KitsuAPIBaseURLSettingKey, apiOverride)
 						os.Setenv("KITSU_API_BASE_URL", apiOverride)
 					} else {
-						model.DeleteSetting(db, KitsuAPIBaseURLSettingKey)
 						os.Unsetenv("KITSU_API_BASE_URL")
 					}
 					os.Setenv("KITSU_HOSTNAME", hostForAuth)
@@ -3377,6 +3383,58 @@ type assignmentUserOption struct {
 	KitsuName  string
 	KitsuEmail string
 	DiscordID  string
+}
+
+type kitsuConnectionPersistence struct {
+	storeToken    func(*gorm.DB, string) error
+	storeMetadata func(*gorm.DB, BotTokenValidationResult) error
+	set           func(*gorm.DB, string, string) error
+	delete        func(*gorm.DB, string) error
+}
+
+func defaultKitsuConnectionPersistence() kitsuConnectionPersistence {
+	return kitsuConnectionPersistence{setRuntimeKitsuToken, StoreValidatedKitsuBotMetadata, model.SetSettingWithError, model.DeleteSettingWithError}
+}
+
+func persistKitsuConnection(db *gorm.DB, submittedToken string, validation BotTokenValidationResult, externalSubmitted bool, externalURL, displayHost, runtimeHost, apiOverride string) error {
+	return persistKitsuConnectionWith(db, defaultKitsuConnectionPersistence(), submittedToken, validation, externalSubmitted, externalURL, displayHost, runtimeHost, apiOverride)
+}
+
+func persistKitsuConnectionWith(db *gorm.DB, persistence kitsuConnectionPersistence, submittedToken string, validation BotTokenValidationResult, externalSubmitted bool, externalURL, displayHost, runtimeHost, apiOverride string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		if submittedToken != "" {
+			if err := persistence.storeToken(tx, submittedToken); err != nil {
+				return err
+			}
+		}
+		if err := persistence.storeMetadata(tx, validation); err != nil {
+			return err
+		}
+		if externalSubmitted {
+			if externalURL == "" {
+				if err := persistence.delete(tx, ExternalKitsuURLSettingKey); err != nil {
+					return err
+				}
+				if err := persistence.delete(tx, PublicKitsuURLSettingKey); err != nil {
+					return err
+				}
+			} else if err := persistence.set(tx, ExternalKitsuURLSettingKey, externalURL); err != nil {
+				return err
+			}
+		}
+		for _, setting := range []struct{ key, value string }{
+			{KitsuDisplayURLSettingKey, displayHost},
+			{"kitsu.hostname", runtimeHost},
+		} {
+			if err := persistence.set(tx, setting.key, setting.value); err != nil {
+				return err
+			}
+		}
+		if apiOverride == "" {
+			return persistence.delete(tx, KitsuAPIBaseURLSettingKey)
+		}
+		return persistence.set(tx, KitsuAPIBaseURLSettingKey, apiOverride)
+	})
 }
 
 func buildPersonOptions(persons []KitsuPerson, selectedName, selectedEmail, lang string) string {

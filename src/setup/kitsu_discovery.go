@@ -99,8 +99,8 @@ func isPlaceholderKitsuEndpoint(raw string) bool {
 
 func localKitsuHostCandidates() []kitsuHostProbe {
 	// Deliberately empty: setup must not scan localhost or guess ports. A
-	// saved endpoint, KITSU_HOSTNAME, an explicit setup URL, or an installer
-	// supplied hint is required before any network request is made.
+	// saved endpoint, KITSU_HOSTNAME, or an installer-supplied hint is required
+	// before any network request is made. Login form values are never candidates.
 	return nil
 }
 

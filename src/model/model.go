@@ -1506,16 +1506,24 @@ func GetSetting(db *gorm.DB, key string) string {
 }
 
 func SetSetting(db *gorm.DB, key, value string) {
+	_ = SetSettingWithError(db, key, value)
+}
+
+// SetSettingWithError makes durable configuration failures visible to callers
+// that must not report a successful connection save after a failed write.
+func SetSettingWithError(db *gorm.DB, key, value string) error {
 	if IsSecretSettingKey(key) {
-		return
+		return nil
 	}
 	var s Setting
 	if err := db.Where("key = ?", key).First(&s).Error; err != nil {
-		db.Create(&Setting{Key: key, Value: value})
-		return
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return db.Create(&Setting{Key: key, Value: value}).Error
 	}
 	s.Value = value
-	db.Save(&s)
+	return db.Save(&s).Error
 }
 
 func SetSecretSetting(db *gorm.DB, key, value string) {
@@ -1532,7 +1540,11 @@ func SetSecretSettingWithError(db *gorm.DB, key, value string) error {
 }
 
 func DeleteSetting(db *gorm.DB, key string) {
-	db.Where("key = ?", key).Delete(&Setting{})
+	_ = DeleteSettingWithError(db, key)
+}
+
+func DeleteSettingWithError(db *gorm.DB, key string) error {
+	return db.Where("key = ?", key).Delete(&Setting{}).Error
 }
 
 func IsSecretSettingKey(key string) bool {

@@ -271,7 +271,7 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 		}
 		return nil
 	}); txErr != nil {
-		res.fail("Discord setup succeeded but database transaction failed: " + txErr.Error())
+		res.fail("Discord setup succeeded but database transaction failed: database_write_failed")
 		cleanupHadErrors := cleanupDiscordArtifactsAfterDBFailure(categoryID, botToken, createdChannels, &res)
 		if cleanupHadErrors {
 			res.fail("automatic Discord cleanup had warnings; verify Discord resources manually before retrying.")
@@ -280,7 +280,7 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 			res.ok("automatic Discord cleanup completed")
 			res.SafeToRetry = true
 		}
-		slog.Error("Project setup database transaction failed", "projectName", projectName, "kitsuProjectID", kitsuProjectID, "duration", time.Since(dbStart).String(), "cleanupHadErrors", cleanupHadErrors, "err", txErr)
+		slog.Error("Project setup database transaction failed", "projectName", projectName, "kitsuProjectID", kitsuProjectID, "duration", time.Since(dbStart).String(), "cleanupHadErrors", cleanupHadErrors, "error_class", classifySQLitePersistenceError(txErr))
 		return
 	}
 	slog.Info("Project setup database records persisted", "projectName", projectName, "kitsuProjectID", kitsuProjectID, "webhookCount", len(webhooksToSave), "duration", time.Since(dbStart).String())

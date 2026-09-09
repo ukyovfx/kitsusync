@@ -128,6 +128,7 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	form.Set("guild_id", "999999999999999999")
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?legacy=1", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
 	rr := httptest.NewRecorder()
 
 	h(rr, req)
