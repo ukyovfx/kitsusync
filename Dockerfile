@@ -22,10 +22,18 @@ RUN mkdir -p /app/data /app/logs /app/dump \
 COPY --from=builder --chown=10001:10001 /app/kitsu-discord .
 COPY --from=builder --chown=10001:10001 /app/tpl ./tpl
 ARG COMMIT_SHA=unknown
+ARG APP_VERSION=0.4.5
+ARG BUILD_TIMESTAMP=unknown
+ARG SCHEMA_VERSION=1
 ARG WORKTREE_DIRTY=false
 ARG BUILD_SOURCE_ID=unknown
+ARG IMAGE_REVISION=unknown
 LABEL org.opencontainers.image.revision="${COMMIT_SHA}" \
       org.opencontainers.image.source-id="${BUILD_SOURCE_ID}" \
-      org.opencontainers.image.dirty="${WORKTREE_DIRTY}"
+      org.opencontainers.image.created="${BUILD_TIMESTAMP}" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.schema-version="${SCHEMA_VERSION}" \
+      org.opencontainers.image.dirty="${WORKTREE_DIRTY}" \
+      org.opencontainers.image.image-revision="${IMAGE_REVISION}"
 USER 10001:10001
 CMD ["./kitsu-discord"]

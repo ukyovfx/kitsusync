@@ -172,7 +172,7 @@ If those post-deploy checks all pass, hash drift across the recreate can still b
 - `DISCORD_GUILD_ID`
 - `KITSU_HOSTNAME`
 - `KITSU_RUNTIME_EMAIL`
-- `KITSU_RUNTIME_PASSWORD`
+- `KITSU_RUNTIME_PASSWORD` (bootstrap/compatibility only; token-based runtime recovery is preferred)
 - `DISCORD_WEBHOOK_URL`
 
 `conf.toml` reads secret values from env via `${VAR_NAME}` syntax. The actual secrets never live in `conf.toml`.
@@ -197,6 +197,25 @@ When rotating `DISCORD_BOT_TOKEN` or other secrets:
 2. Restart the container: `docker compose -f deploy/docker-compose.yml up -d`
 
 No rebuild is needed for env-only changes.
+
+## Runtime recovery
+
+Do not recover a production runtime by copying or re-entering a saved password
+into a host script. Open the authenticated KitsuSync Connections/setup surface
+and use the validated Kitsu bot-token flow. A recovery check must prove that the
+process is running, `/health` is semantically healthy, `/api/setup/status` is
+reachable or correctly protected, and `/bot/setup` is available. The deployment
+wrapper performs these checks during both deployment and rollback.
+
+## Release provenance policy
+
+The root-installed deployment boundary consumes a staged image archive plus a
+root-owned policy set: archive digest, immutable image ID, Compose digest, and
+the source/build/image manifest (`source_commit`, `source_id`, `version`). It
+refuses mutable tags, missing metadata, symlinked policy files, or an image
+whose OCI labels do not match the manifest. The previous image is retained by
+immutable ID before recreation; rollback must restore that ID and the saved
+Compose, environment, mount, host-config, and network identity checks.
 
 ## Host-loopback Kitsu with zero-input discovery
 

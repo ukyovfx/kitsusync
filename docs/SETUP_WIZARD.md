@@ -43,7 +43,7 @@ This is the only normal first-time setup path operators should follow.
 
 KitsuSync accepts the Kitsu authentication authority only from operator-managed `KITSU_HOSTNAME`, a previously saved trusted endpoint, or an installer-supplied hint. A saved or environment-provided API base override remains supported. Login form values never select or replace the authentication authority, even during first-time setup or recovery. Every trusted candidate still passes the Kitsu connection, DNS, redirect, TLS, and network-scope checks before credentials are sent. If no trusted authority is configured, login remains blocked with an actionable error.
 
-The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. The runtime password is encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
+The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. Production recovery is token-first: use the validated Kitsu bot-token path in Connections or the setup surface; it persists `kitsu.runtime_token_encrypted` and never requires a password-era recovery script. Password input remains only for first-time bootstrap and compatibility migration. Runtime secrets are encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
 
 ---
 

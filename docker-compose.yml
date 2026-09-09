@@ -4,6 +4,12 @@ services:
       context: .
       args:
         APP_VERSION: "0.4.5"
+        COMMIT_SHA: "${KITSUSYNC_COMMIT_SHA:-unknown}"
+        BUILD_TIMESTAMP: "${KITSUSYNC_BUILD_TIMESTAMP:-unknown}"
+        SCHEMA_VERSION: "${KITSUSYNC_SCHEMA_VERSION:-1}"
+        WORKTREE_DIRTY: "${KITSUSYNC_WORKTREE_DIRTY:-unknown}"
+        BUILD_SOURCE_ID: "${KITSUSYNC_BUILD_SOURCE_ID:-unknown}"
+        IMAGE_REVISION: "${KITSUSYNC_IMAGE_REVISION:-unknown}"
     restart: unless-stopped
     env_file:
       - .env.local

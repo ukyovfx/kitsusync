@@ -59,6 +59,10 @@ The runtime bot account cannot authenticate.
 - Open `/bot/login` and sign in with a Kitsu manager or admin account
 - Complete Bot Setup from `/bot/setup`
 
+For an existing deployment, use the token-based recovery path in Connections;
+do not use password-era host recovery scripts. Password entry is retained only
+for initial bootstrap or compatibility migration.
+
 ### `config validation` FATAL errors at startup
 
 The app logs FATAL validation errors and may exit or continue in degraded mode.

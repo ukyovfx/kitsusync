@@ -99,6 +99,9 @@ jobs:
           FB_PASSWORD: ci-password
         run: docker compose config -q
 
+      - name: Release hardening contract tests
+        run: bash scripts/test-release-hardening.sh
+
       - name: Docker Compose build app
         env:
           FB_USERNAME: ci-user
@@ -111,3 +114,27 @@ jobs:
             --build-arg BUILD_SOURCE_ID="${GITHUB_SHA}" \
             --build-arg IMAGE_REVISION="${GITHUB_SHA}" \
             --build-arg WORKTREE_DIRTY=false app
+
+      - name: Verify source-build-image provenance
+        env:
+          FB_USERNAME: ci-user
+          FB_PASSWORD: ci-password
+        run: |
+          set -euo pipefail
+          image_id="$(docker compose images -q app)"
+          test -n "$image_id"
+          revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_id")"
+          source_id="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "$image_id")"
+          version="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_id")"
+          test "$revision" = "$GITHUB_SHA"
+          test "$source_id" = "$GITHUB_SHA"
+          test -n "$version"
+          printf 'source_commit=%s\nsource_id=%s\nversion=%s\nimage_id=%s\n' "$revision" "$source_id" "$version" "$(docker image inspect --format '{{.Id}}' "$image_id")" > provenance.txt
+          cat provenance.txt
+
+      - name: Upload provenance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitsusync-provenance-${{ github.sha }}
+          path: provenance.txt
+          if-no-files-found: error
