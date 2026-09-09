@@ -1,5 +1,8 @@
 # KitsuSync AGENTS.md
 
+## Agent knowledge entry point
+- Read `docs/agent/START-HERE.md` before repository work, then verify technical claims against the current repository state.
+
 ## Workspace scope
 - This workspace is exclusively for KitsuSync: its Go application, backend/frontend, setup wizard, Discord integration, Kitsu/Zou integration required by KitsuSync, Docker/Compose, tests, CI, releases, and documentation.
 - Vatler, general Kitsu host/server administration, host firewall/network/SSH/Tailscale administration, Kitsu Server Console, unrelated repositories, and unrelated infrastructure are out of scope. Do not inspect, modify, or operate on them; respond `OUT_OF_SCOPE_FOR_KITSUSYNC` with the best matching workspace (or `unknown`).
