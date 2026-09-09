@@ -33,7 +33,9 @@ jobs:
           # The hosted runner's optional Chrome source can be temporarily
           # inconsistent. It is unrelated to this Go/SQLite build and must not
           # prevent the authoritative CGO validation from starting.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -print0 \
+            | sudo xargs -0 -r grep -lZ 'dl.google.com/linux/chrome-stable/deb' \
+            | sudo xargs -0 -r rm -f
           sudo apt-get update
           sudo apt-get install -y gcc libsqlite3-dev
 
