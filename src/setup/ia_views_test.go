@@ -24,7 +24,7 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
