@@ -28,20 +28,6 @@ type runtimeSnapshot struct {
 	RuntimeAuthenticated bool        `json:"runtime_authenticated"`
 }
 
-type readinessSnapshot struct {
-	KitsuConfigured              bool   `json:"kitsu_configured"`
-	KitsuConnected               bool   `json:"kitsu_connected"`
-	KitsuReady                   bool   `json:"kitsu_ready"`
-	DiscordBotConfigured         bool   `json:"discord_bot_configured"`
-	DiscordAPIValidated          bool   `json:"discord_api_validated"`
-	ProductionRoutingConfigured  bool   `json:"production_routing_configured"`
-	OverallNotificationReadiness string `json:"overall_notification_readiness"`
-}
-
-var healthReadinessProvider = func() readinessSnapshot {
-	return readinessSnapshot{OverallNotificationReadiness: "unknown"}
-}
-
 type runtimeManager struct {
 	authMu   sync.Mutex
 	mu       sync.RWMutex
@@ -161,16 +147,36 @@ func (m *runtimeManager) runWhenReady(fn func()) bool {
 	return true
 }
 
-func healthHandler(runtime *runtimeManager) http.HandlerFunc {
+// healthHandler reports process and local-runtime health only. Dependency
+// readiness belongs to the setup/admin status surfaces so a slow or
+// unavailable Discord/Kitsu API cannot flap the container healthcheck.
+func healthHandler(runtime *runtimeManager, localChecks ...func(context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		healthy := runtime != nil
+		for _, check := range localChecks {
+			if check != nil {
+				if err := check(r.Context()); err != nil {
+					healthy = false
+					break
+				}
+			}
+		}
+		status := http.StatusOK
+		statusText := "ok"
+		if !healthy {
+			status = http.StatusServiceUnavailable
+			statusText = "unhealthy"
+		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(status)
 		response := struct {
-			Status    string            `json:"status"`
-			Build     buildInfo         `json:"build"`
-			Runtime   runtimeSnapshot   `json:"runtime"`
-			Readiness readinessSnapshot `json:"readiness"`
-		}{Status: "ok", Build: currentBuildInfo(), Runtime: runtime.snapshot(), Readiness: healthReadinessProvider()}
+			Status  string          `json:"status"`
+			Build   buildInfo       `json:"build"`
+			Runtime runtimeSnapshot `json:"runtime"`
+		}{Status: statusText, Build: currentBuildInfo()}
+		if runtime != nil {
+			response.Runtime = runtime.snapshot()
+		}
 		_ = json.NewEncoder(w).Encode(response)
 	}
 }

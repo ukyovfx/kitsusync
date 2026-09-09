@@ -261,4 +261,4 @@ Polling reads Kitsu. Notification delivery is the only Discord message write in 
 
 ## Release readiness boundary
 
-`/health` reports `overall_notification_readiness: "ready"` only when Kitsu is runtime-ready, the Discord Bot is configured and API-validated, and at least one Production routing configuration is valid. A configured Bot or connected Production alone remains a blocked or pending state.
+`/health` reports process/local-runtime health only and must not call Discord or Kitsu APIs. Dependency-aware `overall_notification_readiness` is reported by the authenticated setup status and admin health surfaces (`/api/setup/status` and `/bot/admin/health`); it is `"ready"` only when Kitsu is runtime-ready, the Discord Bot is configured and API-validated, and at least one Production routing configuration is valid. A configured Bot or connected Production alone remains a blocked or pending state.

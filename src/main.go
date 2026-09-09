@@ -920,30 +920,6 @@ func main() {
 	))
 
 	runtime := newRuntimeManager()
-	healthReadinessProvider = func() readinessSnapshot {
-		host, _, _ := getKitsuCreds(db, conf)
-		botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
-		discordValidated, routingReady := setup.ProjectDiscordReadiness(db, botToken, fallbackGuildID)
-		slog.Debug("Project Discord readiness evaluated",
-			"api_validated", discordValidated,
-			"routing_ready", routingReady,
-			"project_count", len(model.ListProjects(db)),
-		)
-		kitsuToken := setup.StoredRuntimeKitsuToken(db)
-		kitsuConfigured := strings.TrimSpace(host) != "" && strings.TrimSpace(kitsuToken) != ""
-		kitsuReady := runtime.ready()
-		botConfigured := strings.TrimSpace(botToken) != ""
-		overall := overallNotificationReadiness(kitsuReady, botConfigured, discordValidated, routingReady)
-		return readinessSnapshot{
-			KitsuConfigured:              kitsuConfigured,
-			KitsuConnected:               kitsuReady,
-			KitsuReady:                   kitsuReady,
-			DiscordBotConfigured:         botConfigured,
-			DiscordAPIValidated:          discordValidated,
-			ProductionRoutingConfigured:  routingReady,
-			OverallNotificationReadiness: overall,
-		}
-	}
 	refreshRuntime := func() bool {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		slog.Debug("Kitsu runtime credential availability",
@@ -984,7 +960,13 @@ func main() {
 
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler(runtime))
+	mux.HandleFunc("/health", healthHandler(runtime, func(ctx context.Context) error {
+		sqlDB, err := db.DB()
+		if err != nil {
+			return err
+		}
+		return sqlDB.PingContext(ctx)
+	}))
 
 	onRuntimeConfigured := func() {
 		slog.Debug("Kitsu reconnect attempted", "attempted", true)
