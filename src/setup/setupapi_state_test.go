@@ -26,7 +26,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func newSetupStateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	dsn := filepath.Join(t.TempDir(), "setup-state.sqlite")
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
