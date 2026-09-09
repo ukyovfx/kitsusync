@@ -65,5 +65,6 @@ require 'org.opencontainers.image.version' "$dockerfile"
 require 'COMMIT_SHA' "$compose"
 require 'BUILD_SOURCE_ID' "$compose"
 require 'IMAGE_REVISION' "$compose"
+require 'KITSUSYNC_IMAGE_TAG' "$compose"
 
 printf 'release-hardening-contract=PASS\n'

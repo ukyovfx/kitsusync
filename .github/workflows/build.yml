@@ -114,6 +114,7 @@ jobs:
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
+          KITSUSYNC_IMAGE_TAG: ci-${{ github.sha }}
         run: |
           docker compose build \
             --build-arg APP_VERSION="${{ github.event_name == 'pull_request' && '0.4.4' || github.ref_name }}" \
@@ -127,10 +128,11 @@ jobs:
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
+          KITSUSYNC_IMAGE_TAG: ci-${{ github.sha }}
         run: |
           set -euo pipefail
-          image_id="$(docker compose images -q app)"
-          test -n "$image_id"
+          image_ref="kitsusync:${KITSUSYNC_IMAGE_TAG}"
+          image_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
           revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_id")"
           source_id="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "$image_id")"
           version="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_id")"

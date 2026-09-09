@@ -1,5 +1,6 @@
 services:
   app:
+    image: "kitsusync:${KITSUSYNC_IMAGE_TAG:-dev}"
     build:
       context: .
       args:
