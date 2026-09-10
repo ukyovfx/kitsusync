@@ -1,0 +1,97 @@
+name: Release deployment bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable KitsuSync release tag
+        required: true
+        default: v0.4.6
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out trusted deployment tooling
+        uses: actions/checkout@v4
+        with:
+          path: control
+          ref: master
+          fetch-depth: 0
+
+      - name: Resolve and check out immutable release source
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git -C control fetch --tags --force origin
+          commit="$(git -C control rev-list -n 1 "$RELEASE_TAG")"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$RELEASE_TAG" == v0.4.6 ]]; then
+            [[ "$commit" == b7b30157cb90c4500e8b00d3c26ac7038f5c8c10 ]]
+          fi
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+          printf 'version=%s\n' "${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          ref: ${{ steps.release.outputs.commit }}
+          fetch-depth: 0
+
+      - name: Verify release source identity
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$(tr -d '\r\n' < source/VERSION)" == "$RELEASE_VERSION" ]]
+          [[ "$(git -C control rev-list -n 1 "$RELEASE_TAG")" == "${{ steps.release.outputs.commit }}" ]]
+
+      - name: Prepare build environment
+        run: cp source/.env.example source/.env.local
+
+      - name: Build exact release source
+        working-directory: source
+        env:
+          KITSUSYNC_APP_VERSION: ${{ steps.release.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ${{ inputs.release_tag }}
+        run: |
+          docker compose build \
+            --build-arg APP_VERSION="$KITSUSYNC_APP_VERSION" \
+            --build-arg COMMIT_SHA="${{ steps.release.outputs.commit }}" \
+            --build-arg BUILD_TIMESTAMP="$(git show -s --format=%cI '${{ steps.release.outputs.commit }}')" \
+            --build-arg BUILD_SOURCE_ID="${{ steps.release.outputs.commit }}" \
+            --build-arg IMAGE_REVISION="${{ steps.release.outputs.commit }}" \
+            --build-arg WORKTREE_DIRTY=false app
+
+      - name: Build and verify deployable release bundle
+        env:
+          ARTIFACT_KIND: release
+          SOURCE_COMMIT: ${{ steps.release.outputs.commit }}
+          SOURCE_ID: ${{ steps.release.outputs.commit }}
+          RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          IMAGE_REF: kitsusync:${{ inputs.release_tag }}
+          COMPOSE_SOURCE: ${{ github.workspace }}/source/docker-compose.yml
+          BUNDLE_OUTPUT: ${{ github.workspace }}/kitsusync-${{ inputs.release_tag }}-deployment
+        working-directory: control
+        run: |
+          set -euo pipefail
+          image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")"
+          mode=normal
+          if [[ "$RELEASE_TAG" == v0.4.6 ]]; then mode=legacy-migration; fi
+          IMAGE_ID="$image_id" DEPLOYMENT_MODE="$mode" bash scripts/build-deployment-bundle.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kitsusync-${{ inputs.release_tag }}-deployment
+          path: kitsusync-${{ inputs.release_tag }}-deployment/
+          if-no-files-found: error
+          retention-days: 30

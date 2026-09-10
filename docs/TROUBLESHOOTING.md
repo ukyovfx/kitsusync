@@ -1,8 +1,12 @@
 # Troubleshooting
 
-Production deployments and recovery use `deploy/kitsusync-deploy` only. The
+Production deployments and recovery use `/usr/local/sbin/kitsusync-deploy` only. The
 direct Compose startup/rebuild examples below are explicitly local-development
 diagnostics and must not be used to operate production.
+
+Use `sudo /usr/local/sbin/kitsusync-inspect` for the safe, read-only production
+status surface. See `docs/PRODUCTION_BOOTSTRAP.md`; neither installed command
+accepts arguments.
 
 ## Current notification routing model
 

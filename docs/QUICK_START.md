@@ -128,7 +128,7 @@ If Project Setup fails after partial Discord provisioning, rollback is best-effo
 ## Production deployment
 
 Production deployment uses only the root-installed
-`deploy/kitsusync-deploy` boundary with the repository-root Compose model,
+`/usr/local/sbin/kitsusync-deploy` boundary with the repository-root Compose model,
 an immutable approved image, provenance manifest, and explicit normal or
 recovery mode. Do not run production Compose directly. See
-`docs/ENVIRONMENTS.md` for the supported contract.
+`docs/PRODUCTION_BOOTSTRAP.md` for bootstrap and `docs/ENVIRONMENTS.md` for the supported contract.

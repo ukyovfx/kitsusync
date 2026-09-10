@@ -195,8 +195,8 @@ curl http://localhost:8090/health
 ```
 
 The former temporary GCP direct-Compose procedure is historical only. Production
-recreation now uses the hardened `deploy/kitsusync-deploy` wrapper described in
-`docs/ENVIRONMENTS.md`.
+recreation now uses the hardened `/usr/local/sbin/kitsusync-deploy` wrapper described in
+`docs/PRODUCTION_BOOTSTRAP.md` and `docs/ENVIRONMENTS.md`.
 
 ## First-Time Setup Flow
 

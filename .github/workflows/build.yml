@@ -126,6 +126,7 @@ jobs:
           bash scripts/test-release-hardening.sh
           bash scripts/test-release-identity.sh
           bash scripts/test-production-path-contract.sh
+          bash scripts/test-bootstrap-security.sh
 
       - name: Docker Compose build app
         env:
@@ -167,15 +168,37 @@ jobs:
           IMAGE_ID="$image_id" bash scripts/generate-provenance.sh
           cat provenance.txt
 
+      - name: Build and load-back deployment bundle
+        env:
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
+          ARTIFACT_KIND: ${{ steps.identity.outputs.artifact_kind }}
+          SOURCE_COMMIT: ${{ steps.identity.outputs.source_commit }}
+          SOURCE_ID: ${{ steps.identity.outputs.source_id }}
+          MERGE_TEST_COMMIT: ${{ steps.identity.outputs.merge_test_commit }}
+          RELEASE_COMMIT: ${{ steps.identity.outputs.release_commit }}
+          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+          RELEASE_TAG: ${{ steps.identity.outputs.artifact_kind == 'release' && format('v{0}', steps.identity.outputs.version) || '' }}
+        run: |
+          set -euo pipefail
+          image_ref="kitsusync:${KITSUSYNC_IMAGE_TAG}"
+          image_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
+          mode=normal
+          if [[ "$ARTIFACT_KIND" == release && "$RELEASE_TAG" == v0.4.6 ]]; then mode=legacy-migration; fi
+          IMAGE_REF="$image_ref" IMAGE_ID="$image_id" DEPLOYMENT_MODE="$mode" \
+            bash scripts/build-deployment-bundle.sh
+
       - name: Docker deployment behavior tests
         env:
           KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
           KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
         run: bash scripts/test-deployment-behavior.sh
 
-      - name: Upload provenance evidence
+      - name: Upload provenance and deployment bundle
         uses: actions/upload-artifact@v4
         with:
-          name: kitsusync-provenance-${{ steps.identity.outputs.source_commit }}
-          path: provenance.txt
+          name: kitsusync-deployment-${{ steps.identity.outputs.source_commit }}
+          path: |
+            provenance.txt
+            deployment-bundle/
           if-no-files-found: error
