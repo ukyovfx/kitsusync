@@ -857,6 +857,10 @@ func main() {
 	if conf.Debug {
 		os.Setenv("Debug", "true")
 	}
+	if err := secureRuntimeDataFiles("data"); err != nil {
+		slog.Fatal("failed to secure runtime data files", "error_class", "runtime_file_permissions_failed")
+		os.Exit(1)
+	}
 
 	db, err := gorm.Open(sqlite.Open(filepath.Join("data", "sqlite.db")), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
