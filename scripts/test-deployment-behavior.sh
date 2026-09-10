@@ -44,19 +44,19 @@ docker network create "${network}" >/dev/null
 docker network create "${other_network}" >/dev/null
 
 run_contract_container() {
-  local name="$1" selected_image="$2" env_value="$3" source_mount="$4" selected_network="$5" config_hash="$6" sleep_seconds="$7"
+  local name="$1" selected_image="$2" env_value="$3" source_mount="$4" selected_network="$5" config_hash="$6" sleep_seconds="$7" command_suffix="$8"
   docker run -d --name "${name}" \
     --network "${selected_network}" --network-alias kitsusync-app \
     --mount "type=bind,src=${source_mount},dst=/runtime-state" \
     --env "KITSUSYNC_STATE=${env_value}" \
     --label "kitsusync.runtime-contract=test" \
     --label "com.docker.compose.config-hash=${config_hash}" \
-    --entrypoint /bin/sh "${selected_image}" -c "sleep ${sleep_seconds}" >/dev/null
+    --entrypoint /bin/sh "${selected_image}" -c "sleep ${sleep_seconds}${command_suffix}" >/dev/null
   containers+=("${name}")
 }
 
 original="ks-original-${suffix}"
-run_contract_container "${original}" "${image}" expected "${mount_dir}" "${network}" old-hash 300
+run_contract_container "${original}" "${image}" expected "${mount_dir}" "${network}" old-hash 300 ""
 original_id="$(docker inspect --format '{{.Id}}' "${original}")"
 image_id="$(docker inspect --format '{{.Image}}' "${original}")"
 revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${original}")"
@@ -66,9 +66,18 @@ KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${snapsh
 
 docker tag "${image_id}" "${rollback_ref}"
 restored="ks-restored-${suffix}"
-run_contract_container "${restored}" "${rollback_ref}" expected "${mount_dir}" "${network}" new-hash 300
+run_contract_container "${restored}" "${rollback_ref}" expected "${mount_dir}" "${network}" new-hash 300 ""
 restored_id="$(docker inspect --format '{{.Id}}' "${restored}")"
-KITSUSYNC_DEPLOY_TEST_MODE=compare bash "${wrapper}" "${restored_id}" "${snapshot}" "${image_id}" "${revision}" "${source_id}" "${version}"
+if ! KITSUSYNC_DEPLOY_TEST_MODE=compare bash "${wrapper}" "${restored_id}" "${snapshot}" "${image_id}" "${revision}" "${source_id}" "${version}"; then
+  restored_snapshot="$(mktemp -d)"
+  trap 'rm -rf "${restored_snapshot}"; cleanup' EXIT
+  KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${restored_id}" "${restored_snapshot}"
+  for part in runtime-config runtime-env runtime-labels runtime-host-config runtime-mounts runtime-networks runtime-network-aliases; do
+    cmp -s "${snapshot}/${part}" "${restored_snapshot}/${part}" || printf 'rollback normalized state mismatch: %s\n' "${part}" >&2
+  done
+  printf 'rollback restoration was rejected\n' >&2
+  exit 1
+fi
 
 expect_mismatch() {
   local name="$1"
@@ -82,23 +91,23 @@ expect_mismatch() {
 
 docker commit "${original}" "${wrong_ref}" >/dev/null
 wrong_image="ks-wrong-image-${suffix}"
-run_contract_container "${wrong_image}" "${wrong_ref}" expected "${mount_dir}" "${network}" new-hash 300
+run_contract_container "${wrong_image}" "${wrong_ref}" expected "${mount_dir}" "${network}" new-hash 300 ""
 expect_mismatch "${wrong_image}"
 
 wrong_env="ks-wrong-env-${suffix}"
-run_contract_container "${wrong_env}" "${rollback_ref}" changed "${mount_dir}" "${network}" new-hash 300
+run_contract_container "${wrong_env}" "${rollback_ref}" changed "${mount_dir}" "${network}" new-hash 300 ""
 expect_mismatch "${wrong_env}"
 
 wrong_mount="ks-wrong-mount-${suffix}"
-run_contract_container "${wrong_mount}" "${rollback_ref}" expected "${other_mount_dir}" "${network}" new-hash 300
+run_contract_container "${wrong_mount}" "${rollback_ref}" expected "${other_mount_dir}" "${network}" new-hash 300 ""
 expect_mismatch "${wrong_mount}"
 
 wrong_network="ks-wrong-network-${suffix}"
-run_contract_container "${wrong_network}" "${rollback_ref}" expected "${mount_dir}" "${other_network}" new-hash 300
+run_contract_container "${wrong_network}" "${rollback_ref}" expected "${mount_dir}" "${other_network}" new-hash 300 ""
 expect_mismatch "${wrong_network}"
 
 wrong_config="ks-wrong-config-${suffix}"
-run_contract_container "${wrong_config}" "${rollback_ref}" expected "${mount_dir}" "${network}" new-hash 301
+run_contract_container "${wrong_config}" "${rollback_ref}" expected "${mount_dir}" "${network}" new-hash 301 "; true"
 expect_mismatch "${wrong_config}"
 
 printf 'deployment-behavior-tests=PASS\n'

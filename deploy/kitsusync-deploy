@@ -36,14 +36,22 @@ readiness_allows() {
 # generated ID/name aliases are also recreated; network IDs and explicit
 # aliases remain part of the normalized contract.
 snapshot_runtime_state() {
-  local id="$1" target="$2" container_name short_id
+  local id="$1" target="$2" container_name short_id hostname
   mkdir -p "${target}"
   container_name="$(${DOCKER_BIN} inspect --format '{{.Name}}' "${id}")"
   container_name="${container_name#/}"
   short_id="${id:0:12}"
-  ${DOCKER_BIN} inspect --format 'user={{.Config.User}}
+  hostname="$(${DOCKER_BIN} inspect --format '{{.Config.Hostname}}' "${id}")"
+  # Docker assigns the container ID as the default hostname. It necessarily
+  # changes on reconstruction, whereas an operator-specified hostname remains
+  # part of the runtime contract.
+  if [[ "${hostname}" == "${id}" || "${hostname}" == "${short_id}" ]]; then
+    hostname=""
+  fi
+  {
+    printf 'hostname=%s\n' "${hostname}"
+    ${DOCKER_BIN} inspect --format 'user={{.Config.User}}
 working_dir={{.Config.WorkingDir}}
-hostname={{.Config.Hostname}}
 domainname={{.Config.Domainname}}
 tty={{.Config.Tty}}
 open_stdin={{.Config.OpenStdin}}
@@ -55,7 +63,8 @@ cmd={{json .Config.Cmd}}
 healthcheck={{json .Config.Healthcheck}}
 exposed_ports={{json .Config.ExposedPorts}}
 stop_signal={{.Config.StopSignal}}
-stop_timeout={{json .Config.StopTimeout}}' "${id}" >"${target}/runtime-config"
+stop_timeout={{json .Config.StopTimeout}}' "${id}"
+  } >"${target}/runtime-config"
   ${DOCKER_BIN} inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${id}" | sort >"${target}/runtime-env"
   ${DOCKER_BIN} inspect --format '{{range $key, $value := .Config.Labels}}{{printf "%s=%s\n" $key $value}}{{end}}' "${id}" \
     | grep -v '^com\.docker\.compose\.config-hash=' | sort >"${target}/runtime-labels"
