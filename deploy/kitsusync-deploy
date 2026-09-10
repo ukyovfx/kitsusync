@@ -44,29 +44,52 @@ backup_is_complete() {
 }
 
 snapshot_runtime_state() {
-  local id="$1" target="$2" container_name short_id hostname
+  local id="$1" target="$2" container_name short_id
   /usr/bin/install -d -m 0700 "${target}"
   container_name="$(${DOCKER_BIN} inspect --format '{{.Name}}' "${id}")"; container_name="${container_name#/}"
   short_id="${id:0:12}"
-  hostname="$(${DOCKER_BIN} inspect --format '{{.Config.Hostname}}' "${id}")"
-  [[ "${hostname}" == "${id}" || "${hostname}" == "${short_id}" ]] && hostname=""
-  {
-    printf 'hostname=%s\n' "${hostname}"
-    ${DOCKER_BIN} inspect --format 'user={{.Config.User}}
-working_dir={{.Config.WorkingDir}}
-domainname={{.Config.Domainname}}
-tty={{.Config.Tty}}
-open_stdin={{.Config.OpenStdin}}
-stdin_once={{.Config.StdinOnce}}
-network_disabled={{.Config.NetworkDisabled}}
-mac_address={{.Config.MacAddress}}
-entrypoint={{json .Config.Entrypoint}}
-cmd={{json .Config.Cmd}}
-healthcheck={{json .Config.Healthcheck}}
-exposed_ports={{json .Config.ExposedPorts}}
-stop_signal={{.Config.StopSignal}}
-stop_timeout={{json .Config.StopTimeout}}' "${id}"
-  } >"${target}/runtime-config"
+  # Docker API versions may omit zero-valued optional Config keys. Normalize
+  # those keys without dropping any runtime-significant field from comparison.
+  ${DOCKER_BIN} inspect --format '{{json .Config}}' "${id}" | /usr/bin/python3 -c '
+import json
+import sys
+
+config = json.load(sys.stdin)
+required = ("Hostname", "User", "WorkingDir", "Domainname", "Tty", "OpenStdin", "StdinOnce")
+missing = [key for key in required if key not in config]
+if missing:
+    raise SystemExit("required container config fields are missing: " + ",".join(missing))
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
+
+def boolean(value):
+    return "true" if value else "false"
+
+hostname = config["Hostname"] or ""
+if hostname in (sys.argv[1], sys.argv[2]):
+    hostname = ""
+
+values = (
+    ("hostname", hostname),
+    ("user", config["User"] or ""),
+    ("working_dir", config["WorkingDir"] or ""),
+    ("domainname", config["Domainname"] or ""),
+    ("tty", boolean(config["Tty"])),
+    ("open_stdin", boolean(config["OpenStdin"])),
+    ("stdin_once", boolean(config["StdinOnce"])),
+    ("network_disabled", boolean(config.get("NetworkDisabled", False))),
+    ("mac_address", config.get("MacAddress") or ""),
+    ("entrypoint", compact(config.get("Entrypoint"))),
+    ("cmd", compact(config.get("Cmd"))),
+    ("healthcheck", compact(config.get("Healthcheck"))),
+    ("exposed_ports", compact(config.get("ExposedPorts"))),
+    ("stop_signal", config.get("StopSignal") or ""),
+    ("stop_timeout", compact(config.get("StopTimeout"))),
+)
+for key, value in values:
+    print(f"{key}={value}")
+' "${id}" "${short_id}" >"${target}/runtime-config"
   ${DOCKER_BIN} inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${id}" | LC_ALL=C /usr/bin/sort >"${target}/runtime-env"
   ${DOCKER_BIN} inspect --format '{{range $key, $value := .Config.Labels}}{{printf "%s=%s\n" $key $value}}{{end}}' "${id}" \
     | /usr/bin/grep -Ev '^com\.docker\.compose\.(config-hash|project\.config_files|project\.working_dir)=' \
@@ -99,7 +122,8 @@ compare_runtime_state() {
 
 if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
   [[ "${EUID}" -ne 0 ]] || die "test mode is forbidden for root"
-  DOCKER_BIN="$(command -v docker)"
+  DOCKER_BIN="${KITSUSYNC_DEPLOY_TEST_DOCKER_BIN:-$(command -v docker)}"
+  [[ -x "${DOCKER_BIN}" ]] || die "test Docker executable is unavailable"
   case "${KITSUSYNC_DEPLOY_TEST_MODE}" in
     readiness) [[ "$#" -eq 2 ]]; readiness_allows "$1" "$2" ;;
     legacy-contract) [[ "$#" -eq 4 ]]; legacy_status_allows "$1" "$2" "$3" "$4" ;;

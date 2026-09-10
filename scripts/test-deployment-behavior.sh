@@ -10,6 +10,8 @@ other_network="ks-state-other-${suffix}"
 mount_dir="$(mktemp -d)"
 other_mount_dir="$(mktemp -d)"
 snapshot="$(mktemp -d)"
+compat_snapshot="$(mktemp -d)"
+docker_shim="$(mktemp)"
 rollback_ref="kitsusync:state-rollback-${suffix}"
 wrong_ref="kitsusync:state-wrong-${suffix}"
 containers=()
@@ -20,7 +22,8 @@ cleanup() {
   fi
   docker network rm "${network}" "${other_network}" >/dev/null 2>&1 || true
   docker image rm "${rollback_ref}" "${wrong_ref}" >/dev/null 2>&1 || true
-  rm -rf "${mount_dir}" "${other_mount_dir}" "${snapshot}"
+  rm -rf "${mount_dir}" "${other_mount_dir}" "${snapshot}" "${compat_snapshot}"
+  rm -f "${docker_shim}"
 }
 trap cleanup EXIT
 
@@ -89,7 +92,21 @@ image_id="$(docker inspect --format '{{.Image}}' "${original}")"
 revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${original}")"
 source_id="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${original}")"
 version="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${original}")"
-KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${snapshot}"
+real_docker="$(command -v docker)"
+cat >"${docker_shim}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == inspect && "$2" == --format && "$3" == '{{json .Config}}' ]]; then
+  "${REAL_DOCKER_BIN}" "$@" | /usr/bin/python3 -c 'import json, sys; value = json.load(sys.stdin); value.pop("NetworkDisabled", None); json.dump(value, sys.stdout, separators=(",", ":"), sort_keys=True)'
+else
+  exec "${REAL_DOCKER_BIN}" "$@"
+fi
+EOF
+chmod 0700 "${docker_shim}"
+KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${docker_shim}" REAL_DOCKER_BIN="${real_docker}" KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${snapshot}"
+KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${docker_shim}" REAL_DOCKER_BIN="${real_docker}" KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${compat_snapshot}"
+cmp -s "${snapshot}/runtime-config" "${compat_snapshot}/runtime-config"
+grep -Fxq 'network_disabled=false' "${snapshot}/runtime-config"
 grep -Fxq 'APP_ENV=production' "${snapshot}/runtime-env"
 
 docker tag "${image_id}" "${rollback_ref}"
