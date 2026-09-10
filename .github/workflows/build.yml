@@ -125,6 +125,7 @@ jobs:
         run: |
           bash scripts/test-release-hardening.sh
           bash scripts/test-release-identity.sh
+          bash scripts/test-production-path-contract.sh
 
       - name: Docker Compose build app
         env:

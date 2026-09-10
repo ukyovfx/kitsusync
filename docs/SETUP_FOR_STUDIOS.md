@@ -43,9 +43,9 @@ Note your **Discord Guild IDs** (Server IDs) for each production server:
 
 ---
 
-## Part 3: Deploy KitsuSync
+## Part 3: Local development setup (not production)
 
-### On the server
+### On a development machine
 
 ```bash
 git clone https://github.com/ukyovfx/kitsusync.git
@@ -86,12 +86,15 @@ ignoreMessagesDaysOld = 5     # How many days back to pick up missed changes on 
 
 Leave other settings at their defaults for now.
 
-### Start the app
+### Start the app locally
 
+<!-- LOCAL DEVELOPMENT ONLY -->
 ```bash
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
 docker compose logs -f app
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 Wait until you see:
 
@@ -171,19 +174,23 @@ If notifications are not appearing, see `docs/TROUBLESHOOTING.md`.
 Use only the root-installed `deploy/kitsusync-deploy` boundary with the
 repository-root Compose model. It requires a root-owned approved image,
 immutable image ID, Compose digest, provenance manifest, and explicit
-deployment mode. Direct production Compose commands and the former alternate
-Compose file under `deploy/` are retired. See `docs/ENVIRONMENTS.md`.
+deployment mode. The protected `.env.local` is the canonical wrapper input and
+the wrapper forces `APP_ENV=production`. Direct production Compose commands and
+the former alternate Compose file under `deploy/` are retired. See
+`docs/ENVIRONMENTS.md`.
 
 ---
 
 ## Updating KitsuSync
 
-```bash
-git pull
-docker compose up -d --build
-```
+Production updates use the same `deploy/kitsusync-deploy` wrapper as the initial
+deployment. Stage the approved immutable image, Compose digest, provenance
+manifest, runtime configuration, and deployment-mode policy, then invoke the
+wrapper with no alternate Compose file or ad-hoc environment file.
 
-Config files (`conf.toml`, `.env.local`) are not touched by git pull — your settings are preserved.
+The wrapper-managed config files (`conf.toml`, protected `.env.local`) are not
+replaced by an image update; keep them under the deployment policy and backup
+process.
 
 ---
 
@@ -195,6 +202,6 @@ Config files (`conf.toml`, `.env.local`) are not touched by git pull — your se
 | Bot Setup fails | Bot token or Guild ID wrong | Double-check both in `.env.local` |
 | Project Setup fails | Bot lacks Discord permissions | Verify bot has Manage Channels and Manage Webhooks |
 | Notifications not arriving | No fallback webhook | Set `DISCORD_WEBHOOK_URL` or ensure project routing is active |
-| `/health` returns 502 | App not started | Run `docker compose up -d --build` |
+| `/health` returns 502 | App not started | For production, inspect the wrapper-managed service and readiness state; use direct Compose only for local development |
 
 For more detailed troubleshooting, see `docs/TROUBLESHOOTING.md`.

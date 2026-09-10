@@ -8,8 +8,8 @@ Get KitsuSync running in about 5 minutes.
 
 Before you begin, confirm you have:
 
-- [ ] Docker and Docker Compose installed on the server
-- [ ] Kitsu running and reachable from the server (test: `curl http://YOUR_KITSU_HOST/api/`)
+- [ ] Docker and Docker Compose installed on the local development machine
+- [ ] Kitsu running and reachable from that machine (test: `curl http://YOUR_KITSU_HOST/api/`)
 - [ ] Discord server where the bot can be granted the required permissions
 - [ ] Discord **Bot Token** — create one at [discord.com/developers/applications](https://discord.com/developers/applications) (Bot tab → Reset Token)
 - [ ] One or more Discord **Guild IDs** — enable Developer Mode in Discord settings, then right-click each target server → Copy Server ID
@@ -45,7 +45,9 @@ Leave `DISCORD_WEBHOOK_URL` empty for now — Project Management sets up routing
 
 ## Step 2 — Start the app
 
+<!-- LOCAL DEVELOPMENT ONLY -->
 ```bash
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
 ```
 
@@ -54,6 +56,7 @@ Wait for the app to be ready:
 ```bash
 docker compose logs -f app
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 You should see within a few seconds:
 

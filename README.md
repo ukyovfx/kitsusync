@@ -157,14 +157,16 @@ If you want a default catch-all Discord route before project setup, also set:
 - `mention.artistStatuses`
 - `mention.hereStatuses`
 
-### 4. Start the app
+### 4. Start the app locally (development only)
 
+<!-- LOCAL DEVELOPMENT ONLY -->
 ```bash
 export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
 docker compose ps
 docker compose logs -f app
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 Health check:
 
@@ -228,7 +230,7 @@ Use the public `/bot/*` paths exposed by your proxy, for example:
 
 ## Environment Variables
 
-See `.env.example` for the full template. Copy it to `.env.local` (development) or `.env.production` (production) — never commit these files to git.
+See `.env.example` for the full template. Copy it to `.env.local` for local development or the supported production wrapper input — never commit this file to git. The wrapper does not consume `.env.production`.
 
 ### Required for most installs
 
@@ -253,7 +255,7 @@ See `.env.example` for the full template. Copy it to `.env.local` (development) 
 
 - `app` starts by default.
 - `editor` does not start by default.
-- Runtime secrets must stay in `.env.production` or your deployment secret store. Never commit secret files to git.
+- Runtime secrets must stay in the protected `.env.local` wrapper input or your deployment secret store. Never commit secret files to git.
 - The app is expected to run behind a trusted reverse proxy if you expose `/bot/*` publicly.
 
 ### Debug profile

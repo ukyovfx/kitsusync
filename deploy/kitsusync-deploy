@@ -193,6 +193,8 @@ services:
   app:
     image: ${selected_image}
     build: !reset null
+    environment:
+      APP_ENV: production
     ports: !reset
       - "127.0.0.1:8090:8090"
     extra_hosts:

@@ -79,6 +79,8 @@ require 'IMAGE_REVISION' "$compose"
 require 'KITSUSYNC_IMAGE_TAG' "$compose"
 require 'KITSUSYNC_APP_VERSION' "$compose"
 require 'VERSION' "$dockerfile"
+require 'APP_ENV: production' "$wrapper"
+require 'APP_ENV=development' "$compose"
 [[ ! -e "$root/deploy/docker-compose.yml" ]] || {
   printf 'retired alternate production Compose file is still present\n' >&2
   exit 1

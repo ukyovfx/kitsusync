@@ -49,6 +49,7 @@ run_contract_container() {
     --network "${selected_network}" --network-alias kitsusync-app \
     --mount "type=bind,src=${source_mount},dst=/runtime-state" \
     --env "KITSUSYNC_STATE=${env_value}" \
+    --env APP_ENV=production \
     --label "kitsusync.runtime-contract=test" \
     --label "com.docker.compose.config-hash=${config_hash}" \
     --entrypoint /bin/sh "${selected_image}" -c "sleep ${sleep_seconds}${command_suffix}" >/dev/null
@@ -63,6 +64,7 @@ revision="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.
 source_id="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${original}")"
 version="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${original}")"
 KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${snapshot}"
+grep -Fxq 'APP_ENV=production' "${snapshot}/runtime-env"
 
 docker tag "${image_id}" "${rollback_ref}"
 restored="ks-restored-${suffix}"

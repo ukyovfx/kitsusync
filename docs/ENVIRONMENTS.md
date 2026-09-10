@@ -7,16 +7,15 @@ KitsuSync uses two environment files that are never committed to git:
 | File | Purpose |
 |------|---------|
 | `.env.local` | Local development — created from `.env.example` |
-| `.env.production` | Production server — managed on the server only |
+| `.env.production` | Unsupported legacy name; not consumed by the production wrapper |
 
 ```bash
 # Development setup
 cp .env.example .env.local
 # Edit .env.local with your values
 
-# Production setup (on the server)
-cp .env.example .env.production
-# Edit .env.production with production values
+# Production uses the protected .env.local input consumed by the wrapper.
+# Do not create or rely on .env.production.
 ```
 
 Both files are listed in `.gitignore`. Never commit them to version control.
@@ -28,10 +27,10 @@ The `APP_ENV` environment variable controls log verbosity.
 | Value | Log level | Set by |
 |-------|-----------|--------|
 | `development` | DEBUG (all logs) | `docker-compose.yml` |
-| `production` | INFO (no debug) | root `docker-compose.yml` through the hardened wrapper |
+| `production` | INFO (no debug) | hardened wrapper override |
 
-This variable is set by the supported Compose model; production operators must
-not invoke Compose directly.
+The root Compose file remains development-oriented. The supported production
+wrapper overrides `APP_ENV=production`; production operators must not bypass it.
 
 ## Development: docker-compose.yml
 
@@ -40,6 +39,7 @@ For local use. Builds the image from source.
 Before a local Compose build, set `KITSUSYNC_APP_VERSION` from the tracked
 `VERSION` file. This is a build input, not a second version source:
 
+<!-- LOCAL DEVELOPMENT ONLY -->
 ```bash
 export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 ```
@@ -60,6 +60,7 @@ The `editor` service (FileBrowser) is disabled by default. Start it explicitly o
 ```bash
 docker compose --profile debug up -d editor
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 FileBrowser mounts only the active docs/template files. It does not have access to `.env`, `conf.toml`, or the database.
 
@@ -71,8 +72,9 @@ The only supported production path is the root-installed
 `deploy/docker-compose.yml`, mutable tags, and ad-hoc server build/recreate
 commands are retired.
 
-The wrapper accepts no arguments and consumes root-owned approved image,
-provenance, Compose-digest, and deployment-mode policy. `normal` mode requires
+The wrapper accepts no arguments and consumes the protected `.env.local` input
+plus root-owned approved image, provenance, Compose-digest, and deployment-mode
+policy. `normal` mode requires
 `/ready` to report `ready`. `recovery` mode deliberately permits
 `setup_required`; neither mode accepts `degraded`.
 
