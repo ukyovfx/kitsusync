@@ -1,6 +1,7 @@
 package main
 
 import (
+	"app/src/setup"
 	"context"
 	"errors"
 	"net/http"
@@ -12,9 +13,6 @@ import (
 func TestRuntimeManagerSetupRequiredDoesNotPoll(t *testing.T) {
 	runtime := newRuntimeManager()
 	called := false
-	if runtime.authenticate("", "", "") {
-		t.Fatal("missing credentials must not authenticate")
-	}
 	if runtime.runWhenReady(func() { called = true }) || called {
 		t.Fatal("polling must remain disabled in setup-required mode")
 	}
@@ -26,21 +24,53 @@ func TestRuntimeManagerSetupRequiredDoesNotPoll(t *testing.T) {
 
 func TestRuntimeManagerTransitionsAndKeepsPreviousTokenOnOutage(t *testing.T) {
 	runtime := newRuntimeManager()
-	responses := []string{"runtime-jwt", ""}
-	runtime.auth = func(_, _, _ string) string {
-		response := responses[0]
-		responses = responses[1:]
-		return response
-	}
-	if !runtime.authenticate("http://kitsu.local", "runtime@example.com", "password") {
-		t.Fatal("valid runtime credentials should configure runtime")
-	}
-	if runtime.authenticate("http://kitsu.local", "runtime@example.com", "password") {
+	runtime.mu.Lock()
+	runtime.mode = runtimeConfigured
+	runtime.canPoll = true
+	runtime.hadToken = true
+	runtime.mu.Unlock()
+	if runtime.authenticateToken(setup.KitsuURLModel{RuntimeBaseURL: "http://kitsu.invalid", ResolvedAPIBaseURL: "http://kitsu.invalid/api"}, "runtime-token") {
 		t.Fatal("refresh outage should report authentication failure")
 	}
 	snapshot := runtime.snapshot()
 	if snapshot.Mode != runtimeDegraded || !runtime.ready() {
 		t.Fatalf("previous usable token should remain available in degraded mode: %+v", snapshot)
+	}
+}
+
+func TestReadinessHandlerRejectsSetupAndDegradedModes(t *testing.T) {
+	for _, mode := range []runtimeMode{runtimeSetupRequired, runtimeDegraded} {
+		t.Run(string(mode), func(t *testing.T) {
+			runtime := newRuntimeManager()
+			runtime.mu.Lock()
+			runtime.mode = mode
+			runtime.canPoll = mode == runtimeDegraded
+			runtime.mu.Unlock()
+			rr := httptest.NewRecorder()
+			readinessHandler(runtime)(rr, httptest.NewRequest(http.MethodGet, "/ready", nil))
+			if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), `"status":"`+string(mode)+`"`) {
+				t.Fatalf("%s readiness = %d %s", mode, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestReadinessHandlerAcceptsOnlyConfiguredAuthenticatedRuntime(t *testing.T) {
+	runtime := newRuntimeManager()
+	runtime.mu.Lock()
+	runtime.mode = runtimeConfigured
+	runtime.canPoll = true
+	runtime.hadToken = true
+	runtime.mu.Unlock()
+	rr := httptest.NewRecorder()
+	readinessHandler(runtime)(rr, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"status":"ready"`) {
+		t.Fatalf("configured readiness = %d %s", rr.Code, rr.Body.String())
+	}
+	for _, forbidden := range []string{"KitsuJWTToken", "password", "Bearer"} {
+		if strings.Contains(rr.Body.String(), forbidden) {
+			t.Fatalf("readiness exposed forbidden value %q: %s", forbidden, rr.Body.String())
+		}
 	}
 }
 

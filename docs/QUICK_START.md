@@ -122,17 +122,10 @@ If Project Setup fails after partial Discord provisioning, rollback is best-effo
 
 ---
 
-## Production deployment (Traefik + HTTPS)
+## Production deployment
 
-For a production server using the Traefik stack in `deploy/`:
-
-```bash
-cp .env.local .env.production
-# Edit .env.production: set PUBLIC_HOST and ALIAS
-cd deploy
-docker compose up -d
-```
-
-HTTPS and rate limiting are handled automatically by the Traefik labels in `deploy/docker-compose.yml`.
-
-See `docs/ENVIRONMENTS.md` for full environment configuration details.
+Production deployment uses only the root-installed
+`deploy/kitsusync-deploy` boundary with the repository-root Compose model,
+an immutable approved image, provenance manifest, and explicit normal or
+recovery mode. Do not run production Compose directly. See
+`docs/ENVIRONMENTS.md` for the supported contract.

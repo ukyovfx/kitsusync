@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"app/src/setup"
-	"app/src/utils/basicauth"
 	"app/src/utils/request"
 )
 
@@ -34,47 +33,10 @@ type runtimeManager struct {
 	mode     runtimeMode
 	canPoll  bool
 	hadToken bool
-	auth     func(url, email, password string) string
 }
 
 func newRuntimeManager() *runtimeManager {
-	return &runtimeManager{mode: runtimeSetupRequired, auth: basicauth.AuthForJWTToken}
-}
-
-func (m *runtimeManager) authenticate(hostname, email, password string) bool {
-	m.authMu.Lock()
-	defer m.authMu.Unlock()
-	hostname = strings.TrimSpace(hostname)
-	email = strings.TrimSpace(email)
-	if hostname == "" || email == "" || password == "" {
-		m.mu.Lock()
-		m.mode = runtimeSetupRequired
-		m.canPoll = false
-		m.mu.Unlock()
-		return false
-	}
-	if !strings.HasSuffix(hostname, "/") {
-		hostname += "/"
-	}
-	token := m.auth(hostname+"api/auth/login", email, password)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if token == "" {
-		if m.hadToken {
-			m.mode = runtimeDegraded
-			m.canPoll = true
-		} else {
-			m.mode = runtimeSetupRequired
-			m.canPoll = false
-		}
-		return false
-	}
-	os.Setenv("KITSU_HOSTNAME", hostname)
-	os.Setenv("KitsuJWTToken", token)
-	m.mode = runtimeConfigured
-	m.canPoll = true
-	m.hadToken = true
-	return true
+	return &runtimeManager{mode: runtimeSetupRequired}
 }
 
 func (m *runtimeManager) authenticateToken(connection setup.KitsuURLModel, token string) bool {
@@ -178,5 +140,31 @@ func healthHandler(runtime *runtimeManager, localChecks ...func(context.Context)
 			response.Runtime = runtime.snapshot()
 		}
 		_ = json.NewEncoder(w).Encode(response)
+	}
+}
+
+// readinessHandler reports whether the configured runtime may perform its
+// normal work. Unlike /health, setup-required and degraded modes are not ready.
+// The response contains only the non-secret runtime snapshot and build identity.
+func readinessHandler(runtime *runtimeManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		status := http.StatusServiceUnavailable
+		statusText := string(runtimeSetupRequired)
+		var snapshot runtimeSnapshot
+		if runtime != nil {
+			snapshot = runtime.snapshot()
+			statusText = string(snapshot.Mode)
+			if snapshot.Mode == runtimeConfigured && snapshot.RuntimeAuthenticated {
+				status = http.StatusOK
+				statusText = "ready"
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(struct {
+			Status  string          `json:"status"`
+			Build   buildInfo       `json:"build"`
+			Runtime runtimeSnapshot `json:"runtime"`
+		}{Status: statusText, Build: currentBuildInfo(), Runtime: snapshot})
 	}
 }

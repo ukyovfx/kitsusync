@@ -3,7 +3,7 @@ package main
 import "strings"
 
 var (
-	BuildVersion       = "0.4.5"
+	BuildVersion       = "development"
 	BuildCommit        = "unknown"
 	BuildTimestamp     = "unknown"
 	BuildSchema        = "1"

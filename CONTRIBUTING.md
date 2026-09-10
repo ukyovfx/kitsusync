@@ -12,6 +12,7 @@
 cp .env.example .env
 cp conf.toml.example conf.toml
 mkdir -p data
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
 docker compose logs -f app
 ```

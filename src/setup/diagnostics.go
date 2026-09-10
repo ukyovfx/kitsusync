@@ -2,6 +2,7 @@ package setup
 
 import (
 	"app/src/model"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -214,7 +215,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		}
 	}
 
-	checks = append(checks, buildKitsuRuntimeCheck(lang, client, kitsuHost, kitsuSettingsFix))
+	checks = append(checks, buildKitsuRuntimeCheck(lang, db, kitsuHost, kitsuSettingsFix))
 
 	botTokenMissing := strings.TrimSpace(botToken) == ""
 	botTokenBlocked := false
@@ -556,7 +557,7 @@ func buildProjectWebhookCheck(
 	return diagCheck{Label: label, Status: status, Detail: detail, Fix: fix}
 }
 
-func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSettingsFix string) diagCheck {
+func buildKitsuRuntimeCheck(lang string, db *gorm.DB, kitsuHost, kitsuSettingsFix string) diagCheck {
 	snap := Stats.Snapshot()
 	pollingHealthy := !snap.LastPollTime.IsZero() && snap.LastPollErr == ""
 	recentPolling := pollingHealthy && time.Since(snap.LastPollTime) <= 5*time.Minute
@@ -575,17 +576,13 @@ func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSe
 	authStatus := 0
 	authErr := ""
 	if jwtToken != "" {
-		authURL := strings.TrimRight(kitsuHost, "/") + "/api/auth/user"
-		req, err := http.NewRequest("GET", authURL, nil)
-		if err == nil {
-			req.Header.Set("Authorization", "Bearer "+jwtToken)
-			resp, err := client.Do(req)
-			if err != nil {
-				authErr = err.Error()
-			} else {
-				authStatus = resp.StatusCode
-				resp.Body.Close()
-			}
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		err := verifyDiagnosticsRuntimeToken(ctx, db, kitsuHost, jwtToken)
+		if err != nil {
+			authErr = connectionErrorClass(err)
+		} else {
+			authStatus = http.StatusOK
 		}
 	}
 
@@ -665,6 +662,18 @@ func buildKitsuRuntimeCheck(lang string, client *http.Client, kitsuHost, kitsuSe
 		Detail: t(lang, "Direct auth check と runtime polling の状態をまだ確定できていません。", "The direct auth check and runtime polling state could not be confirmed yet."),
 		Fix:    kitsuSettingsFix,
 	}
+}
+
+func verifyDiagnosticsRuntimeToken(ctx context.Context, db *gorm.DB, kitsuHost, token string) error {
+	apiOverride := ""
+	if db != nil {
+		apiOverride = model.GetSetting(db, KitsuAPIBaseURLSettingKey)
+	}
+	connection, err := ResolveKitsuConnection(ctx, kitsuHost, apiOverride)
+	if err != nil {
+		return err
+	}
+	return VerifyKitsuToken(ctx, connection, token)
 }
 
 func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) projectDeliveryState {

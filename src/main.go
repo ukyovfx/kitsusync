@@ -971,6 +971,7 @@ func main() {
 		}
 		return sqlDB.PingContext(ctx)
 	}))
+	mux.HandleFunc("/ready", readinessHandler(runtime))
 
 	onRuntimeConfigured := func() {
 		slog.Debug("Kitsu reconnect attempted", "attempted", true)

@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
     branches: [master]
 
@@ -22,6 +23,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Resolve immutable release identity
+        id: identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/resolve-release-identity.sh
+
+      - name: Check out exact candidate source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.identity.outputs.source_commit }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -105,30 +118,41 @@ jobs:
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
         run: docker compose config -q
 
       - name: Release hardening contract tests
-        run: bash scripts/test-release-hardening.sh
+        run: |
+          bash scripts/test-release-hardening.sh
+          bash scripts/test-release-identity.sh
 
       - name: Docker Compose build app
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
-          KITSUSYNC_IMAGE_TAG: ci-${{ github.sha }}
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
         run: |
           docker compose build \
-            --build-arg APP_VERSION="${{ github.event_name == 'pull_request' && '0.4.4' || github.ref_name }}" \
-            --build-arg COMMIT_SHA="${GITHUB_SHA}" \
+            --build-arg APP_VERSION="${{ steps.identity.outputs.version }}" \
+            --build-arg COMMIT_SHA="${{ steps.identity.outputs.source_commit }}" \
             --build-arg BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --build-arg BUILD_SOURCE_ID="${GITHUB_SHA}" \
-            --build-arg IMAGE_REVISION="${GITHUB_SHA}" \
+            --build-arg BUILD_SOURCE_ID="${{ steps.identity.outputs.source_id }}" \
+            --build-arg IMAGE_REVISION="${{ steps.identity.outputs.source_commit }}" \
             --build-arg WORKTREE_DIRTY=false app
 
       - name: Verify source-build-image provenance
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
-          KITSUSYNC_IMAGE_TAG: ci-${{ github.sha }}
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
+          ARTIFACT_KIND: ${{ steps.identity.outputs.artifact_kind }}
+          SOURCE_COMMIT: ${{ steps.identity.outputs.source_commit }}
+          SOURCE_ID: ${{ steps.identity.outputs.source_id }}
+          MERGE_TEST_COMMIT: ${{ steps.identity.outputs.merge_test_commit }}
+          RELEASE_COMMIT: ${{ steps.identity.outputs.release_commit }}
+          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
         run: |
           set -euo pipefail
           image_ref="kitsusync:${KITSUSYNC_IMAGE_TAG}"
@@ -136,15 +160,21 @@ jobs:
           revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_id")"
           source_id="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "$image_id")"
           version="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_id")"
-          test "$revision" = "$GITHUB_SHA"
-          test "$source_id" = "$GITHUB_SHA"
-          test -n "$version"
-          printf 'source_commit=%s\nsource_id=%s\nversion=%s\nimage_id=%s\n' "$revision" "$source_id" "$version" "$(docker image inspect --format '{{.Id}}' "$image_id")" > provenance.txt
+          test "$revision" = "$SOURCE_COMMIT"
+          test "$source_id" = "$SOURCE_ID"
+          test "$version" = "$RELEASE_VERSION"
+          IMAGE_ID="$image_id" bash scripts/generate-provenance.sh
           cat provenance.txt
+
+      - name: Docker deployment behavior tests
+        env:
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
+        run: bash scripts/test-deployment-behavior.sh
 
       - name: Upload provenance evidence
         uses: actions/upload-artifact@v4
         with:
-          name: kitsusync-provenance-${{ github.sha }}
+          name: kitsusync-provenance-${{ steps.identity.outputs.source_commit }}
           path: provenance.txt
           if-no-files-found: error

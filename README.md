@@ -160,6 +160,7 @@ If you want a default catch-all Discord route before project setup, also set:
 ### 4. Start the app
 
 ```bash
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
 docker compose ps
 docker compose logs -f app
@@ -177,7 +178,11 @@ Expected response:
 {"status":"ok"}
 ```
 
-The response also reports `runtime.mode` as `setup_required`, `configured`, or `degraded`. Do not expose KitsuSync directly to the public internet; place production deployments behind the documented authenticated reverse-proxy boundary.
+The response also reports `runtime.mode` as `setup_required`, `configured`, or
+`degraded`. `/health` is process/local-runtime health only; use `/ready` for
+operational readiness. Do not expose KitsuSync directly to the public internet;
+place production deployments behind the documented authenticated reverse-proxy
+boundary.
 
 If you want a quick release-readiness sanity check after boot:
 
@@ -187,7 +192,9 @@ docker compose logs --tail=50 app
 curl http://localhost:8090/health
 ```
 
-For the temporary GCP maintenance stack, use a stricter deploy order: `docker compose build app` first, then `docker compose up -d --force-recreate app`. Avoid overlapping build and recreate steps. See `docs/ENVIRONMENTS.md` for the current backup-first verification flow.
+The former temporary GCP direct-Compose procedure is historical only. Production
+recreation now uses the hardened `deploy/kitsusync-deploy` wrapper described in
+`docs/ENVIRONMENTS.md`.
 
 ## First-Time Setup Flow
 

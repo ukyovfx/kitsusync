@@ -166,21 +166,13 @@ If notifications are not appearing, see `docs/TROUBLESHOOTING.md`.
 
 ---
 
-## Part 6: Production Deployment (with Traefik)
+## Part 6: Production Deployment
 
-For a production server using the Traefik setup in `deploy/docker-compose.yml`:
-
-1. Copy `.env.local` to `.env.production` and update values as needed.
-2. Set `PUBLIC_HOST=kitsusync.example.com` and `ALIAS=kitsusync` in `.env.production`.
-3. Ensure Traefik is running and the `proxy` Docker network exists.
-4. Deploy:
-
-```bash
-cd deploy
-docker compose up -d
-```
-
-HTTPS and rate limiting are handled automatically by Traefik using the labels in `deploy/docker-compose.yml`.
+Use only the root-installed `deploy/kitsusync-deploy` boundary with the
+repository-root Compose model. It requires a root-owned approved image,
+immutable image ID, Compose digest, provenance manifest, and explicit
+deployment mode. Direct production Compose commands and the former alternate
+Compose file under `deploy/` are retired. See `docs/ENVIRONMENTS.md`.
 
 ---
 

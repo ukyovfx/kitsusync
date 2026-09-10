@@ -3,7 +3,7 @@ package setup
 import (
 	"app/src/api/kitsu"
 	"app/src/model"
-	"app/src/utils/basicauth"
+	"context"
 	"fmt"
 	"html"
 	"net/http"
@@ -425,42 +425,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		if r.Method == http.MethodPost && r.FormValue("action") == "runtime_setup_from_session" {
 			// The legacy session action used to create a Kitsu bot account. Runtime
 			// credential setup is now an explicit Kitsu-only form operation.
-			if legacyRuntimeSetupDisabled() {
-				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
-				return
-			}
-
-			_, adminToken, role, ok := CurrentSessionKitsuAuth(r)
-			if !ok || !isStudioManagerOrHigher(role) {
-				w.WriteHeader(http.StatusUnauthorized)
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 管理者 session を確認できませんでした。再ログインしてください。", "The Kitsu administrator session is unavailable. Sign in again.")))
-				return
-			}
-			kitsuHostInput := normalizeKitsuHostname(model.GetSetting(db, "kitsu.hostname"))
-			botEmail, botPassword := storedRuntimeKitsuEmail(db), StoredRuntimeKitsuPassword(db)
-			var err error
-			if botEmail != "" && botPassword != "" {
-				botEmail, botPassword, err = ReuseRuntimeBotAccountWithToken(kitsuHostInput, adminToken, botEmail, botPassword)
-			} else {
-				botEmail, botPassword, err = CreateKitsuBotAccountWithToken(kitsuHostInput, adminToken)
-			}
-			if err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 接続の設定に失敗しました。", "Could not configure the Kitsu connection.")))
-				return
-			}
-			setRuntimeKitsuEmail(db, botEmail)
-			if err := setRuntimeKitsuPassword(db, botPassword); err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Runtime credential の安全な保存に失敗しました。もう一度実行してください。", "Could not safely store the runtime credential. Try again.")))
-				return
-			}
-			if onRuntimeConfigured != nil {
-				onRuntimeConfigured()
-			}
-			if runtimeReady == nil || !runtimeReady() {
-				fmt.Fprint(w, renderBotSetupError(lang, "Kitsuの認証確認に失敗しました。設定は完了していません。もう一度お試しください。"))
-				return
-			}
-			fmt.Fprint(w, renderBotSetupSuccess(lang))
+			http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
 			return
 		}
 
@@ -602,7 +567,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "メールアドレスとパスワードを入力してください。", "Please enter email and password.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
-			if token := basicauth.AuthForJWTToken(kitsuHost+"api/auth/login", adminEmail, adminPassword); token == "" {
+			if err := authenticateDeleteAdmin(r.Context(), db, kitsuHost, adminEmail, adminPassword); err != nil {
 				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "Kitsu 管理者のメールアドレスとパスワードを確認してください。", "Check the Kitsu admin email and password.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
@@ -666,6 +631,25 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		detectedHost := publicKitsuHostnameFromRequest(r, kitsuHostStored)
 		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID, botToken))
 	}
+}
+
+func authenticateDeleteAdmin(ctx context.Context, db *gorm.DB, kitsuHost, email, password string) error {
+	apiOverride := ""
+	if db != nil {
+		apiOverride = model.GetSetting(db, KitsuAPIBaseURLSettingKey)
+	}
+	connection, err := ResolveKitsuConnection(ctx, kitsuHost, apiOverride)
+	if err != nil {
+		return err
+	}
+	_, role, err := AuthenticateKitsuCredentials(ctx, connection, email, password)
+	if err != nil {
+		return err
+	}
+	if !isStudioManagerOrHigher(role) {
+		return connectionError("auth_failed")
+	}
+	return nil
 }
 
 func DeleteProjectChannel(db *gorm.DB, botToken string, webhookID uint) error {
@@ -1699,5 +1683,3 @@ func renderKitsuConnectionError(lang string, args ...interface{}) string {
 	}
 	return page(lang, t(lang, "Kitsu接続を確認できませんでした", "Kitsu connection could not be verified"), "#ff6a50", t(lang, "Bot tokenを確認し、接続設定からもう一度試してください。", "Check the Bot token and try again from Connections."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
 }
-
-func legacyRuntimeSetupDisabled() bool { return true }

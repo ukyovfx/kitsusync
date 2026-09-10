@@ -4,7 +4,7 @@ services:
     build:
       context: .
       args:
-        APP_VERSION: "0.4.5"
+        APP_VERSION: "${KITSUSYNC_APP_VERSION:?KITSUSYNC_APP_VERSION must match VERSION}"
         COMMIT_SHA: "${KITSUSYNC_COMMIT_SHA:-unknown}"
         BUILD_TIMESTAMP: "${KITSUSYNC_BUILD_TIMESTAMP:-unknown}"
         SCHEMA_VERSION: "${KITSUSYNC_SCHEMA_VERSION:-1}"

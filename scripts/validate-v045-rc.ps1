@@ -255,7 +255,7 @@ try {
     }
     if($testFailed){$result[$group.Gate] = 'FAIL'}elseif($testInfraFailure){$result[$group.Gate] = 'INFRA_FAILURE'}else{$result[$group.Gate] = 'PASS'}
   }
-  $buildVersion=Get-Content src/build_info.go -Raw;$dockerfileVersion=Get-Content Dockerfile -Raw;$composeVersion=Get-Content docker-compose.yml -Raw;if($buildVersion -match 'BuildVersion\s*=\s*"0\.4\.5"' -and $dockerfileVersion -match 'ARG APP_VERSION=0\.4\.5' -and $composeVersion -match 'APP_VERSION:\s*"0\.4\.5"'){$result.VERSION_045='PASS'}else{Add-Failure 'VERSION_045' 'active version source is not consistently 0.4.5'}
+  $version=Get-Content VERSION -Raw;$dockerfileVersion=Get-Content Dockerfile -Raw;$composeVersion=Get-Content docker-compose.yml -Raw;if($version.Trim() -eq '0.4.5' -and $dockerfileVersion -match 'tr -d' -and $dockerfileVersion -match '< VERSION' -and $composeVersion -match 'KITSUSYNC_APP_VERSION'){$result.VERSION_045='PASS'}else{Add-Failure 'VERSION_045' 'VERSION is not the authoritative release version source'}
   try{git diff --check;if($LASTEXITCODE){throw 'git diff --check failed'};$result.DIFF_CHECK='PASS'}catch{Add-Failure 'DIFF_CHECK' $_.Exception.Message}; $changedGo=git diff --name-only -- '*.go';$bad=if($changedGo){gofmt -l $changedGo}else{@()};if(-not $bad){$result.GOFMT='PASS'}else{Add-Failure 'GOFMT' ($bad -join ', ')}
   $unsafe = @()
   $secretKeywordPattern = '(?i)(password|secret|token|authorization|cookie|ciphertext|encryption|credential)'

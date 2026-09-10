@@ -35,6 +35,9 @@ require 'State.Health' "$wrapper"
 require '/api/setup/status' "$wrapper"
 require '/bot/setup' "$wrapper"
 require '/bot/admin/health' "$wrapper"
+require '/ready' "$wrapper"
+require 'readiness_allows' "$wrapper"
+require 'deployment-mode' "$wrapper"
 require '"status"[[:space:]]*:[[:space:]]*"ok"' "$wrapper"
 
 # F06: rollback is tied to an immutable image and the saved compatible runtime
@@ -42,9 +45,14 @@ require '"status"[[:space:]]*:[[:space:]]*"ok"' "$wrapper"
 require 'previous_image_id' "$wrapper"
 require 'rollback_image_ref' "$wrapper"
 require 'runtime-config' "$wrapper"
+require 'runtime-env' "$wrapper"
+require 'runtime-labels' "$wrapper"
 require 'runtime-host-config' "$wrapper"
 require 'runtime-mounts' "$wrapper"
 require 'runtime-networks' "$wrapper"
+require 'runtime-network-aliases' "$wrapper"
+require 'compare_runtime_state' "$wrapper"
+require 'config-hash' "$wrapper"
 require 'sha256sum -c "${backup_dir}/compose.sha256"' "$wrapper"
 require 'sha256sum -c "${backup_dir}/env.sha256"' "$wrapper"
 
@@ -57,6 +65,9 @@ require 'kitsu.runtime_token_encrypted' "$root/docs/SETUP_WIZARD.md"
 # plus matching OCI labels; a tag by itself is deliberately insufficient.
 require 'approved-image.id' "$wrapper"
 require 'provenance' "$wrapper"
+require 'artifact_kind' "$wrapper"
+require 'merge_test_commit' "$wrapper"
+require 'release_commit' "$wrapper"
 require 'loaded image identity does not match approved provenance' "$wrapper"
 require 'image labels do not match release provenance' "$wrapper"
 require 'org.opencontainers.image.revision' "$dockerfile"
@@ -66,5 +77,11 @@ require 'COMMIT_SHA' "$compose"
 require 'BUILD_SOURCE_ID' "$compose"
 require 'IMAGE_REVISION' "$compose"
 require 'KITSUSYNC_IMAGE_TAG' "$compose"
+require 'KITSUSYNC_APP_VERSION' "$compose"
+require 'VERSION' "$dockerfile"
+[[ ! -e "$root/deploy/docker-compose.yml" ]] || {
+  printf 'retired alternate production Compose file is still present\n' >&2
+  exit 1
+}
 
 printf 'release-hardening-contract=PASS\n'

@@ -1,12 +1,10 @@
 package setup
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -819,35 +817,6 @@ func isStudioManagerOrHigher(role string) bool {
 	default:
 		return false
 	}
-}
-
-func kitsuLoginCheck(loginURL, email, password string) (role, kitsuToken string, ok bool) {
-	body, _ := json.Marshal(map[string]string{
-		"email":    email,
-		"password": password,
-	})
-	req, err := http.NewRequest(http.MethodPost, loginURL, bytes.NewReader(body))
-	if err != nil {
-		return "", "", false
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := (&http.Client{Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
-	if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
-		return "", "", false
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		AccessToken string `json:"access_token"`
-		User        struct {
-			Role string `json:"role"`
-		} `json:"user"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", false
-	}
-	return result.User.Role, result.AccessToken, result.User.Role != "" && result.AccessToken != ""
 }
 
 func legacyLoginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
