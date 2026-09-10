@@ -35,9 +35,12 @@ func TestStaleProductionDeleteBypassesOnlyRuntimeReadinessGate(t *testing.T) {
 	var projectReads int
 	kitsu := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","version":"0.1.0","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true}`))
 		case "/api/auth/login":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"access_token":"runtime-token"}`))
+			_, _ = w.Write([]byte(`{"access_token":"runtime-token","user":{"role":"admin"}}`))
 		case "/api/data/projects/" + staleID:
 			projectReads++
 			http.NotFound(w, r)
