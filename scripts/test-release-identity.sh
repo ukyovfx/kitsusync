@@ -15,14 +15,14 @@ GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/159/merge GITHUB_SHA="${a}" 
 grep -Fxq 'artifact_kind=candidate' "${tmp}/pr"
 grep -Fxq "merge_test_commit=${a}" "${tmp}/pr"
 grep -Fxq "source_commit=${b}" "${tmp}/pr"
-grep -Fxq 'version=0.4.5' "${tmp}/pr"
+grep -Fxq 'version=0.4.6' "${tmp}/pr"
 
 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/master GITHUB_SHA="${a}" GITHUB_OUTPUT="${tmp}/master" bash "${resolver}"
 grep -Fxq 'artifact_kind=nonrelease' "${tmp}/master"
 grep -Fxq 'release_commit=' "${tmp}/master"
 ! grep -Fq 'version=master' "${tmp}/master"
 
-GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v0.4.5 GITHUB_SHA="${a}" GITHUB_OUTPUT="${tmp}/release" bash "${resolver}"
+GITHUB_EVENT_NAME=push GITHUB_REF=refs/tags/v0.4.6 GITHUB_SHA="${a}" GITHUB_OUTPUT="${tmp}/release" bash "${resolver}"
 grep -Fxq 'artifact_kind=release' "${tmp}/release"
 grep -Fxq "release_commit=${a}" "${tmp}/release"
 
@@ -31,7 +31,7 @@ if GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/159/merge GITHUB_SHA="${a
   exit 1
 fi
 
-ARTIFACT_KIND=candidate SOURCE_COMMIT="${b}" SOURCE_ID="${b}" MERGE_TEST_COMMIT="${a}" RELEASE_VERSION=0.4.5 IMAGE_ID="${image}" PROVENANCE_OUTPUT="${tmp}/manifest" bash "${generator}"
+ARTIFACT_KIND=candidate SOURCE_COMMIT="${b}" SOURCE_ID="${b}" MERGE_TEST_COMMIT="${a}" RELEASE_VERSION=0.4.6 IMAGE_ID="${image}" PROVENANCE_OUTPUT="${tmp}/manifest" bash "${generator}"
 grep -Fxq "source_commit=${b}" "${tmp}/manifest"
 grep -Fxq "image_id=${image}" "${tmp}/manifest"
 
