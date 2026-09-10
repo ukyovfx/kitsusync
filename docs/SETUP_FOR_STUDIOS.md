@@ -5,7 +5,7 @@ This guide walks through the complete setup of KitsuSync for a studio that alrea
 ## What You Need Before Starting
 
 - **Kitsu** running and reachable from the server
-- **Discord server** where you are an administrator
+- A **Discord server** where the bot can be granted the required permissions
 - A **server or VM** with Docker and Docker Compose installed
 - A **Kitsu account** with `manager` or `admin` role (for logging into KitsuSync)
 - A **dedicated Kitsu runtime account** (a bot/service account used for polling — see below)
@@ -30,10 +30,10 @@ KitsuSync needs a dedicated Kitsu account to poll for changes. This should be a 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications).
 2. Create a new application, then go to the **Bot** tab.
 3. Click **Reset Token** and copy the bot token — save it securely.
-4. Under **Privileged Gateway Intents**, no special intents are needed.
+4. Under **Privileged Gateway Intents**, leave Presence Intent and Message Content Intent turned off. Enable Server Members Intent if you will use User Linking; KitsuSync reads the Guild member list for that screen.
 5. Go to **OAuth2 → URL Generator**.
 6. Select scopes: `bot`
-7. Select permissions: `Manage Channels`, `Manage Webhooks`
+7. Select the bot permissions `Manage Channels` and `Manage Webhooks`. Administrator is not required.
 8. Copy the generated URL and open it in a browser to add the bot to your server.
 
 Note your **Discord Guild IDs** (Server IDs) for each production server:
@@ -43,9 +43,9 @@ Note your **Discord Guild IDs** (Server IDs) for each production server:
 
 ---
 
-## Part 3: Deploy KitsuSync
+## Part 3: Local development setup (not production)
 
-### On the server
+### On a development machine
 
 ```bash
 git clone https://github.com/ukyovfx/kitsusync.git
@@ -86,12 +86,15 @@ ignoreMessagesDaysOld = 5     # How many days back to pick up missed changes on 
 
 Leave other settings at their defaults for now.
 
-### Start the app
+### Start the app locally
 
+<!-- LOCAL DEVELOPMENT ONLY -->
 ```bash
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
 docker compose logs -f app
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 Wait until you see:
 
@@ -166,32 +169,28 @@ If notifications are not appearing, see `docs/TROUBLESHOOTING.md`.
 
 ---
 
-## Part 6: Production Deployment (with Traefik)
+## Part 6: Production Deployment
 
-For a production server using the Traefik setup in `deploy/docker-compose.yml`:
-
-1. Copy `.env.local` to `.env.production` and update values as needed.
-2. Set `PUBLIC_HOST=kitsusync.example.com` and `ALIAS=kitsusync` in `.env.production`.
-3. Ensure Traefik is running and the `proxy` Docker network exists.
-4. Deploy:
-
-```bash
-cd deploy
-docker compose up -d
-```
-
-HTTPS and rate limiting are handled automatically by Traefik using the labels in `deploy/docker-compose.yml`.
+Use only the root-installed `deploy/kitsusync-deploy` boundary with the
+repository-root Compose model. It requires a root-owned approved image,
+immutable image ID, Compose digest, provenance manifest, and explicit
+deployment mode. The protected `.env.local` is the canonical wrapper input and
+the wrapper forces `APP_ENV=production`. Direct production Compose commands and
+the former alternate Compose file under `deploy/` are retired. See
+`docs/ENVIRONMENTS.md`.
 
 ---
 
 ## Updating KitsuSync
 
-```bash
-git pull
-docker compose up -d --build
-```
+Production updates use the same `deploy/kitsusync-deploy` wrapper as the initial
+deployment. Stage the approved immutable image, Compose digest, provenance
+manifest, runtime configuration, and deployment-mode policy, then invoke the
+wrapper with no alternate Compose file or ad-hoc environment file.
 
-Config files (`conf.toml`, `.env.local`) are not touched by git pull — your settings are preserved.
+The wrapper-managed config files (`conf.toml`, protected `.env.local`) are not
+replaced by an image update; keep them under the deployment policy and backup
+process.
 
 ---
 
@@ -203,6 +202,6 @@ Config files (`conf.toml`, `.env.local`) are not touched by git pull — your se
 | Bot Setup fails | Bot token or Guild ID wrong | Double-check both in `.env.local` |
 | Project Setup fails | Bot lacks Discord permissions | Verify bot has Manage Channels and Manage Webhooks |
 | Notifications not arriving | No fallback webhook | Set `DISCORD_WEBHOOK_URL` or ensure project routing is active |
-| `/health` returns 502 | App not started | Run `docker compose up -d --build` |
+| `/health` returns 502 | App not started | For production, inspect the wrapper-managed service and readiness state; use direct Compose only for local development |
 
 For more detailed troubleshooting, see `docs/TROUBLESHOOTING.md`.

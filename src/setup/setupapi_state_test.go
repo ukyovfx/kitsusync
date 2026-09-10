@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,7 +25,8 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func newSetupStateTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	dsn := filepath.Join(t.TempDir(), "setup-state.sqlite")
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
@@ -126,6 +128,7 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	form.Set("guild_id", "999999999999999999")
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?legacy=1", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
 	rr := httptest.NewRecorder()
 
 	h(rr, req)
@@ -135,8 +138,14 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	if got := strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN")); got != "rotated-token" {
 		t.Fatalf("expected runtime token update, got %q", got)
 	}
-	if got := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenKey)); got != "rotated-token" {
-		t.Fatalf("expected persisted runtime token, got %q", got)
+	if got := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenKey)); got != "" {
+		t.Fatal("legacy plaintext Discord token must not be persisted")
+	}
+	if ciphertext := strings.TrimSpace(model.GetSetting(db, RuntimeDiscordBotTokenSettingKey)); ciphertext == "" || strings.Contains(ciphertext, "rotated-token") {
+		t.Fatal("expected encrypted Discord token without plaintext")
+	}
+	if got := StoredRuntimeDiscordBotToken(db); got != "rotated-token" {
+		t.Fatalf("expected encrypted runtime token, got %q", got)
 	}
 	if got := strings.TrimSpace(model.GetSetting(db, "discord.guildID")); got != "999999999999999999" {
 		t.Fatalf("expected persisted guild ID, got %q", got)

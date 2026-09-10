@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 
-	"app/src/utils/basicauth"
+	"app/src/setup"
+	"app/src/utils/request"
 )
 
 type runtimeMode string
@@ -25,73 +27,22 @@ type runtimeSnapshot struct {
 	RuntimeAuthenticated bool        `json:"runtime_authenticated"`
 }
 
-type readinessSnapshot struct {
-	KitsuConfigured              bool   `json:"kitsu_configured"`
-	KitsuConnected               bool   `json:"kitsu_connected"`
-	KitsuReady                   bool   `json:"kitsu_ready"`
-	DiscordBotConfigured         bool   `json:"discord_bot_configured"`
-	DiscordAPIValidated          bool   `json:"discord_api_validated"`
-	ProductionRoutingConfigured  bool   `json:"production_routing_configured"`
-	OverallNotificationReadiness string `json:"overall_notification_readiness"`
-}
-
-var healthReadinessProvider = func() readinessSnapshot {
-	return readinessSnapshot{OverallNotificationReadiness: "unknown"}
-}
-
 type runtimeManager struct {
 	authMu   sync.Mutex
 	mu       sync.RWMutex
 	mode     runtimeMode
 	canPoll  bool
 	hadToken bool
-	auth     func(url, email, password string) string
 }
 
 func newRuntimeManager() *runtimeManager {
-	return &runtimeManager{mode: runtimeSetupRequired, auth: basicauth.AuthForJWTToken}
+	return &runtimeManager{mode: runtimeSetupRequired}
 }
 
-func (m *runtimeManager) authenticate(hostname, email, password string) bool {
+func (m *runtimeManager) authenticateToken(connection setup.KitsuURLModel, token string) bool {
 	m.authMu.Lock()
 	defer m.authMu.Unlock()
-	hostname = strings.TrimSpace(hostname)
-	email = strings.TrimSpace(email)
-	if hostname == "" || email == "" || password == "" {
-		m.mu.Lock()
-		m.mode = runtimeSetupRequired
-		m.canPoll = false
-		m.mu.Unlock()
-		return false
-	}
-	if !strings.HasSuffix(hostname, "/") {
-		hostname += "/"
-	}
-	token := m.auth(hostname+"api/auth/login", email, password)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if token == "" {
-		if m.hadToken {
-			m.mode = runtimeDegraded
-			m.canPoll = true
-		} else {
-			m.mode = runtimeSetupRequired
-			m.canPoll = false
-		}
-		return false
-	}
-	os.Setenv("KITSU_HOSTNAME", hostname)
-	os.Setenv("KitsuJWTToken", token)
-	m.mode = runtimeConfigured
-	m.canPoll = true
-	m.hadToken = true
-	return true
-}
-
-func (m *runtimeManager) authenticateToken(hostname, token string) bool {
-	m.authMu.Lock()
-	defer m.authMu.Unlock()
-	hostname = strings.TrimSpace(hostname)
+	hostname := strings.TrimSpace(connection.RuntimeBaseURL)
 	token = strings.TrimSpace(token)
 	if hostname == "" || token == "" {
 		m.mu.Lock()
@@ -100,10 +51,7 @@ func (m *runtimeManager) authenticateToken(hostname, token string) bool {
 		m.mu.Unlock()
 		return false
 	}
-	if !strings.HasSuffix(hostname, "/") {
-		hostname += "/"
-	}
-	if !basicauth.ValidateJWTToken(hostname+"api/auth/authenticated", token) {
+	if err := setup.VerifyKitsuToken(context.Background(), connection, token); err != nil {
 		m.mu.Lock()
 		if m.hadToken {
 			m.mode = runtimeDegraded
@@ -112,6 +60,13 @@ func (m *runtimeManager) authenticateToken(hostname, token string) bool {
 			m.mode = runtimeSetupRequired
 			m.canPoll = false
 		}
+		m.mu.Unlock()
+		return false
+	}
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: connection.ResolvedAPIBaseURL, PinnedIPs: connection.VerifiedIPs}); err != nil {
+		m.mu.Lock()
+		m.mode = runtimeSetupRequired
+		m.canPoll = false
 		m.mu.Unlock()
 		return false
 	}
@@ -154,16 +109,62 @@ func (m *runtimeManager) runWhenReady(fn func()) bool {
 	return true
 }
 
-func healthHandler(runtime *runtimeManager) http.HandlerFunc {
+// healthHandler reports process and local-runtime health only. Dependency
+// readiness belongs to the setup/admin status surfaces so a slow or
+// unavailable Discord/Kitsu API cannot flap the container healthcheck.
+func healthHandler(runtime *runtimeManager, localChecks ...func(context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		healthy := runtime != nil
+		for _, check := range localChecks {
+			if check != nil {
+				if err := check(r.Context()); err != nil {
+					healthy = false
+					break
+				}
+			}
+		}
+		status := http.StatusOK
+		statusText := "ok"
+		if !healthy {
+			status = http.StatusServiceUnavailable
+			statusText = "unhealthy"
+		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(status)
 		response := struct {
-			Status    string            `json:"status"`
-			Build     buildInfo         `json:"build"`
-			Runtime   runtimeSnapshot   `json:"runtime"`
-			Readiness readinessSnapshot `json:"readiness"`
-		}{Status: "ok", Build: currentBuildInfo(), Runtime: runtime.snapshot(), Readiness: healthReadinessProvider()}
+			Status  string          `json:"status"`
+			Build   buildInfo       `json:"build"`
+			Runtime runtimeSnapshot `json:"runtime"`
+		}{Status: statusText, Build: currentBuildInfo()}
+		if runtime != nil {
+			response.Runtime = runtime.snapshot()
+		}
 		_ = json.NewEncoder(w).Encode(response)
+	}
+}
+
+// readinessHandler reports whether the configured runtime may perform its
+// normal work. Unlike /health, setup-required and degraded modes are not ready.
+// The response contains only the non-secret runtime snapshot and build identity.
+func readinessHandler(runtime *runtimeManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		status := http.StatusServiceUnavailable
+		statusText := string(runtimeSetupRequired)
+		var snapshot runtimeSnapshot
+		if runtime != nil {
+			snapshot = runtime.snapshot()
+			statusText = string(snapshot.Mode)
+			if snapshot.Mode == runtimeConfigured && snapshot.RuntimeAuthenticated {
+				status = http.StatusOK
+				statusText = "ready"
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(struct {
+			Status  string          `json:"status"`
+			Build   buildInfo       `json:"build"`
+			Runtime runtimeSnapshot `json:"runtime"`
+		}{Status: statusText, Build: currentBuildInfo(), Runtime: snapshot})
 	}
 }

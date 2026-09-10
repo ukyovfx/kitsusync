@@ -30,6 +30,7 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
 	if err := db.AutoMigrate(
+		&model.Setting{},
 		&model.Project{},
 		&model.ProjectWebhook{},
 		&model.ProductionChannelMapping{},

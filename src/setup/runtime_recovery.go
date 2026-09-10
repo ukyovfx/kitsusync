@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,7 +9,6 @@ import (
 	"strings"
 
 	"app/src/model"
-	"app/src/utils/basicauth"
 	"gorm.io/gorm"
 )
 
@@ -30,10 +30,13 @@ func RecoverRuntimeCredentials(db *gorm.DB, kitsuHost, email, password string) e
 		slog.Warn("Kitsu credential recovery failed", "stage", "credential_validation", "success", false)
 		return errors.New("runtime recovery credentials are incomplete")
 	}
-	authURL := strings.TrimRight(kitsuHost, "/") + "/api/auth/login"
+	connection, err := ResolveKitsuConnection(context.Background(), kitsuHost, model.GetSetting(db, KitsuAPIBaseURLSettingKey))
+	if err != nil {
+		return errors.New(connectionErrorClass(err))
+	}
 	slog.Debug("Kitsu credential authentication attempted", "attempted", true)
-	token, diagnostics := basicauth.AuthForJWTTokenDetailed(authURL, email, password)
-	slog.Debug("Kitsu credential authentication result", "success", token != "", "status_code", diagnostics.StatusCode, "error_class", diagnostics.Category)
+	token, _, authErr := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
+	slog.Debug("Kitsu credential authentication result", "success", token != "", "error_class", connectionErrorClass(authErr))
 	if token == "" {
 		return errors.New("Kitsu connection could not be verified")
 	}
@@ -76,7 +79,11 @@ func RecoverRuntimeToken(db *gorm.DB, kitsuHost, email, token string) error {
 	if email == "" || token == "" {
 		return errors.New("runtime token credentials are incomplete")
 	}
-	if !basicauth.ValidateJWTToken(strings.TrimRight(kitsuHost, "/")+"/api/auth/authenticated", token) {
+	connection, err := ResolveKitsuConnection(context.Background(), kitsuHost, model.GetSetting(db, KitsuAPIBaseURLSettingKey))
+	if err != nil {
+		return errors.New(connectionErrorClass(err))
+	}
+	if err := VerifyKitsuToken(context.Background(), connection, token); err != nil {
 		return errors.New("runtime bot token authentication failed")
 	}
 	ciphertext, err := encryptRuntimeSecret(token)

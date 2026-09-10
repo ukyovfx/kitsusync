@@ -7,16 +7,15 @@ KitsuSync uses two environment files that are never committed to git:
 | File | Purpose |
 |------|---------|
 | `.env.local` | Local development — created from `.env.example` |
-| `.env.production` | Production server — managed on the server only |
+| `.env.production` | Unsupported legacy name; not consumed by the production wrapper |
 
 ```bash
 # Development setup
 cp .env.example .env.local
 # Edit .env.local with your values
 
-# Production setup (on the server)
-cp .env.example .env.production
-# Edit .env.production with production values
+# Production uses the protected .env.local input consumed by the wrapper.
+# Do not create or rely on .env.production.
 ```
 
 Both files are listed in `.gitignore`. Never commit them to version control.
@@ -28,13 +27,22 @@ The `APP_ENV` environment variable controls log verbosity.
 | Value | Log level | Set by |
 |-------|-----------|--------|
 | `development` | DEBUG (all logs) | `docker-compose.yml` |
-| `production` | INFO (no debug) | `deploy/docker-compose.yml` |
+| `production` | INFO (no debug) | hardened wrapper override |
 
-This variable is automatically set by the compose files — you do not need to add it to `.env.local` or `.env.production`.
+The root Compose file remains development-oriented. The supported production
+wrapper overrides `APP_ENV=production`; production operators must not bypass it.
 
 ## Development: docker-compose.yml
 
 For local use. Builds the image from source.
+
+Before a local Compose build, set `KITSUSYNC_APP_VERSION` from the tracked
+`VERSION` file. This is a build input, not a second version source:
+
+<!-- LOCAL DEVELOPMENT ONLY -->
+```bash
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
+```
 
 ```bash
 # Start
@@ -52,10 +60,30 @@ The `editor` service (FileBrowser) is disabled by default. Start it explicitly o
 ```bash
 docker compose --profile debug up -d editor
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 FileBrowser mounts only the active docs/template files. It does not have access to `.env`, `conf.toml`, or the database.
 
-## Production: deploy/docker-compose.yml
+## Production: hardened deployment wrapper
+
+The only supported production path is the root-installed
+`deploy/kitsusync-deploy` wrapper using the repository-root
+`docker-compose.yml`. Direct production `docker compose up`, the former
+`deploy/docker-compose.yml`, mutable tags, and ad-hoc server build/recreate
+commands are retired.
+
+The wrapper accepts no arguments and consumes the protected `.env.local` input
+plus root-owned approved image, provenance, Compose-digest, and deployment-mode
+policy. `normal` mode requires
+`/ready` to report `ready`. `recovery` mode deliberately permits
+`setup_required`; neither mode accepts `degraded`.
+
+### Historical retired deployment procedure — do not execute
+
+The remainder of this historical section is retained only as audit evidence for
+the retired alternate Compose path. It is not a supported operator runbook.
+
+### Retired: deploy/docker-compose.yml
 
 For VPS/server deployment via Traefik. Uses a pre-built image.
 
@@ -128,7 +156,7 @@ curl http://localhost:8090/health
 ```bash
 curl -I http://localhost:8090/bot/admin
 curl -I http://localhost:8090/bot/admin/health
-curl -I http://localhost:8090/bot/admin/diagnostics
+curl -I http://localhost:8090/bot/admin/health
 ```
 
 For the current stack, the expected compose service name is `app` and the expected running container name is `app-app-1`. Avoid checking a non-existent service label when verifying the deploy.
@@ -149,8 +177,6 @@ If those post-deploy checks all pass, hash drift across the recreate can still b
 /your-deployment-dir/
 ├── .env.production          ← required
 ├── conf.toml                ← required
-├── docs.html
-├── site.jsx
 ├── tpl/
 ├── data/
 │   └── sqlite.db
@@ -174,31 +200,47 @@ If those post-deploy checks all pass, hash drift across the recreate can still b
 - `DISCORD_GUILD_ID`
 - `KITSU_HOSTNAME`
 - `KITSU_RUNTIME_EMAIL`
-- `KITSU_RUNTIME_PASSWORD`
+- `KITSU_RUNTIME_PASSWORD` (bootstrap/compatibility only; token-based runtime recovery is preferred)
 - `DISCORD_WEBHOOK_URL`
 
 `conf.toml` reads secret values from env via `${VAR_NAME}` syntax. The actual secrets never live in `conf.toml`.
 
 ## Updating conf.toml in Production
 
-`conf.toml` is mounted as a volume, so edits take effect after a container restart — no rebuild needed.
-
-```bash
-# Edit on the server
-vim conf.toml
-
-# Restart to apply
-docker compose -f deploy/docker-compose.yml restart app
-```
+`conf.toml` is mounted read-only. Any production restart or recreate must go
+through the same approved-image, provenance, readiness, and rollback wrapper;
+do not bypass it with direct Compose commands.
 
 ## Rotating Secrets
 
 When rotating `DISCORD_BOT_TOKEN` or other secrets:
 
-1. Update `.env.production` with the new value.
-2. Restart the container: `docker compose -f deploy/docker-compose.yml up -d`
+Update the protected production environment source, stage the approved
+Compose/environment digests, and use the hardened wrapper. Secret rotation
+does not authorize a direct Compose recreate.
 
-No rebuild is needed for env-only changes.
+## Runtime recovery
+
+Do not recover a production runtime by copying or re-entering a saved password
+into a host script. Open the authenticated KitsuSync Connections/setup surface
+and use the validated Kitsu bot-token flow. `/health` proves process/local
+health only. `/ready` distinguishes `ready`, `setup_required`, and `degraded`;
+the root-owned deployment mode determines whether setup recovery is deliberate.
+The wrapper also verifies authenticated setup/admin entry points during both
+deployment and rollback.
+
+## Release provenance policy
+
+The root-installed deployment boundary consumes a staged image archive plus a
+root-owned policy set: archive digest, immutable image ID, Compose digest,
+explicit deployment mode, and the source/build/image manifest
+(`artifact_kind`, `merge_test_commit`, `source_commit`, `source_id`,
+`release_commit`, `version`). It
+refuses mutable tags, missing metadata, symlinked policy files, or an image
+whose OCI labels do not match the manifest. The previous image is retained by
+immutable ID before recreation; rollback must restore that ID and normalized
+runtime-significant environment, labels, command, healthcheck, mounts,
+host-config, network IDs, and explicit aliases.
 
 ## Host-loopback Kitsu with zero-input discovery
 

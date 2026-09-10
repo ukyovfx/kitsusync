@@ -106,7 +106,7 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 			renderTaskTypeChannelPlanResult(w, r, lang, trf(lang, "channel_plan.partial", created), redirect)
 			return true
 		}
-		webhookURL, webhookID, createdWebhook, destinationErr := ensureProductionChannelWebhook(db, projectID, channelID, entry.ChannelName, botToken)
+		webhookURL, webhookID, createdWebhook, destinationErr := ensureProductionChannelWebhook(db, projectID, channelID, entry.ChannelName, botToken, projectWebhooks)
 		_ = webhookURL
 		if createdWebhook {
 			createdWebhookIDs = append(createdWebhookIDs, webhookID)
@@ -237,9 +237,9 @@ func markPendingChannelPlanFailure(db *gorm.DB, rows []model.ProductionChannelMa
 	}
 }
 
-func ensureProductionChannelWebhook(db *gorm.DB, productionID, channelID, channelName, botToken string) (string, uint, bool, error) {
+func ensureProductionChannelWebhook(db *gorm.DB, productionID, channelID, channelName, botToken string, candidates []model.ProjectWebhook) (string, uint, bool, error) {
 	var selected *model.ProjectWebhook
-	for _, candidate := range model.ListProjectWebhooks(db, productionID) {
+	for _, candidate := range candidates {
 		if strings.TrimSpace(candidate.DiscordChannelID) != strings.TrimSpace(channelID) {
 			continue
 		}
@@ -262,13 +262,11 @@ func ensureProductionChannelWebhook(db *gorm.DB, productionID, channelID, channe
 	if err := model.CreateProjectWebhook(db, productionID, channelName, "", webhookURL, channelID); err != nil {
 		return "", 0, false, err
 	}
-	created := model.ListProjectWebhooks(db, productionID)
-	for i := len(created) - 1; i >= 0; i-- {
-		if created[i].DiscordChannelID == channelID && created[i].WebhookURL == webhookURL {
-			return webhookURL, created[i].ID, true, nil
-		}
+	var created model.ProjectWebhook
+	if err := db.Where("kitsu_project_id = ? AND discord_channel_id = ? AND webhook_url = ?", productionID, channelID, webhookURL).Order("id desc").First(&created).Error; err != nil {
+		return "", 0, false, fmt.Errorf("saved notification destination could not be found")
 	}
-	return "", 0, false, fmt.Errorf("saved notification destination could not be found")
+	return webhookURL, created.ID, true, nil
 }
 
 func mappingRowsMatchChannels(rows []model.ProductionChannelMapping, channels []DiscordGuildChannel) bool {

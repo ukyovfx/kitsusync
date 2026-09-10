@@ -1,8 +1,12 @@
 # Troubleshooting
 
+Production deployments and recovery use `deploy/kitsusync-deploy` only. The
+direct Compose startup/rebuild examples below are explicitly local-development
+diagnostics and must not be used to operate production.
+
 ## Current notification routing model
 
-Notifications are fail-closed. An enabled route must match the Kitsu Production ID and Task Type ID and must point to a valid channel mapping in that Production's linked Discord Guild. Unmatched, paused, stale, incomplete, cross-Guild, or ambiguous routes are diagnosed without dispatching. Manage mappings in Connected Productions (`/bot/admin/projects`); the older `/bot/admin/production-routing` bookmark redirects there. A connected Production alone is not sufficient, and global fallback webhooks are not used for new routing.
+Notifications are fail-closed. An enabled route must match the Kitsu Production ID and Task Type ID and must point to a valid channel mapping in that Production's linked Discord Guild. Unmatched, paused, stale, incomplete, cross-Guild, or ambiguous routes are diagnosed without dispatching. Manage mappings in Connected Productions (`/bot/admin/projects`). A connected Production alone is not sufficient, and global fallback webhooks are not used for new routing.
 
 Channel names are deterministic display metadata derived from the original Task Type name. Names are never used to guess or remap routing identity: routing uses stable Production, Guild, Task Type, and channel IDs. Before creating channels, KitsuSync shows the full create/reuse/conflict plan and requires explicit confirmation. No Discord write occurs during dry-run or preview.
 
@@ -10,15 +14,19 @@ Channel names are deterministic display metadata derived from the original Task 
 
 Before digging deeper, run these three commands:
 
+<!-- LOCAL DEVELOPMENT ONLY -->
 ```bash
 docker compose ps
 docker compose logs --tail=50 app
 curl http://localhost:8090/health
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 A healthy app returns `{"status":"ok"}` on the health endpoint and shows no ERROR lines in the last 50 log lines at steady state.
 
-On the temporary GCP stack, remember that the compose service name is `app` and the running container name is `app-app-1`. Verify the recreated app container, not an assumed service/container label from an older runbook.
+The temporary GCP direct-Compose runbook is historical only. Production
+verification is performed by the hardened deployment wrapper against its
+approved immutable image and runtime contract.
 
 For setup state, the `/api/setup/status` endpoint returns a JSON snapshot of every component:
 
@@ -36,11 +44,14 @@ curl http://localhost:8090/api/setup/status
 
 The app requires an env file to start.
 
+<!-- LOCAL DEVELOPMENT ONLY -->
 ```bash
 cp .env.example .env.local
 # Fill in the required values
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
 ```
+<!-- END LOCAL DEVELOPMENT ONLY -->
 
 ### `Initial Kitsu authentication failed`
 
@@ -58,6 +69,10 @@ The runtime bot account cannot authenticate.
 - Start the app
 - Open `/bot/login` and sign in with a Kitsu manager or admin account
 - Complete Bot Setup from `/bot/setup`
+
+For an existing deployment, use the token-based recovery path in Connections;
+do not use password-era host recovery scripts. Password entry is retained only
+for initial bootstrap or compatibility migration.
 
 ### `config validation` FATAL errors at startup
 
@@ -281,10 +296,15 @@ The `data/` directory must exist and be writable before startup:
 
 ```bash
 mkdir -p data
+<!-- LOCAL DEVELOPMENT ONLY -->
+export KITSUSYNC_APP_VERSION="$(tr -d '\r\n' < VERSION)"
 docker compose up -d --build
+<!-- END LOCAL DEVELOPMENT ONLY -->
 ```
 
-In production, confirm `../data/sqlite.db` is correctly mounted via the volume in `deploy/docker-compose.yml`.
+In production, confirm the canonical root Compose model mounts
+`./data:/app/data` and that the hardened wrapper's saved mount comparison
+matches the recreated container.
 
 If sqlite hashes differ before and after a recreate, do not assume the bind mount failed from that signal alone. Confirm the post-deploy host and container hashes match each other, confirm the expected sqlite bind mount is still attached, and confirm the app is healthy on `/health`.
 

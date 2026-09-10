@@ -157,7 +157,7 @@ func TestKitsuHostDiscoveryTimeoutIsBounded(t *testing.T) {
 func TestConnectionsFormOmitsHumanCredentialControls(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	for _, lang := range []string{"ja", "en"} {
-		body := renderConnectionsEditForm(lang, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang="+lang, nil), db, "Review", "warn", "Check", "http://127.0.0.1:8080", "legacy@example.test")
+		body := renderConnectionsEditFormWithHealth(lang, httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang="+lang, nil), db, "Review", "warn", "Check", "http://127.0.0.1:8080", false, false, "")
 		for _, forbidden := range []string{`name="kitsu_runtime_email"`, `name="kitsu_runtime_password"`, "Legacy fallback", "Runtime email", "Runtime password"} {
 			if strings.Contains(body, forbidden) {
 				t.Fatalf("%s current form rendered forbidden legacy control/text %q", lang, forbidden)

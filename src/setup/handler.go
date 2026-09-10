@@ -3,7 +3,7 @@ package setup
 import (
 	"app/src/api/kitsu"
 	"app/src/model"
-	"app/src/utils/basicauth"
+	"context"
 	"fmt"
 	"html"
 	"net/http"
@@ -271,7 +271,7 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 		}
 		return nil
 	}); txErr != nil {
-		res.fail("Discord setup succeeded but database transaction failed: " + txErr.Error())
+		res.fail("Discord setup succeeded but database transaction failed: database_write_failed")
 		cleanupHadErrors := cleanupDiscordArtifactsAfterDBFailure(categoryID, botToken, createdChannels, &res)
 		if cleanupHadErrors {
 			res.fail("automatic Discord cleanup had warnings; verify Discord resources manually before retrying.")
@@ -280,7 +280,7 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 			res.ok("automatic Discord cleanup completed")
 			res.SafeToRetry = true
 		}
-		slog.Error("Project setup database transaction failed", "projectName", projectName, "kitsuProjectID", kitsuProjectID, "duration", time.Since(dbStart).String(), "cleanupHadErrors", cleanupHadErrors, "err", txErr)
+		slog.Error("Project setup database transaction failed", "projectName", projectName, "kitsuProjectID", kitsuProjectID, "duration", time.Since(dbStart).String(), "cleanupHadErrors", cleanupHadErrors, "error_class", classifySQLitePersistenceError(txErr))
 		return
 	}
 	slog.Info("Project setup database records persisted", "projectName", projectName, "kitsuProjectID", kitsuProjectID, "webhookCount", len(webhooksToSave), "duration", time.Since(dbStart).String())
@@ -312,21 +312,9 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 		logs = append(logs, "deleted category")
 	}
 
-	if project != nil {
-		model.DeleteProjectScopedData(db, project.ID)
-	}
-	if err := model.DeleteProductionOperationalState(db, kitsuProjectID); err != nil {
-		logs = append(logs, "failed to delete production routing state")
-		return logs, fmt.Errorf("db delete production routing state: %w", err)
-	}
-
-	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
+	if err := DeleteProjectConnectionOnly(kitsuProjectID, db); err != nil {
 		logs = append(logs, "failed to delete project records from database")
-		return logs, fmt.Errorf("db delete webhooks: %w", err)
-	}
-	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.Project{}).Error; err != nil {
-		logs = append(logs, "failed to delete project record from database")
-		return logs, fmt.Errorf("db delete project: %w", err)
+		return logs, err
 	}
 	logs = append(logs, "deleted project records")
 	return logs, nil
@@ -342,18 +330,41 @@ func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 		if project == nil {
 			return fmt.Errorf("project not found: %s", kitsuProjectID)
 		}
-		model.DeleteProjectScopedData(tx, project.ID)
+		if err := model.DeleteProjectScopedData(tx, project.ID); err != nil {
+			return fmt.Errorf("db delete project-scoped data: %w", err)
+		}
 		if err := model.DeleteProductionOperationalState(tx, kitsuProjectID); err != nil {
 			return fmt.Errorf("db delete production routing state: %w", err)
 		}
 		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.ProjectWebhook{}).Error; err != nil {
 			return fmt.Errorf("db delete webhooks: %w", err)
 		}
-		if err := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.Project{}).Error; err != nil {
-			return fmt.Errorf("db delete project: %w", err)
+		result := tx.Where("kitsu_project_id = ?", kitsuProjectID).Delete(&model.Project{})
+		if result.Error != nil {
+			return fmt.Errorf("db delete project: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("db delete project: expected one row, removed %d", result.RowsAffected)
+		}
+		if model.FindProjectByKitsuID(tx, kitsuProjectID) != nil ||
+			len(model.ListProjectWebhooks(tx, kitsuProjectID)) != 0 ||
+			model.HasProductionOperationalState(tx, kitsuProjectID) {
+			return fmt.Errorf("db delete verification failed for project: %s", kitsuProjectID)
 		}
 		return nil
 	})
+}
+
+func isReadinessRecoveryAction(r *http.Request) bool {
+	if r == nil || r.Method != http.MethodPost {
+		return false
+	}
+	switch strings.TrimSpace(r.FormValue("action")) {
+	case "delete", "delete_final":
+		return true
+	default:
+		return false
+	}
 }
 
 func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeReady func() bool, onRuntimeConfigured func()) http.HandlerFunc {
@@ -414,46 +425,11 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		if r.Method == http.MethodPost && r.FormValue("action") == "runtime_setup_from_session" {
 			// The legacy session action used to create a Kitsu bot account. Runtime
 			// credential setup is now an explicit Kitsu-only form operation.
-			if legacyRuntimeSetupDisabled() {
-				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
-				return
-			}
-
-			_, adminToken, role, ok := CurrentSessionKitsuAuth(r)
-			if !ok || !isStudioManagerOrHigher(role) {
-				w.WriteHeader(http.StatusUnauthorized)
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 管理者 session を確認できませんでした。再ログインしてください。", "The Kitsu administrator session is unavailable. Sign in again.")))
-				return
-			}
-			kitsuHostInput := normalizeKitsuHostname(model.GetSetting(db, "kitsu.hostname"))
-			botEmail, botPassword := storedRuntimeKitsuEmail(db), StoredRuntimeKitsuPassword(db)
-			var err error
-			if botEmail != "" && botPassword != "" {
-				botEmail, botPassword, err = ReuseRuntimeBotAccountWithToken(kitsuHostInput, adminToken, botEmail, botPassword)
-			} else {
-				botEmail, botPassword, err = CreateKitsuBotAccountWithToken(kitsuHostInput, adminToken)
-			}
-			if err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Kitsu 接続の設定に失敗しました。", "Could not configure the Kitsu connection.")))
-				return
-			}
-			setRuntimeKitsuEmail(db, botEmail)
-			if err := setRuntimeKitsuPassword(db, botPassword); err != nil {
-				fmt.Fprint(w, renderBotSetupError(lang, t(lang, "Runtime credential の安全な保存に失敗しました。もう一度実行してください。", "Could not safely store the runtime credential. Try again.")))
-				return
-			}
-			if onRuntimeConfigured != nil {
-				onRuntimeConfigured()
-			}
-			if runtimeReady == nil || !runtimeReady() {
-				fmt.Fprint(w, renderBotSetupError(lang, "Kitsuの認証確認に失敗しました。設定は完了していません。もう一度お試しください。"))
-				return
-			}
-			fmt.Fprint(w, renderBotSetupSuccess(lang))
+			http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r), http.StatusSeeOther)
 			return
 		}
 
-		if runtimeReady != nil && !runtimeReady() {
+		if runtimeReady != nil && !runtimeReady() && !isReadinessRecoveryAction(r) {
 			fmt.Fprint(w, renderSetupRequiredPage(lang, r))
 			return
 		}
@@ -591,7 +567,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "メールアドレスとパスワードを入力してください。", "Please enter email and password.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
-			if token := basicauth.AuthForJWTToken(kitsuHost+"api/auth/login", adminEmail, adminPassword); token == "" {
+			if err := authenticateDeleteAdmin(r.Context(), db, kitsuHost, adminEmail, adminPassword); err != nil {
 				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "Kitsu 管理者のメールアドレスとパスワードを確認してください。", "Check the Kitsu admin email and password.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
@@ -655,6 +631,25 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		detectedHost := publicKitsuHostnameFromRequest(r, kitsuHostStored)
 		fmt.Fprint(w, renderForm(r, projects, kitsuProjects, setupDone, db, kitsuHostStored, kitsuEmailStored, detectedHost, fallbackGuildID, botToken))
 	}
+}
+
+func authenticateDeleteAdmin(ctx context.Context, db *gorm.DB, kitsuHost, email, password string) error {
+	apiOverride := ""
+	if db != nil {
+		apiOverride = model.GetSetting(db, KitsuAPIBaseURLSettingKey)
+	}
+	connection, err := ResolveKitsuConnection(ctx, kitsuHost, apiOverride)
+	if err != nil {
+		return err
+	}
+	_, role, err := AuthenticateKitsuCredentials(ctx, connection, email, password)
+	if err != nil {
+		return err
+	}
+	if !isStudioManagerOrHigher(role) {
+		return connectionError("auth_failed")
+	}
+	return nil
 }
 
 func DeleteProjectChannel(db *gorm.DB, botToken string, webhookID uint) error {
@@ -1688,5 +1683,3 @@ func renderKitsuConnectionError(lang string, args ...interface{}) string {
 	}
 	return page(lang, t(lang, "Kitsu接続を確認できませんでした", "Kitsu connection could not be verified"), "#ff6a50", t(lang, "Bot tokenを確認し、接続設定からもう一度試してください。", "Check the Bot token and try again from Connections."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
 }
-
-func legacyRuntimeSetupDisabled() bool { return true }

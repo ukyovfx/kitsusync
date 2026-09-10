@@ -1,6 +1,6 @@
 # Setup Flow Reference
 
-This document describes the current operator-facing setup flow for KitsuSync v0.4.3.
+This document describes the current operator-facing setup flow for KitsuSync v0.4.4.
 
 The normal setup path is now:
 
@@ -41,9 +41,9 @@ This is the only normal first-time setup path operators should follow.
 
 ### Kitsu endpoint selection
 
-KitsuSync resolves the Kitsu base URL in this order: explicit `KITSU_HOSTNAME`, a previously verified saved endpoint, supported local deployment endpoints, and finally a URL entered by the operator on the fresh-login page. Every candidate is checked as a Kitsu API before it is used. A manually entered URL is saved only after Kitsu login succeeds. Placeholder values are never used; if no endpoint can be verified, login remains blocked with an actionable error.
+KitsuSync accepts the Kitsu authentication authority only from operator-managed `KITSU_HOSTNAME`, a previously saved trusted endpoint, or an installer-supplied hint. A saved or environment-provided API base override remains supported. Login form values never select or replace the authentication authority, even during first-time setup or recovery. Every trusted candidate still passes the Kitsu connection, DNS, redirect, TLS, and network-scope checks before credentials are sent. If no trusted authority is configured, login remains blocked with an actionable error.
 
-The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. The runtime password is encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
+The Kitsu manager/admin browser session is held in process memory and authorizes setup pages. Background polling uses a separate dedicated runtime account and never reuses the browser session JWT. Production recovery is token-first: use the validated Kitsu bot-token path in Connections or the setup surface; it persists `kitsu.runtime_token_encrypted` and never requires a password-era recovery script. Password input remains only for first-time bootstrap and compatibility migration. Runtime secrets are encrypted before SQLite storage; the encryption key is stored separately under the ignored `data/` runtime directory. Keep both files protected and backed up together.
 
 ---
 
@@ -105,7 +105,7 @@ System Status is intentionally secondary to `/bot/setup`.
 
 ## Discord Resource Creation Notes
 
-New Connection Setup fetches the selected Production's Task Types and shows a complete create/reuse/conflict plan before any Discord write. Discord channel creation is limited to the selected Guild and only missing channels listed in the confirmed plan. Connected Productions is the normal surface for reviewing mappings, previewing missing channels, pausing/resuming notifications, dry-run, and diagnosis. Compatibility route `/bot/admin/production-routing` redirects there and remains available only for old bookmarks.
+New Connection Setup fetches the selected Production's Task Types and shows a complete create/reuse/conflict plan before any Discord write. Discord channel creation is limited to the selected Guild and only missing channels listed in the confirmed plan. Connected Productions is the normal surface for reviewing mappings, previewing missing channels, pausing/resuming notifications, dry-run, and diagnosis.
 
 If setup fails partway through:
 
@@ -123,4 +123,4 @@ Historical docs and older releases may reference:
 - Manual Setup
 - Setup Status
 
-Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.3.
+Those belong to the older setup architecture and should not be treated as the current recommended operator flow for v0.4.4.

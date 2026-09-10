@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
     branches: [master]
 
@@ -23,13 +24,33 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Resolve immutable release identity
+        id: identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/resolve-release-identity.sh
+
+      - name: Check out exact candidate source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ steps.identity.outputs.source_commit }}
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: 1.21
 
       - name: Install SQLite build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libsqlite3-dev
+        run: |
+          # The hosted runner's optional Chrome source can be temporarily
+          # inconsistent. It is unrelated to this Go/SQLite build and must not
+          # prevent the authoritative CGO validation from starting.
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -print0 \
+            | sudo xargs -0 -r grep -lZ 'dl.google.com/linux/chrome-stable/deb' \
+            | sudo xargs -0 -r rm -f
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
 
       - name: Mojibake regression check
         shell: bash
@@ -97,17 +118,64 @@ jobs:
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
         run: docker compose config -q
+
+      - name: Release hardening contract tests
+        run: |
+          bash scripts/test-release-hardening.sh
+          bash scripts/test-release-identity.sh
+          bash scripts/test-production-path-contract.sh
 
       - name: Docker Compose build app
         env:
           FB_USERNAME: ci-user
           FB_PASSWORD: ci-password
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
         run: |
           docker compose build \
-            --build-arg APP_VERSION="${GITHUB_REF_NAME}" \
-            --build-arg COMMIT_SHA="${GITHUB_SHA}" \
+            --build-arg APP_VERSION="${{ steps.identity.outputs.version }}" \
+            --build-arg COMMIT_SHA="${{ steps.identity.outputs.source_commit }}" \
             --build-arg BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --build-arg BUILD_SOURCE_ID="${GITHUB_SHA}" \
-            --build-arg IMAGE_REVISION="${GITHUB_SHA}" \
+            --build-arg BUILD_SOURCE_ID="${{ steps.identity.outputs.source_id }}" \
+            --build-arg IMAGE_REVISION="${{ steps.identity.outputs.source_commit }}" \
             --build-arg WORKTREE_DIRTY=false app
+
+      - name: Verify source-build-image provenance
+        env:
+          FB_USERNAME: ci-user
+          FB_PASSWORD: ci-password
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
+          ARTIFACT_KIND: ${{ steps.identity.outputs.artifact_kind }}
+          SOURCE_COMMIT: ${{ steps.identity.outputs.source_commit }}
+          SOURCE_ID: ${{ steps.identity.outputs.source_id }}
+          MERGE_TEST_COMMIT: ${{ steps.identity.outputs.merge_test_commit }}
+          RELEASE_COMMIT: ${{ steps.identity.outputs.release_commit }}
+          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          image_ref="kitsusync:${KITSUSYNC_IMAGE_TAG}"
+          image_id="$(docker image inspect --format '{{.Id}}' "$image_ref")"
+          revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image_id")"
+          source_id="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "$image_id")"
+          version="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_id")"
+          test "$revision" = "$SOURCE_COMMIT"
+          test "$source_id" = "$SOURCE_ID"
+          test "$version" = "$RELEASE_VERSION"
+          IMAGE_ID="$image_id" bash scripts/generate-provenance.sh
+          cat provenance.txt
+
+      - name: Docker deployment behavior tests
+        env:
+          KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
+        run: bash scripts/test-deployment-behavior.sh
+
+      - name: Upload provenance evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitsusync-provenance-${{ steps.identity.outputs.source_commit }}
+          path: provenance.txt
+          if-no-files-found: error

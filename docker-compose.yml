@@ -1,20 +1,28 @@
 services:
   app:
-    build: .
+    image: "kitsusync:${KITSUSYNC_IMAGE_TAG:-dev}"
+    build:
+      context: .
+      args:
+        APP_VERSION: "${KITSUSYNC_APP_VERSION:?KITSUSYNC_APP_VERSION must match VERSION}"
+        COMMIT_SHA: "${KITSUSYNC_COMMIT_SHA:-unknown}"
+        BUILD_TIMESTAMP: "${KITSUSYNC_BUILD_TIMESTAMP:-unknown}"
+        SCHEMA_VERSION: "${KITSUSYNC_SCHEMA_VERSION:-1}"
+        WORKTREE_DIRTY: "${KITSUSYNC_WORKTREE_DIRTY:-unknown}"
+        BUILD_SOURCE_ID: "${KITSUSYNC_BUILD_SOURCE_ID:-unknown}"
+        IMAGE_REVISION: "${KITSUSYNC_IMAGE_REVISION:-unknown}"
     restart: unless-stopped
     env_file:
       - .env.local
     volumes:
-      - ./conf.toml:/app/conf.toml
-      - ./docs.html:/app/docs.html
-      - ./site.jsx:/app/site.jsx
-      - ./tpl:/app/tpl
+      - ./conf.toml:/app/conf.toml:ro
+      - ./tpl:/app/tpl:ro
       - ./data:/app/data
     environment:
       - APP_ENV=development
       - TZ=Asia/Tokyo
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -30,12 +38,10 @@ services:
     restart: unless-stopped
     user: "1000:1000"
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     volumes:
       - filebrowser_data:/database
       - ./README.md:/srv/README.md:ro
-      - ./docs.html:/srv/docs.html:ro
-      - ./site.jsx:/srv/site.jsx:ro
       - ./tpl:/srv/tpl:ro
     environment:
       - PUID=1000

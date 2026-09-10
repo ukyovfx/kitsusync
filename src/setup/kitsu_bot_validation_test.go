@@ -10,9 +10,23 @@ import (
 	"testing"
 )
 
+func zouStatus(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"Zou","database-up":true,"event-stream-up":true,"job-queue-up":true,"key-value-store-up":true,"version":"0.11.3"}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func TestValidateKitsuBotTokenReadsRequiredEndpoints(t *testing.T) {
 	var endpoints []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/status" {
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer test-bot-token" {
 			t.Fatalf("missing bearer token for %s", r.URL.Path)
 		}
@@ -22,7 +36,7 @@ func TestValidateKitsuBotTokenReadsRequiredEndpoints(t *testing.T) {
 			return
 		}
 		fmt.Fprint(w, `{}`)
-	}))
+	})))
 	defer server.Close()
 
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", true)
@@ -48,7 +62,7 @@ func TestValidateKitsuBotTokenReadsRequiredEndpoints(t *testing.T) {
 }
 
 func TestValidateKitsuBotTokenClassifiesMissingRequiredEndpoint(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/auth/authenticated" {
 			fmt.Fprint(w, `{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true}`)
 			return
@@ -58,7 +72,7 @@ func TestValidateKitsuBotTokenClassifiesMissingRequiredEndpoint(t *testing.T) {
 			return
 		}
 		fmt.Fprint(w, `{}`)
-	}))
+	})))
 	defer server.Close()
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", false)
 	if result.Stage != "task_types" || result.Classification != BotTokenRequiredEndpointFailure {
@@ -77,9 +91,9 @@ func TestValidateKitsuBotTokenClassifiesAuthAndPermissionFailures(t *testing.T) 
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(test.status)
-			}))
+			})))
 			defer server.Close()
 			result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", true)
 			if result.Classification != test.classification || result.Compatible() {
@@ -90,9 +104,9 @@ func TestValidateKitsuBotTokenClassifiesAuthAndPermissionFailures(t *testing.T) 
 }
 
 func TestValidateKitsuBotTokenRejectsHumanIdentity(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"id":"human-id","full_name":"Human","is_bot":false}`)
-	}))
+	})))
 	defer server.Close()
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", false)
 	if result.Classification != BotTokenAuthenticatedIdentityNotBot || result.Compatible() {
@@ -101,9 +115,9 @@ func TestValidateKitsuBotTokenRejectsHumanIdentity(t *testing.T) {
 }
 
 func TestValidateKitsuBotTokenDoesNotTreatMissingBotFlagAsInvalidToken(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"authenticated":true,"user":{"id":"person-id","full_name":"Authenticated person"}}`)
-	}))
+	})))
 	defer server.Close()
 
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", false)
@@ -113,13 +127,13 @@ func TestValidateKitsuBotTokenDoesNotTreatMissingBotFlagAsInvalidToken(t *testin
 }
 
 func TestValidateKitsuBotTokenVerifiesNestedCanonicalBotPerson(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/auth/authenticated" {
 			fmt.Fprint(w, `{"authenticated":true,"user":{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true,"active":true,"archived":false}}`)
 			return
 		}
 		fmt.Fprint(w, `{}`)
-	}))
+	})))
 	defer server.Close()
 
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", false)
@@ -129,7 +143,7 @@ func TestValidateKitsuBotTokenVerifiesNestedCanonicalBotPerson(t *testing.T) {
 }
 
 func TestValidateKitsuBotTokenKeepsCommentsOptional(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/auth/authenticated" {
 			fmt.Fprint(w, `{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true}`)
 			return
@@ -139,7 +153,7 @@ func TestValidateKitsuBotTokenKeepsCommentsOptional(t *testing.T) {
 			return
 		}
 		fmt.Fprint(w, `{}`)
-	}))
+	})))
 	defer server.Close()
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", true)
 	if !result.Compatible() {
@@ -148,7 +162,7 @@ func TestValidateKitsuBotTokenKeepsCommentsOptional(t *testing.T) {
 }
 
 func TestValidateKitsuBotTokenReportsFailureStage(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/auth/authenticated" {
 			fmt.Fprint(w, `{"id":"bot-id","full_name":"KitsuSync Bot","is_bot":true}`)
 			return
@@ -158,7 +172,7 @@ func TestValidateKitsuBotTokenReportsFailureStage(t *testing.T) {
 			return
 		}
 		fmt.Fprint(w, `{}`)
-	}))
+	})))
 	defer server.Close()
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", false)
 	if result.Stage != "persons" || result.Classification != BotTokenPermissionInsufficient {
@@ -167,9 +181,9 @@ func TestValidateKitsuBotTokenReportsFailureStage(t *testing.T) {
 }
 
 func TestValidateKitsuBotTokenReportsAuthenticatedResponseParseBug(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{malformed`)
-	}))
+	})))
 	defer server.Close()
 
 	result := ValidateKitsuBotToken(nil, server.URL, "test-bot-token", false)
@@ -187,9 +201,9 @@ func TestValidateKitsuBotTokenDiagnosticsAreSecretSafe(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(zouStatus(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-	}))
+	})))
 	defer server.Close()
 
 	secret := "test-secret-token"
@@ -219,7 +233,7 @@ func TestValidateKitsuBotTokenClassifiesNetworkFailure(t *testing.T) {
 	if result.Classification != KitsuUnreachable || result.Compatible() {
 		t.Fatalf("unexpected network failure result: %+v", result)
 	}
-	if len(result.Reads) != 1 || result.Reads[0].Endpoint != "/api/auth/authenticated" || result.Reads[0].ErrorClass != "network_error" {
-		t.Fatalf("unexpected network failure diagnostics: %+v", result.Reads)
+	if len(result.Reads) != 0 || result.Failure.ErrorClass == "" {
+		t.Fatalf("unexpected network failure diagnostics: %+v", result)
 	}
 }
