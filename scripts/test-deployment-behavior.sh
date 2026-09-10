@@ -39,6 +39,32 @@ expect_readiness fail normal degraded
 expect_readiness pass recovery ready
 expect_readiness pass recovery setup_required
 expect_readiness fail recovery degraded
+expect_readiness pass legacy-migration ready
+expect_readiness fail legacy-migration setup_required
+
+expect_legacy() {
+  local expected="$1" approved="$2" actual="$3" health="$4" ready="$5"
+  if KITSUSYNC_DEPLOY_TEST_MODE=legacy-contract bash "${wrapper}" "${approved}" "${actual}" "${health}" "${ready}"; then
+    [[ "${expected}" == pass ]] || { printf 'legacy rollback contract unexpectedly passed\n' >&2; exit 1; }
+  else
+    [[ "${expected}" == fail ]] || { printf 'legacy rollback contract unexpectedly failed\n' >&2; exit 1; }
+  fi
+}
+expect_legacy pass sha256:approved sha256:approved 200 404
+expect_legacy fail sha256:approved sha256:wrong 200 404
+expect_legacy fail sha256:approved sha256:approved 503 404
+expect_legacy fail sha256:approved sha256:approved 200 200
+
+backup_contract="$(mktemp -d)"
+mkdir -p "${backup_contract}"
+printf 'sqlite\n' >"${backup_contract}/sqlite.db"
+if KITSUSYNC_DEPLOY_TEST_MODE=backup-contract bash "${wrapper}" "${backup_contract}"; then
+  printf 'incomplete rollback backup was accepted\n' >&2; exit 1
+fi
+sha256sum "${backup_contract}/sqlite.db" >"${backup_contract}/persistent-state.sha256"
+: >"${backup_contract}/backup-complete"
+KITSUSYNC_DEPLOY_TEST_MODE=backup-contract bash "${wrapper}" "${backup_contract}"
+rm -rf "${backup_contract}"
 
 docker network create "${network}" >/dev/null
 docker network create "${other_network}" >/dev/null

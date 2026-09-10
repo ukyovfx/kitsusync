@@ -1,0 +1,132 @@
+#!/bin/bash
+set -euo pipefail
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+STAGE=/root/kitsusync-release-stage
+CONTROL=/etc/kitsusync-deploy
+STATE=/var/lib/kitsusync-deploy
+BACKUPS=/var/backups/kitsusync-deploy
+RUNTIME=/home/ukyo_vfx/kitsusync
+SUDOERS=/etc/sudoers.d/kitsusync-deploy
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+[[ "$#" -eq 0 ]] || die "arguments are not accepted"
+for inherited_name in $(compgen -e); do
+  case "${inherited_name}" in DOCKER_*|COMPOSE_*) die "inherited Docker/Compose control variables are not accepted" ;; esac
+done
+[[ "${EUID}" -eq 0 ]] || die "root execution required"
+cd /
+
+secure_source() {
+  local path="$1" expected_mode="$2" metadata
+  [[ -f "${path}" && ! -L "${path}" ]] || die "staged input is missing or unsafe"
+  metadata="$(/usr/bin/stat -c '%u:%g:%a' "${path}")"
+  [[ "${metadata}" == "0:0:${expected_mode}" ]] || die "staged input ownership or mode is unsafe"
+}
+
+[[ -d "${STAGE}" && ! -L "${STAGE}" ]] || die "fixed release stage is unavailable"
+[[ "$(/usr/bin/stat -c '%u:%g:%a' "${STAGE}")" == 0:0:700 ]] || die "release stage must be root-owned mode 0700"
+for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap; do
+  secure_source "${STAGE}/${file}" 600
+done
+
+field() { /usr/bin/sed -n "s/^$1=//p" "${STAGE}/provenance.txt" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r'; }
+archive_sha="$(field image_archive_sha256)"
+compose_sha="$(field compose_sha256)"
+deploy_sha="$(field deployment_tool_sha256)"
+inspect_sha="$(field inspection_tool_sha256)"
+backup_sha="$(field sqlite_backup_tool_sha256)"
+bootstrap_sha="$(field bootstrap_tool_sha256)"
+[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-image.tar" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "staged image archive digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/docker-compose.yml" | /usr/bin/cut -d' ' -f1)" == "${compose_sha}" ]] || die "staged Compose digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-deploy" | /usr/bin/cut -d' ' -f1)" == "${deploy_sha}" ]] || die "staged deploy tool digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-inspect" | /usr/bin/cut -d' ' -f1)" == "${inspect_sha}" ]] || die "staged inspect tool digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-sqlite-backup" | /usr/bin/cut -d' ' -f1)" == "${backup_sha}" ]] || die "staged SQLite backup tool digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-bootstrap" | /usr/bin/cut -d' ' -f1)" == "${bootstrap_sha}" ]] || die "staged bootstrap tool digest mismatch"
+
+mode="$(/usr/bin/tr -d '\r\n' <"${STAGE}/deployment-mode")"
+[[ "${mode}" == normal || "${mode}" == recovery || "${mode}" == legacy-migration ]] || die "unsupported deployment mode"
+version="$(field version)"
+image_ref="$(field image_ref)"
+artifact_kind="$(field artifact_kind)"
+release_tag="$(field release_tag)"
+source_commit="$(field source_commit)"
+source_id="$(field source_id)"
+release_commit="$(field release_commit)"
+[[ "${artifact_kind}" == release && "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "${release_tag}" == "v${version}" && "${image_ref}" == "kitsusync:v${version}" ]] || die "staged release identity is invalid"
+[[ "${source_commit}" =~ ^[0-9a-f]{40}$ && "${source_id}" == "${source_commit}" && "${release_commit}" == "${source_commit}" ]] || die "staged source identity is invalid"
+if [[ "${release_tag}" == v0.4.6 ]]; then
+  [[ "${source_commit}" == b7b30157cb90c4500e8b00d3c26ac7038f5c8c10 ]] || die "v0.4.6 source commit is not approved"
+fi
+export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
+[[ -f "${RUNTIME}/.env.local" && ! -L "${RUNTIME}/.env.local" ]] || die "existing protected operator environment is unavailable"
+[[ -f "${RUNTIME}/conf.toml" && ! -L "${RUNTIME}/conf.toml" ]] || die "existing runtime configuration is unavailable"
+[[ -d "${RUNTIME}/data" && ! -L "${RUNTIME}/data" && -d "${RUNTIME}/tpl" && ! -L "${RUNTIME}/tpl" ]] || die "existing runtime state directories are unavailable"
+[[ -z "$(/usr/bin/find "${RUNTIME}/tpl" -type l -print -quit)" ]] || die "runtime template symlinks are not accepted"
+# Remove operator replacement authority before adopting any runtime file into
+# the root-only deployment control plane.
+/usr/bin/chown root:root "${RUNTIME}"
+/usr/bin/chmod 0755 "${RUNTIME}"
+/usr/bin/chown root:root "${RUNTIME}/.env.local"
+/usr/bin/chmod 0600 "${RUNTIME}/.env.local"
+! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "${RUNTIME}/.env.local" || die "operator environment contains Docker/Compose control variables"
+
+/usr/bin/install -d -o root -g root -m 0700 "${CONTROL}" "${STATE}" "${BACKUPS}"
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-deploy" /usr/local/sbin/kitsusync-deploy
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-inspect" /usr/local/sbin/kitsusync-inspect
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
+/usr/bin/install -o root -g root -m 0600 "${STAGE}/docker-compose.yml" "${CONTROL}/docker-compose.yml"
+/usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
+/usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"
+/usr/bin/install -o root -g root -m 0600 "${STAGE}/kitsusync-image.tar" "${STATE}/kitsusync-image.tar"
+if [[ ! -e "${CONTROL}/.env.local" ]]; then
+  /usr/bin/install -o root -g root -m 0600 "${RUNTIME}/.env.local" "${CONTROL}/.env.local"
+fi
+
+# The data directory remains writable only by the non-root runtime UID/GID.
+/usr/bin/chown 10001:10001 "${RUNTIME}/data"
+/usr/bin/chmod 0700 "${RUNTIME}/data"
+for runtime_file in sqlite.db sqlite.db-wal sqlite.db-shm runtime-secret.key; do
+  path="${RUNTIME}/data/${runtime_file}"
+  [[ ! -e "${path}" ]] && continue
+  [[ -f "${path}" && ! -L "${path}" ]] || die "runtime database/secret path is unsafe"
+  /usr/bin/chown 10001:10001 "${path}"
+  /usr/bin/chmod 0600 "${path}"
+done
+/usr/bin/chown root:root "${RUNTIME}/conf.toml"
+/usr/bin/chmod 0644 "${RUNTIME}/conf.toml"
+/usr/bin/chown -R root:root "${RUNTIME}/tpl"
+/usr/bin/find "${RUNTIME}/tpl" -type d -exec /usr/bin/chmod 0755 {} +
+/usr/bin/find "${RUNTIME}/tpl" -type f -exec /usr/bin/chmod 0644 {} +
+
+if [[ "${mode}" == legacy-migration ]]; then
+  current_id="$(/usr/bin/docker compose --project-name kitsusync --env-file "${CONTROL}/.env.local" -f "${CONTROL}/docker-compose.yml" ps -q app)"
+  [[ -n "${current_id}" ]] || die "legacy migration requires a running prior container"
+  current_image_id="$(/usr/bin/docker inspect --format '{{.Image}}' "${current_id}")"
+  [[ "${current_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "legacy prior image identity is unavailable"
+  ready_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
+  [[ "${ready_code}" == 404 ]] || die "legacy migration is allowed only for the expected pre-/ready runtime"
+  legacy_tmp="$(/usr/bin/mktemp)"
+  printf '%s\n' "${current_image_id}" >"${legacy_tmp}"
+  /usr/bin/install -o root -g root -m 0600 "${legacy_tmp}" "${CONTROL}/legacy-image.id"
+  /usr/bin/rm -f "${legacy_tmp}"
+fi
+
+sudoers_tmp="$(/usr/bin/mktemp)"
+trap '/usr/bin/rm -f "${sudoers_tmp}"' EXIT
+{
+  printf 'Defaults!/usr/local/sbin/kitsusync-deploy env_reset,secure_path=/usr/sbin:/usr/bin:/sbin:/bin\n'
+  printf 'Defaults!/usr/local/sbin/kitsusync-inspect env_reset,secure_path=/usr/sbin:/usr/bin:/sbin:/bin\n'
+  printf 'ukyo_vfx ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/kitsusync-deploy ""\n'
+  printf 'ukyo_vfx ALL=(root) NOPASSWD: NOSETENV: /usr/local/sbin/kitsusync-inspect ""\n'
+} >"${sudoers_tmp}"
+/usr/sbin/visudo -cf "${sudoers_tmp}" >/dev/null || die "generated sudoers policy is invalid"
+/usr/bin/install -o root -g root -m 0440 "${sudoers_tmp}" "${SUDOERS}"
+trap - EXIT
+/usr/bin/rm -f "${sudoers_tmp}"
+
+printf 'KitsuSync bootstrap installed. Normal operator commands accept no arguments.\n'

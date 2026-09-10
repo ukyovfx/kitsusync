@@ -171,19 +171,19 @@ If notifications are not appearing, see `docs/TROUBLESHOOTING.md`.
 
 ## Part 6: Production Deployment
 
-Use only the root-installed `deploy/kitsusync-deploy` boundary with the
+Use only the root-installed `/usr/local/sbin/kitsusync-deploy` boundary with the
 repository-root Compose model. It requires a root-owned approved image,
 immutable image ID, Compose digest, provenance manifest, and explicit
 deployment mode. The protected `.env.local` is the canonical wrapper input and
 the wrapper forces `APP_ENV=production`. Direct production Compose commands and
 the former alternate Compose file under `deploy/` are retired. See
-`docs/ENVIRONMENTS.md`.
+`docs/PRODUCTION_BOOTSTRAP.md` and `docs/ENVIRONMENTS.md`.
 
 ---
 
 ## Updating KitsuSync
 
-Production updates use the same `deploy/kitsusync-deploy` wrapper as the initial
+Production updates use the same `/usr/local/sbin/kitsusync-deploy` wrapper as the initial
 deployment. Stage the approved immutable image, Compose digest, provenance
 manifest, runtime configuration, and deployment-mode policy, then invoke the
 wrapper with no alternate Compose file or ad-hoc environment file.

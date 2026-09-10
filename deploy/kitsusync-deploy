@@ -1,53 +1,55 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-# Root-installed KitsuSync-only deployment boundary for vfxstudio.
-# This wrapper intentionally accepts no arguments and never touches shared
-# services. The root-owned allowlist selects the image; operators cannot pass
-# arbitrary Docker, Compose, path, or shell arguments through sudo.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
 
-DEPLOY_ROOT="/home/ukyo_vfx/kitsusync"
-COMPOSE_FILE="${DEPLOY_ROOT}/docker-compose.yml"
-ENV_FILE="${DEPLOY_ROOT}/.env.local"
-POLICY_DIR="/etc/kitsusync-deploy"
-IMAGE_FILE="${POLICY_DIR}/approved-image"
-IMAGE_SHA_FILE="${POLICY_DIR}/approved-image.sha256"
-IMAGE_ID_FILE="${POLICY_DIR}/approved-image.id"
-COMPOSE_SHA_FILE="${POLICY_DIR}/compose.sha256"
-PROVENANCE_FILE="${POLICY_DIR}/provenance"
-MODE_FILE="${POLICY_DIR}/deployment-mode"
-IMAGE_ARCHIVE="${DEPLOY_ROOT}/.kitsusync-image.tar"
-SERVICE="app"
+for inherited_name in $(compgen -e); do
+  case "${inherited_name}" in DOCKER_*|COMPOSE_*) printf 'ERROR: inherited Docker/Compose control variables are not accepted\n' >&2; exit 1 ;; esac
+done
 
-die() { printf '%s\n' "ERROR: $*" >&2; logger -t kitsusync-deploy -- "failed: $*" || true; exit 1; }
-log() { logger -t kitsusync-deploy -- "$*" || true; }
+CONTROL_DIR=/etc/kitsusync-deploy
+STATE_DIR=/var/lib/kitsusync-deploy
+BACKUP_ROOT=/var/backups/kitsusync-deploy
+RUNTIME_ROOT=/home/ukyo_vfx/kitsusync
+COMPOSE_FILE=${CONTROL_DIR}/docker-compose.yml
+ENV_FILE=${CONTROL_DIR}/.env.local
+PROVENANCE_FILE=${CONTROL_DIR}/provenance
+MODE_FILE=${CONTROL_DIR}/deployment-mode
+LEGACY_IMAGE_FILE=${CONTROL_DIR}/legacy-image.id
+IMAGE_ARCHIVE=${STATE_DIR}/kitsusync-image.tar
+SQLITE_BACKUP=/usr/local/libexec/kitsusync-sqlite-backup
+PROJECT_NAME=kitsusync
+SERVICE=app
+
+die() { printf 'ERROR: %s\n' "$*" >&2; /usr/bin/logger -t kitsusync-deploy -- "failed: $*" 2>/dev/null || true; exit 1; }
+log() { /usr/bin/logger -t kitsusync-deploy -- "$*" 2>/dev/null || true; }
 
 readiness_allows() {
   local mode="$1" readiness="$2"
   case "${mode}:${readiness}" in
-    normal:ready|recovery:ready|recovery:setup_required) return 0 ;;
+    normal:ready|legacy-migration:ready|recovery:ready|recovery:setup_required) return 0 ;;
     *) return 1 ;;
   esac
 }
 
-# Config.Image and the Compose config-hash are generated from the selected
-# image reference. Rollback deliberately uses a short-lived reference, while
-# immutable .Image identity is checked separately. Container addresses and
-# generated ID/name aliases are also recreated; network IDs and explicit
-# aliases remain part of the normalized contract.
+legacy_status_allows() {
+  [[ "$1" == "$2" && "$3" == 200 && "$4" == 404 ]]
+}
+
+backup_is_complete() {
+  [[ -f "$1/backup-complete" && -s "$1/sqlite.db" && -f "$1/persistent-state.sha256" ]] || return 1
+  /usr/bin/sha256sum -c "$1/persistent-state.sha256" >/dev/null 2>&1
+}
+
 snapshot_runtime_state() {
   local id="$1" target="$2" container_name short_id hostname
-  mkdir -p "${target}"
-  container_name="$(${DOCKER_BIN} inspect --format '{{.Name}}' "${id}")"
-  container_name="${container_name#/}"
+  /usr/bin/install -d -m 0700 "${target}"
+  container_name="$(${DOCKER_BIN} inspect --format '{{.Name}}' "${id}")"; container_name="${container_name#/}"
   short_id="${id:0:12}"
   hostname="$(${DOCKER_BIN} inspect --format '{{.Config.Hostname}}' "${id}")"
-  # Docker assigns the container ID as the default hostname. It necessarily
-  # changes on reconstruction, whereas an operator-specified hostname remains
-  # part of the runtime contract.
-  if [[ "${hostname}" == "${id}" || "${hostname}" == "${short_id}" ]]; then
-    hostname=""
-  fi
+  [[ "${hostname}" == "${id}" || "${hostname}" == "${short_id}" ]] && hostname=""
   {
     printf 'hostname=%s\n' "${hostname}"
     ${DOCKER_BIN} inspect --format 'user={{.Config.User}}
@@ -65,43 +67,43 @@ exposed_ports={{json .Config.ExposedPorts}}
 stop_signal={{.Config.StopSignal}}
 stop_timeout={{json .Config.StopTimeout}}' "${id}"
   } >"${target}/runtime-config"
-  ${DOCKER_BIN} inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${id}" | sort >"${target}/runtime-env"
+  ${DOCKER_BIN} inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${id}" | LC_ALL=C /usr/bin/sort >"${target}/runtime-env"
   ${DOCKER_BIN} inspect --format '{{range $key, $value := .Config.Labels}}{{printf "%s=%s\n" $key $value}}{{end}}' "${id}" \
-    | grep -v '^com\.docker\.compose\.config-hash=' | sort >"${target}/runtime-labels"
+    | /usr/bin/grep -Ev '^com\.docker\.compose\.(config-hash|project\.config_files|project\.working_dir)=' \
+    | LC_ALL=C /usr/bin/sort >"${target}/runtime-labels"
   ${DOCKER_BIN} inspect --format '{{json .HostConfig}}' "${id}" >"${target}/runtime-host-config"
   ${DOCKER_BIN} inspect --format '{{json .Mounts}}' "${id}" >"${target}/runtime-mounts"
-  ${DOCKER_BIN} inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s|%s\n" $name $network.NetworkID}}{{end}}' "${id}" | sort >"${target}/runtime-networks"
+  ${DOCKER_BIN} inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s|%s\n" $name $network.NetworkID}}{{end}}' "${id}" | LC_ALL=C /usr/bin/sort >"${target}/runtime-networks"
   : >"${target}/runtime-network-aliases"
   while IFS='|' read -r network alias; do
     [[ -n "${network}" && -n "${alias}" ]] || continue
     [[ "${alias}" == "${id}" || "${alias}" == "${short_id}" || "${alias}" == "${container_name}" ]] && continue
     printf '%s|%s\n' "${network}" "${alias}" >>"${target}/runtime-network-aliases"
   done < <(${DOCKER_BIN} inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{range $network.Aliases}}{{printf "%s|%s\n" $name .}}{{end}}{{end}}' "${id}")
-  sort -o "${target}/runtime-network-aliases" "${target}/runtime-network-aliases"
+  LC_ALL=C /usr/bin/sort -o "${target}/runtime-network-aliases" "${target}/runtime-network-aliases"
 }
 
 compare_runtime_state() {
-  local id="$1" expected="$2" expected_image_id="$3" expected_revision="$4" expected_source="$5" expected_version="$6" actual
+  local id="$1" expected="$2" expected_image_id="$3" expected_revision="$4" expected_source="$5" expected_version="$6" actual part
   [[ "$(${DOCKER_BIN} inspect --format '{{.Image}}' "${id}")" == "${expected_image_id}" ]] || return 1
   [[ "$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${id}")" == "${expected_revision}" ]] || return 1
   [[ "$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${id}")" == "${expected_source}" ]] || return 1
   [[ "$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${id}")" == "${expected_version}" ]] || return 1
-  actual="$(mktemp -d)"
-  snapshot_runtime_state "${id}" "${actual}" || { rm -rf "${actual}"; return 1; }
-  local part
+  actual="$(/usr/bin/mktemp -d)"
+  snapshot_runtime_state "${id}" "${actual}" || { /usr/bin/rm -rf "${actual}"; return 1; }
   for part in runtime-config runtime-env runtime-labels runtime-host-config runtime-mounts runtime-networks runtime-network-aliases; do
-    cmp -s "${actual}/${part}" "${expected}/${part}" || { rm -rf "${actual}"; return 1; }
+    /usr/bin/cmp -s "${actual}/${part}" "${expected}/${part}" || { /usr/bin/rm -rf "${actual}"; return 1; }
   done
-  rm -rf "${actual}"
+  /usr/bin/rm -rf "${actual}"
 }
 
-# CI exercises the exact normalization functions without entering the
-# privileged deployment path. Root execution can never enable this interface.
 if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
   [[ "${EUID}" -ne 0 ]] || die "test mode is forbidden for root"
   DOCKER_BIN="$(command -v docker)"
   case "${KITSUSYNC_DEPLOY_TEST_MODE}" in
     readiness) [[ "$#" -eq 2 ]]; readiness_allows "$1" "$2" ;;
+    legacy-contract) [[ "$#" -eq 4 ]]; legacy_status_allows "$1" "$2" "$3" "$4" ;;
+    backup-contract) [[ "$#" -eq 1 ]]; backup_is_complete "$1" ;;
     snapshot) [[ "$#" -eq 2 ]]; snapshot_runtime_state "$1" "$2" ;;
     compare) [[ "$#" -eq 6 ]]; compare_runtime_state "$1" "$2" "$3" "$4" "$5" "$6" ;;
     *) die "unknown test mode" ;;
@@ -109,167 +111,154 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
   exit $?
 fi
 
-[[ "${EUID}" -eq 0 ]] || die "root execution required"
 [[ "$#" -eq 0 ]] || die "arguments are not accepted"
+[[ "${EUID}" -eq 0 ]] || die "root execution required"
 DOCKER_BIN=/usr/bin/docker
-[[ -x /usr/bin/docker ]] || die "docker is unavailable"
-[[ -x /usr/bin/sha256sum ]] || die "sha256sum is unavailable"
-[[ -x /usr/bin/curl ]] || die "curl is unavailable"
-[[ -f "${COMPOSE_FILE}" && -f "${ENV_FILE}" ]] || die "fixed KitsuSync deployment files are missing"
-[[ -f "${IMAGE_FILE}" && -f "${IMAGE_SHA_FILE}" && -f "${IMAGE_ID_FILE}" && -f "${COMPOSE_SHA_FILE}" && -f "${PROVENANCE_FILE}" && -f "${MODE_FILE}" ]] || die "deployment policy is incomplete"
-[[ ! -L "${POLICY_DIR}" && "$(stat -c '%U:%G:%a' "${POLICY_DIR}")" == "root:root:700" ]] || die "deployment policy directory is not root-owned and private"
-[[ ! -L "${IMAGE_FILE}" && ! -L "${IMAGE_SHA_FILE}" && ! -L "${IMAGE_ID_FILE}" && ! -L "${COMPOSE_SHA_FILE}" && ! -L "${PROVENANCE_FILE}" && ! -L "${MODE_FILE}" ]] || die "deployment policy symlinks are not allowed"
-[[ "$(stat -c '%U:%G:%a' "${IMAGE_FILE}")" == "root:root:600" ]] || die "approved image policy is not root-owned and private"
-[[ "$(stat -c '%U:%G:%a' "${IMAGE_SHA_FILE}")" == "root:root:600" ]] || die "image digest policy is not root-owned and private"
-[[ "$(stat -c '%U:%G:%a' "${IMAGE_ID_FILE}")" == "root:root:600" ]] || die "image identity policy is not root-owned and private"
-[[ "$(stat -c '%U:%G:%a' "${COMPOSE_SHA_FILE}")" == "root:root:600" ]] || die "Compose digest policy is not root-owned and private"
-[[ "$(stat -c '%U:%G:%a' "${PROVENANCE_FILE}")" == "root:root:600" ]] || die "provenance policy is not root-owned and private"
-[[ "$(stat -c '%U:%G:%a' "${MODE_FILE}")" == "root:root:600" ]] || die "deployment mode policy is not root-owned and private"
+cd /
+for executable in /usr/bin/docker /usr/bin/curl /usr/bin/sha256sum /usr/bin/stat /usr/bin/tar /usr/bin/python3 /usr/bin/env "${SQLITE_BACKUP}"; do [[ -x "${executable}" ]] || die "required deployment executable is unavailable"; done
+sqlite_backup() { /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${SQLITE_BACKUP}" "$@"; }
 
-deployment_mode="$(tr -d '\r\n' <"${MODE_FILE}")"
-[[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery ]] || die "deployment mode must be normal or recovery"
+secure_dir() { [[ -d "$1" && ! -L "$1" && "$(/usr/bin/stat -c '%u:%g:%a' "$1")" == "0:0:$2" ]] || die "trusted directory is unsafe"; }
+secure_file() { [[ -f "$1" && ! -L "$1" && "$(/usr/bin/stat -c '%u:%g:%a' "$1")" == "0:0:$2" ]] || die "trusted file is unsafe"; }
+reject_env_controls() { ! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "$1" || die "protected environment contains Docker/Compose control variables"; }
+secure_dir "${CONTROL_DIR}" 700; secure_dir "${STATE_DIR}" 700; secure_dir "${BACKUP_ROOT}" 700
+for file in "${COMPOSE_FILE}" "${ENV_FILE}" "${PROVENANCE_FILE}" "${MODE_FILE}" "${IMAGE_ARCHIVE}"; do secure_file "${file}" 600; done
+reject_env_controls "${ENV_FILE}"
+[[ -d "${RUNTIME_ROOT}" && ! -L "${RUNTIME_ROOT}" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}")" == 0:0:755 ]] || die "runtime root is replaceable or unsafe"
+[[ -d "${RUNTIME_ROOT}/data" && ! -L "${RUNTIME_ROOT}/data" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}/data")" == 10001:10001:700 ]] || die "runtime data directory is unsafe"
+for runtime_file in sqlite.db sqlite.db-wal sqlite.db-shm runtime-secret.key; do
+  runtime_path="${RUNTIME_ROOT}/data/${runtime_file}"
+  [[ ! -e "${runtime_path}" ]] && continue
+  [[ -f "${runtime_path}" && ! -L "${runtime_path}" && "$(/usr/bin/stat -c '%u:%g:%a' "${runtime_path}")" == 10001:10001:600 ]] || die "runtime database/secret file is unsafe"
+done
+[[ -f "${RUNTIME_ROOT}/conf.toml" && ! -L "${RUNTIME_ROOT}/conf.toml" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}/conf.toml")" == 0:0:644 ]] || die "runtime configuration file is unsafe"
+[[ -d "${RUNTIME_ROOT}/tpl" && ! -L "${RUNTIME_ROOT}/tpl" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}/tpl")" == 0:0:755 ]] || die "runtime template directory is unsafe"
+[[ -z "$(/usr/bin/find "${RUNTIME_ROOT}/tpl" -type l -print -quit)" ]] || die "runtime template symlinks are not allowed"
+[[ -z "$(/usr/bin/find "${RUNTIME_ROOT}/tpl" -perm /022 -print -quit)" ]] || die "runtime templates are writable outside root"
 
-image="$(tr -d '\r\n' <"${IMAGE_FILE}")"
-[[ "${image}" =~ ^kitsusync:[a-z0-9][a-z0-9._-]{0,127}$ ]] || die "approved image reference is malformed"
-[[ -f "${IMAGE_ARCHIVE}" && ! -L "${IMAGE_ARCHIVE}" ]] || die "approved image archive is missing or unsafe"
-[[ "$(stat -c '%U:%G:%a' "${IMAGE_ARCHIVE}")" == "root:root:600" ]] || die "approved image archive is not root-owned and private"
-sha256sum -c "${IMAGE_SHA_FILE}" >/dev/null 2>&1 || die "approved image archive digest mismatch"
-sha256sum -c "${COMPOSE_SHA_FILE}" >/dev/null 2>&1 || die "KitsuSync Compose digest mismatch"
-approved_image_id="$(tr -d '\r\n' <"${IMAGE_ID_FILE}")"
-[[ "${approved_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "approved image identity is malformed"
-source_commit="$(sed -n 's/^source_commit=//p' "${PROVENANCE_FILE}" | head -n 1 | tr -d '\r')"
-source_id="$(sed -n 's/^source_id=//p' "${PROVENANCE_FILE}" | head -n 1 | tr -d '\r')"
-version="$(sed -n 's/^version=//p' "${PROVENANCE_FILE}" | head -n 1 | tr -d '\r')"
-artifact_kind="$(sed -n 's/^artifact_kind=//p' "${PROVENANCE_FILE}" | head -n 1 | tr -d '\r')"
-merge_test_commit="$(sed -n 's/^merge_test_commit=//p' "${PROVENANCE_FILE}" | head -n 1 | tr -d '\r')"
-release_commit="$(sed -n 's/^release_commit=//p' "${PROVENANCE_FILE}" | head -n 1 | tr -d '\r')"
-[[ "${source_commit}" =~ ^[0-9a-f]{40}$ && "${source_id}" == "${source_commit}" && "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "release provenance is incomplete"
-[[ "${artifact_kind}" == candidate || "${artifact_kind}" == release ]] || die "non-release branch artifacts are not deployable"
-[[ -z "${merge_test_commit}" || "${merge_test_commit}" =~ ^[0-9a-f]{40}$ ]] || die "merge-test provenance is malformed"
-if [[ "${artifact_kind}" == release ]]; then
-  [[ "${release_commit}" == "${source_commit}" ]] || die "release commit does not match source commit"
-else
-  [[ -z "${release_commit}" ]] || die "candidate provenance must not claim a release commit"
+run_dir="$(/usr/bin/mktemp -d /run/kitsusync-deploy.XXXXXX)"; trap '/usr/bin/rm -rf "${run_dir}"' EXIT
+/usr/bin/install -d -o root -g root -m 0700 "${run_dir}/trusted"
+for file in docker-compose.yml .env.local provenance deployment-mode; do /usr/bin/install -o root -g root -m 0600 "${CONTROL_DIR}/${file}" "${run_dir}/trusted/${file}"; done
+COMPOSE_FILE=${run_dir}/trusted/docker-compose.yml; ENV_FILE=${run_dir}/trusted/.env.local; PROVENANCE_FILE=${run_dir}/trusted/provenance; MODE_FILE=${run_dir}/trusted/deployment-mode
+
+field() { /usr/bin/sed -n "s/^$1=//p" "${PROVENANCE_FILE}" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r'; }
+artifact_kind="$(field artifact_kind)"; source_commit="$(field source_commit)"; source_id="$(field source_id)"; release_commit="$(field release_commit)"; release_tag="$(field release_tag)"; version="$(field version)"; image="$(field image_ref)"; approved_image_id="$(field image_id)"; archive_sha="$(field image_archive_sha256)"; compose_sha="$(field compose_sha256)"; deploy_sha="$(field deployment_tool_sha256)"; deployment_mode="$(/usr/bin/tr -d '\r\n' <"${MODE_FILE}")"
+[[ "${artifact_kind}" == release && "${source_commit}" =~ ^[0-9a-f]{40}$ && "${source_id}" == "${source_commit}" && "${release_commit}" == "${source_commit}" ]] || die "release provenance is not deployable"
+[[ "${release_tag}" == "v${version}" && "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "release version provenance is invalid"
+[[ "${image}" =~ ^kitsusync:v[0-9]+\.[0-9]+\.[0-9]+$ && "${approved_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "image provenance is invalid"
+[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
+[[ "$(/usr/bin/sha256sum "${IMAGE_ARCHIVE}" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "approved image archive digest mismatch"
+[[ "$(/usr/bin/sha256sum "${COMPOSE_FILE}" | /usr/bin/cut -d' ' -f1)" == "${compose_sha}" ]] || die "production Compose digest mismatch"
+[[ "$(/usr/bin/sha256sum /usr/local/sbin/kitsusync-deploy | /usr/bin/cut -d' ' -f1)" == "${deploy_sha}" ]] || die "installed deployment tool identity mismatch"
+[[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery || "${deployment_mode}" == legacy-migration ]] || die "deployment mode is invalid"
+export KITSUSYNC_APP_VERSION="${version}"
+export KITSUSYNC_IMAGE_TAG="${image#kitsusync:}"
+export KITSUSYNC_COMMIT_SHA="${source_commit}"
+export KITSUSYNC_BUILD_SOURCE_ID="${source_id}"
+export KITSUSYNC_IMAGE_REVISION="${source_commit}"
+export KITSUSYNC_WORKTREE_DIRTY=false
+
+compose() { /usr/bin/docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"; }
+container_id="$(compose ps -q "${SERVICE}")"; [[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
+current_image="$(${DOCKER_BIN} inspect --format '{{.Config.Image}}' "${container_id}")"; previous_image_id="$(${DOCKER_BIN} inspect --format '{{.Image}}' "${container_id}")"; previous_revision="$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${container_id}")"; previous_source_id="$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${container_id}")"; previous_version="$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${container_id}")"
+[[ "${previous_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "prior immutable image identity is unavailable"
+prior_validation=normal
+if [[ "${deployment_mode}" == legacy-migration ]]; then
+  secure_file "${LEGACY_IMAGE_FILE}" 600
+  [[ "$(/usr/bin/tr -d '\r\n' <"${LEGACY_IMAGE_FILE}")" == "${previous_image_id}" ]] || die "legacy migration prior image does not match approval"
+  prior_ready_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
+  [[ "${prior_ready_code}" == 404 ]] || die "legacy migration requires the approved pre-/ready runtime"
+  prior_validation=legacy
 fi
-/usr/bin/docker load -i "${IMAGE_ARCHIVE}" >/dev/null || die "approved image load failed"
-/usr/bin/docker image inspect "${image}" >/dev/null 2>&1 || die "approved image is not available"
-loaded_image_id="$(/usr/bin/docker image inspect --format '{{.Id}}' "${image}")"
-[[ "${loaded_image_id}" == "${approved_image_id}" ]] || die "loaded image identity does not match approved provenance"
-image_revision="$(/usr/bin/docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")"
-image_source_id="$(/usr/bin/docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${image}")"
-image_version="$(/usr/bin/docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")"
-[[ "${image_revision}" == "${source_commit}" && "${image_source_id}" == "${source_id}" && "${image_version}" == "${version}" ]] || die "image labels do not match release provenance"
+network_name="$(${DOCKER_BIN} inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "${container_id}" | /usr/bin/head -n 1)"
+network_data="$(${DOCKER_BIN} network inspect "${network_name}" --format '{{with index .IPAM.Config 0}}{{.Gateway}} {{.Subnet}}{{end}}')"; read -r gateway subnet <<<"${network_data}"
+[[ "${gateway}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "${subnet}" == */* ]] || die "Docker bridge identity is unavailable"
 
-container_id="$(/usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" ps -q "${SERVICE}")"
-[[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
-current_image="$(/usr/bin/docker inspect --format '{{.Config.Image}}' "${container_id}")"
-/usr/bin/docker image inspect "${current_image}" >/dev/null 2>&1 || die "current image is not available for rollback"
-previous_image_id="$(/usr/bin/docker inspect --format '{{.Image}}' "${container_id}")"
-[[ "${previous_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "current image identity is not immutable"
-previous_revision="$(/usr/bin/docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${container_id}")"
-previous_source_id="$(/usr/bin/docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${container_id}")"
-previous_version="$(/usr/bin/docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${container_id}")"
-network_name="$(/usr/bin/docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "${container_id}" | head -n 1)"
-network_data="$(/usr/bin/docker network inspect "${network_name}" --format '{{with index .IPAM.Config 0}}{{.Gateway}} {{.Subnet}}{{end}}')"
-read -r gateway subnet <<<"${network_data}"
-[[ "${gateway}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "${subnet}" == */* ]] || die "Docker bridge gateway/CIDR could not be verified"
-
-run_dir="/run/kitsusync-deploy"
-backup_dir="/var/backups/kitsusync-deploy.$(date -u +%Y%m%dT%H%M%SZ)"
-install -d -o root -g root -m 0700 "${run_dir}" "${backup_dir}"
-printf '%s\n' "${container_id}" >"${backup_dir}/container-id"
-printf '%s\n' "${current_image}" >"${backup_dir}/previous-image"
-printf '%s\n' "${previous_image_id}" >"${backup_dir}/previous-image-id"
-printf '%s\n' "${gateway} ${subnet}" >"${backup_dir}/network"
-sha256sum "${COMPOSE_FILE}" >"${backup_dir}/compose.sha256"
-sha256sum "${ENV_FILE}" >"${backup_dir}/env.sha256"
-snapshot_runtime_state "${container_id}" "${backup_dir}" || die "current runtime state could not be captured"
+backup_dir="${BACKUP_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-${container_id:0:12}"; /usr/bin/install -d -o root -g root -m 0700 "${backup_dir}"
+printf '%s\n' "${container_id}" >"${backup_dir}/container-id"; printf '%s\n' "${current_image}" >"${backup_dir}/previous-image"; printf '%s\n' "${previous_image_id}" >"${backup_dir}/previous-image-id"; printf '%s\n' "${previous_revision}" >"${backup_dir}/previous-revision"; printf '%s\n' "${previous_source_id}" >"${backup_dir}/previous-source-id"; printf '%s\n' "${previous_version}" >"${backup_dir}/previous-version"; printf '%s\n' "${prior_validation}" >"${backup_dir}/prior-validation"; printf '%s %s\n' "${gateway}" "${subnet}" >"${backup_dir}/network"
+/usr/bin/install -o root -g root -m 0600 "${ENV_FILE}" "${backup_dir}/operator.env"; /usr/bin/install -o root -g root -m 0600 "${RUNTIME_ROOT}/conf.toml" "${backup_dir}/conf.toml"; /usr/bin/tar --create --file "${backup_dir}/templates.tar" --directory "${RUNTIME_ROOT}" --numeric-owner tpl
+if [[ -f "${RUNTIME_ROOT}/data/runtime-secret.key" && ! -L "${RUNTIME_ROOT}/data/runtime-secret.key" ]]; then /usr/bin/install -o root -g root -m 0600 "${RUNTIME_ROOT}/data/runtime-secret.key" "${backup_dir}/runtime-secret.key"; else : >"${backup_dir}/runtime-secret.absent"; fi
+sqlite_backup "${RUNTIME_ROOT}/data/sqlite.db" "${backup_dir}/sqlite.db"
+write_persistent_manifest() {
+  local secret_state="${backup_dir}/runtime-secret.absent"
+  [[ -f "${backup_dir}/runtime-secret.key" ]] && secret_state="${backup_dir}/runtime-secret.key"
+  /usr/bin/sha256sum "${backup_dir}/sqlite.db" "${backup_dir}/conf.toml" "${backup_dir}/templates.tar" "${backup_dir}/operator.env" "${secret_state}" >"${backup_dir}/persistent-state.sha256"
+}
+snapshot_runtime_state "${container_id}" "${backup_dir}/runtime"; /usr/bin/install -o root -g root -m 0600 "${PROVENANCE_FILE}" "${backup_dir}/target-provenance"; /usr/bin/sha256sum "${COMPOSE_FILE}" >"${backup_dir}/compose.sha256"; /usr/bin/sha256sum "${ENV_FILE}" >"${backup_dir}/env.sha256"; write_persistent_manifest; : >"${backup_dir}/backup-complete"
+[[ -s "${backup_dir}/sqlite.db" && -f "${backup_dir}/backup-complete" ]] || die "complete rollback backup was not created"
 
 override="${run_dir}/compose.override.yml"
 write_override() {
   local selected_image="$1"
-  cat >"${override}" <<EOF
-services:
-  app:
-    image: ${selected_image}
-    build: !reset null
-    environment:
-      APP_ENV: production
-    ports: !reset
-      - "127.0.0.1:8090:8090"
-    extra_hosts:
-      - "host.docker.internal:${gateway}"
-EOF
+  /usr/bin/printf '%s\n' 'services:' '  app:' "    image: ${selected_image}" '    build: !reset null' '    env_file: !reset' "      - ${ENV_FILE}" '    environment:' '      APP_ENV: production' '    volumes: !reset' "      - ${RUNTIME_ROOT}/conf.toml:/app/conf.toml:ro" "      - ${RUNTIME_ROOT}/tpl:/app/tpl:ro" "      - ${RUNTIME_ROOT}/data:/app/data" '    ports: !reset' '      - "127.0.0.1:8090:8090"' '    extra_hosts:' "      - \"host.docker.internal:${gateway}\"" >"${override}"
+  /usr/bin/chmod 0600 "${override}"
 }
+compose_override() { /usr/bin/docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" "$@"; }
 
-rollback_image_ref="kitsusync:rollback-$$"
-/usr/bin/docker tag "${previous_image_id}" "${rollback_image_ref}" || die "cannot preserve previous image identity"
-printf '%s\n' "${rollback_image_ref}" >"${backup_dir}/rollback-image-ref"
-
-write_override "${image}"
-chmod 600 "${override}"
-
-rollback() {
-  log "rollback started previous_image=${current_image}"
-  write_override "${rollback_image_ref}"
-  if /usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" up -d --no-deps --force-recreate "${SERVICE}" >/dev/null 2>&1; then
-    rollback_id="$(/usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" ps -q "${SERVICE}" || true)"
-    if [[ -n "${rollback_id}" ]] && sha256sum -c "${backup_dir}/compose.sha256" >/dev/null 2>&1 && sha256sum -c "${backup_dir}/env.sha256" >/dev/null 2>&1 && compare_runtime_state "${rollback_id}" "${backup_dir}" "${previous_image_id}" "${previous_revision}" "${previous_source_id}" "${previous_version}" && validate_runtime "${rollback_id}" "${previous_revision}" "${previous_source_id}" "${previous_version}"; then
-      log "rollback completed container=${rollback_id}"
-      return 0
-    fi
-  fi
-  log "rollback failed"
-  return 1
+restore_persistent_state() {
+  backup_is_complete "${backup_dir}" || return 1
+  /usr/bin/rm -f "${RUNTIME_ROOT}/data/sqlite.db-wal" "${RUNTIME_ROOT}/data/sqlite.db-shm"
+  /usr/bin/install -o 10001 -g 10001 -m 0600 "${backup_dir}/sqlite.db" "${RUNTIME_ROOT}/data/sqlite.db"
+  if [[ -f "${backup_dir}/runtime-secret.key" ]]; then /usr/bin/install -o 10001 -g 10001 -m 0600 "${backup_dir}/runtime-secret.key" "${RUNTIME_ROOT}/data/runtime-secret.key"; else /usr/bin/rm -f "${RUNTIME_ROOT}/data/runtime-secret.key"; fi
+  /usr/bin/install -o root -g root -m 0644 "${backup_dir}/conf.toml" "${RUNTIME_ROOT}/conf.toml"
+  /usr/bin/rm -rf "${RUNTIME_ROOT}/tpl"; /usr/bin/tar --extract --file "${backup_dir}/templates.tar" --directory "${RUNTIME_ROOT}" --same-owner --no-overwrite-dir
 }
 
 validate_runtime() {
-  local id="$1"
-  local expected_revision="${2:-${source_commit}}" expected_source_id="${3:-${source_id}}" expected_version="${4:-${version}}"
-  local port status health revision source image_version readiness_response readiness_code readiness_state setup_code recovery_code admin_code admin_health_code
-  port="$(/usr/bin/docker port "${id}" 8090/tcp 2>/dev/null || true)"
-  [[ "${port}" == "127.0.0.1:8090" ]] || return 1
-  status="$(/usr/bin/docker inspect --format '{{.State.Status}}' "${id}")"
-  [[ "${status}" == running ]] || return 1
-  health="$(/usr/bin/docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${id}")"
-  [[ "${health}" == healthy ]] || return 1
-  revision="$(/usr/bin/docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${id}")"
-  source="$(/usr/bin/docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${id}")"
-  image_version="$(/usr/bin/docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${id}")"
-  [[ "${revision}" == "${expected_revision}" && "${source}" == "${expected_source_id}" && "${image_version}" == "${expected_version}" ]] || return 1
-  /usr/bin/curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8090/health | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' || return 1
-  readiness_response="$(/usr/bin/curl --silent --show-error --max-time 10 --write-out $'\n%{http_code}' http://127.0.0.1:8090/ready || true)"
-  readiness_code="$(printf '%s\n' "${readiness_response}" | tail -n 1)"
-  readiness_state="$(printf '%s\n' "${readiness_response}" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
-  readiness_allows "${deployment_mode}" "${readiness_state}" || return 1
-  case "${readiness_state}:${readiness_code}" in
-    ready:200|setup_required:503) ;;
-    *) return 1 ;;
-  esac
-  printf '%s\n' "${readiness_response}" | grep -Fq '"base_commit":"'"${expected_revision}"'"' || return 1
-  printf '%s\n' "${readiness_response}" | grep -Fq '"build_source_id":"'"${expected_source_id}"'"' || return 1
-  printf '%s\n' "${readiness_response}" | grep -Fq '"image_revision":"'"${expected_revision}"'"' || return 1
-  printf '%s\n' "${readiness_response}" | grep -Fq '"version":"'"${expected_version}"'"' || return 1
-  setup_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:8090/api/setup/status || true)"
-  [[ "${setup_code}" =~ ^(200|401|403)$ ]] || return 1
-  recovery_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:8090/bot/setup || true)"
-  [[ "${recovery_code}" =~ ^(200|302|303|401|403)$ ]] || return 1
-  admin_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:8090/bot/admin || true)"
-  [[ "${admin_code}" =~ ^(200|302|303|401|403)$ ]] || return 1
-  admin_health_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:8090/bot/admin/health || true)"
-  [[ "${admin_health_code}" =~ ^(200|302|303|401|403)$ ]] || return 1
+  local id="$1" mode="$2" expected_revision="$3" expected_source="$4" expected_version="$5" port status health response code state path
+  port="$(${DOCKER_BIN} port "${id}" 8090/tcp 2>/dev/null || true)"; [[ "${port}" == 127.0.0.1:8090 ]] || return 1
+  status="$(${DOCKER_BIN} inspect --format '{{.State.Status}}' "${id}")"; [[ "${status}" == running ]] || return 1
+  health="$(${DOCKER_BIN} inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${id}")"; [[ "${health}" == healthy ]] || return 1
+  [[ "$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${id}")" == "${expected_revision}" ]] || return 1
+  [[ "$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${id}")" == "${expected_source}" ]] || return 1
+  [[ "$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${id}")" == "${expected_version}" ]] || return 1
+  /usr/bin/curl --fail --silent --max-time 10 http://127.0.0.1:8090/health | /usr/bin/grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' || return 1
+  response="$(/usr/bin/curl --silent --max-time 10 --write-out $'\n%{http_code}' http://127.0.0.1:8090/ready || true)"; code="$(printf '%s\n' "${response}" | /usr/bin/tail -n 1)"; state="$(printf '%s\n' "${response}" | /usr/bin/sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | /usr/bin/head -n 1)"
+  readiness_allows "${mode}" "${state}" || return 1; case "${state}:${code}" in ready:200|setup_required:503) ;; *) return 1 ;; esac
+  printf '%s\n' "${response}" | /usr/bin/grep -Fq '"base_commit":"'"${expected_revision}"'"' || return 1; printf '%s\n' "${response}" | /usr/bin/grep -Fq '"build_source_id":"'"${expected_source}"'"' || return 1
+  for path in /api/setup/status /bot/setup /bot/admin /bot/admin/health; do code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "http://127.0.0.1:8090${path}" || true)"; [[ "${code}" =~ ^(200|302|303|401|403)$ ]] || return 1; done
+}
+validate_legacy_runtime() {
+  local actual_image health_code ready_code
+  actual_image="$(${DOCKER_BIN} inspect --format '{{.Image}}' "$1")"
+  [[ "$(${DOCKER_BIN} port "$1" 8090/tcp 2>/dev/null || true)" == 127.0.0.1:8090 ]] || return 1
+  health_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:8090/health || true)"
+  ready_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
+  legacy_status_allows "${previous_image_id}" "${actual_image}" "${health_code}" "${ready_code}"
 }
 
-if ! /usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" up -d --no-deps --force-recreate "${SERVICE}" >/dev/null; then
-  rollback || die "KitsuSync recreation failed and rollback validation failed"
-  die "KitsuSync recreation failed; rollback completed"
-fi
+rollback_image_ref="kitsusync:rollback-$$"; ${DOCKER_BIN} tag "${previous_image_id}" "${rollback_image_ref}" || die "prior image identity could not be preserved"; printf '%s\n' "${rollback_image_ref}" >"${backup_dir}/rollback-image-ref"
+rollback() {
+  log "rollback started previous_image_id=${previous_image_id}"
+  /usr/bin/sha256sum -c "${backup_dir}/compose.sha256" >/dev/null 2>&1 || return 1
+  /usr/bin/sha256sum -c "${backup_dir}/env.sha256" >/dev/null 2>&1 || return 1
+  compose_override stop "${SERVICE}" >/dev/null 2>&1 || true
+  restore_persistent_state || return 1; write_override "${rollback_image_ref}"; compose_override up -d --no-deps --force-recreate "${SERVICE}" >/dev/null 2>&1 || return 1
+  rollback_id="$(compose_override ps -q "${SERVICE}")"; [[ -n "${rollback_id}" ]] || return 1
+  compare_runtime_state "${rollback_id}" "${backup_dir}/runtime" "${previous_image_id}" "${previous_revision}" "${previous_source_id}" "${previous_version}" || return 1
+  if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${rollback_id}"; else validate_runtime "${rollback_id}" normal "${previous_revision}" "${previous_source_id}" "${previous_version}"; fi
+}
 
-new_id="$(/usr/bin/docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${override}" ps -q "${SERVICE}")"
-[[ -n "${new_id}" ]] || { rollback; die "new KitsuSync container was not found"; }
-if ! validate_runtime "${new_id}"; then
-  rollback || die "KitsuSync recreation failed and rollback validation failed"
-  die "KitsuSync recreation failed; rollback completed"
+# The first Docker mutation occurs only after backup-complete and integrity checks.
+${DOCKER_BIN} stop "${container_id}" >/dev/null || die "prior container could not be quiesced after backup"
+quiesced_db="${backup_dir}/sqlite.quiesced.db"
+if ! sqlite_backup "${RUNTIME_ROOT}/data/sqlite.db" "${quiesced_db}" >/dev/null; then ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || true; die "quiesced SQLite backup failed; prior container restart attempted"; fi
+/usr/bin/mv -f "${quiesced_db}" "${backup_dir}/sqlite.db"
+/usr/bin/rm -f "${backup_dir}/runtime-secret.key" "${backup_dir}/runtime-secret.absent"
+if [[ -f "${RUNTIME_ROOT}/data/runtime-secret.key" && ! -L "${RUNTIME_ROOT}/data/runtime-secret.key" ]]; then /usr/bin/install -o root -g root -m 0600 "${RUNTIME_ROOT}/data/runtime-secret.key" "${backup_dir}/runtime-secret.key"; else : >"${backup_dir}/runtime-secret.absent"; fi
+write_persistent_manifest
+restart_prior_and_die() { ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || true; die "$1; prior container restart attempted"; }
+if ! ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null; then restart_prior_and_die "approved image load failed"; fi
+loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"; [[ "${loaded_image_id}" == "${approved_image_id}" ]] || { ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || true; die "loaded image identity does not match approved provenance"; }
+[[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${source_commit}" ]] || restart_prior_and_die "image revision label mismatch"; [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${image}")" == "${source_id}" ]] || restart_prior_and_die "image source label mismatch"; [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")" == "${version}" ]] || restart_prior_and_die "image version label mismatch"
+write_override "${image}"
+if ! compose_override up -d --no-deps --force-recreate "${SERVICE}" >/dev/null; then rollback || die "deployment failed and complete rollback validation failed"; die "deployment failed; rollback completed"; fi
+new_id="$(compose_override ps -q "${SERVICE}")"
+if [[ -z "${new_id}" ]] || ! validate_runtime "${new_id}" "${deployment_mode}" "${source_commit}" "${source_id}" "${version}"; then rollback || die "deployment validation failed and complete rollback validation failed"; die "deployment validation failed; rollback completed"; fi
+if [[ "${deployment_mode}" == legacy-migration ]]; then
+  mode_tmp="$(/usr/bin/mktemp)"; printf 'normal\n' >"${mode_tmp}"
+  /usr/bin/install -o root -g root -m 0600 "${mode_tmp}" "${CONTROL_DIR}/deployment-mode"
+  /usr/bin/rm -f "${mode_tmp}" "${LEGACY_IMAGE_FILE}"
 fi
-log "deployment completed image=${image} container=${new_id} backup=${backup_dir}"
-printf 'KitsuSync deployment completed: image=%s container=%s backup=%s\n' "${image}" "${new_id}" "${backup_dir}"
+log "deployment completed image_id=${approved_image_id} container=${new_id} backup=${backup_dir}"
+printf 'KitsuSync deployment completed: version=%s image_id=%s container=%s backup=%s\n' "${version}" "${approved_image_id}" "${new_id}" "${backup_dir}"

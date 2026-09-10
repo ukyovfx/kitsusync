@@ -1,0 +1,57 @@
+#!/usr/bin/python3
+"""Create and verify a consistent SQLite backup without exposing database data."""
+
+import os
+import pathlib
+import sqlite3
+import stat
+import sys
+
+
+def fail(message: str) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        fail("source and destination are required")
+    source, destination = map(os.path.abspath, sys.argv[1:])
+    try:
+        source_stat = os.lstat(source)
+    except OSError:
+        fail("source database is unavailable")
+    if not stat.S_ISREG(source_stat.st_mode) or stat.S_ISLNK(source_stat.st_mode):
+        fail("source database must be a regular non-symlink file")
+    parent_stat = os.lstat(os.path.dirname(destination))
+    if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
+        fail("destination directory is unsafe")
+    if os.path.lexists(destination):
+        fail("destination already exists")
+
+    source_uri = pathlib.Path(source).as_uri() + "?mode=ro"
+    try:
+        with sqlite3.connect(source_uri, uri=True, timeout=10) as source_db:
+            with sqlite3.connect(destination, timeout=10) as destination_db:
+                source_db.backup(destination_db)
+                result = destination_db.execute("PRAGMA integrity_check").fetchone()
+                if result != ("ok",):
+                    fail("backup integrity check failed")
+        os.chmod(destination, 0o600)
+        fd = os.open(destination, os.O_RDWR)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except (OSError, sqlite3.Error):
+        try:
+            os.unlink(destination)
+        except OSError:
+            pass
+        fail("SQLite online backup failed")
+
+    print("sqlite-backup=verified")
+
+
+if __name__ == "__main__":
+    main()

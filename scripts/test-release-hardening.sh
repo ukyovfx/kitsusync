@@ -63,13 +63,15 @@ require 'kitsu.runtime_token_encrypted' "$root/docs/SETUP_WIZARD.md"
 
 # F13/F15: source/build/image/runtime provenance needs immutable image identity
 # plus matching OCI labels; a tag by itself is deliberately insufficient.
-require 'approved-image.id' "$wrapper"
+require 'image_id' "$wrapper"
 require 'provenance' "$wrapper"
 require 'artifact_kind' "$wrapper"
-require 'merge_test_commit' "$wrapper"
 require 'release_commit' "$wrapper"
 require 'loaded image identity does not match approved provenance' "$wrapper"
-require 'image labels do not match release provenance' "$wrapper"
+require 'image revision label mismatch' "$wrapper"
+require 'image_archive_sha256' "$wrapper"
+require 'compose_sha256' "$wrapper"
+require 'deployment_tool_sha256' "$wrapper"
 require 'org.opencontainers.image.revision' "$dockerfile"
 require 'org.opencontainers.image.source-id' "$dockerfile"
 require 'org.opencontainers.image.version' "$dockerfile"
@@ -81,6 +83,7 @@ require 'KITSUSYNC_APP_VERSION' "$compose"
 require 'VERSION' "$dockerfile"
 require 'APP_ENV: production' "$wrapper"
 require 'APP_ENV=development' "$compose"
+require '--project-name "${PROJECT_NAME}"' "$wrapper"
 [[ ! -e "$root/deploy/docker-compose.yml" ]] || {
   printf 'retired alternate production Compose file is still present\n' >&2
   exit 1

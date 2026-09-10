@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+[[ "$#" -eq 0 ]] || die "arguments are not accepted"
+for inherited_name in $(compgen -e); do
+  case "${inherited_name}" in DOCKER_*|COMPOSE_*) die "inherited Docker/Compose control variables are not accepted" ;; esac
+done
+[[ "${EUID}" -eq 0 ]] || die "root execution required"
+cd /
+
+compose_file=/etc/kitsusync-deploy/docker-compose.yml
+env_file=/etc/kitsusync-deploy/.env.local
+[[ -f "${compose_file}" && ! -L "${compose_file}" && -f "${env_file}" && ! -L "${env_file}" ]] || die "installed deployment inputs are unavailable"
+[[ -d /etc/kitsusync-deploy && ! -L /etc/kitsusync-deploy && "$(/usr/bin/stat -c '%u:%g:%a' /etc/kitsusync-deploy)" == 0:0:700 ]] || die "installed control directory is unsafe"
+provenance=/etc/kitsusync-deploy/provenance
+[[ -f "${provenance}" && ! -L "${provenance}" ]] || die "installed provenance is unavailable"
+for file in "${compose_file}" "${env_file}" "${provenance}"; do
+  [[ "$(/usr/bin/stat -c '%u:%g:%a' "${file}")" == 0:0:600 ]] || die "installed deployment input ownership or mode is unsafe"
+done
+! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "${env_file}" || die "protected environment contains Docker/Compose control variables"
+version="$(/usr/bin/sed -n 's/^version=//p' "${provenance}" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r')"
+[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "installed version identity is invalid"
+export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
+
+container_id="$(/usr/bin/docker compose --project-name kitsusync --env-file "${env_file}" -f "${compose_file}" ps -q app)"
+[[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
+
+entrypoint_executable="$(/usr/bin/docker inspect --format '{{if .Config.Entrypoint}}{{index .Config.Entrypoint 0}}{{end}}' "${container_id}")"
+command_executable="$(/usr/bin/docker inspect --format '{{if .Config.Cmd}}{{index .Config.Cmd 0}}{{end}}' "${container_id}")"
+if printf '%s\n%s\n' "${entrypoint_executable}" "${command_executable}" | /usr/bin/grep -Eiq 'pass(word)?|secret|token|credential|authorization|cookie|jwt|[[:space:]=]'; then
+  entrypoint_executable='[redacted]'
+  command_executable='[redacted]'
+fi
+
+printf 'container_id=%s\n' "${container_id}"
+printf 'image_id=%s\n' "$(/usr/bin/docker inspect --format '{{.Image}}' "${container_id}")"
+/usr/bin/docker inspect --format 'oci_revision={{index .Config.Labels "org.opencontainers.image.revision"}}
+oci_source_id={{index .Config.Labels "org.opencontainers.image.source-id"}}
+oci_version={{index .Config.Labels "org.opencontainers.image.version"}}
+runtime_user={{.Config.User}}
+state={{.State.Status}}
+container_health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container_id}"
+printf 'port_bindings=%s\n' "$(/usr/bin/docker port "${container_id}" 2>/dev/null | /usr/bin/tr '\n' ';')"
+printf 'mounts_begin\n'
+/usr/bin/docker inspect --format '{{range .Mounts}}{{printf "%s|%s|%s|rw=%t\n" .Type .Source .Destination .RW}}{{end}}' "${container_id}"
+printf 'mounts_end\nnetworks_begin\n'
+/usr/bin/docker inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s|%s\n" $name $network.NetworkID}}{{end}}' "${container_id}"
+printf 'networks_end\nhost_config_restart_policy=%s\n' "$(/usr/bin/docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' "${container_id}")"
+printf 'host_config_readonly_rootfs=%s\n' "$(/usr/bin/docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "${container_id}")"
+printf 'entrypoint_executable=%s\ncommand_executable=%s\ncommand_arguments=[redacted]\n' "${entrypoint_executable}" "${command_executable}"
+printf 'environment_names_begin\n'
+/usr/bin/docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${container_id}" | /usr/bin/sed 's/=.*//' | LC_ALL=C /usr/bin/sort -u
+printf 'environment_names_end\n'
+
+health_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:8090/health || true)"
+ready_response="$(/usr/bin/curl --silent --show-error --max-time 10 --write-out $'\n%{http_code}' http://127.0.0.1:8090/ready || true)"
+ready_code="$(printf '%s\n' "${ready_response}" | /usr/bin/tail -n 1)"
+ready_state="$(printf '%s\n' "${ready_response}" | /usr/bin/sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | /usr/bin/head -n 1)"
+printf 'health_http=%s\nreadiness_http=%s\nreadiness_state=%s\n' "${health_code}" "${ready_code}" "${ready_state:-unknown}"

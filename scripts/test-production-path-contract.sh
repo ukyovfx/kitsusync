@@ -13,7 +13,7 @@ trap 'rm -rf "${tmp}"' EXIT
 
 require_wrapper_doc() {
   local file="$1"
-  grep -Fq 'deploy/kitsusync-deploy' "$root/$file" || {
+  grep -Fq '/usr/local/sbin/kitsusync-deploy' "$root/$file" || {
     printf 'production wrapper is not documented in %s\n' "$file" >&2
     exit 1
   }
@@ -40,7 +40,9 @@ for file in README.md docs/QUICK_START.md docs/SETUP_FOR_STUDIOS.md docs/TROUBLE
   fi
 done
 
-grep -Fq 'ENV_FILE="${DEPLOY_ROOT}/.env.local"' "$wrapper"
+grep -Fq 'ENV_FILE=${CONTROL_DIR}/.env.local' "$wrapper"
+grep -Fq 'PROJECT_NAME=kitsusync' "$wrapper"
+grep -Fq -- '--project-name "${PROJECT_NAME}"' "$wrapper"
 grep -Fq 'APP_ENV: production' "$wrapper"
 grep -Fq 'APP_ENV=development' "$root/docker-compose.yml"
 if grep -Fq 'deploy/docker-compose.yml' "$root/.env.example"; then
