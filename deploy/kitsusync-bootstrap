@@ -29,7 +29,7 @@ secure_source() {
 
 [[ -d "${STAGE}" && ! -L "${STAGE}" ]] || die "fixed release stage is unavailable"
 [[ "$(/usr/bin/stat -c '%u:%g:%a' "${STAGE}")" == 0:0:700 ]] || die "release stage must be root-owned mode 0700"
-for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap; do
+for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity; do
   secure_source "${STAGE}/${file}" 600
 done
 
@@ -40,13 +40,19 @@ deploy_sha="$(field deployment_tool_sha256)"
 inspect_sha="$(field inspection_tool_sha256)"
 backup_sha="$(field sqlite_backup_tool_sha256)"
 bootstrap_sha="$(field bootstrap_tool_sha256)"
-[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
+identity_sha="$(field image_identity_tool_sha256)"
+image_config_digest="$(field image_config_digest)"
+image_manifest_digest="$(field image_manifest_digest)"
+image_content_digest="$(field image_content_digest)"
+[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
+[[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "portable image provenance is incomplete"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-image.tar" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "staged image archive digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/docker-compose.yml" | /usr/bin/cut -d' ' -f1)" == "${compose_sha}" ]] || die "staged Compose digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-deploy" | /usr/bin/cut -d' ' -f1)" == "${deploy_sha}" ]] || die "staged deploy tool digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-inspect" | /usr/bin/cut -d' ' -f1)" == "${inspect_sha}" ]] || die "staged inspect tool digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-sqlite-backup" | /usr/bin/cut -d' ' -f1)" == "${backup_sha}" ]] || die "staged SQLite backup tool digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-bootstrap" | /usr/bin/cut -d' ' -f1)" == "${bootstrap_sha}" ]] || die "staged bootstrap tool digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-image-identity" | /usr/bin/cut -d' ' -f1)" == "${identity_sha}" ]] || die "staged image identity tool digest mismatch"
 
 mode="$(/usr/bin/tr -d '\r\n' <"${STAGE}/deployment-mode")"
 [[ "${mode}" == normal || "${mode}" == recovery || "${mode}" == legacy-migration ]] || die "unsupported deployment mode"
@@ -62,6 +68,10 @@ release_commit="$(field release_commit)"
 if [[ "${release_tag}" == v0.4.6 ]]; then
   [[ "${source_commit}" == b7b30157cb90c4500e8b00d3c26ac7038f5c8c10 ]] || die "v0.4.6 source commit is not approved"
 fi
+archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${STAGE}/kitsusync-image-identity" archive "${STAGE}/kitsusync-image.tar" "${image_ref}")" || die "staged image archive identity cannot be verified"
+[[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_config_digest=//p')" == "${image_config_digest}" ]] || die "staged image config digest mismatch"
+[[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_manifest_digest=//p')" == "${image_manifest_digest}" ]] || die "staged image manifest digest mismatch"
+[[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_content_digest=//p')" == "${image_content_digest}" ]] || die "staged image content identity mismatch"
 export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 [[ -f "${RUNTIME}/.env.local" && ! -L "${RUNTIME}/.env.local" ]] || die "existing protected operator environment is unavailable"
 [[ -f "${RUNTIME}/conf.toml" && ! -L "${RUNTIME}/conf.toml" ]] || die "existing runtime configuration is unavailable"
@@ -79,6 +89,7 @@ export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-deploy" /usr/local/sbin/kitsusync-deploy
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-inspect" /usr/local/sbin/kitsusync-inspect
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-image-identity" /usr/local/libexec/kitsusync-image-identity
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/docker-compose.yml" "${CONTROL}/docker-compose.yml"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"

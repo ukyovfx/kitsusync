@@ -20,6 +20,7 @@ MODE_FILE=${CONTROL_DIR}/deployment-mode
 LEGACY_IMAGE_FILE=${CONTROL_DIR}/legacy-image.id
 IMAGE_ARCHIVE=${STATE_DIR}/kitsusync-image.tar
 SQLITE_BACKUP=/usr/local/libexec/kitsusync-sqlite-backup
+IMAGE_IDENTITY=/usr/local/libexec/kitsusync-image-identity
 PROJECT_NAME=kitsusync
 SERVICE=app
 
@@ -36,6 +37,10 @@ readiness_allows() {
 
 legacy_status_allows() {
   [[ "$1" == "$2" && "$3" == 200 && "$4" == 404 ]]
+}
+
+archive_image_id_allows() {
+  [[ "$1" == "$2" || "$1" == "$3" ]]
 }
 
 backup_is_complete() {
@@ -130,6 +135,7 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
     backup-contract) [[ "$#" -eq 1 ]]; backup_is_complete "$1" ;;
     snapshot) [[ "$#" -eq 2 ]]; snapshot_runtime_state "$1" "$2" ;;
     compare) [[ "$#" -eq 6 ]]; compare_runtime_state "$1" "$2" "$3" "$4" "$5" "$6" ;;
+    image-id) [[ "$#" -eq 3 ]]; archive_image_id_allows "$1" "$2" "$3" ;;
     *) die "unknown test mode" ;;
   esac
   exit $?
@@ -139,7 +145,7 @@ fi
 [[ "${EUID}" -eq 0 ]] || die "root execution required"
 DOCKER_BIN=/usr/bin/docker
 cd /
-for executable in /usr/bin/docker /usr/bin/curl /usr/bin/sha256sum /usr/bin/stat /usr/bin/tar /usr/bin/python3 /usr/bin/env "${SQLITE_BACKUP}"; do [[ -x "${executable}" ]] || die "required deployment executable is unavailable"; done
+for executable in /usr/bin/docker /usr/bin/curl /usr/bin/sha256sum /usr/bin/stat /usr/bin/tar /usr/bin/python3 /usr/bin/env "${SQLITE_BACKUP}" "${IMAGE_IDENTITY}"; do [[ -x "${executable}" ]] || die "required deployment executable is unavailable"; done
 sqlite_backup() { /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${SQLITE_BACKUP}" "$@"; }
 
 secure_dir() { [[ -d "$1" && ! -L "$1" && "$(/usr/bin/stat -c '%u:%g:%a' "$1")" == "0:0:$2" ]] || die "trusted directory is unsafe"; }
@@ -166,14 +172,19 @@ for file in docker-compose.yml .env.local provenance deployment-mode; do /usr/bi
 COMPOSE_FILE=${run_dir}/trusted/docker-compose.yml; ENV_FILE=${run_dir}/trusted/.env.local; PROVENANCE_FILE=${run_dir}/trusted/provenance; MODE_FILE=${run_dir}/trusted/deployment-mode
 
 field() { /usr/bin/sed -n "s/^$1=//p" "${PROVENANCE_FILE}" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r'; }
-artifact_kind="$(field artifact_kind)"; source_commit="$(field source_commit)"; source_id="$(field source_id)"; release_commit="$(field release_commit)"; release_tag="$(field release_tag)"; version="$(field version)"; image="$(field image_ref)"; approved_image_id="$(field image_id)"; archive_sha="$(field image_archive_sha256)"; compose_sha="$(field compose_sha256)"; deploy_sha="$(field deployment_tool_sha256)"; deployment_mode="$(/usr/bin/tr -d '\r\n' <"${MODE_FILE}")"
+artifact_kind="$(field artifact_kind)"; source_commit="$(field source_commit)"; source_id="$(field source_id)"; release_commit="$(field release_commit)"; release_tag="$(field release_tag)"; version="$(field version)"; image="$(field image_ref)"; build_daemon_image_id="$(field build_daemon_image_id)"; archive_sha="$(field image_archive_sha256)"; approved_config_digest="$(field image_config_digest)"; approved_manifest_digest="$(field image_manifest_digest)"; approved_content_digest="$(field image_content_digest)"; compose_sha="$(field compose_sha256)"; deploy_sha="$(field deployment_tool_sha256)"; identity_sha="$(field image_identity_tool_sha256)"; deployment_mode="$(/usr/bin/tr -d '\r\n' <"${MODE_FILE}")"
 [[ "${artifact_kind}" == release && "${source_commit}" =~ ^[0-9a-f]{40}$ && "${source_id}" == "${source_commit}" && "${release_commit}" == "${source_commit}" ]] || die "release provenance is not deployable"
 [[ "${release_tag}" == "v${version}" && "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "release version provenance is invalid"
-[[ "${image}" =~ ^kitsusync:v[0-9]+\.[0-9]+\.[0-9]+$ && "${approved_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "image provenance is invalid"
-[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
+[[ "${image}" =~ ^kitsusync:v[0-9]+\.[0-9]+\.[0-9]+$ && "${build_daemon_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "image provenance is invalid"
+[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${approved_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${approved_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${approved_content_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
 [[ "$(/usr/bin/sha256sum "${IMAGE_ARCHIVE}" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "approved image archive digest mismatch"
 [[ "$(/usr/bin/sha256sum "${COMPOSE_FILE}" | /usr/bin/cut -d' ' -f1)" == "${compose_sha}" ]] || die "production Compose digest mismatch"
 [[ "$(/usr/bin/sha256sum /usr/local/sbin/kitsusync-deploy | /usr/bin/cut -d' ' -f1)" == "${deploy_sha}" ]] || die "installed deployment tool identity mismatch"
+[[ "$(/usr/bin/sha256sum "${IMAGE_IDENTITY}" | /usr/bin/cut -d' ' -f1)" == "${identity_sha}" ]] || die "installed image identity tool mismatch"
+archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" archive "${IMAGE_ARCHIVE}" "${image}")" || die "approved image archive identity cannot be verified"
+[[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_config_digest=//p')" == "${approved_config_digest}" ]] || die "approved image config digest mismatch"
+[[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_manifest_digest=//p')" == "${approved_manifest_digest}" ]] || die "approved image manifest digest mismatch"
+[[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_content_digest=//p')" == "${approved_content_digest}" ]] || die "approved image content identity mismatch"
 [[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery || "${deployment_mode}" == legacy-migration ]] || die "deployment mode is invalid"
 export KITSUSYNC_APP_VERSION="${version}"
 export KITSUSYNC_IMAGE_TAG="${image#kitsusync:}"
@@ -273,7 +284,9 @@ if [[ -f "${RUNTIME_ROOT}/data/runtime-secret.key" && ! -L "${RUNTIME_ROOT}/data
 write_persistent_manifest
 restart_prior_and_die() { ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || true; die "$1; prior container restart attempted"; }
 if ! ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null; then restart_prior_and_die "approved image load failed"; fi
-loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"; [[ "${loaded_image_id}" == "${approved_image_id}" ]] || { ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || true; die "loaded image identity does not match approved provenance"; }
+loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"; archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || restart_prior_and_die "loaded image ID is not an approved archive content identity"
+loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || restart_prior_and_die "loaded image content identity cannot be verified"
+[[ "${loaded_content_digest}" == "${approved_content_digest}" ]] || restart_prior_and_die "loaded image content identity does not match approved provenance"
 [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${source_commit}" ]] || restart_prior_and_die "image revision label mismatch"; [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${image}")" == "${source_id}" ]] || restart_prior_and_die "image source label mismatch"; [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")" == "${version}" ]] || restart_prior_and_die "image version label mismatch"
 write_override "${image}"
 if ! compose_override up -d --no-deps --force-recreate "${SERVICE}" >/dev/null; then rollback || die "deployment failed and complete rollback validation failed"; die "deployment failed; rollback completed"; fi
@@ -284,5 +297,5 @@ if [[ "${deployment_mode}" == legacy-migration ]]; then
   /usr/bin/install -o root -g root -m 0600 "${mode_tmp}" "${CONTROL_DIR}/deployment-mode"
   /usr/bin/rm -f "${mode_tmp}" "${LEGACY_IMAGE_FILE}"
 fi
-log "deployment completed image_id=${approved_image_id} container=${new_id} backup=${backup_dir}"
-printf 'KitsuSync deployment completed: version=%s image_id=%s container=%s backup=%s\n' "${version}" "${approved_image_id}" "${new_id}" "${backup_dir}"
+log "deployment completed image_id=${loaded_image_id} image_content_digest=${approved_content_digest} container=${new_id} backup=${backup_dir}"
+printf 'KitsuSync deployment completed: version=%s image_id=%s image_content_digest=%s container=%s backup=%s\n' "${version}" "${loaded_image_id}" "${approved_content_digest}" "${new_id}" "${backup_dir}"

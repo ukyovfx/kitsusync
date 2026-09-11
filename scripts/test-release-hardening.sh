@@ -63,13 +63,18 @@ require 'kitsu.runtime_token_encrypted' "$root/docs/SETUP_WIZARD.md"
 
 # F13/F15: source/build/image/runtime provenance needs immutable image identity
 # plus matching OCI labels; a tag by itself is deliberately insufficient.
-require 'image_id' "$wrapper"
+require 'build_daemon_image_id' "$wrapper"
 require 'provenance' "$wrapper"
 require 'artifact_kind' "$wrapper"
 require 'release_commit' "$wrapper"
-require 'loaded image identity does not match approved provenance' "$wrapper"
+require 'loaded image content identity does not match approved provenance' "$wrapper"
 require 'image revision label mismatch' "$wrapper"
 require 'image_archive_sha256' "$wrapper"
+require 'image_config_digest' "$wrapper"
+require 'image_manifest_digest' "$wrapper"
+require 'image_content_digest' "$wrapper"
+require 'image_identity_tool_sha256' "$wrapper"
+require 'archive_image_id_allows' "$wrapper"
 require 'compose_sha256' "$wrapper"
 require 'deployment_tool_sha256' "$wrapper"
 require 'org.opencontainers.image.revision' "$dockerfile"
@@ -88,5 +93,20 @@ require '--project-name "${PROJECT_NAME}"' "$wrapper"
   printf 'retired alternate production Compose file is still present\n' >&2
   exit 1
 }
+if grep -Eq 'loaded_image_id.*==.*(build_daemon_image_id|approved_image_id)' "$wrapper"; then
+  printf 'daemon-local image identity is incorrectly treated as portable\n' >&2
+  exit 1
+fi
+
+config_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+manifest_id=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+wrong_id=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+test_docker="$(type -P true)"
+KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${config_id}" "${config_id}" "${manifest_id}"
+KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${manifest_id}" "${config_id}" "${manifest_id}"
+if KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${wrong_id}" "${config_id}" "${manifest_id}"; then
+  printf 'unrelated daemon image ID was accepted\n' >&2
+  exit 1
+fi
 
 printf 'release-hardening-contract=PASS\n'

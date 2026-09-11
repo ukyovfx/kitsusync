@@ -123,6 +123,7 @@ jobs:
 
       - name: Release hardening contract tests
         run: |
+          python3 scripts/test-image-identity.py
           bash scripts/test-release-hardening.sh
           bash scripts/test-release-identity.sh
           bash scripts/test-production-path-contract.sh

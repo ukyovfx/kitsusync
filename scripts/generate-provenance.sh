@@ -9,11 +9,15 @@ image_id="${IMAGE_ID:?IMAGE_ID is required}"
 release_tag="${RELEASE_TAG:-}"
 image_ref="${IMAGE_REF:-}"
 archive_sha="${IMAGE_ARCHIVE_SHA256:-}"
+image_config_digest="${IMAGE_CONFIG_DIGEST:-}"
+image_manifest_digest="${IMAGE_MANIFEST_DIGEST:-}"
+image_content_digest="${IMAGE_CONTENT_DIGEST:-}"
 compose_sha="${COMPOSE_SHA256:-}"
 deploy_sha="${DEPLOYMENT_TOOL_SHA256:-}"
 inspect_sha="${INSPECTION_TOOL_SHA256:-}"
 backup_sha="${SQLITE_BACKUP_TOOL_SHA256:-}"
 bootstrap_sha="${BOOTSTRAP_TOOL_SHA256:-}"
+identity_sha="${IMAGE_IDENTITY_TOOL_SHA256:-}"
 merge_test="${MERGE_TEST_COMMIT:-}"
 release_commit="${RELEASE_COMMIT:-}"
 output="${PROVENANCE_OUTPUT:-provenance.txt}"
@@ -29,9 +33,10 @@ if [[ "${kind}" == release ]]; then
 else
   [[ -z "${release_commit}" ]] || { printf 'non-release artifact has release commit\n' >&2; exit 1; }
 fi
-if [[ -n "${archive_sha}${compose_sha}${deploy_sha}${inspect_sha}${backup_sha}${bootstrap_sha}${image_ref}" ]]; then
+if [[ -n "${archive_sha}${image_config_digest}${image_manifest_digest}${image_content_digest}${compose_sha}${deploy_sha}${inspect_sha}${backup_sha}${bootstrap_sha}${identity_sha}${image_ref}" ]]; then
   [[ "${image_ref}" =~ ^kitsusync:(v?[a-zA-Z0-9][a-zA-Z0-9._-]{0,127})$ ]] || { printf 'invalid image reference\n' >&2; exit 1; }
-  for digest in "${archive_sha}" "${compose_sha}" "${deploy_sha}" "${inspect_sha}" "${backup_sha}" "${bootstrap_sha}"; do
+  [[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'invalid portable image identity\n' >&2; exit 1; }
+  for digest in "${archive_sha}" "${compose_sha}" "${deploy_sha}" "${inspect_sha}" "${backup_sha}" "${bootstrap_sha}" "${identity_sha}"; do
     [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || { printf 'invalid bundle digest\n' >&2; exit 1; }
   done
 fi
@@ -44,12 +49,18 @@ fi
   printf 'source_id=%s\n' "${source_id}"
   printf 'release_commit=%s\n' "${release_commit}"
   printf 'version=%s\n' "${version}"
-  printf 'image_id=%s\n' "${image_id}"
+  # This records build-daemon evidence only. Cross-daemon acceptance is bound
+  # by the archive/config/content digests below, never by this local ID.
+  printf 'build_daemon_image_id=%s\n' "${image_id}"
   printf 'image_ref=%s\n' "${image_ref}"
   printf 'image_archive_sha256=%s\n' "${archive_sha}"
+  printf 'image_config_digest=%s\n' "${image_config_digest}"
+  printf 'image_manifest_digest=%s\n' "${image_manifest_digest}"
+  printf 'image_content_digest=%s\n' "${image_content_digest}"
   printf 'compose_sha256=%s\n' "${compose_sha}"
   printf 'deployment_tool_sha256=%s\n' "${deploy_sha}"
   printf 'inspection_tool_sha256=%s\n' "${inspect_sha}"
   printf 'sqlite_backup_tool_sha256=%s\n' "${backup_sha}"
   printf 'bootstrap_tool_sha256=%s\n' "${bootstrap_sha}"
+  printf 'image_identity_tool_sha256=%s\n' "${identity_sha}"
 } > "${output}"
