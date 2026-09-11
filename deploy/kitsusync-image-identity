@@ -1,0 +1,330 @@
+#!/usr/bin/python3
+"""Derive a daemon-portable identity for a Docker image archive or inspect result."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+import tarfile
+from typing import Any, BinaryIO
+
+
+DIGEST_RE = re.compile(r"^sha256:([0-9a-f]{64})$")
+HASH_MEMBER_RE = re.compile(r"^(?:blobs/sha256/)?([0-9a-f]{64})(?:\.json)?$")
+MAX_METADATA_BYTES = 16 * 1024 * 1024
+OCI_INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
+OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+OCI_CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json"
+UNCOMPRESSED_LAYER_MEDIA_TYPES = {
+    "application/vnd.oci.image.layer.v1.tar",
+    "application/vnd.docker.image.rootfs.diff.tar",
+}
+
+
+class IdentityError(Exception):
+    pass
+
+
+def fail(message: str) -> None:
+    raise IdentityError(message)
+
+
+def digest_stream(stream: BinaryIO) -> str:
+    hasher = hashlib.sha256()
+    for block in iter(lambda: stream.read(1024 * 1024), b""):
+        hasher.update(block)
+    return "sha256:" + hasher.hexdigest()
+
+
+def read_json_member(archive: tarfile.TarFile, name: str) -> tuple[dict[str, Any], str]:
+    try:
+        member = archive.getmember(name)
+    except KeyError:
+        fail(f"archive member is missing: {name}")
+    if not member.isfile() or member.size > MAX_METADATA_BYTES:
+        fail(f"archive metadata member is unsafe: {name}")
+    stream = archive.extractfile(member)
+    if stream is None:
+        fail(f"archive metadata member cannot be read: {name}")
+    raw = stream.read(MAX_METADATA_BYTES + 1)
+    if len(raw) > MAX_METADATA_BYTES:
+        fail(f"archive metadata member is too large: {name}")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"archive metadata member is invalid JSON: {name}: {exc}")
+    if not isinstance(value, dict):
+        fail(f"archive metadata member is not an object: {name}")
+    return value, "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def content_addressed_digest(name: str) -> str:
+    match = HASH_MEMBER_RE.fullmatch(name)
+    if not match:
+        fail(f"archive member is not content-addressed: {name}")
+    return "sha256:" + match.group(1)
+
+
+def string_value(config: dict[str, Any], name: str) -> str:
+    value = config.get(name)
+    return value if isinstance(value, str) else ""
+
+
+def string_list(config: dict[str, Any], name: str) -> list[str]:
+    value = config.get(name)
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        fail(f"image configuration field is invalid: {name}")
+    return value
+
+
+def bool_value(config: dict[str, Any], name: str) -> bool:
+    value = config.get(name)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        fail(f"image configuration field is invalid: {name}")
+    return value
+
+
+def integer_value(config: dict[str, Any], name: str) -> int:
+    value = config.get(name)
+    if value is None:
+        return 0
+    if not isinstance(value, int) or isinstance(value, bool):
+        fail(f"image configuration field is invalid: {name}")
+    return value
+
+
+def key_map(config: dict[str, Any], name: str) -> dict[str, Any]:
+    value = config.get(name)
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        fail(f"image configuration field is invalid: {name}")
+    return {key: {} for key in sorted(value)}
+
+
+def labels(config: dict[str, Any]) -> dict[str, str]:
+    value = config.get("Labels")
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or any(not isinstance(k, str) or not isinstance(v, str) for k, v in value.items()):
+        fail("image configuration field is invalid: Labels")
+    return {key: value[key] for key in sorted(value)}
+
+
+def healthcheck(config: dict[str, Any]) -> dict[str, Any]:
+    value = config.get("Healthcheck")
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        fail("image configuration field is invalid: Healthcheck")
+    test = value.get("Test")
+    if test is None:
+        test = []
+    if not isinstance(test, list) or any(not isinstance(item, str) for item in test):
+        fail("image configuration field is invalid: Healthcheck.Test")
+    normalized: dict[str, Any] = {"Test": test}
+    for name in ("Interval", "Timeout", "StartPeriod", "StartInterval", "Retries"):
+        item = value.get(name, 0)
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            fail(f"image configuration field is invalid: Healthcheck.{name}")
+        normalized[name] = item
+    return normalized
+
+
+def normalize_descriptor(platform: dict[str, Any], rootfs: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    architecture = platform.get("architecture")
+    operating_system = platform.get("os")
+    variant = platform.get("variant", "")
+    if not isinstance(architecture, str) or not architecture or not isinstance(operating_system, str) or not operating_system:
+        fail("image platform is incomplete")
+    if not isinstance(variant, str):
+        fail("image platform variant is invalid")
+    rootfs_type = rootfs.get("type")
+    diff_ids = rootfs.get("diff_ids")
+    if rootfs_type != "layers" or not isinstance(diff_ids, list) or not diff_ids:
+        fail("image rootfs identity is incomplete")
+    if any(not isinstance(item, str) or DIGEST_RE.fullmatch(item) is None for item in diff_ids):
+        fail("image rootfs digest is invalid")
+
+    runtime = {
+        "Hostname": string_value(config, "Hostname"),
+        "Domainname": string_value(config, "Domainname"),
+        "User": string_value(config, "User"),
+        "AttachStdin": bool_value(config, "AttachStdin"),
+        "AttachStdout": bool_value(config, "AttachStdout"),
+        "AttachStderr": bool_value(config, "AttachStderr"),
+        "Tty": bool_value(config, "Tty"),
+        "OpenStdin": bool_value(config, "OpenStdin"),
+        "StdinOnce": bool_value(config, "StdinOnce"),
+        "Env": string_list(config, "Env"),
+        "Entrypoint": string_list(config, "Entrypoint"),
+        "Cmd": string_list(config, "Cmd"),
+        "OnBuild": string_list(config, "OnBuild"),
+        "WorkingDir": string_value(config, "WorkingDir"),
+        "NetworkDisabled": bool_value(config, "NetworkDisabled"),
+        "MacAddress": string_value(config, "MacAddress"),
+        "ExposedPorts": key_map(config, "ExposedPorts"),
+        "Volumes": key_map(config, "Volumes"),
+        "Labels": labels(config),
+        "Healthcheck": healthcheck(config),
+        "StopSignal": string_value(config, "StopSignal"),
+        "StopTimeout": integer_value(config, "StopTimeout"),
+        "Shell": string_list(config, "Shell"),
+    }
+    if operating_system.lower() == "windows":
+        runtime["ArgsEscaped"] = bool_value(config, "ArgsEscaped")
+    return {
+        "schema": "kitsusync-portable-image-identity-v1",
+        "platform": {"architecture": architecture.lower(), "os": operating_system.lower(), "variant": variant.lower()},
+        "rootfs": {"type": "layers", "diff_ids": diff_ids},
+        "runtime_config": runtime,
+    }
+
+
+def descriptor_digest(descriptor: dict[str, Any]) -> str:
+    encoded = json.dumps(descriptor, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, int]:
+    try:
+        archive = tarfile.open(path, mode="r:*")
+    except (OSError, tarfile.TarError) as exc:
+        fail(f"image archive cannot be opened: {exc}")
+    with archive:
+        manifest_member = archive.getmember("manifest.json") if "manifest.json" in archive.getnames() else None
+        if manifest_member is None or not manifest_member.isfile() or manifest_member.size > MAX_METADATA_BYTES:
+            fail("image archive manifest is missing or unsafe")
+        stream = archive.extractfile(manifest_member)
+        if stream is None:
+            fail("image archive manifest cannot be read")
+        try:
+            manifest = json.load(stream)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            fail(f"image archive manifest is invalid: {exc}")
+        if not isinstance(manifest, list) or len(manifest) != 1 or not isinstance(manifest[0], dict):
+            fail("image archive must contain exactly one manifest entry")
+        entry = manifest[0]
+        tags = entry.get("RepoTags")
+        config_name = entry.get("Config")
+        layer_names = entry.get("Layers")
+        if tags != [expected_ref]:
+            fail("image archive repository/tag mapping does not match the approved image reference")
+        if not isinstance(config_name, str) or not isinstance(layer_names, list) or not layer_names:
+            fail("image archive manifest is incomplete")
+        if any(not isinstance(name, str) for name in layer_names):
+            fail("image archive layer list is invalid")
+
+        config, actual_config_digest = read_json_member(archive, config_name)
+        expected_config_digest = content_addressed_digest(config_name)
+        if actual_config_digest != expected_config_digest:
+            fail("image archive config content digest does not match its descriptor")
+
+        index, _ = read_json_member(archive, "index.json")
+        index_manifests = index.get("manifests")
+        if index.get("schemaVersion") != 2 or index.get("mediaType") != OCI_INDEX_MEDIA_TYPE or not isinstance(index_manifests, list) or len(index_manifests) != 1:
+            fail("OCI image index must contain exactly one manifest descriptor")
+        manifest_descriptor = index_manifests[0]
+        if not isinstance(manifest_descriptor, dict):
+            fail("OCI image manifest descriptor is invalid")
+        manifest_digest = manifest_descriptor.get("digest")
+        manifest_size = manifest_descriptor.get("size")
+        annotations = manifest_descriptor.get("annotations", {})
+        expected_tag = expected_ref.rsplit(":", 1)[-1]
+        if manifest_descriptor.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE or not isinstance(manifest_digest, str) or DIGEST_RE.fullmatch(manifest_digest) is None:
+            fail("OCI image manifest digest is invalid")
+        if not isinstance(manifest_size, int) or isinstance(manifest_size, bool) or manifest_size < 0:
+            fail("OCI image manifest size is invalid")
+        if not isinstance(annotations, dict) or annotations.get("org.opencontainers.image.ref.name") != expected_tag:
+            fail("OCI image index tag mapping does not match the approved image reference")
+        manifest_name = "blobs/sha256/" + manifest_digest.removeprefix("sha256:")
+        oci_manifest, actual_manifest_digest = read_json_member(archive, manifest_name)
+        if actual_manifest_digest != manifest_digest or archive.getmember(manifest_name).size != manifest_size:
+            fail("OCI image manifest content does not match its descriptor")
+        if oci_manifest.get("schemaVersion") != 2 or oci_manifest.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE:
+            fail("OCI image manifest schema is invalid")
+        oci_config = oci_manifest.get("config")
+        oci_layers = oci_manifest.get("layers")
+        if not isinstance(oci_config, dict) or not isinstance(oci_layers, list) or len(oci_layers) != len(layer_names):
+            fail("OCI image manifest is incomplete")
+        if oci_config.get("mediaType") != OCI_CONFIG_MEDIA_TYPE or oci_config.get("digest") != actual_config_digest or oci_config.get("size") != archive.getmember(config_name).size:
+            fail("OCI image config descriptor does not match the archive config")
+
+        rootfs = config.get("rootfs")
+        image_config = config.get("config")
+        if not isinstance(rootfs, dict) or not isinstance(image_config, dict):
+            fail("image archive config lacks rootfs or runtime configuration")
+        diff_ids = rootfs.get("diff_ids")
+        if not isinstance(diff_ids, list) or len(diff_ids) != len(layer_names):
+            fail("image archive layer count does not match rootfs identity")
+        for index, layer_name in enumerate(layer_names):
+            expected_layer_digest = content_addressed_digest(layer_name)
+            if diff_ids[index] != expected_layer_digest:
+                fail("image archive layer descriptor does not match rootfs identity")
+            try:
+                member = archive.getmember(layer_name)
+            except KeyError:
+                fail(f"image archive layer is missing: {layer_name}")
+            if not member.isfile():
+                fail(f"image archive layer is unsafe: {layer_name}")
+            layer_stream = archive.extractfile(member)
+            if layer_stream is None or digest_stream(layer_stream) != expected_layer_digest:
+                fail("image archive layer content digest does not match its descriptor")
+            oci_layer = oci_layers[index]
+            if not isinstance(oci_layer, dict) or oci_layer.get("mediaType") not in UNCOMPRESSED_LAYER_MEDIA_TYPES or oci_layer.get("digest") != expected_layer_digest or oci_layer.get("size") != member.size:
+                fail("OCI image layer descriptor does not match the archive layer")
+
+        platform = {"architecture": config.get("architecture"), "os": config.get("os"), "variant": config.get("variant", "")}
+        descriptor = normalize_descriptor(platform, rootfs, image_config)
+        return actual_config_digest, actual_manifest_digest, descriptor_digest(descriptor), len(layer_names)
+
+
+def inspect_identity(stream: BinaryIO) -> str:
+    try:
+        value = json.load(stream)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        fail(f"Docker inspect JSON is invalid: {exc}")
+    if not isinstance(value, dict):
+        fail("Docker inspect JSON is not an object")
+    rootfs_value = value.get("RootFS")
+    config = value.get("Config")
+    if not isinstance(rootfs_value, dict) or not isinstance(config, dict):
+        fail("Docker inspect JSON lacks rootfs or runtime configuration")
+    rootfs = {"type": str(rootfs_value.get("Type", "")).lower(), "diff_ids": rootfs_value.get("Layers")}
+    platform = {"architecture": value.get("Architecture"), "os": value.get("Os"), "variant": value.get("Variant", "")}
+    return descriptor_digest(normalize_descriptor(platform, rootfs, config))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    archive_parser = subparsers.add_parser("archive")
+    archive_parser.add_argument("archive")
+    archive_parser.add_argument("image_ref")
+    subparsers.add_parser("inspect")
+    args = parser.parse_args()
+    try:
+        if args.command == "archive":
+            config_digest, manifest_digest, content_digest, layer_count = archive_identity(args.archive, args.image_ref)
+            print(f"image_ref={args.image_ref}")
+            print(f"image_config_digest={config_digest}")
+            print(f"image_manifest_digest={manifest_digest}")
+            print(f"image_content_digest={content_digest}")
+            print(f"layer_count={layer_count}")
+        else:
+            print(f"image_content_digest={inspect_identity(sys.stdin.buffer)}")
+    except IdentityError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

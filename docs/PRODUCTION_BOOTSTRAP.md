@@ -30,6 +30,7 @@ tool digests before installing:
 - `/usr/local/sbin/kitsusync-deploy` (`root:root`, `0700`)
 - `/usr/local/sbin/kitsusync-inspect` (`root:root`, `0700`)
 - `/usr/local/libexec/kitsusync-sqlite-backup` (`root:root`, `0700`)
+- `/usr/local/libexec/kitsusync-image-identity` (`root:root`, `0700`)
 - `/etc/kitsusync-deploy/` (`root:root`, `0700`)
 - `/var/lib/kitsusync-deploy/` (`root:root`, `0700`)
 - `/var/backups/kitsusync-deploy/` (`root:root`, `0700`)

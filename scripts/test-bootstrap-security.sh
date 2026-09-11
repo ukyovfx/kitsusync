@@ -6,6 +6,7 @@ deploy="${root}/deploy/kitsusync-deploy"
 inspect="${root}/deploy/kitsusync-inspect"
 bootstrap="${root}/deploy/kitsusync-bootstrap"
 backup="${root}/deploy/kitsusync-sqlite-backup"
+identity="${root}/deploy/kitsusync-image-identity"
 bundle="${root}/scripts/build-deployment-bundle.sh"
 tmp="$(mktemp -d)"
 python_bin="${PYTHON_BIN:-python3}"
@@ -13,6 +14,7 @@ trap 'rm -rf "${tmp}"' EXIT
 
 for script in "${deploy}" "${inspect}" "${bootstrap}" "${bundle}"; do bash -n "${script}"; done
 "${python_bin}" -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "${backup}"
+"${python_bin}" -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "${identity}"
 
 require() { grep -Fq -- "$1" "$2" || { printf 'missing bootstrap security contract: %s (%s)\n' "$1" "$2" >&2; exit 1; }; }
 for script in "${deploy}" "${inspect}" "${bootstrap}"; do
@@ -44,6 +46,10 @@ require 'command_arguments=[redacted]' "${inspect}"
 require 'docker save' "${bundle}"
 require 'docker load' "${bundle}"
 require 'image_archive_sha256' "${deploy}"
+require 'image_content_digest' "${deploy}"
+require '/usr/local/libexec/kitsusync-image-identity' "${deploy}"
+require '/usr/local/libexec/kitsusync-image-identity' "${bootstrap}"
+require 'kitsusync-image-identity' "${bundle}"
 
 for script in "${deploy}" "${inspect}" "${bootstrap}"; do
   if "${script}" unexpected >/dev/null 2>"${tmp}/error"; then
