@@ -289,6 +289,11 @@ if __name__ == "__main__":
         print("ERROR: reconstruction rejected; stopped container cleanup failed: " + error.container_id,
               file=sys.stderr)
         sys.exit(1)
-    except (StateError, OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+    except StateError as error:
+        # StateError messages are fixed classifications and never interpolate
+        # Config, environment, labels, commands, Docker response bodies, or paths.
+        print("ERROR: runtime reconstruction rejected: " + str(error), file=sys.stderr)
+        sys.exit(1)
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
         print("ERROR: runtime reconstruction or verification failed; configuration withheld", file=sys.stderr)
         sys.exit(1)
