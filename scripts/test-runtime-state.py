@@ -216,6 +216,14 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual(message, "state.host_config.SecretSetting")
         self.assertNotIn("private-value", message)
 
+    def test_duplicate_config_mac_is_normalized_but_endpoint_mac_is_preserved(self):
+        source = fixture()
+        endpoint_mac = source["NetworkSettings"]["Networks"]["ks-net"]["MacAddress"]
+        source["Config"]["MacAddress"] = "02:42:ac:11:00:02"
+        state = runtime.runtime_state(source)
+        self.assertEqual(state["config"]["MacAddress"], "")
+        self.assertEqual(state["networks"]["ks-net"]["MacAddress"], endpoint_mac)
+
 
 @unittest.skipUnless(os.environ.get("KITSUSYNC_RUNTIME_DOCKER_TEST") == "1", "Docker integration not requested")
 class DockerRoundTripTests(unittest.TestCase):

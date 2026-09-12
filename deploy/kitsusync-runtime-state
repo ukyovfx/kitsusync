@@ -65,7 +65,10 @@ def normalized_config(value, container_id):
     if config.get("Hostname") in (container_id, container_id[:12]):
         config["Hostname"] = ""
     config.setdefault("NetworkDisabled", False)
-    config.setdefault("MacAddress", "")
+    # Docker may copy the default endpoint MAC into this deprecated duplicate
+    # Config field during create. Endpoint MACs remain strictly preserved and
+    # compared in `networks`, so normalize only the duplicate representation.
+    config["MacAddress"] = ""
     return config
 
 

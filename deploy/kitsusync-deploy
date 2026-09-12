@@ -86,7 +86,9 @@ values = (
     ("open_stdin", boolean(config["OpenStdin"])),
     ("stdin_once", boolean(config["StdinOnce"])),
     ("network_disabled", boolean(config.get("NetworkDisabled", False))),
-    ("mac_address", config.get("MacAddress") or ""),
+    # Per-network MAC addresses are captured by the strict runtime plan. Docker
+    # may rewrite this deprecated duplicate Config field during reconstruction.
+    ("mac_address", ""),
     ("entrypoint", compact(config.get("Entrypoint"))),
     ("cmd", compact(config.get("Cmd"))),
     ("healthcheck", compact(config.get("Healthcheck"))),
