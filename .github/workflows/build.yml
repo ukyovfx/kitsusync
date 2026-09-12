@@ -123,6 +123,9 @@ jobs:
 
       - name: Release hardening contract tests
         run: |
+          python3 scripts/test-startup-validation.py
+          python3 scripts/test-runtime-state.py
+          sudo /usr/bin/python3 scripts/test-restore-state.py
           python3 scripts/test-image-identity.py
           bash scripts/test-release-hardening.sh
           bash scripts/test-release-identity.sh
@@ -193,7 +196,9 @@ jobs:
         env:
           KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
           KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
-        run: bash scripts/test-deployment-behavior.sh
+        run: |
+          bash scripts/test-deployment-behavior.sh
+          KITSUSYNC_RUNTIME_DOCKER_TEST=1 python3 scripts/test-runtime-state.py
 
       - name: Upload provenance and deployment bundle
         uses: actions/upload-artifact@v4
@@ -203,3 +208,13 @@ jobs:
             provenance.txt
             deployment-bundle/
           if-no-files-found: error
+
+  deployment-transaction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Execute actual deployment and rollback on isolated fixtures
+        run: bash scripts/test-deployment-transaction.sh

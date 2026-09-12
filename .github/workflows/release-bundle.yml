@@ -56,6 +56,17 @@ jobs:
       - name: Prepare build environment
         run: cp source/.env.example source/.env.local
 
+      - name: Recovery and deployment contracts
+        working-directory: control
+        run: |
+          python3 scripts/test-startup-validation.py
+          python3 scripts/test-runtime-state.py
+          sudo /usr/bin/python3 scripts/test-restore-state.py
+          python3 scripts/test-image-identity.py
+          bash scripts/test-release-hardening.sh
+          bash scripts/test-production-path-contract.sh
+          bash scripts/test-bootstrap-security.sh
+
       - name: Build exact release source
         working-directory: source
         env:
@@ -88,6 +99,14 @@ jobs:
           mode=normal
           if [[ "$RELEASE_TAG" == v0.4.6 ]]; then mode=legacy-migration; fi
           IMAGE_ID="$image_id" DEPLOYMENT_MODE="$mode" bash scripts/build-deployment-bundle.sh
+
+      - name: Docker runtime reconstruction and deployment behavior
+        working-directory: control
+        env:
+          KITSUSYNC_IMAGE_TAG: ${{ inputs.release_tag }}
+        run: |
+          bash scripts/test-deployment-behavior.sh
+          KITSUSYNC_RUNTIME_DOCKER_TEST=1 python3 scripts/test-runtime-state.py
 
       - uses: actions/upload-artifact@v4
         with:

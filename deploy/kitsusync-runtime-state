@@ -1,0 +1,332 @@
+#!/usr/bin/python3
+"""Recreate a stopped container from a protected same-daemon inspect snapshot.
+
+Config and HostConfig are replayed through Engine's create API, never translated
+through the next release's Compose configuration. No operation starts a container,
+pulls an image, or prints environment/command/label values. Creation warnings clean
+up only the exact newly created stopped container, without deleting volumes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import http.client
+import json
+import os
+import re
+import socket
+import sys
+import urllib.parse
+
+MAX_JSON = 16 * 1024 * 1024
+ID = re.compile(r"^[0-9a-f]{64}$")
+IMAGE = re.compile(r"^sha256:[0-9a-f]{64}$")
+NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
+ENDPOINT_INPUTS = {"IPAMConfig", "Links", "Aliases", "MacAddress", "DriverOpts", "GwPriority"}
+ENDPOINT_OUTPUTS = {"NetworkID", "EndpointID", "Gateway", "IPAddress", "IPPrefixLen",
+                    "IPv6Gateway", "GlobalIPv6Address", "GlobalIPv6PrefixLen", "DNSNames"}
+
+
+class StateError(Exception):
+    pass
+
+
+class CleanupError(StateError):
+    def __init__(self, container_id):
+        self.container_id = container_id
+
+
+def require(condition, message):
+    if not condition:
+        raise StateError(message)
+
+
+def read_json(path):
+    with open(path, "rb") as stream:
+        data = stream.read(MAX_JSON + 1)
+    require(len(data) <= MAX_JSON, "runtime metadata exceeds limit")
+    return json.loads(data)
+
+
+def inspect_object(value):
+    if isinstance(value, list):
+        require(len(value) == 1, "expected one container inspect result")
+        value = value[0]
+    require(isinstance(value, dict), "container inspect is not an object")
+    return value
+
+
+def normalized_config(value, container_id):
+    config = copy.deepcopy(value)
+    # Operator's image reference may change; top-level immutable Image may not.
+    config.pop("Image", None)
+    # Docker generates this hostname when Config.Hostname was empty.
+    if config.get("Hostname") in (container_id, container_id[:12]):
+        config["Hostname"] = ""
+    config.setdefault("NetworkDisabled", False)
+    # Docker may copy the default endpoint MAC into this deprecated duplicate
+    # Config field during create. Endpoint MACs remain strictly preserved and
+    # compared in `networks`, so normalize only the duplicate representation.
+    config["MacAddress"] = ""
+    return config
+
+
+def normalized_host_config(value):
+    host = copy.deepcopy(value)
+    # Docker versions encode the unset/default OOM-kill policy as either null
+    # or false after create. Both mean that OOM killing has not been disabled.
+    host["OomKillDisable"] = bool(host.get("OomKillDisable", False))
+    return host
+
+
+def endpoints(value, container_id, name):
+    result = {}
+    require(isinstance(value, dict) and bool(value), "runtime networks missing")
+    for network, settings in value.items():
+        require(isinstance(settings, dict), "invalid network settings")
+        require(not (set(settings) - ENDPOINT_INPUTS - ENDPOINT_OUTPUTS),
+                "unknown network fields require explicit support")
+        network_id = settings.get("NetworkID", "")
+        require(bool(ID.fullmatch(network_id)), "network immutable identity missing")
+        entry = {key: copy.deepcopy(settings.get(key)) for key in ENDPOINT_INPUTS}
+        entry["NetworkID"] = network_id
+        entry["Aliases"] = sorted(alias for alias in (entry["Aliases"] or [])
+                                  if alias not in (container_id, container_id[:12], name))
+        entry["Links"] = entry["Links"] or []
+        require(not entry["Links"], "linked container endpoints are unsupported")
+        # Preserve observed MAC: inspect cannot distinguish requested/generated
+        # MAC, so dropping it could silently discard explicitly configured state.
+        entry["MacAddress"] = entry["MacAddress"] or ""
+        entry["GwPriority"] = entry["GwPriority"] or 0
+        result[network] = entry
+    return result
+
+
+def runtime_state(value):
+    value = inspect_object(value)
+    container_id = value.get("Id", "")
+    image_id = value.get("Image", "")
+    name = value.get("Name", "").removeprefix("/")
+    require(bool(ID.fullmatch(container_id)), "container ID missing")
+    require(bool(IMAGE.fullmatch(image_id)), "immutable image ID missing")
+    require(bool(NAME.fullmatch(name)), "container name invalid")
+    config, host, mounts = value.get("Config"), value.get("HostConfig"), value.get("Mounts")
+    require(isinstance(config, dict) and isinstance(host, dict) and isinstance(mounts, list),
+            "runtime config, host config, or mounts missing")
+    for key in ("Hostname", "User", "Env", "Cmd", "Entrypoint", "WorkingDir", "Labels"):
+        require(key in config, "required container config field missing: " + key)
+    require(host.get("AutoRemove") is False, "AutoRemove runtime cannot provide rollback")
+    require(not host.get("VolumesFrom") and not host.get("Links"),
+            "dependent container volumes/links unsupported")
+    for key in ("NetworkMode", "PidMode", "IpcMode", "UTSMode"):
+        require(not str(host.get(key, "")).startswith("container:"),
+                "container namespace dependencies unsupported")
+    require(host.get("NetworkMode") not in ("host", "none"), "isolated networks required")
+    require(not host.get("PublishAllPorts"), "dynamically published ports unsupported")
+    for bindings in (host.get("PortBindings") or {}).values():
+        for binding in bindings or []:
+            port = binding.get("HostPort", "")
+            require(port.isdigit() and 1 <= int(port) <= 65535, "ephemeral host port unsupported")
+    destinations = set()
+    volume_requests = {}
+    for bind in host.get("Binds") or []:
+        parts = bind.split(":")
+        require(len(parts) in (2, 3) and parts[0], "unsupported bind encoding")
+        destinations.add(parts[1])
+        if not parts[0].startswith("/"):
+            volume_requests[parts[1]] = (parts[0], len(parts) == 3 and "nocopy" in parts[2].split(","))
+    for mount in host.get("Mounts") or []:
+        destinations.add(mount.get("Target"))
+        if mount.get("Type") == "volume":
+            volume_requests[mount.get("Target")] = (
+                mount.get("Source"), (mount.get("VolumeOptions") or {}).get("NoCopy") is True)
+    destinations.update((host.get("Tmpfs") or {}).keys())
+    for mount in mounts:
+        require(mount.get("Type") in ("bind", "volume", "tmpfs"), "unsupported runtime mount type")
+        require(mount.get("Destination") in destinations, "implicit runtime mount unsupported")
+        if mount["Type"] == "volume":
+            require(bool(mount.get("Name")), "volume immutable name missing")
+            # Docker populates empty named volumes during *create*, even when the
+            # container never starts. A proof probe must not copy image defaults
+            # into live data, or allocate a new anonymous volume under a new name.
+            require(volume_requests.get(mount["Destination"]) == (mount["Name"], True),
+                    "volume must name the existing volume and explicitly disable copy-up")
+    return {"name": name, "image_id": image_id, "config": normalized_config(config, container_id),
+            "host_config": normalized_host_config(host),
+            "mounts": sorted(copy.deepcopy(mounts), key=lambda mount: mount["Destination"]),
+            "networks": endpoints(value.get("NetworkSettings", {}).get("Networks"), container_id, name)}
+
+
+def make_plan(value):
+    value = inspect_object(value)
+    state = runtime_state(value)
+    request = copy.deepcopy(value["Config"])
+    request["Image"] = state["image_id"]
+    request["Hostname"] = state["config"]["Hostname"]
+    request["MacAddress"] = ""
+    request["HostConfig"] = copy.deepcopy(state["host_config"])
+    request["NetworkingConfig"] = {"EndpointsConfig": copy.deepcopy(state["networks"])}
+    return {"schema": 1, "state": state, "request": request}
+
+
+def check_plan(plan):
+    require(isinstance(plan, dict) and plan.get("schema") == 1, "unknown runtime plan schema")
+    state, request = plan.get("state", {}), plan.get("request", {})
+    # Request/state divergence means corruption. Never trust only one side.
+    source = {"Id": "0" * 64, "Name": "/" + state.get("name", ""),
+              "Image": state.get("image_id", ""),
+              "Config": {key: value for key, value in request.items()
+                         if key not in ("HostConfig", "NetworkingConfig")},
+              "HostConfig": request.get("HostConfig"), "Mounts": state.get("mounts"),
+              "NetworkSettings": {"Networks": request.get("NetworkingConfig", {}).get("EndpointsConfig")}}
+    require(source["Config"].get("Image") == source["Image"], "runtime plan image mismatch")
+    require(runtime_state(source) == state, "runtime plan request/state mismatch")
+    return plan
+
+
+class LocalConnection(http.client.HTTPConnection):
+    def __init__(self):
+        super().__init__("localhost", timeout=10)
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect("/var/run/docker.sock")
+
+
+class Engine:
+    def __init__(self):
+        version = self.call("GET", "/version")["ApiVersion"]
+        require(bool(re.fullmatch(r"1\.[0-9]+", version)) and int(version.split(".")[1]) >= 44,
+                "runtime reconstruction requires Docker Engine API 1.44 or later")
+        self.prefix = "/v" + version
+
+    def call(self, method, path, body=None):
+        connection = LocalConnection()
+        try:
+            payload = None if body is None else json.dumps(body, separators=(",", ":")).encode()
+            connection.request(method, path, body=payload, headers={"Content-Type": "application/json"})
+            response = connection.getresponse()
+            data = response.read(MAX_JSON + 1)
+            require(len(data) <= MAX_JSON, "Docker response exceeds limit")
+            # Docker errors may include environment/command values: withhold body.
+            require(200 <= response.status < 300, "Docker runtime operation failed (HTTP %s)" % response.status)
+            return json.loads(data) if data else {}
+        finally:
+            connection.close()
+
+    def request(self, method, path, body=None):
+        return self.call(method, self.prefix + path, body)
+
+
+def validate_dependencies(plan, engine):
+    state = check_plan(plan)["state"]
+    image = engine.request("GET", "/images/" + state["image_id"] + "/json")
+    require(image.get("Id") == state["image_id"], "prior local immutable image missing")
+    for name, network in state["networks"].items():
+        actual = engine.request("GET", "/networks/" + network["NetworkID"])
+        require(actual.get("Id") == network["NetworkID"] and actual.get("Name") == name,
+                "prior network identity changed")
+    for mount in state["mounts"]:
+        if mount["Type"] == "bind":
+            require(os.path.exists(mount["Source"]), "prior bind source absent")
+            require(os.path.realpath(mount["Source"]) == mount["Source"], "prior bind source traverses a symlink")
+        elif mount["Type"] == "volume":
+            actual = engine.request("GET", "/volumes/" + urllib.parse.quote(mount["Name"], safe=""))
+            require(actual.get("Name") == mount["Name"] and actual.get("Driver") == mount.get("Driver")
+                    and actual.get("Mountpoint") == mount["Source"], "prior volume identity changed")
+
+
+def create(plan, engine, name=None):
+    validate_dependencies(plan, engine)
+    name = name or plan["state"]["name"]
+    require(bool(NAME.fullmatch(name)), "container name invalid")
+    result = engine.request("POST", "/containers/create?name=" + urllib.parse.quote(name, safe=""), plan["request"])
+    require(bool(ID.fullmatch(result.get("Id", ""))), "created container ID invalid")
+    if result.get("Warnings"):
+        try:
+            # Non-force deletion refuses a running container. Never delete any
+            # volume, and never address a name that could identify another object.
+            engine.request("DELETE", "/containers/" + result["Id"] + "?force=false&v=false")
+        except (StateError, OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+            raise CleanupError(result["Id"]) from None
+        raise StateError("reconstruction warnings; created container removed")
+    return result["Id"]
+
+
+def compare(plan, value, name=None):
+    expected = copy.deepcopy(check_plan(plan)["state"])
+    if name is not None:
+        require(bool(NAME.fullmatch(name)), "container name invalid")
+        expected["name"] = name
+    actual = runtime_state(value)
+    require(actual == expected, "recreated runtime differs at " + difference_path(expected, actual))
+
+
+def difference_path(expected, actual, path="state"):
+    """Return only structural field names; never include configuration values."""
+    if type(expected) is not type(actual):
+        return path + ".type"
+    if isinstance(expected, dict):
+        for key in sorted(set(expected) | set(actual)):
+            child = path + "." + str(key)
+            if key not in expected or key not in actual:
+                return child
+            if expected[key] != actual[key]:
+                return difference_path(expected[key], actual[key], child)
+    elif isinstance(expected, list):
+        if len(expected) != len(actual):
+            return path + ".length"
+        for index, (left, right) in enumerate(zip(expected, actual)):
+            if left != right:
+                return difference_path(left, right, path + "[]")
+    return path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    plan_parser = commands.add_parser("plan")
+    plan_parser.add_argument("inspect")
+    plan_parser.add_argument("output")
+    commands.add_parser("validate").add_argument("plan")
+    create_parser = commands.add_parser("create")
+    create_parser.add_argument("plan")
+    create_parser.add_argument("name", nargs="?")
+    compare_parser = commands.add_parser("compare")
+    compare_parser.add_argument("plan")
+    compare_parser.add_argument("inspect")
+    compare_parser.add_argument("name", nargs="?")
+    args = parser.parse_args()
+    if args.command == "plan":
+        plan = check_plan(make_plan(read_json(args.inspect)))
+        fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            json.dump(plan, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+    else:
+        plan = check_plan(read_json(args.plan))
+        if args.command == "compare":
+            compare(plan, read_json(args.inspect), args.name)
+        elif args.command == "validate":
+            validate_dependencies(plan, Engine())
+        else:
+            print(create(plan, Engine(), args.name))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except CleanupError as error:
+        print("ERROR: reconstruction rejected; stopped container cleanup failed: " + error.container_id,
+              file=sys.stderr)
+        sys.exit(1)
+    except StateError as error:
+        # StateError messages are fixed classifications and never interpolate
+        # Config, environment, labels, commands, Docker response bodies, or paths.
+        print("ERROR: runtime reconstruction rejected: " + str(error), file=sys.stderr)
+        sys.exit(1)
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+        print("ERROR: runtime reconstruction or verification failed; configuration withheld", file=sys.stderr)
+        sys.exit(1)

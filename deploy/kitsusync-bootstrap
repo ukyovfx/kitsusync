@@ -29,7 +29,7 @@ secure_source() {
 
 [[ -d "${STAGE}" && ! -L "${STAGE}" ]] || die "fixed release stage is unavailable"
 [[ "$(/usr/bin/stat -c '%u:%g:%a' "${STAGE}")" == 0:0:700 ]] || die "release stage must be root-owned mode 0700"
-for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity; do
+for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity kitsusync-runtime-state kitsusync-restore-state; do
   secure_source "${STAGE}/${file}" 600
 done
 
@@ -53,6 +53,10 @@ image_content_digest="$(field image_content_digest)"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-sqlite-backup" | /usr/bin/cut -d' ' -f1)" == "${backup_sha}" ]] || die "staged SQLite backup tool digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-bootstrap" | /usr/bin/cut -d' ' -f1)" == "${bootstrap_sha}" ]] || die "staged bootstrap tool digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-image-identity" | /usr/bin/cut -d' ' -f1)" == "${identity_sha}" ]] || die "staged image identity tool digest mismatch"
+for helper in runtime-state restore-state; do
+  helper_sha="$(field "${helper//-/_}_tool_sha256")"
+  [[ "${helper_sha}" =~ ^[0-9a-f]{64}$ && "$(/usr/bin/sha256sum "${STAGE}/kitsusync-${helper}" | /usr/bin/cut -d' ' -f1)" == "${helper_sha}" ]] || die "staged recovery helper digest mismatch"
+done
 
 mode="$(/usr/bin/tr -d '\r\n' <"${STAGE}/deployment-mode")"
 [[ "${mode}" == normal || "${mode}" == recovery || "${mode}" == legacy-migration ]] || die "unsupported deployment mode"
@@ -90,6 +94,8 @@ export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-inspect" /usr/local/sbin/kitsusync-inspect
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-image-identity" /usr/local/libexec/kitsusync-image-identity
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-runtime-state" /usr/local/libexec/kitsusync-runtime-state
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-restore-state" /usr/local/libexec/kitsusync-restore-state
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/docker-compose.yml" "${CONTROL}/docker-compose.yml"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"

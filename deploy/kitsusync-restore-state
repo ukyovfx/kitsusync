@@ -1,0 +1,212 @@
+#!/usr/bin/python3
+"""Restore a verified rollback backup; caller must first stop all runtime writers."""
+
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import sqlite3
+import stat
+import sys
+import tarfile
+import tempfile
+
+
+class RestoreError(Exception):
+    pass
+
+
+def regular(path):
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise RestoreError("required file is not regular")
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        value = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(block)
+        return value.hexdigest()
+
+
+def safe_directory(path):
+    if path.resolve() != path or not stat.S_ISDIR(path.lstat().st_mode):
+        raise RestoreError("directory path is unsafe")
+
+
+def validate_backup(backup):
+    safe_directory(backup)
+    if (backup.stat().st_uid, backup.stat().st_gid) != (0, 0) or backup.stat().st_mode & 0o077:
+        raise RestoreError("backup directory is not protected")
+    regular(backup / "backup-complete")
+    regular(backup / "persistent-state.sha256")
+    secret = "runtime-secret.key" if (backup / "runtime-secret.key").exists() else "runtime-secret.absent"
+    opposite = "runtime-secret.absent" if secret == "runtime-secret.key" else "runtime-secret.key"
+    if os.path.lexists(backup / opposite):
+        raise RestoreError("backup secret state is ambiguous")
+    required = {"sqlite.db", "conf.toml", "templates.tar", "operator.env", secret}
+    hashes = {}
+    for line in (backup / "persistent-state.sha256").read_text().splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if not match:
+            raise RestoreError("backup manifest is malformed")
+        path = Path(match[2])
+        if path.parent != backup or path.name not in required or path.name in hashes:
+            raise RestoreError("backup manifest inventory is invalid")
+        regular(path)
+        if digest(path) != match[1]:
+            raise RestoreError("backup integrity check failed")
+        hashes[path.name] = match[1]
+    if set(hashes) != required:
+        raise RestoreError("backup manifest is incomplete")
+    if not (backup / "sqlite.db").stat().st_size:
+        raise RestoreError("backup database is empty")
+    if secret.endswith(".absent") and (backup / secret).stat().st_size:
+        raise RestoreError("backup absence marker is invalid")
+    with sqlite3.connect((backup / "sqlite.db").as_uri() + "?immutable=1&mode=ro", uri=True) as db:
+        if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+            raise RestoreError("backup database integrity check failed")
+    with tarfile.open(backup / "templates.tar", "r:") as archive:
+        members = archive.getmembers()
+        names = set()
+        for member in members:
+            path = PurePosixPath(member.name)
+            if (path.is_absolute() or ".." in path.parts or not path.parts
+                    or path.parts[0] != "tpl" or str(path) in names
+                    or not (member.isdir() or member.isfile()) or member.mode & 0o7022):
+                raise RestoreError("template archive contains unsafe entries")
+            names.add(str(path))
+        if not any(m.name.rstrip("/") == "tpl" and m.isdir() for m in members):
+            raise RestoreError("template archive root is missing")
+        for member in members:
+            for parent in PurePosixPath(member.name).parents:
+                if str(parent) == ".":
+                    break
+                if not any(PurePosixPath(item.name) == parent and item.isdir() for item in members):
+                    raise RestoreError("template archive parent is missing")
+    return hashes, secret
+
+
+def write_file(source, target, uid, gid, mode):
+    with source.open("rb") as incoming, target.open("xb") as outgoing:
+        shutil.copyfileobj(incoming, outgoing)
+        outgoing.flush()
+        os.fchown(outgoing.fileno(), uid, gid)
+        os.fchmod(outgoing.fileno(), mode)
+        metadata = os.fstat(outgoing.fileno())
+        if (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)) != (uid, gid, mode):
+            raise RestoreError("restored ownership or mode verification failed")
+        os.fsync(outgoing.fileno())
+
+
+def restore(backup, runtime):
+    if os.geteuid() != 0:
+        raise RestoreError("root execution required")
+    backup, runtime = Path(backup).absolute(), Path(runtime).absolute()
+    hashes, secret = validate_backup(backup)
+    safe_directory(runtime)
+    safe_directory(runtime / "data")
+    if runtime.stat().st_uid != 0 or runtime.stat().st_mode & 0o022:
+        raise RestoreError("runtime root is unsafe")
+    data_metadata = (runtime / "data").stat()
+    if (data_metadata.st_uid, data_metadata.st_gid, stat.S_IMODE(data_metadata.st_mode)) != (10001, 10001, 0o700):
+        raise RestoreError("runtime data directory is unsafe")
+    destinations = [runtime / "data" / name for name in
+                    ("sqlite.db", "runtime-secret.key", "sqlite.db-wal", "sqlite.db-shm")]
+    destinations += [runtime / "conf.toml", runtime / "tpl"]
+    for path in destinations:
+        if os.path.lexists(path):
+            if path.name == "tpl":
+                safe_directory(path)
+                if any(not (stat.S_ISREG(item.lstat().st_mode) or stat.S_ISDIR(item.lstat().st_mode)) for item in path.rglob("*")):
+                    raise RestoreError("runtime templates contain unsafe entries")
+            else:
+                regular(path)
+
+    stages = []
+    promoted = []
+    retained = []
+    compensation_failed = False
+    try:
+        runtime_stage = Path(tempfile.mkdtemp(prefix=".kitsusync-restore-", dir=runtime))
+        stages.append(runtime_stage)
+        data_stage = Path(tempfile.mkdtemp(prefix=".kitsusync-restore-", dir=runtime / "data"))
+        stages.append(data_stage)
+        write_file(backup / "sqlite.db", data_stage / "sqlite.db", 10001, 10001, 0o600)
+        write_file(backup / "conf.toml", runtime_stage / "conf.toml", 0, 0, 0o644)
+        if secret == "runtime-secret.key":
+            write_file(backup / secret, data_stage / secret, 10001, 10001, 0o600)
+        for name, folder in (("sqlite.db", data_stage), ("conf.toml", runtime_stage)):
+            if digest(folder / name) != hashes[name]:
+                raise RestoreError("staged restore integrity failed")
+        if secret == "runtime-secret.key" and digest(data_stage / secret) != hashes[secret]:
+            raise RestoreError("staged secret integrity failed")
+        with tarfile.open(backup / "templates.tar", "r:") as archive:
+            for member in sorted(archive.getmembers(), key=lambda item: (len(PurePosixPath(item.name).parts), item.name)):
+                target = runtime_stage / member.name
+                if member.isdir():
+                    target.mkdir(mode=0o700)
+                else:
+                    with archive.extractfile(member) as incoming, target.open("xb") as outgoing:
+                        shutil.copyfileobj(incoming, outgoing)
+                        outgoing.flush()
+                        os.fchown(outgoing.fileno(), 0, 0)
+                        os.fchmod(outgoing.fileno(), member.mode)
+                        os.fsync(outgoing.fileno())
+            for member in reversed(archive.getmembers()):
+                if member.isdir():
+                    os.chmod(runtime_stage / member.name, member.mode)
+        os.chmod(runtime_stage / "tpl", 0o755)
+        # Retain every replaced entry until the entire promotion succeeds. Sidecars
+        # and an absent secret are removed by retention, never by early unlink.
+        for destination in destinations:
+            folder = data_stage if destination.parent.name == "data" else runtime_stage
+            old = folder / (destination.name + ".previous")
+            if os.path.lexists(destination):
+                os.replace(destination, old)
+                retained.append((old, destination))
+            source = folder / destination.name
+            if source.exists():
+                os.replace(source, destination)
+                promoted.append(destination)
+    except BaseException:
+        # If compensation itself fails, retain the original entries for recovery;
+        # never delete the only remaining copy of a pre-restore state.
+        try:
+            for destination in reversed(promoted):
+                if destination.is_dir():
+                    shutil.rmtree(destination)
+                else:
+                    destination.unlink()
+            for old, destination in reversed(retained):
+                os.replace(old, destination)
+        except BaseException:
+            compensation_failed = True
+            raise RestoreError("restore failed; original entries retained in restore staging directories") from None
+        raise
+    finally:
+        if not compensation_failed:
+            for stage in stages:
+                shutil.rmtree(stage)
+
+
+def main():
+    if os.geteuid() != 0:
+        raise RestoreError("root execution required")
+    if len(sys.argv) == 3 and sys.argv[1] == "verify":
+        validate_backup(Path(sys.argv[2]).absolute())
+        print("persistent-state=verified")
+        return
+    if len(sys.argv) != 3:
+        raise RestoreError("backup and runtime directories are required")
+    restore(sys.argv[1], sys.argv[2])
+    print("persistent-state=restored")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (RestoreError, OSError, ValueError, sqlite3.Error, tarfile.TarError):
+        print("ERROR: persistent state restore failed; runtime must remain stopped", file=sys.stderr)
+        raise SystemExit(1)

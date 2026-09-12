@@ -18,6 +18,8 @@ inspect_sha="${INSPECTION_TOOL_SHA256:-}"
 backup_sha="${SQLITE_BACKUP_TOOL_SHA256:-}"
 bootstrap_sha="${BOOTSTRAP_TOOL_SHA256:-}"
 identity_sha="${IMAGE_IDENTITY_TOOL_SHA256:-}"
+runtime_state_sha="${RUNTIME_STATE_TOOL_SHA256:-}"
+restore_state_sha="${RESTORE_STATE_TOOL_SHA256:-}"
 merge_test="${MERGE_TEST_COMMIT:-}"
 release_commit="${RELEASE_COMMIT:-}"
 output="${PROVENANCE_OUTPUT:-provenance.txt}"
@@ -36,7 +38,7 @@ fi
 if [[ -n "${archive_sha}${image_config_digest}${image_manifest_digest}${image_content_digest}${compose_sha}${deploy_sha}${inspect_sha}${backup_sha}${bootstrap_sha}${identity_sha}${image_ref}" ]]; then
   [[ "${image_ref}" =~ ^kitsusync:(v?[a-zA-Z0-9][a-zA-Z0-9._-]{0,127})$ ]] || { printf 'invalid image reference\n' >&2; exit 1; }
   [[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'invalid portable image identity\n' >&2; exit 1; }
-  for digest in "${archive_sha}" "${compose_sha}" "${deploy_sha}" "${inspect_sha}" "${backup_sha}" "${bootstrap_sha}" "${identity_sha}"; do
+  for digest in "${archive_sha}" "${compose_sha}" "${deploy_sha}" "${inspect_sha}" "${backup_sha}" "${bootstrap_sha}" "${identity_sha}" "${runtime_state_sha}" "${restore_state_sha}"; do
     [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || { printf 'invalid bundle digest\n' >&2; exit 1; }
   done
 fi
@@ -63,4 +65,6 @@ fi
   printf 'sqlite_backup_tool_sha256=%s\n' "${backup_sha}"
   printf 'bootstrap_tool_sha256=%s\n' "${bootstrap_sha}"
   printf 'image_identity_tool_sha256=%s\n' "${identity_sha}"
+  printf 'runtime_state_tool_sha256=%s\n' "${runtime_state_sha}"
+  printf 'restore_state_tool_sha256=%s\n' "${restore_state_sha}"
 } > "${output}"
