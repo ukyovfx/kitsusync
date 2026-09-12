@@ -98,16 +98,31 @@ cat >"${docker_shim}" <<'EOF'
 set -euo pipefail
 if [[ "$1" == inspect && "$2" == --format && "$3" == '{{json .Config}}' ]]; then
   "${REAL_DOCKER_BIN}" "$@" | /usr/bin/python3 -c 'import json, sys; value = json.load(sys.stdin); value.pop("NetworkDisabled", None); json.dump(value, sys.stdout, separators=(",", ":"), sort_keys=True)'
+elif [[ "$1" == inspect && "$2" == --format && "$3" == '{{json .HostConfig}}' ]]; then
+  "${REAL_DOCKER_BIN}" "$@" | /usr/bin/python3 -c 'import json, os, sys; value = json.load(sys.stdin); value["OomKillDisable"] = True if os.environ.get("KITSUSYNC_SHIM_OOM") == "true" else None; json.dump(value, sys.stdout, separators=(",", ":"), sort_keys=True)'
 else
   exec "${REAL_DOCKER_BIN}" "$@"
 fi
 EOF
 chmod 0700 "${docker_shim}"
-KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${docker_shim}" REAL_DOCKER_BIN="${real_docker}" KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${snapshot}"
+KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${real_docker}" KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${snapshot}"
 KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${docker_shim}" REAL_DOCKER_BIN="${real_docker}" KITSUSYNC_DEPLOY_TEST_MODE=snapshot bash "${wrapper}" "${original_id}" "${compat_snapshot}"
 cmp -s "${snapshot}/runtime-config" "${compat_snapshot}/runtime-config"
+cmp -s "${snapshot}/runtime-host-config" "${compat_snapshot}/runtime-host-config"
 grep -Fxq 'network_disabled=false' "${snapshot}/runtime-config"
+/usr/bin/python3 - "${compat_snapshot}/runtime-host-config" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    assert json.load(handle)["OomKillDisable"] is False
+PY
 grep -Fxq 'APP_ENV=production' "${snapshot}/runtime-env"
+if KITSUSYNC_SHIM_OOM=true KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${docker_shim}" REAL_DOCKER_BIN="${real_docker}" KITSUSYNC_DEPLOY_TEST_MODE=compare \
+    bash "${wrapper}" "${original_id}" "${snapshot}" "${image_id}" "${revision}" "${source_id}" "${version}"; then
+  printf 'enabled OOM-kill policy mismatch was accepted\n' >&2
+  exit 1
+fi
 
 docker tag "${image_id}" "${rollback_ref}"
 restored="ks-restored-${suffix}"

@@ -103,7 +103,18 @@ for key, value in values:
   ${DOCKER_BIN} inspect --format '{{range $key, $value := .Config.Labels}}{{printf "%s=%s\n" $key $value}}{{end}}' "${id}" \
     | /usr/bin/grep -Ev '^com\.docker\.compose\.(config-hash|project\.config_files|project\.working_dir)=' \
     | LC_ALL=C /usr/bin/sort >"${target}/runtime-labels"
-  ${DOCKER_BIN} inspect --format '{{json .HostConfig}}' "${id}" | /usr/bin/python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin),sort_keys=True,separators=(",",":")))' >"${target}/runtime-host-config" || return 1
+  ${DOCKER_BIN} inspect --format '{{json .HostConfig}}' "${id}" | /usr/bin/python3 -c '
+import json
+import sys
+
+host_config = json.load(sys.stdin)
+# Docker APIs may report the unset default as either null/missing or false.
+# Keep an explicitly enabled policy distinct while normalizing only that
+# reconstruction-only default difference.
+if host_config.get("OomKillDisable") is None:
+    host_config["OomKillDisable"] = False
+print(json.dumps(host_config, sort_keys=True, separators=(",", ":")))
+' >"${target}/runtime-host-config" || return 1
   ${DOCKER_BIN} inspect --format '{{json .Mounts}}' "${id}" | /usr/bin/python3 -c 'import json,sys; print(json.dumps(sorted(json.load(sys.stdin),key=lambda m:m["Destination"]),sort_keys=True,separators=(",",":")))' >"${target}/runtime-mounts" || return 1
   ${DOCKER_BIN} inspect --format '{{range $name, $network := .NetworkSettings.Networks}}{{printf "%s|%s\n" $name $network.NetworkID}}{{end}}' "${id}" | LC_ALL=C /usr/bin/sort >"${target}/runtime-networks"
   : >"${target}/runtime-network-aliases"
