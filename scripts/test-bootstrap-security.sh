@@ -50,6 +50,12 @@ require 'image_content_digest' "${deploy}"
 require '/usr/local/libexec/kitsusync-image-identity' "${deploy}"
 require '/usr/local/libexec/kitsusync-image-identity' "${bootstrap}"
 require 'kitsusync-image-identity' "${bundle}"
+require '/usr/local/libexec/kitsusync-runtime-state' "${deploy}"
+require '/usr/local/libexec/kitsusync-restore-state' "${deploy}"
+require 'kitsusync-runtime-state' "${bootstrap}"
+require 'kitsusync-restore-state' "${bootstrap}"
+require 'RUNTIME_STATE_TOOL_SHA256' "${bundle}"
+require 'RESTORE_STATE_TOOL_SHA256' "${bundle}"
 
 for script in "${deploy}" "${inspect}" "${bootstrap}"; do
   if "${script}" unexpected >/dev/null 2>"${tmp}/error"; then
@@ -63,7 +69,7 @@ for script in "${deploy}" "${inspect}" "${bootstrap}"; do
 done
 
 backup_line="$(grep -n ': >"${backup_dir}/backup-complete"' "${deploy}" | cut -d: -f1)"
-stop_line="$(grep -n '${DOCKER_BIN} stop' "${deploy}" | cut -d: -f1)"
+stop_line="$(grep -n '^${DOCKER_BIN} stop "${container_id}"' "${deploy}" | cut -d: -f1)"
 load_line="$(grep -n '${DOCKER_BIN} load' "${deploy}" | cut -d: -f1)"
 [[ -n "${backup_line}" && "${backup_line}" -lt "${stop_line}" && "${stop_line}" -lt "${load_line}" ]] || { printf 'backup/mutation ordering is unsafe\n' >&2; exit 1; }
 
