@@ -164,6 +164,7 @@ def make_plan(value):
     request = copy.deepcopy(value["Config"])
     request["Image"] = state["image_id"]
     request["Hostname"] = state["config"]["Hostname"]
+    request["MacAddress"] = ""
     request["HostConfig"] = copy.deepcopy(state["host_config"])
     request["NetworkingConfig"] = {"EndpointsConfig": copy.deepcopy(state["networks"])}
     return {"schema": 1, "state": state, "request": request}

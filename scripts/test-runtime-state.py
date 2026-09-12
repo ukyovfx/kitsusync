@@ -224,6 +224,7 @@ class RuntimeStateTests(unittest.TestCase):
         state = runtime.runtime_state(source)
         self.assertEqual(state["config"]["MacAddress"], "")
         self.assertEqual(state["networks"]["ks-net"]["MacAddress"], endpoint_mac)
+        self.assertEqual(runtime.make_plan(source)["request"]["MacAddress"], "")
 
     def test_unset_oom_kill_policy_matches_docker_false_default(self):
         source = fixture()
