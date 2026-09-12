@@ -209,6 +209,13 @@ class RuntimeStateTests(unittest.TestCase):
                 runtime.create(runtime.make_plan(fixture()), engine)
         self.assertEqual([call.args[0] for call in engine.request.call_args_list], ["POST"])
 
+    def test_difference_diagnostic_withholds_values(self):
+        expected = {"host_config": {"SecretSetting": "first-private-value"}}
+        actual = {"host_config": {"SecretSetting": "second-private-value"}}
+        message = runtime.difference_path(expected, actual)
+        self.assertEqual(message, "state.host_config.SecretSetting")
+        self.assertNotIn("private-value", message)
+
 
 @unittest.skipUnless(os.environ.get("KITSUSYNC_RUNTIME_DOCKER_TEST") == "1", "Docker integration not requested")
 class DockerRoundTripTests(unittest.TestCase):

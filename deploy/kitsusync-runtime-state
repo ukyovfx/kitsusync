@@ -248,7 +248,28 @@ def compare(plan, value, name=None):
     if name is not None:
         require(bool(NAME.fullmatch(name)), "container name invalid")
         expected["name"] = name
-    require(runtime_state(value) == expected, "recreated runtime differs from captured state")
+    actual = runtime_state(value)
+    require(actual == expected, "recreated runtime differs at " + difference_path(expected, actual))
+
+
+def difference_path(expected, actual, path="state"):
+    """Return only structural field names; never include configuration values."""
+    if type(expected) is not type(actual):
+        return path + ".type"
+    if isinstance(expected, dict):
+        for key in sorted(set(expected) | set(actual)):
+            child = path + "." + str(key)
+            if key not in expected or key not in actual:
+                return child
+            if expected[key] != actual[key]:
+                return difference_path(expected[key], actual[key], child)
+    elif isinstance(expected, list):
+        if len(expected) != len(actual):
+            return path + ".length"
+        for index, (left, right) in enumerate(zip(expected, actual)):
+            if left != right:
+                return difference_path(left, right, path + "[]")
+    return path
 
 
 def main():
