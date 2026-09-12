@@ -47,7 +47,8 @@ class RuntimeStateTests(unittest.TestCase):
         original = fixture()
         plan = runtime.make_plan(original)
         self.assertEqual(runtime.check_plan(plan), plan)
-        self.assertEqual(plan["request"]["HostConfig"], original["HostConfig"])
+        self.assertEqual(plan["request"]["HostConfig"],
+                         runtime.normalized_host_config(original["HostConfig"]))
         self.assertEqual(plan["request"]["Image"], original["Image"])
         self.assertEqual(plan["request"]["Env"], original["Config"]["Env"])
         endpoint = plan["request"]["NetworkingConfig"]["EndpointsConfig"]["ks-net"]
@@ -223,6 +224,13 @@ class RuntimeStateTests(unittest.TestCase):
         state = runtime.runtime_state(source)
         self.assertEqual(state["config"]["MacAddress"], "")
         self.assertEqual(state["networks"]["ks-net"]["MacAddress"], endpoint_mac)
+
+    def test_unset_oom_kill_policy_matches_docker_false_default(self):
+        source = fixture()
+        source["HostConfig"]["OomKillDisable"] = None
+        expected = runtime.runtime_state(source)
+        source["HostConfig"]["OomKillDisable"] = False
+        self.assertEqual(runtime.runtime_state(source), expected)
 
 
 @unittest.skipUnless(os.environ.get("KITSUSYNC_RUNTIME_DOCKER_TEST") == "1", "Docker integration not requested")

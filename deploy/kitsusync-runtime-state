@@ -72,6 +72,14 @@ def normalized_config(value, container_id):
     return config
 
 
+def normalized_host_config(value):
+    host = copy.deepcopy(value)
+    # Docker versions encode the unset/default OOM-kill policy as either null
+    # or false after create. Both mean that OOM killing has not been disabled.
+    host["OomKillDisable"] = bool(host.get("OomKillDisable", False))
+    return host
+
+
 def endpoints(value, container_id, name):
     result = {}
     require(isinstance(value, dict) and bool(value), "runtime networks missing")
@@ -145,7 +153,7 @@ def runtime_state(value):
             require(volume_requests.get(mount["Destination"]) == (mount["Name"], True),
                     "volume must name the existing volume and explicitly disable copy-up")
     return {"name": name, "image_id": image_id, "config": normalized_config(config, container_id),
-            "host_config": copy.deepcopy(host),
+            "host_config": normalized_host_config(host),
             "mounts": sorted(copy.deepcopy(mounts), key=lambda mount: mount["Destination"]),
             "networks": endpoints(value.get("NetworkSettings", {}).get("Networks"), container_id, name)}
 
