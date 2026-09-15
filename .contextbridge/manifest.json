@@ -1,0 +1,27 @@
+{
+  "schema_version": 2,
+  "generator": {
+    "name": "contextbridge",
+    "version": "v1.2.1"
+  },
+  "project": {
+    "id": "prj_5e9dba8a-67fe-4676-b0e2-bfc32051f5f1",
+    "name": "kitsusync",
+    "repository": "github.com/ukyovfx/kitsusync",
+    "profile": "core"
+  },
+  "repository_identity": {
+    "id": "repo_de60bec5-70fb-4afc-9fcb-0834549cb66e",
+    "identity": {
+      "host": "github.com",
+      "path": "ukyovfx/kitsusync"
+    },
+    "primary_remote_name": "origin",
+    "canonical_branch": "archive/kitsusync-clean/codex/deploy-rollback-transaction"
+  },
+  "lifecycle": {
+    "created_by_contextbridge": true,
+    "local_only": false
+  },
+  "files": null
+}
