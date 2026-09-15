@@ -1,0 +1,29 @@
+name: Prune old release assets
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  prune:
+    if: ${{ github.event.release.draft == false && github.event.release.prerelease == false }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove assets from older releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CURRENT_RELEASE_ID: ${{ github.event.release.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh api --paginate "repos/${REPO}/releases?per_page=100" \
+            --jq ".[] | select(.id != (${CURRENT_RELEASE_ID} | tonumber)) | .assets[]?.id" \
+            | while IFS= read -r asset_id; do
+                [[ -n "$asset_id" ]] || continue
+                gh api --method DELETE "repos/${REPO}/releases/assets/${asset_id}"
+              done
