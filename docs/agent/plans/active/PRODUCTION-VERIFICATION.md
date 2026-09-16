@@ -26,16 +26,25 @@ An authorized operator must stage the verified bundle, inspect the target runtim
 
 - Upstream CI reports successful `build`, `bundle`, and `deployment-transaction` jobs for hardening commit `cc9dea2`; `master` subsequently advanced to `0d226f5` through merged PR #162.
 - The retained upstream bundle is `kitsusync-v0.4.6-deployment`; it is not a GitHub Release asset and has not been downloaded or deployed here.
-- Local Gitleaks scans pass for the working tree and staged content.
-- Local staged and tracked-tree privacy scans pass after removing the user-specific Docker path from `scripts/validate-v045-rc.ps1`.
+- Current staged Gitleaks and staged/tracked privacy scans pass; earlier tracked-tree scans also passed after removing the user-specific Docker path from `scripts/validate-v045-rc.ps1`.
 - `go vet ./src/...` passes.
 - Go tests cannot run successfully in this environment: CGO-off runs fail on the SQLite stub, and CGO-on runs cannot find `gcc`.
 - Docker/WSL is unavailable, so local Compose validation, image build/load-back, bundle reconstruction, and Docker deployment transaction tests remain unrun locally.
+- The release-hardening, release-identity, bootstrap-security, image-identity, and runtime-state contract tests pass locally; runtime-state skips its Docker round-trip.
+- Restore-state tests require the POSIX-only Python `pwd` module, and Windows startup-validation cases are collected but skipped.
+- The production-path contract still flags a literal `docker compose down -v` safety warning in pre-existing `README.md` content; deployment-behavior tests require Docker and remain unrun.
 
 ## Intentional deferrals
 
 - F02 remains deferred pending production evidence. It is not an implementation task in this plan.
 - PR #162 is merged and is not a blocker for the v0.4.6 deployment path.
+
+## Documentation cleanup task
+
+- Review stale or contradictory operational claims and remove obsolete completion language while preserving durable evidence.
+- Keep `docs/PRODUCTION_BOOTSTRAP.md` as the canonical production deployment procedure and reduce duplicated operational instructions elsewhere by linking or narrowing them.
+- Resolve the production-path contract finding in the pre-existing `README.md` recovery warning only after confirming ownership of that dirty change; do not absorb unrelated user work into a cleanup commit.
+- Review completed plans for archival only after their work is actually complete; this active plan remains unarchivable while off-production verification and the operator-only production gate are incomplete.
 
 ## Next action
 
