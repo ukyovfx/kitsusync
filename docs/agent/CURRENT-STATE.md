@@ -2,7 +2,7 @@
 
 ## Verification basis
 
-Verified against upstream `master` at commit `cc9dea22daba83dbc04503f3d87e5fc402d04bd7` on 2026-09-15.
+Verified against upstream `master` at commit `0d226f5d2d9383ba6275366783c1f82cc66ee596` on 2026-09-16.
 
 ## Confirmed stable areas
 
@@ -12,6 +12,7 @@ Verified against upstream `master` at commit `cc9dea22daba83dbc04503f3d87e5fc402
 - The CI workflow targets `master` and defines Go, Docker Compose configuration, and Docker build checks.
 - The repo-local AI knowledge entry points are present on `master`: `AGENTS.md`, `docs/agent/START-HERE.md`, `docs/agent/CURRENT-STATE.md`, and `docs/agent/plans/`.
 - PR #159 is merged, and v0.4.6 is released from commit `b7b30157cb90c4500e8b00d3c26ac7038f5c8c10`.
+- PR #162 is merged into `master` at commit `0d226f5d2d9383ba6275366783c1f82cc66ee596`.
 - PRs #164, #165, #166, and #167 are merged into `master`; #167 is the latest relevant production deploy/rollback hardening change.
 - Production deployment is governed by the root-installed `kitsusync-deploy` wrapper and a provenance-checked deployment bundle. Direct production Compose execution is unsupported.
 
@@ -26,4 +27,4 @@ Verified against upstream `master` at commit `cc9dea22daba83dbc04503f3d87e5fc402
 - The next production deployment is prepared off-production from the immutable v0.4.6 release artifact and current trusted deployment tooling in `master`.
 - Remaining work is controlled production verification: stage and inspect the bundle, verify the target runtime and rollback evidence, then obtain operator approval before the first production write.
 - F02 remains intentionally deferred pending production evidence; it is not converted into an implementation task.
-- PR #162 is open and is not a production blocker for this deployment path.
+- PR #162 is merged and is not a production blocker for this deployment path.

@@ -6,10 +6,10 @@ Prepare the next KitsuSync production deployment from the immutable v0.4.6 relea
 
 ## Verified basis
 
-- Upstream `master`: `cc9dea22daba83dbc04503f3d87e5fc402d04bd7`
+- Upstream `master`: `0d226f5d2d9383ba6275366783c1f82cc66ee596`
 - Release: `v0.4.6`, source commit `b7b30157cb90c4500e8b00d3c26ac7038f5c8c10`
-- Merged hardening: PRs #164, #165, #166, and #167
-- Latest relevant hardening: PR #167, merged into `master`
+- Merged changes: PR #162 at `0d226f5d2d9383ba6275366783c1f82cc66ee596`, plus PRs #164, #165, #166, and #167
+- Latest relevant production deploy/rollback hardening: PR #167 at `cc9dea22daba83dbc04503f3d87e5fc402d04bd7`, merged into `master`
 
 ## Required off-production work
 
@@ -24,7 +24,7 @@ An authorized operator must stage the verified bundle, inspect the target runtim
 
 ## Verification status
 
-- Upstream `master` CI reports successful `build`, `bundle`, and `deployment-transaction` jobs for `cc9dea2`.
+- Upstream CI reports successful `build`, `bundle`, and `deployment-transaction` jobs for hardening commit `cc9dea2`; `master` subsequently advanced to `0d226f5` through merged PR #162.
 - The retained upstream bundle is `kitsusync-v0.4.6-deployment`; it is not a GitHub Release asset and has not been downloaded or deployed here.
 - Local Gitleaks scans pass for the working tree and staged content.
 - Local staged and tracked-tree privacy scans pass after removing the user-specific Docker path from `scripts/validate-v045-rc.ps1`.
@@ -35,7 +35,7 @@ An authorized operator must stage the verified bundle, inspect the target runtim
 ## Intentional deferrals
 
 - F02 remains deferred pending production evidence. It is not an implementation task in this plan.
-- PR #162 remains open and is not a blocker for the v0.4.6 deployment path.
+- PR #162 is merged and is not a blocker for the v0.4.6 deployment path.
 
 ## Next action
 
