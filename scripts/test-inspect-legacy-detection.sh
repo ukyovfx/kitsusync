@@ -7,7 +7,7 @@ bash -n "${inspect}"
 for contract in \
   'docker compose --project-name kitsusync' \
   'compose_ids' \
-  'deployment_mode == legacy-migration' \
+  'deployment_mode}" == legacy-migration' \
   'docker ps -q --no-trunc --filter label=com.docker.compose.project=kitsusync --filter label=com.docker.compose.service=app --filter status=running' \
   'legacy migration requires exactly one running prior container' \
   'candidate_name} == /kitsusync-app-1' \
@@ -21,6 +21,6 @@ for contract in \
   'duplicate retained service containers require operator preflight'; do
   grep -Fq -- "${contract}" "${inspect}" || { printf 'missing inspect detector contract: %s\n' "${contract}" >&2; exit 1; }
 done
-grep -Fq 'deployment_mode} == normal ||' "${inspect}"
-grep -Fq 'deployment_mode} == recovery ||' "${inspect}"
+grep -Fq 'deployment_mode}" == normal ||' "${inspect}"
+grep -Fq 'deployment_mode}" == recovery ||' "${inspect}"
 printf 'inspect-legacy-detector-contract=PASS\n'
