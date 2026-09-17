@@ -45,7 +45,7 @@ EOF
 chmod 700 "${TMP}/curl"
 cat >"${TMP}/runtime-state.py" <<'EOF'
 import sys
-assert sys.argv[-2] in ("plan", "validate")
+assert sys.argv[1] in ("plan", "validate")
 EOF
 
 run_case() {
