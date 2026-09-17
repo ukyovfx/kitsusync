@@ -131,6 +131,7 @@ jobs:
           bash scripts/test-release-identity.sh
           bash scripts/test-production-path-contract.sh
           bash scripts/test-bootstrap-security.sh
+          bash scripts/test-deploy-legacy-detection.sh
 
       - name: Docker Compose build app
         env:
