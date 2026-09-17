@@ -16,6 +16,7 @@ cd /
 
 compose_file=/etc/kitsusync-deploy/docker-compose.yml
 env_file=/etc/kitsusync-deploy/.env.local
+deployment_mode_file=/etc/kitsusync-deploy/deployment-mode
 [[ -f "${compose_file}" && ! -L "${compose_file}" && -f "${env_file}" && ! -L "${env_file}" ]] || die "installed deployment inputs are unavailable"
 [[ -d /etc/kitsusync-deploy && ! -L /etc/kitsusync-deploy && "$(/usr/bin/stat -c '%u:%g:%a' /etc/kitsusync-deploy)" == 0:0:700 ]] || die "installed control directory is unsafe"
 provenance=/etc/kitsusync-deploy/provenance
@@ -24,11 +25,45 @@ for file in "${compose_file}" "${env_file}" "${provenance}"; do
   [[ "$(/usr/bin/stat -c '%u:%g:%a' "${file}")" == 0:0:600 ]] || die "installed deployment input ownership or mode is unsafe"
 done
 ! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "${env_file}" || die "protected environment contains Docker/Compose control variables"
+[[ -f "${deployment_mode_file}" && ! -L "${deployment_mode_file}" && "$(/usr/bin/stat -c '%u:%g:%a' "${deployment_mode_file}")" == 0:0:600 ]] || die "installed deployment mode is unavailable or unsafe"
+deployment_mode="$(/usr/bin/tr -d '\r\n' <"${deployment_mode_file}")"
+[[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery || "${deployment_mode}" == legacy-migration ]] || die "installed deployment mode is invalid"
 version="$(/usr/bin/sed -n 's/^version=//p' "${provenance}" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r')"
 [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "installed version identity is invalid"
 export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 
-container_id="$(/usr/bin/docker compose --project-name kitsusync --env-file "${env_file}" -f "${compose_file}" ps -q app)"
+container_id=""
+compose_status=0
+container_id="$(/usr/bin/docker compose --project-name kitsusync --env-file "${env_file}" -f "${compose_file}" ps -q app)" || compose_status=$?
+(( compose_status == 0 )) || die "KitsuSync Compose discovery failed"
+compose_ids=()
+mapfile -t compose_ids < <(printf '%s\n' "${container_id}" | /usr/bin/sed '/^[[:space:]]*$/d')
+if [[ "${#compose_ids[@]}" -gt 1 ]]; then
+  die "duplicate retained service containers require operator preflight"
+elif [[ "${#compose_ids[@]}" -eq 1 ]]; then
+  container_id="${compose_ids[0]}"
+elif [[ "${deployment_mode}" == legacy-migration ]]; then
+  mapfile -t direct_ids < <(/usr/bin/docker ps -q --no-trunc --filter label=com.docker.compose.project=kitsusync --filter label=com.docker.compose.service=app --filter status=running)
+  [[ "${#direct_ids[@]}" -eq 1 ]] || die "legacy migration requires exactly one running prior container"
+  candidate_id="${direct_ids[0]}"
+  candidate_name="$(/usr/bin/docker inspect --format '{{.Name}}' "${candidate_id}")"
+  candidate_project="$(/usr/bin/docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${candidate_id}")"
+  candidate_service="$(/usr/bin/docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "${candidate_id}")"
+  candidate_running="$(/usr/bin/docker inspect --format '{{.State.Running}}' "${candidate_id}")"
+  candidate_image="$(/usr/bin/docker inspect --format '{{.Image}}' "${candidate_id}")"
+  [[ "${candidate_name}" == /kitsusync-app-1 && "${candidate_project}" == kitsusync && "${candidate_service}" == app && "${candidate_running}" == true ]] || die "legacy prior container identity is invalid"
+  [[ "${candidate_image}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "legacy prior image identity is unavailable"
+  candidate_ready="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
+  [[ "${candidate_ready}" == 404 ]] || die "legacy migration is allowed only for the expected pre-/ready runtime"
+  runtime_check="$(/usr/bin/mktemp -d)"
+  trap '/usr/bin/rm -rf -- "${runtime_check}"' EXIT
+  /usr/bin/docker inspect "${candidate_id}" >"${runtime_check}/inspect.json"
+  /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 /usr/local/libexec/kitsusync-runtime-state plan "${runtime_check}/inspect.json" "${runtime_check}/plan.json" >/dev/null
+  /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 /usr/local/libexec/kitsusync-runtime-state validate "${runtime_check}/plan.json" >/dev/null
+  /usr/bin/rm -rf -- "${runtime_check}"
+  trap - EXIT
+  container_id="${candidate_id}"
+fi
 [[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
 
 entrypoint_executable="$(/usr/bin/docker inspect --format '{{if .Config.Entrypoint}}{{index .Config.Entrypoint 0}}{{end}}' "${container_id}")"
