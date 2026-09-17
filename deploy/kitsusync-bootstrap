@@ -11,6 +11,13 @@ STATE=/var/lib/kitsusync-deploy
 BACKUPS=/var/backups/kitsusync-deploy
 RUNTIME=/home/ukyo_vfx/kitsusync
 SUDOERS=/etc/sudoers.d/kitsusync-deploy
+DOCKER_BIN=/usr/bin/docker
+CURL_BIN=/usr/bin/curl
+PYTHON_BIN=/usr/bin/python3
+RUNTIME_STATE=/usr/local/libexec/kitsusync-runtime-state
+PROJECT_NAME=kitsusync
+SERVICE=app
+EXPECTED_CONTAINER_NAME=/kitsusync-app-1
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$#" -eq 0 ]] || die "arguments are not accepted"
@@ -120,12 +127,48 @@ done
 /usr/bin/find "${RUNTIME}/tpl" -type d -exec /usr/bin/chmod 0755 {} +
 /usr/bin/find "${RUNTIME}/tpl" -type f -exec /usr/bin/chmod 0644 {} +
 
+resolve_legacy_prior_container() {
+  local current_id compose_status candidate_count candidate name project service running image_id ready_code runtime_check
+  local -a candidates=() compose_candidates=()
+  current_id=""
+  compose_status=0
+  current_id="$(${DOCKER_BIN} compose --project-name "${PROJECT_NAME}" --env-file "${CONTROL}/.env.local" -f "${CONTROL}/docker-compose.yml" ps -q "${SERVICE}")" || compose_status=$?
+  (( compose_status == 0 )) || die "legacy prior container Compose discovery failed"
+  mapfile -t compose_candidates < <(printf '%s\n' "${current_id}" | /usr/bin/sed '/^[[:space:]]*$/d')
+  if [[ "${#compose_candidates[@]}" -gt 1 ]]; then
+    die "legacy migration found duplicate Compose service containers"
+  elif [[ "${#compose_candidates[@]}" -eq 1 ]]; then
+    current_id="${compose_candidates[0]}"
+  else
+    mapfile -t candidates < <("${DOCKER_BIN}" ps -q --no-trunc --filter "label=com.docker.compose.project=${PROJECT_NAME}" --filter "label=com.docker.compose.service=${SERVICE}" --filter status=running)
+    candidate_count="${#candidates[@]}"
+    [[ "${candidate_count}" -eq 1 ]] || die "legacy migration requires exactly one running prior container"
+    candidate="${candidates[0]}"
+    name="$(${DOCKER_BIN} inspect --format '{{.Name}}' "${candidate}")"
+    project="$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${candidate}")"
+    service="$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "${candidate}")"
+    running="$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${candidate}")"
+    image_id="$(${DOCKER_BIN} inspect --format '{{.Image}}' "${candidate}")"
+    [[ "${name}" == "${EXPECTED_CONTAINER_NAME}" && "${project}" == "${PROJECT_NAME}" && "${service}" == "${SERVICE}" && "${running}" == true ]] || die "legacy prior container identity is invalid"
+    [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "legacy prior image identity is unavailable"
+    ready_code="$(${CURL_BIN} --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
+    [[ "${ready_code}" == 404 ]] || die "legacy migration is allowed only for the expected pre-/ready runtime"
+    runtime_check="$(/usr/bin/mktemp -d)"
+    "${DOCKER_BIN}" inspect "${candidate}" >"${runtime_check}/inspect.json" || { /usr/bin/rm -rf "${runtime_check}"; die "legacy prior runtime inspection failed"; }
+    /usr/bin/env -i PATH=/usr/bin:/bin "${PYTHON_BIN}" "${RUNTIME_STATE}" plan "${runtime_check}/inspect.json" "${runtime_check}/plan.json" >/dev/null || { /usr/bin/rm -rf "${runtime_check}"; die "legacy prior runtime plan failed"; }
+    /usr/bin/env -i PATH=/usr/bin:/bin "${PYTHON_BIN}" "${RUNTIME_STATE}" validate "${runtime_check}/plan.json" >/dev/null || { /usr/bin/rm -rf "${runtime_check}"; die "legacy prior runtime validation failed"; }
+    /usr/bin/rm -rf "${runtime_check}"
+    current_id="${candidate}"
+  fi
+  printf '%s\n' "${current_id}"
+}
+
 if [[ "${mode}" == legacy-migration ]]; then
-  current_id="$(/usr/bin/docker compose --project-name kitsusync --env-file "${CONTROL}/.env.local" -f "${CONTROL}/docker-compose.yml" ps -q app)"
+  current_id="$(resolve_legacy_prior_container)"
   [[ -n "${current_id}" ]] || die "legacy migration requires a running prior container"
-  current_image_id="$(/usr/bin/docker inspect --format '{{.Image}}' "${current_id}")"
+  current_image_id="$(${DOCKER_BIN} inspect --format '{{.Image}}' "${current_id}")"
   [[ "${current_image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "legacy prior image identity is unavailable"
-  ready_code="$(/usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
+  ready_code="$(${CURL_BIN} --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
   [[ "${ready_code}" == 404 ]] || die "legacy migration is allowed only for the expected pre-/ready runtime"
   legacy_tmp="$(/usr/bin/mktemp)"
   printf '%s\n' "${current_image_id}" >"${legacy_tmp}"
