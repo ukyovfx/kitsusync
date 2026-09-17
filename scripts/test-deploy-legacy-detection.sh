@@ -63,7 +63,7 @@ run_case() {
     [[ "${expected}" == reject ]] || { echo "unexpected rejection: ${scenario}" >&2; exit 1; }
     return
   }
-  [[ "${expected}" == accept && ( "${scenario}" == compose-valid && "${output}" == compose-id || "${scenario}" != compose-valid && "${output}" == candidate-id ) ]] || { echo "unexpected acceptance: ${scenario}: ${output}" >&2; exit 1; }
+  [[ "${expected}" == accept && ( "${scenario}" == compose-valid && "${output}" == compose:compose-id || "${scenario}" != compose-valid && "${output}" == direct:candidate-id ) ]] || { echo "unexpected acceptance: ${scenario}: ${output}" >&2; exit 1; }
 }
 
 run_case valid accept

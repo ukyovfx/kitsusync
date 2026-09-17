@@ -122,7 +122,12 @@ cp "$work/operator.env" "$work/.env.local"
 docker network create "$extra_network" >/dev/null
 # Reproduce the recovered legacy runtime precisely: it carries the KitsuSync
 # project/service labels but not Compose's config bookkeeping.
-docker network create kitsusync_default >/dev/null
+# Give the disposable network the metadata Compose expects while keeping the
+# recovered container itself deliberately incomplete (no config-hash).
+docker network create \
+  --label com.docker.compose.network=default \
+  --label com.docker.compose.project=kitsusync \
+  kitsusync_default >/dev/null
 prior_id="$(docker run -d --name kitsusync-app-1 \
   --network kitsusync_default --network-alias kitsusync-app \
   --restart on-failure:3 \

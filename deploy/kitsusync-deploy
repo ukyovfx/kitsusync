@@ -330,7 +330,7 @@ resolve_legacy_prior_container() {
   if [[ "${#compose_ids[@]}" -gt 1 ]]; then
     die "duplicate retained service containers require operator preflight"
   elif [[ "${#compose_ids[@]}" -eq 1 ]]; then
-    printf '%s\n' "${compose_ids[0]}"
+    printf 'compose:%s\n' "${compose_ids[0]}"
     return 0
   fi
 
@@ -354,11 +354,17 @@ resolve_legacy_prior_container() {
     die "legacy prior runtime validation failed"
   fi
   /usr/bin/rm -rf -- "${runtime_check}"
-  printf '%s\n' "${candidate_id}"
+  printf 'direct:%s\n' "${candidate_id}"
 }
 
+legacy_direct_fallback=false
 if [[ "${deployment_mode}" == legacy-migration ]]; then
-  container_id="$(resolve_legacy_prior_container)"
+  resolved_container="$(resolve_legacy_prior_container)"
+  case "${resolved_container}" in
+    compose:*) container_id="${resolved_container#compose:}" ;;
+    direct:*) container_id="${resolved_container#direct:}"; legacy_direct_fallback=true ;;
+    *) die "legacy prior container resolution is invalid" ;;
+  esac
 else
   container_id="$(compose ps -q "${SERVICE}")"
 fi
@@ -534,6 +540,13 @@ if [[ -f "${RUNTIME_ROOT}/data/runtime-secret.key" && ! -L "${RUNTIME_ROOT}/data
 write_persistent_manifest
 restart_prior_and_die() { die "$1"; }
 /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${RESTORE_STATE}" verify "${backup_dir}"
+if [[ "${legacy_direct_fallback}" == true ]]; then
+  # Compose cannot replace a recovered container that lacks its config-hash.
+  # The complete backup and reconstruction probe above make this removal
+  # recoverable; mark the transaction replacing before removing the name.
+  transaction_phase=replacing
+  ${DOCKER_BIN} rm "${container_id}" >/dev/null || die "recovered legacy container could not be removed after backup"
+fi
 if ! ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null; then restart_prior_and_die "approved image load failed"; fi
 loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"; archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || restart_prior_and_die "loaded image ID is not an approved archive content identity"
 loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || restart_prior_and_die "loaded image content identity cannot be verified"
