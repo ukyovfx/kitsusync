@@ -26,9 +26,11 @@ work="$(mktemp -d)"
 legacy_ref="kitsusync:fixture-legacy-$$"
 extra_network="kitsusync-fixture-extra-$$"
 source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
+stage=fixture-setup
 cleanup() {
   local ids result=$?
   if [[ "$result" -ne 0 ]]; then
+    printf 'deployment-transaction-failed-stage=%s\n' "$stage" >&2
     for report in "$work/failed-deploy.log" "$work/successful-deploy.log"; do
       [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|rollback=)' "$report" >&2 || true
     done
@@ -115,44 +117,36 @@ os.chown(sys.argv[1],10001,10001); os.chmod(sys.argv[1],0o600)
 PY
 mkdir "$work/extra"
 chmod 0755 "$work" "$work/extra"
+cp "$root/docker-compose.yml" "$work/compose.yml"
+cp "$work/operator.env" "$work/.env.local"
 docker network create "$extra_network" >/dev/null
-cat >"$work/legacy.yml" <<YAML
-services:
-  app:
-    image: $legacy_ref
-    command: ["python", "/fixture.py", "--legacy"]
-    user: "10001:10001"
-    restart: on-failure:3
-    environment:
-      APP_ENV: production
-      OLD_ONLY: preserved
-    labels:
-      kitsusync.fixture-contract: legacy
-    volumes:
-      - $runtime/conf.toml:/app/conf.toml
-      - $runtime/tpl:/app/tpl:ro
-      - $runtime/data:/app/data
-      - $work/extra:/legacy-extra:ro
-    ports:
-      - "127.0.0.1:8090:8090"
-    networks:
-      default:
-        aliases: [legacy-alias]
-      extra:
-        aliases: [second-alias]
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8090/health"]
-      interval: 1s
-      timeout: 1s
-      start_period: 1s
-      retries: 5
-networks:
-  extra:
-    external: true
-    name: $extra_network
-YAML
-docker compose -p kitsusync -f "$work/legacy.yml" up -d >/dev/null
-prior_id="$(docker compose -p kitsusync -f "$work/legacy.yml" ps -q app)"
+# Reproduce the recovered legacy runtime precisely: it carries the KitsuSync
+# project/service labels but not Compose's config bookkeeping.
+# Give the disposable network the metadata Compose expects while keeping the
+# recovered container itself deliberately incomplete (no config-hash).
+docker network create \
+  --label com.docker.compose.network=default \
+  --label com.docker.compose.project=kitsusync \
+  kitsusync_default >/dev/null
+prior_id="$(docker run -d --name kitsusync-app-1 \
+  --network kitsusync_default --network-alias kitsusync-app \
+  --restart on-failure:3 \
+  --env APP_ENV=production --env OLD_ONLY=preserved \
+  --label com.docker.compose.project=kitsusync \
+  --label com.docker.compose.service=app \
+  --label kitsusync.fixture-contract=legacy \
+  --mount "type=bind,src=$runtime/conf.toml,dst=/app/conf.toml,readonly" \
+  --mount "type=bind,src=$runtime/tpl,dst=/app/tpl,readonly" \
+  --mount "type=bind,src=$runtime/data,dst=/app/data" \
+  --mount "type=bind,src=$work/extra,dst=/legacy-extra,readonly" \
+  --publish 127.0.0.1:8090:8090 \
+  --health-cmd 'curl -fsS http://localhost:8090/health' \
+  --health-interval 1s --health-timeout 1s --health-start-period 1s --health-retries 5 \
+  "$legacy_ref" python /fixture.py --legacy)"
+docker network connect --alias second-alias "$extra_network" "$prior_id"
+[[ -z "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$prior_id")" ]]
+compose_discovery="$(KITSUSYNC_APP_VERSION=0.4.6 KITSUSYNC_IMAGE_TAG=v0.4.6 KITSUSYNC_COMMIT_SHA="$source_commit" KITSUSYNC_BUILD_SOURCE_ID="$source_commit" KITSUSYNC_IMAGE_REVISION="$source_commit" KITSUSYNC_WORKTREE_DIRTY=false docker compose -p kitsusync --env-file "$work/operator.env" -f "$work/compose.yml" ps -q app)"
+[[ -z "${compose_discovery}" ]]
 for attempt in $(seq 1 30); do
   [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prior_id")" == healthy ]] && break
   sleep 1
@@ -180,30 +174,42 @@ sudo install -d -o root -g root -m 0755 /usr/local/libexec
 for path in "${tools[@]}"; do sudo install -o root -g root -m 0700 "$work/bundle/$(basename "$path")" "$path"; done
 
 sudo touch "$runtime/data/fail-target"
+stage=failed-target-deploy
 if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$work/failed-deploy.log" 2>&1; then
   printf 'wrong target readiness identity incorrectly passed\n' >&2; exit 1
 fi
+stage=rollback-contract
 grep -Fq 'runtime validation failed: check=readiness_identity' "$work/failed-deploy.log"
 grep -Fxq 'rollback=verified' "$work/failed-deploy.log"
+stage=rollback-restored-container
 restored_id="$(docker ps -q --filter name='^/kitsusync-app-1$')"
 [[ -n "$restored_id" && "$restored_id" != "$prior_id" ]]
+stage=rollback-image
 [[ "$(docker inspect -f '{{.Image}}' "$restored_id")" == "$prior_image" ]]
+stage=rollback-runtime-plan
 docker inspect "$restored_id" >"$work/restored-inspect.json"
 python3 "$root/deploy/kitsusync-runtime-state" compare "$work/prior-plan.json" "$work/restored-inspect.json"
+stage=rollback-secret
 sudo cmp -s "$work/key" "$runtime/data/runtime-secret.key"
+stage=rollback-sqlite
 sudo python3 - "$runtime/data/sqlite.db" <<'PY'
 import sqlite3, sys
 with sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True) as db:
     assert db.execute('SELECT value FROM evidence').fetchall() == [('original',)]
 PY
+stage=rollback-readiness
 [[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/ready)" == 404 ]]
+stage=rollback-legacy-image
 sudo test -f /etc/kitsusync-deploy/legacy-image.id
+stage=rollback-mode
 [[ "$(sudo cat /etc/kitsusync-deploy/deployment-mode)" == legacy-migration ]]
 
 # The restored old state can subsequently migrate successfully. The fixture's
 # initial setup_required interval must be awaited, never accepted as success.
 sudo rm -f -- "$runtime/data/fail-target"
+stage=successful-deploy
 sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$work/successful-deploy.log" 2>&1
+stage=successful-contract
 grep -Fq 'KitsuSync deployment completed: version=0.4.6' "$work/successful-deploy.log"
 [[ "$(sudo cat /etc/kitsusync-deploy/deployment-mode)" == normal ]]
 sudo test ! -e /etc/kitsusync-deploy/legacy-image.id

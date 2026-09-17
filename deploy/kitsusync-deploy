@@ -25,6 +25,7 @@ RUNTIME_STATE=/usr/local/libexec/kitsusync-runtime-state
 RESTORE_STATE=/usr/local/libexec/kitsusync-restore-state
 PROJECT_NAME=kitsusync
 SERVICE=app
+EXPECTED_CONTAINER_NAME=/kitsusync-app-1
 
 die() { printf 'ERROR: %s\n' "$*" >&2; /usr/bin/logger -t kitsusync-deploy -- "failed: $*" 2>/dev/null || true; exit 1; }
 log() { /usr/bin/logger -t kitsusync-deploy -- "$*" 2>/dev/null || true; }
@@ -319,7 +320,55 @@ export KITSUSYNC_IMAGE_REVISION="${source_commit}"
 export KITSUSYNC_WORKTREE_DIRTY=false
 
 compose() { /usr/bin/docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"; }
-container_id="$(compose ps -q "${SERVICE}")"; [[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
+resolve_legacy_prior_container() {
+  local compose_output compose_status candidate_id candidate_name candidate_project candidate_service candidate_running candidate_image candidate_ready runtime_check
+  local -a compose_ids=() direct_ids=()
+  compose_status=0
+  compose_output="$(compose ps -q "${SERVICE}")" || compose_status=$?
+  (( compose_status == 0 )) || die "KitsuSync Compose discovery failed"
+  mapfile -t compose_ids < <(printf '%s\n' "${compose_output}" | /usr/bin/sed '/^[[:space:]]*$/d')
+  if [[ "${#compose_ids[@]}" -gt 1 ]]; then
+    die "duplicate retained service containers require operator preflight"
+  elif [[ "${#compose_ids[@]}" -eq 1 ]]; then
+    printf 'compose:%s\n' "${compose_ids[0]}"
+    return 0
+  fi
+
+  mapfile -t direct_ids < <(${DOCKER_BIN} ps -q --no-trunc --filter "label=com.docker.compose.project=${PROJECT_NAME}" --filter "label=com.docker.compose.service=${SERVICE}" --filter status=running)
+  [[ "${#direct_ids[@]}" -eq 1 ]] || die "legacy migration requires exactly one running prior container"
+  candidate_id="${direct_ids[0]}"
+  candidate_name="$(${DOCKER_BIN} inspect --format '{{.Name}}' "${candidate_id}")"
+  candidate_project="$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${candidate_id}")"
+  candidate_service="$(${DOCKER_BIN} inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "${candidate_id}")"
+  candidate_running="$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${candidate_id}")"
+  candidate_image="$(${DOCKER_BIN} inspect --format '{{.Image}}' "${candidate_id}")"
+  [[ "${candidate_name}" == "${EXPECTED_CONTAINER_NAME}" && "${candidate_project}" == "${PROJECT_NAME}" && "${candidate_service}" == "${SERVICE}" && "${candidate_running}" == true ]] || die "legacy prior container identity is invalid"
+  [[ "${candidate_image}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "legacy prior image identity is unavailable"
+  candidate_ready="$("${CURL_BIN}" --silent --output /dev/null --write-out '%{http_code}' --max-time 5 http://127.0.0.1:8090/ready || true)"
+  [[ "${candidate_ready}" == 404 ]] || die "legacy migration is allowed only for the expected pre-/ready runtime"
+  runtime_check="$(/usr/bin/mktemp -d)"
+  if ! ${DOCKER_BIN} inspect "${candidate_id}" >"${runtime_check}/inspect.json" \
+    || ! runtime_state plan "${runtime_check}/inspect.json" "${runtime_check}/plan.json" >/dev/null \
+    || ! runtime_state validate "${runtime_check}/plan.json" >/dev/null; then
+    /usr/bin/rm -rf -- "${runtime_check}"
+    die "legacy prior runtime validation failed"
+  fi
+  /usr/bin/rm -rf -- "${runtime_check}"
+  printf 'direct:%s\n' "${candidate_id}"
+}
+
+legacy_direct_fallback=false
+if [[ "${deployment_mode}" == legacy-migration ]]; then
+  resolved_container="$(resolve_legacy_prior_container)"
+  case "${resolved_container}" in
+    compose:*) container_id="${resolved_container#compose:}" ;;
+    direct:*) container_id="${resolved_container#direct:}"; legacy_direct_fallback=true ;;
+    *) die "legacy prior container resolution is invalid" ;;
+  esac
+else
+  container_id="$(compose ps -q "${SERVICE}")"
+fi
+[[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
 [[ "${container_id}" =~ ^[0-9a-f]{64}$ ]] || die "multiple or invalid runtime containers"
 service_ids="$(${DOCKER_BIN} ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT_NAME}" --filter "label=com.docker.compose.service=${SERVICE}")"
 [[ "${service_ids}" == "${container_id}" ]] || die "duplicate retained service containers require operator preflight"
@@ -491,6 +540,13 @@ if [[ -f "${RUNTIME_ROOT}/data/runtime-secret.key" && ! -L "${RUNTIME_ROOT}/data
 write_persistent_manifest
 restart_prior_and_die() { die "$1"; }
 /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${RESTORE_STATE}" verify "${backup_dir}"
+if [[ "${legacy_direct_fallback}" == true ]]; then
+  # Compose cannot replace a recovered container that lacks its config-hash.
+  # The complete backup and reconstruction probe above make this removal
+  # recoverable; mark the transaction replacing before removing the name.
+  transaction_phase=replacing
+  ${DOCKER_BIN} rm "${container_id}" >/dev/null || die "recovered legacy container could not be removed after backup"
+fi
 if ! ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null; then restart_prior_and_die "approved image load failed"; fi
 loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"; archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || restart_prior_and_die "loaded image ID is not an approved archive content identity"
 loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || restart_prior_and_die "loaded image content identity cannot be verified"

@@ -68,6 +68,7 @@ jobs:
           bash scripts/test-bootstrap-security.sh
           bash scripts/test-bootstrap-legacy-detection.sh
           bash scripts/test-inspect-legacy-detection.sh
+          bash scripts/test-deploy-legacy-detection.sh
 
       - name: Build exact release source
         working-directory: source
