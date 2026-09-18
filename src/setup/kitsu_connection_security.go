@@ -277,10 +277,10 @@ func verifyKitsuZou(ctx context.Context, model KitsuURLModel) (KitsuURLModel, er
 		return KitsuURLModel{}, connectionError("zou_identity_mismatch")
 	}
 	var status struct {
-		Name            string `json:"name"`
-		DatabaseUp      *bool  `json:"database-up"`
-		EventStreamUp   *bool  `json:"event-stream-up"`
-		JobQueueUp      *bool  `json:"job-queue-up"`
+		Name          string `json:"name"`
+		DatabaseUp    *bool  `json:"database-up"`
+		EventStreamUp *bool  `json:"event-stream-up"`
+
 		KeyValueStoreUp *bool  `json:"key-value-store-up"`
 		Version         string `json:"version"`
 	}
