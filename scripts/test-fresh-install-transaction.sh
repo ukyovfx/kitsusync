@@ -153,6 +153,8 @@ fi
 grep -Fq 'fresh install has already completed' "${work}/completed-bootstrap.log"
 
 stage=subsequent-normal-upgrade
+sudo chown 10001:10001 "${runtime}/data/sqlite.db"
+sudo chmod 0600 "${runtime}/data/sqlite.db"
 sudo touch "${runtime}/data/ready"
 sudo chown 10001:10001 "${runtime}/data/ready"
 sudo chmod 0600 "${runtime}/data/ready"
