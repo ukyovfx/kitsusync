@@ -11,12 +11,22 @@ running anything, verify that its workflow completed successfully for release
 tag `v0.4.6` and source commit
 `b7b30157cb90c4500e8b00d3c26ac7038f5c8c10`.
 
+For a purged host, dispatch the workflow with `deployment_mode=fresh-install`.
+The artifact contains a digest-bound credential-free `conf.toml`, the templates
+from the immutable application source, an empty data-directory contract, and a
+protected environment seed. It never contains a Kitsu or Discord credential.
+
 An administrator stages the artifact at the fixed path
 `/root/kitsusync-release-stage`. The directory must be owned by root with mode
 `0700`; every staged file must be owned by root with mode `0600`. Do not place
-credentials in shell arguments or terminal output. The existing protected
-`/home/ukyo_vfx/kitsusync/.env.local` is copied into the root-only control
-directory without printing its contents.
+credentials in shell arguments or terminal output. For `fresh-install`, an
+optional root-owned mode `0600` file named `fresh-kitsu-hostname` contains the
+single non-secret HTTP(S) Kitsu authority URL. Bootstrap validates that it has
+no userinfo, query, or fragment before constructing `.env.local`. When the file
+is absent, KitsuSync starts with an empty authority and remains
+`setup_required`; credentials are still entered only through the supported UI.
+Existing update modes continue copying the protected runtime `.env.local` into
+the root-only control directory without printing its contents.
 
 After staging and verifying the files, the one-time root action is:
 
@@ -25,7 +35,7 @@ After staging and verifying the files, the one-time root action is:
 ```
 
 The bootstrap accepts no arguments. It verifies the archive, Compose file and
-tool digests before installing:
+tool and fresh-seed digests before installing:
 
 - `/usr/local/sbin/kitsusync-deploy` (`root:root`, `0700`)
 - `/usr/local/sbin/kitsusync-inspect` (`root:root`, `0700`)
@@ -76,3 +86,21 @@ consistent snapshot; stale sidecars are removed before restoration. Preserve
 the SQLite snapshot, runtime secret (or its absence marker), `conf.toml`,
 templates, protected environment, prior immutable image and captured runtime
 contract as one rollback unit.
+
+## Fresh installation
+
+`fresh-install` requires an empty KitsuSync container/network/runtime state and
+does not require a prior image or rollback snapshot. Bootstrap reconstructs the
+runtime seed with root-owned configuration/templates and a UID/GID `10001:10001`
+mode `0700` data directory. Deploy loads the approved immutable image, creates
+only the `kitsusync` Compose app and network, binds `127.0.0.1:8090`, and accepts
+only `HTTP 503` with readiness `setup_required` as its initial success state.
+The container must also be running, Docker-healthy, use UID/GID `10001:10001`,
+and expose `/health` as HTTP 200.
+
+On success, deployment mode changes atomically to `normal`; subsequent updates
+use the existing backup/rollback path after setup reaches `ready`. On failure,
+the wrapper removes only the new KitsuSync app container, project network, and
+files created in the still-marked fresh data directory. The verified seed and
+control plane remain for an identical retry. It never changes Kitsu/Zou,
+PostgreSQL, Redis, nginx, Tailscale, firewall, or SSH configuration.

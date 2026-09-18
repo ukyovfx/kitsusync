@@ -92,7 +92,7 @@ class StartupValidation(unittest.TestCase):
                 self.assertIn("runtime validation failed: check=" + stage, result.stderr)
             if passes and not legacy:
                 requests = (root / "requests").read_text()
-                for path in ("/health", "/ready", "/api/setup/status", "/bot/setup", "/bot/admin", "/bot/admin/health"):
+                for path in ("/health", "/ready", "/api/setup/status", "/bot/login", "/bot/setup", "/bot/admin", "/bot/admin/health"):
                     self.assertIn("http://127.0.0.1:8090" + path + "\n", requests)
             return int((root / "attempt").read_text())
 
@@ -107,6 +107,8 @@ class StartupValidation(unittest.TestCase):
         self.run_case("setup", stage="readiness")
         self.run_case("setup", mode="legacy-migration", stage="readiness")
         self.run_case("setup", mode="recovery", passes=True)
+        self.run_case("setup", mode="fresh-install", passes=True)
+        self.run_case("ready", mode="fresh-install", stage="readiness")
 
     def test_persistent_failures_cannot_pass(self):
         for case, stage in (("starting", "docker_health"), ("none", "docker_health"),

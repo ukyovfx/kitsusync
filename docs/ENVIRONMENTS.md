@@ -76,7 +76,9 @@ The wrapper accepts no arguments and consumes the protected root-owned
 `/etc/kitsusync-deploy/.env.local` input plus the approved image archive,
 provenance, Compose digest, and deployment-mode policy. `normal` mode requires
 `/ready` to report `ready`. `recovery` mode deliberately permits
-`setup_required`; neither mode accepts `degraded`.
+`setup_required`; `fresh-install` requires `setup_required` for the first
+credential-free boot and then transitions atomically to `normal`. No mode
+accepts `degraded`.
 
 See `docs/PRODUCTION_BOOTSTRAP.md` for the one-time root bootstrap, narrow sudo
 boundary, read-only inspection, consistent backup, explicit first legacy
@@ -148,3 +150,10 @@ for the app and inject that validated URL as `KITSU_HOSTNAME`. KitsuSync itself
 does not change Zou, nginx, public/Tailscale listeners, or shared databases.
 Deployments that cannot provide a safe internal endpoint retain the validated
 operator-entered URL fallback on `/bot/login`.
+
+The KitsuSync deployment bundle does not install or reload nginx. A host-only
+proxy is host/Kitsu infrastructure and must be established separately only
+after read-only bind/routing evidence proves it necessary. The fresh installer
+accepts the resulting non-secret authority through the root-owned
+`fresh-kitsu-hostname` input and supplies Docker's supported
+`host.docker.internal:host-gateway` mapping; it does not change public routing.

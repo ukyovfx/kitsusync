@@ -132,6 +132,7 @@ jobs:
           bash scripts/test-production-path-contract.sh
           bash scripts/test-bootstrap-security.sh
           bash scripts/test-deploy-legacy-detection.sh
+          bash scripts/test-fresh-install-contract.sh
 
       - name: Docker Compose build app
         env:
@@ -218,4 +219,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Execute actual deployment and rollback on isolated fixtures
-        run: bash scripts/test-deployment-transaction.sh
+        run: |
+          bash scripts/test-deployment-transaction.sh
+          bash scripts/test-fresh-install-transaction.sh

@@ -7,9 +7,10 @@ image_ref="${IMAGE_REF:?IMAGE_REF is required}"
 image_id="${IMAGE_ID:?IMAGE_ID is required}"
 mode="${DEPLOYMENT_MODE:-normal}"
 compose_source="${COMPOSE_SOURCE:-${root}/docker-compose.yml}"
+app_source_root="${APP_SOURCE_ROOT:-${root}}"
 
 [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'invalid image id\n' >&2; exit 1; }
-[[ "${mode}" == normal || "${mode}" == recovery || "${mode}" == legacy-migration ]] || { printf 'invalid deployment mode\n' >&2; exit 1; }
+[[ "${mode}" == normal || "${mode}" == recovery || "${mode}" == legacy-migration || "${mode}" == fresh-install ]] || { printf 'invalid deployment mode\n' >&2; exit 1; }
 [[ ! -e "${output}" ]] || { printf 'bundle output already exists\n' >&2; exit 1; }
 mkdir -m 0700 "${output}"
 
@@ -23,6 +24,22 @@ install -m 0600 "${root}/deploy/kitsusync-runtime-state" "${output}/kitsusync-ru
 install -m 0600 "${root}/deploy/kitsusync-restore-state" "${output}/kitsusync-restore-state"
 printf '%s\n' "${mode}" >"${output}/deployment-mode"
 chmod 0600 "${output}/deployment-mode"
+
+fresh_conf_sha= fresh_env_sha= fresh_templates_sha= fresh_templates_manifest_sha=
+if [[ "${mode}" == fresh-install ]]; then
+  [[ -f "${root}/deploy/fresh-conf.toml" && -f "${root}/deploy/fresh-env.local" && -d "${app_source_root}/tpl" ]] || { printf 'fresh runtime seed source is unavailable\n' >&2; exit 1; }
+  [[ -z "$(find "${app_source_root}/tpl" -type l -print -quit)" ]] || { printf 'fresh template seed contains symlinks\n' >&2; exit 1; }
+  install -m 0600 "${root}/deploy/fresh-conf.toml" "${output}/fresh-conf.toml"
+  install -m 0600 "${root}/deploy/fresh-env.local" "${output}/fresh-env.local"
+  (cd "${app_source_root}" && find tpl -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) >"${output}/fresh-templates.sha256"
+  tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner --format=posix --pax-option=delete=atime,delete=ctime \
+    --create --file "${output}/fresh-templates.tar" --directory "${app_source_root}" tpl
+  chmod 0600 "${output}/fresh-templates.sha256" "${output}/fresh-templates.tar"
+  fresh_conf_sha="$(sha256sum "${output}/fresh-conf.toml" | cut -d' ' -f1)"
+  fresh_env_sha="$(sha256sum "${output}/fresh-env.local" | cut -d' ' -f1)"
+  fresh_templates_sha="$(sha256sum "${output}/fresh-templates.tar" | cut -d' ' -f1)"
+  fresh_templates_manifest_sha="$(sha256sum "${output}/fresh-templates.sha256" | cut -d' ' -f1)"
+fi
 
 docker save --output "${output}/kitsusync-image.tar" "${image_ref}"
 chmod 0600 "${output}/kitsusync-image.tar"
@@ -45,6 +62,8 @@ IMAGE_ARCHIVE_SHA256="${archive_sha}" COMPOSE_SHA256="${compose_sha}" \
 DEPLOYMENT_TOOL_SHA256="${deploy_sha}" INSPECTION_TOOL_SHA256="${inspect_sha}" \
 SQLITE_BACKUP_TOOL_SHA256="${backup_sha}" BOOTSTRAP_TOOL_SHA256="${bootstrap_sha}" IMAGE_IDENTITY_TOOL_SHA256="${identity_sha}" \
 RUNTIME_STATE_TOOL_SHA256="${runtime_state_sha}" RESTORE_STATE_TOOL_SHA256="${restore_state_sha}" \
+FRESH_CONF_SHA256="${fresh_conf_sha}" FRESH_ENV_SHA256="${fresh_env_sha}" \
+FRESH_TEMPLATES_SHA256="${fresh_templates_sha}" FRESH_TEMPLATES_MANIFEST_SHA256="${fresh_templates_manifest_sha}" \
 IMAGE_CONFIG_DIGEST="${image_config_digest}" IMAGE_MANIFEST_DIGEST="${image_manifest_digest}" IMAGE_CONTENT_DIGEST="${image_content_digest}" PROVENANCE_OUTPUT="${output}/provenance.txt" \
 bash "${root}/scripts/generate-provenance.sh"
 chmod 0600 "${output}/provenance.txt"

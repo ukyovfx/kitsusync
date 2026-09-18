@@ -18,6 +18,8 @@ ENV_FILE=${CONTROL_DIR}/.env.local
 PROVENANCE_FILE=${CONTROL_DIR}/provenance
 MODE_FILE=${CONTROL_DIR}/deployment-mode
 LEGACY_IMAGE_FILE=${CONTROL_DIR}/legacy-image.id
+FRESH_PENDING_FILE=${STATE_DIR}/fresh-install.pending
+FRESH_SEED_MARKER=${RUNTIME_ROOT}/.fresh-install-seed
 IMAGE_ARCHIVE=${STATE_DIR}/kitsusync-image.tar
 SQLITE_BACKUP=/usr/local/libexec/kitsusync-sqlite-backup
 IMAGE_IDENTITY=/usr/local/libexec/kitsusync-image-identity
@@ -33,7 +35,7 @@ log() { /usr/bin/logger -t kitsusync-deploy -- "$*" 2>/dev/null || true; }
 readiness_allows() {
   local mode="$1" readiness="$2"
   case "${mode}:${readiness}" in
-    normal:ready|legacy-migration:ready|recovery:ready|recovery:setup_required) return 0 ;;
+    normal:ready|legacy-migration:ready|recovery:ready|recovery:setup_required|fresh-install:setup_required) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -194,13 +196,13 @@ runtime_probe() {
   response="$(startup_command "${CURL_BIN}" --silent --max-time 10 --max-filesize 65536 --write-out $'\n%{http_code}' http://127.0.0.1:8090/ready)" || return 1
   code="$(printf '%s\n' "${response}" | /usr/bin/tail -n 1)"
   state="$(printf '%s\n' "${response}" | /usr/bin/sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | /usr/bin/head -n 1)"
-  readiness_allows "${mode}" "${state}" || return 1
+  readiness_allows "${mode}" "${state}" || { [[ "${state}" != degraded ]] || VALIDATION_RETRY=0; return 1; }
   case "${state}:${code}" in ready:200|setup_required:503) ;; *) return 1 ;; esac
   VALIDATION_STAGE=readiness_identity
   printf '%s\n' "${response}" | /usr/bin/grep -Fq '"base_commit":"'"${expected_revision}"'"' || { VALIDATION_RETRY=0; return 1; }
   printf '%s\n' "${response}" | /usr/bin/grep -Fq '"build_source_id":"'"${expected_source}"'"' || { VALIDATION_RETRY=0; return 1; }
   VALIDATION_STAGE=admin_boundary
-  for path in /api/setup/status /bot/setup /bot/admin /bot/admin/health; do
+  for path in /api/setup/status /bot/login /bot/setup /bot/admin /bot/admin/health; do
     code="$(startup_command "${CURL_BIN}" --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "http://127.0.0.1:8090${path}")" || return 1
     [[ "${code}" =~ ^(200|302|303|401|403)$ ]] || return 1
   done
@@ -311,7 +313,7 @@ archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_config_digest=//p')" == "${approved_config_digest}" ]] || die "approved image config digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_manifest_digest=//p')" == "${approved_manifest_digest}" ]] || die "approved image manifest digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_content_digest=//p')" == "${approved_content_digest}" ]] || die "approved image content identity mismatch"
-[[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery || "${deployment_mode}" == legacy-migration ]] || die "deployment mode is invalid"
+[[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery || "${deployment_mode}" == legacy-migration || "${deployment_mode}" == fresh-install ]] || die "deployment mode is invalid"
 export KITSUSYNC_APP_VERSION="${version}"
 export KITSUSYNC_IMAGE_TAG="${image#kitsusync:}"
 export KITSUSYNC_COMMIT_SHA="${source_commit}"
@@ -320,6 +322,86 @@ export KITSUSYNC_IMAGE_REVISION="${source_commit}"
 export KITSUSYNC_WORKTREE_DIRTY=false
 
 compose() { /usr/bin/docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@"; }
+
+if [[ "${deployment_mode}" == fresh-install ]]; then
+  secure_file "${FRESH_PENDING_FILE}" 600
+  secure_file "${FRESH_SEED_MARKER}" 600
+  [[ "$(/usr/bin/tr -d '\r\n' <"${FRESH_PENDING_FILE}")" == "${source_commit}" && "$(/usr/bin/tr -d '\r\n' <"${FRESH_SEED_MARKER}")" == "${source_commit}" ]] || die "fresh-install seed identity mismatch"
+  existing_project_containers="$(${DOCKER_BIN} ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT_NAME}")"
+  [[ -z "${existing_project_containers}" ]] || die "fresh install requires no prior KitsuSync project container"
+  existing_services="$(${DOCKER_BIN} ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT_NAME}" --filter "label=com.docker.compose.service=${SERVICE}")"
+  [[ -z "${existing_services}" ]] || die "fresh install requires no prior KitsuSync container"
+  existing_networks="$(${DOCKER_BIN} network ls -q --filter "label=com.docker.compose.project=${PROJECT_NAME}")"
+  [[ -z "${existing_networks}" ]] || die "fresh install requires no prior KitsuSync network"
+  [[ -z "$(/usr/bin/find "${RUNTIME_ROOT}/data" -mindepth 1 -print -quit)" ]] || die "fresh install requires an empty runtime data directory"
+
+  fresh_override="${run_dir}/fresh.override.yml"
+  /usr/bin/printf '%s\n' 'services:' '  app:' "    image: ${image}" '    build: !reset null' '    env_file: !override' "      - ${ENV_FILE}" '    environment:' '      APP_ENV: production' '    volumes: !override' "      - ${RUNTIME_ROOT}/conf.toml:/app/conf.toml:ro" "      - ${RUNTIME_ROOT}/tpl:/app/tpl:ro" "      - ${RUNTIME_ROOT}/data:/app/data" '    ports: !override' '      - "127.0.0.1:8090:8090"' '    extra_hosts: !override' '      - "host.docker.internal:host-gateway"' >"${fresh_override}"
+  /usr/bin/chmod 0600 "${fresh_override}"
+  compose_fresh() { /usr/bin/docker compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" -f "${fresh_override}" "$@"; }
+  compose_fresh config --format json >"${run_dir}/fresh-compose.json"
+  /usr/bin/python3 - "${run_dir}/fresh-compose.json" "${RUNTIME_ROOT}" "${image}" <<'PY'
+import json, sys
+app = json.load(open(sys.argv[1]))["services"]["app"]
+root, image = sys.argv[2:]
+expected = {"/app/conf.toml": (root + "/conf.toml", True),
+            "/app/tpl": (root + "/tpl", True), "/app/data": (root + "/data", False)}
+mounts = {m["target"]: (m.get("source"), bool(m.get("read_only")))
+          for m in app.get("volumes", []) if m.get("type") == "bind"}
+ports = app.get("ports", [])
+if (mounts != expected or len(app.get("volumes", [])) != 3 or len(ports) != 1
+        or ports[0].get("host_ip") != "127.0.0.1" or str(ports[0].get("published")) != "8090"
+        or ports[0].get("target") != 8090 or ports[0].get("protocol", "tcp") != "tcp"
+        or app.get("environment", {}).get("APP_ENV") != "production"
+        or app.get("image") != image or app.get("build") or app.get("env_file")
+        or app.get("restart") != "unless-stopped"):
+    raise SystemExit("effective fresh-install Compose contract is incomplete")
+PY
+
+  fresh_completed=false
+  finish_fresh_install() {
+    local result=$?
+    trap - EXIT INT TERM
+    set +e
+    if [[ "${fresh_completed}" != true ]]; then
+      compose_fresh rm --stop --force "${SERVICE}" >/dev/null 2>&1 || true
+      compose_fresh down --remove-orphans >/dev/null 2>&1 || true
+      if [[ -f "${FRESH_PENDING_FILE}" && -f "${FRESH_SEED_MARKER}" ]]; then
+        /usr/bin/find "${RUNTIME_ROOT}/data" -mindepth 1 -delete >/dev/null 2>&1 || result=1
+      fi
+      log "fresh install failed; created container, network, and runtime data cleaned"
+    fi
+    /usr/bin/rm -rf "${run_dir}"
+    exit "${result}"
+  }
+  trap finish_fresh_install EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null || die "approved image load failed"
+  loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"
+  archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || die "loaded image ID is not an approved archive content identity"
+  loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || die "loaded image content identity cannot be verified"
+  [[ "${loaded_content_digest}" == "${approved_content_digest}" ]] || die "loaded image content identity does not match approved provenance"
+  [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${source_commit}" ]] || die "image revision label mismatch"
+  [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${image}")" == "${source_id}" ]] || die "image source label mismatch"
+  [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")" == "${version}" ]] || die "image version label mismatch"
+  compose_fresh up -d --no-deps "${SERVICE}" >/dev/null || die "fresh deployment failed; cleanup follows"
+  new_id="$(compose_fresh ps -q "${SERVICE}")"
+  [[ "${new_id}" =~ ^[0-9a-f]{64}$ ]] || die "fresh runtime container identity is unavailable"
+  validate_runtime "${new_id}" fresh-install "${source_commit}" "${source_id}" "${version}" || die "fresh deployment validation failed; cleanup follows"
+  [[ "$(${DOCKER_BIN} inspect --format '{{.Image}}' "${new_id}")" == "${loaded_image_id}" ]] || die "runtime immutable image mismatch"
+  [[ "$(${DOCKER_BIN} inspect --format '{{.Config.User}}' "${new_id}")" == 10001:10001 ]] || die "runtime user mismatch"
+  [[ "$(${DOCKER_BIN} inspect --format '{{.HostConfig.RestartPolicy.Name}}' "${new_id}")" == unless-stopped ]] || die "runtime restart policy mismatch"
+  mode_tmp="$(/usr/bin/mktemp)"; printf 'normal\n' >"${mode_tmp}"
+  /usr/bin/install -o root -g root -m 0600 "${mode_tmp}" "${CONTROL_DIR}/deployment-mode"
+  /usr/bin/rm -f "${mode_tmp}" "${FRESH_PENDING_FILE}" "${FRESH_SEED_MARKER}"
+  fresh_completed=true
+  log "fresh install completed image_id=${loaded_image_id} image_content_digest=${approved_content_digest} container=${new_id}"
+  printf 'KitsuSync fresh installation completed: version=%s image_id=%s image_content_digest=%s container=%s readiness=setup_required\n' "${version}" "${loaded_image_id}" "${approved_content_digest}" "${new_id}"
+  exit 0
+fi
+
 resolve_legacy_prior_container() {
   local compose_output compose_status candidate_id candidate_name candidate_project candidate_service candidate_running candidate_image candidate_ready runtime_check
   local -a compose_ids=() direct_ids=()

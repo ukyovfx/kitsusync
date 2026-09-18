@@ -44,6 +44,9 @@ expect_readiness pass recovery setup_required
 expect_readiness fail recovery degraded
 expect_readiness pass legacy-migration ready
 expect_readiness fail legacy-migration setup_required
+expect_readiness pass fresh-install setup_required
+expect_readiness fail fresh-install ready
+expect_readiness fail fresh-install degraded
 
 expect_legacy() {
   local expected="$1" approved="$2" actual="$3" health="$4" ready="$5"
