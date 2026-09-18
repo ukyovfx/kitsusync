@@ -273,6 +273,12 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
     image-id) [[ "$#" -eq 3 ]]; archive_image_id_allows "$1" "$2" "$3" ;;
     runtime|legacy-runtime)
       CURL_BIN="${KITSUSYNC_DEPLOY_TEST_CURL_BIN:?test curl required}"
+      # This override is test-only: the real wrapper always reads the root-owned
+      # protected environment file.  Runtime validator tests need a fixture
+      # KITSU_HOSTNAME when exercising the fresh-install connectivity probe.
+      if [[ -n "${KITSUSYNC_DEPLOY_TEST_ENV_FILE:-}" ]]; then
+        ENV_FILE=${KITSUSYNC_DEPLOY_TEST_ENV_FILE}
+      fi
       STARTUP_TIMEOUT="${KITSUSYNC_DEPLOY_TEST_TIMEOUT:-5}"
       STARTUP_INTERVAL=1
       [[ -x "${CURL_BIN}" && "${STARTUP_TIMEOUT}" =~ ^[1-9][0-9]?$ ]] || die "invalid startup test controls"

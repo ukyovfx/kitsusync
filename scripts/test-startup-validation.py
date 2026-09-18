@@ -22,6 +22,10 @@ case = settings["case"]
 if pathlib.Path(sys.argv[0]).name == "docker":
     if args[0] == "port":
         print("0.0.0.0:8090" if case == "wrong-port" else "127.0.0.1:8090")
+    elif args[0] == "exec":
+        url = args[-1]
+        with (root / "requests").open("a") as out: out.write(url + "\n")
+        print("200")
     elif args[2] == "{{.State.Status}}":
         attempt += 1
         counter.write_text(str(attempt))
@@ -71,6 +75,8 @@ class StartupValidation(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="kitsusync-startup-") as temp:
             root = Path(temp)
             (root / "settings").write_text(json.dumps(dict(case=case, legacy=legacy, admin_code=admin_code)))
+            env_file = root / "operator.env"
+            env_file.write_text("KITSU_HOSTNAME=http://host.docker.internal:8080/\n")
             for tool in ("docker", "curl"):
                 path = root / tool
                 path.write_text(MOCK.replace("#!/usr/bin/python3", "#!" + sys.executable, 1))
@@ -79,6 +85,7 @@ class StartupValidation(unittest.TestCase):
             env.update(STARTUP_FIXTURE=temp, KITSUSYNC_DEPLOY_TEST_MODE="legacy-runtime" if legacy else "runtime",
                        KITSUSYNC_DEPLOY_TEST_DOCKER_BIN=str(root / "docker"),
                        KITSUSYNC_DEPLOY_TEST_CURL_BIN=str(root / "curl"),
+                       KITSUSYNC_DEPLOY_TEST_ENV_FILE=str(env_file),
                        KITSUSYNC_DEPLOY_TEST_TIMEOUT=str(timeout))
             args = ["fixture-container", "sha256:previous"] if legacy else ["fixture-container", mode, "revision", "source", "0.4.6"]
             started = time.monotonic()
@@ -92,6 +99,8 @@ class StartupValidation(unittest.TestCase):
                 self.assertIn("runtime validation failed: check=" + stage, result.stderr)
             if passes and not legacy:
                 requests = (root / "requests").read_text()
+                if mode == "fresh-install":
+                    self.assertIn("http://host.docker.internal:8080/api/\n", requests)
                 for path in ("/health", "/ready", "/api/setup/status", "/bot/login", "/bot/setup", "/bot/admin", "/bot/admin/health"):
                     self.assertIn("http://127.0.0.1:8090" + path + "\n", requests)
             return int((root / "attempt").read_text())
