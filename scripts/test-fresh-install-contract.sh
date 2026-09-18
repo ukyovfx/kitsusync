@@ -26,6 +26,13 @@ grep -Fq 'compose_fresh down --remove-orphans' "${deploy}"
 grep -Fq "printf 'normal\\n'" "${deploy}"
 grep -Fq 'fresh install has already completed' "${bootstrap}"
 grep -Fq '/usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec' "${bootstrap}"
+grep -Fq '/usr/bin/install -d -o root -g root -m 0700 "${runtime_tmp}/data"' "${bootstrap}"
+grep -Fq '/usr/bin/chown 10001:10001 "${runtime_tmp}/data"' "${bootstrap}"
+
+if grep -Fq '/usr/bin/install -d -o 10001 -g 10001' "${bootstrap}"; then
+  printf 'fresh bootstrap must not require passwd/group entries for UID/GID 10001\n' >&2
+  exit 1
+fi
 grep -Fq 'fresh_conf_sha256' "${provenance}"
 grep -Fq 'fresh_templates_manifest_sha256' "${provenance}"
 grep -Fq 'APP_SOURCE_ROOT' "${bundle}"
