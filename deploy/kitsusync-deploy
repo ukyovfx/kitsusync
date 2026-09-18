@@ -156,7 +156,7 @@ startup_command() {
 }
 
 runtime_probe() {
-  local id="$1" mode="$2" expected_revision="$3" expected_source="$4" expected_version="$5" value response code state path
+  local id="$1" mode="$2" expected_revision="$3" expected_source="$4" expected_version="$5" value response code state path kitsu_probe_url
   VALIDATION_RETRY=1
   VALIDATION_STAGE=container_state
   value="$(startup_command "${DOCKER_BIN}" inspect --format '{{.State.Status}}' "${id}")" || return 1
@@ -182,6 +182,32 @@ runtime_probe() {
   VALIDATION_STAGE=docker_health
   value="$(startup_command "${DOCKER_BIN}" inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${id}")" || return 1
   [[ "${value}" == healthy ]] || return 1
+  if [[ "${mode}" == fresh-install ]]; then
+    kitsu_probe_url="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 - "${ENV_FILE}" <<'PY'
+import pathlib
+import sys
+from urllib.parse import urlsplit, urlunsplit
+
+values = []
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.startswith("KITSU_HOSTNAME="):
+        values.append(line.split("=", 1)[1].strip())
+if len(values) != 1:
+    raise SystemExit("protected KITSU_HOSTNAME is unavailable or ambiguous")
+if values[0]:
+    parsed = urlsplit(values[0])
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise SystemExit("protected KITSU_HOSTNAME is invalid")
+    path = parsed.path.rstrip("/") + "/api/"
+    print(urlunsplit((parsed.scheme, parsed.netloc, path, "", "")))
+PY
+)" || { VALIDATION_RETRY=0; return 1; }
+    if [[ -n "${kitsu_probe_url}" ]]; then
+      VALIDATION_STAGE=kitsu_connectivity
+      code="$(startup_command "${DOCKER_BIN}" exec "${id}" /usr/bin/curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "${kitsu_probe_url}")" || return 1
+      [[ "${code}" == 200 ]] || return 1
+    fi
+  fi
   VALIDATION_STAGE=local_health
   if [[ "${mode}" == legacy ]]; then
     code="$(startup_command "${CURL_BIN}" --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:8090/health)" || return 1
@@ -247,6 +273,12 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
     image-id) [[ "$#" -eq 3 ]]; archive_image_id_allows "$1" "$2" "$3" ;;
     runtime|legacy-runtime)
       CURL_BIN="${KITSUSYNC_DEPLOY_TEST_CURL_BIN:?test curl required}"
+      # This override is test-only: the real wrapper always reads the root-owned
+      # protected environment file.  Runtime validator tests need a fixture
+      # KITSU_HOSTNAME when exercising the fresh-install connectivity probe.
+      if [[ -n "${KITSUSYNC_DEPLOY_TEST_ENV_FILE:-}" ]]; then
+        ENV_FILE=${KITSUSYNC_DEPLOY_TEST_ENV_FILE}
+      fi
       STARTUP_TIMEOUT="${KITSUSYNC_DEPLOY_TEST_TIMEOUT:-5}"
       STARTUP_INTERVAL=1
       [[ -x "${CURL_BIN}" && "${STARTUP_TIMEOUT}" =~ ^[1-9][0-9]?$ ]] || die "invalid startup test controls"

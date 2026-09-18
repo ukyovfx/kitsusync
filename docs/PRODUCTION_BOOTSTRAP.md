@@ -98,6 +98,20 @@ only `HTTP 503` with readiness `setup_required` as its initial success state.
 The container must also be running, Docker-healthy, use UID/GID `10001:10001`,
 and expose `/health` as HTTP 200.
 
+When `fresh-kitsu-hostname` supplies an authority, the wrapper additionally
+requires `curl` executed inside the new KitsuSync container to receive HTTP
+200 from `KITSU_HOSTNAME/api/`. This validates the actual container-to-proxy-to-
+Zou route. Do not gate the installation on a host curl to the Docker bridge
+address: host self-routing and host firewall policy may reject that path even
+when the bridged container path is correct.
+
+For the vfxstudio loopback Zou topology, the host-only proxy remains bound to
+the Docker bridge and accepts only Docker address space. Its `/api/` locations
+use `proxy_pass http://127.0.0.1:5000/`; nginx removes the `/api/` prefix, so
+the direct Zou upstream receives `/` for `/api/` and `/status` for
+`/api/status`. This matches Zou's direct API routing and must not be changed to
+prefix preservation without independently changing the upstream contract.
+
 On success, deployment mode changes atomically to `normal`; subsequent updates
 use the existing backup/rollback path after setup reaches `ready`. On failure,
 the wrapper removes only the new KitsuSync app container, project network, and

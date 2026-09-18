@@ -157,3 +157,16 @@ after read-only bind/routing evidence proves it necessary. The fresh installer
 accepts the resulting non-secret authority through the root-owned
 `fresh-kitsu-hostname` input and supplies Docker's supported
 `host.docker.internal:host-gateway` mapping; it does not change public routing.
+For an authority supplied during `fresh-install`, the deployment wrapper proves
+the real dependency path after the app container is created:
+`KitsuSync container -> KITSU_HOSTNAME/api/ -> host-only proxy -> Zou` must
+return HTTP 200. A host curl to the Docker bridge address is not an equivalent
+test: a host-local route or host firewall policy can reject it while a bridged
+container can correctly reach the proxy. Do not substitute a host self-test
+for the wrapper's container-path validation.
+
+For Zou instances whose direct API routes are rooted at `/` (for example,
+`GET /status`), the internal nginx proxy intentionally uses a trailing slash
+in `proxy_pass http://127.0.0.1:5000/`. nginx therefore maps the public
+container request `/api/status` to the direct Zou request `/status`. This is
+intentional URI mapping, not a prefix-preservation configuration.
