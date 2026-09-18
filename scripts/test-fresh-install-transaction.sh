@@ -13,6 +13,9 @@ protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusyn
 tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
        /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state)
+proxy_container=kitsusync-fresh-proxy-fixture
+zou_container=kitsusync-fresh-zou-fixture
+host_self_test_rule=false
 for path in "${protected[@]}" "${tools[@]}"; do
   sudo test ! -e "$path" && sudo test ! -L "$path" || { printf 'refusing existing fixture path: %s\n' "$path" >&2; exit 1; }
 done
@@ -34,6 +37,10 @@ cleanup() {
   fi
   ids="$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)"
   if [[ -n "${ids}" ]]; then docker rm -f ${ids} >/dev/null 2>&1 || true; fi
+  if [[ "${host_self_test_rule}" == true ]]; then
+    sudo iptables -D OUTPUT -p tcp -d 172.17.0.1 --dport 8080 -j DROP >/dev/null 2>&1 || true
+  fi
+  docker rm -f "${proxy_container}" "${zou_container}" >/dev/null 2>&1 || true
   docker network rm kitsusync_default >/dev/null 2>&1 || true
   docker image rm kitsusync:v0.4.6 >/dev/null 2>&1 || true
   sudo rm -rf -- "${protected[@]}"
@@ -66,6 +73,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 http.server.ThreadingHTTPServer(('0.0.0.0',8090), Handler).serve_forever()
 PY
+cat >"${work}/zou.py" <<'PY'
+import http.server
+import json
+import pathlib
+
+paths = pathlib.Path('/zou-paths')
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        with paths.open('a', encoding='utf-8') as output:
+            output.write(self.path + '\n')
+        if self.path in ('/', '/status'):
+            code, body = 200, {'status': 'ok'}
+        elif self.path.startswith('/api/'):
+            code, body = 418, {'error': 'unexpected api prefix'}
+        else:
+            code, body = 404, {'error': 'not found'}
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(body, separators=(',', ':')).encode())
+    def log_message(self, *_): pass
+
+http.server.ThreadingHTTPServer(('127.0.0.1', 18080), Handler).serve_forever()
+PY
+cat >"${work}/nginx.conf" <<'NGINX'
+events {}
+http {
+  access_log off;
+  server {
+    listen 172.17.0.1:8080;
+    server_name _;
+
+    allow 172.16.0.0/12;
+    deny all;
+
+    location = /api {
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_pass http://127.0.0.1:18080/;
+    }
+
+    location ^~ /api/ {
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_pass http://127.0.0.1:18080/;
+    }
+
+    location / { return 404; }
+  }
+}
+NGINX
 cat >"${work}/Dockerfile" <<'DOCKER'
 FROM python:3.12-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
@@ -103,9 +162,47 @@ stage_bundle() {
   sudo install -o root -g root -m 0600 "${work}/fresh-kitsu-hostname" /root/kitsusync-release-stage/fresh-kitsu-hostname
 }
 
+start_proxy_fixture() {
+  local attempt
+  docker container inspect "${proxy_container}" >/dev/null 2>&1 && { printf 'proxy fixture name is already in use\n' >&2; return 1; }
+  docker container inspect "${zou_container}" >/dev/null 2>&1 && { printf 'Zou fixture name is already in use\n' >&2; return 1; }
+  : >"${work}/zou-paths"
+  chmod 0666 "${work}/zou-paths"
+  docker run -d --name "${zou_container}" --network host --entrypoint python \
+    -v "${work}/zou.py:/zou.py:ro" -v "${work}/zou-paths:/zou-paths" \
+    kitsusync:v0.4.6 /zou.py >/dev/null
+  for attempt in $(seq 1 20); do
+    curl --silent --fail --max-time 1 http://127.0.0.1:18080/status >/dev/null && break
+    sleep 1
+  done
+  curl --silent --fail --max-time 1 http://127.0.0.1:18080/status >/dev/null
+  docker run -d --name "${proxy_container}" --network host \
+    -v "${work}/nginx.conf:/etc/nginx/nginx.conf:ro" nginx:1.28.0-alpine >/dev/null
+  for attempt in $(seq 1 20); do
+    docker run --rm --add-host host.docker.internal:host-gateway --entrypoint curl kitsusync:v0.4.6 \
+      --silent --fail --max-time 1 http://host.docker.internal:8080/api/ >/dev/null 2>&1 && break
+    sleep 1
+  done
+  docker run --rm --add-host host.docker.internal:host-gateway --entrypoint curl kitsusync:v0.4.6 \
+    --silent --fail --max-time 3 http://host.docker.internal:8080/api/ >/dev/null
+  docker run --rm --add-host host.docker.internal:host-gateway --entrypoint curl kitsusync:v0.4.6 \
+    --silent --fail --max-time 3 http://host.docker.internal:8080/api/status >/dev/null
+  grep -Fxq / "${work}/zou-paths"
+  grep -Fxq /status "${work}/zou-paths"
+  sudo iptables -I OUTPUT -p tcp -d 172.17.0.1 --dport 8080 -j DROP
+  host_self_test_rule=true
+  if timeout 2 curl --silent --fail --connect-timeout 1 http://172.17.0.1:8080/api/ >/dev/null 2>&1; then
+    printf 'host self-test unexpectedly succeeded; fixture did not model the production topology\n' >&2
+    return 1
+  fi
+}
+
 sudo install -d -o root -g root -m 0755 /home/ukyo_vfx
 stage=build-bad-bundle
 build_bundle bad "${work}/bad-bundle"
+stage=proxy-topology
+start_proxy_fixture
+: >"${work}/zou-paths"
 stage_bundle "${work}/bad-bundle"
 stage=bootstrap-empty-host
 sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash /root/kitsusync-release-stage/kitsusync-bootstrap
@@ -119,6 +216,7 @@ if sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /usr/local/sbin/kitsu
   printf 'degraded fresh runtime incorrectly passed validation\n' >&2; exit 1
 fi
 grep -Fq 'fresh deployment validation failed; cleanup follows' "${work}/failed.log"
+grep -Fxq / "${work}/zou-paths"
 [[ -z "$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)" ]]
 [[ -z "$(docker network ls -q --filter label=com.docker.compose.project=kitsusync)" ]]
 sudo test -z "$(sudo find "${runtime}/data" -mindepth 1 -print -quit)"
