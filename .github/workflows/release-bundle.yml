@@ -7,6 +7,16 @@ on:
         description: Existing immutable KitsuSync release tag
         required: true
         default: v0.4.6
+      deployment_mode:
+        description: Explicit production transaction policy
+        required: true
+        type: choice
+        default: fresh-install
+        options:
+          - fresh-install
+          - legacy-migration
+          - normal
+          - recovery
 
 permissions:
   contents: read
@@ -69,6 +79,7 @@ jobs:
           bash scripts/test-bootstrap-legacy-detection.sh
           bash scripts/test-inspect-legacy-detection.sh
           bash scripts/test-deploy-legacy-detection.sh
+          bash scripts/test-fresh-install-contract.sh
 
       - name: Build exact release source
         working-directory: source
@@ -94,14 +105,14 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           IMAGE_REF: kitsusync:${{ inputs.release_tag }}
           COMPOSE_SOURCE: ${{ github.workspace }}/source/docker-compose.yml
+          APP_SOURCE_ROOT: ${{ github.workspace }}/source
           BUNDLE_OUTPUT: ${{ github.workspace }}/kitsusync-${{ inputs.release_tag }}-deployment
+          DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
         working-directory: control
         run: |
           set -euo pipefail
           image_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")"
-          mode=normal
-          if [[ "$RELEASE_TAG" == v0.4.6 ]]; then mode=legacy-migration; fi
-          IMAGE_ID="$image_id" DEPLOYMENT_MODE="$mode" bash scripts/build-deployment-bundle.sh
+          IMAGE_ID="$image_id" bash scripts/build-deployment-bundle.sh
 
       - name: Docker runtime reconstruction and deployment behavior
         working-directory: control
@@ -110,6 +121,8 @@ jobs:
         run: |
           bash scripts/test-deployment-behavior.sh
           KITSUSYNC_RUNTIME_DOCKER_TEST=1 python3 scripts/test-runtime-state.py
+          docker image rm "kitsusync:${KITSUSYNC_IMAGE_TAG}" >/dev/null
+          bash scripts/test-fresh-install-transaction.sh
 
       - uses: actions/upload-artifact@v4
         with:

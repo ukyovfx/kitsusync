@@ -1,0 +1,35 @@
+# Credential-free production seed for the supported fresh-install path.
+# Host-specific Kitsu authority is supplied through protected .env.local.
+
+tplPreset = "rich"
+ignoreMessagesDaysOld = 5
+silentUpdateDB = false
+threads = 12
+debug = false
+log = true
+
+[kitsu]
+    hostname = "${KITSU_HOSTNAME}"
+    email = ""
+    password = ""
+    skipComments = false
+    requestInterval = 1
+
+[discord]
+    embedsPerRequests = 10
+    RequestsPerMinute = 50
+    webhookURL = ""
+    useThreads = false
+    botToken = ""
+    guildID = ""
+
+[mention]
+    checkerStatuses = ["WFA"]
+    artistStatuses = ["READY", "RETAKE", "DONE"]
+    hereStatuses = []
+
+[notification]
+    notifyOnAssign = false
+
+[googleDrive]
+    url = ""

@@ -27,7 +27,7 @@ done
 ! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "${env_file}" || die "protected environment contains Docker/Compose control variables"
 [[ -f "${deployment_mode_file}" && ! -L "${deployment_mode_file}" && "$(/usr/bin/stat -c '%u:%g:%a' "${deployment_mode_file}")" == 0:0:600 ]] || die "installed deployment mode is unavailable or unsafe"
 deployment_mode="$(/usr/bin/tr -d '\r\n' <"${deployment_mode_file}")"
-[[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery || "${deployment_mode}" == legacy-migration ]] || die "installed deployment mode is invalid"
+[[ "${deployment_mode}" == normal || "${deployment_mode}" == recovery || "${deployment_mode}" == legacy-migration || "${deployment_mode}" == fresh-install ]] || die "installed deployment mode is invalid"
 version="$(/usr/bin/sed -n 's/^version=//p' "${provenance}" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r')"
 [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "installed version identity is invalid"
 export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
@@ -63,6 +63,10 @@ elif [[ "${deployment_mode}" == legacy-migration ]]; then
   /usr/bin/rm -rf -- "${runtime_check}"
   trap - EXIT
   container_id="${candidate_id}"
+fi
+if [[ -z "${container_id}" && "${deployment_mode}" == fresh-install ]]; then
+  printf 'deployment_mode=fresh-install\nstate=not_installed\nreadiness_state=pending_deploy\n'
+  exit 0
 fi
 [[ -n "${container_id}" ]] || die "KitsuSync app container is not running"
 

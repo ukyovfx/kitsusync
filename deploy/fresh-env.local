@@ -1,0 +1,3 @@
+# KITSU_HOSTNAME is intentionally empty in the immutable seed. The bootstrap
+# may replace it from the root-owned fresh-kitsu-hostname deployment input.
+KITSU_HOSTNAME=

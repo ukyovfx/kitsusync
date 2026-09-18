@@ -39,6 +39,13 @@ secure_source() {
 for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity kitsusync-runtime-state kitsusync-restore-state; do
   secure_source "${STAGE}/${file}" 600
 done
+mode="$(/usr/bin/tr -d '\r\n' <"${STAGE}/deployment-mode")"
+[[ "${mode}" == normal || "${mode}" == recovery || "${mode}" == legacy-migration || "${mode}" == fresh-install ]] || die "unsupported deployment mode"
+if [[ "${mode}" == fresh-install ]]; then
+  for file in fresh-conf.toml fresh-env.local fresh-templates.tar fresh-templates.sha256; do
+    secure_source "${STAGE}/${file}" 600
+  done
+fi
 
 field() { /usr/bin/sed -n "s/^$1=//p" "${STAGE}/provenance.txt" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r'; }
 archive_sha="$(field image_archive_sha256)"
@@ -51,6 +58,10 @@ identity_sha="$(field image_identity_tool_sha256)"
 image_config_digest="$(field image_config_digest)"
 image_manifest_digest="$(field image_manifest_digest)"
 image_content_digest="$(field image_content_digest)"
+fresh_conf_sha="$(field fresh_conf_sha256)"
+fresh_env_sha="$(field fresh_env_sha256)"
+fresh_templates_sha="$(field fresh_templates_sha256)"
+fresh_templates_manifest_sha="$(field fresh_templates_manifest_sha256)"
 [[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
 [[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "portable image provenance is incomplete"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-image.tar" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "staged image archive digest mismatch"
@@ -64,9 +75,13 @@ for helper in runtime-state restore-state; do
   helper_sha="$(field "${helper//-/_}_tool_sha256")"
   [[ "${helper_sha}" =~ ^[0-9a-f]{64}$ && "$(/usr/bin/sha256sum "${STAGE}/kitsusync-${helper}" | /usr/bin/cut -d' ' -f1)" == "${helper_sha}" ]] || die "staged recovery helper digest mismatch"
 done
-
-mode="$(/usr/bin/tr -d '\r\n' <"${STAGE}/deployment-mode")"
-[[ "${mode}" == normal || "${mode}" == recovery || "${mode}" == legacy-migration ]] || die "unsupported deployment mode"
+if [[ "${mode}" == fresh-install ]]; then
+  [[ "${fresh_conf_sha}" =~ ^[0-9a-f]{64}$ && "${fresh_env_sha}" =~ ^[0-9a-f]{64}$ && "${fresh_templates_sha}" =~ ^[0-9a-f]{64}$ && "${fresh_templates_manifest_sha}" =~ ^[0-9a-f]{64}$ ]] || die "fresh runtime seed provenance is incomplete"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/fresh-conf.toml" | /usr/bin/cut -d' ' -f1)" == "${fresh_conf_sha}" ]] || die "fresh configuration seed digest mismatch"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/fresh-env.local" | /usr/bin/cut -d' ' -f1)" == "${fresh_env_sha}" ]] || die "fresh environment seed digest mismatch"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/fresh-templates.tar" | /usr/bin/cut -d' ' -f1)" == "${fresh_templates_sha}" ]] || die "fresh template archive digest mismatch"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/fresh-templates.sha256" | /usr/bin/cut -d' ' -f1)" == "${fresh_templates_manifest_sha}" ]] || die "fresh template manifest digest mismatch"
+fi
 version="$(field version)"
 image_ref="$(field image_ref)"
 artifact_kind="$(field artifact_kind)"
@@ -84,19 +99,87 @@ archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${STAGE
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_manifest_digest=//p')" == "${image_manifest_digest}" ]] || die "staged image manifest digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_content_digest=//p')" == "${image_content_digest}" ]] || die "staged image content identity mismatch"
 export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
-[[ -f "${RUNTIME}/.env.local" && ! -L "${RUNTIME}/.env.local" ]] || die "existing protected operator environment is unavailable"
-[[ -f "${RUNTIME}/conf.toml" && ! -L "${RUNTIME}/conf.toml" ]] || die "existing runtime configuration is unavailable"
-[[ -d "${RUNTIME}/data" && ! -L "${RUNTIME}/data" && -d "${RUNTIME}/tpl" && ! -L "${RUNTIME}/tpl" ]] || die "existing runtime state directories are unavailable"
-[[ -z "$(/usr/bin/find "${RUNTIME}/tpl" -type l -print -quit)" ]] || die "runtime template symlinks are not accepted"
-# Remove operator replacement authority before adopting any runtime file into
-# the root-only deployment control plane.
-/usr/bin/chown root:root "${RUNTIME}"
-/usr/bin/chmod 0755 "${RUNTIME}"
-/usr/bin/chown root:root "${RUNTIME}/.env.local"
-/usr/bin/chmod 0600 "${RUNTIME}/.env.local"
-! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "${RUNTIME}/.env.local" || die "operator environment contains Docker/Compose control variables"
+if [[ "${mode}" == fresh-install && -f "${CONTROL}/deployment-mode" && ! -L "${CONTROL}/deployment-mode" && "$(/usr/bin/tr -d '\r\n' <"${CONTROL}/deployment-mode")" == normal ]]; then
+  die "fresh install has already completed"
+fi
+
+fresh_seed_tmp=
+fresh_env_source=
+fresh_runtime_create=false
+runtime_tmp=
+cleanup_seed_tmp() {
+  [[ -z "${fresh_seed_tmp}" ]] || /usr/bin/rm -rf -- "${fresh_seed_tmp}"
+  if [[ -n "${runtime_tmp}" && "${runtime_tmp}" == /home/ukyo_vfx/.kitsusync-fresh.* ]]; then /usr/bin/rm -rf -- "${runtime_tmp}"; fi
+}
+if [[ "${mode}" == fresh-install ]]; then
+  fresh_seed_tmp="$(/usr/bin/mktemp -d)"
+  trap cleanup_seed_tmp EXIT
+  while IFS= read -r entry; do
+    [[ "${entry}" == tpl || "${entry}" == tpl/ || "${entry}" == tpl/* ]] || die "fresh template archive contains an unexpected path"
+    [[ "${entry}" != /* && "${entry}" != *'/../'* && "${entry}" != ../* && "${entry}" != *'/..' ]] || die "fresh template archive path is unsafe"
+  done < <(/usr/bin/tar -tf "${STAGE}/fresh-templates.tar")
+  /usr/bin/tar --extract --file "${STAGE}/fresh-templates.tar" --directory "${fresh_seed_tmp}" --no-same-owner --no-same-permissions
+  [[ -d "${fresh_seed_tmp}/tpl" && -z "$(/usr/bin/find "${fresh_seed_tmp}/tpl" -type l -print -quit)" && -z "$(/usr/bin/find "${fresh_seed_tmp}/tpl" ! -type f ! -type d -print -quit)" ]] || die "fresh template archive contains unsafe entries"
+  (cd "${fresh_seed_tmp}" && /usr/bin/sha256sum -c "${STAGE}/fresh-templates.sha256" >/dev/null) || die "fresh template file digest mismatch"
+  [[ -z "$(/usr/bin/grep -Ev '^(#.*|[[:space:]]*|KITSU_HOSTNAME=)$' "${STAGE}/fresh-env.local")" ]] || die "fresh environment seed contains unsupported values"
+  fresh_env_source="${fresh_seed_tmp}/.env.local"
+  if [[ -e "${STAGE}/fresh-kitsu-hostname" ]]; then
+    secure_source "${STAGE}/fresh-kitsu-hostname" 600
+    /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 - "${STAGE}/fresh-kitsu-hostname" "${fresh_env_source}" <<'PY'
+import pathlib, sys, urllib.parse
+raw = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+if raw.count("\n") > 1 or any(ord(ch) < 32 and ch not in "\r\n\t" for ch in raw):
+    raise SystemExit("fresh Kitsu hostname input is malformed")
+value = raw.strip()
+parsed = urllib.parse.urlsplit(value)
+if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+    raise SystemExit("fresh Kitsu hostname input is not an approved HTTP endpoint")
+pathlib.Path(sys.argv[2]).write_text(f"KITSU_HOSTNAME={value}\n", encoding="utf-8")
+PY
+  else
+    /usr/bin/install -m 0600 "${STAGE}/fresh-env.local" "${fresh_env_source}"
+  fi
+  if [[ -e "${RUNTIME}" || -L "${RUNTIME}" ]]; then
+    [[ -d "${RUNTIME}" && ! -L "${RUNTIME}" && -f "${RUNTIME}/.fresh-install-seed" && ! -L "${RUNTIME}/.fresh-install-seed" ]] || die "existing runtime is not a resumable fresh-install seed"
+    [[ -f "${RUNTIME}/conf.toml" && -f "${RUNTIME}/.env.local" && -d "${RUNTIME}/data" && -d "${RUNTIME}/tpl" ]] || die "partial fresh runtime is incomplete"
+    /usr/bin/cmp -s "${STAGE}/fresh-conf.toml" "${RUNTIME}/conf.toml" || die "partial fresh runtime configuration differs from approved seed"
+    /usr/bin/cmp -s "${fresh_env_source}" "${RUNTIME}/.env.local" || die "partial fresh runtime environment differs from approved seed"
+    (cd "${RUNTIME}" && /usr/bin/sha256sum -c "${STAGE}/fresh-templates.sha256" >/dev/null) || die "partial fresh runtime templates differ from approved seed"
+  else
+    fresh_runtime_create=true
+  fi
+else
+  [[ -f "${RUNTIME}/.env.local" && ! -L "${RUNTIME}/.env.local" ]] || die "existing protected operator environment is unavailable"
+  [[ -f "${RUNTIME}/conf.toml" && ! -L "${RUNTIME}/conf.toml" ]] || die "existing runtime configuration is unavailable"
+  [[ -d "${RUNTIME}/data" && ! -L "${RUNTIME}/data" && -d "${RUNTIME}/tpl" && ! -L "${RUNTIME}/tpl" ]] || die "existing runtime state directories are unavailable"
+  [[ -z "$(/usr/bin/find "${RUNTIME}/tpl" -type l -print -quit)" ]] || die "runtime template symlinks are not accepted"
+fi
 
 /usr/bin/install -d -o root -g root -m 0700 "${CONTROL}" "${STATE}" "${BACKUPS}"
+if [[ "${mode}" == fresh-install ]]; then
+  if [[ "${fresh_runtime_create}" == true ]]; then
+    [[ -d /home/ukyo_vfx && ! -L /home/ukyo_vfx ]] || die "runtime parent directory is unavailable or unsafe"
+    runtime_tmp="$(/usr/bin/mktemp -d /home/ukyo_vfx/.kitsusync-fresh.XXXXXX)"
+    /usr/bin/chown root:root "${runtime_tmp}"
+    /usr/bin/chmod 0755 "${runtime_tmp}"
+    /usr/bin/install -d -o root -g root -m 0755 "${runtime_tmp}/tpl"
+    /usr/bin/install -d -o 10001 -g 10001 -m 0700 "${runtime_tmp}/data"
+    /usr/bin/install -o root -g root -m 0644 "${STAGE}/fresh-conf.toml" "${runtime_tmp}/conf.toml"
+    /usr/bin/install -o root -g root -m 0600 "${fresh_env_source}" "${runtime_tmp}/.env.local"
+    /usr/bin/cp -a "${fresh_seed_tmp}/tpl/." "${runtime_tmp}/tpl/"
+    /usr/bin/chown -R root:root "${runtime_tmp}/tpl"
+    /usr/bin/find "${runtime_tmp}/tpl" -type d -exec /usr/bin/chmod 0755 {} +
+    /usr/bin/find "${runtime_tmp}/tpl" -type f -exec /usr/bin/chmod 0644 {} +
+    marker_tmp="$(/usr/bin/mktemp)"; printf '%s\n' "${source_commit}" >"${marker_tmp}"
+    /usr/bin/install -o root -g root -m 0600 "${marker_tmp}" "${runtime_tmp}/.fresh-install-seed"
+    /usr/bin/rm -f "${marker_tmp}"
+    /usr/bin/mv "${runtime_tmp}" "${RUNTIME}"
+    runtime_tmp=
+  fi
+  pending_tmp="$(/usr/bin/mktemp)"; printf '%s\n' "${source_commit}" >"${pending_tmp}"
+  /usr/bin/install -o root -g root -m 0600 "${pending_tmp}" "${STATE}/fresh-install.pending"
+  /usr/bin/rm -f "${pending_tmp}"
+fi
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-deploy" /usr/local/sbin/kitsusync-deploy
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-inspect" /usr/local/sbin/kitsusync-inspect
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
@@ -107,9 +190,19 @@ export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/kitsusync-image.tar" "${STATE}/kitsusync-image.tar"
-if [[ ! -e "${CONTROL}/.env.local" ]]; then
+if [[ "${mode}" == fresh-install ]]; then
+  /usr/bin/install -o root -g root -m 0600 "${fresh_env_source}" "${CONTROL}/.env.local"
+elif [[ ! -e "${CONTROL}/.env.local" ]]; then
   /usr/bin/install -o root -g root -m 0600 "${RUNTIME}/.env.local" "${CONTROL}/.env.local"
 fi
+
+# Remove operator replacement authority before adopting any runtime file into
+# the root-only deployment control plane.
+/usr/bin/chown root:root "${RUNTIME}"
+/usr/bin/chmod 0755 "${RUNTIME}"
+/usr/bin/chown root:root "${RUNTIME}/.env.local"
+/usr/bin/chmod 0600 "${RUNTIME}/.env.local"
+! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "${RUNTIME}/.env.local" || die "operator environment contains Docker/Compose control variables"
 
 # The data directory remains writable only by the non-root runtime UID/GID.
 /usr/bin/chown 10001:10001 "${RUNTIME}/data"
@@ -126,6 +219,9 @@ done
 /usr/bin/chown -R root:root "${RUNTIME}/tpl"
 /usr/bin/find "${RUNTIME}/tpl" -type d -exec /usr/bin/chmod 0755 {} +
 /usr/bin/find "${RUNTIME}/tpl" -type f -exec /usr/bin/chmod 0644 {} +
+cleanup_seed_tmp
+fresh_seed_tmp=
+trap - EXIT
 
 resolve_legacy_prior_container() {
   local current_id compose_status candidate_count candidate name project service running image_id ready_code runtime_check

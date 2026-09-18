@@ -35,6 +35,10 @@ require 'prior immutable image identity' "${deploy}"
 require 'legacy-migration' "${deploy}"
 require 'legacy-image.id' "${deploy}"
 require 'legacy_status_allows' "${deploy}"
+require 'fresh-install' "${deploy}"
+require 'fresh-install' "${bootstrap}"
+require 'fresh-install' "${inspect}"
+require 'FRESH_CONF_SHA256' "${bundle}"
 require 'backup_is_complete' "${deploy}"
 require 'sqlite.db-wal' "${deploy}"
 require 'sqlite.db-shm' "${deploy}"
@@ -70,7 +74,7 @@ done
 
 backup_line="$(grep -n ': >"${backup_dir}/backup-complete"' "${deploy}" | cut -d: -f1)"
 stop_line="$(grep -n '^${DOCKER_BIN} stop "${container_id}"' "${deploy}" | cut -d: -f1)"
-load_line="$(grep -n '${DOCKER_BIN} load' "${deploy}" | cut -d: -f1)"
+load_line="$(grep -n '${DOCKER_BIN} load' "${deploy}" | cut -d: -f1 | tail -n 1)"
 [[ -n "${backup_line}" && "${backup_line}" -lt "${stop_line}" && "${stop_line}" -lt "${load_line}" ]] || { printf 'backup/mutation ordering is unsafe\n' >&2; exit 1; }
 
 "${python_bin}" - "${tmp}/live.db" <<'PY'
