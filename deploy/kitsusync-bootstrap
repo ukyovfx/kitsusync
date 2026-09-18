@@ -156,6 +156,7 @@ else
 fi
 
 /usr/bin/install -d -o root -g root -m 0700 "${CONTROL}" "${STATE}" "${BACKUPS}"
+/usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec
 if [[ "${mode}" == fresh-install ]]; then
   if [[ "${fresh_runtime_create}" == true ]]; then
     [[ -d /home/ukyo_vfx && ! -L /home/ukyo_vfx ]] || die "runtime parent directory is unavailable or unsafe"
