@@ -287,7 +287,7 @@ func verifyKitsuZou(ctx context.Context, model KitsuURLModel) (KitsuURLModel, er
 	if json.Unmarshal(body, &status) != nil || !strings.EqualFold(status.Name, "Zou") || status.Version == "" {
 		return KitsuURLModel{}, connectionError("zou_identity_mismatch")
 	}
-	if status.DatabaseUp == nil || status.EventStreamUp == nil || status.JobQueueUp == nil || status.KeyValueStoreUp == nil || !*status.DatabaseUp || !*status.EventStreamUp || !*status.JobQueueUp || !*status.KeyValueStoreUp {
+	if status.DatabaseUp == nil || status.EventStreamUp == nil || status.KeyValueStoreUp == nil || !*status.DatabaseUp || !*status.EventStreamUp || !*status.KeyValueStoreUp {
 		return KitsuURLModel{}, connectionError("zou_unhealthy")
 	}
 	return model, nil
