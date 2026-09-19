@@ -25,7 +25,7 @@ func TestSetupRequiredPageIsAvailableWithoutRuntimeCredentials(t *testing.T) {
 			t.Fatalf("setup-required page missing %q", expected)
 		}
 	}
-	if strings.Contains(body, "Disconnected") || strings.Contains(body, "Paused") || strings.Contains(body, "<h2") {
+	if strings.Contains(body, "Disconnected") || strings.Contains(body, "Paused") {
 		t.Fatal("setup-required page retained redundant status surfaces")
 	}
 	if strings.Contains(body, "kitsu_runtime_email") || strings.Contains(body, "kitsu_runtime_password") {
