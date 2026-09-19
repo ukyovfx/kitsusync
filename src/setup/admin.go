@@ -2794,6 +2794,15 @@ func connectionSecretStatus(value, lang string) connectionStatus {
 	return connectionStatus{Class: "muted", Label: t(lang, "保存済み", "Saved")}
 }
 
+const connectionSecretMask = "••••••••••••••••••••"
+
+func connectionSecretDisplay(value, lang string) string {
+	if strings.TrimSpace(value) == "" {
+		return connectionStatusPill(connectionSecretStatus(value, lang))
+	}
+	return `<span class="secret-mask" aria-label="` + esc(t(lang, "保存済みtokenは非表示", "Saved token hidden")) + `">` + connectionSecretMask + `</span>`
+}
+
 func connectionHealthStatus(lang string, configured, healthy bool) connectionStatus {
 	if !configured {
 		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
@@ -2893,8 +2902,8 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	kitsuStatus := canonicalConnectionHealthStatus(lang, kitsuConfigured, kitsuHealthy)
 	discordStatus := canonicalConnectionHealthStatus(lang, strings.TrimSpace(botToken) != "", discordHealthy)
 	return `<div class="connections-summary-grid">` +
-		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div></dl></section>` +
-		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div><dl class="connection-field-list"></dl></section>` +
+		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div><div class="connection-field-row"><dt>` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</dt><dd>` + connectionSecretDisplay(StoredRuntimeKitsuToken(db), lang) + `</dd></div></dl></section>` +
+		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</dt><dd>` + connectionSecretDisplay(botToken, lang) + `</dd></div></dl></section>` +
 		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div>`
 }
 

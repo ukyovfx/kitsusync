@@ -714,6 +714,18 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .api-sparkline-y-labels{margin-top:0}
   .api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:none}
   .api-sparkline-y-label-min{top:calc(var(--sparkline-chart-box-bottom) - 1em);bottom:auto;transform:none}
+  .system-status-sections .api-observation-card h3{font-size:18px}
+  .system-status-sections .api-observation-latency strong{font-size:26px}
+  .system-status-sections .api-observation-label,.system-status-sections .field-help,.system-status-sections .hint{font-size:15px}
+  .system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list,.system-status-sections .pipeline-health-details-toggle{font-size:14px}
+  .system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}
+  .page-card:has(.system-status-sections)>.page-heading h1{font-size:32px}
+  .page-card:has(.system-status-sections)>.page-heading h2{font-size:24px}
+  .system-status-sections h2{font-size:24px}
+  .api-sparkline .telemetry-bar.success{fill:#8ecf8b;stroke:#8ecf8b}
+  .api-sparkline .telemetry-bar.failure{fill:#ff6a50;stroke:#ff6a50}
+  .api-sparkline .telemetry-bar:focus{stroke:#fff;stroke-width:1.5;outline:none}
+  .api-sparkline .chart-baseline{stroke:var(--line);stroke-width:1}
 `
 
 func shellHeadExtras() string {
