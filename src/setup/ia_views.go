@@ -1556,9 +1556,6 @@ func replaceElementTextByID(body, id, text string) string {
 }
 
 func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName string) (result string) {
-	defer func() {
-		result = normalizeSystemStatusViewerTimeMarkup(result)
-	}()
 	for _, service := range []string{"kitsu", "discord"} {
 		items := filterAPIObservations(stats.APIObservations[service], time.Now(), telemetryWindowDuration(windowName))
 		if len(items) == 0 {
@@ -1568,14 +1565,7 @@ func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName
 		replacement := `<span class="api-observation-meta" data-telemetry-meta data-telemetry-at="` + esc(items[len(items)-1].At.UTC().Format(time.RFC3339)) + `">`
 		body = strings.Replace(body, marker, replacement, 1)
 	}
-	return body + `<script data-telemetry-local-time>(function(){document.querySelectorAll("[data-telemetry-at]").forEach(function(node){var date=new Date(node.getAttribute("data-telemetry-at"));if(Number.isNaN(date.getTime())){return}var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+new Intl.DateTimeFormat(undefined,{hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(date);node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone})})();</script>`
-}
-
-func normalizeSystemStatusViewerTimeMarkup(body string) string {
-	const scriptMarker = `<script data-telemetry-local-time>(function(){`
-	const formatter = `window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};`
-	body = strings.Replace(body, scriptMarker, scriptMarker+formatter, 1)
-	return strings.ReplaceAll(body, `new Intl.DateTimeFormat(undefined,{hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(date)`, `window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))`)
+	return body + `<script data-telemetry-local-time>(function(){window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll("[data-telemetry-meta][data-telemetry-at]").forEach(function(node){node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"));node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone});document.querySelectorAll(".telemetry-bar[data-telemetry-at]").forEach(function(node){var success=node.getAttribute("data-telemetry-success")==="true",duration=Number(node.getAttribute("data-telemetry-duration"))||0,status=success?(document.documentElement.lang==="ja"?"正常":"Healthy"):(document.documentElement.lang==="ja"?"リクエスト失敗":"Request failed"),label=(window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))+" "+(success?duration+" ms ":"")+status).trim();node.setAttribute("aria-label",label);var title=node.querySelector("title");if(title){title.textContent=label}})})();</script>`
 }
 
 func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, windowName, body string) string {

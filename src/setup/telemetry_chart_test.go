@@ -117,3 +117,24 @@ func TestSystemStatusUsesOneViewerLocalHHMMSSFormatter(t *testing.T) {
 		t.Fatal("AJAX metadata does not use the shared HH:MM:SS formatter")
 	}
 }
+
+func TestInitialTelemetryLocalizesMetadataAndBarTooltipsWithSharedFormatter(t *testing.T) {
+	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
+		"kitsu": {{At: time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC), Duration: 42 * time.Millisecond, Success: true}},
+	}}
+	body := `<span class="api-observation-meta" data-telemetry-meta>Last updated 00:00:00</span><svg><rect class="telemetry-bar success" data-telemetry-at="2026-08-10T12:34:56Z" data-telemetry-duration="42" data-telemetry-success="true"><title>old</title></rect></svg>`
+	initial := addTelemetryViewerLocalTimes(body, stats, telemetryWindow60Seconds)
+	for _, fragment := range []string{
+		`window.kitsuSyncSystemStatusTime=function(value)`,
+		`[data-telemetry-meta][data-telemetry-at]`,
+		`.telemetry-bar[data-telemetry-at]`,
+		`window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))`,
+	} {
+		if !strings.Contains(initial, fragment) {
+			t.Fatalf("initial telemetry localization is missing %q", fragment)
+		}
+	}
+	if strings.Contains(initial, `querySelectorAll("[data-telemetry-at]")`) || strings.Contains(initial, `new Intl.DateTimeFormat(undefined`) {
+		t.Fatal("initial telemetry localization still applies locale-shaped formatting to every telemetry node")
+	}
+}
