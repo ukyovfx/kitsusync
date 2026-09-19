@@ -162,6 +162,21 @@ func TestSendMessageMarksMalformedOrUnusableSuccessResponseUnknown(t *testing.T)
 	}
 }
 
+func TestSendMessageMarksMissingThreadChannelIDUnknown(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"message-1"}`))
+	}))
+	defer server.Close()
+
+	result := SendMessage(Payload{Content: "safe"}, server.URL, "", "new thread")
+	if result.MessageID != "" || result.ThreadID != "" || result.FailureCategory != "unknown_response" || !result.Unknown || result.Retryable || attempts != 1 {
+		t.Fatalf("expected one unknown new-thread response outcome, result=%+v attempts=%d", result, attempts)
+	}
+}
+
 func TestSendMessageReturnsDiscordMessageIDOnSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

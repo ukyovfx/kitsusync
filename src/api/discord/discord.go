@@ -708,10 +708,14 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 		slog.Error("SendMessage: response has no message ID")
 		return SendResult{FailureCategory: "unknown_response", Unknown: true}
 	}
+	if threadName != "" && strings.TrimSpace(msg.ChannelID) == "" {
+		slog.Error("SendMessage: thread response has no channel ID")
+		return SendResult{FailureCategory: "unknown_response", Unknown: true}
+	}
 
 	result := SendResult{MessageID: msg.ID}
 	// スレッド新規作成時: channel_id がスレッドID になる
-	if threadName != "" && msg.ChannelID != "" {
+	if threadName != "" {
 		result.ThreadID = msg.ChannelID
 	} else {
 		result.ThreadID = threadID // 既存スレッドはそのまま引き継ぐ
