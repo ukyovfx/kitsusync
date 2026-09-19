@@ -64,7 +64,7 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesCompactHealthySummaryAndOperationalRows(t *testing.T) {
+func TestSystemStatusUsesCompactHealthySummaryAndInlineOperationalDetails(t *testing.T) {
 	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Details"}
 	rendered := renderPipelineHealthItem("en", item, 0)
 	if strings.Contains(rendered, `class="field-help"`) {
@@ -73,19 +73,13 @@ func TestSystemStatusUsesCompactHealthySummaryAndOperationalRows(t *testing.T) {
 	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
 		t.Fatal("operational row lost its compact structure")
 	}
-	for _, want := range []string{
-		`class="pipeline-health-details-content"`,
-		`class="details-label-collapsed">Details ▾</span>`,
-		`class="details-label-expanded">Hide details ▴</span>`,
-		`aria-expanded="false"`,
-		`aria-controls="pipeline-health-details-0"`,
-	} {
+	for _, want := range []string{`class="pipeline-health-details-content"`} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("operational row missing geometry/detail contract %q", want)
 		}
 	}
-	if !strings.Contains(rendered, `class="pipeline-health-details-toggle" type="button"`) {
-		t.Fatal("operational row is missing its keyboard disclosure button")
+	if strings.Contains(rendered, `pipeline-health-details-toggle`) || strings.Contains(rendered, `aria-expanded`) {
+		t.Fatal("operational row should not expose a generic Details disclosure")
 	}
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
@@ -689,8 +683,12 @@ func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
 			}
 			auditPage := httptest.NewRecorder()
 			renderIAAudit(auditPage, r, db)
-			if !strings.Contains(auditPage.Body.String(), tc.action) {
+			auditBody := auditPage.Body.String()
+			if !strings.Contains(auditBody, tc.action) {
 				t.Fatalf("audit page omitted notification-send entry: %q", auditPage.Body.String())
+			}
+			if !strings.Contains(auditBody, `class="audit-log-content"`) || strings.Contains(auditBody, `<section class="section-card glass"><p class="hint">`) {
+				t.Fatal("audit log retained a redundant inner card")
 			}
 			dashboard := renderDashboardMenuRefined(tc.lang, r, db, nil, 0, SharedBotRuntimeReadiness{}, nil)
 			if !strings.Contains(dashboard, tc.countLabel) || !strings.Contains(dashboard, tc.healthLabel) {
@@ -1049,7 +1047,7 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	if got := strings.Count(body, "<h1"); got != 1 {
 		t.Fatalf("Connections page has %d h1 elements, want 1", got)
 	}
-	pageCard := strings.Index(body, `<div class="page-card glass">`)
+	pageCard := strings.Index(body, `<div class="page-card glass editorial-workbench">`)
 	connectionsCard := strings.Index(body, `<section class="section-card glass connections-card">`)
 	h1 := strings.Index(body, "<h1")
 	if pageCard < 0 || connectionsCard < 0 || h1 < pageCard || h1 > connectionsCard {
@@ -1681,6 +1679,15 @@ func TestConnectionsUseSharedActionSpacingToken(t *testing.T) {
 	}
 }
 
+func TestEditorialWorkbenchUsesRestrainedSurfaceContract(t *testing.T) {
+	body := adminPage("en", "Dashboard", httptest.NewRequest(http.MethodGet, "/bot/admin?lang=en", nil), `<div class="dashboard-page"></div>`)
+	for _, want := range []string{`class="page-card glass editorial-workbench"`, `.editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}`, `.editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}`, `.editorial-advanced-settings{display:grid;gap:16px`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("editorial surface contract missing %q", want)
+		}
+	}
+}
+
 func TestAdminFormSizingLeavesCheckboxesAndRadiosCompact(t *testing.T) {
 	if !strings.Contains(adminThemeCSS, `input:not([type="checkbox"]):not([type="radio"]),select{min-height:var(--control-height-standard);}`) {
 		t.Fatal("text input sizing does not exclude checkbox and radio controls")
@@ -1704,13 +1711,13 @@ func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
+func TestSystemStatusUsesInlineSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Count(body, `class="pipeline-health-details-toggle"`) < 4 || strings.Count(body, `aria-expanded="false"`) < 4 {
-		t.Fatalf("system status details are not expandable: %d", strings.Count(body, `class="pipeline-health-details-toggle"`))
+	if strings.Count(body, `class="pipeline-health-details-content"`) < 4 || strings.Contains(body, `class="pipeline-health-details-toggle"`) {
+		t.Fatalf("system status operational details are not rendered as inline rows")
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
@@ -1730,7 +1737,7 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
 	}
-	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list,.system-status-sections .pipeline-health-details-toggle{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
+	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
 	refreshStart := strings.Index(body, `<script data-system-status-refresh>`)
@@ -1757,15 +1764,10 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	}
 }
 
-func TestSystemStatusDetailsToggleIsBidirectional(t *testing.T) {
-	script := systemStatusDetailsScript()
-	for _, fragment := range []string{`aria-expanded`, `aria-controls`, `panel.hidden=expanded`, `toggle.setAttribute("aria-expanded",String(!expanded))`} {
-		if !strings.Contains(script, fragment) {
-			t.Fatalf("details toggle is missing %q", fragment)
-		}
-	}
-	if strings.Contains(script, `querySelector(".details-label-collapsed").hidden`) || strings.Contains(script, `querySelector(".details-label-expanded").hidden`) {
-		t.Fatal("details labels change intrinsic button geometry during toggling")
+func TestSystemStatusDoesNotAddGenericDetailsControls(t *testing.T) {
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Configured", class: "success", details: "<dl></dl>"}, 0)
+	if strings.Contains(rendered, "pipeline-health-details-toggle") || strings.Contains(rendered, "aria-controls") {
+		t.Fatal("system status should keep safe diagnostics inline instead of a generic Details control")
 	}
 }
 

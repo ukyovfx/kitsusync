@@ -335,7 +335,7 @@ func renderIADashboardWithRuntime(w http.ResponseWriter, r *http.Request, db *go
 			dashboardMenu = dashboardMenu[:start] + dashboardMenu[end:]
 		}
 	}
-	body := `<div class="section-stack">` +
+	body := `<div class="section-stack dashboard-page">` +
 		`<section class="dashboard-intro"><div><h1>` + esc(tr(lang, "ia.dashboard")) + `</h1><p class="hint">` + esc(t(lang, "KitsuSyncの接続状態と、対応が必要な項目を確認できます。", "Review KitsuSync connection state and items that need attention.")) + `</p></div><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin", r)) + `">` + esc(t(lang, "状態を更新", "Refresh status")) + `</a></div></section>` +
 		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "通知状態", "Notification status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
 		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なプロダクション", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
@@ -1487,7 +1487,6 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
-	body += systemStatusDetailsScript()
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
@@ -1591,24 +1590,20 @@ func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, wi
 }
 
 func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) string {
+	_ = index
 	action := ""
 	if item.action != "" && item.actionLabel != "" {
 		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
 	}
 	details := ""
 	if item.details != "" {
-		id := "pipeline-health-details-" + strconv.Itoa(index)
-		details = `<button class="pipeline-health-details-toggle" type="button" aria-expanded="false" aria-controls="` + id + `"><span class="details-label-collapsed">` + esc(item.detailsLabel) + ` ▾</span><span class="details-label-expanded">` + esc(t(lang, "詳細を隠す", "Hide details")) + ` ▴</span></button><div id="` + id + `" class="pipeline-health-details-content" hidden>` + item.details + `</div>`
+		details = `<div class="pipeline-health-details-content">` + item.details + `</div>`
 	}
 	explanation := ""
 	if strings.TrimSpace(item.explanation) != "" {
 		explanation = `<p class="field-help">` + esc(item.explanation) + `</p>`
 	}
 	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + `</div><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + details + action + `</article>`
-}
-
-func systemStatusDetailsScript() string {
-	return `<script data-system-status-details>(function(){var root=document.querySelector(".system-status-sections");if(!root){return}root.addEventListener("click",function(event){var toggle=event.target.closest(".pipeline-health-details-toggle");if(!toggle||!root.contains(toggle)){return}var panelId=toggle.getAttribute("aria-controls"),panel=panelId&&document.getElementById(panelId),expanded=toggle.getAttribute("aria-expanded")==="true";if(!panel){return}toggle.setAttribute("aria-expanded",String(!expanded));panel.hidden=expanded})})();</script>`
 }
 
 func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string, sharedMax ...float64) string {
@@ -2168,7 +2163,7 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません", "No audit log entries")) + `</td></tr>`)
 	}
-	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
 	for _, log := range logs {
 		oldTime := `<td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td>`
 		newTime := `<td><time class="audit-time" datetime="` + esc(log.CreatedAt.UTC().Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time></td>`

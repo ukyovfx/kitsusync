@@ -717,7 +717,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections .api-observation-card h3{font-size:18px}
   .system-status-sections .api-observation-latency strong{font-size:26px}
   .system-status-sections .api-observation-label,.system-status-sections .field-help,.system-status-sections .hint{font-size:15px}
-  .system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list,.system-status-sections .pipeline-health-details-toggle{font-size:14px}
+  .system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:14px}
   .system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}
   .page-card:has(.system-status-sections)>.page-heading h1{font-size:32px}
   .page-card:has(.system-status-sections)>.page-heading h2{font-size:24px}
@@ -726,6 +726,33 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .api-sparkline .telemetry-bar.failure{fill:#ff6a50;stroke:#ff6a50}
   .api-sparkline .telemetry-bar:focus{stroke:#fff;stroke-width:1.5;outline:none}
   .api-sparkline .chart-baseline{stroke:var(--line);stroke-width:1}
+  /* Editorial systems refinement: one quiet workbench with explicit peer boundaries. */
+  .editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}
+  .editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}
+  .editorial-workbench h2{font-size:24px;line-height:1.2}
+  .editorial-workbench h3{font-size:18px;line-height:1.25}
+  .editorial-workbench .hint{font-size:15px}
+  .editorial-workbench .field-help{font-size:15px}
+  .editorial-workbench .dashboard-page{gap:28px}
+  .editorial-workbench .dashboard-page>.dashboard-queue{border:1px solid var(--border-default);border-radius:8px;background:var(--surface-subtle);box-shadow:none}
+  .editorial-workbench .dashboard-page>.dashboard-lower-grid{display:none}
+  .editorial-workbench .dashboard-page>.dashboard-cta{border-radius:8px;box-shadow:none}
+  .editorial-workbench .connections-edit-stack{gap:28px}
+  .editorial-workbench .connections-edit-grid{gap:16px}
+  .editorial-workbench .connections-edit-grid>.connections-card{border-radius:8px;background:var(--surface-subtle);box-shadow:none}
+  .editorial-advanced-settings{display:grid;gap:16px;border-top:1px solid var(--divider-color);padding-top:24px}
+  .editorial-advanced-settings .page-heading{margin:0}
+  .editorial-advanced-settings .connection-form-field{display:grid;gap:8px;max-width:640px}
+  .editorial-advanced-settings input{max-width:640px}
+  .editorial-workbench .system-status-sections .pipeline-health-details-content{grid-column:1 / -1;grid-row:2;min-width:0;border-top:0;padding-top:0;color:var(--muted)}
+  .editorial-workbench .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) auto;row-gap:8px}
+  .editorial-workbench .system-status-sections .pipeline-health-item>.status-badge{grid-column:2;grid-row:1}
+  .editorial-workbench .system-status-sections .pipeline-health-details-content{grid-column:1 / -1;grid-row:2}
+  .editorial-workbench .audit-log-content{display:grid;gap:16px}
+  .editorial-workbench .audit-log-table{border-top:1px solid var(--divider-color);padding-top:8px}
+  .setup-required-state{display:grid;gap:24px;max-width:640px}
+  .setup-required-message{margin:0;color:var(--muted);font-size:15px}
+  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:32px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{padding-top:20px}}
 `
 
 func shellHeadExtras() string {

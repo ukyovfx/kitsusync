@@ -295,6 +295,18 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 			t.Fatalf("saved secret or mask leaked into form: %q", secret)
 		}
 	}
+	if strings.Count(body, `class="editorial-advanced-settings"`) != 1 || strings.Contains(body, `<details class="connection-advanced"`) || strings.Contains(body, `<details class="connection-expert"`) {
+		t.Fatal("advanced connection settings must be one flat section without nested accordions")
+	}
+	advanced := strings.Index(body, `class="editorial-advanced-settings"`)
+	if advanced < strings.Index(body, `class="connections-edit-grid"`) {
+		t.Fatal("advanced settings must follow the parallel service forms")
+	}
+	for _, field := range []string{`name="kitsu_external_url"`, `name="kitsu_internal_url"`, `name="kitsu_api_base_url"`} {
+		if !strings.Contains(body[advanced:], field) {
+			t.Fatalf("advanced settings missing %s", field)
+		}
+	}
 }
 
 func TestConnectionsDisplayUsesSharedFieldRows(t *testing.T) {
