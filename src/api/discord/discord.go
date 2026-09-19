@@ -636,8 +636,8 @@ func sendMessageOnce(body []byte, reqURL string) (respBody []byte, statusCode in
 // SendMessage は1タスク分のメッセージを送信して SendResult を返す。
 // threadID が空で threadName が非空の場合は新規スレッドを作成する。
 // threadID が非空の場合は既存スレッドに返信する。
-// 429 Rate Limit と 5xx エラーは自動リトライ（最大3回）する。
-// 失敗時は空の SendResult を返す。
+// 429 Rate Limit のみ自動リトライ（最大3回）する。POST の transport
+// error と 5xx は Discord が受理した可能性があるため再送しない。
 func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendResult {
 	// URL 組み立て
 	reqURL := webhookURL + "?wait=true"
@@ -658,7 +658,7 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 		return SendResult{FailureCategory: "invalid_payload"}
 	}
 
-	// リトライループ: 429 Rate Limit と 5xx エラーは最大3回まで再試行
+	// リトライループ: 429 Rate Limit のみ最大3回まで再試行
 	const maxRetries = 3
 	var respBody []byte
 	var statusCode int
@@ -667,11 +667,7 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 		respBody, statusCode, retryAfterSec, err = sendMessageOnce(body, reqURL)
 		if err != nil {
 			slog.Error("SendMessage: HTTP post failed", "category", "network_error", "attempt", attempt+1)
-			if attempt < maxRetries {
-				time.Sleep(time.Duration(1<<attempt) * time.Second) // 1s, 2s, 4s
-				continue
-			}
-			return SendResult{FailureCategory: "network_error", Retryable: true, Unknown: true}
+			return SendResult{FailureCategory: "network_error", Unknown: true}
 		}
 		if statusCode == 429 {
 			// Rate Limited: Retry-After ヘッダの秒数だけ待って再試行。
@@ -693,14 +689,6 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 			time.Sleep(wait)
 			continue
 		}
-		if statusCode >= 500 && attempt < maxRetries {
-			// サーバーエラー: 指数バックオフで再試行
-			wait := time.Duration(1<<attempt) * time.Second
-			slog.Warn("SendMessage: server error, retrying",
-				"status", statusCode, "attempt", attempt+1, "waitSec", wait.Seconds())
-			time.Sleep(wait)
-			continue
-		}
 		break // 成功 or リトライ不要なエラー
 	}
 
@@ -708,12 +696,16 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 		slog.Error("SendMessage: non-2xx response",
 			"status", statusCode,
 			"category", discordHTTPErrorCategory(statusCode))
-		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests || statusCode >= 500, Unknown: statusCode >= 500}
+		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests, Unknown: statusCode >= 500}
 	}
 
 	var msg DiscordMessage
 	if err := json.Unmarshal(respBody, &msg); err != nil {
 		slog.Error("SendMessage: unmarshal failed", "err", err)
+		return SendResult{FailureCategory: "unknown_response", Unknown: true}
+	}
+	if strings.TrimSpace(msg.ID) == "" {
+		slog.Error("SendMessage: response has no message ID")
 		return SendResult{FailureCategory: "unknown_response", Unknown: true}
 	}
 

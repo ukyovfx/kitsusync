@@ -5,6 +5,8 @@ import (
 	"app/src/model"
 	"app/src/utils/config"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -124,6 +126,38 @@ func TestFilterTasksRetriesAfterFailedDispatch(t *testing.T) {
 	FilterTasks([]kitsu.MessagePayload{payload}, pipelineConfig(), db)
 	if attempts != 2 {
 		t.Fatalf("expected failed delivery to be retried once, got %d attempts", attempts)
+	}
+}
+
+func TestFilterTasksDoesNotResendUnknownDiscordDelivery(t *testing.T) {
+	db := newNotificationPipelineDB(t)
+	if err := db.AutoMigrate(&model.AuditLog{}); err != nil {
+		t.Fatal(err)
+	}
+	configurePipelineRoute(t, db)
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	webhook := model.ListProjectWebhooks(db, "p1")[0]
+	if err := db.Model(&model.ProjectWebhook{}).Where("id = ?", webhook.ID).Update("webhook_url", server.URL).Error; err != nil {
+		t.Fatal(err)
+	}
+	conf := pipelineConfig()
+	conf.Discord.EmbedsPerRequests = 1
+	conf.Discord.RequestsPerMinute = 1000
+	payload := pipelinePayload("WFA")
+
+	FilterTasks([]kitsu.MessagePayload{payload}, conf, db)
+	FilterTasks([]kitsu.MessagePayload{payload}, conf, db)
+
+	if attempts != 1 {
+		t.Fatalf("unknown delivery was re-sent %d times, want once", attempts)
+	}
+	if task := model.FindTask(db, payload.Task.ID); task.ID == 0 || task.TaskUpdatedAt != payload.Task.UpdatedAt {
+		t.Fatalf("unknown delivery was not marked observed: %+v", task)
 	}
 }
 
