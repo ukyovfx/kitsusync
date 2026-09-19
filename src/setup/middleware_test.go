@@ -25,6 +25,17 @@ func resetSessions() {
 	sessionMu.Unlock()
 }
 
+// rotateSessionDigestKey simulates a process restart without exposing the
+// process-local key outside this package.
+func rotateSessionDigestKey(t *testing.T) {
+	t.Helper()
+	previous := sessionDigestKey
+	sessionDigestKey = newSessionDigestKey()
+	t.Cleanup(func() {
+		sessionDigestKey = previous
+	})
+}
+
 func addRecentBotEditSession(t *testing.T, req *http.Request) string {
 	t.Helper()
 	resetSessions()
@@ -209,7 +220,7 @@ func TestSessionCookieUsesSecureForForwardedHTTPS(t *testing.T) {
 	}
 }
 
-func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t *testing.T) {
+func TestPersistentSessionSurvivesCacheClearWithinProcessWithoutPersistingKitsuToken(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -262,6 +273,37 @@ func TestPersistentSessionSurvivesProcessCacheResetWithoutPersistingKitsuToken(t
 	}
 }
 
+func TestProcessDigestKeyRotationInvalidatesPersistedSession(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	if err := db.AutoMigrate(&model.AdminSession{}); err != nil {
+		t.Fatal(err)
+	}
+	ConfigureSessionStore(db)
+	t.Cleanup(resetSessions)
+
+	token, err := newSessionTokenChecked("manager@example.com", "", "manager", "/bot/admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionMu.Lock()
+	sessions = map[string]sessionData{}
+	revokedSessions = map[string]time.Time{}
+	sessionMu.Unlock()
+	rotateSessionDigestKey(t)
+
+	if validSession(token) {
+		t.Fatal("persisted session became valid after process digest key rotation")
+	}
+}
+
 func TestPersistentSessionLogoutReportsDeleteFailureAndFailsClosed(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "sessions.db")), &gorm.Config{})
 	if err != nil {
@@ -296,6 +338,21 @@ func TestPersistentSessionLogoutReportsDeleteFailureAndFailsClosed(t *testing.T)
 	}
 	if validSession(token) {
 		t.Fatal("session remained valid in the process after revocation failure")
+	}
+	var sessionCount int64
+	if err := db.Model(&model.AdminSession{}).Where("token_hash = ?", sessionTokenHash(token)).Count(&sessionCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("logout delete failure left %d persisted session rows, want 1", sessionCount)
+	}
+	sessionMu.Lock()
+	sessions = map[string]sessionData{}
+	revokedSessions = map[string]time.Time{}
+	sessionMu.Unlock()
+	rotateSessionDigestKey(t)
+	if validSession(token) {
+		t.Fatal("stale persisted session became valid after digest key rotation")
 	}
 	if cookie := rr.Header().Get("Set-Cookie"); !strings.Contains(cookie, "Max-Age=0") {
 		t.Fatalf("logout failure did not clear the browser cookie: %q", cookie)

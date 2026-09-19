@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -43,7 +44,11 @@ var (
 	revokedSessions = map[string]time.Time{}
 	sessionStoreDB  *gorm.DB
 	sessionTTL      = 15 * time.Minute
-	loginAttempts   = struct {
+	// sessionDigestKey is generated once for this process and deliberately
+	// never persisted. Consequently, AdminSession rows from an earlier
+	// process cannot validate opaque browser tokens after a restart.
+	sessionDigestKey = newSessionDigestKey()
+	loginAttempts    = struct {
 		sync.Mutex
 		started map[string][]time.Time
 	}{started: make(map[string][]time.Time)}
@@ -62,9 +67,20 @@ func ConfigureSessionStore(db *gorm.DB) {
 	sessionStoreDB = db
 }
 
+func newSessionDigestKey() []byte {
+	key := make([]byte, sha256.Size)
+	if _, err := rand.Read(key); err != nil {
+		// Starting without a process-local secret could allow persisted sessions
+		// to outlive the process that issued them, so fail closed at startup.
+		panic("admin session digest key entropy unavailable")
+	}
+	return key
+}
+
 func sessionTokenHash(token string) string {
-	digest := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(digest[:])
+	digest := hmac.New(sha256.New, sessionDigestKey)
+	_, _ = digest.Write([]byte(token))
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 func isHTTPSRequest(r *http.Request) bool {
