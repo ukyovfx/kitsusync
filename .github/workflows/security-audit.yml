@@ -83,5 +83,115 @@ jobs:
       - name: Rollout note
         if: always()
         run: |
-          echo 'govulncheck and Staticcheck are intentionally non-blocking during the first audit pass.'
-          echo 'Findings will be triaged before any scanner becomes a required check.'
+          echo 'govulncheck and Staticcheck are intentionally non-blocking during rollout.'
+          echo 'Findings are triaged before any scanner becomes a required check.'
+
+  race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install SQLite build dependencies
+        run: |
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -print0 \
+            | sudo xargs -0 -r grep -lZ 'dl.google.com/linux/chrome-stable/deb' \
+            | sudo xargs -0 -r rm -f
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
+
+      - name: Run race detector (audit-only during rollout)
+        continue-on-error: true
+        run: CGO_ENABLED=1 go test -race ./src/... -count=1 -timeout=180s
+
+  shell-audit:
+    name: Deployment shell audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: ShellCheck deploy scripts (audit-only during rollout)
+        continue-on-error: true
+        shell: bash
+        run: |
+          mapfile -d '' scripts < <(grep -IlZ -E '^#!.*(bash|sh)([[:space:]]|$)' deploy/* 2>/dev/null || true)
+          if (( ${#scripts[@]} == 0 )); then
+            echo 'No shell deploy scripts found.'
+            exit 0
+          fi
+          printf 'ShellCheck targets:\n'
+          printf ' - %s\n' "${scripts[@]}"
+          shellcheck -x "${scripts[@]}"
+
+  trivy:
+    name: Trivy filesystem and image audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Scan repository filesystem (audit-only during rollout)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: MEDIUM,HIGH,CRITICAL
+          format: table
+          exit-code: '0'
+          hide-progress: true
+          cache-dir: ${{ runner.temp }}/trivy-cache
+
+      - name: Build audit image
+        shell: bash
+        run: |
+          app_version="$(tr -d '\r\n' < VERSION)"
+          docker build \
+            --build-arg APP_VERSION="$app_version" \
+            --build-arg COMMIT_SHA="${{ github.event.pull_request.head.sha || github.sha }}" \
+            --build-arg BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg WORKTREE_DIRTY=false \
+            --build-arg IMAGE_REVISION="${{ github.event.pull_request.head.sha || github.sha }}" \
+            -t kitsusync:security-audit .
+
+      - name: Scan built image (audit-only during rollout)
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: image
+          image-ref: kitsusync:security-audit
+          scanners: vuln,secret
+          severity: MEDIUM,HIGH,CRITICAL
+          format: table
+          exit-code: '0'
+          hide-progress: true
+          cache-dir: ${{ runner.temp }}/trivy-cache
+
+      - name: Rollout note
+        if: always()
+        run: |
+          echo 'Race, ShellCheck and Trivy are intentionally non-blocking during their first audit pass.'
+          echo 'Findings will be triaged for KitsuSync-specific impact before enforcement.'
