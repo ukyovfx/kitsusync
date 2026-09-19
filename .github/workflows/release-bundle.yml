@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out trusted deployment tooling
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: control
           ref: master
@@ -48,7 +48,7 @@ jobs:
           fi
           printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: source
           ref: ${{ steps.release.outputs.commit }}
@@ -124,7 +124,7 @@ jobs:
           docker image rm "kitsusync:${KITSUSYNC_IMAGE_TAG}" >/dev/null
           bash scripts/test-fresh-install-transaction.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: kitsusync-${{ inputs.release_tag }}-deployment
           path: kitsusync-${{ inputs.release_tag }}-deployment/
