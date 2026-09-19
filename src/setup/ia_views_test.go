@@ -90,15 +90,15 @@ func TestSystemStatusUsesCompactHealthySummaryAndOperationalRows(t *testing.T) {
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
 	body := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{APIObservations: map[string][]APIObservation{"kitsu": {{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}, "discord": {{At: time.Now(), Duration: 12 * time.Millisecond, Success: true}}}}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
-	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, `>System</span>`) {
-		t.Fatal("healthy system status should not repeat a redundant aggregate summary")
+	if !strings.Contains(body, `class="system-overall-summary"`) || !strings.Contains(body, `>Healthy</span>`) {
+		t.Fatal("healthy system status must expose the canonical aggregate summary")
 	}
 	degraded := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{LastPollErr: "poll failed"}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
 	if !strings.Contains(degraded, `class="system-overall-summary"`) || !strings.Contains(degraded, `>System</span>`) {
 		t.Fatal("degraded system status should retain an actionable aggregate summary")
 	}
-	if strings.Contains(body, "Recent runtime observations are healthy.") || strings.Contains(body, "Overall system health") {
-		t.Fatal("healthy overall state retains redundant explanatory copy")
+	if !strings.Contains(body, "Recent runtime observations are healthy.") {
+		t.Fatal("healthy overall state is missing its supporting status explanation")
 	}
 }
 
@@ -257,10 +257,13 @@ func TestSystemStatusUsesOneAlignedReadinessGrid(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	for _, label := range []string{"Kitsu API", "Event monitoring", "Connection / routing integrity", "Notification processing", "Internal data", "Discord API", "Recent system issues"} {
+	for _, label := range []string{"Kitsu API", "Event monitoring", "Connection / routing integrity", "Notification processing", "Internal data", "Discord API"} {
 		if !strings.Contains(body, ">"+label+"<") {
 			t.Fatalf("System Status missing row %q", label)
 		}
+	}
+	if strings.Contains(body, "Recent system issues") || strings.Contains(body, "No recent issues.") {
+		t.Fatal("empty Recent system issues section must be omitted")
 	}
 	if got := strings.Count(body, `class="pipeline-health-item"`); got != 4 {
 		t.Fatalf("System Status rendered %d internal pipeline items, want 4", got)
@@ -287,10 +290,13 @@ func TestSystemStatusPipelineHealthUsesSafeUnavailableMetrics(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=ja", nil), db)
 	body := w.Body.String()
-	for _, want := range []string{"Kitsu API", "イベント監視", "接続・ルーティング整合性", "Discord API", "通知処理", "内部データ", "最近のシステム問題", "未確認"} {
+	for _, want := range []string{"Kitsu API", "イベント監視", "接続・ルーティング整合性", "Discord API", "通知処理", "内部データ", "未確認"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Japanese System Status missing %q", want)
 		}
+	}
+	if strings.Contains(body, "最近のシステム問題") {
+		t.Fatal("empty Japanese Recent system issues section must be omitted")
 	}
 	for _, forbidden := range []string{"polling", "runtime", "readiness", "webhook count", "Next required action:"} {
 		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
@@ -1066,6 +1072,10 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 
 func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	db := newSetupStateTestDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatal(err)
+	}
 	body := renderConnectionsDisplayBodyWithHealth("en", httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db, "", "ok", "Connected", "https://kitsu.example.test", "configured-token", true, true)
 	if strings.Count(body, `class="section-card glass connections-card"`) != 2 {
 		t.Fatalf("expected two summary cards, got %d", strings.Count(body, `class="section-card glass connections-card"`))
@@ -1076,18 +1086,29 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if strings.Contains(body, "Authentication:") || strings.Contains(body, "KitsuSync") || strings.Contains(body, "Hidden") {
 		t.Fatal("summary exposes redundant identity or secret metadata")
 	}
-	if strings.Contains(body, "configured-token") || strings.Contains(body, "Saved token is not displayed.") {
+	if strings.Contains(body, "configured-token") || strings.Contains(body, "configured-kitsu-token") || strings.Contains(body, "Saved token is not displayed.") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("summary secret handling is incorrect")
 	}
-	if strings.Contains(body, ">Token<") || strings.Contains(body, ">Connection<") || strings.Contains(body, "ステータス") || strings.Contains(body, "トークン") {
-		t.Fatal("summary should use the service-level status without redundant state rows")
+	if !strings.Contains(body, "Kitsu Bot API token") || !strings.Contains(body, "Discord Bot Token") {
+		t.Fatal("summary is missing the canonical masked token rows")
 	}
 	if strings.Contains(body, `connections-card-header"><div>`) || strings.Contains(body, `role="status">Connected</span></div><section`) {
 		t.Fatal("summary retained the redundant combined status header")
 	}
 	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済", "https://kitsu.example.test", "configured-token", true, true)
-	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") {
+	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("Japanese summary did not preserve explicit service labels or secret safety")
+	}
+}
+
+func TestSystemStatusRendersRecentIssuesOnlyWhenPresent(t *testing.T) {
+	db := newIAViewDB(t)
+	model.WriteAuditLog(db, model.AuditLog{EntityName: "notification", Success: false, ErrorMessage: "safe failure summary"})
+	w := httptest.NewRecorder()
+	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
+	body := w.Body.String()
+	if !strings.Contains(body, "Recent system issues") || !strings.Contains(body, "safe failure summary") {
+		t.Fatal("non-empty Recent system issues section was not rendered")
 	}
 }
 
@@ -1369,7 +1390,7 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	renderIAHealth(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Not configured", "Discord API", "Notification processing", "Internal data", "Recent system issues"} {
+	for _, want := range []string{"System", "Not configured", "Discord API", "Notification processing", "Internal data"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("system status missing %q", want)
 		}
@@ -1594,16 +1615,16 @@ func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *tes
 }
 
 func TestStatusPolishUsesRealSparkline(t *testing.T) {
-	items := []APIObservation{{Duration: 10 * time.Millisecond, Success: true}, {Duration: 20 * time.Millisecond, Success: false}}
+	items := []APIObservation{{At: time.Now().Add(-30 * time.Second), Duration: 10 * time.Millisecond, Success: true}, {At: time.Now().Add(-5 * time.Second), Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
-	if strings.Contains(graph, "<circle") || !strings.Contains(graph, `class="telemetry-line"`) || strings.Contains(graph, "<rect") || strings.Contains(graph, "<polyline") {
-		t.Fatal("line graph did not reflect the recorded observations")
+	if !strings.Contains(graph, `class="telemetry-bar success"`) || !strings.Contains(graph, `class="telemetry-bar failure"`) || !strings.Contains(graph, `viewBox="0 0 466 104"`) {
+		t.Fatal("bar graph did not reflect the recorded observations")
 	}
-	if strings.Contains(apiObservationGraph(nil), "polyline") {
+	if strings.Contains(apiObservationGraph(nil), "telemetry-bar") {
 		t.Fatal("empty telemetry should not render a fake graph")
 	}
-	if strings.Contains(apiObservationGraph([]APIObservation{{Duration: 10 * time.Millisecond}}), "<circle") {
-		t.Fatal("a single telemetry sample should not render a point marker")
+	if !strings.Contains(apiObservationGraph([]APIObservation{{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}), `tabindex="0"`) {
+		t.Fatal("a single telemetry sample should render an accessible bar")
 	}
 }
 
@@ -1612,7 +1633,7 @@ func TestDashboardRendersPrimaryContentBeforeManagementMenu(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
 	body := w.Body.String()
-	positions := []string{`<section class="dashboard-intro">`, `dashboard-cta"`, `dashboard-queue"`, `class="dashboard-summary-grid"`, `dashboard-menu"`}
+	positions := []string{`<section class="dashboard-intro">`, `class="dashboard-summary-grid"`, `dashboard-queue"`, `dashboard-cta"`, `dashboard-menu"`}
 	last := -1
 	for _, marker := range positions {
 		pos := strings.Index(body[last+1:], marker)
@@ -1697,26 +1718,23 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `window.setInterval(refresh,interval)`) {
 		t.Fatal("system status does not include the bounded snapshot interval")
 	}
-	if strings.Contains(body, `new Date(item.at).getTime()`) || strings.Contains(body, `windowMs=select.value`) || !strings.Contains(body, `function(item,index)`) {
-		t.Fatal("system status graph does not use equal sample positions")
+	if !strings.Contains(body, `Date.parse(item.at)`) || !strings.Contains(body, `telemetry-bar`) {
+		t.Fatal("system status graph does not use timestamp-positioned bars")
 	}
-	if !strings.Contains(body, `function stableDomain(name,items)`) || !strings.Contains(body, `domain=stableDomain(service,items)`) {
-		t.Fatal("system status refresh does not apply independent service Y scales")
+	if !strings.Contains(body, `function scale(items)`) || !strings.Contains(body, `upper=scale(items)`) {
+		t.Fatal("system status refresh does not apply independent zero-based Y scales")
 	}
-	if strings.Contains(body, `30s`) || strings.Contains(body, `2m30s`) || strings.Contains(body, `class='chart-time-label'`) {
-		t.Fatal("system status refresh retains removed time-axis labels")
+	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2m30s`) {
+		t.Fatal("system status refresh is missing canonical time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
 	}
-	if !strings.Contains(body, `.system-status-sections .api-observation-meta{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
+	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list,.system-status-sections .pipeline-health-details-toggle{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
-	if strings.Contains(body, `class='chart-axis'`) || strings.Contains(body, `class="chart-axis"`) {
-		t.Fatal("system status refresh retains axis chrome")
-	}
-	if !strings.Contains(body, `telemetry-line`) || strings.Contains(body, `telemetry-point`) {
-		t.Fatal("system status refresh does not use the marker-free line chart geometry")
+	if strings.Contains(body, `class='chart-axis'`) || strings.Contains(body, `class="chart-axis"`) || strings.Contains(body, `telemetry-line`) {
+		t.Fatal("system status refresh retains obsolete line/axis chrome")
 	}
 	if !strings.Contains(body, `class="api-observation-details"`) {
 		t.Fatal("system status cards do not reserve shared detail geometry")

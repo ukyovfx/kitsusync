@@ -302,8 +302,8 @@ func TestConnectionsDisplayUsesSharedFieldRows(t *testing.T) {
 	req := httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil)
 	body := renderConnectionsDisplayBodyWithHealthRaw("ja", req, db, "Kitsu接続を設定してください", "bad", "対応が必要", "http://127.0.0.1:8080", "", false, false)
 
-	if got := strings.Count(body, `class="connection-field-row"`); got != 1 {
-		t.Fatalf("expected one Kitsu host field row in the compact summary, got %d", got)
+	if got := strings.Count(body, `class="connection-field-row"`); got != 3 {
+		t.Fatalf("expected host and two safe token rows in the summary, got %d", got)
 	}
 	if !strings.Contains(body, `class="connection-field-list"`) || !strings.Contains(body, `class="status-pill warning"`) {
 		t.Fatal("expected shared field-list and semantic status badge")
@@ -311,8 +311,8 @@ func TestConnectionsDisplayUsesSharedFieldRows(t *testing.T) {
 	if strings.Contains(body, "host.docker.internal") || strings.Contains(body, "&lt;span") || strings.Contains(body, "<span class=\"status-pill bad\">対応が必要</span>") {
 		t.Fatal("did not expect internal endpoint or literal status markup")
 	}
-	if strings.Contains(body, "<dt>Token</dt>") || strings.Contains(body, "<dt>Connection</dt>") || strings.Contains(body, "<dt>トークン</dt>") || strings.Contains(body, "<dt>接続</dt>") {
-		t.Fatal("normal Connections view should not duplicate token and connection state rows")
+	if !strings.Contains(body, "Kitsu Bot APIトークン") || !strings.Contains(body, "Discord Botトークン") {
+		t.Fatal("normal Connections view is missing the canonical safe token rows")
 	}
 }
 
