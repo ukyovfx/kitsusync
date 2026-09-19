@@ -14,7 +14,7 @@ RUN test "${APP_VERSION}" = "$(tr -d '\r\n' < VERSION)"
 RUN CGO_ENABLED=1 go build -ldflags "-X main.BuildVersion=${APP_VERSION} -X main.BuildCommit=${COMMIT_SHA} -X main.BuildTimestamp=${BUILD_TIMESTAMP} -X main.BuildSchema=${SCHEMA_VERSION} -X main.BuildWorktreeDirty=${WORKTREE_DIRTY} -X main.BuildSourceID=${BUILD_SOURCE_ID} -X main.BuildImageRevision=${IMAGE_REVISION}" -o kitsu-discord ./src
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates curl tzdata && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl tzdata && rm -rf /var/lib/apt/lists/*
 RUN groupadd --gid 10001 kitsusync \
     && useradd --uid 10001 --gid 10001 --home-dir /app --no-create-home --shell /usr/sbin/nologin kitsusync
 WORKDIR /app
