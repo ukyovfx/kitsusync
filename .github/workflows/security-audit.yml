@@ -1,0 +1,87 @@
+name: Security Audit
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install SQLite build dependencies
+        run: |
+          sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -print0 \
+            | sudo xargs -0 -r grep -lZ 'dl.google.com/linux/chrome-stable/deb' \
+            | sudo xargs -0 -r rm -f
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          languages: go
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build analyzed Go packages
+        run: CGO_ENABLED=1 go test ./src/... -run '^$' -count=1
+
+      - name: Analyze with CodeQL
+        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          category: /language:go
+
+  go-audit:
+    name: Go vulnerability and static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install audit tools
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+
+      - name: govulncheck (audit-only during rollout)
+        continue-on-error: true
+        run: govulncheck ./...
+
+      - name: Staticcheck (audit-only during rollout)
+        continue-on-error: true
+        run: staticcheck ./src/...
+
+      - name: Rollout note
+        if: always()
+        run: |
+          echo 'govulncheck and Staticcheck are intentionally non-blocking during the first audit pass.'
+          echo 'Findings will be triaged before any scanner becomes a required check.'
