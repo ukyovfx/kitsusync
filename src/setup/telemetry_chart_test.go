@@ -95,3 +95,25 @@ func TestSystemStatusRefreshAndInitialGraphUseMatchingLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemStatusUsesOneViewerLocalHHMMSSFormatter(t *testing.T) {
+	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
+		"kitsu": {{At: time.Now().Add(-5 * time.Second), Duration: 12 * time.Millisecond, Success: true}},
+	}}
+	initial := addTelemetryViewerLocalTimes(`<span class="api-observation-meta" data-telemetry-meta>Last updated 00:00:00</span>`, stats, telemetryWindow60Seconds)
+	refresh := systemStatusRefreshScriptCanonical()
+	for name, markup := range map[string]string{"initial": initial, "refresh": refresh} {
+		if !strings.Contains(markup, `kitsuSyncSystemStatusTime`) {
+			t.Fatalf("%s markup does not use the shared viewer-local formatter", name)
+		}
+		if strings.Contains(markup, "toLocaleTimeString") || strings.Contains(markup, "hour12") {
+			t.Fatalf("%s markup permits locale-shaped or AM/PM time output", name)
+		}
+	}
+	if !strings.Contains(initial, `Last updated`) || !strings.Contains(initial, `window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))`) {
+		t.Fatal("initial metadata does not preserve the single Last updated line")
+	}
+	if !strings.Contains(refresh, `data-telemetry-meta`) || !strings.Contains(refresh, `function localTime(value){return window.kitsuSyncSystemStatusTime(value)}`) {
+		t.Fatal("AJAX metadata does not use the shared HH:MM:SS formatter")
+	}
+}
