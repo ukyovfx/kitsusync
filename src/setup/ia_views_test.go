@@ -1681,7 +1681,7 @@ func TestConnectionsUseSharedActionSpacingToken(t *testing.T) {
 
 func TestEditorialWorkbenchUsesRestrainedSurfaceContract(t *testing.T) {
 	body := adminPage("en", "Dashboard", httptest.NewRequest(http.MethodGet, "/bot/admin?lang=en", nil), `<div class="dashboard-page"></div>`)
-	for _, want := range []string{`class="page-card glass editorial-workbench"`, `.editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}`, `.editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}`, `.editorial-advanced-settings{display:grid;gap:16px`} {
+	for _, want := range []string{`class="page-card glass editorial-workbench"`, `.editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}`, `.editorial-workbench h1,.editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}`, `.editorial-workbench .btn,.editorial-workbench .btn-sm,.editorial-workbench .btn-ghost,.editorial-workbench .btn-danger{min-height:40px;border-radius:8px}`, `.editorial-workbench .production-tabpanel>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:20px 0 0}`, `.editorial-advanced-settings{display:grid;gap:16px`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("editorial surface contract missing %q", want)
 		}

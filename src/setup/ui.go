@@ -649,21 +649,14 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections .pipeline-health-details{border-top:0;padding-top:0;margin-top:8px}
   .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) auto auto;align-items:start;column-gap:12px;row-gap:10px}
   .system-status-sections .pipeline-health-item>.status-badge{grid-column:2;grid-row:1;align-self:start;justify-self:end;white-space:nowrap}
-  .system-status-sections .pipeline-health-details-toggle{grid-column:3;grid-row:1;align-self:start;justify-self:end;margin:0;white-space:nowrap}
   .system-status-sections .pipeline-health-details-content{grid-column:1 / -1;grid-row:2;min-width:0;width:auto;border-top:1px solid var(--line);padding-top:10px}
   .system-status-sections .pipeline-health-details-content .pipeline-detail-list{margin:0}
-  .system-status-sections .pipeline-health-details-toggle{display:inline-grid;grid-template-columns:max-content;appearance:none;background:none;border:0;color:var(--muted);font:inherit;cursor:pointer;padding:0}
   .system-status-sections .pipeline-health-details-content[hidden]{display:none}
-  .system-status-sections .pipeline-health-details-toggle:focus-visible{outline:3px solid var(--interaction-focus);outline-offset:3px}
   .system-status-sections .api-sparkline:focus-visible{outline:3px solid var(--interaction-focus);outline-offset:3px}
   .system-status-sections .sparkline-hover-guide{stroke:rgba(255,141,72,.45);stroke-width:1;stroke-dasharray:2 3;pointer-events:none}
   .system-status-sections .sparkline-hover-marker{fill:var(--accent-2);stroke:var(--surface);stroke-width:1.5;pointer-events:none}
   .system-status-sections .sparkline-tooltip-background{fill:var(--surface);stroke:rgba(255,141,72,.55);stroke-width:1;rx:5;pointer-events:none}
   .system-status-sections .sparkline-tooltip-text{fill:var(--text);font-size:10px;font-variant-numeric:tabular-nums;pointer-events:none}
-  .system-status-sections .details-label-collapsed,.system-status-sections .details-label-expanded{grid-area:1 / 1}
-  .system-status-sections .details-label-expanded{visibility:hidden}
-  .system-status-sections .pipeline-health-details-toggle[aria-expanded="true"] .details-label-collapsed{visibility:hidden}
-  .system-status-sections .pipeline-health-details-toggle[aria-expanded="true"] .details-label-expanded{visibility:visible}
   @media(max-width:760px){.system-overall-summary{align-items:flex-start;flex-wrap:wrap}.system-overall-hint{flex-basis:100%;}.system-status-sections .system-observability-grid{grid-template-columns:1fr;gap:0}.system-status-sections .system-observability-grid>article:first-child{border-top:0}.system-status-sections>.system-observability,.system-status-sections>.pipeline-health,.system-status-sections>.section-card[aria-labelledby="system-issues-title"]{padding-top:16px}.system-status-sections .pipeline-health-controls{flex-wrap:wrap;justify-content:flex-end}}
   /* Phase 10 B: the system page uses one semantic section boundary and quiet row dividers. */
   .system-status-sections>.system-observability,.system-status-sections>.section-stack{gap:var(--space-section)}
@@ -728,11 +721,12 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .api-sparkline .chart-baseline{stroke:var(--line);stroke-width:1}
   /* Editorial systems refinement: one quiet workbench with explicit peer boundaries. */
   .editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}
-  .editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}
+  .editorial-workbench h1,.editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}
   .editorial-workbench h2{font-size:24px;line-height:1.2}
   .editorial-workbench h3{font-size:18px;line-height:1.25}
   .editorial-workbench .hint{font-size:15px}
   .editorial-workbench .field-help{font-size:15px}
+  .editorial-workbench .btn,.editorial-workbench .btn-sm,.editorial-workbench .btn-ghost,.editorial-workbench .btn-danger{min-height:40px;border-radius:8px}
   .editorial-workbench .dashboard-page{gap:28px}
   .editorial-workbench .dashboard-page>.dashboard-queue{border:1px solid var(--border-default);border-radius:8px;background:var(--surface-subtle);box-shadow:none}
   .editorial-workbench .dashboard-page>.dashboard-lower-grid{display:none}
@@ -750,6 +744,11 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .system-status-sections .pipeline-health-details-content{grid-column:1 / -1;grid-row:2}
   .editorial-workbench .audit-log-content{display:grid;gap:16px}
   .editorial-workbench .audit-log-table{border-top:1px solid var(--divider-color);padding-top:8px}
+  .editorial-workbench .production-tabpanel>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:20px 0 0}
+  .editorial-workbench .production-context #panel-overview>.section-card{border-top:0;padding-top:0}
+  .editorial-workbench .production-context #panel-notifications>.section-card>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:16px 0;margin-top:0}
+  .editorial-workbench .production-context #panel-notifications>.section-card>.section-card:first-child{border-top:0;padding-top:0}
+  .editorial-workbench .user-linking-page>.section-card{border:0;border-bottom:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
   .setup-required-state{display:grid;gap:24px;max-width:640px}
   .setup-required-message{margin:0;color:var(--muted);font-size:15px}
   @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:32px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{padding-top:20px}}
