@@ -865,6 +865,24 @@ func TestUserLinkingReadinessKeepsJapaneseEnglishParity(t *testing.T) {
 	}
 }
 
+func TestUserLinkingReadinessExplainsDataSourceStates(t *testing.T) {
+	directory := globalDiscordDirectory{
+		Guilds:        []DiscordGuild{{ID: "123456789012345678", Name: "Test server"}},
+		SelectedGuild: DiscordGuild{ID: "123456789012345678", Name: "Test server"},
+		Options:       []globalDiscordUserOption{{ID: "123456789012345679", Name: "Discord User"}},
+	}
+	body := renderUserLinkingReadinessWithData("en", true, true, false, []KitsuPerson{{ID: "kitsu-1", FullName: "Kitsu User"}}, directory, nil)
+	for _, want := range []string{"Kitsu users", "Discord server", "Discord users", "Connected"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("ready data state omitted %q", want)
+		}
+	}
+	empty := renderUserLinkingReadinessWithData("en", true, true, false, nil, directory, nil)
+	if !strings.Contains(empty, "Kitsu users") || !strings.Contains(empty, "Empty") {
+		t.Fatal("empty Kitsu users state was not explicit")
+	}
+}
+
 func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "安全なDiscord表示名"})
@@ -1128,6 +1146,36 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済", "https://kitsu.example.test", "configured-token", true, true)
 	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("Japanese summary did not preserve explicit service labels or secret safety")
+	}
+}
+
+func TestConnectionsEditKeepsSavedTokensMaskedAndAdvancedCopySingle(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := setRuntimeKitsuToken(db, "saved-kitsu-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRuntimeDiscordBotToken(db, "saved-discord-token"); err != nil {
+		t.Fatal(err)
+	}
+	body := renderConnectionsEditFormWithIdentityRows("ja", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", true, true, "")
+	for _, want := range []string{`id="kitsu-bot-token"`, `id="discord-bot-token"`, `placeholder="` + connectionSecretMask + `"`, `data-token-change`, "トークンを変更", "キャンセル"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("saved-token edit view omitted %q", want)
+		}
+	}
+	for _, secret := range []string{"saved-kitsu-token", "saved-discord-token"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("saved token %q was rendered", secret)
+		}
+	}
+	wantCopy := "Discord通知のKitsuリンクに必要な外部URLだけを通常設定として表示します。未設定の場合はKitsu URLを使用します。"
+	if strings.Count(body, wantCopy) != 1 || strings.Contains(body, "Discord通知のKitsuリンクに使用するURLです。未設定時はKitsu URLを使用します。") {
+		t.Fatal("Japanese advanced settings copy was duplicated or stale")
+	}
+	enBody := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), db, "", "ok", "Connected", "https://kitsu.example.test", true, true, "")
+	if strings.Count(enBody, "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting. When empty, the Kitsu URL is used.") != 1 {
+		t.Fatal("English advanced settings copy was not singular")
 	}
 }
 
