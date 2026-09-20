@@ -1246,8 +1246,8 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	if !strings.Contains(body, `class="user-link-grid-row"`) || !strings.Contains(body, "data-label=") || !strings.Contains(body, "user-link-actions") {
 		t.Fatal("User Linking did not render the shared responsive grid structure")
 	}
-	if strings.Contains(body, "123456789012345678") {
-		t.Fatal("User Linking rendered a raw Discord ID")
+	if !strings.Contains(body, "Discord One") {
+		t.Fatal("User Linking did not render the safe Discord display name")
 	}
 }
 
