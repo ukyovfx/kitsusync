@@ -1499,6 +1499,36 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 	}
 }
 
+func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
+	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
+	setup := SharedBotRuntimeReadiness{State: ReadinessSetupRequired}
+	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, setup); got != "Configure the Kitsu connection before continuing." {
+		t.Fatalf("Kitsu setup blocker = %q", got)
+	}
+	if got := pipelineNotificationHint("en", setup); got != "Configure the Kitsu connection before continuing." {
+		t.Fatalf("notification setup blocker = %q", got)
+	}
+	production := SharedBotRuntimeReadiness{State: ReadinessProductionRequired, KitsuConfigured: true, DiscordConfigured: true, PrerequisitesReady: true}
+	if got := pipelineRoutingHint("en", production); got != "No Production is currently available for notifications." {
+		t.Fatalf("Production blocker = %q", got)
+	}
+	view := readinessViewFor("en", r, production)
+	if view.ActionURL != "/bot/setup?lang=en" || view.ActionLabel != "New Production Connection" {
+		t.Fatalf("Production action = %#v", view)
+	}
+	routing := SharedBotRuntimeReadiness{State: ReadinessRoutingRequired, KitsuConfigured: true, DiscordConfigured: true, ProductionConnected: true, PrerequisitesReady: true}
+	if got := pipelineRoutingHint("en", routing); got != "A Production exists, but its notification routing is missing or invalid." {
+		t.Fatalf("routing blocker = %q", got)
+	}
+	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "Waiting for the first observation." {
+		t.Fatalf("first-observation guidance = %q", got)
+	}
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", details: "<p>safe</p>", detailsLabel: "Observation diagnostics", detailsID: "pipeline-event-monitoring", action: "#pipeline-event-monitoring", actionLabel: "Review observation diagnostics"}, 0)
+	if !strings.Contains(rendered, `data-open-pipeline-details="pipeline-event-monitoring"`) {
+		t.Fatal("diagnostic action did not target its selective disclosure")
+	}
+}
+
 func TestDashboardRefinedMenuOrderHasNoNumericIndicators(t *testing.T) {
 	db := newIAViewDB(t)
 	readiness := SharedBotRuntimeReadiness{}

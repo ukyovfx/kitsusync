@@ -212,8 +212,11 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="bot_token"`) {
 		t.Fatal("expected the Discord Bot token field")
 	}
-	if got := strings.Count(body, `<form method="POST" class="connection-save-form">`); got != 2 {
+	if got := strings.Count(body, `class="connection-save-form"`); got != 2 {
 		t.Fatalf("expected two independent connection forms, got %d", got)
+	}
+	if !strings.Contains(body, `id="kitsu-connection-form"`) || !strings.Contains(body, `form="kitsu-connection-form"`) {
+		t.Fatal("advanced Kitsu fields must remain associated with the Kitsu save form")
 	}
 	if !strings.Contains(body, `name="action" value="save_kitsu"`) || !strings.Contains(body, `name="action" value="save_discord"`) {
 		t.Fatal("expected explicit independent save actions")
@@ -295,8 +298,8 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 			t.Fatalf("saved secret or mask leaked into form: %q", secret)
 		}
 	}
-	if strings.Count(body, `class="editorial-advanced-settings"`) != 1 || strings.Contains(body, `<details class="connection-advanced"`) || strings.Contains(body, `<details class="connection-expert"`) {
-		t.Fatal("advanced connection settings must be one flat section without nested accordions")
+	if strings.Count(body, `class="editorial-advanced-settings"`) != 1 || strings.Count(body, `class="connection-expert-network"`) != 1 {
+		t.Fatal("advanced connection settings must use one restrained expert disclosure")
 	}
 	if strings.Contains(body, "An internal route used only by KitsuSync") || strings.Contains(body, "KitsuSyncだけが使う内部経路です") {
 		t.Fatal("advanced settings retained redundant internal-route helper copy")
@@ -309,6 +312,21 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 		if !strings.Contains(body[advanced:], field) {
 			t.Fatalf("advanced settings missing %s", field)
 		}
+	}
+	if !strings.Contains(body, `data-kitsu-internal-endpoint hidden`) {
+		t.Fatal("internal Kitsu endpoint must stay hidden until a manual endpoint override")
+	}
+}
+
+func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) {
+	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "Review connections separately.", "warning", "Needs review", "https://kitsu.example.test/", false, false, "")
+	for _, want := range []string{"Resolved Kitsu endpoint", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Change endpoint manually", `data-kitsu-endpoint-field hidden`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("resolved endpoint UI missing %q", want)
+		}
+	}
+	if strings.Contains(body, `name="kitsu_hostname" value="Not configured"`) {
+		t.Fatal("resolved endpoint form must not submit the display placeholder")
 	}
 }
 

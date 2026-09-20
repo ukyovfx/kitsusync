@@ -720,6 +720,17 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .api-sparkline .telemetry-bar.failure{fill:#ff6a50;stroke:#ff6a50}
   .api-sparkline .telemetry-bar:focus{stroke:#fff;stroke-width:1.5;outline:none}
   .api-sparkline .chart-baseline{stroke:var(--line);stroke-width:1}
+  .system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{fill:#b8b5ae!important}
+  .system-status-sections .api-sparkline .chart-guide,.system-status-sections .api-sparkline .chart-baseline{stroke:#56616a!important}
+  .editorial-workbench .connection-resolved-endpoint{display:grid;gap:6px;margin:4px 0 16px;padding:12px 0;border-bottom:1px solid var(--divider-color)}
+  .editorial-workbench .connection-resolved-endpoint-label{color:var(--muted-2);font-size:13px}
+  .editorial-workbench .connection-resolved-endpoint code{font-size:15px;overflow-wrap:anywhere}
+  .editorial-workbench .connection-resolved-endpoint .connection-endpoint-change{justify-self:start;min-height:34px;padding:6px 10px;font-size:13px}
+  .editorial-workbench .connection-expert-network{grid-column:1 / -1;border-top:1px solid var(--divider-color);padding-top:12px}
+  .editorial-workbench .connection-expert-network summary{cursor:pointer;color:var(--muted);font-size:14px}
+  .editorial-workbench .connection-expert-network-content{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px;padding-top:16px}
+  .editorial-workbench .connection-expert-network-content .connection-form-field{min-width:0}
+  @media(max-width:760px){.editorial-workbench .connection-expert-network-content{grid-template-columns:1fr}}
   /* Editorial systems refinement: one quiet workbench with explicit peer boundaries. */
   .editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}
   .editorial-workbench h1,.editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}
@@ -743,6 +754,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .connections-summary-grid>.connections-card{border-radius:8px}
   .editorial-workbench .system-status-sections .system-observability-grid{gap:16px}
   .editorial-workbench .system-status-sections .system-observability-grid>article{display:grid;grid-template-rows:auto 1fr;min-height:224px;padding:16px;border:1px solid var(--border-default);border-radius:8px;background:var(--surface-subtle);box-shadow:none}
+  .editorial-workbench .system-status-sections .api-sparkline{background:transparent;border-radius:0}
   .editorial-workbench .system-status-sections .pipeline-health-details{grid-column:1 / -1;grid-row:2;margin:0;padding:0;border:0}
   .editorial-workbench .system-status-sections .pipeline-health-details summary{cursor:pointer;color:var(--muted);font-size:14px}
   .editorial-workbench .system-status-sections .pipeline-health-details-content{min-width:0;padding-top:10px;color:var(--muted)}

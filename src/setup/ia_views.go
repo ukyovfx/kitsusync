@@ -1458,7 +1458,7 @@ func renderIABot(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 }
 
 type pipelineHealthItem struct {
-	label, value, class, explanation, details, detailsLabel, action, actionLabel string
+	label, value, class, explanation, details, detailsLabel, action, actionLabel, detailsID string
 }
 
 func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -1467,17 +1467,36 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	readinessView := readinessViewFor(lang, r, readiness)
 	stats := Stats.Snapshot()
 	windowName := telemetryWindowName(strings.TrimSpace(r.URL.Query().Get("window")))
+	issues := recentSystemIssues(lang, db)
+	readinessAction, readinessActionLabel := readinessView.ActionURL, readinessView.ActionLabel
+	eventAction, eventActionLabel := "", ""
+	if stats.LastPollErr != "" {
+		if issues != "" {
+			eventAction, eventActionLabel = withLang("/bot/admin/audit", r), t(lang, "最近の問題を確認", "Review recent issues")
+		} else {
+			eventAction, eventActionLabel = "#pipeline-event-monitoring", t(lang, "観測診断を確認", "Review observation diagnostics")
+		}
+	} else if !readiness.PrerequisitesReady {
+		eventAction, eventActionLabel = readinessAction, readinessActionLabel
+	}
+	notificationAction, notificationActionLabel := "", ""
+	if !readiness.OverallReady {
+		notificationAction, notificationActionLabel = readinessAction, readinessActionLabel
+	}
+	routingAction, routingActionLabel := "", ""
+	if !readiness.RoutingReady {
+		routingAction, routingActionLabel = readinessAction, readinessActionLabel
+	}
 	items := []pipelineHealthItem{
-		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics")},
-		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics")},
+		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics"), action: eventAction, actionLabel: eventActionLabel, detailsID: "pipeline-event-monitoring"},
+		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics"), action: notificationAction, actionLabel: notificationActionLabel},
 		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success"},
-		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics")},
+		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics"), action: routingAction, actionLabel: routingActionLabel},
 	}
 	var healthRows strings.Builder
 	for index, item := range items {
 		healthRows.WriteString(renderPipelineHealthItem(lang, item, index))
 	}
-	issues := recentSystemIssues(lang, db)
 	issuesSection := ""
 	if issues != "" {
 		issuesSection = `<section class="section-card glass system-issues" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + issues + `</section>`
@@ -1487,6 +1506,7 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
+	body += `<script data-pipeline-health-actions>(function(){document.addEventListener('click',function(event){var link=event.target.closest('[data-open-pipeline-details]');if(!link)return;var details=document.getElementById(link.getAttribute('data-open-pipeline-details'));if(details){details.open=true;}});})();</script>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
@@ -1583,11 +1603,21 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 	_ = index
 	action := ""
 	if item.action != "" && item.actionLabel != "" {
-		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
+		openDetails := ""
+		href := item.action
+		if strings.HasPrefix(item.action, "#") && item.detailsID != "" {
+			openDetails = ` data-open-pipeline-details="` + esc(item.detailsID) + `"`
+			href = item.action
+		}
+		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(href) + `"` + openDetails + `>` + esc(item.actionLabel) + `</a>`
 	}
 	details := ""
 	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
-		details = `<details class="pipeline-health-details"><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-details-content">` + item.details + `</div></details>`
+		detailsID := ""
+		if item.detailsID != "" {
+			detailsID = ` id="` + esc(item.detailsID) + `"`
+		}
+		details = `<details class="pipeline-health-details"` + detailsID + `><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-details-content">` + item.details + `</div></details>`
 	}
 	explanation := ""
 	if strings.TrimSpace(item.explanation) != "" {
@@ -1973,12 +2003,15 @@ func pipelineProcessingClass(stats RuntimeSnapshot) string {
 	return "warning"
 }
 
-func pipelineProcessingHint(lang string, stats RuntimeSnapshot) string {
+func pipelineProcessingHint(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness) string {
 	if stats.LastPollErr != "" {
 		return t(lang, "直近の処理で問題が記録されています。", "The most recent processing cycle recorded an issue.")
 	}
 	if stats.LastPollTime.IsZero() {
-		return t(lang, "処理メトリクスはまだ確認できません。", "Processing metrics are not available yet.")
+		if !readiness.PrerequisitesReady {
+			return readinessViewFor(lang, nil, readiness).Hint
+		}
+		return t(lang, "初回の観測を待っています。", "Waiting for the first observation.")
 	}
 	return ""
 }
@@ -2004,7 +2037,10 @@ func pipelineRoutingHint(lang string, readiness SharedBotRuntimeReadiness) strin
 	if readiness.RoutingReady {
 		return ""
 	}
-	return t(lang, "有効な通知先設定がありません。", "No valid enabled route is available.")
+	if !readiness.ProductionConnected {
+		return t(lang, "通知可能なProductionがありません。", "No Production is currently available for notifications.")
+	}
+	return t(lang, "Productionはありますが、有効な通知先設定がありません。", "A Production exists, but its notification routing is missing or invalid.")
 }
 
 func pipelineDiscordValue(lang string, configured bool) string {
@@ -2032,7 +2068,7 @@ func pipelineNotificationHint(lang string, readiness SharedBotRuntimeReadiness) 
 	if readiness.OverallReady {
 		return ""
 	}
-	return t(lang, "設定が完了するまで通知は停止しています。", "Notifications remain blocked until setup is complete.")
+	return readinessViewFor(lang, nil, readiness).Hint
 }
 
 func pipelineNotificationDetails(lang string, stats RuntimeSnapshot) string {
