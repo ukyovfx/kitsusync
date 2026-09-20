@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -829,6 +830,41 @@ func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	}
 }
 
+func TestGlobalUserLinkingMissingPrerequisitesIsReadinessState(t *testing.T) {
+	w := httptest.NewRecorder()
+	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), nil)
+	body := w.Body.String()
+	for _, want := range []string{"Kitsu", "Discord Bot", "未設定", "接続設定"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing-prerequisite view omitted %q", want)
+		}
+	}
+	for _, forbidden := range []string{"Discordユーザーを取得できませんでした", "Discordサーバーが見つかりません", "Bot接続を確認", "診断の詳細", `id="global-discord-guild"`, `<table`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("missing-prerequisite view exposed failure/lookup UI %q", forbidden)
+		}
+	}
+}
+
+func TestUserLinkingReadinessKeepsJapaneseEnglishParity(t *testing.T) {
+	for _, tc := range []struct {
+		lang, status, message, action string
+	}{
+		{"ja", "未設定", "Discord Botを設定すると", "接続設定"},
+		{"en", "Not configured", "Configure the Discord Bot", "Connection settings"},
+	} {
+		body := renderUserLinkingReadiness(tc.lang, true, false)
+		for _, want := range []string{tc.status, tc.message, tc.action} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s readiness omitted %q", tc.lang, want)
+			}
+		}
+		if strings.Contains(body, "Diagnostic details") || strings.Contains(body, "Discord users could not be loaded") {
+			t.Fatalf("%s readiness incorrectly rendered failure diagnostics", tc.lang)
+		}
+	}
+}
+
 func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "安全なDiscord表示名"})
@@ -1163,6 +1199,40 @@ func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
 
 func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	db := newIAViewDB(t)
+	kitsuStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/auth/authenticated" || r.URL.Path == "/api/data/projects/" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(kitsuStub.Close)
+	t.Setenv("KITSU_HOSTNAME", kitsuStub.URL)
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRuntimeDiscordBotToken(db, "configured-discord-token"); err != nil {
+		t.Fatal(err)
+	}
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload string
+		switch req.URL.Path {
+		case "/api/v10/users/@me/guilds":
+			payload = `[{"id":"123456789012345678","name":"Test server"}]`
+		case "/api/v10/guilds/123456789012345678/members":
+			payload = `[{"user":{"id":"123456789012345679","username":"Discord One"}}]`
+		default:
+			return nil, fmt.Errorf("unexpected Discord path: %s", req.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload))}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 	db.Create(&model.UserMap{KitsuID: "user-1", KitsuName: "User One", DiscordID: "123456789012345678", DiscordDisplayName: "Discord One"})
 	w := httptest.NewRecorder()
 	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)

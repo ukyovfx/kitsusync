@@ -144,6 +144,10 @@ Production detail Users is a compact, linear workflow: `Production users`, `Add 
 
 The add form contains only globally linked human users not already associated with this Production. Adding creates a local `ProjectUserMap` association and does not change global User Linking or Kitsu membership. Reviewer / Checker assignment is a separate form using an associated Production user and a Kitsu Task Type; current assignments are compact removable rows. Role removal does not remove the user association. Removing a user association also removes that user's local role assignments. `ProjectUserMap` and `ProjectCheckerMap` remain the canonical stores, and bots are excluded.
 
+## User Linking readiness states
+
+`/bot/admin/users` renders the two prerequisite rows first: Kitsu and Discord Bot, using the shared `接続済` / `Connected`, `未設定` / `Not configured`, and `要確認` / `Needs review` vocabulary. Missing configuration is a readiness state, not a diagnostic error: show one concise cause and one `接続設定` / `Connection settings` action, without a selector, mapping table, failure copy, or diagnostics. Configured lookup is represented separately as waiting/loading, successful zero results, genuine request/auth/network failure (with safe diagnostics only when useful), or ready/populated. A selector is rendered only when joined guild data is available; mapping rows are rendered only when both directories are meaningful. Empty-result copy never describes a blocked lookup as an API failure.
+
 ## Source references
 
 The primary implementation is in `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/observability.go`, `src/setup/runtime_observation.go`, and the route registration in `src/main.go`.
