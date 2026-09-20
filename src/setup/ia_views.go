@@ -2498,55 +2498,6 @@ func renderUserLinkingReadinessState(lang string, kitsuConfigured, discordConfig
 	return `<div class="user-linking-readiness" aria-label="` + esc(t(lang, "ユーザー紐づけの前提条件", "User Linking prerequisites")) + `">` + rows + `</div><div class="notice notice-info user-linking-readiness-notice" role="status"><p>` + esc(message) + `</p><div class="button-row">` + action + `</div></div>`
 }
 
-func renderUserLinkingReadinessWithData(lang string, kitsuConfigured, discordConfigured, discordNeedsReview bool, people []KitsuPerson, directory globalDiscordDirectory, loadErr error) string {
-	base := renderUserLinkingReadinessState(lang, kitsuConfigured, discordConfigured, discordNeedsReview)
-	status := func(class, label string) string {
-		return `<span class="status-pill ` + esc(class) + `" role="status">` + esc(label) + `</span>`
-	}
-	kitsuUsers := connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
-	if kitsuConfigured {
-		kitsuUsers = connectionStatus{Class: "muted", Label: t(lang, "空", "Empty")}
-		if len(people) > 0 {
-			kitsuUsers = connectionStatus{Class: "ok", Label: t(lang, "接続済", "Connected")}
-		}
-	}
-	guilds := connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
-	discordUsers := connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
-	if discordConfigured {
-		switch {
-		case loadErr != nil:
-			guilds = connectionStatus{Class: "warn", Label: t(lang, "要確認", "Needs review")}
-			discordUsers = guilds
-		case people == nil && len(directory.Guilds) == 0:
-			guilds = connectionStatus{Class: "warn", Label: t(lang, "待機中", "Waiting")}
-			discordUsers = guilds
-		case len(directory.Guilds) == 0:
-			guilds = connectionStatus{Class: "muted", Label: t(lang, "空", "Empty")}
-			discordUsers = connectionStatus{Class: "muted", Label: t(lang, "待機中", "Waiting")}
-		case directory.SelectedGuild.ID == "":
-			guilds = connectionStatus{Class: "warn", Label: t(lang, "待機中", "Waiting")}
-			discordUsers = connectionStatus{Class: "warn", Label: t(lang, "待機中", "Waiting")}
-		case len(directory.Options) == 0:
-			guilds = connectionStatus{Class: "ok", Label: t(lang, "接続済", "Connected")}
-			discordUsers = connectionStatus{Class: "muted", Label: t(lang, "空", "Empty")}
-		default:
-			guilds = connectionStatus{Class: "ok", Label: t(lang, "接続済", "Connected")}
-			discordUsers = connectionStatus{Class: "ok", Label: t(lang, "接続済", "Connected")}
-		}
-	}
-	rows := `<div class="user-linking-readiness-row"><span>` + esc(t(lang, "Kitsuユーザー", "Kitsu users")) + `</span>` + status(kitsuUsers.Class, kitsuUsers.Label) + `</div>` +
-		`<div class="user-linking-readiness-row"><span>` + esc(t(lang, "Discordサーバー", "Discord server")) + `</span>` + status(guilds.Class, guilds.Label) + `</div>` +
-		`<div class="user-linking-readiness-row"><span>` + esc(t(lang, "Discordユーザー", "Discord users")) + `</span>` + status(discordUsers.Class, discordUsers.Label) + `</div>`
-	insertAt := strings.LastIndex(base, `</div>`)
-	if noticeAt := strings.Index(base, `</div><div class="notice`); noticeAt >= 0 {
-		insertAt = noticeAt
-	}
-	if insertAt < 0 {
-		return base
-	}
-	return base[:insertAt] + rows + base[insertAt:]
-}
-
 func renderUserLinkingReadiness(lang string, kitsuConfigured, discordConfigured bool) string {
 	return renderUserLinkingReadinessState(lang, kitsuConfigured, discordConfigured, false)
 }

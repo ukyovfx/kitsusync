@@ -868,24 +868,6 @@ func TestUserLinkingReadinessKeepsJapaneseEnglishParity(t *testing.T) {
 	}
 }
 
-func TestUserLinkingReadinessExplainsDataSourceStates(t *testing.T) {
-	directory := globalDiscordDirectory{
-		Guilds:        []DiscordGuild{{ID: "123456789012345678", Name: "Test server"}},
-		SelectedGuild: DiscordGuild{ID: "123456789012345678", Name: "Test server"},
-		Options:       []globalDiscordUserOption{{ID: "123456789012345679", Name: "Discord User"}},
-	}
-	body := renderUserLinkingReadinessWithData("en", true, true, false, []KitsuPerson{{ID: "kitsu-1", FullName: "Kitsu User"}}, directory, nil)
-	for _, want := range []string{"Kitsu users", "Discord server", "Discord users", "Connected"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("ready data state omitted %q", want)
-		}
-	}
-	empty := renderUserLinkingReadinessWithData("en", true, true, false, nil, directory, nil)
-	if !strings.Contains(empty, "Kitsu users") || !strings.Contains(empty, "Empty") {
-		t.Fatal("empty Kitsu users state was not explicit")
-	}
-}
-
 func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "安全なDiscord表示名"})
