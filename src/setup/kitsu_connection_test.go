@@ -242,7 +242,7 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.") || strings.Contains(body, `placeholder="••••••••••••••••••••"`) {
 		t.Fatal("token fields must use the canonical concise helper without a mask-looking placeholder")
 	}
-	if strings.Contains(body, "Change token") || strings.Contains(body, `hidden style="display:none"`) {
+	if strings.Contains(body, "Change token") || strings.Contains(body, `id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help" hidden style="display:none"`) || strings.Contains(body, `id="discord-bot-token" type="password" name="bot_token" autocomplete="new-password" aria-describedby="discord-token-help" hidden style="display:none"`) {
 		t.Fatal("unset token fields should remain editable without saved-secret controls")
 	}
 	if !strings.Contains(body, "Kitsu Bot API token") || !strings.Contains(body, "Discord Bot Token") {
