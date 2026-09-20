@@ -286,6 +286,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 		t.Fatalf("store Kitsu test token: %v", err)
 	}
 	setRuntimeDiscordBotToken(db, "discord-test-token")
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, "https://api.kitsu.example.test")
 
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", false, false, "Test Bot")
 	for _, want := range []string{"Needs review", "Recheck connection", "Change token", `hidden style="display:none"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
@@ -300,6 +301,9 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	}
 	if strings.Count(body, `class="editorial-advanced-settings"`) != 1 || strings.Count(body, `class="connection-expert-network"`) != 1 {
 		t.Fatal("advanced connection settings must use one restrained expert disclosure")
+	}
+	if !strings.Contains(body, `class="connection-expert-network" data-expert-network-overrides open`) || !strings.Contains(body, `value="https://api.kitsu.example.test"`) {
+		t.Fatal("saved API Base URL must keep the expert disclosure visible and editable")
 	}
 	if strings.Contains(body, "An internal route used only by KitsuSync") || strings.Contains(body, "KitsuSyncだけが使う内部経路です") {
 		t.Fatal("advanced settings retained redundant internal-route helper copy")
@@ -320,10 +324,13 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 
 func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) {
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "Review connections separately.", "warning", "Needs review", "https://kitsu.example.test/", false, false, "")
-	for _, want := range []string{"Resolved Kitsu endpoint", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Change endpoint manually", `data-kitsu-endpoint-field hidden`} {
+	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Change manually", "Use automatic endpoint", `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden`, `data-kitsu-host-auto`, `data-reset-kitsu-endpoint`, "setEndpointMode"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resolved endpoint UI missing %q", want)
 		}
+	}
+	if strings.Contains(body, "Resolved Kitsu endpoint") || strings.Contains(body, "Expert network overrides") {
+		t.Fatal("normal endpoint UI retained obsolete or over-prominent copy")
 	}
 	if strings.Contains(body, `name="kitsu_hostname" value="Not configured"`) {
 		t.Fatal("resolved endpoint form must not submit the display placeholder")

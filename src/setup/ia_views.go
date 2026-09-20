@@ -443,7 +443,13 @@ func systemStatusRefreshScriptCanonicalRaw() string {
 func systemStatusRefreshScriptCanonical() string {
 	const localTimeSource = `function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":date.toLocaleTimeString()}`
 	const sharedLocalTimeSource = `function localTime(value){return window.kitsuSyncSystemStatusTime(value)}`
-	return strings.ReplaceAll(systemStatusRefreshScriptCanonicalRaw(), localTimeSource, sharedLocalTimeSource)
+	script := systemStatusRefreshScriptCanonicalRaw()
+	script = strings.ReplaceAll(script, `labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")]`, `labels=select.value==="5m"?["5m","2.5m","0s"]:["60s","30s","0s"]`)
+	metadataParity := `function alignMetadata(row){if(!row||row.querySelector(".api-observation-primary")){return}var label=row.querySelector(".api-observation-label"),value=row.querySelector("[data-telemetry-value]"),meta=row.querySelector(".api-observation-meta");if(!label||!value||!meta){return}var primary=document.createElement("div");primary.className="api-observation-primary";primary.appendChild(label);primary.appendChild(value);row.insertBefore(primary,meta)}root.querySelectorAll(".api-observation-latency").forEach(alignMetadata);var metadataObserver=new MutationObserver(function(){root.querySelectorAll(".api-observation-latency").forEach(alignMetadata)});metadataObserver.observe(root,{subtree:true,childList:true});`
+	if end := strings.LastIndex(script, `</script>`); end >= 0 {
+		script = script[:end] + metadataParity + script[end:]
+	}
+	return strings.ReplaceAll(script, localTimeSource, sharedLocalTimeSource)
 }
 
 func addDynamicObservationAccessibility(graph string) string {
@@ -1461,6 +1467,32 @@ type pipelineHealthItem struct {
 	label, value, class, explanation, details, detailsLabel, action, actionLabel, detailsID string
 }
 
+func pipelineReadinessNextAction(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) string {
+	if readiness.State == ReadinessReady {
+		return ""
+	}
+	view := readinessViewFor(lang, r, readiness)
+	copyText, actionLabel := view.Hint, view.ActionLabel
+	switch readiness.State {
+	case ReadinessSetupRequired:
+		copyText = t(lang, "Kitsu接続が未設定のため、イベント監視と通知を開始できません。", "Kitsu setup is required before event monitoring and notifications can run.")
+		actionLabel = t(lang, "Kitsu接続を設定", "Configure Kitsu connection")
+	case ReadinessBotSetupRequired:
+		copyText = t(lang, "Discord Bot設定が未完了のため、通知を開始できません。", "Discord Bot setup is incomplete, so notifications cannot run.")
+		actionLabel = t(lang, "Discord Botを設定", "Configure Discord Bot")
+	case ReadinessProductionRequired:
+		copyText = t(lang, "接続済みで通知可能なProductionがありません。", "No connected and notifiable Production is available.")
+		actionLabel = t(lang, "新しいProduction接続", "New Production Connection")
+	case ReadinessRoutingRequired:
+		copyText = t(lang, "通知ルーティング設定が未完了です。", "Notification routing needs attention.")
+		actionLabel = t(lang, "通知設定を確認", "Review notification settings")
+	}
+	if strings.TrimSpace(view.ActionURL) == "" || strings.TrimSpace(actionLabel) == "" {
+		return `<p class="field-help pipeline-health-next-action" role="status">` + esc(copyText) + `</p>`
+	}
+	return `<div class="pipeline-health-next-action" role="status"><p class="field-help">` + esc(copyText) + `</p><a class="btn-ghost pipeline-health-next-action-link" href="` + esc(view.ActionURL) + `">` + esc(actionLabel) + `</a></div>`
+}
+
 func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
@@ -1468,30 +1500,19 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	stats := Stats.Snapshot()
 	windowName := telemetryWindowName(strings.TrimSpace(r.URL.Query().Get("window")))
 	issues := recentSystemIssues(lang, db)
-	readinessAction, readinessActionLabel := readinessView.ActionURL, readinessView.ActionLabel
 	eventAction, eventActionLabel := "", ""
-	if stats.LastPollErr != "" {
+	if stats.LastPollErr != "" && readiness.PrerequisitesReady {
 		if issues != "" {
 			eventAction, eventActionLabel = withLang("/bot/admin/audit", r), t(lang, "最近の問題を確認", "Review recent issues")
 		} else {
 			eventAction, eventActionLabel = "#pipeline-event-monitoring", t(lang, "観測診断を確認", "Review observation diagnostics")
 		}
-	} else if !readiness.PrerequisitesReady {
-		eventAction, eventActionLabel = readinessAction, readinessActionLabel
-	}
-	notificationAction, notificationActionLabel := "", ""
-	if !readiness.OverallReady {
-		notificationAction, notificationActionLabel = readinessAction, readinessActionLabel
-	}
-	routingAction, routingActionLabel := "", ""
-	if !readiness.RoutingReady {
-		routingAction, routingActionLabel = readinessAction, readinessActionLabel
 	}
 	items := []pipelineHealthItem{
 		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics"), action: eventAction, actionLabel: eventActionLabel, detailsID: "pipeline-event-monitoring"},
-		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics"), action: notificationAction, actionLabel: notificationActionLabel},
+		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics")},
 		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success"},
-		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics"), action: routingAction, actionLabel: routingActionLabel},
+		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics")},
 	}
 	var healthRows strings.Builder
 	for index, item := range items {
@@ -1501,7 +1522,8 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if issues != "" {
 		issuesSection = `<section class="section-card glass system-issues" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + issues + `</section>`
 	}
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + `</div>`
+	sectionAction := pipelineReadinessNextAction(lang, r, readiness)
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p>` + sectionAction + `</div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
@@ -1511,14 +1533,12 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 }
 
 func renderRuntimeObservabilitySummary(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness, windowName, body string) string {
-	statusLabel, statusClass, statusHint := overallRuntimeStatus(lang, readiness, stats)
 	body = renderRuntimeObservabilitySummaryRaw(lang, stats, windowName, body)
 	body = stripSystemStatusRedundantCopy(body)
 	body = addTelemetryViewerLocalTimes(body, stats, windowName)
 	body = replaceElementTextByID(body, "system-observability-title", t(lang, "API応答状態", "API response status"))
 	body = replaceElementTextByID(body, "pipeline-health-title", t(lang, "KitsuSync処理状態", "KitsuSync operational status"))
-	overall := `<div class="system-overall-summary" aria-labelledby="system-overall-title"><span id="system-overall-title" class="system-overall-label">` + esc(t(lang, "システム", "System")) + `</span><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span><span class="system-overall-hint">` + esc(statusHint) + `</span></div>`
-	return `<div class="section-stack system-status-sections">` + overall + body + `</div>`
+	return `<div class="section-stack system-status-sections">` + body + `</div>`
 }
 
 func stripSystemStatusRedundantCopy(body string) string {
@@ -1638,7 +1658,7 @@ func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowNa
 	}
 	normalMeta := fmt.Sprintf("%s %s", t(lang, "最終更新", "Last updated"), last.At.Local().Format("15:04:05"))
 	scale := stableObservationScale(service, windowName, items)
-	return `<div class="api-observation-latency"><strong data-telemetry-value>` + esc(value) + `</strong><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationBarGraphWithScale(items, lang, windowName, scale)
+	return `<div class="api-observation-latency"><div class="api-observation-primary"><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span><strong data-telemetry-value>` + esc(value) + `</strong></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationBarGraphWithScale(items, lang, windowName, scale)
 }
 
 func apiObservationGraph(items []APIObservation) string {
@@ -1686,9 +1706,9 @@ func apiObservationBarsWithScale(items []APIObservation, lang, windowName string
 		label := telemetryObservationLabel(lang, item)
 		bars.WriteString(`<rect class="telemetry-bar ` + class + `" x="` + fmt.Sprintf("%.1f", x-barWidth/2) + `" y="` + fmt.Sprintf("%.1f", y) + `" width="` + fmt.Sprintf("%.1f", barWidth) + `" height="` + fmt.Sprintf("%.1f", height) + `" data-telemetry-at="` + esc(item.At.UTC().Format(time.RFC3339)) + `" data-telemetry-duration="` + strconv.FormatInt(item.Duration.Milliseconds(), 10) + `" data-telemetry-success="` + strconv.FormatBool(item.Success) + `" tabindex="0" role="img" aria-label="` + esc(label) + `"><title>` + esc(label) + `</title></rect>`)
 	}
-	labels := []string{t(lang, "60秒", "60s"), t(lang, "30秒", "30s"), t(lang, "今", "Now")}
+	labels := []string{"60s", "30s", "0s"}
 	if windowName == telemetryWindow5Minutes {
-		labels = []string{t(lang, "5分", "5m"), t(lang, "2分30秒", "2m30s"), t(lang, "今", "Now")}
+		labels = []string{"5m", "2.5m", "0s"}
 	}
 	middle := maxValue / 2
 	svg := `<svg class="api-sparkline" viewBox="0 0 466 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", len(items))) + `"` + sparklineDataAttributes(items) + `><line class="chart-guide" x1="34" y1="45" x2="464" y2="45"></line><line class="chart-baseline" x1="34" y1="82" x2="464" y2="82"></line><text class="chart-tick" text-anchor="end" x="30" y="12">` + esc(formatLatencyTick(maxValue)) + `</text><text class="chart-tick" text-anchor="end" x="30" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="30" y="84">0ms</text>` + bars.String() + `<text class="chart-time-label" text-anchor="start" x="34" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="233" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="464" y="100">` + esc(labels[2]) + `</text></svg>`

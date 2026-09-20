@@ -760,6 +760,23 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .system-status-sections .pipeline-health-details-content{min-width:0;padding-top:10px;color:var(--muted)}
   .editorial-workbench .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) auto;row-gap:8px}
   .editorial-workbench .system-status-sections .pipeline-health-item>.status-badge{grid-column:2;grid-row:1}
+  .editorial-workbench .connection-host-value-row{display:flex;align-items:center;gap:12px;min-width:0}
+  .editorial-workbench .connection-host-value-row code{min-width:0;overflow-wrap:anywhere;color:var(--text);font-size:15px}
+  .editorial-workbench .connection-host-value-row .connection-endpoint-change{flex:0 0 auto;min-height:34px;padding:6px 10px;font-size:13px}
+  .editorial-workbench .connection-host-manual{display:grid;gap:8px}
+  .editorial-workbench .connection-host-manual .connection-endpoint-reset{justify-self:start;min-height:34px;padding:6px 10px;font-size:13px}
+  .editorial-workbench .connection-expert-network[hidden]{display:none}
+  .editorial-workbench .connection-external-url-controls{display:flex;align-items:center;gap:12px;width:100%}
+  .editorial-workbench .connection-external-url-controls input{flex:1 1 auto;min-width:0}
+  .editorial-workbench .connection-external-url-controls .btn-ghost{flex:0 0 auto;min-height:36px;padding:7px 10px;font-size:13px}
+  .system-status-sections .api-observation-latency{display:flex;align-items:baseline;justify-content:space-between;gap:16px;min-width:0}
+  .system-status-sections .api-observation-primary{display:flex;align-items:baseline;gap:10px;min-width:0}
+  .system-status-sections .api-observation-primary .api-observation-label{white-space:nowrap}
+  .system-status-sections .api-observation-latency .api-observation-meta{white-space:nowrap}
+  .system-status-sections .api-observation-details .api-sparkline{margin-top:12px}
+  .system-status-sections .pipeline-health-next-action{display:flex;align-items:center;gap:12px;margin:12px 0 0}
+  .system-status-sections .pipeline-health-next-action p{margin:0;min-width:0}
+  .system-status-sections .pipeline-health-next-action-link{flex:0 0 auto;min-height:36px;padding:7px 10px;font-size:13px}
   .editorial-workbench .audit-log-content{display:grid;gap:16px}
   .editorial-workbench .audit-log-table{border-top:1px solid var(--divider-color);padding-top:8px}
   .editorial-workbench .production-tabpanel>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:20px 0 0}
@@ -769,7 +786,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .user-linking-page>.section-card{border:0;border-bottom:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
   .setup-required-state{display:grid;gap:24px;max-width:640px}
   .setup-required-message{margin:0;color:var(--muted);font-size:15px}
-  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:32px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{grid-template-columns:1fr;padding-top:20px}.editorial-advanced-settings>.page-heading,.editorial-advanced-settings .connection-form-field:last-child{grid-column:auto}}
+  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:32px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{grid-template-columns:1fr;padding-top:20px}.editorial-advanced-settings>.page-heading,.editorial-advanced-settings .connection-form-field:last-child{grid-column:auto}.editorial-workbench .connection-external-url-controls{align-items:stretch;flex-wrap:wrap}.editorial-workbench .connection-external-url-controls input{flex-basis:100%}.editorial-workbench .connection-external-url-controls .btn-ghost{margin-left:auto}.system-status-sections .api-observation-latency{align-items:flex-start;flex-direction:column;gap:4px}.system-status-sections .api-observation-primary{flex-wrap:wrap}.system-status-sections .api-observation-latency .api-observation-meta{white-space:normal}.system-status-sections .pipeline-health-next-action{align-items:flex-start;flex-direction:column}}
 `
 
 func shellHeadExtras() string {

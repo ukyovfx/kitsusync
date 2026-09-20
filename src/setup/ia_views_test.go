@@ -87,15 +87,8 @@ func TestSystemStatusUsesCompactHealthySummaryAndSelectiveDiagnostics(t *testing
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
 	body := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{APIObservations: map[string][]APIObservation{"kitsu": {{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}, "discord": {{At: time.Now(), Duration: 12 * time.Millisecond, Success: true}}}}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
-	if !strings.Contains(body, `class="system-overall-summary"`) || !strings.Contains(body, `>Healthy</span>`) {
-		t.Fatal("healthy system status must expose the canonical aggregate summary")
-	}
-	degraded := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{LastPollErr: "poll failed"}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
-	if !strings.Contains(degraded, `class="system-overall-summary"`) || !strings.Contains(degraded, `>System</span>`) {
-		t.Fatal("degraded system status should retain an actionable aggregate summary")
-	}
-	if !strings.Contains(body, "Recent runtime observations are healthy.") {
-		t.Fatal("healthy overall state is missing its supporting status explanation")
+	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, `system-overall-title`) {
+		t.Fatal("System Status must not render a redundant page-level overall summary")
 	}
 }
 
@@ -1502,6 +1495,10 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	setup := SharedBotRuntimeReadiness{State: ReadinessSetupRequired}
+	setupAction := pipelineReadinessNextAction("en", r, setup)
+	if !strings.Contains(setupAction, "Kitsu setup is required") || !strings.Contains(setupAction, "Configure Kitsu connection") || !strings.Contains(setupAction, `href="/bot/admin/bot?lang=en"`) {
+		t.Fatalf("Kitsu section action = %q", setupAction)
+	}
 	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, setup); got != "Configure the Kitsu connection before continuing." {
 		t.Fatalf("Kitsu setup blocker = %q", got)
 	}
@@ -1509,6 +1506,9 @@ func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
 		t.Fatalf("notification setup blocker = %q", got)
 	}
 	production := SharedBotRuntimeReadiness{State: ReadinessProductionRequired, KitsuConfigured: true, DiscordConfigured: true, PrerequisitesReady: true}
+	if got := pipelineReadinessNextAction("en", r, production); !strings.Contains(got, "No connected and notifiable Production is available.") || !strings.Contains(got, "New Production Connection") {
+		t.Fatalf("Production section action = %q", got)
+	}
 	if got := pipelineRoutingHint("en", production); got != "No Production is currently available for notifications." {
 		t.Fatalf("Production blocker = %q", got)
 	}
@@ -1517,11 +1517,17 @@ func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
 		t.Fatalf("Production action = %#v", view)
 	}
 	routing := SharedBotRuntimeReadiness{State: ReadinessRoutingRequired, KitsuConfigured: true, DiscordConfigured: true, ProductionConnected: true, PrerequisitesReady: true}
+	if got := pipelineReadinessNextAction("en", r, routing); !strings.Contains(got, "Notification routing needs attention.") || !strings.Contains(got, "Review notification settings") {
+		t.Fatalf("routing section action = %q", got)
+	}
 	if got := pipelineRoutingHint("en", routing); got != "A Production exists, but its notification routing is missing or invalid." {
 		t.Fatalf("routing blocker = %q", got)
 	}
 	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "Waiting for the first observation." {
 		t.Fatalf("first-observation guidance = %q", got)
+	}
+	if got := pipelineReadinessNextAction("en", r, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "" {
+		t.Fatalf("ready section should not expose a next action: %q", got)
 	}
 	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", details: "<p>safe</p>", detailsLabel: "Observation diagnostics", detailsID: "pipeline-event-monitoring", action: "#pipeline-event-monitoring", actionLabel: "Review observation diagnostics"}, 0)
 	if !strings.Contains(rendered, `data-open-pipeline-details="pipeline-event-monitoring"`) {
@@ -1767,7 +1773,7 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `function scale(items)`) || !strings.Contains(body, `upper=scale(items)`) {
 		t.Fatal("system status refresh does not apply independent zero-based Y scales")
 	}
-	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2m30s`) {
+	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2.5m`) {
 		t.Fatal("system status refresh is missing canonical time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {

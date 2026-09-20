@@ -28,7 +28,7 @@ func TestAPIObservationBarsUseTimestampGeometryAndCanonicalTicks(t *testing.T) {
 	if strings.Count(graph, `class="chart-tick"`) != 3 {
 		t.Fatalf("chart has %d Y ticks, want exactly 3", strings.Count(graph, `class="chart-tick"`))
 	}
-	for _, label := range []string{`>60s<`, `>30s<`, `>Now<`, `x1="34"`, `x2="464"`, `x="233"`} {
+	for _, label := range []string{`>60s<`, `>30s<`, `>0s<`, `x1="34"`, `x2="464"`, `x="233"`} {
 		if !strings.Contains(graph, label) {
 			t.Fatalf("chart is missing canonical geometry/label %q: %s", label, graph)
 		}
@@ -73,7 +73,7 @@ func TestAPIObservationBarsExposeSecretSafeKeyboardTooltips(t *testing.T) {
 
 func TestSystemStatusRefreshUsesCanonicalBarContract(t *testing.T) {
 	updated := replaceSystemStatusRefreshScript(`<script data-system-status-refresh></script>`)
-	for _, fragment := range []string{`viewBox=\"0 0 466 104\"`, `telemetry-bar`, `Date.parse(item.at)`, `tabindex=\"0\"`, `Request failed`, `60s`, `2m30s`, `x1=\"34\"`, `x2=\"464\"`} {
+	for _, fragment := range []string{`viewBox=\"0 0 466 104\"`, `telemetry-bar`, `Date.parse(item.at)`, `tabindex=\"0\"`, `Request failed`, `60s`, `2.5m`, `0s`, `x1=\"34\"`, `x2=\"464\"`} {
 		if !strings.Contains(updated, fragment) {
 			t.Fatalf("refresh graph is missing canonical contract %q", fragment)
 		}
@@ -89,9 +89,14 @@ func TestSystemStatusRefreshAndInitialGraphUseMatchingLabels(t *testing.T) {
 	items := []APIObservation{{At: time.Now().Add(-2 * time.Minute), Duration: 25 * time.Millisecond, Success: true}}
 	initial := apiObservationBarGraphWithScale(items, "ja", telemetryWindow5Minutes, 50)
 	refresh := systemStatusRefreshScriptCanonical()
-	for _, label := range []string{"5m", "2m30s", "Now", "5分", "2分30秒", "今", "telemetry-bar", "chart-time-label"} {
+	for _, label := range []string{"5m", "2.5m", "0s", "telemetry-bar", "chart-time-label"} {
 		if !strings.Contains(initial+refresh, label) {
 			t.Fatalf("initial/AJAX telemetry contract is missing %q", label)
+		}
+	}
+	for _, obsolete := range []string{"Now", "2m30s", "5分", "2分30秒", "今", "60秒", "30秒"} {
+		if strings.Contains(initial+refresh, obsolete) {
+			t.Fatalf("initial/AJAX telemetry contract retained language-specific label %q", obsolete)
 		}
 	}
 }
@@ -115,6 +120,22 @@ func TestSystemStatusUsesOneViewerLocalHHMMSSFormatter(t *testing.T) {
 	}
 	if !strings.Contains(refresh, `data-telemetry-meta`) || !strings.Contains(refresh, `function localTime(value){return window.kitsuSyncSystemStatusTime(value)}`) {
 		t.Fatal("AJAX metadata does not use the shared HH:MM:SS formatter")
+	}
+}
+
+func TestSystemStatusMetadataKeepsInitialAndRefreshLayoutInParity(t *testing.T) {
+	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
+		"kitsu": {{At: time.Now().Add(-2 * time.Second), Duration: 18 * time.Millisecond, Success: true}},
+	}}
+	initial := apiObservationDetails("en", stats, "kitsu", telemetryWindow60Seconds)
+	refresh := systemStatusRefreshScriptCanonical()
+	for name, markup := range map[string]string{"initial": initial, "refresh": refresh} {
+		if !strings.Contains(markup, "api-observation-primary") || !strings.Contains(markup, "api-observation-meta") {
+			t.Fatalf("%s metadata does not use the shared primary/meta row contract", name)
+		}
+		if strings.Contains(markup, "Last 5 minutes") || strings.Contains(markup, "Last 60 seconds") {
+			t.Fatalf("%s metadata exposes selected-window prose", name)
+		}
 	}
 }
 
