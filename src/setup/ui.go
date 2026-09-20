@@ -712,6 +712,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections .api-observation-label,.system-status-sections .field-help,.system-status-sections .hint{font-size:15px}
   .system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:14px}
   .system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}
+  .system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{fill:var(--muted)}
   .page-card:has(.system-status-sections)>.page-heading h1{font-size:32px}
   .page-card:has(.system-status-sections)>.page-heading h2{font-size:24px}
   .system-status-sections h2{font-size:24px}
@@ -734,14 +735,19 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .connections-edit-stack{gap:28px}
   .editorial-workbench .connections-edit-grid{gap:16px}
   .editorial-workbench .connections-edit-grid>.connections-card{border-radius:8px;background:var(--surface-subtle);box-shadow:none}
-  .editorial-advanced-settings{display:grid;gap:16px;border-top:1px solid var(--divider-color);padding-top:24px}
+  .editorial-advanced-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px;border-top:1px solid var(--divider-color);padding-top:24px}
   .editorial-advanced-settings .page-heading{margin:0}
-  .editorial-advanced-settings .connection-form-field{display:grid;gap:8px;max-width:640px}
-  .editorial-advanced-settings input{max-width:640px}
-  .editorial-workbench .system-status-sections .pipeline-health-details-content{grid-column:1 / -1;grid-row:2;min-width:0;border-top:0;padding-top:0;color:var(--muted)}
+  .editorial-advanced-settings>.page-heading,.editorial-advanced-settings .connection-form-field:last-child{grid-column:1 / -1}
+  .editorial-advanced-settings .connection-form-field{display:grid;gap:8px;max-width:none}
+  .editorial-advanced-settings input{max-width:none;width:100%}
+  .editorial-workbench .connections-summary-grid>.connections-card{border-radius:8px}
+  .editorial-workbench .system-status-sections .system-observability-grid{gap:16px}
+  .editorial-workbench .system-status-sections .system-observability-grid>article{display:grid;grid-template-rows:auto 1fr;min-height:224px;padding:16px;border:1px solid var(--border-default);border-radius:8px;background:var(--surface-subtle);box-shadow:none}
+  .editorial-workbench .system-status-sections .pipeline-health-details{grid-column:1 / -1;grid-row:2;margin:0;padding:0;border:0}
+  .editorial-workbench .system-status-sections .pipeline-health-details summary{cursor:pointer;color:var(--muted);font-size:14px}
+  .editorial-workbench .system-status-sections .pipeline-health-details-content{min-width:0;padding-top:10px;color:var(--muted)}
   .editorial-workbench .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) auto;row-gap:8px}
   .editorial-workbench .system-status-sections .pipeline-health-item>.status-badge{grid-column:2;grid-row:1}
-  .editorial-workbench .system-status-sections .pipeline-health-details-content{grid-column:1 / -1;grid-row:2}
   .editorial-workbench .audit-log-content{display:grid;gap:16px}
   .editorial-workbench .audit-log-table{border-top:1px solid var(--divider-color);padding-top:8px}
   .editorial-workbench .production-tabpanel>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:20px 0 0}
@@ -751,7 +757,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .user-linking-page>.section-card{border:0;border-bottom:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
   .setup-required-state{display:grid;gap:24px;max-width:640px}
   .setup-required-message{margin:0;color:var(--muted);font-size:15px}
-  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:32px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{padding-top:20px}}
+  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:32px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{grid-template-columns:1fr;padding-top:20px}.editorial-advanced-settings>.page-heading,.editorial-advanced-settings .connection-form-field:last-child{grid-column:auto}}
 `
 
 func shellHeadExtras() string {

@@ -298,6 +298,9 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	if strings.Count(body, `class="editorial-advanced-settings"`) != 1 || strings.Contains(body, `<details class="connection-advanced"`) || strings.Contains(body, `<details class="connection-expert"`) {
 		t.Fatal("advanced connection settings must be one flat section without nested accordions")
 	}
+	if strings.Contains(body, "An internal route used only by KitsuSync") || strings.Contains(body, "KitsuSyncだけが使う内部経路です") {
+		t.Fatal("advanced settings retained redundant internal-route helper copy")
+	}
 	advanced := strings.Index(body, `class="editorial-advanced-settings"`)
 	if advanced < strings.Index(body, `class="connections-edit-grid"`) {
 		t.Fatal("advanced settings must follow the parallel service forms")

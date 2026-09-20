@@ -64,8 +64,8 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesCompactHealthySummaryAndInlineOperationalDetails(t *testing.T) {
-	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Details"}
+func TestSystemStatusUsesCompactHealthySummaryAndSelectiveDiagnostics(t *testing.T) {
+	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Observation diagnostics"}
 	rendered := renderPipelineHealthItem("en", item, 0)
 	if strings.Contains(rendered, `class="field-help"`) {
 		t.Fatal("healthy operational row should not repeat a redundant explanation")
@@ -73,13 +73,16 @@ func TestSystemStatusUsesCompactHealthySummaryAndInlineOperationalDetails(t *tes
 	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
 		t.Fatal("operational row lost its compact structure")
 	}
-	for _, want := range []string{`class="pipeline-health-details-content"`} {
+	for _, want := range []string{`<details class="pipeline-health-details">`, `<summary>Observation diagnostics</summary>`, `class="pipeline-health-details-content"`} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("operational row missing geometry/detail contract %q", want)
 		}
 	}
-	if strings.Contains(rendered, `pipeline-health-details-toggle`) || strings.Contains(rendered, `aria-expanded`) {
-		t.Fatal("operational row should not expose a generic Details disclosure")
+	if strings.Contains(rendered, `>Details<`) || strings.Contains(rendered, `pipeline-health-details-toggle`) || strings.Contains(rendered, `aria-expanded`) {
+		t.Fatal("operational row should not expose a generic Details control")
+	}
+	if noDetails := renderPipelineHealthItem("en", pipelineHealthItem{label: "Healthy", value: "Ready", class: "success"}, 0); strings.Contains(noDetails, "pipeline-health-details") {
+		t.Fatal("operational row without useful diagnostics exposed a disclosure")
 	}
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
@@ -1681,7 +1684,7 @@ func TestConnectionsUseSharedActionSpacingToken(t *testing.T) {
 
 func TestEditorialWorkbenchUsesRestrainedSurfaceContract(t *testing.T) {
 	body := adminPage("en", "Dashboard", httptest.NewRequest(http.MethodGet, "/bot/admin?lang=en", nil), `<div class="dashboard-page"></div>`)
-	for _, want := range []string{`class="page-card glass editorial-workbench"`, `.editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}`, `.editorial-workbench h1,.editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}`, `.editorial-workbench .btn,.editorial-workbench .btn-sm,.editorial-workbench .btn-ghost,.editorial-workbench .btn-danger{min-height:40px;border-radius:8px}`, `.editorial-workbench .production-tabpanel>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:20px 0 0}`, `.editorial-advanced-settings{display:grid;gap:16px`} {
+	for _, want := range []string{`class="page-card glass editorial-workbench"`, `.editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}`, `.editorial-workbench h1,.editorial-workbench>.page-heading h1{font-size:32px;line-height:1.15}`, `.editorial-workbench .btn,.editorial-workbench .btn-sm,.editorial-workbench .btn-ghost,.editorial-workbench .btn-danger{min-height:40px;border-radius:8px}`, `.editorial-workbench .production-tabpanel>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:20px 0 0}`, `.editorial-advanced-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 24px;border-top:1px solid var(--divider-color);padding-top:24px}`, `.editorial-workbench .system-status-sections .system-observability-grid>article{display:grid;grid-template-rows:auto 1fr;min-height:224px;padding:16px;border:1px solid var(--border-default);border-radius:8px;background:var(--surface-subtle);box-shadow:none}`, `.system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{fill:var(--muted)}`, `.dashboard-service-status{display:grid;gap:8px;width:100%;min-width:0}`, `.editorial-workbench .connections-summary-grid>.connections-card{border-radius:8px}`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("editorial surface contract missing %q", want)
 		}
@@ -1711,13 +1714,16 @@ func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesInlineSafeDetailsAndRefreshSnapshot(t *testing.T) {
+func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Count(body, `class="pipeline-health-details-content"`) < 4 || strings.Contains(body, `class="pipeline-health-details-toggle"`) {
-		t.Fatalf("system status operational details are not rendered as inline rows")
+	if strings.Count(body, `<details class="pipeline-health-details">`) < 3 || strings.Contains(body, `class="pipeline-health-details-toggle"`) || strings.Contains(body, `>Details<`) {
+		t.Fatalf("system status operational details are not selectively disclosed")
+	}
+	if strings.Contains(body, "Internal data diagnostics") || strings.Contains(body, "内部データ診断") {
+		t.Fatal("system status exposed a datastore-only diagnostic disclosure")
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
@@ -1764,10 +1770,13 @@ func TestSystemStatusUsesInlineSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	}
 }
 
-func TestSystemStatusDoesNotAddGenericDetailsControls(t *testing.T) {
-	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Configured", class: "success", details: "<dl></dl>"}, 0)
-	if strings.Contains(rendered, "pipeline-health-details-toggle") || strings.Contains(rendered, "aria-controls") {
-		t.Fatal("system status should keep safe diagnostics inline instead of a generic Details control")
+func TestSystemStatusUsesContextualDiagnosticsLabels(t *testing.T) {
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Configured", class: "success", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
+	if strings.Contains(rendered, "pipeline-health-details-toggle") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, ">Details<") {
+		t.Fatal("system status should not use a generic Details control")
+	}
+	if !strings.Contains(rendered, "Connection and routing diagnostics") {
+		t.Fatal("system status omitted the contextual diagnostics label")
 	}
 }
 

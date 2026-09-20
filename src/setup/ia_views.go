@@ -1468,10 +1468,10 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	stats := Stats.Snapshot()
 	windowName := telemetryWindowName(strings.TrimSpace(r.URL.Query().Get("window")))
 	items := []pipelineHealthItem{
-		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "詳細", "Details")},
-		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "詳細", "Details")},
-		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success", details: pipelineInternalDetails(lang), detailsLabel: t(lang, "詳細", "Details")},
-		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "詳細", "Details")},
+		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics")},
+		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics")},
+		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success"},
+		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics")},
 	}
 	var healthRows strings.Builder
 	for index, item := range items {
@@ -1586,8 +1586,8 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
 	}
 	details := ""
-	if item.details != "" {
-		details = `<div class="pipeline-health-details-content">` + item.details + `</div>`
+	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
+		details = `<details class="pipeline-health-details"><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-details-content">` + item.details + `</div></details>`
 	}
 	explanation := ""
 	if strings.TrimSpace(item.explanation) != "" {
@@ -2040,10 +2040,6 @@ func pipelineNotificationDetails(lang string, stats RuntimeSnapshot) string {
 		return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "成功", "Successful")) + `</dt><dd>0</dd></div><div><dt>` + esc(t(lang, "失敗", "Failed")) + `</dt><dd>0</dd></div></dl>`
 	}
 	return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "成功", "Successful")) + `</dt><dd>` + strconv.FormatInt(stats.SendSuccessTotal, 10) + `</dd></div><div><dt>` + esc(t(lang, "失敗", "Failed")) + `</dt><dd>` + strconv.FormatInt(stats.SendFailureTotal, 10) + `</dd></div></dl>`
-}
-
-func pipelineInternalDetails(lang string) string {
-	return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "データソース", "Data source")) + `</dt><dd>` + esc(t(lang, "ローカル設定・履歴", "Local settings and history")) + `</dd></div></dl>`
 }
 
 func pipelineRoutingDetails(lang string, readiness SharedBotRuntimeReadiness, db *gorm.DB) string {
