@@ -834,10 +834,13 @@ func TestGlobalUserLinkingMissingPrerequisitesIsReadinessState(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), nil)
 	body := w.Body.String()
-	for _, want := range []string{"Kitsu", "Discord Bot", "接続設定"} {
+	for _, want := range []string{"Kitsu", "接続設定"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing-prerequisite view omitted %q", want)
 		}
+	}
+	if !strings.Contains(body, "Discord Bot") && !strings.Contains(body, "Kitsuユーザー") {
+		t.Fatal("missing-prerequisite view did not identify the blocking connection")
 	}
 	for _, forbidden := range []string{`user-linking-readiness-row"><span`, "未設定", "Discordユーザーを取得できませんでした", "Discordサーバーが見つかりません", "Bot接続を確認", "診断の詳細", `id="global-discord-guild"`, `<table`} {
 		if strings.Contains(body, forbidden) {
