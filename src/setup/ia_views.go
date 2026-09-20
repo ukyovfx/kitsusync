@@ -1506,7 +1506,7 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
-	body += `<script data-pipeline-health-actions>(function(){document.addEventListener('click',function(event){var link=event.target.closest('[data-open-pipeline-details]');if(!link)return;var details=document.getElementById(link.getAttribute('data-open-pipeline-details'));if(details){details.open=true;}});})();</script>`
+	body += `<script data-pipeline-health-actions>(function(){document.addEventListener('click',function(event){var link=event.target.closest('[data-open-pipeline-details]');if(!link)return;var summary=document.getElementById(link.getAttribute('data-open-pipeline-details'));var details=summary&&summary.closest('details');if(details){details.open=true;}});})();</script>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
@@ -1613,11 +1613,11 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 	}
 	details := ""
 	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
-		detailsID := ""
+		summaryID := ""
 		if item.detailsID != "" {
-			detailsID = ` id="` + esc(item.detailsID) + `"`
+			summaryID = ` id="` + esc(item.detailsID) + `"`
 		}
-		details = `<details class="pipeline-health-details"` + detailsID + `><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-details-content">` + item.details + `</div></details>`
+		details = `<details class="pipeline-health-details"><summary` + summaryID + `>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-details-content">` + item.details + `</div></details>`
 	}
 	explanation := ""
 	if strings.TrimSpace(item.explanation) != "" {
