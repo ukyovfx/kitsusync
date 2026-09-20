@@ -293,6 +293,12 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 			t.Fatalf("saved-secret form missing %q", want)
 		}
 	}
+	if strings.Count(body, "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.") != 2 {
+		t.Fatal("configured Kitsu and Discord controls must share the concise token helper")
+	}
+	if strings.Contains(body, "The saved token is never displayed. Recheck without entering it again") || strings.Contains(body, "保存済みtokenは表示しません。再確認では再入力不要です") {
+		t.Fatal("configured token controls retained the obsolete Kitsu-only helper")
+	}
 	for _, secret := range []string{"kitsu-test-token", "discord-test-token", "••••"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("saved secret or mask leaked into form: %q", secret)
@@ -323,7 +329,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 
 func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) {
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "Review connections separately.", "warning", "Needs review", "https://kitsu.example.test/", false, false, "")
-	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Manual setup", "Automatic", `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden`, `data-kitsu-host-auto`, `data-reset-kitsu-endpoint`, "setEndpointMode"} {
+	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Manual setup", "Automatic", `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden style="display:none"`, `data-kitsu-host-auto`, `data-reset-kitsu-endpoint`, "setVisible", "setEndpointMode"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resolved endpoint UI missing %q", want)
 		}
@@ -339,6 +345,28 @@ func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) 
 	}
 	if strings.Contains(body, `name="kitsu_hostname" value="Not configured"`) {
 		t.Fatal("resolved endpoint form must not submit the display placeholder")
+	}
+	if strings.Count(body, `<div data-kitsu-endpoint-auto>`) != 1 || strings.Count(body, `<div class="connection-host-manual" data-kitsu-endpoint-manual`) != 1 {
+		t.Fatal("automatic endpoint mode must keep one auto and one switchable manual slot")
+	}
+	if !strings.Contains(body, "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.") || strings.Contains(body, "The saved token is never displayed. Recheck without entering it again") {
+		t.Fatal("token controls must use the concise shared helper")
+	}
+	if !strings.Contains(body, `class="button-row connections-navigation connections-footer"`) {
+		t.Fatal("connections back link must use the restrained footer structure")
+	}
+}
+
+func TestConnectionsEditManualEndpointUsesOneControl(t *testing.T) {
+	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "", "warning", "Needs review", "", false, false, "")
+	if strings.Contains(body, `<div data-kitsu-endpoint-auto>`) || strings.Contains(body, `data-kitsu-host-auto>`) {
+		t.Fatal("manual endpoint mode must not render the automatic endpoint representation")
+	}
+	if strings.Count(body, `id="kitsu-hostname"`) != 1 || strings.Count(body, `name="kitsu_hostname"`) != 1 {
+		t.Fatal("manual endpoint mode must render exactly one editable host control")
+	}
+	if !strings.Contains(body, `data-kitsu-endpoint-manual`) || !strings.Contains(body, `data-reset-kitsu-endpoint`) || !strings.Contains(body, "Automatic") {
+		t.Fatal("manual endpoint mode must provide the automatic-mode action in the same slot")
 	}
 }
 
