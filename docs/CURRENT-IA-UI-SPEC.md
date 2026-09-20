@@ -55,7 +55,7 @@ Kitsu and Discord cards are equal-height, stretch-aligned desktop peers without 
 
 Edit view keeps the same two-card structure and independent badges:
 
-- Kitsu host is shown as the resolved safe endpoint with automatic-detection copy and a compact `Change manually` action. Manual mode reveals the existing validated host input and a `Use automatic endpoint` action without changing resolution or persistence semantics.
+- Kitsu host is shown as the resolved safe endpoint with automatic-detection copy and a compact `Manual setup` action. Manual mode reveals the existing validated host input and an `Automatic` action without changing resolution or persistence semantics.
 - Kitsu Bot API Token field remains the normal Kitsu credential; saved secrets are never rendered.
 - Discord Bot Token field
 - fixed secret-mask note: saved secrets are never rendered; a fixed-length bullet mask is used for a configured secret
@@ -102,7 +102,7 @@ System Status is organized as:
 API response status contains separate Kitsu API and Discord API peer cards with equal card and graph dimensions. Each card shows the latest safe response-time value, status, one horizontal `Current response time` / `Last updated HH:MM:SS` metadata row on desktop (stacked on mobile), and a chronological bar visualization. Sample counts and selected-window prose remain secondary diagnostic data, not normal-card copy. Bar x positions are derived from observation timestamps across the selected window, so sparse observations remain sparse rather than stretching to the sample count. Each service uses its own zero-based Y scale selected from stable stepped ceilings, so low Kitsu latency remains readable without changing the exact value above the graph. Each graph has exactly three Y ticks at ceiling, midpoint, and 0ms, plus an optional horizontal midpoint guide. The 60-second graph labels its x positions `60s`, `30s`, and `0s`; the 5-minute graph uses `5m`, `2.5m`, and `0s`, independent of UI language. A failure is red; a successful observation is green. No invented latency threshold or yellow pseudo-metric is used. Both graphs share the same viewBox, plot bounds, tick positions, time-label positions, and metadata slots.
 Each chart uses a 466×104 viewBox matching the desktop rendered chart aspect. Its Y tick column occupies x=0..34 outside the data plot; the plot spans x=34 through x=464 and the midpoint label is at x=233. The SVG uses its full responsive width and must not create horizontal pillarboxing through `preserveAspectRatio`.
 
-System Status typography uses a visibly readable step: page title 32px; major section titles 24px; API and operational card titles 18px; response values 26px; helper/body text 15px; metadata 14px; chart axis/time labels 12px; and Details triggers 14px.
+System Status typography uses a compact operational step: page title 28px; major section titles 20px; API and operational card titles 16px; response values 24px; helper/body text 14px; metadata 13px; chart axis/time labels 12px; and Details triggers 14px.
 
 Chart time labels are compact, language-independent units: `60s`, `30s`, `0s` and `5m`, `2.5m`, `0s`.
 

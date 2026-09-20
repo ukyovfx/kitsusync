@@ -87,7 +87,7 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] Both graphs use independent zero-based stepped ceilings, exactly three readable Y ticks outside the plot, shared timestamp positioning, metadata slots, and fixed 60s/5m geometry.
 - [ ] Each service plot uses x=34 through x=464 in the 466×104 viewBox, with midpoint x=233; the Y tick column is outside the plot and the browser-measured right gap is at most 6px.
 - [ ] Browser measurement, not viewBox ratio alone, proves the rendered baseline/grid leaves at most 6px on each side of the SVG and the graph surface has no unnecessary side padding or Y-axis gutter.
-- [ ] Computed System Status typography is visibly stepped up: 32px page title, 24px major titles, 18px card titles, 26px response values, 15px body/helper, 14px metadata/details, and 12px chart labels.
+- [ ] Computed System Status typography uses the compact operational hierarchy: 28px page title, 20px major titles, 16px card titles, 24px response values, 14px body/helper, 13px metadata, and 12px chart labels.
 - [ ] Exact chart labels are language-independent `60s`, `30s`, `0s` and `5m`, `2.5m`, `0s`.
 - [ ] Both graphs show exactly three Y ticks at the same positions: maximum, midpoint, and 0, with an optional subtle midpoint guide.
 - [ ] Both graphs use the same x-label positions: 60s uses `60s`, `30s`, `0s`; 5m uses `5m`, `2.5m`, `0s`.

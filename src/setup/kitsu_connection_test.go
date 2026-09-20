@@ -251,9 +251,8 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `<button type="submit" class="btn">Save</button>`) {
 		t.Fatal("did not expect a generic Save button")
 	}
-	// The summary intentionally contains helper text only; service headers own the prominent state.
-	if strings.Contains(body, `<div class="connections-edit-summary"><p class="hint">Review connections separately.</p><span class="status-pill`) {
-		t.Fatal("did not expect a page-level status pill in edit mode")
+	if strings.Contains(body, `class="connections-edit-summary"`) {
+		t.Fatal("did not expect redundant page-level connection copy in edit mode")
 	}
 	if got := strings.Count(body, `class="status-pill `); got != 2 {
 		t.Fatalf("expected one service status pill per card, got %d", got)
@@ -324,13 +323,19 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 
 func TestConnectionsEditShowsResolvedEndpointBeforeManualOverride(t *testing.T) {
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), nil, "Review connections separately.", "warning", "Needs review", "https://kitsu.example.test/", false, false, "")
-	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Change manually", "Use automatic endpoint", `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden`, `data-kitsu-host-auto`, `data-reset-kitsu-endpoint`, "setEndpointMode"} {
+	for _, want := range []string{"Kitsu host", "https://kitsu.example.test", "Detected automatically or loaded from the saved configuration.", "Manual setup", "Automatic", `data-kitsu-endpoint-auto`, `data-kitsu-endpoint-manual hidden`, `data-kitsu-host-auto`, `data-reset-kitsu-endpoint`, "setEndpointMode"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("resolved endpoint UI missing %q", want)
 		}
 	}
+	if got := strings.Count(body, `>Kitsu host<`); got != 1 {
+		t.Fatalf("automatic endpoint mode should render one Kitsu host label, got %d", got)
+	}
 	if strings.Contains(body, "Resolved Kitsu endpoint") || strings.Contains(body, "Expert network overrides") {
 		t.Fatal("normal endpoint UI retained obsolete or over-prominent copy")
+	}
+	if strings.Contains(body, `class="connections-edit-summary"`) || strings.Contains(body, "Complete the Kitsu connection first.") {
+		t.Fatal("connections edit retained redundant page-level setup copy")
 	}
 	if strings.Contains(body, `name="kitsu_hostname" value="Not configured"`) {
 		t.Fatal("resolved endpoint form must not submit the display placeholder")
