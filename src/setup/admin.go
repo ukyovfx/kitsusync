@@ -2794,6 +2794,15 @@ func connectionSecretStatus(value, lang string) connectionStatus {
 	return connectionStatus{Class: "muted", Label: t(lang, "保存済み", "Saved")}
 }
 
+const connectionSecretMask = "••••••••••••••••••••"
+
+func connectionSecretDisplay(value, lang string) string {
+	if strings.TrimSpace(value) == "" {
+		return connectionStatusPill(connectionSecretStatus(value, lang))
+	}
+	return `<span class="secret-mask" aria-label="` + esc(t(lang, "保存済みtokenは非表示", "Saved token hidden")) + `">` + connectionSecretMask + `</span>`
+}
+
 func connectionHealthStatus(lang string, configured, healthy bool) connectionStatus {
 	if !configured {
 		return connectionStatus{Class: "warning", Label: t(lang, "未設定", "Not configured")}
@@ -2893,8 +2902,8 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	kitsuStatus := canonicalConnectionHealthStatus(lang, kitsuConfigured, kitsuHealthy)
 	discordStatus := canonicalConnectionHealthStatus(lang, strings.TrimSpace(botToken) != "", discordHealthy)
 	return `<div class="connections-summary-grid">` +
-		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div></dl></section>` +
-		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div><dl class="connection-field-list"></dl></section>` +
+		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div><div class="connection-field-row"><dt>` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</dt><dd>` + connectionSecretDisplay(StoredRuntimeKitsuToken(db), lang) + `</dd></div></dl></section>` +
+		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</dt><dd>` + connectionSecretDisplay(botToken, lang) + `</dd></div></dl></section>` +
 		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div>`
 }
 
@@ -2903,7 +2912,8 @@ func renderConnectionsDisplayBodyWithHealth(lang string, r *http.Request, db *go
 }
 
 func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, runtimeHost string, kitsuHealthy, discordHealthy bool, discordBotName string) string {
-	displayHost := safeKitsuHostDisplay(runtimeHost)
+	resolvedHost := safeKitsuHostDisplay(runtimeHost)
+	displayHost := resolvedHost
 	if displayHost == "" {
 		displayHost = t(lang, "未設定", "Not configured")
 	}
@@ -2927,23 +2937,39 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 	if effectiveURL != "" {
 		checkLink = `<a class="btn-ghost" href="` + esc(effectiveURL) + `" target="_blank" rel="noopener noreferrer">` + esc(t(lang, "リンクを確認", "Check link")) + `</a>`
 	}
-	externalURLField := `<div class="connection-form-field"><label for="kitsu-external-url">` + esc(t(lang, "外部Kitsu URL（任意）", "External Kitsu URL (optional)")) + `</label><input id="kitsu-external-url" type="url" name="kitsu_external_url" value="` + esc(externalURL) + `" aria-describedby="kitsu-external-url-help"><p id="kitsu-external-url-help" class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに使用するURLです。未設定時はKitsu URLを使用します。", "The URL used for Kitsu links in Discord notifications. When empty, the Kitsu URL is used.")) + `</p>` + checkLink + `</div>`
-	apiOverrideField := `<details class="connection-advanced"><summary>` + esc(t(lang, "詳細設定（任意）", "Advanced (optional)")) + `</summary><label for="kitsu-internal-url">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="kitsu-internal-url" type="url" name="kitsu_internal_url" autocomplete="url"><p class="field-help">` + esc(t(lang, "KitsuSyncだけが使う内部経路です。画面やDiscordリンクの表示は変わりません。", "An internal route used only by KitsuSync; it does not change human-facing or Discord URLs.")) + `</p><details class="connection-expert"><summary>` + esc(t(lang, "Expert: API Base URL", "Expert: API Base URL")) + `</summary><label for="kitsu-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="kitsu-api-base-url" type="url" name="kitsu_api_base_url" value="` + esc(model.GetSetting(db, KitsuAPIBaseURLSettingKey)) + `" autocomplete="url"><p class="field-help">` + esc(t(lang, "Kitsu URLとAPIの起点が異なる特殊なリバースプロキシ用です。", "Only needed for unusual reverse proxy setups where the API is not under the Kitsu URL.")) + `</p></details></details>`
+	apiBaseURL := ""
+	if db != nil {
+		apiBaseURL = strings.TrimSpace(model.GetSetting(db, KitsuAPIBaseURLSettingKey))
+	}
+	externalURLField := `<div class="connection-form-field connection-external-url-field"><label for="kitsu-external-url">` + esc(t(lang, "外部Kitsu URL（任意）", "External Kitsu URL (optional)")) + `</label><div class="connection-external-url-controls"><input id="kitsu-external-url" type="url" name="kitsu_external_url" form="kitsu-connection-form" value="` + esc(externalURL) + `" aria-describedby="kitsu-external-url-help">` + checkLink + `</div><p id="kitsu-external-url-help" class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに使用するURLです。未設定時はKitsu URLを使用します。", "The URL used for Kitsu links in Discord notifications. When empty, the Kitsu URL is used.")) + `</p></div>`
+	expertOpen := ""
+	if apiBaseURL != "" {
+		expertOpen = " open"
+	}
+	expertVisibility := " hidden"
+	if apiBaseURL != "" {
+		expertVisibility = ""
+	}
+	expertOverrides := `<details class="connection-expert-network" data-expert-network-overrides` + expertOpen + expertVisibility + `><summary>` + esc(t(lang, "専門ネットワーク設定", "Special network configuration")) + `</summary><div class="connection-expert-network-content"><div class="connection-form-field" data-kitsu-internal-endpoint hidden><label for="kitsu-internal-url">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="kitsu-internal-url" type="url" name="kitsu_internal_url" form="kitsu-connection-form" autocomplete="url"><p class="field-help">` + esc(t(lang, "KitsuSyncの実行先を通常のKitsu URLと分ける場合だけ使用します。", "Use only when KitsuSync must reach a different internal endpoint than the normal Kitsu URL.")) + `</p></div><div class="connection-form-field"><label for="kitsu-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="kitsu-api-base-url" type="url" name="kitsu_api_base_url" form="kitsu-connection-form" value="` + esc(apiBaseURL) + `" autocomplete="url"><p class="field-help">` + esc(t(lang, "Kitsu URLとAPIの起点が異なる特殊なリバースプロキシ用です。", "Only needed for unusual reverse proxy setups where the API is not under the Kitsu URL.")) + `</p></div></div></details>`
+	advancedSettings := `<section class="editorial-advanced-settings" aria-labelledby="connections-advanced-title"><div class="editorial-advanced-heading"><h2 id="connections-advanced-title">` + esc(t(lang, "詳細設定", "Advanced settings")) + `</h2></div><div class="editorial-advanced-explanation"><p class="field-help">` + esc(t(lang, "通知リンクに必要な外部URLだけを通常設定として表示します。", "Only the External Kitsu URL used in notification links is shown as a normal setting.")) + `</p></div>` + externalURLField + expertOverrides + `</section>`
+	endpointControl := `<div class="connection-form-field connection-host-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><div data-kitsu-endpoint-auto><div class="connection-host-value-row"><code id="kitsu-hostname-resolved">` + esc(displayHost) + `</code><input type="hidden" id="kitsu-hostname-auto" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" data-kitsu-host-auto><button type="button" class="btn-ghost connection-endpoint-change" data-reveal-kitsu-endpoint>` + esc(t(lang, "手動設定", "Manual setup")) + `</button></div><p class="field-help" data-kitsu-host-auto-help>` + esc(t(lang, "自動検出または保存済み設定から使用しています。", "Detected automatically or loaded from the saved configuration.")) + `</p></div><div class="connection-host-manual" data-kitsu-endpoint-manual hidden style="display:none"><input id="kitsu-hostname" type="url" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" aria-describedby="kitsu-host-help" data-initial-value="` + esc(resolvedHost) + `" disabled><p id="kitsu-host-help" class="field-help">` + esc(tr(lang, "connections.host_help")) + `</p><button type="button" class="btn-ghost connection-endpoint-reset" data-reset-kitsu-endpoint>` + esc(t(lang, "自動設定", "Automatic")) + `</button></div></div>`
+	if resolvedHost == "" {
+		endpointControl = `<div class="connection-form-field connection-host-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><div class="connection-host-manual" data-kitsu-endpoint-manual><input id="kitsu-hostname" type="url" name="kitsu_hostname" form="kitsu-connection-form" value="" aria-describedby="kitsu-host-help" data-initial-value=""><p id="kitsu-host-help" class="field-help">` + esc(tr(lang, "connections.host_help")) + `</p><button type="button" class="btn-ghost connection-endpoint-reset" data-reset-kitsu-endpoint>` + esc(t(lang, "自動設定", "Automatic")) + `</button></div></div>`
+	}
 	body := `<div class="section-stack connections-edit-stack">` + notice +
-		`<div class="connections-edit-summary"><p class="hint">` + esc(statusHint) + `</p></div>` +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
-		`<form method="POST" class="connection-save-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label><input id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help"` + func() string {
+		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label><input id="kitsu-bot-token" type="password" name="kitsu_bot_token" autocomplete="new-password" aria-describedby="kitsu-token-help"` + func() string {
 		if kitsuConfigured {
 			return ` hidden style="display:none"`
 		}
 		return ""
 	}() + `><p id="kitsu-token-help" class="field-help">` + esc(func() string {
 		if kitsuConfigured {
-			return t(lang, "保存済みtokenは表示しません。再確認では再入力不要です。変更する場合だけ「トークンを変更」を選びます。", "The saved token is never displayed. Recheck without entering it again; choose Change token only when rotating it.")
+			return t(lang, "必要な場合だけ、新しいTokenを入力してください。保存済みのTokenは表示されません。変更は保存後に反映されます。", "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.")
 		}
-		return t(lang, "読み取り専用で検証し、成功した場合だけ保存します。", "The token is validated read-only and saved only after success.")
-	}()) + `</p></div><div class="connection-form-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><input id="kitsu-hostname" type="url" name="kitsu_hostname" value="` + esc(displayHost) + `" aria-describedby="kitsu-host-help" data-initial-value="` + esc(displayHost) + `"><p id="kitsu-host-help" class="field-help">` + esc(tr(lang, "connections.host_help")) + `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button>` + func() string {
+		return t(lang, "必要な場合だけ、新しいTokenを入力してください。保存済みのTokenは表示されません。変更は保存後に反映されます。", "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.")
+	}()) + `</p></div>` + endpointControl + `<div class="button-row connections-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button>` + func() string {
 		if !kitsuConfigured {
 			return ""
 		}
@@ -2957,19 +2983,20 @@ func renderConnectionsEditFormWithIdentityRows(lang string, r *http.Request, db 
 		return ""
 	}() + `><p id="discord-token-help" class="field-help">` + esc(func() string {
 		if discordConfigured {
-			return t(lang, "保存済みtokenは表示しません。再確認では再入力不要です。変更する場合だけ「トークンを変更」を選びます。", "The saved token is never displayed. Recheck without entering it again; choose Change token only when rotating it.")
+			return t(lang, "必要な場合だけ、新しいTokenを入力してください。保存済みのTokenは表示されません。変更は保存後に反映されます。", "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.")
 		}
-		return tr(lang, "connections.token_help")
+		return t(lang, "必要な場合だけ、新しいTokenを入力してください。保存済みのTokenは表示されません。変更は保存後に反映されます。", "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.")
 	}()) + `</p></div><div class="connection-field-row"><dt>` + esc(t(lang, "Bot", "Bot")) + `</dt><dd>` + esc(identity) + `</dd></div><div class="button-row connections-actions"><button id="discord-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Discord Bot", discordConfigured)) + `</button>` + func() string {
 		if !discordConfigured {
 			return ""
 		}
 		return `<button type="button" class="btn-ghost" data-reveal-secret="discord-bot-token" data-recheck-button="discord-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button>`
 	}() + `</div></form></section>` +
-		`</div><div class="button-row connections-navigation"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-reveal-secret]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.getAttribute('data-reveal-secret'));var submit=document.getElementById(button.getAttribute('data-recheck-button'));if(!input)return;input.hidden=false;input.style.display='';button.hidden=true;if(submit)submit.textContent=saveText;input.focus();});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}}());</script></div>`
-	body = strings.Replace(body, `<div class="connection-form-field"><label for="kitsu-bot-token">`, `<details class="connection-expert"><summary>`+esc(t(lang, "サービス資格情報（任意）", "Service credential (optional)"))+`</summary><div class="connection-form-field"><label for="kitsu-bot-token">`, 1)
-	body = strings.Replace(body, `</p></div><div class="connection-form-field"><label for="kitsu-hostname">`, `</p></div></details><div class="connection-form-field"><label for="kitsu-hostname">`, 1)
-	body = strings.Replace(body, `</p></div><div class="button-row connections-actions"><button id="kitsu-recheck"`, `</p></div>`+externalURLField+apiOverrideField+`<div class="button-row connections-actions"><button id="kitsu-recheck"`, 1)
+		`</div>` + advancedSettings + `<div class="button-row connections-navigation connections-footer"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div><script>(function(){var saveText='` + esc(t(lang, "変更を保存", "Save changes")) + `';document.querySelectorAll('[data-reveal-secret]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.getAttribute('data-reveal-secret'));var submit=document.getElementById(button.getAttribute('data-recheck-button'));if(!input)return;input.hidden=false;input.style.display='';button.hidden=true;if(submit)submit.textContent=saveText;input.focus();});});var host=document.getElementById('kitsu-hostname');var hostSubmit=document.getElementById('kitsu-recheck');if(host&&hostSubmit){host.addEventListener('input',function(){if(host.value!==host.getAttribute('data-initial-value'))hostSubmit.textContent=saveText;});}}());</script></div>`
+	endpointScript := `<script>(function(){var autoField=document.querySelector('[data-kitsu-endpoint-auto]'),manualField=document.querySelector('[data-kitsu-endpoint-manual]'),autoInput=document.querySelector('[data-kitsu-host-auto]'),host=document.getElementById('kitsu-hostname'),endpointButton=document.querySelector('[data-reveal-kitsu-endpoint]'),resetButton=document.querySelector('[data-reset-kitsu-endpoint]'),expert=document.querySelector('[data-expert-network-overrides]'),internal=document.querySelector('[data-kitsu-internal-endpoint]'),expertInitiallyHidden=expert&&expert.hidden;function setVisible(node,visible){if(!node)return;node.hidden=!visible;node.style.display=visible?'':'none';}function setEndpointMode(manual){setVisible(autoField,!manual);setVisible(manualField,manual);if(autoInput)autoInput.disabled=manual;if(host)host.disabled=!manual;if(expert&&expertInitiallyHidden)setVisible(expert,manual);if(internal)internal.hidden=!manual||!expert||!expert.open;if(manual&&host)host.focus();}if(endpointButton)endpointButton.addEventListener('click',function(){setEndpointMode(true);});if(resetButton)resetButton.addEventListener('click',function(){if(autoInput&&host)host.value=autoInput.value;setEndpointMode(false);});if(expert)expert.addEventListener('toggle',function(){if(internal)internal.hidden=!expert.open||!manualField||manualField.hidden;});setEndpointMode(!autoField);})();</script>`
+	if end := strings.LastIndex(body, `</div>`); end >= 0 {
+		body = body[:end] + endpointScript + body[end:]
+	}
 	return body
 }
 
@@ -4004,12 +4031,12 @@ func adminPage(lang, title string, r *http.Request, body string) string {
 	if r != nil && r.URL.Query().Get("msg") != "" {
 		message = `<div class="toast glass" role="status" aria-live="polite">` + t(lang, "保存しました。", "Saved.") + `</div>`
 	}
-	nav := `<div class="nav-card glass">` + iaNav(lang, r) + `</div>`
+	nav := `<div class="nav-card">` + iaNav(lang, r) + `</div>`
 	pageHeading := ""
 	if strings.TrimSpace(title) != "" {
 		pageHeading = `<div class="page-heading"><div><h1>` + esc(title) + `</h1></div></div>`
 	}
-	content := `<div class="page-card glass">` + pageHeading +
+	content := `<div class="page-card glass editorial-workbench">` + pageHeading +
 		message + body + `</div>` +
 		`<div id="deleteModal" class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle"><div class="delete-box glass"><h2 id="deleteModalTitle" class="delete-title">` + esc(t(lang, "操作の確認", "Confirm action")) + `</h2><p id="deleteModalText" class="delete-text"></p><p id="deleteModalHelper" class="field-help hidden"></p><div id="deleteModalInputWrap" class="delete-input hidden"><label for="deleteModalInput"><span class="sr-only">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `</span><input id="deleteModalInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label><div class="field-help">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `: <code id="deleteModalExpected"></code></div></div><div class="button-row"><button id="deleteConfirmBtn" type="button" class="btn-danger">` + esc(t(lang, "実行する", "Continue")) + `</button><button id="deleteCancelBtn" type="button" class="btn-ghost">` + esc(t(lang, "キャンセル", "Cancel")) + `</button></div></div></div>` +
 		baseAdminJS(lang)

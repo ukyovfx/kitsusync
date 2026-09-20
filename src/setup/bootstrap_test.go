@@ -20,10 +20,13 @@ func TestSetupRequiredPageIsAvailableWithoutRuntimeCredentials(t *testing.T) {
 		t.Fatalf("status = %d", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, expected := range []string{"Disconnected", "Paused", "/bot/admin/bot?edit=1"} {
+	for _, expected := range []string{"Configure the Kitsu connection before notifications can start.", "/bot/admin/bot?edit=1", `class="setup-required-state"`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("setup-required page missing %q", expected)
 		}
+	}
+	if strings.Contains(body, "Disconnected") || strings.Contains(body, "Paused") {
+		t.Fatal("setup-required page retained redundant status surfaces")
 	}
 	if strings.Contains(body, "kitsu_runtime_email") || strings.Contains(body, "kitsu_runtime_password") {
 		t.Fatal("setup-required page rendered human Kitsu credential fields")

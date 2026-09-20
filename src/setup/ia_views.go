@@ -335,11 +335,11 @@ func renderIADashboardWithRuntime(w http.ResponseWriter, r *http.Request, db *go
 			dashboardMenu = dashboardMenu[:start] + dashboardMenu[end:]
 		}
 	}
-	body := `<div class="section-stack">` +
+	body := `<div class="section-stack dashboard-page">` +
 		`<section class="dashboard-intro"><div><h1>` + esc(tr(lang, "ia.dashboard")) + `</h1><p class="hint">` + esc(t(lang, "KitsuSyncの接続状態と、対応が必要な項目を確認できます。", "Review KitsuSync connection state and items that need attention.")) + `</p></div><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin", r)) + `">` + esc(t(lang, "状態を更新", "Refresh status")) + `</a></div></section>` +
-		dashboardAction +
-		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なプロダクション", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
 		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "通知状態", "Notification status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
+		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なプロダクション", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
+		dashboardAction +
 		dashboardMenu +
 		`<div class="dashboard-lower-grid"><section class="section-card glass" aria-labelledby="dashboard-activity"><h2 id="dashboard-activity">` + esc(tr(lang, "ia.activity")) + `</h2><div class="activity-columns" aria-hidden="true"><span>` + esc(t(lang, "日時", "Date and time")) + `</span><span>` + esc(t(lang, "操作", "Action")) + `</span><span>` + esc(t(lang, "Production", "Production")) + `</span><span>` + esc(t(lang, "結果", "Result")) + `</span></div><ul class="activity-list" role="log">` + activityRows.String() + `</ul></section><div class="dashboard-side-stack"><section class="section-card glass" aria-labelledby="dashboard-system"><h2 id="dashboard-system">` + esc(t(lang, "通知システム", "Notification system")) + `</h2><div class="dashboard-status-list">` + dashboardStatusRow(t(lang, "Kitsu接続", "Kitsu connection"), kitsuConnectionStatus.Class, kitsuConnectionStatus.Label) + dashboardStatusRow(t(lang, "Discord Bot", "Discord Bot"), discordConnectionStatus.Class, discordConnectionStatus.Label) + dashboardStatusRow(t(lang, "通知状態", "Notification status"), readinessView.NotificationClass, readinessView.Notification) + `</div><p class="field-help" role="status">` + esc(statusExplanation) + `</p>` + statusAction + `</section><section class="section-card glass dashboard-quick" aria-labelledby="dashboard-quick"><h2 id="dashboard-quick">` + esc(t(lang, "クイック操作", "Quick actions")) + `</h2><div class="button-row">` + ifNonEmpty(quickActions, quickActions) + `</div></section></div></div>`
 	body = replaceDashboardConnectedCount(body, len(projects), connectedProductionCount(projects))
@@ -362,6 +362,9 @@ func replaceSystemStatusRefreshScript(body string) string {
 		return body
 	}
 	end := start + relEnd + len(`</script>`)
+	if canonical := systemStatusRefreshScriptCanonical(); canonical != "" {
+		return body[:start] + canonical + body[end:]
+	}
 	script := systemStatusRefreshScriptReadable()
 	script = strings.ReplaceAll(script, "function updateCard", sparklineInteractionScript()+"Array.prototype.forEach.call(document.querySelectorAll(\"[data-telemetry-card]\"),function(card){bindSparkline(card,[])});function updateCard")
 	script = strings.ReplaceAll(script, `+graph(items,maxValue)}function refresh`, `+graph(items,maxValue);bindSparkline(card,items)}function refresh`)
@@ -431,6 +434,22 @@ func sparklineDataAttributes(items []APIObservation) string {
 
 func systemStatusRefreshScriptReadable() string {
 	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,timer,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function niceStep(value){if(!isFinite(value)||value<=0){return 1}var magnitude=Math.pow(10,Math.floor(Math.log(value)/Math.LN10)),normalized=value/magnitude;return (normalized>5?10:normalized>2?5:normalized>1?2:1)*magnitude}function requiredDomain(items){if(!items.length){return {lower:0,upper:10}}var min=Infinity,max=0;items.forEach(function(item){var value=Number(item.duration_ms);if(isFinite(value)&&value>=0){min=Math.min(min,value);max=Math.max(max,value)}});if(!isFinite(min)){return {lower:0,upper:10}}var span=max-min,minSpan=Math.max(10,max*.25);span=Math.max(span,minSpan);var lower=Math.max(0,min-Math.max(span*.15,minSpan*.4)),upper=max+Math.max(span*.15,minSpan*.6),step=niceStep((upper-lower)/4);lower=Math.max(0,Math.floor(lower/step)*step);upper=Math.ceil(upper/step)*step;if(upper-lower<minSpan){upper=lower+Math.ceil(minSpan/step)*step}return {lower:lower,upper:upper}}var domains={};function stableDomain(name,items){var required=requiredDomain(items),state=domains[name]||{lower:0,upper:0,downSince:0},now=Date.now();if(!state.upper||required.lower<state.lower||required.upper>state.upper){state.lower=Math.min(state.lower||required.lower,required.lower);state.upper=Math.max(state.upper,required.upper);state.downSince=0}else if(required.lower>state.lower||required.upper<state.upper){if(!state.downSince){state.downSince=now}else if(now-state.downSince>=15000){state.lower=required.lower;state.upper=required.upper;state.downSince=0}}domains[name]=state;return state}function tick(value){return Math.max(0,Math.round(value))+"ms"}function graph(items,domain){if(!items.length){return ""}var width=466,height=104,left=54,right=2,top=8,bottom=82,plotWidth=width-left-right,points=[];items.forEach(function(item,index){var x=items.length>1?left+index*plotWidth/(items.length-1):left+plotWidth/2,value=Number(item.duration_ms)||0,y=bottom-(bottom-top)*(value-domain.lower)/(domain.upper-domain.lower);y=Math.max(top,Math.min(bottom,y));points.push(x.toFixed(1)+","+y.toFixed(1))});var mid=(domain.lower+domain.upper)/2;return "<svg class=\"api-sparkline\" viewBox=\"0 0 466 104\" role=\"img\" aria-label=\""+items.length+" observations, "+tick(domain.lower)+" to "+tick(domain.upper)+"\"><line class=\"chart-guide\" x1=\"54\" y1=\"45\" x2=\"464\" y2=\"45\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"12\">"+tick(domain.upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"84\">"+tick(domain.lower)+"</text><path class=\"telemetry-line\" d=\"M"+points.join(" L")+"\"></path></svg>"}function setLive(value){if(live){live.textContent=value}}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds"),domain=stableDomain(service,items);status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+value+" ms</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+label+" · "+text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()+"</span></div>"+graph(items,domain)}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")}return response.json()}).then(function(payload){var observations=payload.observations||{};updateCard("kitsu",observations.kitsu||[]);updateCard("discord",observations.discord||[]);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});refresh()})();</script>`
+}
+
+func systemStatusRefreshScriptCanonicalRaw() string {
+	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,timer,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function windowMS(){return select.value==="5m"?300000:60000}function tick(value){return Math.max(0,Math.round(value))+"ms"}function scale(items){var max=1,ceilings=[10,25,50,100,250,500,1000,2000];items.forEach(function(item){var value=Number(item.duration_ms);if(isFinite(value)&&value>max){max=value}});for(var i=0;i<ceilings.length;i++){if(max<=ceilings[i]){return ceilings[i]}}return Math.ceil(max/100)*100}function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":date.toLocaleTimeString()}function chartLabel(item){var status=item.success?text("正常","Healthy"):text("リクエスト失敗","Request failed"),duration=item.success?(Number(item.duration_ms)||0)+" ms ":"";return (localTime(item.at)+" "+duration+status).trim()}function localizeChart(svg){if(!svg){return}svg.querySelectorAll("[data-telemetry-at]").forEach(function(bar){var label=chartLabel({at:bar.getAttribute("data-telemetry-at"),duration_ms:bar.getAttribute("data-telemetry-duration"),success:bar.getAttribute("data-telemetry-success")==="true"});bar.setAttribute("aria-label",label);var title=bar.querySelector("title");if(title){title.textContent=label}})}function graph(items){if(!items.length){return ""}var left=34,right=464,top=8,bottom=82,plotWidth=right-left,window=windowMS(),start=Date.now()-window,upper=scale(items),mid=upper/2,bars="";items.forEach(function(item){var at=Date.parse(item.at);if(!isFinite(at)){at=Date.now()}var x=left+Math.max(0,Math.min(1,(at-start)/window))*plotWidth,value=Number(item.duration_ms);if(!isFinite(value)||value<0){value=0}var height=(bottom-top)*Math.min(1,value/upper),y=bottom-height,success=!!item.success,cls=success?"success":"failure",label=chartLabel(item);bars+="<rect class=\"telemetry-bar "+cls+"\" x=\""+(x-4).toFixed(1)+"\" y=\""+y.toFixed(1)+"\" width=\"8\" height=\""+height.toFixed(1)+"\" data-telemetry-at=\""+item.at+"\" data-telemetry-duration=\""+value+"\" data-telemetry-success=\""+success+"\" tabindex=\"0\" role=\"img\" aria-label=\""+label+"\"><title>"+label+"</title></rect>"});var labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")];return "<svg class=\"api-sparkline\" viewBox=\"0 0 466 104\" role=\"img\" aria-label=\""+items.length+" observations\"><line class=\"chart-guide\" x1=\"34\" y1=\"45\" x2=\"464\" y2=\"45\"></line><line class=\"chart-baseline\" x1=\"34\" y1=\"82\" x2=\"464\" y2=\"82\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"30\" y=\"12\">"+tick(upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"30\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"30\" y=\"84\">0ms</text>"+bars+"<text class=\"chart-time-label\" text-anchor=\"start\" x=\"34\" y=\"100\">"+labels[0]+"</text><text class=\"chart-time-label\" text-anchor=\"middle\" x=\"233\" y=\"100\">"+labels[1]+"</text><text class=\"chart-time-label\" text-anchor=\"end\" x=\"464\" y=\"100\">"+labels[2]+"</text></svg>"}function setLive(value){if(live){live.textContent=value}}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,statusValue=last.success?value+" ms":text("リクエスト失敗","Request failed");status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+statusValue+"</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+text("最終更新","Last updated")+" "+localTime(last.at)+"</span></div>"+graph(items);localizeChart(details.querySelector(".api-sparkline"))}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")}return response.json()}).then(function(payload){var observations=payload.observations||{};updateCard("kitsu",observations.kitsu||[]);updateCard("discord",observations.discord||[]);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});root.querySelectorAll(".api-sparkline").forEach(localizeChart);refresh()})();</script>`
+}
+
+func systemStatusRefreshScriptCanonical() string {
+	const localTimeSource = `function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":date.toLocaleTimeString()}`
+	const sharedLocalTimeSource = `function localTime(value){return window.kitsuSyncSystemStatusTime(value)}`
+	script := systemStatusRefreshScriptCanonicalRaw()
+	script = strings.ReplaceAll(script, `labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")]`, `labels=select.value==="5m"?["5m","2.5m","0s"]:["60s","30s","0s"]`)
+	metadataParity := `function alignMetadata(row){if(!row||row.querySelector(".api-observation-primary")){return}var label=row.querySelector(".api-observation-label"),value=row.querySelector("[data-telemetry-value]"),meta=row.querySelector(".api-observation-meta");if(!label||!value||!meta){return}var primary=document.createElement("div");primary.className="api-observation-primary";primary.appendChild(label);primary.appendChild(value);row.insertBefore(primary,meta)}root.querySelectorAll(".api-observation-latency").forEach(alignMetadata);var metadataObserver=new MutationObserver(function(){root.querySelectorAll(".api-observation-latency").forEach(alignMetadata)});metadataObserver.observe(root,{subtree:true,childList:true});`
+	if end := strings.LastIndex(script, `</script>`); end >= 0 {
+		script = script[:end] + metadataParity + script[end:]
+	}
+	return strings.ReplaceAll(script, localTimeSource, sharedLocalTimeSource)
 }
 
 func addDynamicObservationAccessibility(graph string) string {
@@ -1445,7 +1464,33 @@ func renderIABot(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 }
 
 type pipelineHealthItem struct {
-	label, value, class, explanation, details, detailsLabel, action, actionLabel string
+	label, value, class, explanation, details, detailsLabel, action, actionLabel, detailsID string
+}
+
+func pipelineReadinessNextAction(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) string {
+	if readiness.State == ReadinessReady {
+		return ""
+	}
+	view := readinessViewFor(lang, r, readiness)
+	copyText, actionLabel := view.Hint, view.ActionLabel
+	switch readiness.State {
+	case ReadinessSetupRequired:
+		copyText = t(lang, "Kitsu接続が未設定のため、イベント監視と通知を開始できません。", "Kitsu setup is required before event monitoring and notifications can run.")
+		actionLabel = t(lang, "Kitsu接続を設定", "Configure Kitsu connection")
+	case ReadinessBotSetupRequired:
+		copyText = t(lang, "Discord Bot設定が未完了のため、通知を開始できません。", "Discord Bot setup is incomplete, so notifications cannot run.")
+		actionLabel = t(lang, "Discord Botを設定", "Configure Discord Bot")
+	case ReadinessProductionRequired:
+		copyText = t(lang, "接続済みで通知可能なProductionがありません。", "No connected and notifiable Production is available.")
+		actionLabel = t(lang, "新しいProduction接続", "New Production Connection")
+	case ReadinessRoutingRequired:
+		copyText = t(lang, "通知ルーティング設定が未完了です。", "Notification routing needs attention.")
+		actionLabel = t(lang, "通知設定を確認", "Review notification settings")
+	}
+	if strings.TrimSpace(view.ActionURL) == "" || strings.TrimSpace(actionLabel) == "" {
+		return `<p class="field-help pipeline-health-next-action" role="status">` + esc(copyText) + `</p>`
+	}
+	return `<div class="pipeline-health-next-action" role="status"><p class="field-help">` + esc(copyText) + `</p><a class="btn-ghost pipeline-health-next-action-link" href="` + esc(view.ActionURL) + `">` + esc(actionLabel) + `</a></div>`
 }
 
 func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -1454,38 +1499,46 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	readinessView := readinessViewFor(lang, r, readiness)
 	stats := Stats.Snapshot()
 	windowName := telemetryWindowName(strings.TrimSpace(r.URL.Query().Get("window")))
+	issues := recentSystemIssues(lang, db)
+	eventAction, eventActionLabel := "", ""
+	if stats.LastPollErr != "" && readiness.PrerequisitesReady {
+		if issues != "" {
+			eventAction, eventActionLabel = withLang("/bot/admin/audit", r), t(lang, "最近の問題を確認", "Review recent issues")
+		} else {
+			eventAction, eventActionLabel = "#pipeline-event-monitoring", t(lang, "観測診断を確認", "Review observation diagnostics")
+		}
+	}
 	items := []pipelineHealthItem{
-		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "詳細", "Details")},
-		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "詳細", "Details")},
-		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success", details: pipelineInternalDetails(lang), detailsLabel: t(lang, "詳細", "Details")},
-		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "詳細", "Details")},
+		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics"), action: eventAction, actionLabel: eventActionLabel, detailsID: "pipeline-event-monitoring"},
+		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics")},
+		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success"},
+		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics")},
 	}
 	var healthRows strings.Builder
 	for index, item := range items {
 		healthRows.WriteString(renderPipelineHealthItem(lang, item, index))
 	}
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section><section class="section-card glass" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + recentSystemIssues(lang, db) + `</section></div>`
+	issuesSection := ""
+	if issues != "" {
+		issuesSection = `<section class="section-card glass system-issues" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + issues + `</section>`
+	}
+	sectionAction := pipelineReadinessNextAction(lang, r, readiness)
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p>` + sectionAction + `</div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
-	body = strings.Replace(body, `<section class="section-card glass" aria-labelledby="system-issues-title">`, `<section class="section-card glass system-issues" aria-labelledby="system-issues-title">`, 1)
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
-	body += systemStatusDetailsScript()
+	body += `<script data-pipeline-health-actions>(function(){document.addEventListener('click',function(event){var link=event.target.closest('[data-open-pipeline-details]');if(!link)return;var summary=document.getElementById(link.getAttribute('data-open-pipeline-details'));var details=summary&&summary.closest('details');if(details){details.open=true;}});})();</script>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
 func renderRuntimeObservabilitySummary(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness, windowName, body string) string {
-	statusLabel, statusClass, statusHint := overallRuntimeStatus(lang, readiness, stats)
 	body = renderRuntimeObservabilitySummaryRaw(lang, stats, windowName, body)
 	body = stripSystemStatusRedundantCopy(body)
 	body = addTelemetryViewerLocalTimes(body, stats, windowName)
 	body = replaceElementTextByID(body, "system-observability-title", t(lang, "API応答状態", "API response status"))
 	body = replaceElementTextByID(body, "pipeline-health-title", t(lang, "KitsuSync処理状態", "KitsuSync operational status"))
-	if statusClass == "success" {
-		return `<div class="section-stack system-status-sections">` + body + `</div>`
-	}
-	overall := `<div class="system-overall-summary" aria-labelledby="system-overall-title"><span id="system-overall-title" class="system-overall-label">` + esc(t(lang, "システム", "System")) + `</span><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span><span class="system-overall-hint">` + esc(statusHint) + `</span></div>`
-	return `<div class="section-stack system-status-sections">` + overall + body + `</div>`
+	return `<div class="section-stack system-status-sections">` + body + `</div>`
 }
 
 func stripSystemStatusRedundantCopy(body string) string {
@@ -1542,7 +1595,7 @@ func replaceElementTextByID(body, id, text string) string {
 	return body[:start] + esc(text) + body[end:]
 }
 
-func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName string) string {
+func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName string) (result string) {
 	for _, service := range []string{"kitsu", "discord"} {
 		items := filterAPIObservations(stats.APIObservations[service], time.Now(), telemetryWindowDuration(windowName))
 		if len(items) == 0 {
@@ -1552,7 +1605,7 @@ func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName
 		replacement := `<span class="api-observation-meta" data-telemetry-meta data-telemetry-at="` + esc(items[len(items)-1].At.UTC().Format(time.RFC3339)) + `">`
 		body = strings.Replace(body, marker, replacement, 1)
 	}
-	return body + `<script data-telemetry-local-time>(function(){document.querySelectorAll("[data-telemetry-at]").forEach(function(node){var date=new Date(node.getAttribute("data-telemetry-at"));if(Number.isNaN(date.getTime())){return}var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+new Intl.DateTimeFormat(undefined,{hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(date);node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone})})();</script>`
+	return body + `<script data-telemetry-local-time>(function(){window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll("[data-telemetry-meta][data-telemetry-at]").forEach(function(node){node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"));node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone});document.querySelectorAll(".telemetry-bar[data-telemetry-at]").forEach(function(node){var success=node.getAttribute("data-telemetry-success")==="true",duration=Number(node.getAttribute("data-telemetry-duration"))||0,status=success?(document.documentElement.lang==="ja"?"正常":"Healthy"):(document.documentElement.lang==="ja"?"リクエスト失敗":"Request failed"),label=(window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))+" "+(success?duration+" ms ":"")+status).trim();node.setAttribute("aria-label",label);var title=node.querySelector("title");if(title){title.textContent=label}})})();</script>`
 }
 
 func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, windowName, body string) string {
@@ -1567,14 +1620,24 @@ func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, wi
 }
 
 func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) string {
+	_ = index
 	action := ""
 	if item.action != "" && item.actionLabel != "" {
-		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
+		openDetails := ""
+		href := item.action
+		if strings.HasPrefix(item.action, "#") && item.detailsID != "" {
+			openDetails = ` data-open-pipeline-details="` + esc(item.detailsID) + `"`
+			href = item.action
+		}
+		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(href) + `"` + openDetails + `>` + esc(item.actionLabel) + `</a>`
 	}
 	details := ""
-	if item.details != "" {
-		id := "pipeline-health-details-" + strconv.Itoa(index)
-		details = `<button class="pipeline-health-details-toggle" type="button" aria-expanded="false" aria-controls="` + id + `"><span class="details-label-collapsed">` + esc(item.detailsLabel) + ` ▾</span><span class="details-label-expanded">` + esc(t(lang, "詳細を隠す", "Hide details")) + ` ▴</span></button><div id="` + id + `" class="pipeline-health-details-content" hidden>` + item.details + `</div>`
+	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
+		summaryID := ""
+		if item.detailsID != "" {
+			summaryID = ` id="` + esc(item.detailsID) + `"`
+		}
+		details = `<details class="pipeline-health-details"><summary` + summaryID + `>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-details-content">` + item.details + `</div></details>`
 	}
 	explanation := ""
 	if strings.TrimSpace(item.explanation) != "" {
@@ -1583,25 +1646,19 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + `</div><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + details + action + `</article>`
 }
 
-func systemStatusDetailsScript() string {
-	return `<script data-system-status-details>(function(){var root=document.querySelector(".system-status-sections");if(!root){return}root.addEventListener("click",function(event){var toggle=event.target.closest(".pipeline-health-details-toggle");if(!toggle||!root.contains(toggle)){return}var panelId=toggle.getAttribute("aria-controls"),panel=panelId&&document.getElementById(panelId),expanded=toggle.getAttribute("aria-expanded")==="true";if(!panel){return}toggle.setAttribute("aria-expanded",String(!expanded));panel.hidden=expanded})})();</script>`
-}
-
 func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string, sharedMax ...float64) string {
 	items := filterAPIObservations(stats.APIObservations[service], time.Now(), telemetryWindowDuration(windowName))
 	if len(items) == 0 {
 		return `<div class="api-observation-not-checked">` + esc(t(lang, "未確認", "Not checked")) + `</div>`
 	}
 	last := items[len(items)-1]
-	windowLabel := t(lang, "直近60秒", "Last 60 seconds")
-	if windowName == telemetryWindow5Minutes {
-		windowLabel = t(lang, "直近5分", "Last 5 minutes")
+	value := t(lang, "リクエスト失敗", "Request failed")
+	if last.Success {
+		value = strconv.FormatInt(last.Duration.Milliseconds(), 10) + " ms"
 	}
-	value := strconv.FormatInt(last.Duration.Milliseconds(), 10) + " ms"
 	normalMeta := fmt.Sprintf("%s %s", t(lang, "最終更新", "Last updated"), last.At.Local().Format("15:04:05"))
-	meta := normalMeta + " · " + windowLabel
-	domain := stableObservationYDomain(service, windowName, items)
-	return `<div class="api-observation-latency"><strong data-telemetry-value>` + esc(value) + `</strong><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span><span class="api-observation-meta" data-telemetry-meta>` + esc(meta) + `</span></div>` + apiObservationLineGraphWithDomain(items, lang, windowName, domain)
+	scale := stableObservationScale(service, windowName, items)
+	return `<div class="api-observation-latency"><div class="api-observation-primary"><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span><strong data-telemetry-value>` + esc(value) + `</strong></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationBarGraphWithScale(items, lang, windowName, scale)
 }
 
 func apiObservationGraph(items []APIObservation) string {
@@ -1613,7 +1670,7 @@ func apiObservationBarGraph(items []APIObservation, lang, windowName string) str
 }
 
 func apiObservationBarGraphWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
-	return apiObservationLineGraphWithDomain(items, lang, windowName, observationYDomain{Lower: 0, Upper: maxValue})
+	return apiObservationBarsWithScale(items, lang, windowName, maxValue)
 }
 
 func apiObservationLineGraphWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
@@ -1621,32 +1678,49 @@ func apiObservationLineGraphWithScale(items []APIObservation, lang, windowName s
 }
 
 func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName string, domain observationYDomain) string {
+	return apiObservationBarsWithScale(items, lang, windowName, domain.Upper)
+}
+
+func apiObservationBarsWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
 	if len(items) == 0 {
 		return ""
 	}
 	geometry := telemetryChartGeometry()
-	if domain.Upper <= domain.Lower {
-		domain = observationYDomain{Lower: 0, Upper: 1}
+	if maxValue <= 0 {
+		maxValue = 10
 	}
-	points := make([]string, 0, len(items))
-	plotWidth := geometry.Width - geometry.PlotLeft - geometry.PlotRight
-	for index, item := range items {
-		x := geometry.PlotLeft + plotWidth/2
-		if len(items) > 1 {
-			x = geometry.PlotLeft + float64(index)*plotWidth/float64(len(items)-1)
+	plotWidth := geometry.PlotRight - geometry.PlotLeft
+	window := telemetryWindowDuration(windowName)
+	start := time.Now().Add(-window)
+	barWidth := 8.0
+	var bars strings.Builder
+	for _, item := range items {
+		x := geometry.PlotLeft + math.Max(0, math.Min(1, item.At.Sub(start).Seconds()/window.Seconds()))*plotWidth
+		value := math.Max(0, float64(item.Duration.Milliseconds()))
+		height := (geometry.PlotBottom - geometry.PlotTop) * math.Min(1, value/maxValue)
+		y := geometry.PlotBottom - height
+		class := "failure"
+		if item.Success {
+			class = "success"
 		}
-		value := float64(item.Duration.Milliseconds())
-		y := geometry.PlotBottom - (geometry.PlotBottom-geometry.PlotTop)*(value-domain.Lower)/(domain.Upper-domain.Lower)
-		if y < geometry.PlotTop {
-			y = geometry.PlotTop
-		}
-		if y > geometry.PlotBottom {
-			y = geometry.PlotBottom
-		}
-		points = append(points, fmt.Sprintf("%.1f,%.1f", x, y))
+		label := telemetryObservationLabel(lang, item)
+		bars.WriteString(`<rect class="telemetry-bar ` + class + `" x="` + fmt.Sprintf("%.1f", x-barWidth/2) + `" y="` + fmt.Sprintf("%.1f", y) + `" width="` + fmt.Sprintf("%.1f", barWidth) + `" height="` + fmt.Sprintf("%.1f", height) + `" data-telemetry-at="` + esc(item.At.UTC().Format(time.RFC3339)) + `" data-telemetry-duration="` + strconv.FormatInt(item.Duration.Milliseconds(), 10) + `" data-telemetry-success="` + strconv.FormatBool(item.Success) + `" tabindex="0" role="img" aria-label="` + esc(label) + `"><title>` + esc(label) + `</title></rect>`)
 	}
-	path := "M" + strings.Join(points, " L")
-	return `<div class="api-sparkline-row"><div class="api-sparkline-y-labels" aria-hidden="true"><span class="api-sparkline-y-label api-sparkline-y-label-max">` + esc(formatLatencyTick(domain.Upper)) + `</span><span class="api-sparkline-y-label api-sparkline-y-label-min">` + esc(formatLatencyTick(domain.Lower)) + `</span></div><svg class="api-sparkline" viewBox="0 0 394 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations, %s–%s", len(items), formatLatencyTick(domain.Lower), formatLatencyTick(domain.Upper))) + `"` + sparklineDataAttributes(items) + `><line class="chart-guide" x1="0" y1="45" x2="392" y2="45"></line><path class="telemetry-line" d="` + path + `"></path></svg></div>`
+	labels := []string{"60s", "30s", "0s"}
+	if windowName == telemetryWindow5Minutes {
+		labels = []string{"5m", "2.5m", "0s"}
+	}
+	middle := maxValue / 2
+	svg := `<svg class="api-sparkline" viewBox="0 0 466 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", len(items))) + `"` + sparklineDataAttributes(items) + `><line class="chart-guide" x1="34" y1="45" x2="464" y2="45"></line><line class="chart-baseline" x1="34" y1="82" x2="464" y2="82"></line><text class="chart-tick" text-anchor="end" x="30" y="12">` + esc(formatLatencyTick(maxValue)) + `</text><text class="chart-tick" text-anchor="end" x="30" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="30" y="84">0ms</text>` + bars.String() + `<text class="chart-time-label" text-anchor="start" x="34" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="233" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="464" y="100">` + esc(labels[2]) + `</text></svg>`
+	return svg
+}
+
+func telemetryObservationLabel(lang string, item APIObservation) string {
+	when := item.At.Local().Format("15:04:05")
+	if !item.Success {
+		return when + " " + t(lang, "リクエスト失敗", "Request failed")
+	}
+	return when + " " + strconv.FormatInt(item.Duration.Milliseconds(), 10) + " ms " + t(lang, "正常", "Healthy")
 }
 
 func rewriteLatencyGraph(graph string) string {
@@ -1785,7 +1859,7 @@ func niceObservationStep(value float64) float64 {
 }
 
 func telemetryChartGeometry() telemetryChartLayout {
-	return telemetryChartLayout{Width: 394, Height: 104, PlotLeft: 0, PlotRight: 2, PlotTop: 8, PlotMiddle: 45, PlotBottom: 82}
+	return telemetryChartLayout{Width: 466, Height: 104, PlotLeft: 34, PlotRight: 464, PlotTop: 8, PlotMiddle: 45, PlotBottom: 82}
 }
 
 func observationScaleForItems(items []APIObservation) float64 {
@@ -1949,12 +2023,15 @@ func pipelineProcessingClass(stats RuntimeSnapshot) string {
 	return "warning"
 }
 
-func pipelineProcessingHint(lang string, stats RuntimeSnapshot) string {
+func pipelineProcessingHint(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness) string {
 	if stats.LastPollErr != "" {
 		return t(lang, "直近の処理で問題が記録されています。", "The most recent processing cycle recorded an issue.")
 	}
 	if stats.LastPollTime.IsZero() {
-		return t(lang, "処理メトリクスはまだ確認できません。", "Processing metrics are not available yet.")
+		if !readiness.PrerequisitesReady {
+			return readinessViewFor(lang, nil, readiness).Hint
+		}
+		return t(lang, "初回の観測を待っています。", "Waiting for the first observation.")
 	}
 	return ""
 }
@@ -1980,7 +2057,10 @@ func pipelineRoutingHint(lang string, readiness SharedBotRuntimeReadiness) strin
 	if readiness.RoutingReady {
 		return ""
 	}
-	return t(lang, "有効な通知先設定がありません。", "No valid enabled route is available.")
+	if !readiness.ProductionConnected {
+		return t(lang, "通知可能なProductionがありません。", "No Production is currently available for notifications.")
+	}
+	return t(lang, "Productionはありますが、有効な通知先設定がありません。", "A Production exists, but its notification routing is missing or invalid.")
 }
 
 func pipelineDiscordValue(lang string, configured bool) string {
@@ -2008,7 +2088,7 @@ func pipelineNotificationHint(lang string, readiness SharedBotRuntimeReadiness) 
 	if readiness.OverallReady {
 		return ""
 	}
-	return t(lang, "設定が完了するまで通知は停止しています。", "Notifications remain blocked until setup is complete.")
+	return readinessViewFor(lang, nil, readiness).Hint
 }
 
 func pipelineNotificationDetails(lang string, stats RuntimeSnapshot) string {
@@ -2016,10 +2096,6 @@ func pipelineNotificationDetails(lang string, stats RuntimeSnapshot) string {
 		return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "成功", "Successful")) + `</dt><dd>0</dd></div><div><dt>` + esc(t(lang, "失敗", "Failed")) + `</dt><dd>0</dd></div></dl>`
 	}
 	return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "成功", "Successful")) + `</dt><dd>` + strconv.FormatInt(stats.SendSuccessTotal, 10) + `</dd></div><div><dt>` + esc(t(lang, "失敗", "Failed")) + `</dt><dd>` + strconv.FormatInt(stats.SendFailureTotal, 10) + `</dd></div></dl>`
-}
-
-func pipelineInternalDetails(lang string) string {
-	return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "データソース", "Data source")) + `</dt><dd>` + esc(t(lang, "ローカル設定・履歴", "Local settings and history")) + `</dd></div></dl>`
 }
 
 func pipelineRoutingDetails(lang string, readiness SharedBotRuntimeReadiness, db *gorm.DB) string {
@@ -2059,7 +2135,7 @@ func recentSystemIssues(lang string, db *gorm.DB) string {
 		}
 	}
 	if count == 0 {
-		return `<p class="empty" role="status">` + esc(t(lang, "最近の問題はありません。", "No recent issues.")) + `</p>`
+		return ""
 	}
 	return `<ul class="list-tight pipeline-issues" role="log">` + rows.String() + `</ul>`
 }
@@ -2129,7 +2205,7 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません", "No audit log entries")) + `</td></tr>`)
 	}
-	body := `<section class="section-card glass"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
 	for _, log := range logs {
 		oldTime := `<td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td>`
 		newTime := `<td><time class="audit-time" datetime="` + esc(log.CreatedAt.UTC().Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time></td>`

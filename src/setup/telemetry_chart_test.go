@@ -1,288 +1,161 @@
 package setup
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestAPIObservationLineGraphUsesEqualSamplePositions(t *testing.T) {
+func TestAPIObservationBarsUseTimestampGeometryAndCanonicalTicks(t *testing.T) {
 	now := time.Now()
 	items := []APIObservation{
 		{At: now.Add(-55 * time.Second), Duration: 10 * time.Millisecond, Success: true},
-		{At: now.Add(-30 * time.Second), Duration: 20 * time.Millisecond, Success: true},
-		{At: now.Add(-5 * time.Second), Duration: 30 * time.Millisecond, Success: true},
+		{At: now.Add(-5 * time.Second), Duration: 30 * time.Millisecond, Success: false},
 	}
-	graph := apiObservationBarGraph(items, "en", telemetryWindow60Seconds)
-	if strings.Contains(graph, "<circle") {
-		t.Fatal("line graph should not render point markers")
+	graph := apiObservationBarGraphWithScale(items, "en", telemetryWindow60Seconds, 50)
+	if !strings.Contains(graph, `viewBox="0 0 466 104"`) {
+		t.Fatal("chart does not use the canonical 466x104 viewBox")
 	}
-	if !strings.Contains(graph, `d="M0.0,`) || !strings.Contains(graph, `392.0,`) {
-		t.Fatal("line graph path is missing equal plot-bound positions")
+	if strings.Count(graph, `<rect class="telemetry-bar`) != len(items) {
+		t.Fatalf("rendered %d bars, want %d: %s", strings.Count(graph, `<rect class="telemetry-bar`), len(items), graph)
 	}
-	if !strings.Contains(graph, `196.0,`) {
-		t.Fatal("line graph path does not use equal sample slots")
+	if !strings.Contains(graph, `class="telemetry-bar success"`) || !strings.Contains(graph, `class="telemetry-bar failure"`) {
+		t.Fatal("success and failure bars are not semantically colored")
 	}
-}
-
-func TestAPIObservationGraphsUseIndependentRoundedYScales(t *testing.T) {
-	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
-		"kitsu":   {{At: time.Now().Add(-5 * time.Second), Duration: 8 * time.Millisecond, Success: true}},
-		"discord": {{At: time.Now().Add(-5 * time.Second), Duration: 204 * time.Millisecond, Success: true}},
-	}}
-	kitsuScale := observationScaleForItems(stats.APIObservations["kitsu"])
-	discordScale := observationScaleForItems(stats.APIObservations["discord"])
-	if kitsuScale != 10 || discordScale != 250 {
-		t.Fatalf("expected independent rounded scales 10ms and 250ms, got %v and %v", kitsuScale, discordScale)
+	if strings.Contains(graph, "telemetry-line") || strings.Contains(graph, "<path") {
+		t.Fatal("canonical telemetry graph must not render a line path")
 	}
-	kitsu := apiObservationBarGraphWithScale(stats.APIObservations["kitsu"], "en", telemetryWindow60Seconds, kitsuScale)
-	discord := apiObservationBarGraphWithScale(stats.APIObservations["discord"], "en", telemetryWindow60Seconds, discordScale)
-	if !strings.Contains(kitsu, `api-sparkline-y-label-max">10ms</span>`) || !strings.Contains(discord, `api-sparkline-y-label-max">250ms</span>`) {
-		t.Fatal("graphs do not expose independent Y-axis ceilings")
+	if strings.Count(graph, `class="chart-tick"`) != 3 {
+		t.Fatalf("chart has %d Y ticks, want exactly 3", strings.Count(graph, `class="chart-tick"`))
 	}
-}
-
-func TestStableObservationScaleUpscalesImmediatelyAndHoldsDownscale(t *testing.T) {
-	service := "scale-stability-test"
-	window := telemetryWindow60Seconds
-	high := []APIObservation{{At: time.Now(), Duration: 240 * time.Millisecond, Success: true}}
-	low := []APIObservation{{At: time.Now(), Duration: 8 * time.Millisecond, Success: true}}
-	if got := stableObservationScale(service, window, high); got != 250 {
-		t.Fatalf("expected immediate scale-up to 250ms, got %v", got)
-	}
-	if got := stableObservationScale(service, window, low); got != 250 {
-		t.Fatalf("expected bounded downscale hold at 250ms, got %v", got)
-	}
-}
-
-func TestObservationYDomainUsesIndependentHeadroomAndMinimumSpan(t *testing.T) {
-	kitsu := observationYDomainForItems([]APIObservation{
-		{Duration: 8 * time.Millisecond},
-		{Duration: 12 * time.Millisecond},
-	})
-	discord := observationYDomainForItems([]APIObservation{
-		{Duration: 190 * time.Millisecond},
-		{Duration: 260 * time.Millisecond},
-	})
-	if kitsu.Upper >= 100 || kitsu.Lower < 0 || kitsu.Upper-kitsu.Lower < 10 {
-		t.Fatalf("Kitsu domain is not a compact padded range: %#v", kitsu)
-	}
-	if discord.Upper <= 260 || discord.Lower >= 190 || discord.Upper-kitsu.Upper < 100 {
-		t.Fatalf("Discord domain is not independently padded: %#v", discord)
-	}
-}
-
-func TestStableObservationYDomainExpandsImmediatelyAndContractsAfterHold(t *testing.T) {
-	service := "domain-stability-test"
-	window := telemetryWindow60Seconds
-	high := []APIObservation{{Duration: 240 * time.Millisecond}}
-	low := []APIObservation{{Duration: 8 * time.Millisecond}}
-	first := stableObservationYDomain(service, window, high)
-	if first.Upper <= 240 {
-		t.Fatalf("expected headroom above outlier, got %#v", first)
-	}
-	second := stableObservationYDomain(service, window, low)
-	if second != first {
-		t.Fatalf("domain contracted before stability hold: first=%#v second=%#v", first, second)
-	}
-}
-
-func TestAPIObservationLineGraphUsesIndependentDomainTicksAndEqualX(t *testing.T) {
-	items := []APIObservation{{Duration: 8 * time.Millisecond}, {Duration: 12 * time.Millisecond}, {Duration: 10 * time.Millisecond}}
-	domain := observationYDomainForItems(items)
-	graph := apiObservationLineGraphWithDomain(items, "en", telemetryWindow60Seconds, domain)
-	if !strings.Contains(graph, `class="api-sparkline-y-labels"`) || !strings.Contains(graph, `d="M0.0,`) || !strings.Contains(graph, `196.0,`) {
-		t.Fatalf("labels or equal plot slots are missing: %s", graph)
-	}
-	if strings.Contains(graph, `>0ms</text>`) && domain.Lower > 0 {
-		t.Fatal("dynamic lower bound was incorrectly forced to zero")
-	}
-}
-
-func TestAPIObservationLineGraphUsesReadableTicksWithoutTimeAxisChrome(t *testing.T) {
-	item := []APIObservation{{At: time.Now().Add(-5 * time.Second), Duration: 8 * time.Millisecond, Success: true}}
-	graph60 := apiObservationBarGraphWithScale(item, "en", telemetryWindow60Seconds, 250)
-	for _, want := range []string{`viewBox="0 0 394 104"`, `api-sparkline-y-label-max">250ms</span>`, `api-sparkline-y-label-min">0ms</span>`, `class="telemetry-line"`} {
-		if !strings.Contains(graph60, want) {
-			t.Fatalf("60-second chart is missing %q", want)
-		}
-	}
-	graph5m := apiObservationBarGraphWithScale(item, "en", telemetryWindow5Minutes, 250)
-	if !strings.Contains(graph60, `class="chart-guide"`) {
-		t.Fatal("chart is missing the subtle middle guide")
-	}
-	for _, forbidden := range []string{"60s", "30s", "Now", `class="chart-axis"`, `class="chart-time-label"`} {
-		if strings.Contains(graph60, forbidden) || strings.Contains(graph5m, forbidden) {
-			t.Fatalf("chart retains removed axis chrome %q", forbidden)
+	for _, label := range []string{`>60s<`, `>30s<`, `>0s<`, `x1="34"`, `x2="464"`, `x="233"`} {
+		if !strings.Contains(graph, label) {
+			t.Fatalf("chart is missing canonical geometry/label %q: %s", label, graph)
 		}
 	}
 }
 
-func TestAPIObservationLineGraphUsesNoAxisChrome(t *testing.T) {
-	graph := apiObservationBarGraphWithScale([]APIObservation{{At: time.Now(), Duration: 8 * time.Millisecond, Success: true}}, "en", telemetryWindow60Seconds, 250)
-	if strings.Contains(graph, `x1="2" y1="8" x2="42" y2="82"`) || strings.Contains(graph, `x1="42" y1="8" x2="2" y2="82"`) {
-		t.Fatal("chart contains a diagonal axis line")
+func TestAPIObservationGraphsUseIndependentZeroBasedSteppedScales(t *testing.T) {
+	kitsuItems := []APIObservation{{At: time.Now(), Duration: 8 * time.Millisecond, Success: true}}
+	discordItems := []APIObservation{{At: time.Now(), Duration: 204 * time.Millisecond, Success: true}}
+	kitsu := apiObservationBarGraphWithScale(kitsuItems, "en", telemetryWindow60Seconds, observationScaleForItems(kitsuItems))
+	discord := apiObservationBarGraphWithScale(discordItems, "en", telemetryWindow60Seconds, observationScaleForItems(discordItems))
+	if !strings.Contains(kitsu, `>10ms</text>`) || !strings.Contains(kitsu, `>5ms</text>`) || !strings.Contains(kitsu, `>0ms</text>`) {
+		t.Fatalf("Kitsu chart does not expose the 10/5/0ms scale: %s", kitsu)
 	}
-	if strings.Contains(graph, `class="chart-axis"`) {
-		t.Fatal("chart contains axis chrome")
+	if !strings.Contains(discord, `>250ms</text>`) || !strings.Contains(discord, `>125ms</text>`) || !strings.Contains(discord, `>0ms</text>`) {
+		t.Fatalf("Discord chart does not expose the independent 250/125/0ms scale: %s", discord)
 	}
 }
 
-func TestAPIObservationChartsReserveSharedYAxisColumn(t *testing.T) {
+func TestTelemetryChartGeometryMatchesCanonicalPlot(t *testing.T) {
 	geometry := telemetryChartGeometry()
-	if geometry.PlotLeft != 0 || geometry.Width-geometry.PlotRight != 392 {
-		t.Fatalf("unexpected shared chart geometry: %#v", geometry)
-	}
-	line := apiObservationLineGraphWithDomain([]APIObservation{{Duration: 300 * time.Millisecond}}, "en", telemetryWindow60Seconds, observationYDomain{Lower: 0, Upper: 300})
-	bar := apiObservationBarGraphWithScale([]APIObservation{{Duration: 300 * time.Millisecond}}, "en", telemetryWindow60Seconds, 300)
-	for name, graph := range map[string]string{"line": line, "bar": bar} {
-		if !strings.Contains(graph, `class="api-sparkline-y-labels"`) || !strings.Contains(graph, `x1="0"`) {
-			t.Fatalf("%s chart does not keep labels outside the shared plot start: %s", name, graph)
-		}
-		if strings.Contains(graph, `<svg class="api-sparkline"`) && strings.Contains(graph[strings.Index(graph, `<svg class="api-sparkline"`):], `class="chart-tick"`) {
-			t.Fatalf("%s chart still renders Y labels inside the plot SVG: %s", name, graph)
-		}
-	}
-}
-
-func TestSystemStatusRefreshUsesExternalYAxisLabelSiblings(t *testing.T) {
-	updated := replaceSystemStatusRefreshScript(`<script data-system-status-refresh></script>`)
-	for _, want := range []string{`api-sparkline-row`, `api-sparkline-y-label-max`, `api-sparkline-y-label-min`, `viewBox=\"0 0 394 104\"`} {
-		if !strings.Contains(updated, want) {
-			t.Fatalf("refresh graph is missing external Y-axis structure %q", want)
-		}
-	}
-	if strings.Contains(updated, `class=\"chart-tick\"`) {
-		t.Fatalf("refresh graph still places persistent Y labels inside the plot SVG: %s", updated)
-	}
-}
-
-func TestPhase19SharedSparklineGapAndManagementStateAreSymmetric(t *testing.T) {
-	for _, want := range []string{
-		`--sparkline-axis-gap:2px`,
-		`--sparkline-axis-label-width:40px`,
-		`.api-sparkline-row{display:grid;grid-template-columns:var(--sparkline-axis-label-width,40px) minmax(0,1fr);gap:var(--sparkline-axis-gap,4px)`,
-		`.system-status-sections>.section-stack>.pipeline-health>.page-heading,.system-status-sections>.section-stack>.system-issues>.page-heading{padding-inline:var(--system-status-content-inset)}`,
-		`.dashboard-menu-card:hover,.dashboard-menu-card:focus,.dashboard-menu-card:focus-visible,.dashboard-menu-card:active,.dashboard-menu-card[aria-current="page"]{border-color:var(--line);border-right-color:var(--line);border-inline-end-color:var(--line);box-shadow:none;transform:none}`,
-	} {
-		if !strings.Contains(adminThemeCSS, want) {
-			t.Fatalf("Phase 19 shared visual contract is missing %q", want)
-		}
-	}
-}
-
-func TestPhase20SparklineUsesMetadataAlignedCompactLabelColumn(t *testing.T) {
-	for _, want := range []string{
-		`text-align:left`,
-		`.api-sparkline-y-label{position:absolute;left:0;right:auto`,
-		`--sparkline-axis-label-width:40px`,
-	} {
-		if !strings.Contains(adminThemeCSS, want) {
-			t.Fatalf("sparkline label alignment contract is missing %q", want)
-		}
-	}
-}
-
-func TestSparklineInteractionUsesWholePlotAndNearestSamples(t *testing.T) {
-	script := sparklineInteractionScript()
-	for _, fragment := range []string{`data-sparkline-hit-area`, `pointermove`, `pointerleave`, `Math.round`, `ArrowLeft`, `ArrowRight`, `duration_ms`, `toLocaleTimeString`, `sparkline-hover-indicator`, `sparkline-tooltip`} {
-		if !strings.Contains(script, fragment) {
-			t.Fatalf("sparkline interaction is missing %q", fragment)
-		}
-	}
-	if !strings.Contains(script, `items.length===1?left`) {
-		t.Fatal("single-sample plot geometry is not handled")
-	}
-}
-
-func TestSystemStatusRefreshRebindsSparklineInspectionAfterPolling(t *testing.T) {
-	body := `<script data-system-status-refresh>details.innerHTML=foo+graph(items,domain)}function refresh` + "</script>"
-	updated := replaceSystemStatusRefreshScript(body)
-	if !strings.Contains(updated, `+graph(items,domain);bindSparkline(card,items)}`) {
-		t.Fatal("polling refresh does not rebind sparkline interaction")
-	}
-}
-
-func TestAPIObservationLongYAxisLabelsStayBeforeStablePlot(t *testing.T) {
-	for _, value := range []int{25, 250, 500, 1000, 2000, 5000, 10000} {
-		graph := apiObservationBarGraphWithScale([]APIObservation{{At: time.Now(), Duration: time.Duration(value) * time.Millisecond, Success: true}}, "en", telemetryWindow60Seconds, float64(value))
-		if !strings.Contains(graph, fmt.Sprintf("> %dms</span>", value)) && !strings.Contains(graph, fmt.Sprintf(">%dms</span>", value)) {
-			t.Fatalf("%dms label is missing", value)
-		}
+	if geometry.Width != 466 || geometry.Height != 104 || geometry.PlotLeft != 34 || geometry.PlotRight != 464 || geometry.PlotMiddle != 45 || geometry.PlotBottom != 82 {
+		t.Fatalf("unexpected canonical chart geometry: %#v", geometry)
 	}
 }
 
 func TestAPIObservationBarsExposeSecretSafeKeyboardTooltips(t *testing.T) {
 	graph := apiObservationBarGraphWithScale([]APIObservation{
 		{At: time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC), Duration: 42 * time.Millisecond, Success: true},
-		{At: time.Date(2026, 8, 10, 12, 35, 1, 0, time.UTC), Duration: 0, Success: false},
+		{At: time.Date(2026, 8, 10, 12, 35, 1, 0, time.UTC), Duration: 9 * time.Millisecond, Success: false},
 	}, "en", telemetryWindow60Seconds, 250)
-	if strings.Contains(graph, "<circle") || strings.Contains(graph, "tabindex=\"0\"") {
-		t.Fatal("sparkline should not render point markers")
+	if strings.Count(graph, `tabindex="0"`) != 2 || strings.Count(graph, `<title>`) != 2 {
+		t.Fatalf("each real bar must have keyboard/native tooltip accessibility: %s", graph)
 	}
-	if !strings.Contains(graph, `role="img"`) || !strings.Contains(graph, "observations") {
-		t.Fatal("sparkline accessible name is incomplete")
+	if !strings.Contains(graph, "42 ms Healthy") || !strings.Contains(graph, "Request failed") {
+		t.Fatal("bar accessibility labels do not distinguish success and failure safely")
 	}
-	if strings.Contains(graph, "Authorization") || strings.Contains(graph, "Bearer") || strings.Contains(graph, "token") {
-		t.Fatal("telemetry tooltip contains secret-like content")
+	if strings.Contains(graph, "9 ms Request failed") || strings.Contains(graph, "Authorization") || strings.Contains(graph, "Bearer") || strings.Contains(graph, "token") {
+		t.Fatal("failure tooltip fabricated latency or exposed secret-like content")
 	}
 }
 
-func TestSystemStatusVerticalRhythmUsesExplicitHierarchyTokens(t *testing.T) {
-	for _, fragment := range []string{
-		`--system-status-page-title-to-section:var(--space-5)`,
-		`--system-status-heading-to-content:var(--space-3)`,
-		`--system-status-internal-item-gap:var(--space-2)`,
-		`--system-status-section-to-section:var(--space-5)`,
-		`.page-card:has(.system-status-sections)>.page-heading{margin-bottom:var(--system-status-page-title-to-section)}`,
-		`.system-status-sections>.system-observability,.system-status-sections>.section-stack{gap:var(--system-status-section-to-section)}`,
-		`.system-status-sections .pipeline-health-grid{margin-top:var(--system-status-heading-to-content)`,
-		`.system-status-sections .pipeline-health-details{margin-top:var(--system-status-internal-item-gap)}`,
-	} {
-		if !strings.Contains(adminThemeCSS, fragment) {
-			t.Fatalf("System Status vertical rhythm contract is missing %q", fragment)
+func TestSystemStatusRefreshUsesCanonicalBarContract(t *testing.T) {
+	updated := replaceSystemStatusRefreshScript(`<script data-system-status-refresh></script>`)
+	for _, fragment := range []string{`viewBox=\"0 0 466 104\"`, `telemetry-bar`, `Date.parse(item.at)`, `tabindex=\"0\"`, `Request failed`, `60s`, `2.5m`, `0s`, `x1=\"34\"`, `x2=\"464\"`} {
+		if !strings.Contains(updated, fragment) {
+			t.Fatalf("refresh graph is missing canonical contract %q", fragment)
+		}
+	}
+	for _, obsolete := range []string{"stableDomain", "telemetry-line", "394 104", "equal sample"} {
+		if strings.Contains(updated, obsolete) {
+			t.Fatalf("refresh graph retains obsolete telemetry implementation %q", obsolete)
 		}
 	}
 }
 
-func TestSparklineYAxisLabelsUseSharedPlotBoundAlignment(t *testing.T) {
-	graph := apiObservationLineGraphWithDomain(
-		[]APIObservation{{Duration: 15 * time.Millisecond}, {Duration: 0}},
-		"en",
-		telemetryWindow60Seconds,
-		observationYDomain{Lower: 0, Upper: 15},
-	)
-	labelsEnd := strings.Index(graph, `</div><svg class="api-sparkline"`)
-	if labelsEnd < 0 || strings.Count(graph[:labelsEnd], `class="api-sparkline-y-label `) != 2 {
-		t.Fatalf("external max/min labels are not rendered as the chart-row siblings: %s", graph)
+func TestSystemStatusRefreshAndInitialGraphUseMatchingLabels(t *testing.T) {
+	items := []APIObservation{{At: time.Now().Add(-2 * time.Minute), Duration: 25 * time.Millisecond, Success: true}}
+	initial := apiObservationBarGraphWithScale(items, "ja", telemetryWindow5Minutes, 50)
+	refresh := systemStatusRefreshScriptCanonical()
+	for _, label := range []string{"5m", "2.5m", "0s", "telemetry-bar", "chart-time-label"} {
+		if !strings.Contains(initial+refresh, label) {
+			t.Fatalf("initial/AJAX telemetry contract is missing %q", label)
+		}
 	}
-	if strings.Index(graph, `class="api-sparkline-y-labels"`) > strings.Index(graph, `<svg class="api-sparkline"`) {
-		t.Fatal("external labels must precede, not nest inside, the visible chart box")
+	for _, obsolete := range []string{"Now", "2m30s", "5分", "2分30秒", "今", "60秒", "30秒"} {
+		if strings.Contains(initial+refresh, obsolete) {
+			t.Fatalf("initial/AJAX telemetry contract retained language-specific label %q", obsolete)
+		}
 	}
+}
+
+func TestSystemStatusUsesOneViewerLocalHHMMSSFormatter(t *testing.T) {
+	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
+		"kitsu": {{At: time.Now().Add(-5 * time.Second), Duration: 12 * time.Millisecond, Success: true}},
+	}}
+	initial := addTelemetryViewerLocalTimes(`<span class="api-observation-meta" data-telemetry-meta>Last updated 00:00:00</span>`, stats, telemetryWindow60Seconds)
+	refresh := systemStatusRefreshScriptCanonical()
+	for name, markup := range map[string]string{"initial": initial, "refresh": refresh} {
+		if !strings.Contains(markup, `kitsuSyncSystemStatusTime`) {
+			t.Fatalf("%s markup does not use the shared viewer-local formatter", name)
+		}
+		if strings.Contains(markup, "toLocaleTimeString") || strings.Contains(markup, "hour12") {
+			t.Fatalf("%s markup permits locale-shaped or AM/PM time output", name)
+		}
+	}
+	if !strings.Contains(initial, `Last updated`) || !strings.Contains(initial, `window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))`) {
+		t.Fatal("initial metadata does not preserve the single Last updated line")
+	}
+	if !strings.Contains(refresh, `data-telemetry-meta`) || !strings.Contains(refresh, `function localTime(value){return window.kitsuSyncSystemStatusTime(value)}`) {
+		t.Fatal("AJAX metadata does not use the shared HH:MM:SS formatter")
+	}
+}
+
+func TestSystemStatusMetadataKeepsInitialAndRefreshLayoutInParity(t *testing.T) {
+	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
+		"kitsu": {{At: time.Now().Add(-2 * time.Second), Duration: 18 * time.Millisecond, Success: true}},
+	}}
+	initial := apiObservationDetails("en", stats, "kitsu", telemetryWindow60Seconds)
+	refresh := systemStatusRefreshScriptCanonical()
+	for name, markup := range map[string]string{"initial": initial, "refresh": refresh} {
+		if !strings.Contains(markup, "api-observation-primary") || !strings.Contains(markup, "api-observation-meta") {
+			t.Fatalf("%s metadata does not use the shared primary/meta row contract", name)
+		}
+		if strings.Contains(markup, "Last 5 minutes") || strings.Contains(markup, "Last 60 seconds") {
+			t.Fatalf("%s metadata exposes selected-window prose", name)
+		}
+	}
+}
+
+func TestInitialTelemetryLocalizesMetadataAndBarTooltipsWithSharedFormatter(t *testing.T) {
+	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
+		"kitsu": {{At: time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC), Duration: 42 * time.Millisecond, Success: true}},
+	}}
+	body := `<span class="api-observation-meta" data-telemetry-meta>Last updated 00:00:00</span><svg><rect class="telemetry-bar success" data-telemetry-at="2026-08-10T12:34:56Z" data-telemetry-duration="42" data-telemetry-success="true"><title>old</title></rect></svg>`
+	initial := addTelemetryViewerLocalTimes(body, stats, telemetryWindow60Seconds)
 	for _, fragment := range []string{
-		`--sparkline-chart-box-top:0px;--sparkline-chart-box-bottom:104px`,
-		`.api-observation-details .api-sparkline{margin-top:0}`,
-		`.api-sparkline-y-labels{margin-top:0}`,
-		`.api-observation-details .api-sparkline-row{margin-top:var(--sparkline-label-safe-gap)}`,
-		`.api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:none}`,
-		`.api-sparkline-y-label-min{top:calc(var(--sparkline-chart-box-bottom) - 1em);bottom:auto;transform:none}`,
+		`window.kitsuSyncSystemStatusTime=function(value)`,
+		`[data-telemetry-meta][data-telemetry-at]`,
+		`.telemetry-bar[data-telemetry-at]`,
+		`window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))`,
 	} {
-		if !strings.Contains(adminThemeCSS, fragment) {
-			t.Fatalf("sparkline label alignment contract is missing %q", fragment)
+		if !strings.Contains(initial, fragment) {
+			t.Fatalf("initial telemetry localization is missing %q", fragment)
 		}
 	}
-	if strings.Contains(adminThemeCSS, `.api-sparkline-y-label-max{top:var(--sparkline-chart-box-top);transform:translateY(-50%)}`) || strings.Contains(adminThemeCSS, `.api-sparkline-y-label-min{top:var(--sparkline-chart-box-bottom);transform:translateY(-50%)}`) {
-		t.Fatal("sparkline labels must use visible chart-box edge alignment, not center alignment")
-	}
-	for _, obsolete := range []string{
-		"--sparkline-plot-top",
-		"--sparkline-plot-bottom",
-		"--sparkline-label-plot-offset",
-		`.api-sparkline-y-labels{margin-top:var(--sparkline-label-plot-offset,8px)}`,
-	} {
-		if strings.Contains(adminThemeCSS, obsolete) {
-			t.Fatalf("sparkline label alignment retains obsolete plot-offset contract %q", obsolete)
-		}
+	if strings.Contains(initial, `querySelectorAll("[data-telemetry-at]")`) || strings.Contains(initial, `new Intl.DateTimeFormat(undefined`) {
+		t.Fatal("initial telemetry localization still applies locale-shaped formatting to every telemetry node")
 	}
 }

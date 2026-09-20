@@ -55,10 +55,13 @@ Kitsu and Discord cards are equal-height, stretch-aligned desktop peers without 
 
 Edit view keeps the same two-card structure and independent badges:
 
-- Kitsu host and Kitsu Bot API Token fields
+- Kitsu host is shown as the resolved safe endpoint with automatic-detection copy and a compact `Manual setup` action. Manual mode reveals the existing validated host input and an `Automatic` action without changing resolution or persistence semantics.
+- Kitsu Bot API Token field remains the normal Kitsu credential; saved secrets are never rendered.
 - Discord Bot Token field
 - fixed secret-mask note: saved secrets are never rendered; a fixed-length bullet mask is used for a configured secret
 - one save action per service
+
+Advanced settings show External Kitsu URL as the normal optional setting and keep the compact Check link action beside it. Internal Kitsu URL and API Base URL are specialist network overrides: the single expert disclosure is hidden until manual endpoint mode, except that a saved API Base URL makes it visible and open so the saved value remains editable. Internal Kitsu URL is only visible while manual endpoint mode and the disclosure are open. Existing saved settings are preserved.
 
 Bot identity metadata may remain available to diagnostics, but is not a normal card row.
 
@@ -92,23 +95,24 @@ JP and EN are semantic equivalents. Do not put a full guidance sentence in a bad
 
 System Status is organized as:
 
-1. overall system health
-2. API response status
-3. KitsuSync operational status
-4. recent system issues
+1. API response status
+2. KitsuSync operational status
+3. recent system issues (only when issues exist)
 
-API response status contains separate Kitsu API and Discord API peer cards with equal card and graph dimensions. Each card shows the latest safe response-time value as the primary metric, status, chronological bar visualization, observation count, window, and last update. Bar x positions are derived from observation timestamps across the selected window, so sparse observations remain sparse rather than stretching to the sample count. Each service uses its own zero-based Y scale selected from stable stepped ceilings, so low Kitsu latency remains readable without changing the exact value above the graph. Each graph has exactly three Y ticks at ceiling, midpoint, and 0ms, plus an optional horizontal midpoint guide. The 60-second graph labels its x positions `60秒` / `60s`, `30秒` / `30s`, and `今` / `Now`; the 5-minute graph uses `5分` / `5m`, `2分30秒` / `2m30s`, and `今` / `Now`. A failure is red; a successful observation is green. No invented latency threshold or yellow pseudo-metric is used. Both graphs share the same viewBox, plot bounds, tick positions, time-label positions, and metadata slots.
+API response status contains separate Kitsu API and Discord API peer cards with equal card and graph dimensions. Each card shows the latest safe response-time value, status, one horizontal `Current response time` / `Last updated HH:MM:SS` metadata row on desktop (stacked on mobile), and a chronological bar visualization. Sample counts and selected-window prose remain secondary diagnostic data, not normal-card copy. Bar x positions are derived from observation timestamps across the selected window, so sparse observations remain sparse rather than stretching to the sample count. Each service uses its own zero-based Y scale selected from stable stepped ceilings, so low Kitsu latency remains readable without changing the exact value above the graph. Each graph has exactly three Y ticks at ceiling, midpoint, and 0ms, plus an optional horizontal midpoint guide. The 60-second graph labels its x positions `60s`, `30s`, and `0s`; the 5-minute graph uses `5m`, `2.5m`, and `0s`, independent of UI language. A failure is red; a successful observation is green. No invented latency threshold or yellow pseudo-metric is used. Both graphs share the same viewBox, plot bounds, tick positions, time-label positions, and metadata slots.
 Each chart uses a 466×104 viewBox matching the desktop rendered chart aspect. Its Y tick column occupies x=0..34 outside the data plot; the plot spans x=34 through x=464 and the midpoint label is at x=233. The SVG uses its full responsive width and must not create horizontal pillarboxing through `preserveAspectRatio`.
 
-System Status typography uses a visibly readable step: page title 32px; major section titles 24px; API and operational card titles 18px; response values 26px; helper/body text 15px; metadata 14px; chart axis/time labels 12px; and Details triggers 14px.
+System Status typography uses a compact operational step: page title 28px; major section titles 20px; API and operational card titles 16px; response values 24px; helper/body text 14px; metadata 13px; chart axis/time labels 12px; and Details triggers 14px.
 
-Chart time labels are compact: JP uses `60秒`, `30秒`, `5分`, `2分30秒`, `今`; EN uses `60s`, `30s`, `5m`, `2m30s`, `Now`.
+Chart time labels are compact, language-independent units: `60s`, `30s`, `0s` and `5m`, `2.5m`, `0s`.
 
 Visual acceptance is measured in browser pixels, not viewBox percentages: the baseline/grid must leave no more than 6px on either side of the rendered SVG, and the graph surface itself is full-width within the API card. Y-axis labels remain over the plot coordinate system; no large external Y-axis gutter is reserved.
 
 The selector supports exactly `60s` / `直近60秒` and `5m` / `直近5分`. Changing it updates the snapshot and graph without a full-page navigation. The UI refreshes the bounded snapshot every 5 seconds with overlap protection and recovers after a transient refresh failure. The runtime records bounded read-only Kitsu and Discord observations every 20 seconds. At most 20 observations per service are retained in the snapshot window.
 
 Operational cards expose expandable, safe diagnostic details when data exists. Details may include last observation, duration, counts, route/configuration counts, and processing state; they must not expose secrets, tokens, raw response bodies, or unnecessary internal IDs. Recent system issues are shown only when there are issues.
+
+KitsuSync operational status uses one readiness-derived section-level next-action treatment under the section heading when a blocker exists. Setup required links to Kitsu connection settings; Discord Bot setup required links to Discord Bot settings; Production required links to New Production Connection; Routing required links to notification settings/Productions. Event and Notification rows retain concise state-and-cause guidance without repeating the same readiness CTA. An event runtime failure may retain a separate safe Recent issues or diagnostics action. When prerequisites are ready but no event has been observed, the row says that it is waiting for the first observation without a misleading action.
 
 ## JP/EN parity and security
 
@@ -152,4 +156,4 @@ Every real telemetry bar is a timestamped observation. It has a native SVG toolt
 
 Telemetry timestamps and generated snapshot timestamps are UTC RFC3339 values. The browser converts them with its local `Intl`/IANA timezone rules; language selection never changes timezone conversion, and daylight-saving transitions follow the browser. Audit Log timestamps use the same viewer-local conversion and include the active IANA timezone context.
 
-The only chart time labels are `60s`, `30s`, `Now` and `5m`, `2m30s`, `Now` in English, and `60秒`, `30秒`, `今` and `5分`, `2分30秒`, `今` in Japanese. Charts retain independent zero-based scales, timestamp-based x positions, full-width plot geometry, orthogonal axes, and green success/red failure bars. No fixed latency threshold, adaptive yellow health line, or fabricated observation is displayed. Auto-refresh remains in-memory and does not persist telemetry to SQLite.
+The only chart time labels are `60s`, `30s`, `0s` and `5m`, `2.5m`, `0s` in every language. Charts retain independent zero-based scales, timestamp-based x positions, full-width plot geometry, orthogonal axes, and green success/red failure bars. No fixed latency threshold, adaptive yellow health line, or fabricated observation is displayed. Auto-refresh remains in-memory and does not persist telemetry to SQLite.

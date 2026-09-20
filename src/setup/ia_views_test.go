@@ -64,8 +64,8 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesCompactHealthySummaryAndOperationalRows(t *testing.T) {
-	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Details"}
+func TestSystemStatusUsesCompactHealthySummaryAndSelectiveDiagnostics(t *testing.T) {
+	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Observation diagnostics"}
 	rendered := renderPipelineHealthItem("en", item, 0)
 	if strings.Contains(rendered, `class="field-help"`) {
 		t.Fatal("healthy operational row should not repeat a redundant explanation")
@@ -73,32 +73,22 @@ func TestSystemStatusUsesCompactHealthySummaryAndOperationalRows(t *testing.T) {
 	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
 		t.Fatal("operational row lost its compact structure")
 	}
-	for _, want := range []string{
-		`class="pipeline-health-details-content"`,
-		`class="details-label-collapsed">Details ▾</span>`,
-		`class="details-label-expanded">Hide details ▴</span>`,
-		`aria-expanded="false"`,
-		`aria-controls="pipeline-health-details-0"`,
-	} {
+	for _, want := range []string{`<details class="pipeline-health-details">`, `<summary>Observation diagnostics</summary>`, `class="pipeline-health-details-content"`} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("operational row missing geometry/detail contract %q", want)
 		}
 	}
-	if !strings.Contains(rendered, `class="pipeline-health-details-toggle" type="button"`) {
-		t.Fatal("operational row is missing its keyboard disclosure button")
+	if strings.Contains(rendered, `>Details<`) || strings.Contains(rendered, `pipeline-health-details-toggle`) || strings.Contains(rendered, `aria-expanded`) {
+		t.Fatal("operational row should not expose a generic Details control")
+	}
+	if noDetails := renderPipelineHealthItem("en", pipelineHealthItem{label: "Healthy", value: "Ready", class: "success"}, 0); strings.Contains(noDetails, "pipeline-health-details") {
+		t.Fatal("operational row without useful diagnostics exposed a disclosure")
 	}
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
 	body := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{APIObservations: map[string][]APIObservation{"kitsu": {{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}, "discord": {{At: time.Now(), Duration: 12 * time.Millisecond, Success: true}}}}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
-	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, `>System</span>`) {
-		t.Fatal("healthy system status should not repeat a redundant aggregate summary")
-	}
-	degraded := renderRuntimeObservabilitySummary("en", RuntimeSnapshot{LastPollErr: "poll failed"}, readiness, telemetryWindow60Seconds, "<section class=\"system-observability\"></section>")
-	if !strings.Contains(degraded, `class="system-overall-summary"`) || !strings.Contains(degraded, `>System</span>`) {
-		t.Fatal("degraded system status should retain an actionable aggregate summary")
-	}
-	if strings.Contains(body, "Recent runtime observations are healthy.") || strings.Contains(body, "Overall system health") {
-		t.Fatal("healthy overall state retains redundant explanatory copy")
+	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, `system-overall-title`) {
+		t.Fatal("System Status must not render a redundant page-level overall summary")
 	}
 }
 
@@ -257,10 +247,13 @@ func TestSystemStatusUsesOneAlignedReadinessGrid(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	for _, label := range []string{"Kitsu API", "Event monitoring", "Connection / routing integrity", "Notification processing", "Internal data", "Discord API", "Recent system issues"} {
+	for _, label := range []string{"Kitsu API", "Event monitoring", "Connection / routing integrity", "Notification processing", "Internal data", "Discord API"} {
 		if !strings.Contains(body, ">"+label+"<") {
 			t.Fatalf("System Status missing row %q", label)
 		}
+	}
+	if strings.Contains(body, "Recent system issues") || strings.Contains(body, "No recent issues.") {
+		t.Fatal("empty Recent system issues section must be omitted")
 	}
 	if got := strings.Count(body, `class="pipeline-health-item"`); got != 4 {
 		t.Fatalf("System Status rendered %d internal pipeline items, want 4", got)
@@ -287,10 +280,13 @@ func TestSystemStatusPipelineHealthUsesSafeUnavailableMetrics(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=ja", nil), db)
 	body := w.Body.String()
-	for _, want := range []string{"Kitsu API", "イベント監視", "接続・ルーティング整合性", "Discord API", "通知処理", "内部データ", "最近のシステム問題", "未確認"} {
+	for _, want := range []string{"Kitsu API", "イベント監視", "接続・ルーティング整合性", "Discord API", "通知処理", "内部データ", "未確認"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Japanese System Status missing %q", want)
 		}
+	}
+	if strings.Contains(body, "最近のシステム問題") {
+		t.Fatal("empty Japanese Recent system issues section must be omitted")
 	}
 	for _, forbidden := range []string{"polling", "runtime", "readiness", "webhook count", "Next required action:"} {
 		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
@@ -683,8 +679,12 @@ func TestDashboardAuditSummaryUsesCanonicalPersistedCount(t *testing.T) {
 			}
 			auditPage := httptest.NewRecorder()
 			renderIAAudit(auditPage, r, db)
-			if !strings.Contains(auditPage.Body.String(), tc.action) {
+			auditBody := auditPage.Body.String()
+			if !strings.Contains(auditBody, tc.action) {
 				t.Fatalf("audit page omitted notification-send entry: %q", auditPage.Body.String())
+			}
+			if !strings.Contains(auditBody, `class="audit-log-content"`) || strings.Contains(auditBody, `<section class="section-card glass"><p class="hint">`) {
+				t.Fatal("audit log retained a redundant inner card")
 			}
 			dashboard := renderDashboardMenuRefined(tc.lang, r, db, nil, 0, SharedBotRuntimeReadiness{}, nil)
 			if !strings.Contains(dashboard, tc.countLabel) || !strings.Contains(dashboard, tc.healthLabel) {
@@ -1043,7 +1043,7 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 	if got := strings.Count(body, "<h1"); got != 1 {
 		t.Fatalf("Connections page has %d h1 elements, want 1", got)
 	}
-	pageCard := strings.Index(body, `<div class="page-card glass">`)
+	pageCard := strings.Index(body, `<div class="page-card glass editorial-workbench">`)
 	connectionsCard := strings.Index(body, `<section class="section-card glass connections-card">`)
 	h1 := strings.Index(body, "<h1")
 	if pageCard < 0 || connectionsCard < 0 || h1 < pageCard || h1 > connectionsCard {
@@ -1066,6 +1066,10 @@ func TestConnectionsPageUsesCatalogLabelsAndUnescapedStatusMarkup(t *testing.T) 
 
 func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	db := newSetupStateTestDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatal(err)
+	}
 	body := renderConnectionsDisplayBodyWithHealth("en", httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db, "", "ok", "Connected", "https://kitsu.example.test", "configured-token", true, true)
 	if strings.Count(body, `class="section-card glass connections-card"`) != 2 {
 		t.Fatalf("expected two summary cards, got %d", strings.Count(body, `class="section-card glass connections-card"`))
@@ -1076,18 +1080,29 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if strings.Contains(body, "Authentication:") || strings.Contains(body, "KitsuSync") || strings.Contains(body, "Hidden") {
 		t.Fatal("summary exposes redundant identity or secret metadata")
 	}
-	if strings.Contains(body, "configured-token") || strings.Contains(body, "Saved token is not displayed.") {
+	if strings.Contains(body, "configured-token") || strings.Contains(body, "configured-kitsu-token") || strings.Contains(body, "Saved token is not displayed.") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("summary secret handling is incorrect")
 	}
-	if strings.Contains(body, ">Token<") || strings.Contains(body, ">Connection<") || strings.Contains(body, "ステータス") || strings.Contains(body, "トークン") {
-		t.Fatal("summary should use the service-level status without redundant state rows")
+	if !strings.Contains(body, "Kitsu Bot API token") || !strings.Contains(body, "Discord Bot Token") {
+		t.Fatal("summary is missing the canonical masked token rows")
 	}
 	if strings.Contains(body, `connections-card-header"><div>`) || strings.Contains(body, `role="status">Connected</span></div><section`) {
 		t.Fatal("summary retained the redundant combined status header")
 	}
 	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済", "https://kitsu.example.test", "configured-token", true, true)
-	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") {
+	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("Japanese summary did not preserve explicit service labels or secret safety")
+	}
+}
+
+func TestSystemStatusRendersRecentIssuesOnlyWhenPresent(t *testing.T) {
+	db := newIAViewDB(t)
+	model.WriteAuditLog(db, model.AuditLog{EntityName: "notification", Success: false, ErrorMessage: "safe failure summary"})
+	w := httptest.NewRecorder()
+	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
+	body := w.Body.String()
+	if !strings.Contains(body, "Recent system issues") || !strings.Contains(body, "safe failure summary") {
+		t.Fatal("non-empty Recent system issues section was not rendered")
 	}
 }
 
@@ -1369,7 +1384,7 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	renderIAHealth(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"Not configured", "Discord API", "Notification processing", "Internal data", "Recent system issues"} {
+	for _, want := range []string{"System", "Not configured", "Discord API", "Notification processing", "Internal data"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("system status missing %q", want)
 		}
@@ -1474,6 +1489,49 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 	}
 	if got := pipelineRoutingValue("en", SharedBotRuntimeReadiness{ProductionConnected: true, RoutingReady: true}); got != "Configured" {
 		t.Fatalf("connected Production with valid routing = %q, want Configured", got)
+	}
+}
+
+func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
+	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
+	setup := SharedBotRuntimeReadiness{State: ReadinessSetupRequired}
+	setupAction := pipelineReadinessNextAction("en", r, setup)
+	if !strings.Contains(setupAction, "Kitsu setup is required") || !strings.Contains(setupAction, "Configure Kitsu connection") || !strings.Contains(setupAction, `href="/bot/admin/bot?lang=en"`) {
+		t.Fatalf("Kitsu section action = %q", setupAction)
+	}
+	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, setup); got != "Configure the Kitsu connection before continuing." {
+		t.Fatalf("Kitsu setup blocker = %q", got)
+	}
+	if got := pipelineNotificationHint("en", setup); got != "Configure the Kitsu connection before continuing." {
+		t.Fatalf("notification setup blocker = %q", got)
+	}
+	production := SharedBotRuntimeReadiness{State: ReadinessProductionRequired, KitsuConfigured: true, DiscordConfigured: true, PrerequisitesReady: true}
+	if got := pipelineReadinessNextAction("en", r, production); !strings.Contains(got, "No connected and notifiable Production is available.") || !strings.Contains(got, "New Production Connection") {
+		t.Fatalf("Production section action = %q", got)
+	}
+	if got := pipelineRoutingHint("en", production); got != "No Production is currently available for notifications." {
+		t.Fatalf("Production blocker = %q", got)
+	}
+	view := readinessViewFor("en", r, production)
+	if view.ActionURL != "/bot/setup?lang=en" || view.ActionLabel != "New Production Connection" {
+		t.Fatalf("Production action = %#v", view)
+	}
+	routing := SharedBotRuntimeReadiness{State: ReadinessRoutingRequired, KitsuConfigured: true, DiscordConfigured: true, ProductionConnected: true, PrerequisitesReady: true}
+	if got := pipelineReadinessNextAction("en", r, routing); !strings.Contains(got, "Notification routing needs attention.") || !strings.Contains(got, "Review notification settings") {
+		t.Fatalf("routing section action = %q", got)
+	}
+	if got := pipelineRoutingHint("en", routing); got != "A Production exists, but its notification routing is missing or invalid." {
+		t.Fatalf("routing blocker = %q", got)
+	}
+	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "Waiting for the first observation." {
+		t.Fatalf("first-observation guidance = %q", got)
+	}
+	if got := pipelineReadinessNextAction("en", r, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "" {
+		t.Fatalf("ready section should not expose a next action: %q", got)
+	}
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", details: "<p>safe</p>", detailsLabel: "Observation diagnostics", detailsID: "pipeline-event-monitoring", action: "#pipeline-event-monitoring", actionLabel: "Review observation diagnostics"}, 0)
+	if !strings.Contains(rendered, `data-open-pipeline-details="pipeline-event-monitoring"`) {
+		t.Fatal("diagnostic action did not target its selective disclosure")
 	}
 }
 
@@ -1594,16 +1652,16 @@ func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *tes
 }
 
 func TestStatusPolishUsesRealSparkline(t *testing.T) {
-	items := []APIObservation{{Duration: 10 * time.Millisecond, Success: true}, {Duration: 20 * time.Millisecond, Success: false}}
+	items := []APIObservation{{At: time.Now().Add(-30 * time.Second), Duration: 10 * time.Millisecond, Success: true}, {At: time.Now().Add(-5 * time.Second), Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
-	if strings.Contains(graph, "<circle") || !strings.Contains(graph, `class="telemetry-line"`) || strings.Contains(graph, "<rect") || strings.Contains(graph, "<polyline") {
-		t.Fatal("line graph did not reflect the recorded observations")
+	if !strings.Contains(graph, `class="telemetry-bar success"`) || !strings.Contains(graph, `class="telemetry-bar failure"`) || !strings.Contains(graph, `viewBox="0 0 466 104"`) {
+		t.Fatal("bar graph did not reflect the recorded observations")
 	}
-	if strings.Contains(apiObservationGraph(nil), "polyline") {
+	if strings.Contains(apiObservationGraph(nil), "telemetry-bar") {
 		t.Fatal("empty telemetry should not render a fake graph")
 	}
-	if strings.Contains(apiObservationGraph([]APIObservation{{Duration: 10 * time.Millisecond}}), "<circle") {
-		t.Fatal("a single telemetry sample should not render a point marker")
+	if !strings.Contains(apiObservationGraph([]APIObservation{{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}), `tabindex="0"`) {
+		t.Fatal("a single telemetry sample should render an accessible bar")
 	}
 }
 
@@ -1612,7 +1670,7 @@ func TestDashboardRendersPrimaryContentBeforeManagementMenu(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
 	body := w.Body.String()
-	positions := []string{`<section class="dashboard-intro">`, `dashboard-cta"`, `dashboard-queue"`, `class="dashboard-summary-grid"`, `dashboard-menu"`}
+	positions := []string{`<section class="dashboard-intro">`, `class="dashboard-summary-grid"`, `dashboard-queue"`, `dashboard-cta"`, `dashboard-menu"`}
 	last := -1
 	for _, marker := range positions {
 		pos := strings.Index(body[last+1:], marker)
@@ -1660,6 +1718,33 @@ func TestConnectionsUseSharedActionSpacingToken(t *testing.T) {
 	}
 }
 
+func TestEditorialWorkbenchUsesRestrainedSurfaceContract(t *testing.T) {
+	body := adminPage("en", "Dashboard", httptest.NewRequest(http.MethodGet, "/bot/admin?lang=en", nil), `<div class="dashboard-page"></div>`)
+	for _, want := range []string{`class="page-card glass editorial-workbench"`, `.editorial-workbench{max-width:1088px;border-radius:12px;background:var(--panel);box-shadow:none}`, `.editorial-workbench>.page-heading h1{font-size:28px;line-height:1.15;font-weight:600}`, `.editorial-workbench .page-heading>div>h2,.editorial-workbench .dashboard-menu>h2,.editorial-workbench .dashboard-cta>div>h2{font-size:20px;line-height:1.2;font-weight:600}`, `.editorial-workbench .connections-card-header h2,.editorial-workbench .section-card>h2,.editorial-workbench .section-card>h3,.editorial-workbench .api-observation-card h3,.editorial-workbench .pipeline-health-item h3{font-size:16px;line-height:1.25;font-weight:600}`, `.editorial-workbench .field-help{font-size:13px;font-weight:400}`, `.editorial-workbench .status-pill,.editorial-workbench .status-badge,.editorial-workbench .dashboard-status-chip{font-size:12px;font-weight:600}`, `.editorial-workbench .btn,.editorial-workbench .btn-sm,.editorial-workbench .btn-ghost,.editorial-workbench .btn-danger{min-height:40px;border-radius:8px}`, `.editorial-workbench .production-tabpanel>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:20px 0 0}`, `.editorial-advanced-settings{display:grid;grid-template-columns:minmax(220px,.7fr) minmax(0,1.3fr);align-items:start;gap:16px 32px;border-top:1px solid var(--divider-color);padding-top:24px}`, `.editorial-advanced-settings .editorial-advanced-heading{grid-column:1 / -1;grid-row:1}`, `.editorial-advanced-settings .editorial-advanced-explanation{grid-column:1;grid-row:2}`, `.editorial-advanced-settings>.connection-external-url-field{grid-column:2;grid-row:2}`, `.editorial-advanced-settings>.connection-expert-network{grid-column:1 / -1;grid-row:3}`, `.editorial-workbench .system-status-sections .system-observability-grid>article{display:grid;grid-template-rows:auto 1fr;min-height:224px;padding:16px;border:1px solid var(--border-default);border-radius:8px;background:var(--surface-subtle);box-shadow:none}`, `.system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{fill:var(--muted)}`, `.dashboard-service-status{display:grid;gap:8px;width:100%;min-width:0}`, `.editorial-workbench .connections-summary-grid>.connections-card{border-radius:8px}`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("editorial surface contract missing %q", want)
+		}
+	}
+	if strings.Contains(adminThemeCSS, `.editorial-workbench h2{font-size:24px`) || strings.Contains(adminThemeCSS, `.editorial-workbench h3{font-size:18px`) || strings.Contains(adminThemeCSS, `.system-status-sections h2{font-size:24px`) {
+		t.Fatal("editorial typography still applies blanket heading sizes")
+	}
+	if !strings.Contains(adminThemeCSS, `.editorial-advanced-settings .editorial-advanced-heading,.editorial-advanced-settings .editorial-advanced-explanation,.editorial-advanced-settings>.connection-external-url-field,.editorial-advanced-settings>.connection-expert-network{grid-column:1;grid-row:auto}`) || strings.Contains(adminThemeCSS, `.editorial-advanced-settings .connection-form-field:last-child`) {
+		t.Fatal("Advanced settings mobile layout does not stack its semantic rows")
+	}
+}
+
+func TestPrimaryNavigationHasNoOuterCardSurface(t *testing.T) {
+	body := adminPage("en", "Dashboard", httptest.NewRequest(http.MethodGet, "/bot/admin?lang=en", nil), `<div></div>`)
+	if !strings.Contains(body, `<div class="nav-card">`) || strings.Contains(body, `<div class="nav-card glass">`) {
+		t.Fatal("primary navigation retained an outer glass/card surface")
+	}
+	for _, item := range []string{"Productions", "User Linking", "Connections", "System Status", "Audit Log"} {
+		if !strings.Contains(body, item) {
+			t.Fatalf("primary navigation missing %q", item)
+		}
+	}
+}
+
 func TestAdminFormSizingLeavesCheckboxesAndRadiosCompact(t *testing.T) {
 	if !strings.Contains(adminThemeCSS, `input:not([type="checkbox"]):not([type="radio"]),select{min-height:var(--control-height-standard);}`) {
 		t.Fatal("text input sizing does not exclude checkbox and radio controls")
@@ -1683,13 +1768,16 @@ func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
+func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Count(body, `class="pipeline-health-details-toggle"`) < 4 || strings.Count(body, `aria-expanded="false"`) < 4 {
-		t.Fatalf("system status details are not expandable: %d", strings.Count(body, `class="pipeline-health-details-toggle"`))
+	if strings.Count(body, `<details class="pipeline-health-details">`) < 3 || strings.Contains(body, `class="pipeline-health-details-toggle"`) || strings.Contains(body, `>Details<`) {
+		t.Fatalf("system status operational details are not selectively disclosed")
+	}
+	if strings.Contains(body, "Internal data diagnostics") || strings.Contains(body, "内部データ診断") {
+		t.Fatal("system status exposed a datastore-only diagnostic disclosure")
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
@@ -1697,26 +1785,30 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `window.setInterval(refresh,interval)`) {
 		t.Fatal("system status does not include the bounded snapshot interval")
 	}
-	if strings.Contains(body, `new Date(item.at).getTime()`) || strings.Contains(body, `windowMs=select.value`) || !strings.Contains(body, `function(item,index)`) {
-		t.Fatal("system status graph does not use equal sample positions")
+	if !strings.Contains(body, `Date.parse(item.at)`) || !strings.Contains(body, `telemetry-bar`) {
+		t.Fatal("system status graph does not use timestamp-positioned bars")
 	}
-	if !strings.Contains(body, `function stableDomain(name,items)`) || !strings.Contains(body, `domain=stableDomain(service,items)`) {
-		t.Fatal("system status refresh does not apply independent service Y scales")
+	if !strings.Contains(body, `function scale(items)`) || !strings.Contains(body, `upper=scale(items)`) {
+		t.Fatal("system status refresh does not apply independent zero-based Y scales")
 	}
-	if strings.Contains(body, `30s`) || strings.Contains(body, `2m30s`) || strings.Contains(body, `class='chart-time-label'`) {
-		t.Fatal("system status refresh retains removed time-axis labels")
+	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2.5m`) {
+		t.Fatal("system status refresh is missing canonical time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
 	}
-	if !strings.Contains(body, `.system-status-sections .api-observation-meta{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
+	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:13px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
-	if strings.Contains(body, `class='chart-axis'`) || strings.Contains(body, `class="chart-axis"`) {
-		t.Fatal("system status refresh retains axis chrome")
+	refreshStart := strings.Index(body, `<script data-system-status-refresh>`)
+	refreshScript := body
+	if refreshStart >= 0 {
+		if refreshEnd := strings.Index(body[refreshStart:], `</script>`); refreshEnd >= 0 {
+			refreshScript = body[refreshStart : refreshStart+refreshEnd]
+		}
 	}
-	if !strings.Contains(body, `telemetry-line`) || strings.Contains(body, `telemetry-point`) {
-		t.Fatal("system status refresh does not use the marker-free line chart geometry")
+	if strings.Contains(refreshScript, `class='chart-axis'`) || strings.Contains(refreshScript, `class="chart-axis"`) || strings.Contains(refreshScript, `telemetry-line`) {
+		t.Fatal("system status refresh retains obsolete line/axis chrome")
 	}
 	if !strings.Contains(body, `class="api-observation-details"`) {
 		t.Fatal("system status cards do not reserve shared detail geometry")
@@ -1732,15 +1824,13 @@ func TestSystemStatusUsesExpandableSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	}
 }
 
-func TestSystemStatusDetailsToggleIsBidirectional(t *testing.T) {
-	script := systemStatusDetailsScript()
-	for _, fragment := range []string{`aria-expanded`, `aria-controls`, `panel.hidden=expanded`, `toggle.setAttribute("aria-expanded",String(!expanded))`} {
-		if !strings.Contains(script, fragment) {
-			t.Fatalf("details toggle is missing %q", fragment)
-		}
+func TestSystemStatusUsesContextualDiagnosticsLabels(t *testing.T) {
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Configured", class: "success", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
+	if strings.Contains(rendered, "pipeline-health-details-toggle") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, ">Details<") {
+		t.Fatal("system status should not use a generic Details control")
 	}
-	if strings.Contains(script, `querySelector(".details-label-collapsed").hidden`) || strings.Contains(script, `querySelector(".details-label-expanded").hidden`) {
-		t.Fatal("details labels change intrinsic button geometry during toggling")
+	if !strings.Contains(rendered, "Connection and routing diagnostics") {
+		t.Fatal("system status omitted the contextual diagnostics label")
 	}
 }
 

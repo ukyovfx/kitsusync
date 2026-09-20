@@ -850,7 +850,7 @@ func legacyLoginPageHTML(lang, errMsg, next string, showHostname bool, r *http.R
 	}
 
 	body := fmt.Sprintf(`
-<div class="page-card glass" style="width:100%%;max-width:520px;margin:6vh auto 0">
+<div class="login-page"><div class="page-card glass login-card" style="width:100%%;max-width:520px">
   <div class="page-heading">
     <div>
       <div class="eyebrow">%s</div>
@@ -872,7 +872,7 @@ func legacyLoginPageHTML(lang, errMsg, next string, showHostname bool, r *http.R
       </div>
     </div>
   </form>
-</div>`,
+</div></div>`,
 		t(lang, "管理画面ログイン", "Admin Access"),
 		"KitsuSync",
 		t(lang, "Kitsu の manager / admin アカウントでログインしてください。", "Sign in with a Kitsu manager or admin account."),
@@ -900,6 +900,6 @@ func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request
 	if showHostname {
 		authorityNotice = `<p class="field-help">` + esc(t(lang, "認証先URLは、サーバー管理者がKITSU_HOSTNAMEまたは保存済み設定で指定します。", "The server administrator must provide the authentication URL through KITSU_HOSTNAME or saved configuration.")) + `</p>`
 	}
-	body := `<div class="page-card glass" style="width:100%;max-width:520px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass">` + authorityNotice + `<label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div>`
+	body := `<div class="login-page"><div class="page-card glass login-card" style="width:100%;max-width:520px"><div class="page-heading"><div><div class="eyebrow">` + esc(tr(lang, "login.admin_access")) + `</div><h1>KitsuSync</h1><p>` + esc(tr(lang, "login.description")) + `</p></div></div>` + errHTML + `<form method="POST" class="section-stack">` + nextInput + `<div class="section-card glass">` + authorityNotice + `<label for="login-email">` + esc(tr(lang, "login.email")) + `</label><input id="login-email" type="email" name="email" autocomplete="email" required autofocus><label for="login-password">` + esc(tr(lang, "login.password")) + `</label><input id="login-password" type="password" name="password" autocomplete="current-password" required><div class="button-row"><button type="submit" class="btn">` + esc(tr(lang, "login.submit")) + `</button></div></div></form></div></div>`
 	return appShell("KitsuSync", "", lang, r, "", body)
 }
