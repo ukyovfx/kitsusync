@@ -2541,14 +2541,17 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 	pageRequest := &http.Request{URL: &url.URL{Path: "/bot/admin/users"}}
 	kitsuConfigured := strings.TrimSpace(KitsuHostForUI(db)) != "" && strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
 	discordConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
+	var people []KitsuPerson
+	var directory globalDiscordDirectory
+	var loadErr error
+	readiness := renderUserLinkingReadiness(lang, kitsuConfigured, discordConfigured)
 	if !kitsuConfigured || !discordConfigured {
 		pageBody = `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + renderUserLinkingReadiness(lang, kitsuConfigured, discordConfigured) + `</section></section>`
 	}
 	if pageBody == "" {
-		people, _ := globalUserLinkingPeople(db)
+		people, _ = globalUserLinkingPeople(db)
 		selectedGuildID := canonicalDiscordGuildQuery(r)
-		directory, loadErr := loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), selectedGuildID)
-		readiness := renderUserLinkingReadiness(lang, kitsuConfigured, discordConfigured)
+		directory, loadErr = loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), selectedGuildID)
 		if loadErr != nil {
 			readiness = renderUserLinkingReadinessState(lang, kitsuConfigured, discordConfigured, true)
 			pageBody = `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + readiness + globalDiscordMemberLoadMessage(lang, loadErr) + `</section></section>`
@@ -2565,9 +2568,6 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		}
 	}
 	if pageBody == "" {
-		people, _ := globalUserLinkingPeople(db)
-		selectedGuildID := canonicalDiscordGuildQuery(r)
-		directory, loadErr := loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), selectedGuildID)
 		localMaps := model.ListUserMap(db)
 		findMap := func(person KitsuPerson) *model.UserMap {
 			for i := range localMaps {

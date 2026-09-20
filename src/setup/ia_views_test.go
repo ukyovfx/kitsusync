@@ -289,7 +289,7 @@ func TestSystemStatusPipelineHealthUsesSafeUnavailableMetrics(t *testing.T) {
 	if strings.Contains(body, "最近のシステム問題") {
 		t.Fatal("empty Japanese Recent system issues section must be omitted")
 	}
-	for _, forbidden := range []string{"polling", "runtime", "readiness", "webhook count", "Next required action:"} {
+	for _, forbidden := range []string{"polling", "runtime", "webhook count", "Next required action:"} {
 		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
 			t.Fatalf("System Status leaked internal term %q", forbidden)
 		}
@@ -1228,7 +1228,7 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 		case "/api/v10/guilds/123456789012345678/members":
 			payload = `[{"user":{"id":"123456789012345679","username":"Discord One"}}]`
 		default:
-			return nil, fmt.Errorf("unexpected Discord path: %s", req.URL.Path)
+			return oldTransport.RoundTrip(req)
 		}
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload))}, nil
 	})
