@@ -167,7 +167,7 @@ func TestBotHandler_EditFormShowsDurablePersistenceCopy(t *testing.T) {
 		t.Fatalf("expected 200 for edit form, got %d", rr.Code)
 	}
 	body := rr.Body.String()
-	if strings.Contains(body, "Saved tokens are never displayed.") {
+	if !strings.Contains(body, "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.") {
 		t.Fatalf("expected fixed secret-safe token presentation in connections form")
 	}
 	if strings.Contains(body, "After restart") || strings.Contains(body, "fallback") || strings.Contains(body, "Runtime") {
