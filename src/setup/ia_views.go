@@ -2538,7 +2538,6 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		lang = "ja"
 	}
 	pageBody := ""
-	pageRequest := &http.Request{URL: &url.URL{Path: "/bot/admin/users"}}
 	kitsuConfigured := strings.TrimSpace(KitsuHostForUI(db)) != "" && strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
 	discordConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
 	var people []KitsuPerson
@@ -2653,7 +2652,8 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		pageBody = `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + renderUserLinkingReadiness(lang, kitsuConfigured, discordConfigured) + serverForm + message + `</section><div class="table-wrap user-linking-table"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	}
 	body := pageBody
-	fmt.Fprint(w, adminPage(lang, "", pageRequest, body))
+	r = &http.Request{URL: &url.URL{Path: "/bot/admin/users"}}
+	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
 func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
