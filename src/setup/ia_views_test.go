@@ -1797,7 +1797,7 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
 	}
-	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:14px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
+	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:13px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
 	refreshStart := strings.Index(body, `<script data-system-status-refresh>`)
