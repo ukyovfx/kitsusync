@@ -124,6 +124,7 @@ func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	}
 
 	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
 	if err := setRuntimeKitsuToken(db, "persisted-runtime-token"); err != nil {
 		t.Fatal(err)
 	}
