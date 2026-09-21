@@ -1270,11 +1270,21 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		if r.URL.Path == "/api/data/persons/" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":"user-1","full_name":"User One","active":true}]`))
+			return
+		}
 		http.NotFound(w, r)
 	}))
 	t.Cleanup(kitsuStub.Close)
 	t.Setenv("KITSU_HOSTNAME", kitsuStub.URL)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: kitsuStub.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
 	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, kitsuStub.URL+"/api")
 	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
 		t.Fatal(err)
 	}
