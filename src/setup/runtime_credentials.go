@@ -366,6 +366,12 @@ func runtimeKitsuDataSource(db *gorm.DB) (baseURL, token string, ok bool) {
 				baseURL = KitsuHostForUI(db)
 			}
 			if baseURL == "" {
+				// Keep a configured-but-unreachable endpoint available to the
+				// lookup layer so it can report a safe failure instead of
+				// collapsing the request into an empty dataset.
+				baseURL = strings.TrimSpace(model.GetSetting(db, "kitsu.hostname"))
+			}
+			if baseURL == "" {
 				return "", "", false
 			}
 			return baseURL, strings.TrimSpace(persisted), true

@@ -55,14 +55,22 @@ func hasValidationOnlyProject(db *gorm.DB) bool {
 // It never creates or updates database rows. Live-only records are marked as
 // in-memory previews so normal pages can explain that they are not connected.
 func availableProjects(db *gorm.DB) []model.Project {
+	projects, _ := availableProjectsWithError(db)
+	return projects
+}
+
+func availableProjectsWithError(db *gorm.DB) ([]model.Project, error) {
 	local := model.ListProjects(db)
 	baseURL, token, liveReady := runtimeKitsuDataSource(db)
 	if !liveReady {
-		return local
+		return local, nil
 	}
-	live := ListKitsuProjectsWithCredentials(baseURL, token)
+	live, err := ListKitsuProjectsWithCredentials(baseURL, token)
+	if err != nil {
+		return local, err
+	}
 	if len(live) == 0 {
-		return local
+		return local, nil
 	}
 	localByID := make(map[string]model.Project, len(local))
 	for _, project := range local {
@@ -95,7 +103,7 @@ func availableProjects(db *gorm.DB) []model.Project {
 		merged = append(merged, project)
 	}
 	sort.Slice(merged, func(i, j int) bool { return strings.ToLower(merged[i].Name) < strings.ToLower(merged[j].Name) })
-	return merged
+	return merged, nil
 }
 
 func liveProjectPreview(db *gorm.DB, projectID string) *model.Project {
@@ -584,7 +592,8 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 		}
 	}
 	var rows strings.Builder
-	for _, p := range availableProjects(db) {
+	projects, projectsErr := availableProjectsWithError(db)
+	for _, p := range projects {
 		class, label := productionConnectionStatus(p, lang)
 		_, _, hint := iaStatus(db, p, lang)
 		rows.WriteString(fmt.Sprintf(`<article class="section-card glass production-list-item"><div><h2>%s</h2><p class="field-help">%s</p></div><div class="production-list-state"><span class="status-pill %s">%s</span><span class="field-help">%s</span></div><a class="btn" href="%s">%s</a></article>`, esc(p.Name), esc(t(lang, "現在の状態", "Current state")), class, esc(label), esc(hint), esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(t(lang, "プロダクションを開く", "Open Production"))))
@@ -592,7 +601,11 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 	if rows.Len() == 0 {
 		rows.WriteString(emptyState("-", t(lang, "プロダクションがありません", "No Productions"), t(lang, "新しいプロダクションを接続してください。", "Connect a new Production.")))
 	}
-	body := `<div class="section-stack"><p class="production-list-intro">` + esc(t(lang, "設定はProductionを選択した後に表示します", "Settings appear after you select a Production")) + `</p><div class="production-list" aria-label="` + esc(t(lang, "プロダクション一覧", "Production list")) + `">` + rows.String() + `</div></div>`
+	lookupNotice := ""
+	if projectsErr != nil {
+		lookupNotice = `<div class="notice notice-warning" role="status"><strong>` + esc(t(lang, "KitsuのProduction一覧を確認できませんでした", "Kitsu Productions could not be checked")) + `</strong><p>` + esc(t(lang, "ライブのProduction一覧を取得できません。接続設定を確認して再読み込みしてください。保存済みの接続済みProductionは表示しています。", "The live Production list could not be retrieved. Check the connection settings and reload. Saved connected Productions are still shown.")) + `</p><details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="field-help">` + esc(kitsuLookupDiagnostic(projectsErr)) + `</p></details></div>`
+	}
+	body := `<div class="section-stack">` + lookupNotice + `<p class="production-list-intro">` + esc(t(lang, "設定はProductionを選択した後に表示します", "Settings appear after you select a Production")) + `</p><div class="production-list" aria-label="` + esc(t(lang, "プロダクション一覧", "Production list")) + `">` + rows.String() + `</div></div>`
 	body = strings.Replace(body, rows.String(), simplifyProductionListRows(rows.String()), 1)
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.production_list"), r, body))
 }
@@ -2357,6 +2370,22 @@ func globalDiscordMemberLoadMessage(lang string, loadErr error) string {
 	return `<div class="notice notice-warning" role="status"><strong>` + esc(title) + `</strong><p>` + esc(explanation) + `</p><div class="button-row">` + action + `</div><details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="field-help">` + esc(detail) + `</p></details></div>`
 }
 
+func globalKitsuLookupMessage(lang string, lookupErr error) string {
+	return `<div class="notice notice-warning" role="status"><strong>` + esc(t(lang, "Kitsuユーザーを確認できませんでした", "Kitsu users could not be checked")) + `</strong><p>` + esc(t(lang, "Kitsuからユーザー一覧を取得できません。接続設定を確認して再読み込みしてください。", "The Kitsu user list could not be retrieved. Check the connection settings and reload.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Kitsu接続を確認", "Check Kitsu connection")) + `</a></div><details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="field-help">` + esc(kitsuLookupDiagnostic(lookupErr)) + `</p></details></div>`
+}
+
+func kitsuLookupDiagnostic(lookupErr error) string {
+	var failure *KitsuLookupError
+	if errors.As(lookupErr, &failure) {
+		detail := failure.Endpoint + " lookup: " + failure.Class
+		if failure.StatusCode > 0 {
+			detail += fmt.Sprintf(" (HTTP %d)", failure.StatusCode)
+		}
+		return detail
+	}
+	return "Kitsu lookup failed (request)"
+}
+
 func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.DB, user *model.UserMap) {
 	lang := currentLang(r)
 	options, loadErr := globalDiscordUserOptions(db, storedRuntimeDiscordBotToken(db))
@@ -2457,8 +2486,17 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 }
 
 func globalUserLinkingPeople(db *gorm.DB) ([]KitsuPerson, string) {
+	people, source, _ := globalUserLinkingPeopleWithError(db)
+	return people, source
+}
+
+func globalUserLinkingPeopleWithError(db *gorm.DB) ([]KitsuPerson, string, error) {
 	if baseURL, token, liveReady := runtimeKitsuDataSource(db); liveReady {
-		return filterAssignablePersons(ListKitsuPersonsWithCredentials(baseURL, token), botAccountEmail(db)), "live_kitsu_api"
+		people, err := ListKitsuPersonsWithCredentials(baseURL, token)
+		if err != nil {
+			return nil, "live_kitsu_api", err
+		}
+		return filterAssignablePersons(people, botAccountEmail(db)), "live_kitsu_api", nil
 	}
 	people := make([]KitsuPerson, 0)
 	for _, user := range filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)) {
@@ -2468,7 +2506,7 @@ func globalUserLinkingPeople(db *gorm.DB) ([]KitsuPerson, string) {
 		people = append(people, KitsuPerson{ID: user.KitsuID, FullName: user.KitsuName, Email: user.KitsuEmail, Active: true})
 	}
 	sort.Slice(people, func(i, j int) bool { return strings.ToLower(people[i].FullName) < strings.ToLower(people[j].FullName) })
-	return people, "local_user_map"
+	return people, "local_user_map", nil
 }
 
 func userLinkingStatus(lang string, configured bool) connectionStatus {
@@ -2554,7 +2592,13 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		lang = "ja"
 	}
 	pageBody := ""
-	kitsuConfigured := strings.TrimSpace(KitsuHostForUI(db)) != "" && strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
+	savedAPIBaseURL, savedKitsuHost := "", ""
+	if db != nil {
+		savedAPIBaseURL = model.GetSetting(db, KitsuAPIBaseURLSettingKey)
+		savedKitsuHost = model.GetSetting(db, "kitsu.hostname")
+	}
+	kitsuEndpointConfigured := strings.TrimSpace(KitsuHostForUI(db)) != "" || strings.TrimSpace(savedAPIBaseURL) != "" || strings.TrimSpace(savedKitsuHost) != "" || strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) != ""
+	kitsuConfigured := kitsuEndpointConfigured && strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""
 	discordConfigured := strings.TrimSpace(storedRuntimeDiscordBotToken(db)) != ""
 	var people []KitsuPerson
 	var directory globalDiscordDirectory
@@ -2563,10 +2607,17 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		pageBody = `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + renderUserLinkingSetupNotice(lang, kitsuConfigured, discordConfigured) + `</section></section>`
 	}
 	if pageBody == "" {
-		people, _ = globalUserLinkingPeople(db)
+		var peopleErr error
+		people, _, peopleErr = globalUserLinkingPeopleWithError(db)
 		selectedGuildID := canonicalDiscordGuildQuery(r)
-		directory, loadErr = loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), selectedGuildID)
-		if loadErr != nil {
+		if peopleErr != nil {
+			pageBody = `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + globalKitsuLookupMessage(lang, peopleErr) + `</section></section>`
+		} else {
+			directory, loadErr = loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), selectedGuildID)
+		}
+		if pageBody != "" {
+			// Kitsu lookup failures take precedence over Discord readiness states.
+		} else if loadErr != nil {
 			pageBody = `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass">` + globalDiscordMemberLoadMessage(lang, loadErr) + `</section></section>`
 		} else if len(directory.Guilds) == 0 {
 			pageBody = `<section class="section-stack user-linking-page"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><section class="section-card glass"><div class="empty-state user-linking-empty" role="status"><strong>` + esc(t(lang, "Discordサーバーがありません", "No Discord servers are available")) + `</strong><span class="field-help">` + esc(t(lang, "Botが参加しているDiscordサーバーが見つかると、ここからユーザーを取得できます。", "A Discord server joined by the Bot is required before users can be loaded.")) + `</span></div></section></section>`

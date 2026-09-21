@@ -181,6 +181,103 @@ func TestGlobalUserLinkingPeopleUsesPersistedRuntimeTokenWithoutEnv(t *testing.T
 	}
 }
 
+func TestLiveKitsuLookupPreservesEmptyAndFailureOutcomes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/data/persons/":
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/api/data/projects/":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	people, peopleErr := ListKitsuPersonsWithCredentials(server.URL, "runtime-token")
+	if people != nil || peopleErr == nil {
+		t.Fatalf("persons failure was collapsed: people=%+v err=%v", people, peopleErr)
+	}
+	var personFailure *KitsuLookupError
+	if !errors.As(peopleErr, &personFailure) || personFailure.Endpoint != "persons" || personFailure.Class != "http_4xx" || personFailure.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unexpected persons failure: %#v", peopleErr)
+	}
+	projects, projectsErr := ListKitsuProjectsWithCredentials(server.URL, "runtime-token")
+	if projectsErr != nil || len(projects) != 0 {
+		t.Fatalf("empty projects response was not preserved: projects=%+v err=%v", projects, projectsErr)
+	}
+}
+
+func TestAvailableProjectsPreservesLiveLookupFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/data/projects/" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "runtime-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProject(db, "local-project", "Local project", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	projects, lookupErr := availableProjectsWithError(db)
+	if lookupErr == nil || len(projects) != 1 || projects[0].KitsuProjectID != "local-project" {
+		t.Fatalf("live project failure was hidden: projects=%+v err=%v", projects, lookupErr)
+	}
+	var failure *KitsuLookupError
+	if !errors.As(lookupErr, &failure) || failure.Endpoint != "projects" || failure.Class != "http_4xx" || failure.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected project failure: %#v", lookupErr)
+	}
+}
+
+func TestUserLinkingLookupFailureDoesNotLookEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/":
+			w.WriteHeader(http.StatusOK)
+		case "/api/auth/authenticated", "/api/data/projects/":
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/api/data/persons/":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	model.SetSetting(db, "kitsu.hostname", server.URL)
+	if err := setRuntimeKitsuToken(db, "runtime-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRuntimeDiscordBotToken(db, "discord-token"); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
+	body := w.Body.String()
+	if !strings.Contains(body, "Kitsu users could not be checked") || strings.Contains(body, "no Kitsu users were found") {
+		t.Fatalf("lookup failure was rendered as empty data: %s", body)
+	}
+	if !strings.Contains(body, "persons lookup: http_4xx") {
+		t.Fatalf("safe persons diagnostic missing: %s", body)
+	}
+}
+
 func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuName: "Synthetic User", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord User"})
