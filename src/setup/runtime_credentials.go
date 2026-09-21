@@ -349,6 +349,42 @@ func StoredRuntimeKitsuToken(db *gorm.DB) string {
 	return strings.TrimSpace(token)
 }
 
+// runtimeKitsuDataSource resolves the credential and endpoint used by live
+// read-only Kitsu views. An encrypted persisted token is authoritative: if it
+// exists but cannot be decrypted, the source is unavailable and legacy env
+// credentials are not used as a fallback. Environment credentials remain
+// supported only for installations without a persisted runtime token.
+func runtimeKitsuDataSource(db *gorm.DB) (baseURL, token string, ok bool) {
+	if db != nil {
+		if ciphertext := strings.TrimSpace(model.GetSetting(db, RuntimeKitsuTokenSettingKey)); ciphertext != "" {
+			persisted, err := decryptRuntimeSecret(ciphertext)
+			if err != nil || strings.TrimSpace(persisted) == "" {
+				return "", "", false
+			}
+			baseURL = strings.TrimSpace(model.GetSetting(db, KitsuAPIBaseURLSettingKey))
+			if baseURL == "" {
+				baseURL = KitsuHostForUI(db)
+			}
+			if baseURL == "" {
+				return "", "", false
+			}
+			return baseURL, strings.TrimSpace(persisted), true
+		}
+	}
+	token = strings.TrimSpace(os.Getenv("KitsuJWTToken"))
+	if token == "" {
+		return "", "", false
+	}
+	baseURL = strings.TrimSpace(os.Getenv("KITSU_API_BASE_URL"))
+	if baseURL == "" {
+		baseURL = KitsuHostForUI(db)
+	}
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("KITSU_HOSTNAME"))
+	}
+	return baseURL, token, baseURL != ""
+}
+
 func StoreValidatedKitsuBotMetadata(db *gorm.DB, result BotTokenValidationResult) error {
 	if db == nil || !result.Compatible() {
 		return errors.New("Kitsu Bot validation is not successful")

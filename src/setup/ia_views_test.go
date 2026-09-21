@@ -118,12 +118,15 @@ func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	defer server.Close()
 	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
 	t.Setenv("KITSU_API_BASE_URL", "")
-	t.Setenv("KitsuJWTToken", "test-token")
+	t.Setenv("KitsuJWTToken", "")
 	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
 
 	db := newIAViewDB(t)
+	if err := setRuntimeKitsuToken(db, "persisted-runtime-token"); err != nil {
+		t.Fatal(err)
+	}
 	projects := availableProjects(db)
 	previews := map[string]model.ValidationKitsuData{}
 	for _, project := range projects {
@@ -149,6 +152,31 @@ func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	}
 	if personCalls != 0 {
 		t.Fatalf("live preview used the global persons endpoint %d time(s)", personCalls)
+	}
+}
+
+func TestGlobalUserLinkingPeopleUsesPersistedRuntimeTokenWithoutEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/persons/" || r.Header.Get("Authorization") != "Bearer persisted-runtime-token" {
+			t.Fatalf("unexpected persisted runtime person request: %s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"person-1","full_name":"Persisted User","active":true}]`))
+	}))
+	defer server.Close()
+	t.Setenv("KitsuJWTToken", "")
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "persisted-runtime-token"); err != nil {
+		t.Fatal(err)
+	}
+	people, source := globalUserLinkingPeople(db)
+	if source != "live_kitsu_api" || len(people) != 1 || people[0].ID != "person-1" {
+		t.Fatalf("people=%+v source=%q", people, source)
 	}
 }
 

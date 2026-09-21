@@ -56,10 +56,11 @@ func hasValidationOnlyProject(db *gorm.DB) bool {
 // in-memory previews so normal pages can explain that they are not connected.
 func availableProjects(db *gorm.DB) []model.Project {
 	local := model.ListProjects(db)
-	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) == "" {
+	baseURL, token, liveReady := runtimeKitsuDataSource(db)
+	if !liveReady {
 		return local
 	}
-	live := ListKitsuProjects("")
+	live := ListKitsuProjectsWithCredentials(baseURL, token)
 	if len(live) == 0 {
 		return local
 	}
@@ -77,7 +78,7 @@ func availableProjects(db *gorm.DB) []model.Project {
 		}
 		preview := model.Project{KitsuProjectID: id, Name: strings.TrimSpace(liveProject.Name), ProjectType: "live", ReadOnlyPreview: true}
 		data := model.ValidationKitsuData{}
-		for _, taskType := range kitsu.GetProjectTaskTypes(id).Each {
+		for _, taskType := range kitsu.GetProjectTaskTypesWithCredentials(baseURL, token, id).Each {
 			if taskType.Archived || taskType.IsArchived {
 				continue
 			}
@@ -2456,8 +2457,8 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 }
 
 func globalUserLinkingPeople(db *gorm.DB) ([]KitsuPerson, string) {
-	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
-		return filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db)), "live_kitsu_api"
+	if baseURL, token, liveReady := runtimeKitsuDataSource(db); liveReady {
+		return filterAssignablePersons(ListKitsuPersonsWithCredentials(baseURL, token), botAccountEmail(db)), "live_kitsu_api"
 	}
 	people := make([]KitsuPerson, 0)
 	for _, user := range filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)) {

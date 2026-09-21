@@ -252,7 +252,15 @@ func publicKitsuHostnameFromRequest(r *http.Request, storedHost string) string {
 }
 
 func ListKitsuPersons(_ string) []KitsuPerson {
-	persons := kitsu.GetPersons()
+	return listKitsuPersonsFrom(kitsu.GetPersons())
+}
+
+func ListKitsuPersonsWithCredentials(baseURL, token string) []KitsuPerson {
+	persons, _ := kitsu.GetPersonsWithCredentials(baseURL, token)
+	return listKitsuPersonsFrom(persons)
+}
+
+func listKitsuPersonsFrom(persons kitsu.Persons) []KitsuPerson {
 	out := make([]KitsuPerson, 0, len(persons.Each))
 	for _, person := range persons.Each {
 		fullName := strings.TrimSpace(person.FullName)
@@ -291,7 +299,15 @@ func ListKitsuProjectParticipants(projectID string) []KitsuPerson {
 }
 
 func ListKitsuProjects(_ string) []KitsuProject {
-	projects := kitsu.GetProjects()
+	return listKitsuProjectsFrom(kitsu.GetProjects())
+}
+
+func ListKitsuProjectsWithCredentials(baseURL, token string) []KitsuProject {
+	projects, _ := kitsu.GetProjectsWithCredentials(baseURL, token)
+	return listKitsuProjectsFrom(projects)
+}
+
+func listKitsuProjectsFrom(projects kitsu.Projects) []KitsuProject {
 	out := make([]KitsuProject, 0, len(projects.Each))
 	for _, project := range projects.Each {
 		out = append(out, KitsuProject{ID: project.ID, Name: strings.TrimSpace(project.Name)})
