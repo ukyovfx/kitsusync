@@ -43,6 +43,10 @@ func TestPR199AvailableProjectsPreservesLocalRowsOnLiveFailure(t *testing.T) {
 }
 
 func TestPR199UserLinkingMissingPrerequisitesShowsSetupOnly(t *testing.T) {
+	t.Setenv("KitsuJWTToken", "")
+	t.Setenv("KITSU_API_BASE_URL", "")
+	t.Setenv("KITSU_HOSTNAME", "")
+	t.Setenv("DISCORD_BOT_TOKEN", "")
 	w := httptest.NewRecorder()
 	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), nil)
 	body := w.Body.String()

@@ -1,7 +1,6 @@
 package setup
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +13,7 @@ import (
 
 func testNotificationDestinationDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("file:test-notification-destination-%p?mode=memory&cache=shared", t)
+	dsn := filepath.Join(t.TempDir(), "test.db")
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
