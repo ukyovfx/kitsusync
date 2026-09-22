@@ -1,4 +1,6 @@
-# Production verification after v0.4.6 hardening
+# Archived production verification after v0.4.6 hardening
+
+> Archived on 2026-09-22. This is historical planning material based on v0.4.6 and the repository state recorded below. Do not use it as a current production deployment plan. Re-derive any production procedure from current repository, release, CI, and live runtime evidence.
 
 ## Goal
 
