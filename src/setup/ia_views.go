@@ -3,7 +3,6 @@ package setup
 import (
 	"app/src/api/kitsu"
 	"app/src/model"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -55,46 +54,8 @@ func hasValidationOnlyProject(db *gorm.DB) bool {
 // It never creates or updates database rows. Live-only records are marked as
 // in-memory previews so normal pages can explain that they are not connected.
 func availableProjects(db *gorm.DB) []model.Project {
-	local := model.ListProjects(db)
-	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) == "" {
-		return local
-	}
-	live := ListKitsuProjects("")
-	if len(live) == 0 {
-		return local
-	}
-	localByID := make(map[string]model.Project, len(local))
-	for _, project := range local {
-		localByID[strings.TrimSpace(project.KitsuProjectID)] = project
-	}
-	merged := make([]model.Project, 0, len(live)+len(local))
-	for _, liveProject := range live {
-		id := strings.TrimSpace(liveProject.ID)
-		if project, ok := localByID[id]; ok {
-			merged = append(merged, project)
-			delete(localByID, id)
-			continue
-		}
-		preview := model.Project{KitsuProjectID: id, Name: strings.TrimSpace(liveProject.Name), ProjectType: "live", ReadOnlyPreview: true}
-		data := model.ValidationKitsuData{}
-		for _, taskType := range kitsu.GetProjectTaskTypes(id).Each {
-			if taskType.Archived || taskType.IsArchived {
-				continue
-			}
-			if strings.TrimSpace(taskType.ID) != "" && strings.TrimSpace(taskType.Name) != "" {
-				data.TaskTypes = append(data.TaskTypes, model.ValidationTaskType{ID: strings.TrimSpace(taskType.ID), Name: strings.TrimSpace(taskType.Name)})
-			}
-		}
-		if encoded, err := json.Marshal(data); err == nil {
-			preview.ValidationDataJSON = string(encoded)
-		}
-		merged = append(merged, preview)
-	}
-	for _, project := range localByID {
-		merged = append(merged, project)
-	}
-	sort.Slice(merged, func(i, j int) bool { return strings.ToLower(merged[i].Name) < strings.ToLower(merged[j].Name) })
-	return merged
+	projects, _ := availableProjectsWithError(db)
+	return projects
 }
 
 func liveProjectPreview(db *gorm.DB, projectID string) *model.Project {
@@ -2283,6 +2244,9 @@ func loadGlobalDiscordDirectory(botToken, selectedGuildID string) (globalDiscord
 	}
 	seen := map[string]bool{}
 	for _, member := range members {
+		if member.User.Bot {
+			continue
+		}
 		name := strings.TrimSpace(member.Nick)
 		if name == "" {
 			name = strings.TrimSpace(member.User.DisplayName)
@@ -2470,7 +2434,7 @@ func globalUserLinkingPeople(db *gorm.DB) ([]KitsuPerson, string) {
 	return people, "local_user_map"
 }
 
-func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+func renderGlobalUserLinkingLegacy(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	people, _ := globalUserLinkingPeople(db)
 	selectedGuildID := strings.TrimSpace(r.URL.Query().Get("discord_guild_id"))

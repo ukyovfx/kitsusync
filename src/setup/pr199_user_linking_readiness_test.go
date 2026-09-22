@@ -47,7 +47,7 @@ func TestPR199UserLinkingMissingPrerequisitesShowsSetupOnly(t *testing.T) {
 	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), nil)
 	body := w.Body.String()
 
-	for _, want := range []string{"Configure Kitsu", "Connection settings"} {
+	for _, want := range []string{"Configure Kitsu and the Discord Bot to load servers and users.", "Connection settings"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing-prerequisite state omitted %q", want)
 		}

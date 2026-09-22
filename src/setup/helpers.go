@@ -694,6 +694,7 @@ type DiscordGuildMember struct {
 		Username    string `json:"username"`
 		GlobalName  string `json:"global_name"`
 		DisplayName string `json:"display_name"`
+		Bot         bool   `json:"bot"`
 	} `json:"user"`
 	Nick string `json:"nick"`
 }

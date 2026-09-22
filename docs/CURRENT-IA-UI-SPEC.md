@@ -144,6 +144,12 @@ Production detail Users is a compact, linear workflow: `Production users`, `Add 
 
 The add form contains only globally linked human users not already associated with this Production. Adding creates a local `ProjectUserMap` association and does not change global User Linking or Kitsu membership. Reviewer / Checker assignment is a separate form using an associated Production user and a Kitsu Task Type; current assignments are compact removable rows. Role removal does not remove the user association. Removing a user association also removes that user's local role assignments. `ProjectUserMap` and `ProjectCheckerMap` remain the canonical stores, and bots are excluded.
 
+## User Linking readiness states
+
+`/bot/admin/users` links human Kitsu users to human Discord users. Missing Kitsu or Discord Bot configuration is a setup-readiness state: show one concise cause and one `接続設定` / `Connection settings` action, without a Discord server selector, mapping table, failure copy, or diagnostic disclosure. Configured lookups keep genuine request/auth/network failures distinct from successful empty Kitsu users, zero joined Discord servers, and a selected server with zero selectable human members.
+
+The Discord server selector appears only when joined guild data is usable. Multiple joined servers require an explicit selection before members are loaded. The four-column mapping table (`Kitsu user | Discord user | state | action`) appears only when active non-bot Kitsu users and selectable non-bot Discord members are both available. Save starts disabled until the Discord selection changes; existing mappings expose their linked state and an Unlink action. Raw Discord IDs are not normal visible identity text. JP and EN preserve equivalent state, order, actions, and information density on desktop and mobile.
+
 ## Source references
 
 The primary implementation is in `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/observability.go`, `src/setup/runtime_observation.go`, and the route registration in `src/main.go`.
