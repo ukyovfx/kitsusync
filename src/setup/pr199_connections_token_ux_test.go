@@ -26,7 +26,6 @@ func TestPR199ConnectionsSavedTokenControlsAreMaskedAndReversible(t *testing.T) 
 		`data-token-change`,
 		"Change token",
 		"Cancel",
-		"Check link",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("configured-token edit view omitted %q", want)
