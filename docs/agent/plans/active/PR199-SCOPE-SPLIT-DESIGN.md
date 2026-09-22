@@ -15,7 +15,7 @@ Replace the mixed-scope PR #199 with three reviewable changes rebuilt from curre
 ## Design principles
 
 - Rebuild from current `master`; do not merge or rebase the mixed PR #199 branch into accepted state.
-- Keep runtime semantics, User Linking presentation, and Connections edit UX in separate reviewable scopes.
+- Keep runtime/API semantics, view integration, and Connections edit UX in separate reviewable scopes.
 - Preserve existing setup/auth/DB/API contracts unless a scope explicitly requires a bounded change.
 - Keep persisted secrets non-renderable and fail closed when persisted runtime credentials exist but cannot be used safely.
 - Distinguish successful empty data from request/auth/network failure.
@@ -26,19 +26,19 @@ Replace the mixed-scope PR #199 with three reviewable changes rebuilt from curre
 
 ### Purpose
 
-Make read-only live Kitsu views use the already-persisted validated runtime endpoint/token instead of depending on the legacy `KitsuJWTToken` environment variable, while preserving safe failure outcomes.
+Provide a UI-independent runtime/API foundation for read-only Kitsu data using the already-persisted validated endpoint/token instead of forcing callers to depend on the legacy `KitsuJWTToken` environment variable.
 
 ### Required behavior
 
-- A decryptable persisted runtime Kitsu token is authoritative for live read-only views.
+- A decryptable persisted runtime Kitsu token is authoritative when resolving the runtime Kitsu data source.
 - If a persisted runtime token exists but cannot be decrypted or resolved safely, fail closed instead of silently falling back to a stale environment token.
 - Environment credentials remain a compatibility fallback only when no persisted runtime token exists.
 - Kitsu person, project, and project task-type reads accept explicit runtime endpoint/token inputs.
 - Empty successful responses remain empty successful responses.
-- 4xx, 5xx, invalid responses, and transport failures remain distinguishable failures for callers that need to render safe diagnostics.
+- 4xx, 5xx, invalid responses, and transport failures remain distinguishable failures for callers that need safe diagnostics.
 - 5xx retry exhaustion must preserve a non-nil error instead of collapsing to an uninformative failure.
-- Production-list live lookup failure may show a safe warning while preserving locally saved Productions.
-- No credential, Authorization header, response body, or sensitive endpoint detail is exposed to rendered UI or durable logs.
+- Foundation helpers must not expose credentials, Authorization headers, response bodies, or sensitive endpoint details to rendered UI or durable logs.
+- Scope A does not change normal Current IA rendering; view integration belongs to Scope B.
 
 ### Expected implementation area
 
@@ -47,31 +47,34 @@ Make read-only live Kitsu views use the already-persisted validated runtime endp
 - `src/setup/runtime_credentials.go`
 - `src/setup/runtime_credentials_test.go`
 - `src/setup/helpers.go`
-- `src/setup/ia_views.go` only where live Production reads consume the runtime source
-- `src/setup/ia_views_test.go`
+- focused new foundation tests where useful
 - `src/utils/request/request.go`
 - `src/utils/request/request_security_test.go`
 
 ### Acceptance
 
-- Persisted-token reads work with `KitsuJWTToken` unset.
+- Persisted runtime source resolution works with `KitsuJWTToken` unset.
 - Unreadable persisted credentials fail closed.
+- Explicit person/project reads work without environment credentials.
 - Empty and failure outcomes are distinct.
+- 5xx transient outcomes retain a concrete error.
 - Existing verified-origin / pinned-IP / redirect protections remain intact.
 - Required tests, vet, Compose validation, CI, and Security Audit pass.
 
-## Scope B — User Linking readiness and failure-state UI
+## Scope B — Current IA live-data integration and User Linking readiness UI
 
 ### Dependency
 
-Scope B is based on Scope A so the UI can consume truthful live Kitsu outcomes without re-implementing credential semantics.
+Scope B is based on Scope A so Current IA views consume one truthful runtime/API foundation without re-implementing credential semantics.
 
 ### Purpose
 
-Make `/bot/admin/users` render prerequisite, empty, failure, and ready states as distinct user-facing states instead of presenting blocked lookups as empty data or generic API failure.
+Wire Current IA read-only Kitsu views to Scope A and make `/bot/admin/users` render prerequisite, empty, failure, and ready states as distinct user-facing states instead of presenting blocked lookups as empty data or generic API failure.
 
 ### Required behavior
 
+- Production-list live reads use the persisted runtime source from Scope A and preserve locally saved Productions when a live lookup fails.
+- A Production-list live lookup failure may show a safe warning without exposing sensitive request details.
 - Missing Kitsu and/or Discord Bot configuration is a readiness state, not a diagnostic error.
 - Missing configuration shows one concise cause and one Connection settings action.
 - Blocked prerequisite state does not render the guild selector, mapping table, diagnostic disclosure, or misleading lookup-failure copy.
@@ -105,6 +108,7 @@ The exact normal-page copy remains governed by `docs/CURRENT-IA-UI-SPEC.md` and 
 
 ### Acceptance
 
+- Current IA live Production and User Linking reads consume Scope A instead of depending on `KitsuJWTToken` directly.
 - Focused state tests cover every canonical state above.
 - JP/EN parity tests pass.
 - No secret/raw-ID regression appears in rendered output.
@@ -136,7 +140,7 @@ Keep configured secret fields visible as safe masked controls and make token rep
 
 - `src/setup/admin.go`
 - `src/setup/kitsu_connection_test.go`
-- `src/setup/ia_views_test.go` only if shared Connections rendering assertions belong there
+- focused new Connections rendering tests where useful
 
 ### Acceptance
 
@@ -148,7 +152,7 @@ Keep configured secret fields visible as safe masked controls and make token rep
 ## PR and branch strategy
 
 - Scope A: new branch from current `master`; focused PR.
-- Scope B: new branch based on Scope A only after Scope A is stable enough to provide the required runtime interface; rebase/rebuild onto accepted `master` after Scope A merges.
+- Scope B: new branch based on Scope A only after Scope A is stable enough to provide the required runtime interface; rebuild/rebase onto accepted `master` after Scope A merges.
 - Scope C: new branch from current `master`; may proceed independently of A/B.
 - Do not cherry-pick the full PR #199 history. Re-implement or selectively port only the minimal justified changes per scope.
 - Preserve small commits so each scope can be reviewed and reverted independently.
