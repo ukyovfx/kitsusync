@@ -1,0 +1,97 @@
+name: Reproduction report
+description: Independently verify an existing KitsuSync bug report.
+title: "[Reproduction] "
+labels: ["needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form to report an independent reproduction attempt for an existing bug.
+        Report direct observations only. Keep guesses clearly separated as hypotheses.
+
+  - type: input
+    id: issue
+    attributes:
+      label: Original issue
+      description: Link the existing bug issue you tested.
+      placeholder: https://github.com/ukyovfx/kitsusync/issues/123
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Reproduced
+        - Could not reproduce
+        - Partially reproduced
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: KitsuSync version or commit
+      placeholder: v0.4.7 or abc1234
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        OS:
+        Docker:
+        Compose:
+        Browser:
+        Reverse proxy:
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Exact steps tested
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What you observed
+      description: Report direct observations only.
+    validations:
+      required: true
+
+  - type: upload
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Upload sanitized screenshots, recordings, or other supporting files.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste only relevant sanitized logs.
+      render: shell
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional notes / hypothesis
+      description: Any interpretation here is treated as unverified.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I tested this myself.
+          required: true
+        - label: I separated direct observations from hypotheses.
+          required: true
+        - label: I removed secrets and private information.
+          required: true
