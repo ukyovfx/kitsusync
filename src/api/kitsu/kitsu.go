@@ -274,9 +274,17 @@ func GetPersons() Persons {
 }
 
 func GetPersonsWithError() (Persons, error) {
-	path := kitsuBase() + "api/data/persons/"
+	return GetPersonsWithCredentials("", os.Getenv("KitsuJWTToken"))
+}
+
+// GetPersonsWithCredentials reads the global person directory using the
+// caller's already-validated runtime endpoint and credential. This keeps
+// persisted runtime credentials authoritative without copying them into the
+// legacy KitsuJWTToken environment variable.
+func GetPersonsWithCredentials(baseURL, token string) (Persons, error) {
+	path := kitsuBaseFor(baseURL) + "api/data/persons/"
 	response := Persons{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -370,12 +378,22 @@ func GetTaskTypesWithError() (TaskTypes, error) {
 // global Task Type list is not a safe substitute because it can contain
 // records unrelated to the selected Production.
 func GetProjectTaskTypes(projectID string) TaskTypes {
+	return getProjectTaskTypesWithCredentials("", os.Getenv("KitsuJWTToken"), projectID)
+}
+
+// GetProjectTaskTypesWithCredentials reads task types from a selected
+// Production using an explicit runtime endpoint and credential.
+func GetProjectTaskTypesWithCredentials(baseURL, token, projectID string) TaskTypes {
+	return getProjectTaskTypesWithCredentials(baseURL, token, projectID)
+}
+
+func getProjectTaskTypesWithCredentials(baseURL, token, projectID string) TaskTypes {
 	response := TaskTypes{}
 	if projectID == "" {
 		return response
 	}
-	path := kitsuBase() + "api/data/projects/" + url.PathEscape(projectID) + "/task-types"
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	path := kitsuBaseFor(baseURL) + "api/data/projects/" + url.PathEscape(projectID) + "/task-types"
+	request.Do(token, http.MethodGet, path, nil, &response.Each)
 	return response
 }
 
@@ -407,11 +425,26 @@ func GetProjects() Projects {
 }
 
 func GetProjectsWithError() (Projects, error) {
-	path := kitsuBase() + "api/data/projects/"
+	return GetProjectsWithCredentials("", os.Getenv("KitsuJWTToken"))
+}
+
+// GetProjectsWithCredentials reads live Productions using the caller's
+// already-validated runtime endpoint and credential.
+func GetProjectsWithCredentials(baseURL, token string) (Projects, error) {
+	path := kitsuBaseFor(baseURL) + "api/data/projects/"
 	response := Projects{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response.Each)
 
 	return response, err
+}
+
+func kitsuBaseFor(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return kitsuBase()
+	}
+	h := strings.TrimRight(strings.TrimSpace(raw), "/")
+	h = strings.TrimSuffix(h, "/api")
+	return h + "/"
 }
 
 func GetProjectStatus(projectStatusID string) ProjectStatus {

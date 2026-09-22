@@ -196,7 +196,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 			"status", resp.StatusCode,
 			"method", method,
 			"url", url)
-		return attemptResult{status: statusTransient}
+		return attemptResult{status: statusTransient, err: fmt.Errorf("HTTP status %d", resp.StatusCode)}
 	}
 
 	// その他の非 2xx（4xx 等）— 永続エラー
