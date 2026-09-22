@@ -2,28 +2,36 @@
 
 ## Verification basis
 
-Verified against upstream `master` at commit `cc9dea22daba83dbc04503f3d87e5fc402d04bd7` on 2026-09-15.
+Verified against upstream `master` at commit `c1440d7a258611e7c338d4823a849a98214fdb17` on 2026-09-22.
 
-## Confirmed stable areas
+Repository version: `0.4.7`.
+Latest GitHub Release: `v0.4.7`.
+
+## Confirmed default-branch state
 
 - KitsuSync is a Go Kitsu-to-Discord pipeline bridge with browser setup and administration surfaces.
-- The documented runtime uses Docker Compose, SQLite change tracking, Kitsu polling, and Discord webhook delivery.
-- The repository contains application code under `src/`, templates under `tpl/`, deployment/configuration examples, documentation under `docs/`, and CI under `.github/workflows/`.
-- The CI workflow targets `master` and defines Go, Docker Compose configuration, and Docker build checks.
-- The repo-local AI knowledge entry points are present on `master`: `AGENTS.md`, `docs/agent/START-HERE.md`, `docs/agent/CURRENT-STATE.md`, and `docs/agent/plans/`.
-- PR #159 is merged, and v0.4.6 is released from commit `b7b30157cb90c4500e8b00d3c26ac7038f5c8c10`.
-- PRs #164, #165, #166, and #167 are merged into `master`; #167 is the latest relevant production deploy/rollback hardening change.
-- Production deployment is governed by the root-installed `kitsusync-deploy` wrapper and a provenance-checked deployment bundle. Direct production Compose execution is unsupported.
+- `master` is the accepted default-branch implementation state; code, tests, CI, configuration, PR state, and runtime evidence outrank this summary when they disagree.
+- The repo-local AI knowledge entry points are `AGENTS.md`, `docs/agent/START-HERE.md`, `docs/agent/CURRENT-STATE.md`, and `docs/agent/plans/`.
+- Current IA UI decisions are documented in `docs/CURRENT-IA-UI-SPEC.md`; browser-rendered output remains the final visual acceptance source of truth.
+- PR #197 is merged for the current IA UI work represented on `master`.
+- PR #200 is merged and adds Dependabot configuration for Go Modules, Docker, and GitHub Actions.
+- PR #201 is merged and establishes evidence-first community debugging/contribution rules, structured issue forms, reproduction reporting, and public PR validation guidance.
+- PR #199 is open as Draft and is not accepted default-branch state. Its current diff is broader than its stated focused User Linking UI scope and must be reconciled before merge.
 
-## Known confirmed limitations
+## Current active work
 
-- SQLite is intended for lightweight/small deployments rather than large multi-node scale-out.
-- Discord setup rollback is documented as best-effort; setup depends on correct Discord permissions and Kitsu reachability.
-- Production deployment is documented behind a trusted reverse proxy, and the FileBrowser service is debug-only.
+- Reconcile PR #199 into reviewable scopes before any merge: focused User Linking readiness/presentation, persisted Kitsu runtime credential/live-data behavior, and Connections token-editing UX must not be treated as one already-accepted change.
+- Rebuild/rebase any retained #199 work from current `master`, then rerun required checks and browser acceptance where UI behavior is involved.
+- Keep repository-local continuity documentation synchronized with accepted `master` state.
 
-## Active work
+## Production state boundary
 
-- The next production deployment is prepared off-production from the immutable v0.4.6 release artifact and current trusted deployment tooling in `master`.
-- Remaining work is controlled production verification: stage and inspect the bundle, verify the target runtime and rollback evidence, then obtain operator approval before the first production write.
-- F02 remains intentionally deferred pending production evidence; it is not converted into an implementation task.
-- PR #162 is open and is not a production blocker for this deployment path.
+- The previous active production-verification plan was specific to v0.4.6 and is historical, not a current deployment instruction.
+- No current production deployment or live runtime state is verified from repository evidence alone.
+- Before any production write, re-derive the deployment plan from the current release/repository state and verify the target runtime with live operator evidence.
+
+## Known boundaries
+
+- Local worktree/dirty state is not visible from GitHub and must be checked locally before local implementation work.
+- Live KitsuSync/Kitsu/Zou/Discord runtime health cannot be inferred from GitHub state alone.
+- Do not present open PR behavior as accepted implementation until it is merged into `master`.
