@@ -1,27 +1,37 @@
+## Linked issue
+Closes #
+
 ## Summary
 
-## Scope
-- branch purpose:
-- task goal:
+## Evidence
+- reproduction before fix:
+- behavior after fix:
+- screenshots / recordings if UI-related:
 
-## Touched files
-- 
+## Source / basis
+- relevant documentation:
+- specification:
+- upstream source if applicable:
 
 ## Runtime behavior changed?
 - yes / no
 
-## Touches setup/auth/runtime?
+## Touches sensitive areas?
 - setup: yes / no
-- auth: yes / no
-- runtime: yes / no
+- auth/session: yes / no
+- credentials: yes / no
+- Discord delivery: yes / no
+- deployment/runtime: yes / no
 
 ## Validation
-- `go test ./src/... -count=1 -timeout=240s`
-- `go vet ./src/...`
-- `docker compose config -q`
+- [ ] focused tests
+- [ ] `go test ./src/... -count=1 -timeout=120s`
+- [ ] `go vet ./src/...`
+- [ ] `docker compose config -q`
+- [ ] browser verification if UI-related
+- [ ] screenshots updated if visual behavior changed
 
 ## Risk
-- 
 
-## Obsidian log updated?
-- yes / no
+## Remaining uncertainty
+State anything that was not verified. Do not guess.

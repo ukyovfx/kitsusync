@@ -1,83 +1,153 @@
 name: Bug report
-description: Report a reproducible problem in runtime, setup, routing, or operator flow.
+description: Report a reproducible KitsuSync problem with evidence.
 title: "[Bug] "
 labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. Please include enough detail for a maintainer to reproduce the problem safely.
-  - type: textarea
-    id: summary
+        Thanks for helping improve KitsuSync.
+
+        Report what you actually observed. Do not present guesses about the cause as confirmed facts.
+
+        Remove all credentials, tokens, webhook URLs, cookies, and private data before submitting.
+
+  - type: input
+    id: version
     attributes:
-      label: Summary
-      description: What happened, and what did you expect instead?
-      placeholder: Setup showed success, but one Discord channel was missing.
+      label: KitsuSync version or commit
+      description: Release version or exact Git commit where you observed the problem.
+      placeholder: v0.4.7 or abc1234
     validations:
       required: true
-  - type: dropdown
-    id: deployment
+
+  - type: input
+    id: os
     attributes:
-      label: Deployment style
-      options:
-        - Docker Compose on one host
-        - Docker Compose behind reverse proxy
-        - Local debug environment
-        - Other
+      label: Operating system
+      placeholder: Ubuntu 26.04 / Windows 11 / etc.
     validations:
       required: true
+
+  - type: input
+    id: docker
+    attributes:
+      label: Docker / Compose version
+      placeholder: Docker 28.x, Compose v2.x
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      description: Required for UI/browser issues. Otherwise write N/A.
+      placeholder: Firefox 156 / Chrome 140 / N/A
+    validations:
+      required: true
+
   - type: dropdown
     id: proxy
     attributes:
-      label: Reverse proxy usage
+      label: Reverse proxy
       options:
-        - No reverse proxy
+        - None / direct :8090
         - nginx
         - Cloudflare Tunnel / proxy
-        - Other reverse proxy
+        - Other
     validations:
       required: true
-  - type: dropdown
-    id: filebrowser
+
+  - type: textarea
+    id: expected
     attributes:
-      label: Was the debug FileBrowser profile enabled?
-      options:
-        - "No"
-        - "Yes"
-        - Not sure
+      label: Expected behavior
+      description: What should have happened?
     validations:
       required: true
+
+  - type: textarea
+    id: source
+    attributes:
+      label: Source / basis for expected behavior
+      description: |
+        Provide the exact documentation URL, repository path, issue, PR,
+        upstream Kitsu/Zou documentation, UI text, or other authoritative basis.
+        If no authoritative source exists, explicitly say so.
+      placeholder: |
+        README.md section ...
+        docs/... path
+        https://github.com/...
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Describe only what you actually observed.
+    validations:
+      required: true
+
   - type: textarea
     id: steps
     attributes:
       label: Reproduction steps
-      description: List the exact steps to reproduce the issue.
       placeholder: |
-        1. Start with docker compose up -d --build
-        2. Open /bot/setup
-        3. Create a new project
+        1. Start KitsuSync...
+        2. Open...
+        3. Click...
         4. Observe...
     validations:
       required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Reproduction rate
+      options:
+        - Every time
+        - Often
+        - Sometimes
+        - Reproduced once
+    validations:
+      required: true
+
   - type: textarea
     id: logs
     attributes:
       label: Relevant logs
-      description: Paste docker compose logs --tail=200 app with secrets removed.
+      description: Paste only relevant sanitized logs.
       render: shell
-    validations:
-      required: true
-  - type: textarea
-    id: config
+
+  - type: upload
+    id: evidence
     attributes:
-      label: Relevant config notes
-      description: Mention route settings, task type webhooks, runtime env assumptions, or anything unusual.
+      label: Screenshots / recordings / evidence
+      description: |
+        Attach screenshots or recordings for UI issues.
+        Remove credentials and private information first.
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis (optional)
+      description: |
+        Possible cause if you have one.
+        This is explicitly treated as unverified until supported by evidence.
+
   - type: checkboxes
-    id: checks
+    id: confirmation
     attributes:
       label: Before submitting
       options:
-        - label: I removed secrets such as webhook URLs, passwords, and tokens.
+        - label: I reproduced or directly observed this issue.
           required: true
-        - label: I checked README.md and troubleshooting first.
+        - label: I separated observed facts from hypotheses.
+          required: true
+        - label: I provided a source for claims about intended behavior, or stated that no source exists.
+          required: true
+        - label: I removed passwords, tokens, webhook URLs, cookies, credentials, and private data.
+          required: true
+        - label: I checked existing issues first.
           required: true
