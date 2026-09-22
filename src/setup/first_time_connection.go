@@ -78,8 +78,8 @@ type firstTimeOwnedResources struct {
 }
 
 type firstTimeConnectionOps struct {
-	Projects       func(string) []KitsuProject
-	TaskTypes      func(string) []kitsu.TaskType
+	Projects       func(string, *gorm.DB) []KitsuProject
+	TaskTypes      func(string, *gorm.DB) []kitsu.TaskType
 	DiscordCheck   func(string, string) firstTimeDiscordCheck
 	ListChannels   func(string, string) ([]DiscordGuildChannel, error)
 	CreateCategory func(string, string, string) (string, error)
@@ -90,8 +90,13 @@ type firstTimeConnectionOps struct {
 }
 
 var defaultFirstTimeConnectionOps = firstTimeConnectionOps{
-	Projects:  ListKitsuProjects,
-	TaskTypes: routingTaskTypesForProduction,
+	Projects: func(_ string, db *gorm.DB) []KitsuProject {
+		projects, _ := setupKitsuProjects(db)
+		return projects
+	},
+	TaskTypes: func(projectID string, db *gorm.DB) []kitsu.TaskType {
+		return setupKitsuTaskTypes(db, projectID)
+	},
 	DiscordCheck: func(token, guild string) firstTimeDiscordCheck {
 		status := checkDiscordStatus(token, guild)
 		reason := ""
@@ -129,7 +134,7 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 		return firstTimeConnectionPlan{}, fmt.Errorf("Production is already connected")
 	}
 	var project KitsuProject
-	for _, candidate := range ops.Projects(kitsuHost) {
+	for _, candidate := range ops.Projects(kitsuHost, db) {
 		if strings.TrimSpace(candidate.ID) == projectID {
 			project = candidate
 			break
@@ -168,7 +173,7 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 	if err != nil {
 		return firstTimeConnectionPlan{}, fmt.Errorf("Discord channel read failed")
 	}
-	taskTypes := ops.TaskTypes(projectID)
+	taskTypes := ops.TaskTypes(projectID, db)
 	if len(taskTypes) == 0 {
 		return firstTimeConnectionPlan{}, fmt.Errorf("No valid Task Types were found for this Production")
 	}

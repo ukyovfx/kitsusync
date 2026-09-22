@@ -15,10 +15,10 @@ import (
 
 func firstTimeTestOps(createChannel func(string) (string, error)) firstTimeConnectionOps {
 	return firstTimeConnectionOps{
-		Projects: func(string) []KitsuProject {
+		Projects: func(string, *gorm.DB) []KitsuProject {
 			return []KitsuProject{{ID: "p1", Name: "Test Production"}}
 		},
-		TaskTypes: func(string) []kitsu.TaskType {
+		TaskTypes: func(string, *gorm.DB) []kitsu.TaskType {
 			return []kitsu.TaskType{{ID: "tt1", Name: "Concept"}, {ID: "tt2", Name: "Modeling"}}
 		},
 		DiscordCheck: func(string, string) firstTimeDiscordCheck {
