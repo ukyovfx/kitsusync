@@ -3,6 +3,7 @@ package setup
 import (
 	"html"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -64,5 +65,16 @@ func TestPR206UserLinkingRejectsNonSnowflakeGuildQueryWithoutReflection(t *testi
 	}
 	if !strings.Contains(body, "Select a Discord server to load members and enable saving.") {
 		t.Fatal("invalid guild query was not canonicalized to the unselected state")
+	}
+}
+
+func TestPR206LanguageToggleEscapesQuerySeparatorsInHref(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/bot/admin/users?discord_guild_id=123456789012345678&filter=active&lang=en", nil)
+	body := langToggleHTML(r, "en")
+	if strings.Contains(body, `&lang=ja`) {
+		t.Fatal("language toggle emitted unescaped query separators in an HTML attribute")
+	}
+	if !strings.Contains(body, `&amp;lang=ja`) {
+		t.Fatal("language toggle did not HTML-escape the query separators")
 	}
 }
