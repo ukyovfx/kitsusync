@@ -252,7 +252,66 @@ func publicKitsuHostnameFromRequest(r *http.Request, storedHost string) string {
 }
 
 func ListKitsuPersons(_ string) []KitsuPerson {
-	persons := kitsu.GetPersons()
+	return listKitsuPersonsFrom(kitsu.GetPersons())
+}
+
+// KitsuLookupError is a safe, endpoint-scoped description of a live Kitsu
+// lookup failure. It intentionally omits URLs, credentials, and response
+// bodies so callers can expose diagnostics without leaking secrets.
+type KitsuLookupError struct {
+	Endpoint   string
+	Class      string
+	StatusCode int
+}
+
+func (e *KitsuLookupError) Error() string {
+	if e == nil {
+		return "kitsu lookup failed"
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("kitsu %s lookup failed (%s, HTTP %d)", e.Endpoint, e.Class, e.StatusCode)
+	}
+	return fmt.Sprintf("kitsu %s lookup failed (%s)", e.Endpoint, e.Class)
+}
+
+func classifyKitsuLookupError(endpoint string, err error) error {
+	if err == nil {
+		return nil
+	}
+	class := "request"
+	statusCode := 0
+	message := err.Error()
+	if marker := strings.LastIndex(message, "HTTP status "); marker >= 0 {
+		if parsed, parseErr := strconv.Atoi(strings.TrimSpace(message[marker+len("HTTP status "):])); parseErr == nil {
+			statusCode = parsed
+			switch {
+			case parsed >= 400 && parsed < 500:
+				class = "http_4xx"
+			case parsed >= 500:
+				class = "http_5xx"
+			}
+		}
+	} else if strings.Contains(message, "decode response") {
+		class = "invalid_response"
+	} else if strings.Contains(message, "send request") || strings.Contains(message, "request failed") {
+		class = "transport"
+	}
+	return &KitsuLookupError{Endpoint: endpoint, Class: class, StatusCode: statusCode}
+}
+
+func ListKitsuPersonsWithCredentials(baseURL, token string) ([]KitsuPerson, error) {
+	persons, err := kitsu.GetPersonsWithCredentials(baseURL, token)
+	if err != nil {
+		lookupErr := classifyKitsuLookupError("persons", err)
+		logKitsuLookup("persons", 0, lookupErr)
+		return nil, lookupErr
+	}
+	people := listKitsuPersonsFrom(persons)
+	logKitsuLookup("persons", len(people), nil)
+	return people, nil
+}
+
+func listKitsuPersonsFrom(persons kitsu.Persons) []KitsuPerson {
 	out := make([]KitsuPerson, 0, len(persons.Each))
 	for _, person := range persons.Each {
 		fullName := strings.TrimSpace(person.FullName)
@@ -291,7 +350,35 @@ func ListKitsuProjectParticipants(projectID string) []KitsuPerson {
 }
 
 func ListKitsuProjects(_ string) []KitsuProject {
-	projects := kitsu.GetProjects()
+	return listKitsuProjectsFrom(kitsu.GetProjects())
+}
+
+func ListKitsuProjectsWithCredentials(baseURL, token string) ([]KitsuProject, error) {
+	projects, err := kitsu.GetProjectsWithCredentials(baseURL, token)
+	if err != nil {
+		lookupErr := classifyKitsuLookupError("projects", err)
+		logKitsuLookup("projects", 0, lookupErr)
+		return nil, lookupErr
+	}
+	result := listKitsuProjectsFrom(projects)
+	logKitsuLookup("projects", len(result), nil)
+	return result, nil
+}
+
+func logKitsuLookup(endpoint string, count int, lookupErr error) {
+	if lookupErr == nil {
+		slog.Info("Kitsu live lookup completed", "endpoint", endpoint, "count", count)
+		return
+	}
+	var failure *KitsuLookupError
+	if errors.As(lookupErr, &failure) {
+		slog.Warn("Kitsu live lookup failed", "endpoint", failure.Endpoint, "error_class", failure.Class, "status", failure.StatusCode)
+		return
+	}
+	slog.Warn("Kitsu live lookup failed", "endpoint", endpoint, "error_class", "request", "status", 0)
+}
+
+func listKitsuProjectsFrom(projects kitsu.Projects) []KitsuProject {
 	out := make([]KitsuProject, 0, len(projects.Each))
 	for _, project := range projects.Each {
 		out = append(out, KitsuProject{ID: project.ID, Name: strings.TrimSpace(project.Name)})
