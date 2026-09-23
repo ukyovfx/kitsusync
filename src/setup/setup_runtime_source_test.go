@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -30,10 +29,7 @@ func TestSetupUsesPersistedKitsuRuntimeSource(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	t.Setenv("KitsuJWTToken", "")
 	t.Setenv("DISCORD_BOT_TOKEN", "")
-	db := newRuntimeCredentialTestDB(t)
-	if err := db.AutoMigrate(&model.Project{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newIAViewDB(t)
 	model.SetSetting(db, "kitsu.hostname", server.URL)
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL)
 	if err := setRuntimeKitsuToken(db, "persisted-kitsu-token"); err != nil {
@@ -76,10 +72,7 @@ func TestSetupDistinguishesEmptyProductionResultFromLookupFailure(t *testing.T) 
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	t.Setenv("KitsuJWTToken", "")
 	t.Setenv("DISCORD_BOT_TOKEN", "")
-	db := newRuntimeCredentialTestDB(t)
-	if err := db.AutoMigrate(&model.Project{}); err != nil {
-		t.Fatal(err)
-	}
+	db := newIAViewDB(t)
 	model.SetSetting(db, "kitsu.hostname", server.URL)
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL)
 	if err := setRuntimeKitsuToken(db, "persisted-kitsu-token"); err != nil {
