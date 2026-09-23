@@ -67,14 +67,17 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     if (!page.url().includes('/bot/admin/bot')) throw new Error('Connections route did not remain authenticated');
     const connectionsHTML = await page.locator('html').evaluate(el => el.outerHTML);
     if (connectionsHTML.includes(syntheticKitsu) || connectionsHTML.includes(syntheticDiscord)) throw new Error('persisted synthetic credential appeared in DOM');
+    let fixedSecretMask = null;
     for (const id of ['kitsu-bot-token', 'discord-bot-token']) {
       const input = page.locator(`#${id}`);
-      if (await input.inputValue() !== '' || await input.getAttribute('placeholder') !== '••••••••••••••••') throw new Error(`${id} did not render as a fixed safe mask`);
+      const mask = await input.getAttribute('placeholder');
+      if (await input.inputValue() !== '' || !/^•{8,}$/u.test(mask || '') || (fixedSecretMask !== null && mask !== fixedSecretMask)) throw new Error(`${id} did not render the shared fixed bullet-only mask`);
+      fixedSecretMask = mask;
       const button = page.locator(`[data-token-change="${id}"]`);
       await button.click();
       if (await input.inputValue() !== '' || await input.getAttribute('placeholder') !== '' || await input.isDisabled()) throw new Error(`${id} Change did not open a blank field`);
       await page.locator(`[data-token-cancel-button="${id === 'kitsu-bot-token' ? 'kitsu-token-cancel' : 'discord-token-cancel'}"]`).click();
-      if (await input.inputValue() !== '' || await input.getAttribute('placeholder') !== '••••••••••••••••' || !(await input.isDisabled())) throw new Error(`${id} Cancel did not restore masked state`);
+      if (await input.inputValue() !== '' || await input.getAttribute('placeholder') !== fixedSecretMask || !(await input.isDisabled())) throw new Error(`${id} Cancel did not restore masked state`);
       await button.click();
       await page.locator(`[data-token-cancel-button="${id === 'kitsu-bot-token' ? 'kitsu-token-cancel' : 'discord-token-cancel'}"]`).click();
       if (await input.inputValue() !== '') throw new Error(`${id} repeated Change/Cancel recovered a value`);
