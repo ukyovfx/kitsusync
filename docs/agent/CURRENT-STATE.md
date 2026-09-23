@@ -2,7 +2,7 @@
 
 ## Verification basis
 
-Verified against upstream `master` at commit `84407c582bb0efd0eafd9b0c329c3e3955690b2d` on 2026-09-23.
+Verified against upstream `master` at commit `84407c582bb0efd0eafd9b0c329c3e3955690b2d` on 2026-09-24.
 
 Repository version: `0.4.7`.
 Latest GitHub Release: `v0.4.7`.
@@ -22,7 +22,7 @@ Latest GitHub Release: `v0.4.7`.
 
 ## Current active work
 
-- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; current head `2dff31c8251c83f0d3df2d464c1bd5a1a91b7e9e` passes GitHub CI #511 and Security Audit #93, including CodeQL and the Go race detector, and all eight prior CodeQL XSS review threads are resolved. Authenticated browser acceptance and the real Kitsu Bot visibility/runtime condition remain unresolved.
+- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; current head `2dff31c8251c83f0d3df2d464c1bd5a1a91b7e9e` passes GitHub CI #511 and Security Audit #93, including CodeQL and the Go race detector, and all eight prior CodeQL XSS review threads are resolved. Authenticated browser acceptance remains unresolved. Runtime diagnosis is blocked before container inspection because `vfx-breakglass` cannot access `/var/run/docker.sock`; the running deployment, saved Kitsu origin, bot principal/role, and current project/person endpoint responses are therefore unverified, and previously inspected Zou 1.0.67 behavior must not be treated as the established root cause.
 - PR #207 contains the Production Setup runtime-source fix; GitHub CI and Security Audit pass, while authenticated browser/runtime acceptance of Production and Task Type reads remains unresolved.
 - PR #205 contains the focused Connections saved-token editing UX; it is now aligned with accepted `master` with `behind_by=0`, and GitHub CI #504 / Security Audit #86 pass. Authenticated browser-rendered acceptance remains unresolved.
 - PR #203 contains the split-design documentation; it is aligned with accepted `master` with `behind_by=0`, and GitHub CI #506 / Security Audit #88 pass. Its final lifecycle disposition remains pending replacement-scope acceptance.
