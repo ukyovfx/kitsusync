@@ -2,7 +2,7 @@
 
 ## Verification basis
 
-Verified against upstream `master` at commit `c1440d7a258611e7c338d4823a849a98214fdb17` on 2026-09-22.
+Verified against upstream `master` at commit `84407c582bb0efd0eafd9b0c329c3e3955690b2d` on 2026-09-23.
 
 Repository version: `0.4.7`.
 Latest GitHub Release: `v0.4.7`.
@@ -16,12 +16,16 @@ Latest GitHub Release: `v0.4.7`.
 - PR #197 is merged for the current IA UI work represented on `master`.
 - PR #200 is merged and adds Dependabot configuration for Go Modules, Docker, and GitHub Actions.
 - PR #201 is merged and establishes evidence-first community debugging/contribution rules, structured issue forms, reproduction reporting, and public PR validation guidance.
-- PR #199 is open as Draft and is not accepted default-branch state. Its current diff is broader than its stated focused User Linking UI scope and must be reconciled before merge.
+- PR #202 is merged and refreshed repository continuity documentation.
+- PR #204 is merged and makes the persisted runtime Kitsu credential source authoritative for accepted live Kitsu reads.
+- PRs #199, #203, #205, #206, and #207 are open Draft work and are not accepted default-branch implementation.
 
 ## Current active work
 
-- Reconcile PR #199 into reviewable scopes before any merge: focused User Linking readiness/presentation, persisted Kitsu runtime credential/live-data behavior, and Connections token-editing UX must not be treated as one already-accepted change.
-- Rebuild/rebase any retained #199 work from current `master`, then rerun required checks and browser acceptance where UI behavior is involved.
+- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; GitHub CI and Security Audit pass, while authenticated browser acceptance and the real Kitsu Bot visibility/runtime condition remain unresolved.
+- PR #207 contains the Production Setup runtime-source fix; GitHub CI and Security Audit pass, while authenticated browser/runtime acceptance of Production and Task Type reads remains unresolved.
+- PR #205 contains the focused Connections saved-token editing UX; its existing checks pass, but its branch diverges from current `master` and must be realigned/rebuilt before merge acceptance, then browser-tested.
+- Keep PR #199 Draft until replacement scopes are accepted; then close it as superseded. PR #203 remains the split-design documentation until that cleanup is complete.
 - Keep repository-local continuity documentation synchronized with accepted `master` state.
 
 ## Production state boundary
