@@ -2584,7 +2584,7 @@ func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) 
 		}
 		kitsuHost := model.GetSetting(db, "kitsu.hostname")
 		botToken := storedRuntimeDiscordBotToken(db)
-		projects, _ := setupKitsuProjects(db)
+		projects, projectsErr := setupKitsuProjects(db)
 		requestedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
 		requestedStep := strings.TrimSpace(r.URL.Query().Get("wizard_step"))
 		if requestedProjectID != "" && (requestedStep == "3" || requestedStep == "4") {
@@ -2602,7 +2602,7 @@ func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) 
 		if r.URL.Query().Get("wizard") == "complete" && sharedBotRuntimeReadiness(db, kitsuHost, botToken).OverallReady {
 			step = 7
 		}
-		fmt.Fprint(w, adminPage(lang, tr(lang, "ia.new_connection"), r, renderSetupWizard(lang, r, db, projects, botToken, step)))
+		fmt.Fprint(w, adminPage(lang, tr(lang, "ia.new_connection"), r, renderSetupWizard(lang, r, db, projects, projectsErr, botToken, step)))
 	} else {
 		lang := currentLang(r)
 		botToken := storedRuntimeDiscordBotToken(db)
@@ -2693,7 +2693,7 @@ func productionRepairMode(r *http.Request) bool {
 	return r != nil && strings.TrimSpace(r.URL.Query().Get("repair")) == "1"
 }
 
-func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject, botToken string, step int) string {
+func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject, projectsErr error, botToken string, step int) string {
 	projectID := projectIDFromRequest(r)
 	guildID := strings.TrimSpace(r.URL.Query().Get("plan_guild"))
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), botToken)
@@ -2711,7 +2711,7 @@ func renderSetupWizard(lang string, r *http.Request, db *gorm.DB, projects []Kit
 	case 1:
 		body += renderWizardPrerequisitesShared(lang, r, readiness)
 	case 2:
-		body += renderWizardProductionLocalized(lang, r, db, projects)
+		body += renderWizardProductionLocalized(lang, r, db, projects, projectsErr)
 	case 3:
 		body += renderWizardServer(lang, r, botToken, projectID)
 	case 4, 5:
@@ -2778,7 +2778,7 @@ func renderWizardPrerequisites(lang string, r *http.Request, readiness SharedBot
 	return body + `</section>`
 }
 
-func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject) string {
+func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject, projectsErr error) string {
 	var options strings.Builder
 	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_production")) + `</option>`)
 	for _, p := range projects {
@@ -2792,6 +2792,11 @@ func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, 
 		options.WriteString(`<option value="` + esc(p.ID) + `"` + disabled + `>` + esc(label) + `</option>`)
 	}
 	errorMessage := ""
+	if projectsErr != nil {
+		errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "Production list could not be loaded from Kitsu. Check the Kitsu connection and try again.", "本番リストをKitsuから取得できませんでした。Kitsu接続を確認して再試行してください。")) + `</p>`
+	} else if len(projects) == 0 {
+		errorMessage = `<p class="state-explanation" role="status" aria-live="polite">` + esc(t(lang, "Kitsu returned no Productions.", "KitsuからProductionが返されませんでした。")) + `</p>`
+	}
 	if r.URL.Query().Get("wizard_step") == "3" {
 		projectID := strings.TrimSpace(r.URL.Query().Get("project"))
 		switch {

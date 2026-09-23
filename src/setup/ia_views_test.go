@@ -1110,7 +1110,7 @@ func TestWizardLiveProductionSelectionTargetsServerStep(t *testing.T) {
 	db := newIAViewDB(t)
 	production := KitsuProject{ID: "live-production-id", Name: "Live Production"}
 	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=2", nil)
-	body := renderWizardProductionLocalized("en", r, db, []KitsuProject{production})
+	body := renderWizardProductionLocalized("en", r, db, []KitsuProject{production}, nil)
 	if strings.Contains(body, "disabled") {
 		t.Fatal("unconnected live Production was disabled")
 	}
@@ -1119,6 +1119,22 @@ func TestWizardLiveProductionSelectionTargetsServerStep(t *testing.T) {
 	}
 	if !strings.Contains(body, `name="wizard_step" value="3"`) {
 		t.Fatal("Production selection form does not target Step 3")
+	}
+}
+
+func TestWizardProductionLookupStateDistinguishesEmptyAndFailure(t *testing.T) {
+	db := newIAViewDB(t)
+	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=2", nil)
+	empty := renderWizardProductionLocalized("en", r, db, nil, nil)
+	failure := renderWizardProductionLocalized("en", r, db, nil, errors.New("synthetic lookup failure"))
+	if !strings.Contains(empty, `role="status"`) || !strings.Contains(empty, "Kitsu returned no Productions") {
+		t.Fatal("successful empty Production response was not shown as an empty state")
+	}
+	if !strings.Contains(failure, `role="alert"`) || !strings.Contains(failure, "Production list could not be loaded from Kitsu") {
+		t.Fatal("Production request failure was not shown as an error state")
+	}
+	if strings.Contains(empty, "Production list could not be loaded from Kitsu") || strings.Contains(failure, "Kitsu returned no Productions") {
+		t.Fatal("empty and failure states were conflated")
 	}
 }
 

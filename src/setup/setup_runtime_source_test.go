@@ -51,3 +51,53 @@ func TestSetupUsesPersistedKitsuRuntimeSource(t *testing.T) {
 		t.Fatalf("Setup Task Types did not use the persisted runtime source: %+v", taskTypes)
 	}
 }
+
+func TestSetupDistinguishesEmptyProductionResultFromLookupFailure(t *testing.T) {
+	lookupFails := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/projects/" {
+			http.NotFound(w, r)
+			return
+		}
+		if lookupFails {
+			http.Error(w, `{"message":"synthetic failure"}`, http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	t.Setenv("KitsuJWTToken", "")
+	t.Setenv("DISCORD_BOT_TOKEN", "")
+	db := newRuntimeCredentialTestDB(t)
+	model.SetSetting(db, "kitsu.hostname", server.URL)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL)
+	if err := setRuntimeKitsuToken(db, "persisted-kitsu-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetRuntimeDiscordBotToken(db, "persisted-discord-token"); err != nil {
+		t.Fatal(err)
+	}
+
+	render := func() string {
+		w := httptest.NewRecorder()
+		renderIANewConnection(w, httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=2", nil), db)
+		return w.Body.String()
+	}
+	emptyBody := render()
+	lookupFails = true
+	failureBody := render()
+	if !strings.Contains(emptyBody, "Kitsu returned no Productions") {
+		t.Fatal("successful empty Production response was not identified in Setup")
+	}
+	if !strings.Contains(failureBody, "Could not load Productions from Kitsu") {
+		t.Fatal("Kitsu Production lookup failure was not identified in Setup")
+	}
+	if strings.Contains(emptyBody, "Could not load Productions from Kitsu") || strings.Contains(failureBody, "Kitsu returned no Productions") {
+		t.Fatal("empty success and request failure states were not kept distinct")
+	}
+}
