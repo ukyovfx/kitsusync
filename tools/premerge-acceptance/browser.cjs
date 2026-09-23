@@ -25,7 +25,11 @@ async function visible(page, selector, message) {
 }
 async function bodyHas(page, text, expected = true) {
   const has = (await page.locator('body').innerText()).includes(text);
-  if (has !== expected) throw new Error(`expected text presence=${expected}: ${text}`);
+  if (has !== expected) {
+    const current = new URL(page.url());
+    const htmlLang = await page.locator('html').getAttribute('lang');
+    throw new Error(`expected text presence=${expected}: ${text}; path=${current.pathname}; query_lang=${current.searchParams.get('lang')}; html_lang=${htmlLang}`);
+  }
 }
 async function record(page, pr, route, locale, viewport, state, evidence) {
   records.push({ candidate: process.env.GITHUB_SHA || 'local-unset', pr, route, locale, viewport, fixture_state: state, result: 'PASS', evidence });
