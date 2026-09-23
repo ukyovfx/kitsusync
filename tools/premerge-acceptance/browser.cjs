@@ -39,12 +39,25 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     const page = await context.newPage();
     let unexpectedDialogs = 0;
     const browserErrors = [];
+    const unexpectedExternalRequests = [];
+    const syntheticExternalFixtures = [];
+    await context.route('**/*', async route => {
+      const requestURL = new URL(route.request().url());
+      if (requestURL.origin === base) {
+        await route.continue();
+        return;
+      }
+      if (requestURL.origin === 'https://fonts.googleapis.com' && requestURL.pathname === '/css2') {
+        syntheticExternalFixtures.push(`${requestURL.origin}${requestURL.pathname}`);
+        await route.fulfill({ status: 200, contentType: 'text/css', body: '' });
+        return;
+      }
+      unexpectedExternalRequests.push({ origin: requestURL.origin, path: requestURL.pathname });
+      await route.abort('blockedbyclient');
+    });
     page.on('dialog', dialog => {
       if (!dialog.message().startsWith('Unlink the Kitsu user')) unexpectedDialogs += 1;
       dialog.accept();
-    });
-    page.on('request', request => {
-      if (!request.url().startsWith(base)) throw new Error(`unexpected browser origin: ${new URL(request.url()).origin}`);
     });
     page.on('pageerror', error => browserErrors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') browserErrors.push(message.text()); });
@@ -178,9 +191,10 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     await page.screenshot({ path: path.join(output, 'pr206-user-linking-ja-mobile.png'), fullPage: true });
     await record(page, 206, '/bot/admin/users', 'ja', 'mobile', 'ready unmapped synthetic humans', 'Japanese mobile layout rendered without overflow');
     if (unexpectedDialogs !== 0) throw new Error('hostile fixture triggered a browser dialog');
+    if (unexpectedExternalRequests.length !== 0) throw new Error(`unexpected external requests were intercepted: ${JSON.stringify(unexpectedExternalRequests)}`);
     if (browserErrors.length !== 0) throw new Error(`browser console/runtime errors: ${browserErrors.length}`);
 
-    const report = { candidate_sha: process.env.GITHUB_SHA || 'local-unset', result: 'PASS', browser: 'Chromium via Playwright', records };
+    const report = { candidate_sha: process.env.GITHUB_SHA || 'local-unset', result: 'PASS', browser: 'Chromium via Playwright', intercepted_synthetic_routes: [...new Set(syntheticExternalFixtures)], unexpected_external_requests: unexpectedExternalRequests, records };
     fs.writeFileSync(path.join(output, 'browser-results.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
     await context.close();
   } finally {
