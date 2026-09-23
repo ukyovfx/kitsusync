@@ -28,7 +28,7 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.production_missing"), redirect)
 		return true
 	}
-	taskTypes := routingTaskTypesForProduction(projectID)
+	taskTypes := setupKitsuTaskTypes(db, projectID)
 	taskTypes, overrides := taskTypePlanRequest(r, taskTypes)
 	channels, err := ListGuildChannels(guildID, botToken)
 	if err != nil {

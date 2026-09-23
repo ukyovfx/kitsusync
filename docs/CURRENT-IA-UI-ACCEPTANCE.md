@@ -62,8 +62,14 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 ## User Linking — `/bot/admin/users`
 
 - [ ] The page describes and renders human Kitsu-to-Discord linking.
-- [ ] Bot identities are excluded from normal human linking.
-- [ ] JP and EN copy is equivalent and free of mojibake.
+- [ ] Missing Kitsu or Discord Bot configuration shows one concise setup cause and one Connection settings action only; no server selector, mapping table, failure copy, or diagnostic disclosure appears.
+- [ ] A genuine Kitsu lookup failure is distinct from a successful zero-user result; neither state renders blocked Discord mapping controls.
+- [ ] A genuine Discord lookup failure is distinct from zero joined servers and from a selected server with zero selectable human members.
+- [ ] The Discord server selector appears only when joined guild data is meaningful; multiple joined servers wait for an explicit selection before mapping rows appear.
+- [ ] Ready state shows exactly four mapping columns: Kitsu user, Discord user, state, and action. Real display names are used and raw Discord IDs are not visible as identity text.
+- [ ] Save starts disabled and becomes actionable only after the Discord selection changes; existing mappings show their linked state and Unlink action, and save/unlink persist across refresh.
+- [ ] Kitsu Bot and Discord bot identities are excluded from normal human linking.
+- [ ] JP and EN have equivalent states, order, actions, and information density at desktop and mobile widths, with no mojibake or page overflow.
 
 ## Production Users simple-flow checks
 

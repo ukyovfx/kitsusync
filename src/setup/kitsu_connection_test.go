@@ -195,7 +195,7 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
 	}
-	for _, want := range []string{`name="kitsu_external_url"`, "External Kitsu URL (optional)", "The URL used for Kitsu links in Discord notifications.", "Check link"} {
+	for _, want := range []string{`name="kitsu_external_url"`, "External Kitsu URL (optional)", "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting.", "Check link"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("external Kitsu URL field missing %q", want)
 		}
@@ -288,7 +288,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, "https://api.kitsu.example.test")
 
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", false, false, "Test Bot")
-	for _, want := range []string{"Needs review", "Recheck connection", "Change token", `hidden style="display:none"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
+	for _, want := range []string{"Needs review", "Recheck connection", "Change token", `placeholder="••••••••••••••••••••"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("saved-secret form missing %q", want)
 		}
@@ -299,10 +299,13 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	if strings.Contains(body, "The saved token is never displayed. Recheck without entering it again") || strings.Contains(body, "保存済みtokenは表示しません。再確認では再入力不要です") {
 		t.Fatal("configured token controls retained the obsolete Kitsu-only helper")
 	}
-	for _, secret := range []string{"kitsu-test-token", "discord-test-token", "••••"} {
+	for _, secret := range []string{"kitsu-test-token", "discord-test-token"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("saved secret or mask leaked into form: %q", secret)
 		}
+	}
+	if strings.Count(body, `placeholder="••••••••••••••••••••"`) < 1 || strings.Count(body, "Change token") < 1 || strings.Count(body, "Cancel") < 1 {
+		t.Fatal("saved token controls must remain visible with masked placeholders and change/cancel actions")
 	}
 	if strings.Count(body, `class="editorial-advanced-settings"`) != 1 || strings.Count(body, `class="connection-expert-network"`) != 1 {
 		t.Fatal("advanced connection settings must use one restrained expert disclosure")

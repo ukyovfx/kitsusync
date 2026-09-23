@@ -1164,9 +1164,12 @@ func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
 func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuID: "user-1", KitsuName: "User One", DiscordID: "123456789012345678", DiscordDisplayName: "Discord One"})
-	w := httptest.NewRecorder()
-	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
-	body := w.Body.String()
+	directory := globalDiscordDirectory{
+		Guilds:        []DiscordGuild{{ID: "123456789012345677", Name: "Studio"}},
+		SelectedGuild: DiscordGuild{ID: "123456789012345677", Name: "Studio"},
+		Options:       []globalDiscordUserOption{{ID: "123456789012345678", Name: "Discord One"}},
+	}
+	body := renderGlobalUserLinkingTable(db, "en", directory, []KitsuPerson{{ID: "user-1", FullName: "User One", Active: true}})
 	if !strings.Contains(body, `type="submit" disabled`) {
 		t.Fatal("User Linking Save was not disabled initially")
 	}
@@ -1176,8 +1179,8 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	if !strings.Contains(body, `class="user-link-grid-row"`) || !strings.Contains(body, "data-label=") || !strings.Contains(body, "user-link-actions") {
 		t.Fatal("User Linking did not render the shared responsive grid structure")
 	}
-	if strings.Contains(body, "123456789012345678") {
-		t.Fatal("User Linking rendered a raw Discord ID")
+	if strings.Contains(body, ">123456789012345678<") {
+		t.Fatal("User Linking rendered a raw Discord ID as visible identity text")
 	}
 }
 
