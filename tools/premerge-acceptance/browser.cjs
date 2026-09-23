@@ -110,7 +110,8 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     await record(page, 205, '/bot/admin/bot?edit=1', 'ja', 'desktop', 'persisted synthetic credentials', 'Japanese Connections labels rendered');
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${base}/bot/admin/bot?edit=1&lang=en`, { waitUntil: 'networkidle' });
-    await bodyHas(page, 'Kitsu Bot API token');
+    const englishTokenLabel = page.locator('label[for="kitsu-bot-token"]');
+    if (!(await englishTokenLabel.isVisible()) || !(await englishTokenLabel.textContent()).includes('Kitsu Bot API token')) throw new Error('English mobile Connections label did not render');
     await record(page, 205, '/bot/admin/bot?edit=1', 'en', 'mobile', 'persisted synthetic credentials', 'English mobile Connections rendered');
 
     // PR #207: Production setup reads using the encrypted DB credential while
