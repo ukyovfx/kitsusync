@@ -31,6 +31,9 @@ func TestSetupUsesPersistedKitsuRuntimeSource(t *testing.T) {
 	t.Setenv("KitsuJWTToken", "")
 	t.Setenv("DISCORD_BOT_TOKEN", "")
 	db := newRuntimeCredentialTestDB(t)
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
 	model.SetSetting(db, "kitsu.hostname", server.URL)
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL)
 	if err := setRuntimeKitsuToken(db, "persisted-kitsu-token"); err != nil {
