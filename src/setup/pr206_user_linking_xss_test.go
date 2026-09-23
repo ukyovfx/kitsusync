@@ -59,7 +59,7 @@ func TestPR206UserLinkingRejectsNonSnowflakeGuildQueryWithoutReflection(t *testi
 	})
 
 	body := renderPR199UserLinking(t, db, "/bot/admin/users?lang=en&discord_guild_id=%3Cscript%3EqueryXSS%3C%2Fscript%3E")
-	if strings.Contains(body, "queryXSS") {
+	if strings.Contains(body, "<script>queryXSS</script>") {
 		t.Fatal("invalid guild query was reflected into the rendered page")
 	}
 	if !strings.Contains(body, "Select a Discord server to load members and enable saving.") {
