@@ -22,7 +22,7 @@ Latest GitHub Release: `v0.4.7`.
 
 ## Current active work
 
-- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; current head `2dff31c8251c83f0d3df2d464c1bd5a1a91b7e9e` passes GitHub CI #511 and Security Audit #93, including CodeQL and the Go race detector, and all eight prior CodeQL XSS review threads are resolved. Authenticated browser acceptance remains unresolved. Runtime diagnosis is blocked before container inspection because `vfx-breakglass` cannot access `/var/run/docker.sock`; the running deployment, saved Kitsu origin, bot principal/role, and current project/person endpoint responses are therefore unverified, and previously inspected Zou 1.0.67 behavior must not be treated as the established root cause.
+- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; current head `2dff31c8251c83f0d3df2d464c1bd5a1a91b7e9e` passes GitHub CI #511 and Security Audit #93, including CodeQL and the Go race detector, and all eight prior CodeQL XSS review threads are resolved. Authenticated browser acceptance remains unresolved. Read-only vfxstudio inspection identifies running container `kitsusync-app-1` as healthy on image `kitsusync:v0.4.7`, with configuration/data mounts sourced from `/home/ukyo_vfx/kitsusync`; image revision/source-id is `4879c7f3adb966a4760438f502db1929e76ea51e`. Accepted `master` `84407c582bb0efd0eafd9b0c329c3e3955690b2d` is 46 commits ahead of that deployed revision, so the current deployment must not be used as runtime acceptance evidence for the #204-dependent #206/#207 behavior. Saved Kitsu origin, bot principal/role, and current project/person endpoint responses remain unverified, and previously inspected Zou 1.0.67 behavior is not an established root cause.
 - PR #207 contains the Production Setup runtime-source fix; GitHub CI and Security Audit pass, while authenticated browser/runtime acceptance of Production and Task Type reads remains unresolved.
 - PR #205 contains the focused Connections saved-token editing UX; it is now aligned with accepted `master` with `behind_by=0`, and GitHub CI #504 / Security Audit #86 pass. Authenticated browser-rendered acceptance remains unresolved.
 - PR #203 contains the split-design documentation; it is aligned with accepted `master` with `behind_by=0`, and GitHub CI #506 / Security Audit #88 pass. Its final lifecycle disposition remains pending replacement-scope acceptance.
@@ -32,7 +32,8 @@ Latest GitHub Release: `v0.4.7`.
 ## Production state boundary
 
 - The previous active production-verification plan was specific to v0.4.6 and is historical, not a current deployment instruction.
-- No current production deployment or live runtime state is verified from repository evidence alone.
+- The current vfxstudio KitsuSync container identity and image revision are partially verified, but the deployed source revision predates accepted `master` by 46 commits and therefore does not establish current repository behavior in production.
+- No current accepted-master production deployment or live #206/#207 runtime acceptance is verified from the available evidence.
 - Before any production write, re-derive the deployment plan from the current release/repository state and verify the target runtime with live operator evidence.
 
 ## Known boundaries
