@@ -114,7 +114,16 @@ jobs:
           python3 -m http.server 18765 --bind 127.0.0.1 --directory tools/premerge-acceptance >/dev/null 2>&1 &
           probe_pid=$!
           trap 'kill "$probe_pid" 2>/dev/null || true' EXIT
-          curl --fail --silent http://127.0.0.1:18765/ >/dev/null
+          loopback_ready=false
+          for _ in $(seq 1 20); do
+            if curl --fail --silent --max-time 1 http://127.0.0.1:18765/ >/dev/null; then
+              loopback_ready=true
+              break
+            fi
+            kill -0 "$probe_pid" 2>/dev/null || { echo "Loopback probe server exited before becoming ready" >&2; exit 1; }
+            sleep 0.25
+          done
+          [[ "$loopback_ready" == true ]] || { echo "Loopback probe server did not become ready" >&2; exit 1; }
           if curl --fail --silent --max-time 4 --resolve example.com:443:93.184.216.34 https://example.com >/dev/null 2>&1; then
             echo "External IPv4 HTTP/HTTPS egress unexpectedly succeeded" >&2; exit 1
           fi
