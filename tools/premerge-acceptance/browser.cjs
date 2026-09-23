@@ -91,9 +91,10 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     const postSaveHTML = await page.locator('html').evaluate(el => el.outerHTML);
     if (postSaveHTML.includes(syntheticKitsu)) throw new Error('synthetic Kitsu token remained in the rendered DOM after save/recheck');
     await record(page, 205, '/bot/admin/bot?edit=1', 'en', 'desktop', 'synthetic Kitsu save/recheck', 'saved synthetic Bot token was validated against local fixture and omitted from response DOM');
+    await page.goto(`${base}/bot/admin/bot?edit=1&lang=en`, { waitUntil: 'networkidle' });
     const languageToggle = page.locator('a.lang-toggle');
     const toggleHref = await languageToggle.getAttribute('href');
-    if (!toggleHref || !toggleHref.includes('lang=ja')) throw new Error('language-toggle Japanese URL was not rendered correctly');
+    if (!toggleHref || !toggleHref.includes('lang=ja')) throw new Error(`language-toggle Japanese URL missing on ${new URL(page.url()).pathname}; links=${await languageToggle.count()}`);
     await languageToggle.click();
     await page.waitForLoadState('networkidle');
     if (!page.url().includes('lang=ja')) throw new Error('language toggle did not navigate to Japanese');
