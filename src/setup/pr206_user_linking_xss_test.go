@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"html"
 	"net/http"
 	"strings"
 	"testing"
@@ -8,6 +9,8 @@ import (
 
 func TestPR206UserLinkingEscapesRemoteDirectoryContent(t *testing.T) {
 	guildID := "123456789012345678"
+	maliciousPerson := `</strong><script>personXSS</script>`
+	maliciousMember := `<svg onload=memberXSS>`
 	db := pr199UserLinkingDB(t, http.StatusOK, `[{"id":"person-1","full_name":"</strong><script>personXSS</script>","email":"xss@example.test","active":true}]`)
 	installPR199DiscordReplies(t, map[string]pr199DiscordReply{
 		"/api/v10/users/@me/guilds": {
@@ -19,19 +22,18 @@ func TestPR206UserLinkingEscapesRemoteDirectoryContent(t *testing.T) {
 	})
 
 	body := renderPR199UserLinking(t, db, "/bot/admin/users?lang=en&discord_guild_id="+guildID)
-	for _, raw := range []string{"<script>", "</script>", "<svg "} {
+	for _, raw := range []string{maliciousPerson, maliciousMember} {
 		if strings.Contains(body, raw) {
 			t.Fatalf("remote directory content was rendered as raw HTML: %q", raw)
 		}
-	}
-	for _, marker := range []string{"personXSS", "memberXSS"} {
-		if !strings.Contains(body, marker) {
-			t.Fatalf("remote directory fixture was not rendered: %q", marker)
+		if !strings.Contains(body, html.EscapeString(raw)) {
+			t.Fatalf("remote directory content was not rendered in escaped form: %q", raw)
 		}
 	}
 }
 
 func TestPR206UserLinkingEscapesDiscordGuildSelectorContent(t *testing.T) {
+	maliciousGuild := `<img src=x onerror=guildXSS>`
 	db := pr199UserLinkingDB(t, http.StatusOK, `[{"id":"person-1","full_name":"Person One","email":"one@example.test","active":true}]`)
 	installPR199DiscordReplies(t, map[string]pr199DiscordReply{
 		"/api/v10/users/@me/guilds": {
@@ -40,11 +42,11 @@ func TestPR206UserLinkingEscapesDiscordGuildSelectorContent(t *testing.T) {
 	})
 
 	body := renderPR199UserLinking(t, db, "/bot/admin/users?lang=en")
-	if strings.Contains(body, "<img ") {
+	if strings.Contains(body, maliciousGuild) {
 		t.Fatal("Discord guild name was rendered as raw HTML")
 	}
-	if !strings.Contains(body, "guildXSS") {
-		t.Fatal("Discord guild fixture was not rendered in the selector")
+	if !strings.Contains(body, html.EscapeString(maliciousGuild)) {
+		t.Fatal("Discord guild name was not rendered in escaped form")
 	}
 }
 
@@ -57,8 +59,8 @@ func TestPR206UserLinkingRejectsNonSnowflakeGuildQueryWithoutReflection(t *testi
 	})
 
 	body := renderPR199UserLinking(t, db, "/bot/admin/users?lang=en&discord_guild_id=%3Cscript%3EqueryXSS%3C%2Fscript%3E")
-	if strings.Contains(body, "<script>") {
-		t.Fatal("invalid guild query was reflected as executable HTML")
+	if strings.Contains(body, "queryXSS") {
+		t.Fatal("invalid guild query was reflected into the rendered page")
 	}
 	if !strings.Contains(body, "Select a Discord server to load members and enable saving.") {
 		t.Fatal("invalid guild query was not canonicalized to the unselected state")
