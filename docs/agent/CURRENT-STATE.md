@@ -22,10 +22,11 @@ Latest GitHub Release: `v0.4.7`.
 
 ## Current active work
 
-- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; GitHub CI and Security Audit pass, while authenticated browser acceptance and the real Kitsu Bot visibility/runtime condition remain unresolved.
+- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; its prior full CI/Security run passed, while additional HTML-escaping regression validation, authenticated browser acceptance, and the real Kitsu Bot visibility/runtime condition remain unresolved.
 - PR #207 contains the Production Setup runtime-source fix; GitHub CI and Security Audit pass, while authenticated browser/runtime acceptance of Production and Task Type reads remains unresolved.
-- PR #205 contains the focused Connections saved-token editing UX; its existing checks pass, but its branch diverges from current `master` and must be realigned/rebuilt before merge acceptance, then browser-tested.
-- Keep PR #199 Draft until replacement scopes are accepted; then close it as superseded. PR #203 remains the split-design documentation until that cleanup is complete.
+- PR #205 contains the focused Connections saved-token editing UX; it is now aligned with accepted `master` with `behind_by=0`, and GitHub CI #504 / Security Audit #86 pass. Authenticated browser-rendered acceptance remains unresolved.
+- PR #203 contains the split-design documentation; it is aligned with accepted `master` with `behind_by=0`, and GitHub CI #506 / Security Audit #88 pass. Its final lifecycle disposition remains pending replacement-scope acceptance.
+- Keep PR #199 Draft until replacement scopes are accepted; then close it as superseded.
 - Keep repository-local continuity documentation synchronized with accepted `master` state.
 
 ## Production state boundary
