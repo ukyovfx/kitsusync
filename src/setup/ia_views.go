@@ -2793,9 +2793,9 @@ func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, 
 	}
 	errorMessage := ""
 	if projectsErr != nil {
-		errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "Production list could not be loaded from Kitsu. Check the Kitsu connection and try again.", "本番リストをKitsuから取得できませんでした。Kitsu接続を確認して再試行してください。")) + `</p>`
+		errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "KitsuからProductionリストを取得できませんでした。Kitsu接続を確認して再試行してください。", "Production list could not be loaded from Kitsu. Check the Kitsu connection and try again.")) + `</p>`
 	} else if len(projects) == 0 {
-		errorMessage = `<p class="state-explanation" role="status" aria-live="polite">` + esc(t(lang, "Kitsu returned no Productions.", "KitsuからProductionが返されませんでした。")) + `</p>`
+		errorMessage = `<p class="state-explanation" role="status" aria-live="polite">` + esc(t(lang, "KitsuからProductionが返されませんでした。", "Kitsu returned no Productions.")) + `</p>`
 	}
 	if r.URL.Query().Get("wizard_step") == "3" {
 		projectID := strings.TrimSpace(r.URL.Query().Get("project"))
