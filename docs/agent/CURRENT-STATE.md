@@ -22,7 +22,7 @@ Latest GitHub Release: `v0.4.7`.
 
 ## Current active work
 
-- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; its prior full CI/Security run passed, while additional HTML-escaping regression validation, authenticated browser acceptance, and the real Kitsu Bot visibility/runtime condition remain unresolved.
+- PR #206 contains the focused User Linking readiness/failure-state scope rebuilt on accepted `master`; current head `2dff31c8251c83f0d3df2d464c1bd5a1a91b7e9e` passes GitHub CI #511 and Security Audit #93, including CodeQL and the Go race detector, and all eight prior CodeQL XSS review threads are resolved. Authenticated browser acceptance and the real Kitsu Bot visibility/runtime condition remain unresolved.
 - PR #207 contains the Production Setup runtime-source fix; GitHub CI and Security Audit pass, while authenticated browser/runtime acceptance of Production and Task Type reads remains unresolved.
 - PR #205 contains the focused Connections saved-token editing UX; it is now aligned with accepted `master` with `behind_by=0`, and GitHub CI #504 / Security Audit #86 pass. Authenticated browser-rendered acceptance remains unresolved.
 - PR #203 contains the split-design documentation; it is aligned with accepted `master` with `behind_by=0`, and GitHub CI #506 / Security Audit #88 pass. Its final lifecycle disposition remains pending replacement-scope acceptance.
