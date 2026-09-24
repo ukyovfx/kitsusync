@@ -10,7 +10,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime=/home/ukyo_vfx/kitsusync
 source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
 protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime" /root/kitsusync-release-stage)
-tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
+tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-preview-deploy /usr/local/libexec/kitsusync-deploy-transaction /usr/local/sbin/kitsusync-inspect
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
        /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state)
 proxy_container=kitsusync-fresh-proxy-fixture

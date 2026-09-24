@@ -10,7 +10,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime=/home/ukyo_vfx/kitsusync
 protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime")
-tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
+tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-preview-deploy /usr/local/libexec/kitsusync-deploy-transaction /usr/local/sbin/kitsusync-inspect
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
        /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state)
 for path in "${protected[@]}" "${tools[@]}"; do
@@ -38,7 +38,7 @@ cleanup() {
   ids="$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)"
   if [[ -n "$ids" ]]; then docker rm -f $ids >/dev/null 2>&1 || true; fi
   docker network rm kitsusync_default "$extra_network" >/dev/null 2>&1 || true
-  docker image rm kitsusync:v0.4.6 "$legacy_ref" >/dev/null 2>&1 || true
+  docker image rm kitsusync:v0.4.6 "kitsusync:ci-${source_commit}" "$legacy_ref" >/dev/null 2>&1 || true
   # All fixed paths were proven absent before this disposable fixture created them.
   sudo rm -rf -- "${protected[@]}"
   sudo rm -f -- "${tools[@]}"
@@ -259,4 +259,55 @@ sudo test -f "$latest_backup/backup-complete"
 sudo test -f "$latest_backup/restored-container"
 sudo test -f "$latest_backup/restored-inspect.json"
 sudo test -f "$latest_backup/rollback-image-ref"
-printf 'deployment-transaction-tests=PASS (real wrapper failure/rollback and subsequent deployment)\n'
+
+# Exercise the candidate-only transaction after proving the release flow.
+stage=preview-candidate-bundle
+candidate_image="kitsusync:ci-${source_commit}"
+docker tag kitsusync:v0.4.6 "$candidate_image"
+candidate_id="$(docker image inspect --format '{{.Id}}' "$candidate_image")"
+ARTIFACT_KIND=candidate SOURCE_COMMIT="$source_commit" SOURCE_ID="$source_commit" \
+  RELEASE_COMMIT= RELEASE_VERSION=0.4.6 RELEASE_TAG= IMAGE_REF="$candidate_image" IMAGE_ID="$candidate_id" \
+  DEPLOYMENT_MODE=normal COMPOSE_SOURCE="$root/docker-compose.yml" BUNDLE_OUTPUT="$work/preview-bundle" \
+  bash "$root/scripts/build-deployment-bundle.sh" >/dev/null
+sudo install -o root -g root -m 0600 "$work/preview-bundle/docker-compose.yml" /etc/kitsusync-deploy/docker-compose.yml
+sudo install -o root -g root -m 0600 "$work/preview-bundle/provenance.txt" /etc/kitsusync-deploy/provenance
+sudo install -o root -g root -m 0600 "$work/preview-bundle/deployment-mode" /etc/kitsusync-deploy/deployment-mode
+sudo install -o root -g root -m 0600 "$work/preview-bundle/kitsusync-image.tar" /var/lib/kitsusync-deploy/kitsusync-image.tar
+for path in /usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-preview-deploy /usr/local/libexec/kitsusync-deploy-transaction; do
+  sudo install -o root -g root -m 0700 "$work/preview-bundle/$(basename "$path")" "$path"
+done
+stage=release-rejects-preview
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$work/release-rejected-preview.log" 2>&1; then
+  printf 'release wrapper accepted candidate provenance\n' >&2; exit 1
+fi
+grep -Fq 'release provenance is not deployable' "$work/release-rejected-preview.log"
+stage=preview-wrong-sha-rejection
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "${source_commit%?}0" PREVIEW >"$work/wrong-preview-sha.log" 2>&1; then
+  printf 'preview wrapper accepted a different source SHA\n' >&2; exit 1
+fi
+grep -Fq 'preview candidate source or image identity mismatch' "$work/wrong-preview-sha.log"
+stage=preview-rollback
+sudo rm -f -- "$runtime/data/fail-target"
+sudo touch "$runtime/data/fail-target"
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "$source_commit" PREVIEW >"$work/failed-preview.log" 2>&1; then
+  printf 'preview target with mismatched readiness identity was accepted\n' >&2; exit 1
+fi
+grep -Fq 'runtime validation failed: check=readiness_identity' "$work/failed-preview.log"
+grep -Fxq 'rollback=verified' "$work/failed-preview.log"
+stage=preview-success
+sudo rm -f -- "$runtime/data/fail-target"
+sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "$source_commit" PREVIEW >"$work/successful-preview.log" 2>&1
+grep -Fq "PREVIEW / NON-RELEASE KitsuSync deployment completed: source_commit=${source_commit}" "$work/successful-preview.log"
+preview_container="$(docker ps -q --filter name='^/kitsusync-app-1$')"
+[[ -n "$preview_container" ]]
+[[ "$(docker ps -aq --no-trunc --filter label=com.docker.compose.project=kitsusync --filter label=com.docker.compose.service=app)" == "$preview_container" ]]
+[[ "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$preview_container")" == "$source_commit" ]]
+[[ "$(docker port "$preview_container" 8090/tcp)" == 127.0.0.1:8090 ]]
+[[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/health)" == 200 ]]
+[[ "$(curl -s -o "$work/preview-ready.json" -w '%{http_code}' http://127.0.0.1:8090/ready)" == 503 ]]
+grep -Fq '"status":"setup_required"' "$work/preview-ready.json"
+for path in /bot/admin/users /bot/admin/health; do
+  status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8090${path}")"
+  [[ "$status" =~ ^(200|302|303|401|403)$ ]]
+done
+printf 'deployment-transaction-tests=PASS (release rollback and exact-SHA preview rollback/deployment)\n'

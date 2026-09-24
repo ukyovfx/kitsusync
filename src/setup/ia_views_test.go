@@ -64,7 +64,7 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesCompactHealthySummaryAndSelectiveDiagnostics(t *testing.T) {
+func TestSystemStatusKeepsOperationalRowsCompactWithoutDiagnostics(t *testing.T) {
 	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Observation diagnostics"}
 	rendered := renderPipelineHealthItem("en", item, 0)
 	if strings.Contains(rendered, `class="field-help"`) {
@@ -73,16 +73,11 @@ func TestSystemStatusUsesCompactHealthySummaryAndSelectiveDiagnostics(t *testing
 	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
 		t.Fatal("operational row lost its compact structure")
 	}
-	for _, want := range []string{`<details class="pipeline-health-details">`, `<summary>Observation diagnostics</summary>`, `class="pipeline-health-details-content"`} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("operational row missing geometry/detail contract %q", want)
-		}
+	if strings.Contains(rendered, `<details`) || strings.Contains(rendered, "pipeline-health-details") || strings.Contains(rendered, "Observation diagnostics") {
+		t.Fatal("normal System Status rows must omit diagnostic disclosures and their content")
 	}
-	if strings.Contains(rendered, `>Details<`) || strings.Contains(rendered, `pipeline-health-details-toggle`) || strings.Contains(rendered, `aria-expanded`) {
-		t.Fatal("operational row should not expose a generic Details control")
-	}
-	if noDetails := renderPipelineHealthItem("en", pipelineHealthItem{label: "Healthy", value: "Ready", class: "success"}, 0); strings.Contains(noDetails, "pipeline-health-details") {
-		t.Fatal("operational row without useful diagnostics exposed a disclosure")
+	if !strings.Contains(rendered, `class="pipeline-health-rail"`) {
+		t.Fatal("operational row status is missing its right-side rail")
 	}
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
@@ -1403,10 +1398,13 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	renderIAHealth(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"System", "Not configured", "Discord API", "Notification processing", "Internal data"} {
+	for _, want := range []string{"System Status", "Discord API", "Notification processing", "Unavailable", "Configure the Kitsu connection before continuing.", `href="/bot/admin/bot?lang=en"`, "Internal data"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("system status missing %q", want)
 		}
+	}
+	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, "Not configured") {
+		t.Fatal("system status should distinguish missing readiness prerequisites from an unobserved API response")
 	}
 	w = httptest.NewRecorder()
 	renderIABot(w, r, db)
@@ -1511,23 +1509,13 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 	}
 }
 
-func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
+func TestSystemStatusUsesOnlyRealStateActions(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
-	setup := SharedBotRuntimeReadiness{State: ReadinessSetupRequired}
-	setupAction := pipelineReadinessNextAction("en", r, setup)
-	if !strings.Contains(setupAction, "Kitsu setup is required") || !strings.Contains(setupAction, "Configure Kitsu connection") || !strings.Contains(setupAction, `href="/bot/admin/bot?lang=en"`) {
-		t.Fatalf("Kitsu section action = %q", setupAction)
-	}
-	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, setup); got != "Configure the Kitsu connection before continuing." {
-		t.Fatalf("Kitsu setup blocker = %q", got)
-	}
-	if got := pipelineNotificationHint("en", setup); got != "Configure the Kitsu connection before continuing." {
-		t.Fatalf("notification setup blocker = %q", got)
+	setup := readinessViewFor("en", r, SharedBotRuntimeReadiness{State: ReadinessSetupRequired})
+	if setup.ActionURL != "/bot/admin/bot?lang=en" || setup.ActionLabel != "Configure Kitsu connection" {
+		t.Fatalf("Kitsu setup action = %#v", setup)
 	}
 	production := SharedBotRuntimeReadiness{State: ReadinessProductionRequired, KitsuConfigured: true, DiscordConfigured: true, PrerequisitesReady: true}
-	if got := pipelineReadinessNextAction("en", r, production); !strings.Contains(got, "No connected and notifiable Production is available.") || !strings.Contains(got, "New Production Connection") {
-		t.Fatalf("Production section action = %q", got)
-	}
 	if got := pipelineRoutingHint("en", production); got != "No Production is currently available for notifications." {
 		t.Fatalf("Production blocker = %q", got)
 	}
@@ -1536,21 +1524,33 @@ func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
 		t.Fatalf("Production action = %#v", view)
 	}
 	routing := SharedBotRuntimeReadiness{State: ReadinessRoutingRequired, KitsuConfigured: true, DiscordConfigured: true, ProductionConnected: true, PrerequisitesReady: true}
-	if got := pipelineReadinessNextAction("en", r, routing); !strings.Contains(got, "Notification routing needs attention.") || !strings.Contains(got, "Review notification settings") {
-		t.Fatalf("routing section action = %q", got)
-	}
 	if got := pipelineRoutingHint("en", routing); got != "A Production exists, but its notification routing is missing or invalid." {
 		t.Fatalf("routing blocker = %q", got)
 	}
+	for _, tc := range []struct {
+		name string
+		item pipelineHealthItem
+		want string
+	}{
+		{name: "production setup", item: pipelineHealthItem{label: "Notification processing", value: "Unavailable", class: "blocked", action: view.ActionURL, actionLabel: view.ActionLabel}, want: `href="/bot/setup?lang=en"`},
+		{name: "audit log", item: pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", action: "/bot/admin/audit", actionLabel: "Review audit log"}, want: `href="/bot/admin/audit"`},
+		{name: "healthy row", item: pipelineHealthItem{label: "Internal data", value: "Available", class: "success"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered := renderPipelineHealthItem("en", tc.item, 0)
+			if tc.want != "" && !strings.Contains(rendered, tc.want) {
+				t.Fatalf("real action missing %q: %s", tc.want, rendered)
+			}
+			if strings.Contains(rendered, `href="#`) || strings.Contains(rendered, `data-open-pipeline-details`) || strings.Contains(rendered, "diagnostic") {
+				t.Fatalf("normal status row contains a placeholder or diagnostic action: %s", rendered)
+			}
+			if tc.name == "healthy row" && strings.Contains(rendered, `pipeline-health-action`) {
+				t.Fatalf("healthy row has an unnecessary action: %s", rendered)
+			}
+		})
+	}
 	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "Waiting for the first observation." {
 		t.Fatalf("first-observation guidance = %q", got)
-	}
-	if got := pipelineReadinessNextAction("en", r, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "" {
-		t.Fatalf("ready section should not expose a next action: %q", got)
-	}
-	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", details: "<p>safe</p>", detailsLabel: "Observation diagnostics", detailsID: "pipeline-event-monitoring", action: "#pipeline-event-monitoring", actionLabel: "Review observation diagnostics"}, 0)
-	if !strings.Contains(rendered, `data-open-pipeline-details="pipeline-event-monitoring"`) {
-		t.Fatal("diagnostic action did not target its selective disclosure")
 	}
 }
 
@@ -1787,7 +1787,7 @@ func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
+func TestSystemStatusOmitsNormalPageDiagnosticsAndRefreshesSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
@@ -1816,7 +1816,7 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
 	}
-	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:13px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
+	if !strings.Contains(body, `.system-status-sections .api-observation-meta{font-size:13px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
 	refreshStart := strings.Index(body, `<script data-system-status-refresh>`)
@@ -1843,7 +1843,7 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesContextualDiagnosticsLabels(t *testing.T) {
+func TestSystemStatusUsesRealRoutingActionInRightRail(t *testing.T) {
 	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Needs review", class: "warning", action: "/bot/admin/projects", actionLabel: "Review Productions", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
 	if strings.Contains(rendered, "<details") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, "Connection and routing diagnostics") {
 		t.Fatal("system status should not render expandable diagnostics")

@@ -36,7 +36,7 @@ secure_source() {
 
 [[ -d "${STAGE}" && ! -L "${STAGE}" ]] || die "fixed release stage is unavailable"
 [[ "$(/usr/bin/stat -c '%u:%g:%a' "${STAGE}")" == 0:0:700 ]] || die "release stage must be root-owned mode 0700"
-for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity kitsusync-runtime-state kitsusync-restore-state; do
+for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-preview-deploy kitsusync-deploy-transaction kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity kitsusync-runtime-state kitsusync-restore-state; do
   secure_source "${STAGE}/${file}" 600
 done
 mode="$(/usr/bin/tr -d '\r\n' <"${STAGE}/deployment-mode")"
@@ -51,6 +51,8 @@ field() { /usr/bin/sed -n "s/^$1=//p" "${STAGE}/provenance.txt" | /usr/bin/head 
 archive_sha="$(field image_archive_sha256)"
 compose_sha="$(field compose_sha256)"
 deploy_sha="$(field deployment_tool_sha256)"
+preview_deploy_sha="$(field preview_deployment_tool_sha256)"
+deployment_core_sha="$(field deployment_core_sha256)"
 inspect_sha="$(field inspection_tool_sha256)"
 backup_sha="$(field sqlite_backup_tool_sha256)"
 bootstrap_sha="$(field bootstrap_tool_sha256)"
@@ -62,11 +64,13 @@ fresh_conf_sha="$(field fresh_conf_sha256)"
 fresh_env_sha="$(field fresh_env_sha256)"
 fresh_templates_sha="$(field fresh_templates_sha256)"
 fresh_templates_manifest_sha="$(field fresh_templates_manifest_sha256)"
-[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
+[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${preview_deploy_sha}" =~ ^[0-9a-f]{64}$ && "${deployment_core_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
 [[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "portable image provenance is incomplete"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-image.tar" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "staged image archive digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/docker-compose.yml" | /usr/bin/cut -d' ' -f1)" == "${compose_sha}" ]] || die "staged Compose digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-deploy" | /usr/bin/cut -d' ' -f1)" == "${deploy_sha}" ]] || die "staged deploy tool digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-preview-deploy" | /usr/bin/cut -d' ' -f1)" == "${preview_deploy_sha}" ]] || die "staged preview tool digest mismatch"
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-deploy-transaction" | /usr/bin/cut -d' ' -f1)" == "${deployment_core_sha}" ]] || die "staged transaction core digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-inspect" | /usr/bin/cut -d' ' -f1)" == "${inspect_sha}" ]] || die "staged inspect tool digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-sqlite-backup" | /usr/bin/cut -d' ' -f1)" == "${backup_sha}" ]] || die "staged SQLite backup tool digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-bootstrap" | /usr/bin/cut -d' ' -f1)" == "${bootstrap_sha}" ]] || die "staged bootstrap tool digest mismatch"
@@ -183,6 +187,8 @@ if [[ "${mode}" == fresh-install ]]; then
   /usr/bin/rm -f "${pending_tmp}"
 fi
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-deploy" /usr/local/sbin/kitsusync-deploy
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-preview-deploy" /usr/local/sbin/kitsusync-preview-deploy
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-deploy-transaction" /usr/local/libexec/kitsusync-deploy-transaction
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-inspect" /usr/local/sbin/kitsusync-inspect
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-image-identity" /usr/local/libexec/kitsusync-image-identity

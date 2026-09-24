@@ -2,7 +2,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-deploy="${root}/deploy/kitsusync-deploy"
+deploy="${root}/deploy/kitsusync-deploy-transaction"
+release_entry="${root}/deploy/kitsusync-deploy"
 inspect="${root}/deploy/kitsusync-inspect"
 bootstrap="${root}/deploy/kitsusync-bootstrap"
 backup="${root}/deploy/kitsusync-sqlite-backup"
@@ -12,16 +13,21 @@ tmp="$(mktemp -d)"
 python_bin="${PYTHON_BIN:-python3}"
 trap 'rm -rf "${tmp}"' EXIT
 
-for script in "${deploy}" "${inspect}" "${bootstrap}" "${bundle}"; do bash -n "${script}"; done
+for script in "${deploy}" "${release_entry}" "${inspect}" "${bootstrap}" "${bundle}"; do bash -n "${script}"; done
 "${python_bin}" -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "${backup}"
 "${python_bin}" -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "${identity}"
 
 require() { grep -Fq -- "$1" "$2" || { printf 'missing bootstrap security contract: %s (%s)\n' "$1" "$2" >&2; exit 1; }; }
-for script in "${deploy}" "${inspect}" "${bootstrap}"; do
+for script in "${release_entry}" "${inspect}" "${bootstrap}"; do
   [[ "$(head -n 1 "${script}")" == '#!/bin/bash' ]]
   require 'PATH=/usr/sbin:/usr/bin:/sbin:/bin' "${script}"
-  require 'arguments are not accepted' "${script}"
 done
+[[ "$(head -n 1 "${deploy}")" == '#!/bin/bash' ]]
+require 'PATH=/usr/sbin:/usr/bin:/sbin:/bin' "${deploy}"
+require 'arguments are not accepted' "${release_entry}"
+require 'deployment_core_sha256' "${deploy}"
+require 'preview_deployment_tool_sha256' "${bootstrap}"
+require '/usr/local/sbin/kitsusync-preview-deploy' "${bootstrap}"
 require 'DOCKER_*|COMPOSE_*' "${deploy}"
 require 'protected environment contains Docker/Compose control variables' "${deploy}"
 require '--project-name "${PROJECT_NAME}"' "${deploy}"
@@ -61,7 +67,7 @@ require 'kitsusync-restore-state' "${bootstrap}"
 require 'RUNTIME_STATE_TOOL_SHA256' "${bundle}"
 require 'RESTORE_STATE_TOOL_SHA256' "${bundle}"
 
-for script in "${deploy}" "${inspect}" "${bootstrap}"; do
+for script in "${release_entry}" "${inspect}" "${bootstrap}"; do
   if "${script}" unexpected >/dev/null 2>"${tmp}/error"; then
     printf 'script accepted an argument: %s\n' "${script}" >&2; exit 1
   fi
