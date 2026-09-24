@@ -31,7 +31,7 @@ cleanup() {
   local ids result=$?
   if [[ "$result" -ne 0 ]]; then
     printf 'deployment-transaction-failed-stage=%s\n' "$stage" >&2
-    for report in "$work/failed-deploy.log" "$work/successful-deploy.log"; do
+    for report in "$work/failed-deploy.log" "$work/successful-deploy.log" "$work/setup-required-deploy.log"; do
       [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|rollback=)' "$report" >&2 || true
     done
   fi
@@ -55,10 +55,12 @@ assert pathlib.Path('/app/tpl/marker').read_text() == 'fixture-template\n'
 assert os.getuid() == 10001 and os.getgid() == 10001
 assert os.environ['APP_ENV'] == 'production'
 failed_target = not legacy and (data / 'fail-target').exists()
+setup_required_after_restart = not legacy and not failed_target and (data / 'setup-required-after-restart').exists()
 if failed_target:
     with sqlite3.connect(data / 'sqlite.db') as db:
         db.execute("UPDATE evidence SET value='target-mutated'")
     (data / 'runtime-secret.key').write_text('target-mutated\n')
+    (data / 'fail-target').unlink()
 started = time.monotonic()
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -68,8 +70,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if legacy: code, body = 404, {}
             else:
                 ready = time.monotonic() - started >= 7
-                code = 200 if ready else 503
-                body = {'status':'ready' if ready else 'setup_required',
+                state = 'setup_required' if setup_required_after_restart else ('ready' if ready else 'setup_required')
+                code = 503 if state == 'setup_required' else 200
+                body = {'status':state,
                         'build':{'base_commit':'wrong' if failed_target else 'b7b30157cb90c4500e8b00d3c26ac7038f5c8c10',
                                  'build_source_id':'b7b30157cb90c4500e8b00d3c26ac7038f5c8c10'}}
         elif self.path.startswith('/bot/admin'): code, body = 401, {}
@@ -215,4 +218,45 @@ grep -Fq 'KitsuSync deployment completed: version=0.4.6' "$work/successful-deplo
 sudo test ! -e /etc/kitsusync-deploy/legacy-image.id
 [[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/ready)" == 200 ]]
 sudo cmp -s "$work/key" "$runtime/data/runtime-secret.key"
+
+# Reproduce the production rollback edge with a Compose-managed normal prior
+# runtime. The target mutates SQLite and the secret, then fails identity. On
+# reconstruction the prior runtime resumes safely as setup_required.
+stage=setup-required-fixture
+prior_normal_id="$(docker ps -q --filter name='^/kitsusync-app-1$')"
+[[ -n "$prior_normal_id" ]]
+prior_normal_image="$(docker inspect -f '{{.Image}}' "$prior_normal_id")"
+template_before="$(sudo sha256sum "$runtime/tpl/marker")"
+sudo touch "$runtime/data/setup-required-after-restart" "$runtime/data/fail-target"
+stage=failed-normal-deploy
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$work/setup-required-deploy.log" 2>&1; then
+  printf 'wrong target readiness identity incorrectly passed on normal prior runtime\n' >&2; exit 1
+fi
+stage=setup-required-rollback-contract
+grep -Fq 'runtime validation failed: check=readiness_identity' "$work/setup-required-deploy.log"
+grep -Fxq 'rollback=verified' "$work/setup-required-deploy.log"
+! grep -Fq 'automatic recovery incomplete' "$work/setup-required-deploy.log"
+stage=setup-required-restored-container
+restored_setup_id="$(docker ps -q --filter name='^/kitsusync-app-1$')"
+[[ -n "$restored_setup_id" && "$restored_setup_id" != "$prior_normal_id" ]]
+[[ "$(docker inspect -f '{{.Image}}' "$restored_setup_id")" == "$prior_normal_image" ]]
+stage=setup-required-restored-state
+sudo cmp -s "$work/key" "$runtime/data/runtime-secret.key"
+sudo python3 - "$runtime/data/sqlite.db" <<'PY'
+import sqlite3, sys
+with sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True) as db:
+    assert db.execute('SELECT value FROM evidence').fetchall() == [('original',)]
+PY
+[[ "$(sudo sha256sum "$runtime/tpl/marker")" == "$template_before" ]]
+stage=setup-required-readiness
+[[ "$(curl -s -o "$work/ready.json" -w '%{http_code}' http://127.0.0.1:8090/ready)" == 503 ]]
+grep -Fq '"status":"setup_required"' "$work/ready.json"
+[[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/health)" == 200 ]]
+stage=setup-required-backup
+latest_backup="$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d -name '*-*' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+[[ -n "$latest_backup" ]]
+sudo test -f "$latest_backup/backup-complete"
+sudo test -f "$latest_backup/restored-container"
+sudo test -f "$latest_backup/restored-inspect.json"
+sudo test -f "$latest_backup/rollback-image-ref"
 printf 'deployment-transaction-tests=PASS (real wrapper failure/rollback and subsequent deployment)\n'

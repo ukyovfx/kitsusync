@@ -80,6 +80,13 @@ provenance, Compose digest, and deployment-mode policy. `normal` mode requires
 credential-free boot and then transitions atomically to `normal`. No mode
 accepts `degraded`.
 
+After a failed deployment, a restored non-legacy runtime is checked using the
+recovery readiness policy. It may report `ready` or `setup_required`, but must
+still pass runtime identity, health, endpoint, and admin-boundary checks. The
+deployment remains failed; `setup_required` leaves the app available for setup
+while integrations remain unready. `degraded` is never accepted during
+rollback.
+
 See `docs/PRODUCTION_BOOTSTRAP.md` for the one-time root bootstrap, narrow sudo
 boundary, read-only inspection, consistent backup, explicit first legacy
 migration, and the normal no-argument deployment command.
