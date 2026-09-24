@@ -94,10 +94,10 @@ func TestSetupDistinguishesEmptyProductionResultFromLookupFailure(t *testing.T) 
 	if !strings.Contains(emptyBody, "Kitsu returned no Productions") {
 		t.Fatal("successful empty Production response was not identified in Setup")
 	}
-	if !strings.Contains(failureBody, "Could not load Productions from Kitsu") {
+	if !strings.Contains(failureBody, "Production list could not be loaded from Kitsu") {
 		t.Fatal("Kitsu Production lookup failure was not identified in Setup")
 	}
-	if strings.Contains(emptyBody, "Could not load Productions from Kitsu") || strings.Contains(failureBody, "Kitsu returned no Productions") {
+	if strings.Contains(emptyBody, "Production list could not be loaded from Kitsu") || strings.Contains(failureBody, "Kitsu returned no Productions") {
 		t.Fatal("empty success and request failure states were not kept distinct")
 	}
 }
