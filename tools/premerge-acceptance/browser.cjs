@@ -169,7 +169,7 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     // PR #206 readiness state matrix. Every state is loaded through the live
     // HTTP server and rendered again in both locales and viewport sizes.
     const matrix = [
-      { mode: 'missing_kitsu', en: 'Configure Kitsu and the Discord Bot', ja: 'KitsuとDiscord Botを設定', noTable: true },
+      { mode: 'missing_kitsu', en: 'Configure Kitsu to load Kitsu users', ja: 'Kitsuを設定するとKitsuユーザーを利用できます', noTable: true },
       { mode: 'missing_discord', en: 'Configure the Discord Bot', ja: 'Discord Botを設定', noTable: true },
       { mode: 'kitsu_failure', en: 'Kitsu users could not be checked', ja: 'Kitsuユーザーを確認できませんでした', noTable: true },
       { mode: 'kitsu_empty', en: 'No Kitsu users were returned', ja: 'Kitsuユーザーが見つかりません', noTable: true },
