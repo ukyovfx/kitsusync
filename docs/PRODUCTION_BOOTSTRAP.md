@@ -1,5 +1,12 @@
 # Production bootstrap and deployment
 
+> **Version-specific procedure:** this page documents the v0.4.6 bootstrap and
+> migration bundle. Do not use its artifact name, release tag, or source commit
+> for another release. Before a bootstrap or deployment for a newer version,
+> verify that release's workflow result, exact source commit, artifact contents,
+> and provenance against the repository and CI. This guide does not establish
+> which version is currently deployed in production.
+
 Production has one supported execution path: the root-installed, no-argument
 `/usr/local/sbin/kitsusync-deploy`. Direct production Docker Compose execution
 is unsupported.
