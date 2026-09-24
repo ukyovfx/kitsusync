@@ -62,6 +62,10 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 ## User Linking — `/bot/admin/users`
 
 - [ ] The page describes and renders human Kitsu-to-Discord linking.
+- [ ] The top of the page shows independent Kitsu and Discord Bot prerequisite statuses using the shared semantic status vocabulary.
+- [ ] Missing configuration is a readiness state, not a diagnostic error: one concise cause and one Connection settings action are shown, with no selector, mapping table, failure copy, or diagnostic disclosure.
+- [ ] Configured loading/waiting, successful zero guild/user results, genuine request/auth/network failure, and ready/populated states remain distinct.
+- [ ] The Discord server selector appears only when joined guild data is meaningfully available; mapping rows appear only when both directories are usable.
 - [ ] Bot identities are excluded from normal human linking.
 - [ ] JP and EN copy is equivalent and free of mojibake.
 

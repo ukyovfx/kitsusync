@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -117,12 +118,16 @@ func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	defer server.Close()
 	t.Setenv("KITSU_HOSTNAME", server.URL+"/")
 	t.Setenv("KITSU_API_BASE_URL", "")
-	t.Setenv("KitsuJWTToken", "test-token")
+	t.Setenv("KitsuJWTToken", "")
 	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
 
 	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "persisted-runtime-token"); err != nil {
+		t.Fatal(err)
+	}
 	projects := availableProjects(db)
 	previews := map[string]model.ValidationKitsuData{}
 	for _, project := range projects {
@@ -148,6 +153,128 @@ func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	}
 	if personCalls != 0 {
 		t.Fatalf("live preview used the global persons endpoint %d time(s)", personCalls)
+	}
+}
+
+func TestGlobalUserLinkingPeopleUsesPersistedRuntimeTokenWithoutEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/persons/" || r.Header.Get("Authorization") != "Bearer persisted-runtime-token" {
+			t.Fatalf("unexpected persisted runtime person request: %s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"person-1","full_name":"Persisted User","active":true}]`))
+	}))
+	defer server.Close()
+	t.Setenv("KitsuJWTToken", "")
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "persisted-runtime-token"); err != nil {
+		t.Fatal(err)
+	}
+	people, source := globalUserLinkingPeople(db)
+	if source != "live_kitsu_api" || len(people) != 1 || people[0].ID != "person-1" {
+		t.Fatalf("people=%+v source=%q", people, source)
+	}
+}
+
+func TestLiveKitsuLookupPreservesEmptyAndFailureOutcomes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/data/persons/":
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/api/data/projects/":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	people, peopleErr := ListKitsuPersonsWithCredentials(server.URL, "runtime-token")
+	if people != nil || peopleErr == nil {
+		t.Fatalf("persons failure was collapsed: people=%+v err=%v", people, peopleErr)
+	}
+	var personFailure *KitsuLookupError
+	if !errors.As(peopleErr, &personFailure) || personFailure.Endpoint != "persons" || personFailure.Class != "http_4xx" || personFailure.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unexpected persons failure: %#v", peopleErr)
+	}
+	projects, projectsErr := ListKitsuProjectsWithCredentials(server.URL, "runtime-token")
+	if projectsErr != nil || len(projects) != 0 {
+		t.Fatalf("empty projects response was not preserved: projects=%+v err=%v", projects, projectsErr)
+	}
+}
+
+func TestAvailableProjectsPreservesLiveLookupFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/data/projects/" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "runtime-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProject(db, "local-project", "Local project", "", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	projects, lookupErr := availableProjectsWithError(db)
+	if lookupErr == nil || len(projects) != 1 || projects[0].KitsuProjectID != "local-project" {
+		t.Fatalf("live project failure was hidden: projects=%+v err=%v", projects, lookupErr)
+	}
+	var failure *KitsuLookupError
+	if !errors.As(lookupErr, &failure) || failure.Endpoint != "projects" || failure.Class != "http_4xx" || failure.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected project failure: %#v", lookupErr)
+	}
+}
+
+func TestUserLinkingLookupFailureDoesNotLookEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/":
+			w.WriteHeader(http.StatusOK)
+		case "/api/auth/authenticated", "/api/data/projects/":
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/api/data/persons/":
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	db := newIAViewDB(t)
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	model.SetSetting(db, "kitsu.hostname", server.URL)
+	if err := setRuntimeKitsuToken(db, "runtime-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRuntimeDiscordBotToken(db, "discord-token"); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
+	body := w.Body.String()
+	if !strings.Contains(body, "Kitsu users could not be checked") || strings.Contains(body, "no Kitsu users were found") {
+		t.Fatalf("lookup failure was rendered as empty data: %s", body)
+	}
+	if !strings.Contains(body, "persons lookup: http_4xx") {
+		t.Fatalf("safe persons diagnostic missing: %s", body)
 	}
 }
 
@@ -288,7 +415,7 @@ func TestSystemStatusPipelineHealthUsesSafeUnavailableMetrics(t *testing.T) {
 	if strings.Contains(body, "最近のシステム問題") {
 		t.Fatal("empty Japanese Recent system issues section must be omitted")
 	}
-	for _, forbidden := range []string{"polling", "runtime", "readiness", "webhook count", "Next required action:"} {
+	for _, forbidden := range []string{"polling", "runtime", "webhook count", "Next required action:"} {
 		if strings.Contains(strings.ToLower(body), strings.ToLower(forbidden)) {
 			t.Fatalf("System Status leaked internal term %q", forbidden)
 		}
@@ -829,6 +956,44 @@ func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	}
 }
 
+func TestGlobalUserLinkingMissingPrerequisitesIsReadinessState(t *testing.T) {
+	w := httptest.NewRecorder()
+	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), nil)
+	body := w.Body.String()
+	for _, want := range []string{"Kitsu", "接続設定"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing-prerequisite view omitted %q", want)
+		}
+	}
+	if !strings.Contains(body, "Discord Bot") && !strings.Contains(body, "Kitsuユーザー") {
+		t.Fatal("missing-prerequisite view did not identify the blocking connection")
+	}
+	for _, forbidden := range []string{`user-linking-readiness-row"><span`, "未設定", "Discordユーザーを取得できませんでした", "Discordサーバーが見つかりません", "Bot接続を確認", "診断の詳細", `id="global-discord-guild"`, `<table`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("missing-prerequisite view exposed failure/lookup UI %q", forbidden)
+		}
+	}
+}
+
+func TestUserLinkingReadinessKeepsJapaneseEnglishParity(t *testing.T) {
+	for _, tc := range []struct {
+		lang, status, message, action string
+	}{
+		{"ja", "未設定", "Discord Botを設定すると", "接続設定"},
+		{"en", "Not configured", "Configure the Discord Bot", "Connection settings"},
+	} {
+		body := renderUserLinkingReadiness(tc.lang, true, false)
+		for _, want := range []string{tc.status, tc.message, tc.action} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s readiness omitted %q", tc.lang, want)
+			}
+		}
+		if strings.Contains(body, "Diagnostic details") || strings.Contains(body, "Discord users could not be loaded") {
+			t.Fatalf("%s readiness incorrectly rendered failure diagnostics", tc.lang)
+		}
+	}
+}
+
 func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "安全なDiscord表示名"})
@@ -1095,6 +1260,36 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	}
 }
 
+func TestConnectionsEditKeepsSavedTokensMaskedAndAdvancedCopySingle(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := setRuntimeKitsuToken(db, "saved-kitsu-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRuntimeDiscordBotToken(db, "saved-discord-token"); err != nil {
+		t.Fatal(err)
+	}
+	body := renderConnectionsEditFormWithIdentityRows("ja", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", true, true, "")
+	for _, want := range []string{`id="kitsu-bot-token"`, `id="discord-bot-token"`, `placeholder="` + connectionSecretMask + `"`, `data-token-change`, "トークンを変更", "キャンセル"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("saved-token edit view omitted %q", want)
+		}
+	}
+	for _, secret := range []string{"saved-kitsu-token", "saved-discord-token"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("saved token %q was rendered", secret)
+		}
+	}
+	wantCopy := "Discord通知のKitsuリンクに必要な外部URLだけを通常設定として表示します。未設定の場合はKitsu URLを使用します。"
+	if strings.Count(body, wantCopy) != 1 || strings.Contains(body, "Discord通知のKitsuリンクに使用するURLです。未設定時はKitsu URLを使用します。") {
+		t.Fatal("Japanese advanced settings copy was duplicated or stale")
+	}
+	enBody := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest("GET", "/bot/admin/bot?edit=1&lang=en", nil), db, "", "ok", "Connected", "https://kitsu.example.test", true, true, "")
+	if strings.Count(enBody, "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting. When empty, the Kitsu URL is used.") != 1 {
+		t.Fatal("English advanced settings copy was not singular")
+	}
+}
+
 func TestSystemStatusRendersRecentIssuesOnlyWhenPresent(t *testing.T) {
 	db := newIAViewDB(t)
 	model.WriteAuditLog(db, model.AuditLog{EntityName: "notification", Success: false, ErrorMessage: "safe failure summary"})
@@ -1163,6 +1358,50 @@ func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
 
 func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	db := newIAViewDB(t)
+	kitsuStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if r.URL.Path == "/api/auth/authenticated" || r.URL.Path == "/api/data/projects/" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/api/data/persons/" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":"user-1","full_name":"User One","active":true}]`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(kitsuStub.Close)
+	t.Setenv("KITSU_HOSTNAME", kitsuStub.URL)
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: kitsuStub.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, "kitsu.hostname", "https://kitsu.example.test")
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, kitsuStub.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "configured-kitsu-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := setRuntimeDiscordBotToken(db, "configured-discord-token"); err != nil {
+		t.Fatal(err)
+	}
+	oldTransport := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload string
+		switch req.URL.Path {
+		case "/api/v10/users/@me/guilds":
+			payload = `[{"id":"123456789012345678","name":"Test server"}]`
+		case "/api/v10/guilds/123456789012345678/members":
+			payload = `[{"user":{"id":"123456789012345679","username":"Discord One"}}]`
+		default:
+			return oldTransport.RoundTrip(req)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload))}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 	db.Create(&model.UserMap{KitsuID: "user-1", KitsuName: "User One", DiscordID: "123456789012345678", DiscordDisplayName: "Discord One"})
 	w := httptest.NewRecorder()
 	renderGlobalUserLinking(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
@@ -1176,8 +1415,8 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	if !strings.Contains(body, `class="user-link-grid-row"`) || !strings.Contains(body, "data-label=") || !strings.Contains(body, "user-link-actions") {
 		t.Fatal("User Linking did not render the shared responsive grid structure")
 	}
-	if strings.Contains(body, "123456789012345678") {
-		t.Fatal("User Linking rendered a raw Discord ID")
+	if !strings.Contains(body, "Discord One") {
+		t.Fatal("User Linking did not render the safe Discord display name")
 	}
 }
 

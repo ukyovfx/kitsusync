@@ -60,6 +60,43 @@ func TestConfiguredAPIOverrideUsesVerifiedOriginForCredentialRequest(t *testing.
 	}
 }
 
+func TestGetPersonsWithCredentialsUsesProvidedRuntimeTokenWithoutEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/persons/" || r.Header.Get("Authorization") != "Bearer persisted-token" {
+			t.Fatalf("unexpected runtime person request: %s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"person-1","full_name":"Persisted User"}]`))
+	}))
+	defer server.Close()
+	t.Setenv("KITSUJWTToken", "")
+	t.Setenv("KitsuJWTToken", "")
+	configureTestOrigin(t, server.URL)
+
+	got, err := GetPersonsWithCredentials(server.URL, "persisted-token")
+	if err != nil || len(got.Each) != 1 || got.Each[0].ID != "person-1" {
+		t.Fatalf("persons = %+v, err=%v", got.Each, err)
+	}
+}
+
+func TestGetProjectsWithCredentialsUsesProvidedRuntimeTokenWithoutEnv(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/data/projects/" || r.Header.Get("Authorization") != "Bearer persisted-token" {
+			t.Fatalf("unexpected runtime project request: %s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"project-1","name":"Persisted Production"}]`))
+	}))
+	defer server.Close()
+	t.Setenv("KitsuJWTToken", "")
+	configureTestOrigin(t, server.URL)
+
+	got, err := GetProjectsWithCredentials(server.URL, "persisted-token")
+	if err != nil || len(got.Each) != 1 || got.Each[0].ID != "project-1" {
+		t.Fatalf("projects = %+v, err=%v", got.Each, err)
+	}
+}
+
 func TestGetProjectTaskTypesUsesProductionScopedEndpointAndPreservesContext(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/data/projects/production-1/task-types" {
