@@ -183,6 +183,9 @@ func TestPremergeBrowserAcceptance(t *testing.T) {
 			}
 			return nil, fmt.Errorf("unexpected outbound destination")
 		}
+		if r.URL.Path == "/api/v10/users/@me" && r.Method == http.MethodGet {
+			return fixtureResponse(r, http.StatusOK, `{"id":"55555555555555555","username":"synthetic-discord-bot","bot":true}`), nil
+		}
 		if r.URL.Path == "/api/v10/users/@me/guilds" && r.Method == http.MethodGet {
 			if scenario.Load().(string) == "discord_failure" {
 				return fixtureResponse(r, http.StatusServiceUnavailable, `{"message":"synthetic fixture failure"}`), nil
