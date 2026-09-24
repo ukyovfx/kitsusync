@@ -1,22 +1,27 @@
 # Production bootstrap and deployment
 
-> **Version-specific procedure:** this page documents the v0.4.6 bootstrap and
-> migration bundle. Do not use its artifact name, release tag, or source commit
-> for another release. Before a bootstrap or deployment for a newer version,
-> verify that release's workflow result, exact source commit, artifact contents,
-> and provenance against the repository and CI. This guide does not establish
-> which version is currently deployed in production.
-
 Production has one supported execution path: the root-installed, no-argument
 `/usr/local/sbin/kitsusync-deploy`. Direct production Docker Compose execution
 is unsupported.
 
+This document describes the current deployment contract. Version-specific
+release identity must always be taken from the exact release being deployed;
+do not reuse an older artifact name, release tag, source commit, or provenance
+record merely because an older deployment used the same wrapper interface.
+
 ## One-time root bootstrap
 
-Use the verified `kitsusync-v0.4.6-deployment` GitHub Actions artifact. Before
-running anything, verify that its workflow completed successfully for release
-tag `v0.4.6` and source commit
-`b7b30157cb90c4500e8b00d3c26ac7038f5c8c10`.
+Use the verified release deployment artifact produced by the repository's
+`Release deployment bundle` workflow for the exact immutable release tag being
+deployed. Before running anything, verify that the workflow completed
+successfully and that the artifact provenance matches the intended release tag,
+source/release commit, version, image reference, deployment mode, image archive
+digest, and deployment/control tool digests.
+
+The workflow names release artifacts `kitsusync-<release-tag>-deployment` and
+supports explicit `fresh-install`, `legacy-migration`, `normal`, and `recovery`
+deployment modes. Do not infer or override the deployment mode from runtime
+state or operator arguments; use the mode carried by the verified artifact.
 
 For a purged host, dispatch the workflow with `deployment_mode=fresh-install`.
 The artifact contains a digest-bound credential-free `conf.toml`, the templates
@@ -41,8 +46,9 @@ After staging and verifying the files, the one-time root action is:
 /bin/bash /root/kitsusync-release-stage/kitsusync-bootstrap
 ```
 
-The bootstrap accepts no arguments. It verifies the archive, Compose file and
-tool and fresh-seed digests before installing:
+The bootstrap accepts no arguments. It verifies the archive, Compose file,
+deployment/control tools, release identity, and applicable fresh-seed digests
+before installing the production control plane, including:
 
 - `/usr/local/sbin/kitsusync-deploy` (`root:root`, `0700`)
 - `/usr/local/sbin/kitsusync-inspect` (`root:root`, `0700`)
@@ -53,9 +59,12 @@ tool and fresh-seed digests before installing:
 - `/var/backups/kitsusync-deploy/` (`root:root`, `0700`)
 - `/etc/sudoers.d/kitsusync-deploy` (`root:root`, `0440`)
 
-The sudo policy permits only the two exact commands below, with no arguments
-and no caller-supplied environment. It does not grant Docker-group access or a
-general root shell.
+The current bootstrap sudo policy permits routine operator `ukyo_vfx` to run
+only the no-argument `kitsusync-deploy` and `kitsusync-inspect` commands with
+`NOPASSWD`/`NOSETENV`. It does not grant Docker-group access, arbitrary command
+arguments, caller-supplied Docker/Compose environment, or a general root shell.
+Re-verify this policy from the accepted bootstrap before automating a future
+release; the installed policy is version-bound implementation detail.
 
 ## Normal inspection
 
@@ -63,10 +72,10 @@ general root shell.
 sudo /usr/local/sbin/kitsusync-inspect
 ```
 
-Inspection is read-only. It prints approved identity/status fields and
-environment variable names only. It never prints environment values. If an
-entrypoint or command contains a credential-like argument name, the entire
-command field is redacted.
+Inspection is read-only and accepts no arguments. It prints approved
+identity/status fields and environment variable names only. It never prints
+environment values. If an entrypoint or command contains a credential-like
+argument name, the entire command field is redacted.
 
 ## Normal deployment
 
@@ -80,19 +89,25 @@ the complete compatible runtime state before the first Docker mutation, then
 loads and verifies the approved immutable image. A normal deployment passes
 only when `/ready` reports `ready`.
 
-The v0.4.6 bundle carries the explicit one-time `legacy-migration` policy for
-the already-approved runtime that predates `/ready`. Bootstrap records that
-runtime's immutable image ID. The new v0.4.6 runtime must still pass the normal
-`ready` contract. If rollback is needed, the previous runtime is checked using
-its actual `/health` and missing-`/ready` contract. A successful migration
-atomically retires legacy mode to `normal`; it is never selected from runtime
-state or operator arguments.
-
 Backups use SQLite's online backup API. WAL/SHM files are not copied over the
 consistent snapshot; stale sidecars are removed before restoration. Preserve
 the SQLite snapshot, runtime secret (or its absence marker), `conf.toml`,
 templates, protected environment, prior immutable image and captured runtime
 contract as one rollback unit.
+
+## Historical v0.4.6 legacy migration note
+
+The v0.4.6 release used an explicit one-time `legacy-migration` policy for the
+approved runtime that predated `/ready`. Bootstrap recorded that runtime's
+immutable image ID. The new v0.4.6 runtime still had to pass the normal `ready`
+contract, while rollback checked the previous runtime using its actual
+`/health` and missing-`/ready` contract. A successful migration atomically
+retired legacy mode to `normal`.
+
+This note is historical evidence for that transition. Do not apply
+`legacy-migration` to a later release unless the exact verified release artifact
+was intentionally produced with that deployment mode and the current accepted
+bootstrap/deploy contract supports it.
 
 ## Fresh installation
 
