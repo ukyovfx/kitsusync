@@ -110,6 +110,7 @@ jobs:
       - name: Linux CGO validation
         run: |
           set -euo pipefail
+          manifest="$GITHUB_WORKSPACE/tools/premerge-acceptance/output/manifest.txt"
           cd "$RUNNER_TEMP/kitsusync-integration"
           CGO_ENABLED=1 go vet ./src/...
           CGO_ENABLED=1 go test ./src/... -count=1 -timeout=240s
@@ -123,10 +124,10 @@ jobs:
           FB_USERNAME=acceptance-user
           VARS
           FB_USERNAME=acceptance-user FB_PASSWORD=acceptance-placeholder-only KITSUSYNC_APP_VERSION=0.4.7 docker compose --env-file .env.local config -q
-          echo "go_vet=PASS" >> tools/premerge-acceptance/output/manifest.txt
-          echo "go_test_cgo=PASS" >> tools/premerge-acceptance/output/manifest.txt
-          echo "git_diff_check=PASS" >> tools/premerge-acceptance/output/manifest.txt
-          echo "compose_config=PASS" >> tools/premerge-acceptance/output/manifest.txt
+          echo "go_vet=PASS" >> "$manifest"
+          echo "go_test_cgo=PASS" >> "$manifest"
+          echo "git_diff_check=PASS" >> "$manifest"
+          echo "compose_config=PASS" >> "$manifest"
 
       - name: Save runner firewall state
         id: firewall
