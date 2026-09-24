@@ -297,17 +297,24 @@ grep -Fxq 'rollback=verified' "$work/failed-preview.log"
 stage=preview-success
 sudo rm -f -- "$runtime/data/fail-target"
 sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "$source_commit" PREVIEW >"$work/successful-preview.log" 2>&1
+stage=preview-success-marker
 grep -Fq "PREVIEW / NON-RELEASE KitsuSync deployment completed: source_commit=${source_commit}" "$work/successful-preview.log"
+stage=preview-container-count
 preview_container="$(docker ps -q --filter name='^/kitsusync-app-1$')"
 [[ -n "$preview_container" ]]
 [[ "$(docker ps -aq --no-trunc --filter label=com.docker.compose.project=kitsusync --filter label=com.docker.compose.service=app)" == "$preview_container" ]]
+stage=preview-source-identity
 [[ "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$preview_container")" == "$source_commit" ]]
+stage=preview-loopback-binding
 [[ "$(docker port "$preview_container" 8090/tcp)" == 127.0.0.1:8090 ]]
+stage=preview-health-and-readiness
 [[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/health)" == 200 ]]
 [[ "$(curl -s -o "$work/preview-ready.json" -w '%{http_code}' http://127.0.0.1:8090/ready)" == 503 ]]
 grep -Fq '"status":"setup_required"' "$work/preview-ready.json"
+stage=preview-admin-routes
 for path in /bot/admin/users /bot/admin/health; do
   status="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8090${path}")"
   [[ "$status" =~ ^(200|302|303|401|403)$ ]]
 done
+stage=preview-success-complete
 printf 'deployment-transaction-tests=PASS (release rollback and exact-SHA preview rollback/deployment)\n'
