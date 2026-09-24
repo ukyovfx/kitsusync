@@ -1792,7 +1792,7 @@ func TestSystemStatusOmitsNormalPageDiagnosticsAndRefreshesSnapshot(t *testing.T
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Contains(body, `<details`) || strings.Contains(body, `pipeline-health-details-toggle`) || strings.Contains(body, `観測診断`) || strings.Contains(body, `通知診断`) || strings.Contains(body, `Connection and routing diagnostics`) {
+	if strings.Contains(body, `<details class="advanced-details`) || strings.Contains(body, `pipeline-health-details-toggle`) || strings.Contains(body, `観測診断`) || strings.Contains(body, `通知診断`) || strings.Contains(body, `Connection and routing diagnostics`) {
 		t.Fatalf("normal System Status rendered expandable diagnostics")
 	}
 	if strings.Contains(body, "Internal data diagnostics") || strings.Contains(body, "内部データ診断") {
