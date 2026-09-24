@@ -7,7 +7,8 @@ const cookie = process.env.KITSUSYNC_ACCEPTANCE_COOKIE;
 const output = process.env.KITSUSYNC_ACCEPTANCE_OUTPUT;
 const syntheticKitsu = process.env.KITSUSYNC_SYNTH_KITSU;
 const syntheticDiscord = process.env.KITSUSYNC_SYNTH_DISCORD;
-if (!base || !cookie || !output || !syntheticKitsu || !syntheticDiscord) throw new Error('acceptance harness inputs missing');
+const syntheticKitsuOrigin = process.env.KITSUSYNC_SYNTH_KITSU_ORIGIN;
+if (!base || !cookie || !output || !syntheticKitsu || !syntheticDiscord || !syntheticKitsuOrigin) throw new Error('acceptance harness inputs missing');
 fs.mkdirSync(output, { recursive: true });
 const records = [];
 const viewports = [
@@ -94,6 +95,9 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     await record(page, 205, '/bot/admin/bot?edit=1', 'en', 'desktop', 'persisted synthetic credentials', 'fixed masks; secrets absent from DOM; Change opens blank field; Cancel restores mask twice');
     await page.locator('[data-token-change="kitsu-bot-token"]').click();
     await page.locator('#kitsu-bot-token').fill(syntheticKitsu);
+    const endpointInput = page.locator('#kitsu-hostname');
+    if (await endpointInput.isDisabled()) await page.locator('[data-reveal-kitsu-endpoint]').click();
+    await endpointInput.fill(syntheticKitsuOrigin);
     const saveResponsePromise = page.waitForResponse(response => new URL(response.url()).pathname === '/bot/admin/bot' && response.request().method() === 'POST');
     await page.locator('#kitsu-recheck').click();
     const saveResponse = await saveResponsePromise;

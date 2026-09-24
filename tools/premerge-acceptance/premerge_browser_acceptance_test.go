@@ -277,7 +277,8 @@ func TestPremergeBrowserAcceptance(t *testing.T) {
 	}
 	cmd := exec.Command("node", filepath.Join(workDir, "tools", "premerge-acceptance", "browser.cjs"))
 	cmd.Env = append(os.Environ(), "KITSUSYNC_ACCEPTANCE_URL="+appURL, "KITSUSYNC_ACCEPTANCE_COOKIE="+session,
-		"KITSUSYNC_ACCEPTANCE_OUTPUT="+outputDir, "KITSUSYNC_SYNTH_KITSU="+premergeKitsuToken, "KITSUSYNC_SYNTH_DISCORD="+premergeDiscordToken)
+		"KITSUSYNC_ACCEPTANCE_OUTPUT="+outputDir, "KITSUSYNC_SYNTH_KITSU="+premergeKitsuToken, "KITSUSYNC_SYNTH_DISCORD="+premergeDiscordToken,
+		"KITSUSYNC_SYNTH_KITSU_ORIGIN="+kitsuFixture.URL)
 	combined, err := cmd.CombinedOutput()
 	safeOutput := string(combined)
 	for _, sensitive := range []string{session, premergeKitsuToken, premergeDiscordToken, "synthetic-manager-session-token"} {
