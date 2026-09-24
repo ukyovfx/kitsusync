@@ -31,8 +31,8 @@ cleanup() {
   local ids result=$?
   if [[ "$result" -ne 0 ]]; then
     printf 'deployment-transaction-failed-stage=%s\n' "$stage" >&2
-    for report in "$work/failed-deploy.log" "$work/successful-deploy.log" "$work/setup-required-deploy.log"; do
-      [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|rollback=)' "$report" >&2 || true
+    for report in "$work/failed-deploy.log" "$work/successful-deploy.log" "$work/setup-required-deploy.log" "$work/failed-preview.log" "$work/successful-preview.log"; do
+      [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|readiness identity mismatch:|PREVIEW / NON-RELEASE|rollback=)' "$report" >&2 || true
     done
   fi
   ids="$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)"

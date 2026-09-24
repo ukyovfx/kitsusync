@@ -232,6 +232,8 @@ PY
   readiness_allows "${mode}" "${state}" || { [[ "${state}" != degraded ]] || VALIDATION_RETRY=0; return 1; }
   case "${state}:${code}" in ready:200|setup_required:503) ;; *) return 1 ;; esac
   VALIDATION_STAGE=readiness_identity
+  printf '%s\n' "${response}" | /usr/bin/grep -Fq '"base_commit":"'"${expected_revision}"'"' || { printf 'readiness identity mismatch: base_commit\n' >&2; VALIDATION_RETRY=0; return 1; }
+  printf '%s\n' "${response}" | /usr/bin/grep -Fq '"build_source_id":"'"${expected_source}"'" || { printf 'readiness identity mismatch: build_source_id\n' >&2; VALIDATION_RETRY=0; return 1; }
   printf '%s\n' "${response}" | /usr/bin/grep -Fq '"base_commit":"'"${expected_revision}"'"' || { VALIDATION_RETRY=0; return 1; }
   printf '%s\n' "${response}" | /usr/bin/grep -Fq '"build_source_id":"'"${expected_source}"'"' || { VALIDATION_RETRY=0; return 1; }
   VALIDATION_STAGE=admin_boundary
