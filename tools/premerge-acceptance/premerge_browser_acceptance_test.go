@@ -78,9 +78,15 @@ func TestPremergeBrowserAcceptance(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/api/":
+			_, _ = fmt.Fprint(w, `{}`)
 		case "/api/status":
 			_, _ = fmt.Fprint(w, `{"name":"Zou","database-up":true,"event-stream-up":true,"key-value-store-up":true,"version":"1.0.67"}`)
 		case "/api/auth/authenticated":
+			if r.Header.Get("Authorization") != "Bearer "+premergeKitsuToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			_, _ = fmt.Fprint(w, `{"authenticated":true,"user":{"id":"synthetic-kitsu-bot","full_name":"Synthetic Kitsu Bot","is_bot":true,"active":true}}`)
 		case "/api/data/projects/":
 			projectReads.Add(1)
