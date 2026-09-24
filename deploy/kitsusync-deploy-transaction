@@ -232,10 +232,12 @@ PY
   readiness_allows "${mode}" "${state}" || { [[ "${state}" != degraded ]] || VALIDATION_RETRY=0; return 1; }
   case "${state}:${code}" in ready:200|setup_required:503) ;; *) return 1 ;; esac
   VALIDATION_STAGE=readiness_identity
-  printf '%s\n' "${response}" | /usr/bin/grep -Fq '"base_commit":"'"${expected_revision}"'"' || { printf 'readiness identity mismatch: base_commit\n' >&2; VALIDATION_RETRY=0; return 1; }
-  printf '%s\n' "${response}" | /usr/bin/grep -Fq '"build_source_id":"'"${expected_source}"'" || { printf 'readiness identity mismatch: build_source_id\n' >&2; VALIDATION_RETRY=0; return 1; }
-  printf '%s\n' "${response}" | /usr/bin/grep -Fq '"base_commit":"'"${expected_revision}"'"' || { VALIDATION_RETRY=0; return 1; }
-  printf '%s\n' "${response}" | /usr/bin/grep -Fq '"build_source_id":"'"${expected_source}"'"' || { VALIDATION_RETRY=0; return 1; }
+  if ! printf '%s\n' "${response}" | /usr/bin/grep -Fq "\"base_commit\":\"${expected_revision}\""; then
+    printf 'readiness identity mismatch: base_commit\n' >&2; VALIDATION_RETRY=0; return 1
+  fi
+  if ! printf '%s\n' "${response}" | /usr/bin/grep -Fq "\"build_source_id\":\"${expected_source}\""; then
+    printf 'readiness identity mismatch: build_source_id\n' >&2; VALIDATION_RETRY=0; return 1
+  fi
   VALIDATION_STAGE=admin_boundary
   for path in /api/setup/status /bot/login /bot/setup /bot/admin /bot/admin/health /bot/admin/users; do
     code="$(startup_command "${CURL_BIN}" --silent --output /dev/null --write-out '%{http_code}' --max-time 10 "http://127.0.0.1:8090${path}")" || return 1
