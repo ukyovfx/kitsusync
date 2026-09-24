@@ -141,7 +141,14 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
       page.waitForNavigation({ waitUntil: 'networkidle' }),
       reviewForm.evaluate(form => form.requestSubmit()),
     ]);
-    await page.getByRole('heading', { name: 'Connection setup complete' }).waitFor({ timeout: 10000 });
+    try {
+      await page.getByRole('heading', { name: 'Connection setup complete' }).waitFor({ timeout: 10000 });
+    } catch (error) {
+      await page.screenshot({ path: path.join(output, 'pr207-revalidation-failed.png'), fullPage: true });
+      let mainText = await page.locator('main').innerText().catch(() => 'main content unavailable');
+      for (const sensitive of [syntheticKitsu, syntheticDiscord]) mainText = mainText.replaceAll(sensitive, '[REDACTED]');
+      throw new Error(`Production Setup execution did not complete; route=${new URL(page.url()).pathname}; main=${mainText.slice(0, 1200)}; ${String(error.message || error)}`);
+    }
     await bodyHas(page, 'Connection setup complete');
     const afterRevalidation = await readCounts();
     if (afterRevalidation.project_reads <= beforeRevalidation.project_reads || afterRevalidation.task_type_reads <= beforeRevalidation.task_type_reads) {
