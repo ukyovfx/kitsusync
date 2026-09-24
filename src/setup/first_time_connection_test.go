@@ -84,11 +84,13 @@ func TestFirstTimePrepareAllowsMissingProjectWithoutWrites(t *testing.T) {
 }
 
 func TestFirstTimeExecutionUsesWizardShellAndSelectedGuildName(t *testing.T) {
+	planTemplate := firstTimeTestPlan()
+	planTemplate.CategoryID = "__create__"
 	plan := firstTimeConnectionPlan{
 		Project:   KitsuProject{ID: "p1", Name: "Test Production"},
 		GuildID:   "g1",
 		GuildName: "Test Guild",
-		Plan:      firstTimeTestPlan(),
+		Plan:      planTemplate,
 	}
 	body := renderWizardFrame("en", 6, renderWizardExecutionCard("en", httptest.NewRequest(http.MethodGet, "/bot/setup?lang=en", nil), plan))
 	if !strings.Contains(body, `class="setup-step active"`) || !strings.Contains(body, "Test Guild") {
@@ -99,6 +101,9 @@ func TestFirstTimeExecutionUsesWizardShellAndSelectedGuildName(t *testing.T) {
 	}
 	if strings.Contains(body, `type="checkbox"`) || strings.Contains(body, "wizard-confirm") {
 		t.Fatal("Step 6 duplicated the confirmation UI")
+	}
+	if !strings.Contains(body, `name="category_id" value="__create__"`) {
+		t.Fatal("Step 6 did not carry the reviewed category into execution revalidation")
 	}
 }
 
