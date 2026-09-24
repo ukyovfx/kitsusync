@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,6 +124,17 @@ func TestPremergeBrowserAcceptance(t *testing.T) {
 		}
 	}))
 	defer kitsuFixture.Close()
+	kitsuOrigin, err := url.Parse(kitsuFixture.URL)
+	if err != nil {
+		t.Fatal("parse synthetic Kitsu fixture origin")
+	}
+	allowedKitsuPaths := map[string]bool{
+		"/api/": true, "/api/status": true, "/api/auth/authenticated": true,
+		"/api/data/projects/": true, "/api/data/projects/synthetic-production-1": true,
+		"/api/data/projects/synthetic-production-1/task-types": true, "/api/data/persons/": true,
+		"/api/data/task-status/": true, "/api/data/entities/": true, "/api/data/entity-types/": true,
+		"/api/data/task-types/": true, "/api/data/tasks": true, "/api/data/comments": true,
+	}
 	model.SetSetting(db, "kitsu.hostname", kitsuFixture.URL)
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, kitsuFixture.URL)
 	previousFirstTimeOps := firstTimeOps
@@ -161,6 +173,9 @@ func TestPremergeBrowserAcceptance(t *testing.T) {
 	unexpected := make(chan string, 32)
 	previousTransport := http.DefaultTransport
 	http.DefaultTransport = premergeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Scheme == kitsuOrigin.Scheme && r.URL.Host == kitsuOrigin.Host && allowedKitsuPaths[r.URL.Path] {
+			return previousTransport.RoundTrip(r)
+		}
 		if r.URL.Scheme != "https" || r.URL.Host != "discord.com" {
 			select {
 			case unexpected <- r.Method + " " + r.URL.Scheme + "://" + r.URL.Host + r.URL.Path:
