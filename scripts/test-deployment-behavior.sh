@@ -48,6 +48,21 @@ expect_readiness pass fresh-install setup_required
 expect_readiness fail fresh-install ready
 expect_readiness fail fresh-install degraded
 
+expect_restored_readiness() {
+  local expected="$1" prior_mode="$2" status="$3"
+  if KITSUSYNC_DEPLOY_TEST_MODE=restored-readiness bash "${wrapper}" "${prior_mode}" "${status}"; then
+    [[ "${expected}" == pass ]] || { printf 'restored readiness unexpectedly allowed %s:%s\n' "${prior_mode}" "${status}" >&2; exit 1; }
+  else
+    [[ "${expected}" == fail ]] || { printf 'restored readiness unexpectedly rejected %s:%s\n' "${prior_mode}" "${status}" >&2; exit 1; }
+  fi
+}
+
+expect_restored_readiness pass normal setup_required
+expect_restored_readiness pass normal ready
+expect_restored_readiness pass recovery setup_required
+expect_restored_readiness fail normal degraded
+expect_restored_readiness fail legacy setup_required
+
 expect_legacy() {
   local expected="$1" approved="$2" actual="$3" health="$4" ready="$5"
   if KITSUSYNC_DEPLOY_TEST_MODE=legacy-contract bash "${wrapper}" "${approved}" "${actual}" "${health}" "${ready}"; then

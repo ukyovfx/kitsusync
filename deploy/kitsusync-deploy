@@ -44,6 +44,13 @@ legacy_status_allows() {
   [[ "$1" == "$2" && "$3" == 200 && "$4" == 404 ]]
 }
 
+restored_validation_mode() {
+  # A restored prior runtime may safely resume in setup_required when its
+  # external credentials are unavailable. It must still pass every other
+  # runtime identity, health, endpoint, and admin-boundary check.
+  [[ "$1" == legacy ]] && printf 'legacy\n' || printf 'recovery\n'
+}
+
 archive_image_id_allows() {
   [[ "$1" == "$2" || "$1" == "$3" ]]
 }
@@ -266,6 +273,7 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
   [[ -x "${DOCKER_BIN}" ]] || die "test Docker executable is unavailable"
   case "${KITSUSYNC_DEPLOY_TEST_MODE}" in
     readiness) [[ "$#" -eq 2 ]]; readiness_allows "$1" "$2" ;;
+    restored-readiness) [[ "$#" -eq 2 ]]; readiness_allows "$(restored_validation_mode "$1")" "$2" ;;
     legacy-contract) [[ "$#" -eq 4 ]]; legacy_status_allows "$1" "$2" "$3" "$4" ;;
     backup-contract) [[ "$#" -eq 1 ]]; backup_is_complete "$1" ;;
     snapshot) [[ "$#" -eq 2 ]]; snapshot_runtime_state "$1" "$2" ;;
@@ -601,7 +609,7 @@ rollback() {
     [[ "$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${rollback_id}")" == false ]] || return 1
     return 1
   fi
-  if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${rollback_id}" || return 1; else validate_runtime "${rollback_id}" "${prior_validation}" "${previous_revision}" "${previous_source_id}" "${previous_version}" || return 1; fi
+  if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${rollback_id}" || return 1; else validate_runtime "${rollback_id}" "$(restored_validation_mode "${prior_validation}")" "${previous_revision}" "${previous_source_id}" "${previous_version}" || return 1; fi
   printf 'rollback=verified\n'
 }
 
@@ -615,7 +623,7 @@ finish_transaction() {
       ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || recovery_result=1
       if [[ "${recovery_result}" == 0 ]]; then
         if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${container_id}" || recovery_result=1
-        else validate_runtime "${container_id}" "${prior_validation}" "${previous_revision}" "${previous_source_id}" "${previous_version}" || recovery_result=1; fi
+        else validate_runtime "${container_id}" "$(restored_validation_mode "${prior_validation}")" "${previous_revision}" "${previous_source_id}" "${previous_version}" || recovery_result=1; fi
       fi ;;
     replacing) rollback || recovery_result=1 ;;
   esac
