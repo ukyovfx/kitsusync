@@ -300,11 +300,12 @@ sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy
 stage=preview-success-marker
 grep -Fq "PREVIEW / NON-RELEASE KitsuSync deployment completed: source_commit=${source_commit}" "$work/successful-preview.log"
 stage=preview-container-count
-preview_container="$(docker ps -q --filter name='^/kitsusync-app-1$')"
+preview_container="$(docker ps -q --no-trunc --filter name='^/kitsusync-app-1$')"
 [[ -n "$preview_container" ]]
 [[ "$(docker ps -aq --no-trunc --filter label=com.docker.compose.project=kitsusync --filter label=com.docker.compose.service=app)" == "$preview_container" ]]
 stage=preview-source-identity
 [[ "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$preview_container")" == "$source_commit" ]]
+[[ "$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "$preview_container")" == "$source_commit" ]]
 stage=preview-loopback-binding
 [[ "$(docker port "$preview_container" 8090/tcp)" == 127.0.0.1:8090 ]]
 stage=preview-health-and-readiness
