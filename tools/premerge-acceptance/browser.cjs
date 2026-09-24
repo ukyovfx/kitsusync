@@ -142,7 +142,7 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
       reviewForm.evaluate(form => form.requestSubmit()),
     ]);
     try {
-      await page.getByRole('heading', { name: 'Connection setup complete' }).waitFor({ timeout: 10000 });
+      await page.locator('h1').getByText('Connection setup complete', { exact: true }).waitFor({ timeout: 10000 });
     } catch (error) {
       await page.screenshot({ path: path.join(output, 'pr207-revalidation-failed.png'), fullPage: true });
       let mainText = await page.locator('main').innerText().catch(() => 'main content unavailable');
