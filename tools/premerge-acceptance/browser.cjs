@@ -94,8 +94,15 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     await record(page, 205, '/bot/admin/bot?edit=1', 'en', 'desktop', 'persisted synthetic credentials', 'fixed masks; secrets absent from DOM; Change opens blank field; Cancel restores mask twice');
     await page.locator('[data-token-change="kitsu-bot-token"]').click();
     await page.locator('#kitsu-bot-token').fill(syntheticKitsu);
+    const saveResponsePromise = page.waitForResponse(response => new URL(response.url()).pathname === '/bot/admin/bot' && response.request().method() === 'POST');
     await page.locator('#kitsu-recheck').click();
+    const saveResponse = await saveResponsePromise;
     await page.waitForLoadState('networkidle');
+    if (saveResponse.status() !== 303) {
+      let failureText = await page.locator('main').innerText().catch(() => 'main content unavailable');
+      for (const sensitive of [syntheticKitsu, syntheticDiscord, cookie]) failureText = failureText.replaceAll(sensitive, '[REDACTED]');
+      throw new Error(`synthetic Kitsu save/recheck rejected; status=${saveResponse.status()}; main=${failureText.slice(0, 1000)}`);
+    }
     const postSaveHTML = await page.locator('html').evaluate(el => el.outerHTML);
     if (postSaveHTML.includes(syntheticKitsu)) throw new Error('synthetic Kitsu token remained in the rendered DOM after save/recheck');
     await record(page, 205, '/bot/admin/bot?edit=1', 'en', 'desktop', 'synthetic Kitsu save/recheck', 'saved synthetic Bot token was validated against local fixture and omitted from response DOM');
