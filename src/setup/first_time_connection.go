@@ -78,8 +78,8 @@ type firstTimeOwnedResources struct {
 }
 
 type firstTimeConnectionOps struct {
-	Projects       func(string) []KitsuProject
-	TaskTypes      func(string) []kitsu.TaskType
+	Projects       func(string, *gorm.DB) []KitsuProject
+	TaskTypes      func(string, *gorm.DB) []kitsu.TaskType
 	DiscordCheck   func(string, string) firstTimeDiscordCheck
 	ListChannels   func(string, string) ([]DiscordGuildChannel, error)
 	CreateCategory func(string, string, string) (string, error)
@@ -90,8 +90,13 @@ type firstTimeConnectionOps struct {
 }
 
 var defaultFirstTimeConnectionOps = firstTimeConnectionOps{
-	Projects:  ListKitsuProjects,
-	TaskTypes: routingTaskTypesForProduction,
+	Projects: func(_ string, db *gorm.DB) []KitsuProject {
+		projects, _ := setupKitsuProjects(db)
+		return projects
+	},
+	TaskTypes: func(projectID string, db *gorm.DB) []kitsu.TaskType {
+		return setupKitsuTaskTypes(db, projectID)
+	},
 	DiscordCheck: func(token, guild string) firstTimeDiscordCheck {
 		status := checkDiscordStatus(token, guild)
 		reason := ""
@@ -129,7 +134,7 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 		return firstTimeConnectionPlan{}, fmt.Errorf("Production is already connected")
 	}
 	var project KitsuProject
-	for _, candidate := range ops.Projects(kitsuHost) {
+	for _, candidate := range ops.Projects(kitsuHost, db) {
 		if strings.TrimSpace(candidate.ID) == projectID {
 			project = candidate
 			break
@@ -168,7 +173,7 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 	if err != nil {
 		return firstTimeConnectionPlan{}, fmt.Errorf("Discord channel read failed")
 	}
-	taskTypes := ops.TaskTypes(projectID)
+	taskTypes := ops.TaskTypes(projectID, db)
 	if len(taskTypes) == 0 {
 		return firstTimeConnectionPlan{}, fmt.Errorf("No valid Task Types were found for this Production")
 	}
@@ -265,7 +270,7 @@ func renderWizardExecutionCard(lang string, r *http.Request, plan firstTimeConne
 	for _, entry := range plan.Plan.Entries {
 		hidden.WriteString(`<input type="hidden" name="included_task_type_id" value="` + html.EscapeString(entry.TaskTypeID) + `"><input type="hidden" name="channel_name_` + html.EscapeString(entry.TaskTypeID) + `" value="` + html.EscapeString(entry.ChannelName) + `"><input type="hidden" name="channel_order_` + html.EscapeString(entry.TaskTypeID) + `" value="` + fmt.Sprint(entry.Order) + `">`)
 	}
-	form := `<form id="wizard-execution-form" method="POST" action="` + html.EscapeString(withLang("/bot/setup", r)) + `"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="confirm_plan" value="yes"><input type="hidden" name="project_id" value="` + html.EscapeString(plan.Project.ID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(plan.GuildID) + `"><input type="hidden" name="notification_language" value="` + html.EscapeString(normalizedProductionNotificationLanguage(plan.NotificationLanguage)) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Plan.Fingerprint()) + `">` + hidden.String() + `<noscript><div class="button-row"><a class="btn-ghost" href="` + html.EscapeString(setupWizardURL(r, 5, plan.Project.ID, plan.GuildID, true)) + `">` + html.EscapeString(tr(lang, "wizard.back_to_review")) + `</a><button class="btn" type="submit">` + html.EscapeString(tr(lang, "wizard.execute")) + `</button></div></noscript></form>`
+	form := `<form id="wizard-execution-form" method="POST" action="` + html.EscapeString(withLang("/bot/setup", r)) + `"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="confirm_plan" value="yes"><input type="hidden" name="project_id" value="` + html.EscapeString(plan.Project.ID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(plan.GuildID) + `"><input type="hidden" name="category_id" value="` + html.EscapeString(plan.Plan.CategoryID) + `"><input type="hidden" name="notification_language" value="` + html.EscapeString(normalizedProductionNotificationLanguage(plan.NotificationLanguage)) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Plan.Fingerprint()) + `">` + hidden.String() + `<noscript><div class="button-row"><a class="btn-ghost" href="` + html.EscapeString(setupWizardURL(r, 5, plan.Project.ID, plan.GuildID, true)) + `">` + html.EscapeString(tr(lang, "wizard.back_to_review")) + `</a><button class="btn" type="submit">` + html.EscapeString(tr(lang, "wizard.execute")) + `</button></div></noscript></form>`
 	targets := `<dl class="wizard-connection-summary"><div><dt>` + html.EscapeString(tr(lang, "wizard.production_summary")) + `</dt><dd>` + html.EscapeString(plan.Project.Name) + `</dd></div><div><dt>` + html.EscapeString(tr(lang, "wizard.server_summary")) + `</dt><dd>` + html.EscapeString(firstTimeGuildName(lang, plan.GuildName)) + `</dd></div><div><dt>` + html.EscapeString(tr(lang, "wizard.area_summary")) + `</dt><dd>` + html.EscapeString(KitsuSyncCategoryName(plan.Project.Name)) + `</dd></div></dl>`
 	return `<section class="section-card glass" aria-labelledby="wizard-execute-title" role="status" aria-live="polite"><h2 id="wizard-execute-title">` + html.EscapeString(tr(lang, "wizard.execute_title")) + `</h2><p class="hint">` + html.EscapeString(tr(lang, "wizard.execute_hint")) + `</p>` + targets + `<p class="field-help">` + html.EscapeString(tr(lang, "wizard.execute_started")) + `</p>` + form + `<script>(function(){var form=document.getElementById('wizard-execution-form');if(form){form.submit();}})();</script></section>`
 }

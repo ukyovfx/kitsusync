@@ -620,7 +620,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			renderIANewConnection(w, r, db)
 			return
 		}
-		kitsuProjects := ListKitsuProjects(kitsuHost)
+		kitsuProjects, _ := setupKitsuProjects(db)
 		setupDone := map[string]bool{}
 		for _, project := range projects {
 			setupDone[project.KitsuProjectID] = true
