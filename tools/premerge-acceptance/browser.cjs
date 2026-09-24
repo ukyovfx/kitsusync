@@ -247,7 +247,14 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     await record(page, 206, '/bot/admin/users', 'ja', 'mobile', 'ready unmapped synthetic humans', 'Japanese mobile layout rendered without overflow');
     if (unexpectedDialogs !== 0) throw new Error('hostile fixture triggered a browser dialog');
     if (unexpectedExternalRequests.length !== 0) throw new Error(`unexpected external requests were intercepted: ${JSON.stringify(unexpectedExternalRequests)}`);
-    if (browserErrors.length !== 0) throw new Error(`browser console/runtime errors: ${browserErrors.length}`);
+    if (browserErrors.length !== 0) {
+      const safeErrors = browserErrors.map(message => message
+        .replaceAll(syntheticKitsu, '[REDACTED]')
+        .replaceAll(syntheticDiscord, '[REDACTED]')
+        .replaceAll(cookie, '[REDACTED]')
+        .slice(0, 400));
+      throw new Error(`browser console/runtime errors: ${JSON.stringify(safeErrors)}`);
+    }
 
     const report = { candidate_sha: process.env.KITSUSYNC_ACCEPTANCE_CANDIDATE_SHA || 'local-unset', result: 'PASS', browser: 'Chromium via Playwright', intercepted_synthetic_routes: [...new Set(syntheticExternalFixtures)], unexpected_external_requests: unexpectedExternalRequests, records };
     fs.writeFileSync(path.join(output, 'browser-results.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
