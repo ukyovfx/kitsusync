@@ -194,7 +194,8 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
             await bodyHas(page, 'Synthetic Discord Bot', false);
             if (await page.locator('img').count() !== 0) throw new Error('hostile Kitsu value created an image node');
             if (await page.locator('select[name="discord_user_id"] option[value="44444444444444444"]').count() !== 0) throw new Error('Discord bot member was offered as a selectable mapping');
-            if ((await page.locator('.user-link-grid-row').innerText()).includes('Synthetic Bot Identity')) throw new Error('Kitsu bot person was rendered as a mappable row');
+            const userRows = await page.locator('.user-link-grid-row').allInnerTexts();
+            if (userRows.some(row => row.includes('Synthetic Bot Identity'))) throw new Error('Kitsu bot person was rendered as a mappable row');
             const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
             if (overflow) throw new Error('User Linking page overflows the viewport');
           }
