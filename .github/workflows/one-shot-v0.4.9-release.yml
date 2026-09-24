@@ -1,0 +1,81 @@
+name: One-shot v0.4.9 release
+
+on:
+  push:
+    branches:
+      - ops/v0.4.9-release-once
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_MASTER_SHA: 22b3a3c9400dad4ef012a570816934d57e736a06
+      RELEASE_TAG: v0.4.9
+      RELEASE_VERSION: 0.4.9
+    steps:
+      - name: Check out exact master
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Verify release preconditions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MASTER_SHA"
+          test "$(tr -d '\r\n' < VERSION)" = "$RELEASE_VERSION"
+          git fetch --tags --force origin
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$EXPECTED_MASTER_SHA"
+          fi
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$EXPECTED_MASTER_SHA"
+          fi
+
+      - name: Create immutable project-policy tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" "$EXPECTED_MASTER_SHA" -m "KitsuSync $RELEASE_TAG"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$EXPECTED_MASTER_SHA"
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --target "$EXPECTED_MASTER_SHA" \
+              --title "KitsuSync $RELEASE_TAG" \
+              --generate-notes
+          fi
+
+      - name: Dispatch canonical release deployment bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-bundle.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref master \
+            -f release_tag="$RELEASE_TAG" \
+            -f deployment_mode=normal
+
+      - name: Verify published release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$EXPECTED_MASTER_SHA"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease --jq 'select(.tagName == "v0.4.9" and .isDraft == false and .isPrerelease == false)' >/dev/null
