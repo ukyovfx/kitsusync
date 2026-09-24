@@ -39,7 +39,7 @@ jobs:
             echo "harness_commit=$(git rev-parse HEAD)"
             echo "accepted_master=84407c582bb0efd0eafd9b0c329c3e3955690b2d"
             echo "pr205=f2bfaed4fa06905a080ab8303f2a57c056a2faf0"
-            echo "pr207=22cb273513c1124fdea8a81abd843f947361c4e2"
+            echo "pr207=6bbad64df233d152929fe4651354ce2f57647b22"
             echo "pr206=d3fee3bd0b096563ee7a06133f7653b03b188eb3"
           } > tools/premerge-acceptance/output/manifest.txt
 
@@ -58,7 +58,7 @@ jobs:
           check_ref refs/heads/master 84407c582bb0efd0eafd9b0c329c3e3955690b2d
           check_ref refs/heads/split/pr199-connections-token-ux f2bfaed4fa06905a080ab8303f2a57c056a2faf0
           check_ref refs/heads/split/pr199-user-linking-readiness d3fee3bd0b096563ee7a06133f7653b03b188eb3
-          check_ref refs/heads/fix/setup-runtime-kitsu-source 22cb273513c1124fdea8a81abd843f947361c4e2
+          check_ref refs/heads/fix/setup-runtime-kitsu-source 6bbad64df233d152929fe4651354ce2f57647b22
           git fetch --no-tags origin \
             refs/heads/master:refs/remotes/acceptance/master \
             refs/heads/split/pr199-connections-token-ux:refs/remotes/acceptance/pr205 \
@@ -93,7 +93,7 @@ jobs:
             }
           }
           assert_parents "$merge205" 84407c582bb0efd0eafd9b0c329c3e3955690b2d f2bfaed4fa06905a080ab8303f2a57c056a2faf0
-          assert_parents "$merge207" "$merge205" 22cb273513c1124fdea8a81abd843f947361c4e2
+          assert_parents "$merge207" "$merge205" 6bbad64df233d152929fe4651354ce2f57647b22
           assert_parents "$candidate" "$merge207" d3fee3bd0b096563ee7a06133f7653b03b188eb3
           {
             echo "merge_pr205=$merge205"
