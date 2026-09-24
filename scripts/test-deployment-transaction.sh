@@ -282,7 +282,7 @@ if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$w
 fi
 grep -Fq 'release provenance is not deployable' "$work/release-rejected-preview.log"
 stage=preview-wrong-sha-rejection
-if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "${source_commit%?}0" PREVIEW >"$work/wrong-preview-sha.log" 2>&1; then
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy 0000000000000000000000000000000000000000 PREVIEW >"$work/wrong-preview-sha.log" 2>&1; then
   printf 'preview wrapper accepted a different source SHA\n' >&2; exit 1
 fi
 grep -Fq 'preview candidate source or image identity mismatch' "$work/wrong-preview-sha.log"
