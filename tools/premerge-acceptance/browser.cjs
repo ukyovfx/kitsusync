@@ -43,6 +43,7 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     const page = await context.newPage();
     let unexpectedDialogs = 0;
     const browserErrors = [];
+    const errorResponses = [];
     const unexpectedExternalRequests = [];
     const syntheticExternalFixtures = [];
     await context.route('**/*', async route => {
@@ -65,6 +66,9 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     });
     page.on('pageerror', error => browserErrors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') browserErrors.push(message.text()); });
+    page.on('response', response => {
+      if (response.status() >= 400) errorResponses.push({ status: response.status(), path: new URL(response.url()).pathname });
+    });
 
     // PR #205: real authenticated Connections page and reversible token inputs.
     await page.goto(`${base}/bot/admin/bot?edit=1&lang=en`, { waitUntil: 'networkidle' });
@@ -253,7 +257,7 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
         .replaceAll(syntheticDiscord, '[REDACTED]')
         .replaceAll(cookie, '[REDACTED]')
         .slice(0, 400));
-      throw new Error(`browser console/runtime errors: ${JSON.stringify(safeErrors)}`);
+      throw new Error(`browser console/runtime errors: ${JSON.stringify(safeErrors)}; error_responses=${JSON.stringify(errorResponses)}`);
     }
 
     const report = { candidate_sha: process.env.KITSUSYNC_ACCEPTANCE_CANDIDATE_SHA || 'local-unset', result: 'PASS', browser: 'Chromium via Playwright', intercepted_synthetic_routes: [...new Set(syntheticExternalFixtures)], unexpected_external_requests: unexpectedExternalRequests, records };
