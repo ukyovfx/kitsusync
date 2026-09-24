@@ -1673,14 +1673,14 @@ func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *tes
 func TestStatusPolishUsesRealSparkline(t *testing.T) {
 	items := []APIObservation{{At: time.Now().Add(-30 * time.Second), Duration: 10 * time.Millisecond, Success: true}, {At: time.Now().Add(-5 * time.Second), Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
-	if !strings.Contains(graph, `class="telemetry-bar success"`) || !strings.Contains(graph, `class="telemetry-bar failure"`) || !strings.Contains(graph, `viewBox="0 0 466 104"`) {
-		t.Fatal("bar graph did not reflect the recorded observations")
+	if !strings.Contains(graph, `class="telemetry-point success"`) || !strings.Contains(graph, `class="telemetry-failure"`) || !strings.Contains(graph, `viewBox="0 0 496 104"`) {
+		t.Fatal("line graph did not reflect the recorded observations")
 	}
-	if strings.Contains(apiObservationGraph(nil), "telemetry-bar") {
+	if strings.Contains(apiObservationGraph(nil), "telemetry-point") {
 		t.Fatal("empty telemetry should not render a fake graph")
 	}
 	if !strings.Contains(apiObservationGraph([]APIObservation{{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}), `tabindex="0"`) {
-		t.Fatal("a single telemetry sample should render an accessible bar")
+		t.Fatal("a single telemetry sample should render an accessible point")
 	}
 }
 
@@ -1792,8 +1792,8 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Count(body, `<details class="pipeline-health-details">`) < 3 || strings.Contains(body, `class="pipeline-health-details-toggle"`) || strings.Contains(body, `>Details<`) {
-		t.Fatalf("system status operational details are not selectively disclosed")
+	if strings.Contains(body, `<details`) || strings.Contains(body, `pipeline-health-details-toggle`) || strings.Contains(body, `観測診断`) || strings.Contains(body, `通知診断`) || strings.Contains(body, `Connection and routing diagnostics`) {
+		t.Fatalf("normal System Status rendered expandable diagnostics")
 	}
 	if strings.Contains(body, "Internal data diagnostics") || strings.Contains(body, "内部データ診断") {
 		t.Fatal("system status exposed a datastore-only diagnostic disclosure")
@@ -1804,13 +1804,13 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `window.setInterval(refresh,interval)`) {
 		t.Fatal("system status does not include the bounded snapshot interval")
 	}
-	if !strings.Contains(body, `Date.parse(item.at)`) || !strings.Contains(body, `telemetry-bar`) {
-		t.Fatal("system status graph does not use timestamp-positioned bars")
+	if !strings.Contains(body, `Date.parse(item.at)`) || !strings.Contains(body, `telemetry-line`) || strings.Contains(body, `telemetry-bar`) {
+		t.Fatal("system status graph does not use timestamp-positioned line observations")
 	}
 	if !strings.Contains(body, `function scale(items)`) || !strings.Contains(body, `upper=scale(items)`) {
 		t.Fatal("system status refresh does not apply independent zero-based Y scales")
 	}
-	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2.5m`) {
+	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2m30s`) {
 		t.Fatal("system status refresh is missing canonical time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
@@ -1826,8 +1826,8 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 			refreshScript = body[refreshStart : refreshStart+refreshEnd]
 		}
 	}
-	if strings.Contains(refreshScript, `class='chart-axis'`) || strings.Contains(refreshScript, `class="chart-axis"`) || strings.Contains(refreshScript, `telemetry-line`) {
-		t.Fatal("system status refresh retains obsolete line/axis chrome")
+	if strings.Contains(refreshScript, `class='chart-axis'`) || strings.Contains(refreshScript, `class="chart-axis"`) || !strings.Contains(refreshScript, `telemetry-line`) {
+		t.Fatal("system status refresh is missing line graph rendering")
 	}
 	if !strings.Contains(body, `class="api-observation-details"`) {
 		t.Fatal("system status cards do not reserve shared detail geometry")
@@ -1844,12 +1844,12 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 }
 
 func TestSystemStatusUsesContextualDiagnosticsLabels(t *testing.T) {
-	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Configured", class: "success", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
-	if strings.Contains(rendered, "pipeline-health-details-toggle") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, ">Details<") {
-		t.Fatal("system status should not use a generic Details control")
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Needs review", class: "warning", action: "/bot/admin/projects", actionLabel: "Review Productions", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
+	if strings.Contains(rendered, "<details") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, "Connection and routing diagnostics") {
+		t.Fatal("system status should not render expandable diagnostics")
 	}
-	if !strings.Contains(rendered, "Connection and routing diagnostics") {
-		t.Fatal("system status omitted the contextual diagnostics label")
+	if !strings.Contains(rendered, `class="pipeline-health-rail"`) || !strings.Contains(rendered, `href="/bot/admin/projects"`) {
+		t.Fatal("status and its real destination are not aligned in the right rail")
 	}
 }
 
