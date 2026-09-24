@@ -20,7 +20,11 @@
 # App
 /conf.toml
 tests.bat
-/tools
+/tools/*
+!/tools/premerge-acceptance/
+!/tools/premerge-acceptance/**
+/tools/premerge-acceptance/node_modules/
+/tools/premerge-acceptance/output/
 /*.db
 /release
 /release/*.db

@@ -1,0 +1,217 @@
+name: Pre-merge browser acceptance
+
+on:
+  push:
+    branches: [acceptance/premerge-205-206-207-r4-harness]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: premerge-browser-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Linux and Chromium dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev iptables curl
+          npm install --prefix tools/premerge-acceptance --no-save --no-package-lock playwright@1.55.1
+          tools/premerge-acceptance/node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Record pinned source identities
+        run: |
+          mkdir -p tools/premerge-acceptance/output
+          {
+            echo "acceptance_branch=$GITHUB_REF_NAME"
+            echo "harness_commit=$(git rev-parse HEAD)"
+            echo "accepted_master=84407c582bb0efd0eafd9b0c329c3e3955690b2d"
+            echo "pr205=f2bfaed4fa06905a080ab8303f2a57c056a2faf0"
+            echo "pr207=22cb273513c1124fdea8a81abd843f947361c4e2"
+            echo "pr206=d3fee3bd0b096563ee7a06133f7653b03b188eb3"
+          } > tools/premerge-acceptance/output/manifest.txt
+
+      - name: Verify accepted base and source PR heads have not moved
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_ref() {
+            local ref="$1" expected="$2" actual
+            actual="$(git ls-remote origin "$ref" | awk 'NR==1 { print $1 }')"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Source ref changed: $ref expected=$expected actual=$actual" >&2
+              exit 1
+            fi
+          }
+          check_ref refs/heads/master 84407c582bb0efd0eafd9b0c329c3e3955690b2d
+          check_ref refs/heads/split/pr199-connections-token-ux f2bfaed4fa06905a080ab8303f2a57c056a2faf0
+          check_ref refs/heads/split/pr199-user-linking-readiness d3fee3bd0b096563ee7a06133f7653b03b188eb3
+          check_ref refs/heads/fix/setup-runtime-kitsu-source 22cb273513c1124fdea8a81abd843f947361c4e2
+          git fetch --no-tags origin \
+            refs/heads/master:refs/remotes/acceptance/master \
+            refs/heads/split/pr199-connections-token-ux:refs/remotes/acceptance/pr205 \
+            refs/heads/fix/setup-runtime-kitsu-source:refs/remotes/acceptance/pr207 \
+            refs/heads/split/pr199-user-linking-readiness:refs/remotes/acceptance/pr206
+          echo "remote_sources_unchanged=PASS" >> tools/premerge-acceptance/output/manifest.txt
+
+      - name: Build disposable ordered integration candidate
+        id: integration
+        run: |
+          set -euo pipefail
+          integration="$RUNNER_TEMP/kitsusync-integration"
+          git worktree add --detach "$integration" 84407c582bb0efd0eafd9b0c329c3e3955690b2d
+          echo "created=true" >> "$GITHUB_OUTPUT"
+          export GIT_AUTHOR_NAME="Codex acceptance"
+          export GIT_AUTHOR_EMAIL="codex-acceptance@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          git -C "$integration" merge --no-ff --no-edit refs/remotes/acceptance/pr205
+          merge205="$(git -C "$integration" rev-parse HEAD)"
+          git -C "$integration" merge --no-ff --no-edit refs/remotes/acceptance/pr207
+          merge207="$(git -C "$integration" rev-parse HEAD)"
+          git -C "$integration" merge --no-ff --no-edit refs/remotes/acceptance/pr206
+          candidate="$(git -C "$integration" rev-parse HEAD)"
+          tree="$(git -C "$integration" rev-parse 'HEAD^{tree}')"
+          assert_parents() {
+            local commit="$1" expected_first="$2" expected_second="$3" actual
+            actual="$(git -C "$integration" rev-list --parents -n 1 "$commit")"
+            [[ "$actual" == "$commit $expected_first $expected_second" ]] || {
+              echo "Unexpected ordered merge parents for $commit: $actual" >&2
+              exit 1
+            }
+          }
+          assert_parents "$merge205" 84407c582bb0efd0eafd9b0c329c3e3955690b2d f2bfaed4fa06905a080ab8303f2a57c056a2faf0
+          assert_parents "$merge207" "$merge205" 22cb273513c1124fdea8a81abd843f947361c4e2
+          assert_parents "$candidate" "$merge207" d3fee3bd0b096563ee7a06133f7653b03b188eb3
+          {
+            echo "merge_pr205=$merge205"
+            echo "merge_pr207=$merge207"
+            echo "merge_pr206=$candidate"
+            echo "integration_candidate=$candidate"
+            echo "integration_tree=$tree"
+          } >> tools/premerge-acceptance/output/manifest.txt
+          cp tools/premerge-acceptance/premerge_browser_acceptance_test.go "$integration/src/setup/"
+          mkdir -p "$integration/tools/premerge-acceptance"
+          cp tools/premerge-acceptance/browser.cjs "$integration/tools/premerge-acceptance/"
+          echo "integration_tree_matches_pinned_sources=PASS" >> tools/premerge-acceptance/output/manifest.txt
+
+      - name: Linux CGO validation
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/kitsusync-integration"
+          CGO_ENABLED=1 go vet ./src/...
+          CGO_ENABLED=1 go test ./src/... -count=1 -timeout=240s
+          git diff --check 84407c582bb0efd0eafd9b0c329c3e3955690b2d...HEAD
+          cat > .env.local <<'VARS'
+          KITSU_HOSTNAME=http://ci.invalid/
+          KITSU_API_BASE_URL=http://ci.invalid/
+          DISCORD_BOT_TOKEN=acceptance-placeholder-only
+          DISCORD_GUILD_ID=000000000000000000
+          FB_PASSWORD=acceptance-placeholder-only
+          FB_USERNAME=acceptance-user
+          VARS
+          FB_USERNAME=acceptance-user FB_PASSWORD=acceptance-placeholder-only KITSUSYNC_APP_VERSION=0.4.7 docker compose --env-file .env.local config -q
+          echo "go_vet=PASS" >> tools/premerge-acceptance/output/manifest.txt
+          echo "go_test_cgo=PASS" >> tools/premerge-acceptance/output/manifest.txt
+          echo "git_diff_check=PASS" >> tools/premerge-acceptance/output/manifest.txt
+          echo "compose_config=PASS" >> tools/premerge-acceptance/output/manifest.txt
+
+      - name: Save runner firewall state
+        id: firewall
+        run: |
+          set -euo pipefail
+          sudo iptables-save > "$RUNNER_TEMP/premerge-ipv4.rules"
+          sudo ip6tables-save > "$RUNNER_TEMP/premerge-ipv6.rules"
+          echo "saved=true" >> "$GITHUB_OUTPUT"
+
+      - name: Isolate runner egress and self-test
+        run: |
+          set -euo pipefail
+          command -v iptables-save >/dev/null
+          command -v iptables-restore >/dev/null
+          command -v ip6tables-save >/dev/null
+          command -v ip6tables-restore >/dev/null
+          sudo iptables -F OUTPUT
+          sudo iptables -P OUTPUT DROP
+          sudo iptables -A OUTPUT -o lo -j ACCEPT
+          sudo ip6tables -F OUTPUT
+          sudo ip6tables -P OUTPUT DROP
+          sudo ip6tables -A OUTPUT -o lo -j ACCEPT
+          sudo iptables -S OUTPUT | grep -Fx -- '-P OUTPUT DROP'
+          sudo iptables -S OUTPUT | grep -Fx -- '-A OUTPUT -o lo -j ACCEPT'
+          sudo ip6tables -S OUTPUT | grep -Fx -- '-P OUTPUT DROP'
+          sudo ip6tables -S OUTPUT | grep -Fx -- '-A OUTPUT -o lo -j ACCEPT'
+          python3 -m http.server 18765 --bind 127.0.0.1 --directory tools/premerge-acceptance >/dev/null 2>&1 &
+          probe_pid=$!
+          trap 'kill "$probe_pid" 2>/dev/null || true' EXIT
+          loopback_ready=false
+          for _ in $(seq 1 20); do
+            if curl --fail --silent --max-time 1 http://127.0.0.1:18765/ >/dev/null; then
+              loopback_ready=true
+              break
+            fi
+            kill -0 "$probe_pid" 2>/dev/null || { echo "Loopback probe server exited before becoming ready" >&2; exit 1; }
+            sleep 0.25
+          done
+          [[ "$loopback_ready" == true ]] || { echo "Loopback probe server did not become ready" >&2; exit 1; }
+          if curl --fail --silent --max-time 4 --resolve example.com:443:93.184.216.34 https://example.com >/dev/null 2>&1; then
+            echo "External IPv4 HTTP/HTTPS egress unexpectedly succeeded" >&2; exit 1
+          fi
+          if curl --fail --silent --max-time 4 --resolve example.com:80:93.184.216.34 http://example.com >/dev/null 2>&1; then
+            echo "External IPv4 HTTP egress unexpectedly succeeded" >&2; exit 1
+          fi
+          if curl -6 --fail --silent --max-time 4 https://[2606:4700:4700::1111] >/dev/null 2>&1; then
+            echo "External IPv6 HTTPS egress unexpectedly succeeded" >&2; exit 1
+          fi
+          echo "network_isolation_self_test=PASS (loopback allowed; IPv4 and IPv6 external denied)" >> tools/premerge-acceptance/output/manifest.txt
+
+      - name: Authenticated Chromium acceptance under egress block
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/kitsusync-integration"
+          KITSUSYNC_PREMERGE_BROWSER=1 KITSUSYNC_ACCEPTANCE_OUTPUT="$GITHUB_WORKSPACE/tools/premerge-acceptance/output" KITSUSYNC_ACCEPTANCE_CANDIDATE_SHA="$(git rev-parse HEAD)" NODE_PATH="$GITHUB_WORKSPACE/tools/premerge-acceptance/node_modules" CGO_ENABLED=1 go test ./src/setup -run '^TestPremergeBrowserAcceptance$' -count=1 -timeout=300s
+
+      - name: Restore runner firewall
+        if: always() && steps.firewall.outputs.saved == 'true'
+        id: restore
+        run: |
+          set -euo pipefail
+          sudo iptables-restore < "$RUNNER_TEMP/premerge-ipv4.rules"
+          sudo ip6tables-restore < "$RUNNER_TEMP/premerge-ipv6.rules"
+          echo "firewall_restoration=PASS" >> tools/premerge-acceptance/output/manifest.txt
+          echo "restored=true" >> "$GITHUB_OUTPUT"
+
+      - name: Clean temporary browser dependencies
+        if: always() && steps.restore.outputs.restored == 'true'
+        run: |
+          set -euo pipefail
+          rm -rf -- tools/premerge-acceptance/node_modules
+          rm -f -- "$RUNNER_TEMP/premerge-ipv4.rules" "$RUNNER_TEMP/premerge-ipv6.rules"
+          echo "temporary_dependencies=removed" >> tools/premerge-acceptance/output/manifest.txt
+
+      - name: Remove disposable integration worktree
+        if: always() && steps.restore.outputs.restored == 'true' && steps.integration.outputs.created == 'true'
+        run: |
+          set -euo pipefail
+          git worktree remove --force "$RUNNER_TEMP/kitsusync-integration"
+          echo "integration_worktree=removed" >> tools/premerge-acceptance/output/manifest.txt
+
+      - name: Upload non-secret browser evidence
+        if: always() && (steps.firewall.outputs.saved != 'true' || steps.restore.outputs.restored == 'true')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kitsusync-premerge-browser-acceptance-${{ github.sha }}
+          path: tools/premerge-acceptance/output/
+          if-no-files-found: warn

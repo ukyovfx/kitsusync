@@ -1,0 +1,7 @@
+{
+  "name": "kitsusync-premerge-acceptance",
+  "private": true,
+  "devDependencies": {
+    "playwright": "1.55.1"
+  }
+}
