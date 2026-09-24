@@ -235,6 +235,8 @@ async function record(page, pr, route, locale, viewport, state, evidence) {
     await page.screenshot({ path: path.join(output, 'pr206-mapped-desktop.png'), fullPage: true });
     await record(page, 206, '/bot/admin/users', 'en', 'desktop', 'mapped synthetic human', 'Save disabled until change; selected member saved and persisted after reload');
     await page.locator('form.delete-form button[type="submit"]').first().click();
+    await page.locator('#deleteModal.open').waitFor({ state: 'visible' });
+    await page.locator('#deleteConfirmBtn').click();
     await page.waitForLoadState('networkidle');
     await page.reload({ waitUntil: 'networkidle' });
     if ((await humanRow().locator('td').nth(1).innerText()).trim() !== 'Not set') throw new Error('Unlink did not persist after reload');
