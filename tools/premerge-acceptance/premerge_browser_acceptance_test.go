@@ -140,6 +140,9 @@ func TestPremergeBrowserAcceptance(t *testing.T) {
 	if err := setRuntimeDiscordBotToken(db, premergeDiscordToken); err != nil {
 		t.Fatal("persist synthetic Discord token")
 	}
+	if storedRuntimeDiscordBotToken(db) != premergeDiscordToken {
+		t.Fatal("synthetic persisted Discord credential could not be read")
+	}
 	_ = os.Unsetenv("KitsuJWTToken")
 	_ = os.Unsetenv("DISCORD_BOT_TOKEN")
 	if _, exists := os.LookupEnv("KitsuJWTToken"); exists {
@@ -202,8 +205,12 @@ func TestPremergeBrowserAcceptance(t *testing.T) {
 	ready := func() bool { return true }
 	mux := http.NewServeMux()
 	mux.Handle("/bot/admin/bot", CSRFProtection(RequireSession(BotHandlerWithRuntime(db, nil, ready))))
-	mux.Handle("/bot/admin/users", CSRFProtection(RequireSession(UsersHandler(db, ""))))
-	mux.Handle("/bot/setup", CSRFProtection(RequireSession(Handler("", "", "", db, ready, nil))))
+	mux.Handle("/bot/admin/users", CSRFProtection(RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		UsersHandler(db, storedRuntimeDiscordBotToken(db))(w, r)
+	}))))
+	mux.Handle("/bot/setup", CSRFProtection(RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Handler("", "", storedRuntimeDiscordBotToken(db), db, ready, nil)(w, r)
+	}))))
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := r.URL.Query().Get("scenario")
 		switch mode {
