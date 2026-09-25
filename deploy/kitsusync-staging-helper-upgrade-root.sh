@@ -45,13 +45,13 @@ trap cleanup_upgrade EXIT
 install -o root -g root -m 0600 "$helper_file" "$root_tmp/kitsusync-staging-deploy"
 [[ "$(sha256sum "$root_tmp/kitsusync-staging-deploy" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die ROOT_COPY_DIGEST_INVALID
 bash -n "$root_tmp/kitsusync-staging-deploy" || die NEW_HELPER_SYNTAX_INVALID
-/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v2' || die NEW_HELPER_CONTRACT_INVALID
+/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v3' || die NEW_HELPER_CONTRACT_INVALID
 
 target_tmp="$(mktemp /usr/local/sbin/.kitsusync-staging-deploy.XXXXXX)"
 install -o root -g root -m 0750 "$root_tmp/kitsusync-staging-deploy" "$target_tmp"
 mv -f -- "$target_tmp" "$TARGET"
 target_tmp=""
 [[ "$(sha256sum "$TARGET" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die INSTALLED_HELPER_DIGEST_INVALID
-"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v2' || die INSTALLED_HELPER_CONTRACT_INVALID
+"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v3' || die INSTALLED_HELPER_CONTRACT_INVALID
 rm -rf -- "$INCOMING"
 printf 'STAGING_HELPER_UPGRADE=PASS source_sha=%s helper_sha256=%s\n' "$SOURCE_SHA" "$NEW_HELPER_SHA"

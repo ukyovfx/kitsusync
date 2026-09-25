@@ -103,7 +103,7 @@ verify_staging_network_name() {
   docker inspect --format '{{json .NetworkSettings.Networks}}' "$1" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)'
 }
 if [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" == --contract-info ]]; then
-  printf 'STAGING_HELPER_CONTRACT=staging-v2 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+  printf 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
   exit 0
 fi
 [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
@@ -112,10 +112,20 @@ readonly INCOMING="/var/tmp/kitsusync-staging-candidate-${SOURCE_SHA}"
 readonly PRIVATE="${STAGE_ROOT}/incoming-${SOURCE_SHA}"
 readonly IMAGE_REF="kitsusync:ci-${SOURCE_SHA}"
 readonly PROJECT=kitsusync-staging
+readonly TRUSTED_IMAGE_IDENTITY_SHA256=8ccc4279655004942b6c2c19c532d3ee25d8e47ea7fca41843da3310a63ae5e7
+readonly TRUSTED_SQLITE_BACKUP_SHA256=18803d1f00883be6c2ee4d9c91c801679b89e31d47349253ee1654ec01df4844
+
+verify_trusted_candidate_tool() {
+  local tool_path="$1" expected_sha256="$2" observed_sha256
+  observed_sha256="$(sha256sum "$tool_path" | cut -d' ' -f1)" || return 1
+  [[ "$observed_sha256" == "$expected_sha256" ]]
+}
 
 [[ -d "$STAGE_ROOT" && ! -L "$STAGE_ROOT" && "$(stat -c '%u:%g:%a' "$STAGE_ROOT")" == 0:0:700 ]] || die STAGING_ROOT_UNSAFE
 [[ -d "$CONFIG_ROOT" && ! -L "$CONFIG_ROOT" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT")" == 0:0:700 ]] || die STAGING_CONFIG_UNSAFE
 [[ -f "$CONFIG_ROOT/conf.toml" && ! -L "$CONFIG_ROOT/conf.toml" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT/conf.toml")" == 0:0:400 ]] || die STAGING_CONFIG_FILE_UNSAFE
+exec 9>>"$STAGE_ROOT/deploy.lock"
+flock -w 1800 -x 9 || die STAGING_DEPLOY_LOCK_TIMEOUT
 incoming_owner_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"
 incoming_mode="$(stat -c '%a' "$INCOMING" 2>/dev/null || printf missing)"
 trusted_owner_uids="$(id -u ukyo_vfx),$(id -u vfx-breakglass)"
@@ -201,6 +211,12 @@ for pair in \
   file="${pair%%:*}" key="${pair#*:}" expected="$(field "$key")"
   [[ "$expected" =~ ^[0-9a-f]{64}$ && "$(sha256sum "$PRIVATE/$file" | cut -d' ' -f1)" == "$expected" ]] || die ARTIFACT_FILE_DIGEST_MISMATCH
 done
+
+# These artifact-provided programs execute as root below. Provenance only proves
+# that the candidate supplied a file; pin the reviewed implementations so a
+# routine candidate cannot turn validation/backup into arbitrary root code.
+verify_trusted_candidate_tool "$PRIVATE/kitsusync-image-identity" "$TRUSTED_IMAGE_IDENTITY_SHA256" || die STAGING_TRUSTED_TOOL_MISMATCH
+verify_trusted_candidate_tool "$PRIVATE/kitsusync-sqlite-backup" "$TRUSTED_SQLITE_BACKUP_SHA256" || die STAGING_TRUSTED_TOOL_MISMATCH
 
 archive_sha="$(sha256sum "$PRIVATE/kitsusync-image.tar" | cut -d' ' -f1)"
 [[ "$archive_sha" == "$(field image_archive_sha256)" ]] || die IMAGE_ARCHIVE_DIGEST_MISMATCH

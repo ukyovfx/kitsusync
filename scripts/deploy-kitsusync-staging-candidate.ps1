@@ -31,6 +31,14 @@ function Invoke-GhJson([string]$Endpoint) {
     return (($response -join "`n") | ConvertFrom-Json)
 }
 
+function Resolve-NativeCommand([string]$Name) {
+    foreach ($candidate in @("$Name.exe", $Name)) {
+        $command = Get-Command $candidate -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($command) { return $command.Source }
+    }
+    throw "Required command is not installed: $Name"
+}
+
 function Read-Provenance([string]$Path) {
     $values = @{}
     foreach ($line in Get-Content -LiteralPath $Path) {
@@ -136,7 +144,7 @@ function Invoke-RemotePreflight([string]$HostName, [string]$Path, [string[]]$Nam
     $codeBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remotePreflightPython))
     $configBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($configJson))
     $remoteCommand = 'python3 -c ''import base64,sys;sys.argv=[sys.argv[0],base64.b64decode("' + $configBase64 + '").decode()];exec(base64.b64decode("' + $codeBase64 + '"))'''
-    $output = @(& $script:ssh -o BatchMode=yes -o StrictHostKeyChecking=yes $HostName $remoteCommand 2>&1)
+    $output = @(& $script:ssh @script:sshOptions $HostName $remoteCommand 2>&1)
     $status = $LASTEXITCODE
     foreach ($line in $output) { Write-Output $line }
     if ($status -ne 0 -or @($output | Where-Object { $_ -like 'STAGING_UPLOAD_PREFLIGHT=FAIL*' }).Count -gt 0) {
@@ -145,12 +153,39 @@ function Invoke-RemotePreflight([string]$HostName, [string]$Path, [string[]]$Nam
 }
 
 function Get-RemoteHelperContract {
-    $output = @(& $script:ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
+    $output = @(& $script:ssh @script:sshOptions $script:remoteHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
     return @{ Status = $LASTEXITCODE; Output = ($output -join "`n") }
 }
 
-$ghCommand = Get-Command gh.exe -ErrorAction Stop
-$script:gh = $ghCommand.Source
+function Assert-RoutineStagingHelperContract([int]$Status, [string]$Output) {
+    $expected = 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    if ($Status -ne 0 -or $Output -notmatch [regex]::Escape($expected)) {
+        throw "STAGING_BOOTSTRAP_REQUIRED expected='$expected' observed_status=$Status observed_output='$Output'"
+    }
+}
+
+$script:gh = Resolve-NativeCommand 'gh'
+$script:ssh = Resolve-NativeCommand 'ssh'
+$script:scp = Resolve-NativeCommand 'scp'
+$script:remoteHost = if ([string]::IsNullOrWhiteSpace($env:KITSUSYNC_STAGING_SSH_HOST)) { 'vfxstudio' } else { $env:KITSUSYNC_STAGING_SSH_HOST }
+$script:remoteUser = if ([string]::IsNullOrWhiteSpace($env:KITSUSYNC_STAGING_SSH_USER)) { 'ukyo_vfx' } else { $env:KITSUSYNC_STAGING_SSH_USER }
+if ($script:remoteHost -notmatch '^[A-Za-z0-9.-]+$' -or $script:remoteUser -ne 'ukyo_vfx') {
+    throw 'Staging SSH target must be a DNS/IP host reached as the unprivileged ukyo_vfx account.'
+}
+$script:remoteTarget = "$($script:remoteUser)@$($script:remoteHost)"
+$script:sshOptions = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes')
+if (-not [string]::IsNullOrWhiteSpace($env:KITSUSYNC_SSH_KNOWN_HOSTS_FILE)) {
+    $script:sshOptions += @('-o', "UserKnownHostsFile=$env:KITSUSYNC_SSH_KNOWN_HOSTS_FILE")
+}
+$script:scpOptions = @('-q', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes')
+if (-not [string]::IsNullOrWhiteSpace($env:KITSUSYNC_SSH_KNOWN_HOSTS_FILE)) {
+    $script:scpOptions += @('-o', "UserKnownHostsFile=$env:KITSUSYNC_SSH_KNOWN_HOSTS_FILE")
+}
+$script:sshOptions += @('-l', $script:remoteUser)
+$script:scpOptions += @('-o', "User=$($script:remoteUser)")
+$contract = Get-RemoteHelperContract
+Assert-RoutineStagingHelperContract $contract.Status $contract.Output
+
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("kitsusync-staging-artifact-$CommitSha-" + [guid]::NewGuid().ToString('N'))
 $zipPath = Join-Path $tempRoot 'candidate-artifact.zip'
 $extractRoot = Join-Path $tempRoot 'extracted'
@@ -159,50 +194,29 @@ $tempRootCreated = $false
 try {
     New-Item -ItemType Directory -Path $tempRoot | Out-Null
     $tempRootCreated = $true
-    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($sid in @(
-        [Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
-        [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
-    )) {
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-            $sid,
-            [System.Security.AccessControl.FileSystemRights]::FullControl,
-            [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit,
-            [System.Security.AccessControl.PropagationFlags]::None,
-            [System.Security.AccessControl.AccessControlType]::Allow
-        )
-        [void]$acl.AddAccessRule($rule)
+    if ($IsWindows) {
+        $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @(
+            [Security.Principal.WindowsIdentity]::GetCurrent().User,
+            [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+            [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+        )) {
+            $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                $sid,
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit,
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow
+            )
+            [void]$acl.AddAccessRule($rule)
+        }
+        Set-Acl -LiteralPath $tempRoot -AclObject $acl
+    } else {
+        & chmod 700 $tempRoot
+        if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the private artifact directory permissions.' }
     }
-    Set-Acl -LiteralPath $tempRoot -AclObject $acl
     New-Item -ItemType Directory -Path $extractRoot | Out-Null
-
-    $git = (Get-Command git.exe -ErrorAction Stop).Source
-    $repoRoot = (& $git -C $PSScriptRoot rev-parse --show-toplevel).Trim()
-    if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the candidate source checkout.' }
-    $checkoutSha = (& $git -C $repoRoot rev-parse HEAD).Trim()
-    if ($LASTEXITCODE -ne 0 -or $checkoutSha -ne $CommitSha) { throw 'The deploy script checkout HEAD does not match CommitSha.' }
-    $wrapperBlob = (& $git -C $repoRoot rev-parse "${CommitSha}:scripts/deploy-kitsusync-staging-candidate.ps1").Trim()
-    $localWrapperBlob = (& $git -C $repoRoot hash-object --path=scripts/deploy-kitsusync-staging-candidate.ps1 $PSCommandPath).Trim()
-    if ($LASTEXITCODE -ne 0 -or $wrapperBlob -ne $localWrapperBlob) { throw 'The running deploy script does not match the exact candidate source.' }
-    $helperSourcePath = Join-Path $tempRoot 'kitsusync-staging-deploy'
-    $rootUpgradeSourcePath = Join-Path $tempRoot 'upgrade-root.sh'
-    $helperBlob = (& $git -C $repoRoot rev-parse "${CommitSha}:deploy/kitsusync-staging-deploy").Trim()
-    $rootUpgradeBlob = (& $git -C $repoRoot rev-parse "${CommitSha}:deploy/kitsusync-staging-helper-upgrade-root.sh").Trim()
-    if ($LASTEXITCODE -ne 0 -or $helperBlob -notmatch '^[0-9a-f]{40}$' -or $rootUpgradeBlob -notmatch '^[0-9a-f]{40}$') {
-        throw 'Candidate staging helper source is missing from the exact commit.'
-    }
-    & $git -C $repoRoot cat-file blob $helperBlob > $helperSourcePath
-    if ($LASTEXITCODE -ne 0 -or (& $git -C $repoRoot hash-object $helperSourcePath).Trim() -ne $helperBlob) {
-        throw 'Could not materialize the exact staging helper from the candidate Git object.'
-    }
-    & $git -C $repoRoot cat-file blob $rootUpgradeBlob > $rootUpgradeSourcePath
-    if ($LASTEXITCODE -ne 0 -or (& $git -C $repoRoot hash-object $rootUpgradeSourcePath).Trim() -ne $rootUpgradeBlob) {
-        throw 'Could not materialize the exact root helper upgrade script from the candidate Git object.'
-    }
-    $newHelperSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $helperSourcePath).Hash.ToLowerInvariant()
-    $rootUpgradeSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $rootUpgradeSourcePath).Hash.ToLowerInvariant()
 
     $runs = Invoke-GhJson "repos/$repo/actions/runs?head_sha=$CommitSha&per_page=100"
     $ciRuns = @($runs.workflow_runs | Where-Object {
@@ -225,7 +239,7 @@ try {
     if (-not $artifact) { throw "No unexpired exact candidate artifact '$artifactName' exists on a successful CI run." }
     if ([string]$artifact.digest -notmatch '^sha256:[0-9a-f]{64}$') { throw 'GitHub artifact ZIP digest is missing or malformed.' }
 
-    & $ghCommand.Source api "repos/$repo/actions/artifacts/$($artifact.id)/zip" > $zipPath
+    & $script:gh api "repos/$repo/actions/artifacts/$($artifact.id)/zip" > $zipPath
     if ($LASTEXITCODE -ne 0) { throw 'GitHub artifact ZIP download failed.' }
     $actualZipDigest = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
     if ($actualZipDigest -ne $artifact.digest) { throw 'Downloaded artifact ZIP digest does not match GitHub artifact metadata.' }
@@ -292,64 +306,21 @@ try {
     Write-Output 'CANDIDATE_PROVENANCE=PASS'
     Write-Output 'CANDIDATE_FILE_DIGESTS=PASS'
 
-    $script:ssh = (Get-Command ssh.exe -ErrorAction Stop).Source
-    $script:scp = (Get-Command scp.exe -ErrorAction Stop).Source
     $stage = "/var/tmp/kitsusync-staging-candidate-$CommitSha"
-    Invoke-RemotePreflight 'vfxstudio' $stage $expectedFiles @{} 'candidate-before-upload' $true $false
-
-    $contract = Get-RemoteHelperContract
-    $helperContractReady = $contract.Status -eq 0 -and $contract.Output -match 'STAGING_HELPER_CONTRACT=staging-v2 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-    if (-not $helperContractReady) {
-        if ($contract.Output -notmatch 'STAGING_DEPLOY_ERROR=INVALID_ARGUMENT') {
-            throw "Installed staging helper contract could not be safely identified: $($contract.Output)"
-        }
-
-        $upgradeDir = "/var/tmp/kitsusync-staging-helper-upgrade-$CommitSha"
-        Invoke-RemotePreflight 'vfxstudio' $upgradeDir @('kitsusync-staging-deploy','upgrade-root.sh') @{} 'helper-upgrade-before-upload' $true $false
-        foreach ($upload in @(
-            @{ Path = $helperSourcePath; Name = 'kitsusync-staging-deploy' },
-            @{ Path = $rootUpgradeSourcePath; Name = 'upgrade-root.sh' }
-        )) {
-            & $script:scp -q -- $upload.Path "vfxstudio:${upgradeDir}/$($upload.Name)"
-            if ($LASTEXITCODE -ne 0) { throw "Staging helper upgrade upload failed: $($upload.Name)" }
-        }
-        & $script:ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio "chmod 600 $upgradeDir/kitsusync-staging-deploy $upgradeDir/upgrade-root.sh"
-        if ($LASTEXITCODE -ne 0) { throw 'Could not secure the staged helper upgrade files.' }
-        Invoke-RemotePreflight 'vfxstudio' $upgradeDir @('kitsusync-staging-deploy','upgrade-root.sh') @{
-            'kitsusync-staging-deploy' = $newHelperSha
-            'upgrade-root.sh' = $rootUpgradeSha
-        } 'helper-upgrade-before-privilege' $false $true
-
-        $breakglassIdentity = @(& $script:ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio-breakglass 'id -un; id -u' 2>&1)
-        $breakglassIdentityStatus = $LASTEXITCODE
-        $breakglassExpectedUidOutput = @(& $script:ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio 'id -u vfx-breakglass' 2>&1)
-        $breakglassExpectedUidStatus = $LASTEXITCODE
-        $breakglassExpectedUid = if ($breakglassExpectedUidOutput.Count -eq 1) { $breakglassExpectedUidOutput[0].Trim() } else { '' }
-        if ($breakglassIdentityStatus -ne 0 -or $breakglassExpectedUidStatus -ne 0 -or $breakglassIdentity.Count -lt 2 -or $breakglassIdentity[0].Trim() -ne 'vfx-breakglass' -or
-            $breakglassIdentity[1].Trim() -notmatch '^[0-9]+$' -or $breakglassIdentity[1].Trim() -ne $breakglassExpectedUid) {
-            throw "Breakglass SSH identity did not match the expected operator account: $($breakglassIdentity -join ' ')"
-        }
-        Write-Output "STAGING_BREAKGLASS_IDENTITY=PASS user=$($breakglassIdentity[0].Trim()) uid=$($breakglassIdentity[1].Trim())"
-        & $script:ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio-breakglass "sudo /bin/bash $upgradeDir/upgrade-root.sh $CommitSha $newHelperSha $rootUpgradeSha"
-        if ($LASTEXITCODE -ne 0) { throw 'Privileged staging helper upgrade failed.' }
-        $contract = Get-RemoteHelperContract
-        if ($contract.Status -ne 0 -or $contract.Output -notmatch 'STAGING_HELPER_CONTRACT=staging-v2 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass') {
-            throw "Installed staging helper contract verification failed: $($contract.Output)"
-        }
-    }
+    Invoke-RemotePreflight $script:remoteHost $stage $expectedFiles @{} 'candidate-before-upload' $true $false
 
     foreach ($name in $expectedFiles) {
-        & $script:scp -q -- (Join-Path $bundle $name) "vfxstudio:${stage}/${name}"
+        & $script:scp @script:scpOptions -- (Join-Path $bundle $name) "${script:remoteTarget}:${stage}/${name}"
         if ($LASTEXITCODE -ne 0) { throw "Candidate upload failed: $name" }
     }
-    & $script:ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio "chmod 600 $stage/*"
+    & $script:ssh @script:sshOptions $script:remoteHost "chmod 600 $stage/*"
     if ($LASTEXITCODE -ne 0) { throw 'Could not secure staged candidate file permissions.' }
     $candidateHashes = @{}
     foreach ($name in $expectedFiles) {
         $candidateHashes[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $bundle $name)).Hash.ToLowerInvariant()
     }
-    Invoke-RemotePreflight 'vfxstudio' $stage $expectedFiles $candidateHashes 'candidate-before-deploy' $false $true
-    & $script:ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio "sudo -n /usr/local/sbin/kitsusync-staging-deploy $CommitSha"
+    Invoke-RemotePreflight $script:remoteHost $stage $expectedFiles $candidateHashes 'candidate-before-deploy' $false $true
+    & $script:ssh @script:sshOptions $script:remoteHost "sudo -n /usr/local/sbin/kitsusync-staging-deploy $CommitSha"
     if ($LASTEXITCODE -ne 0) { throw 'Staging deployment or post-deployment verification failed.' }
 } finally {
     if ($tempRootCreated -and (Test-Path -LiteralPath $tempRoot)) {

@@ -19,7 +19,7 @@ cat >"${helper_file}" <<'HELPER'
 set -euo pipefail
 [[ "$#" -eq 1 && "$1" == --contract-info ]]
 [[ "$(stat -c '%a' "$0")" == 600 ]]
-printf 'STAGING_HELPER_CONTRACT=staging-v2 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+printf 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
 HELPER
 cat >"${old_file}" <<'OLD_HELPER'
 #!/usr/bin/env bash
@@ -36,7 +36,7 @@ import sys
 source, output, sandbox, uid, gid, old_sha = sys.argv[1:]
 script = Path(source).read_text()
 replacements = {
-    '[[ "${EUID}" -eq 0 &&': '[[ "${EUID}" -ge 0 &&',
+    '[[ "$EUID" -eq 0 &&': '[[ "$EUID" -ge 0 &&',
     'readonly INCOMING="/var/tmp/kitsusync-staging-helper-upgrade-${SOURCE_SHA}"': f'readonly INCOMING="{sandbox}/var-tmp/kitsusync-staging-helper-upgrade-${{SOURCE_SHA}}"',
     'readonly TARGET=/usr/local/sbin/kitsusync-staging-deploy': f'readonly TARGET={sandbox}/usr-local-sbin/kitsusync-staging-deploy',
     'readonly EXPECTED_OLD_HELPER_SHA=63d53cedfced32f26f4edc7338ee38d3a4c38e816a8427a6c7194bc366d25fc8': f'readonly EXPECTED_OLD_HELPER_SHA={old_sha}',
@@ -45,7 +45,7 @@ replacements = {
     'mktemp -d /var/tmp/kitsusync-staging-helper-upgrade-root.XXXXXX': f'mktemp -d "{sandbox}/var-tmp/kitsusync-staging-helper-upgrade-root.XXXXXX"',
     'mktemp /usr/local/sbin/.kitsusync-staging-deploy.XXXXXX': f'mktemp "{sandbox}/usr-local-sbin/.kitsusync-staging-deploy.XXXXXX"',
     'install -o root -g root -m ': f'install -o {uid} -g {gid} -m ',
-    '== "0:0:750"': f'== "{uid}:{gid}:750"',
+    '== 0:0:750': f'== {uid}:{gid}:750',
 }
 for old, new in replacements.items():
     if old not in script:
