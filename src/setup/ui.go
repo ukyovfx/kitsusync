@@ -794,7 +794,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
    .system-status-sections .api-sparkline .telemetry-line{fill:none;stroke:#8ecf8b;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
    .system-status-sections .api-sparkline .telemetry-point.success{fill:#8ecf8b;stroke:var(--surface);stroke-width:1}
    .system-status-sections .api-sparkline .telemetry-point:focus{outline:none;filter:drop-shadow(0 0 2px #fff)}
-   .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) minmax(130px,auto);grid-template-areas:"copy rail";align-items:center;gap:8px 16px}
+   .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) minmax(130px,auto);grid-template-areas:"copy rail";align-items:start;gap:8px 16px}
    .system-status-sections .pipeline-health-copy{grid-area:copy;min-width:0}
    .system-status-sections .pipeline-health-rail{grid-area:rail;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-start;gap:8px;min-width:130px}
    .system-status-sections .pipeline-health-rail .status-badge{white-space:nowrap}
