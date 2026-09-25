@@ -39,4 +39,5 @@ volumes:
 networks:
   staging:
     name: kitsusync-staging-network
-    internal: true
+    # Kitsu reads use the operator-configured Staging Connections settings.
+    internal: false
