@@ -13,12 +13,13 @@ source_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 helper_file="${sandbox}/kitsusync-staging-deploy"
 old_file="${sandbox}/old-helper"
 upgrade_file="${sandbox}/upgrade-root.sh"
+mode_log="${sandbox}/helper-invocation-modes"
 
 cat >"${helper_file}" <<'HELPER'
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$#" -eq 1 && "$1" == --contract-info ]]
-[[ "$(stat -c '%a' "$0")" == 600 ]]
+printf '%s\n' "$(stat -c '%a' "$0")" >> "$MODE_LOG"
 printf 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
 HELPER
 cat >"${old_file}" <<'OLD_HELPER'
@@ -62,8 +63,10 @@ install -m 0750 "${old_file}" "${sandbox}/usr-local-sbin/kitsusync-staging-deplo
 
 helper_sha="$(sha256sum "${incoming}/kitsusync-staging-deploy" | cut -d' ' -f1)"
 upgrade_sha="$(sha256sum "${incoming}/upgrade-root.sh" | cut -d' ' -f1)"
+export MODE_LOG="${mode_log}"
 output="$(bash "${incoming}/upgrade-root.sh" "${source_sha}" "${helper_sha}" "${upgrade_sha}")"
 grep -Fq 'STAGING_HELPER_UPGRADE=PASS' <<<"${output}"
+[[ "$(cat "${mode_log}")" == $'600\n750' ]]
 [[ "$(stat -c '%a' "${sandbox}/usr-local-sbin/kitsusync-staging-deploy")" == 750 ]]
 [[ "$(sha256sum "${sandbox}/usr-local-sbin/kitsusync-staging-deploy" | cut -d' ' -f1)" == "${helper_sha}" ]]
 [[ ! -e "${incoming}" ]]
