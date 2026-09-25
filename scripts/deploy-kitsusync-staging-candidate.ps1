@@ -34,7 +34,7 @@ function Invoke-GhJson([string]$Endpoint) {
 function Read-Provenance([string]$Path) {
     $values = @{}
     foreach ($line in Get-Content -LiteralPath $Path) {
-        if ($line -notmatch '^([a-z_]+)=(.*)$') { throw "Malformed provenance line in $([IO.Path]::GetFileName($Path))." }
+        if ($line -cnotmatch '^([a-z_][a-z0-9_]*)=(.*)$') { throw "Malformed provenance line in $([IO.Path]::GetFileName($Path))." }
         $key = $Matches[1]
         if ($values.ContainsKey($key)) { throw "Duplicate provenance key: $key" }
         $values[$key] = $Matches[2]

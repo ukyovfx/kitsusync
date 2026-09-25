@@ -9,4 +9,5 @@ grep -Fq 'actions/artifacts/' "${candidate_deploy}"
 grep -Fq 'actualZipDigest' "${candidate_deploy}"
 grep -Fq 'Remove-Item -LiteralPath $tempRoot -Recurse -Force' "${candidate_deploy}"
 grep -Fq 'image_archive_sha256' "${candidate_deploy}"
+pwsh -NoProfile -File "${root}/scripts/test-staging-provenance-parser.ps1" -DeployScript "${candidate_deploy}"
 printf 'staging-candidate-download-contract=PASS\n'
