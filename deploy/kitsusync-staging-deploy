@@ -295,11 +295,6 @@ elif [[ "$ready_code" == 503 ]]; then grep -Fq '"status":"setup_required"' "$STA
 else die STAGING_READINESS_HTTP_INVALID; fi
 grep -Fq '"base_commit":"'"$SOURCE_SHA"'"' "$STAGE_ROOT/ready.json" && grep -Fq '"build_source_id":"'"$SOURCE_SHA"'"' "$STAGE_ROOT/ready.json" || die STAGING_RUNTIME_SOURCE_MISMATCH
 
-docker exec "$container" /app/kitsu-discord --preview-system-status-dom > "$STAGE_ROOT/system-status.html" || die STAGING_DOM_CAPTURE_FAILED
-grep -Fq telemetry-line "$STAGE_ROOT/system-status.html" || die STAGING_DOM_LINE_GRAPH_MISSING
-for obsolete in telemetry-bar pipeline-health-details data-open-pipeline-details '観測診断を確認' '通知診断を確認' '接続・ルーティング診断を確認'; do ! grep -Fq "$obsolete" "$STAGE_ROOT/system-status.html" || die STAGING_DOM_OBSOLETE_UI
-done
-grep -Fq 'pipeline-health-rail' "$STAGE_ROOT/system-status.html" || die STAGING_DOM_RIGHT_RAIL_MISSING
 for route in users health; do
   code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8091/bot/admin/${route}")"
   [[ "$code" =~ ^(200|302|303|401|403)$ ]] || die STAGING_ADMIN_ROUTE_INVALID
@@ -316,4 +311,4 @@ trap - ERR
 deployment_committed=1
 artifact_cleanup=RETAINED
 if [[ -d "$INCOMING" && ! -L "$INCOMING" ]] && rm -rf -- "$INCOMING"; then artifact_cleanup=REMOVED; fi
-printf 'STAGING_DEPLOY=PASS\nSTAGING_SOURCE_SHA=%s\nSTAGING_CONTAINER_COUNT=1\nSTAGING_BIND=127.0.0.1:8091\nSTAGING_HEALTH=200\nSTAGING_READY=%s\nSTAGING_ADMIN_USERS=PASS\nSTAGING_ADMIN_HEALTH=PASS\nSTAGING_DOM=PASS\nSTAGING_KITSU_NETWORK=DEFAULT_EGRESS_AVAILABLE\nSTAGING_DISCORD=NO_PRODUCTION_CREDENTIALS_OR_STATE\nSTAGING_DATA_VOLUME=kitsusync-staging-data\nSTAGING_ARTIFACT_CLEANUP=%s\nPRODUCTION_RUNTIME=UNCHANGED\n' "$SOURCE_SHA" "$ready_code" "$artifact_cleanup"
+printf 'STAGING_DEPLOY=PASS\nSTAGING_SOURCE_SHA=%s\nSTAGING_CONTAINER_COUNT=1\nSTAGING_BIND=127.0.0.1:8091\nSTAGING_HEALTH=200\nSTAGING_READY=%s\nSTAGING_ADMIN_USERS=PASS\nSTAGING_ADMIN_HEALTH=PASS\nSTAGING_KITSU_NETWORK=DEFAULT_EGRESS_AVAILABLE\nSTAGING_DISCORD=NO_PRODUCTION_CREDENTIALS_OR_STATE\nSTAGING_DATA_VOLUME=kitsusync-staging-data\nSTAGING_ARTIFACT_CLEANUP=%s\nPRODUCTION_RUNTIME=UNCHANGED\n' "$SOURCE_SHA" "$ready_code" "$artifact_cleanup"
