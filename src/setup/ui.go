@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 )
 
@@ -828,7 +829,7 @@ func langToggleHTML(r *http.Request, lang string) string {
 	return fmt.Sprintf(
 		`<a class="lang-toggle glass" data-lang="%s" href="%s" aria-label="Toggle language"><span class="lang-thumb"></span><span class="lang-option %s">JP</span><span class="lang-option %s">EN</span></a>`,
 		lang,
-		toggleLangURL(r),
+		html.EscapeString(toggleLangURL(r)),
 		map[bool]string{true: "active", false: ""}[lang == "ja"],
 		map[bool]string{true: "active", false: ""}[lang == "en"],
 	)
