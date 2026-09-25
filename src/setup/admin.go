@@ -9,7 +9,6 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"regexp"
@@ -2326,23 +2325,6 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 
 		fmt.Fprint(w, adminPage(lang, t(lang, "\u30b7\u30b9\u30c6\u30e0\u72b6\u614b", "System Status"), r, body))
 	}
-}
-
-// RenderPreviewSystemStatusHTML renders the same System Status handler used by
-// the admin route. It is called only by the preview validation CLI against the
-// runtime database, so deployment can check the candidate renderer without
-// exposing an unauthenticated HTTP route.
-func RenderPreviewSystemStatusHTML(db *gorm.DB) (string, error) {
-	if db == nil {
-		return "", fmt.Errorf("preview System Status database is unavailable")
-	}
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/bot/admin/health?lang=ja", nil)
-	HealthHandler(db)(recorder, request)
-	if recorder.Code != http.StatusOK {
-		return "", fmt.Errorf("preview System Status handler returned HTTP %d", recorder.Code)
-	}
-	return recorder.Body.String(), nil
 }
 
 func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
