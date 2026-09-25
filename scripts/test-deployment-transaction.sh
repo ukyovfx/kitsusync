@@ -52,7 +52,7 @@ legacy = '--legacy' in sys.argv
 data = pathlib.Path('/app/data')
 if sys.argv[1:] == ['--preview-system-status-dom']:
     if (data / 'fail-preview-dom').exists():
-        print('telemetry-bar pipeline-health-details data-open-pipeline-details 観測診断を確認')
+        print('telemetry-line telemetry-bar pipeline-health-details data-open-pipeline-details 観測診断を確認')
     else:
         print('telemetry-line api-observation-latency')
     raise SystemExit(0)
