@@ -73,14 +73,14 @@ func TestTelemetryLineGraphTooltipsAreKeyboardReachableAndFailureSafe(t *testing
 		{At: time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC), Duration: 42 * time.Millisecond, Success: true},
 		{At: time.Date(2026, 8, 10, 12, 35, 1, 0, time.UTC), Duration: 900 * time.Millisecond, Success: false},
 	}, "en", telemetryWindow60Seconds, 250)
-	if strings.Count(graph, `tabindex="0"`) != 2 || strings.Count(graph, `<title>`) != 2 {
-		t.Fatalf("each observation needs keyboard and native tooltip accessibility: %s", graph)
+	if strings.Count(graph, `tabindex="0"`) != 1 || strings.Count(graph, `<title>`) != 1 {
+		t.Fatalf("successful points need keyboard/native tooltips, while failures must remain visually quiet: %s", graph)
 	}
-	if !strings.Contains(graph, "42 ms Healthy") || !strings.Contains(graph, "Request failed") {
-		t.Fatal("accessibility labels do not distinguish success and failure")
+	if !strings.Contains(graph, "42 ms Healthy") || strings.Contains(graph, "Request failed") || strings.Contains(graph, "telemetry-failure") {
+		t.Fatal("graph should expose successful point details without rendering a failure mark")
 	}
-	if strings.Contains(graph, "900 ms Request failed") || strings.Contains(graph, "Authorization") || strings.Contains(graph, "Bearer") || strings.Contains(graph, "token") {
-		t.Fatal("failure tooltip fabricated latency or exposed sensitive content")
+	if strings.Contains(graph, "900 ms") || strings.Contains(graph, "Authorization") || strings.Contains(graph, "Bearer") || strings.Contains(graph, "token") {
+		t.Fatal("failure observation fabricated latency or exposed sensitive content")
 	}
 }
 
