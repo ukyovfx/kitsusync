@@ -5,10 +5,10 @@ helper="$root/deploy/kitsusync-staging-deploy"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 
-image_sha=8ccc4279655004942b6c2c19c532d3ee25d8e47ea7fca41843da3310a63ae5e7
-sqlite_sha=18803d1f00883be6c2ee4d9c91c801679b89e31d47349253ee1654ec01df4844
-[[ "$(sha256sum "$root/deploy/kitsusync-image-identity" | cut -d' ' -f1)" == "$image_sha" ]]
-[[ "$(sha256sum "$root/deploy/kitsusync-sqlite-backup" | cut -d' ' -f1)" == "$sqlite_sha" ]]
+image_sha=7698731a4f4b30bca140b700b6716afee6a7dd35ce73f84e3bf11d6676372d0b
+sqlite_sha=6554ca0c07e171b27f039db513d8a929c974fbea1ca0df4efb810081ae11b960
+[[ "$(sed 's/\r$//' "$root/deploy/kitsusync-image-identity" | sha256sum | cut -d' ' -f1)" == "$image_sha" ]]
+[[ "$(sed 's/\r$//' "$root/deploy/kitsusync-sqlite-backup" | sha256sum | cut -d' ' -f1)" == "$sqlite_sha" ]]
 
 sed -n '/^verify_trusted_candidate_tool() {$/,/^}$/p' "$helper" > "$tmp/function.sh"
 [[ -s "$tmp/function.sh" ]]
@@ -18,7 +18,7 @@ source "$1"
 verify_trusted_candidate_tool "$2" "$3"
 SH
 
-cp "$root/deploy/kitsusync-image-identity" "$tmp/tool"
+sed 's/\r$//' "$root/deploy/kitsusync-image-identity" > "$tmp/tool"
 bash "$tmp/check.sh" "$tmp/function.sh" "$tmp/tool" "$image_sha"
 printf '\n# tampered fixture\n' >> "$tmp/tool"
 if bash "$tmp/check.sh" "$tmp/function.sh" "$tmp/tool" "$image_sha" 2>/dev/null; then
