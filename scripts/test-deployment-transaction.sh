@@ -307,6 +307,7 @@ fi
 grep -Fq 'runtime validation failed: check=readiness_identity' "$work/failed-preview.log"
 grep -Fxq 'rollback=verified' "$work/failed-preview.log"
 stage=preview-rejects-obsolete-dom
+sudo rm -f -- "$runtime/data/fail-target"
 sudo touch "$runtime/data/fail-preview-dom"
 if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "$source_commit" PREVIEW >"$work/obsolete-dom-preview.log" 2>&1; then
   printf 'preview target with obsolete System Status DOM was accepted\n' >&2; exit 1
