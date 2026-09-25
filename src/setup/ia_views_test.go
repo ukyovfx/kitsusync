@@ -1810,7 +1810,7 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `function scale(items)`) || !strings.Contains(body, `upper=scale(items)`) {
 		t.Fatal("system status refresh does not apply independent zero-based Y scales")
 	}
-	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2.5m`) {
+	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2m30s`) {
 		t.Fatal("system status refresh is missing canonical time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
