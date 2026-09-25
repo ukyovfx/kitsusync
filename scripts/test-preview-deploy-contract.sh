@@ -60,6 +60,23 @@ run_readiness ready pass
 run_readiness setup_required pass
 run_readiness degraded fail
 
+# Docker may report an OCI archive's manifest digest as the loaded image ID
+# instead of the config digest. Keep the preview's preflight aligned with the
+# shared transaction rule, which accepts either archive-bound identity.
+run_image_id() {
+  local actual="$1" config="$2" manifest="$3" result="$4"
+  if KITSUSYNC_DEPLOY_TEST_DOCKER_BIN=/usr/bin/true KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$core" "$actual" "$config" "$manifest"; then
+    [[ "$result" == pass ]] || { printf 'image ID unexpectedly accepted: %s\n' "$actual" >&2; exit 1; }
+  else
+    [[ "$result" == fail ]] || { printf 'image ID unexpectedly rejected: %s\n' "$actual" >&2; exit 1; }
+  fi
+}
+config_digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+manifest_digest=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+run_image_id "$config_digest" "$config_digest" "$manifest_digest" pass
+run_image_id "$manifest_digest" "$config_digest" "$manifest_digest" pass
+run_image_id sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc "$config_digest" "$manifest_digest" fail
+
 if bash "$preview" "$sha" wrong >/dev/null 2>&1; then
   printf 'preview command accepted a missing PREVIEW confirmation marker\n' >&2
   exit 1
