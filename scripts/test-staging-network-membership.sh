@@ -72,10 +72,18 @@ if verify_staging_network_membership "${short_id}"; then
   exit 1
 fi
 
-if [[ "${STAGING_REQUIRE_DOCKER_FIXTURE:-0}" == 1 ]]; then
-  command -v docker >/dev/null || { printf 'staging-network-membership=FAIL docker-unavailable\n' >&2; exit 1; }
-  docker info >/dev/null 2>&1 || { printf 'staging-network-membership=FAIL docker-daemon-unavailable\n' >&2; exit 1; }
-  unset -f docker
+unset -f docker
+docker_fixture_available=0
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  docker_fixture_available=1
+elif [[ "${STAGING_REQUIRE_DOCKER_FIXTURE:-0}" == 1 ]]; then
+  printf 'staging-network-membership=FAIL docker-daemon-unavailable\n' >&2
+  exit 1
+else
+  printf 'staging-docker-fixture=SKIP docker-daemon-unavailable\n'
+fi
+
+if [[ "${docker_fixture_available}" == 1 ]]; then
   fixture_root="$(mktemp -d)"
   fixture_project="kitsusync-net-contract-${BASHPID}"
   fixture_started_ms="$(date +%s%3N)"

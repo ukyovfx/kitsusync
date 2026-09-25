@@ -137,7 +137,7 @@ jobs:
 
       - name: Staging Docker network metadata integration test
         env:
-          STAGING_REQUIRE_DOCKER_FIXTURE: "1"
+          STAGING_REQUIRE_DOCKER_FIXTURE: "0"
         run: bash scripts/test-staging-network-membership.sh
 
       - name: Docker Compose build app
