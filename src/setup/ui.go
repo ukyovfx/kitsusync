@@ -778,6 +778,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .production-context #panel-overview>.section-card{border-top:0;padding-top:0}
   .editorial-workbench .production-context #panel-notifications>.section-card>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:16px 0;margin-top:0}
   .editorial-workbench .production-context #panel-notifications>.section-card>.section-card:first-child{border-top:0;padding-top:0}
+  .editorial-workbench .user-linking-page>.section-card{border:0;border-bottom:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
    .system-status-sections .api-observation-latency{display:flex;align-items:baseline;justify-content:space-between;gap:16px;min-width:0}
    .system-status-sections .api-observation-primary{display:flex;align-items:baseline;gap:9px;min-width:0}
    .system-status-sections .api-observation-primary strong{font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums}
