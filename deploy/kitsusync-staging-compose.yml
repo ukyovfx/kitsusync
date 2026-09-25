@@ -1,0 +1,42 @@
+services:
+  app:
+    image: "kitsusync:${KITSUSYNC_IMAGE_TAG:?KITSUSYNC_IMAGE_TAG is required}"
+    container_name: kitsusync-staging
+    restart: unless-stopped
+    environment:
+      APP_ENV: staging
+      TZ: Asia/Tokyo
+      KITSUSYNC_DISABLE_POLL: "1"
+      KITSUSYNC_DEPLOY_POLICY: preview
+    ports:
+      - "127.0.0.1:8091:8090"
+    volumes:
+      - ./conf.toml:/app/conf.toml:ro
+      - kitsusync_staging_data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    networks:
+      - staging
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  kitsusync_staging_data:
+    name: kitsusync-staging-data
+
+networks:
+  staging:
+    name: kitsusync-staging-network
+    internal: true
