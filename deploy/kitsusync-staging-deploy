@@ -102,6 +102,10 @@ verify_staging_network_attachment_count() {
 verify_staging_network_name() {
   docker inspect --format '{{json .NetworkSettings.Networks}}' "$1" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)'
 }
+if [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" == --contract-info ]]; then
+  printf 'STAGING_HELPER_CONTRACT=staging-v2 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+  exit 0
+fi
 [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
 readonly SOURCE_SHA="$1"
 readonly INCOMING="/var/tmp/kitsusync-staging-candidate-${SOURCE_SHA}"
@@ -112,9 +116,14 @@ readonly PROJECT=kitsusync-staging
 [[ -d "$STAGE_ROOT" && ! -L "$STAGE_ROOT" && "$(stat -c '%u:%g:%a' "$STAGE_ROOT")" == 0:0:700 ]] || die STAGING_ROOT_UNSAFE
 [[ -d "$CONFIG_ROOT" && ! -L "$CONFIG_ROOT" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT")" == 0:0:700 ]] || die STAGING_CONFIG_UNSAFE
 [[ -f "$CONFIG_ROOT/conf.toml" && ! -L "$CONFIG_ROOT/conf.toml" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT/conf.toml")" == 0:0:400 ]] || die STAGING_CONFIG_FILE_UNSAFE
-incoming_owner="$(stat -c '%u:%a' "$INCOMING" 2>/dev/null || true)"
-trusted_stage_owners="$(id -u ukyo_vfx):700 $(id -u vfx-breakglass):700"
-[[ -d "$INCOMING" && ! -L "$INCOMING" && " $trusted_stage_owners " == *" $incoming_owner "* ]] || die CANDIDATE_DIRECTORY_UNSAFE
+incoming_owner_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"
+incoming_mode="$(stat -c '%a' "$INCOMING" 2>/dev/null || printf missing)"
+trusted_owner_uids="$(id -u ukyo_vfx),$(id -u vfx-breakglass)"
+if [[ ! -d "$INCOMING" || -L "$INCOMING" || ",$trusted_owner_uids," != *",$incoming_owner_uid,"* || "$incoming_mode" != 700 ]]; then
+  printf 'STAGING_DEPLOY_ERROR=CANDIDATE_DIRECTORY_UNSAFE observed_owner_uid=%s observed_mode=%s expected_owner_uids=%s expected_mode=700 expected_owner_class=ukyo_vfx,vfx-breakglass\n' \
+    "$incoming_owner_uid" "$incoming_mode" "$trusted_owner_uids" >&2
+  exit 1
+fi
 [[ ! -e "$PRIVATE" && ! -L "$PRIVATE" ]] || die CANDIDATE_ALREADY_IMPORTED
 
 prod_before="$(docker ps -q --filter publish=8090 | sort)"
