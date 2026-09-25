@@ -29,6 +29,7 @@ candidate_sudo_line="$(grep -n 'sudo -n /usr/local/sbin/kitsusync-staging-deploy
 [[ -n "${candidate_deploy_preflight_line}" && "${candidate_deploy_preflight_line}" -lt "${candidate_sudo_line}" ]]
 pwsh -NoProfile -File "${root}/scripts/test-staging-provenance-parser.ps1" -DeployScript "${candidate_deploy}"
 pwsh -NoProfile -File "${root}/scripts/test-staging-routine-deploy-contract.ps1" -DeployScript "${candidate_deploy}"
+pwsh -NoProfile -File "${root}/scripts/test-staging-helper-upgrade-contract.ps1"
 bash "${root}/scripts/test-staging-helper-upgrade-flow.sh"
 bash "${root}/scripts/test-staging-trusted-tool-contract.sh"
 printf 'staging-candidate-download-contract=PASS\n'

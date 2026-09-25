@@ -14,6 +14,15 @@ function Resolve-NativeCommand([string]$Name) {
     throw "Required command is not installed: $Name"
 }
 
+function Get-StagingHelperUpgradeAction([int]$Status, [string]$Output) {
+    $currentContract = 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    $predecessorContract = 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    if ($Status -eq 0 -and $Output -ceq $currentContract) { return 'ALREADY_CURRENT' }
+    if ($Status -eq 0 -and $Output -ceq $predecessorContract) { return 'UPGRADE' }
+    if ($Status -eq 1 -and $Output -match '(?m)^STAGING_DEPLOY_ERROR=INVALID_ARGUMENT$') { return 'UPGRADE' }
+    throw "Could not safely identify the installed Staging helper: $Output"
+}
+
 $git = Resolve-NativeCommand 'git'
 $gh = Resolve-NativeCommand 'gh'
 $ssh = Resolve-NativeCommand 'ssh'
@@ -64,12 +73,10 @@ try {
     }
     $contract = @(& $ssh @sshArgs $stagingHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
     $contractStatus = $LASTEXITCODE
-    if ($contractStatus -eq 0 -and ($contract -join "`n") -match 'STAGING_HELPER_CONTRACT=staging-v4') {
+    $upgradeAction = Get-StagingHelperUpgradeAction $contractStatus ($contract -join "`n")
+    if ($upgradeAction -eq 'ALREADY_CURRENT') {
         Write-Output 'STAGING_HELPER_UPGRADE=ALREADY_CURRENT'
         exit 0
-    }
-    if ($contractStatus -ne 1 -or ($contract -join "`n") -notmatch 'STAGING_DEPLOY_ERROR=INVALID_ARGUMENT') {
-        throw "Could not safely identify the installed Staging helper: $($contract -join ' ')"
     }
 
     $remoteDir = "/var/tmp/kitsusync-staging-helper-upgrade-$CommitSha"
