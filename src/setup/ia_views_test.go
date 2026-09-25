@@ -1843,6 +1843,23 @@ func TestSystemStatusOmitsNormalPageDiagnosticsAndRefreshesSnapshot(t *testing.T
 	}
 }
 
+func TestPreviewSystemStatusHTMLMatchesCurrentDOMContract(t *testing.T) {
+	body, err := RenderPreviewSystemStatusHTML(newIAViewDB(t))
+	if err != nil {
+		t.Fatalf("render preview System Status HTML: %v", err)
+	}
+	for _, required := range []string{"telemetry-line", "api-observation-latency"} {
+		if !strings.Contains(body, required) {
+			t.Errorf("preview System Status HTML is missing %q", required)
+		}
+	}
+	for _, obsolete := range []string{"telemetry-bar", "pipeline-health-details", "data-open-pipeline-details", "観測診断を確認"} {
+		if strings.Contains(body, obsolete) {
+			t.Errorf("preview System Status HTML contains obsolete DOM marker %q", obsolete)
+		}
+	}
+}
+
 func TestSystemStatusUsesRealRoutingActionInRightRail(t *testing.T) {
 	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Needs review", class: "warning", action: "/bot/admin/projects", actionLabel: "Review Productions", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
 	if strings.Contains(rendered, "<details") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, "Connection and routing diagnostics") {

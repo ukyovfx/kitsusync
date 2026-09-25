@@ -704,6 +704,14 @@ post_deploy_ids="$(${DOCKER_BIN} ps -aq --no-trunc --filter "label=com.docker.co
 [[ "$(${DOCKER_BIN} inspect --format '{{.Name}}' "${new_id}")" == "${EXPECTED_CONTAINER_NAME}" ]] || die "deployed KitsuSync container name mismatch"
 [[ "$(${DOCKER_BIN} inspect --format '{{.Image}}' "${new_id}")" == "${loaded_image_id}" ]] || die "runtime immutable image mismatch"
 [[ "$(${DOCKER_BIN} inspect --format '{{.Config.User}}' "${new_id}")" == 10001:10001 ]] || die "runtime user mismatch"
+if [[ "${deployment_policy}" == preview ]]; then
+  preview_system_status_dom="$(${DOCKER_BIN} exec -e KITSUSYNC_DEPLOY_POLICY=preview "${new_id}" /app/kitsu-discord --preview-system-status-dom)" || die "preview System Status DOM could not be rendered from candidate container"
+  [[ "${preview_system_status_dom}" == *telemetry-line* ]] || die "preview System Status DOM contract mismatch: missing telemetry-line"
+  for obsolete in telemetry-bar pipeline-health-details data-open-pipeline-details '観測診断を確認'; do
+    [[ "${preview_system_status_dom}" != *"${obsolete}"* ]] || die "preview System Status DOM contract mismatch: obsolete marker present"
+  done
+  log "preview System Status DOM contract passed"
+fi
 transaction_phase=validated
 if [[ "${deployment_mode}" == legacy-migration ]]; then
   mode_tmp="$(/usr/bin/mktemp)"; printf 'normal\n' >"${mode_tmp}"

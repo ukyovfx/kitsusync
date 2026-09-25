@@ -50,6 +50,12 @@ cat >"$work/fixture.py" <<'PY'
 import http.server, json, os, pathlib, sqlite3, sys, time
 legacy = '--legacy' in sys.argv
 data = pathlib.Path('/app/data')
+if sys.argv[1:] == ['--preview-system-status-dom']:
+    if (data / 'fail-preview-dom').exists():
+        print('telemetry-bar pipeline-health-details data-open-pipeline-details 観測診断を確認')
+    else:
+        print('telemetry-line api-observation-latency')
+    raise SystemExit(0)
 assert pathlib.Path('/app/conf.toml').read_text() == 'fixture-conf\n'
 assert pathlib.Path('/app/tpl/marker').read_text() == 'fixture-template\n'
 assert os.getuid() == 10001 and os.getgid() == 10001
@@ -82,10 +88,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 http.server.ThreadingHTTPServer(('0.0.0.0',8090), Handler).serve_forever()
 PY
+cat >"$work/kitsu-discord" <<'SH'
+#!/bin/sh
+exec python /fixture.py "$@"
+SH
+chmod 0755 "$work/kitsu-discord"
 cat >"$work/Dockerfile" <<'DOCKER'
 FROM python:3.12-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 COPY fixture.py /fixture.py
+COPY kitsu-discord /app/kitsu-discord
 USER 10001:10001
 WORKDIR /app
 CMD ["python", "/fixture.py"]
@@ -294,11 +306,20 @@ if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-dep
 fi
 grep -Fq 'runtime validation failed: check=readiness_identity' "$work/failed-preview.log"
 grep -Fxq 'rollback=verified' "$work/failed-preview.log"
+stage=preview-rejects-obsolete-dom
+sudo touch "$runtime/data/fail-preview-dom"
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "$source_commit" PREVIEW >"$work/obsolete-dom-preview.log" 2>&1; then
+  printf 'preview target with obsolete System Status DOM was accepted\n' >&2; exit 1
+fi
+grep -Fq 'preview System Status DOM contract mismatch: obsolete marker present' "$work/obsolete-dom-preview.log"
+grep -Fxq 'rollback=verified' "$work/obsolete-dom-preview.log"
 stage=preview-success
 sudo rm -f -- "$runtime/data/fail-target"
+sudo rm -f -- "$runtime/data/fail-preview-dom"
 sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "$source_commit" PREVIEW >"$work/successful-preview.log" 2>&1
 stage=preview-success-marker
 grep -Fq "PREVIEW / NON-RELEASE KitsuSync deployment completed: source_commit=${source_commit}" "$work/successful-preview.log"
+grep -Fq 'preview System Status DOM contract passed' "$work/successful-preview.log"
 stage=preview-container-count
 preview_container="$(docker ps -q --no-trunc --filter name='^/kitsusync-app-1$')"
 [[ -n "$preview_container" ]]

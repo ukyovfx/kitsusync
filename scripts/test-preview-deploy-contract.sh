@@ -22,8 +22,12 @@ grep -Fq 'kitsusync:ci-${expected}' "$preview"
 grep -Fq 'preview:ready|preview:setup_required' "$core"
 grep -Fq '127.0.0.1:8090' "$core"
 grep -Fq 'PREVIEW / NON-RELEASE' "$core"
+grep -Fq -- '--preview-system-status-dom' "$core"
+grep -Fq 'preview System Status DOM contract mismatch: missing telemetry-line' "$core"
+grep -Fq 'preview System Status DOM contract mismatch: obsolete marker present' "$core"
+grep -Fq 'preview System Status DOM contract passed' "$core"
 
-if grep -Fq 'KITSUSYNC_DEPLOY_POLICY=' "$core"; then
+if grep -Eq '^[[:space:]]*(export[[:space:]]+)?KITSUSYNC_DEPLOY_POLICY=' "$core"; then
   printf 'shared transaction core must not select policy itself\n' >&2
   exit 1
 fi
