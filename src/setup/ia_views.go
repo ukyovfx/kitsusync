@@ -331,7 +331,14 @@ func systemStatusRefreshScriptCanonicalRaw() string {
 }
 
 func systemStatusRefreshScriptCanonical() string {
-	return systemStatusRefreshScriptCanonicalRaw()
+	script := systemStatusRefreshScriptCanonicalRaw()
+	if start := strings.Index(script, `if(!item.success){`); start >= 0 {
+		if end := strings.Index(script[start:], `var value=Number(item.duration_ms);`); end >= 0 {
+			script = script[:start] + `if(!item.success){points.push(null);return}` + script[start+end:]
+		}
+	}
+	script = strings.ReplaceAll(script, `<div class=\"api-observation-primary\"><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><strong data-telemetry-value>`, `<div class=\"api-observation-primary\"><strong data-telemetry-value>`)
+	return script
 }
 
 func applyDashboardMetricSemantics(body string, attentionCount, failureCount int, readinessClass string) string {
@@ -1387,10 +1394,10 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		routingActionLabel = t(lang, "Productionを確認", "Review Productions")
 	}
 	items := []pipelineHealthItem{
-		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), action: eventAction, actionLabel: eventActionLabel},
-		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), action: notificationAction, actionLabel: notificationActionLabel},
+		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics"), action: eventAction, actionLabel: eventActionLabel},
+		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics"), action: notificationAction, actionLabel: notificationActionLabel},
 		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success"},
-		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), action: routingAction, actionLabel: routingActionLabel},
+		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics"), action: routingAction, actionLabel: routingActionLabel},
 	}
 	var healthRows strings.Builder
 	for index, item := range items {
@@ -1481,7 +1488,7 @@ func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName
 		replacement := `<span class="api-observation-meta" data-telemetry-meta data-telemetry-at="` + esc(items[len(items)-1].At.UTC().Format(time.RFC3339)) + `">`
 		body = strings.Replace(body, marker, replacement, 1)
 	}
-	return body + `<script data-telemetry-local-time>(function(){window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll("[data-telemetry-meta][data-telemetry-at]").forEach(function(node){node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"));node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone});document.querySelectorAll(".telemetry-point[data-telemetry-at],.telemetry-failure[data-telemetry-at]").forEach(function(node){var success=node.getAttribute("data-telemetry-success")==="true",duration=Number(node.getAttribute("data-telemetry-duration"))||0,status=success?(document.documentElement.lang==="ja"?"正常":"Healthy"):(document.documentElement.lang==="ja"?"リクエスト失敗":"Request failed"),label=(window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))+" "+(success?duration+" ms ":"")+status).trim();node.setAttribute("aria-label",label);var title=node.querySelector("title");if(title){title.textContent=label}})})();</script>`
+	return body + `<script data-telemetry-local-time>(function(){window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll("[data-telemetry-meta][data-telemetry-at]").forEach(function(node){node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"));node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone});document.querySelectorAll(".telemetry-point[data-telemetry-at]").forEach(function(node){var duration=Number(node.getAttribute("data-telemetry-duration"))||0,label=(window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))+" "+duration+" ms "+(document.documentElement.lang==="ja"?"正常":"Healthy")).trim();node.setAttribute("aria-label",label);var title=node.querySelector("title");if(title){title.textContent=label}})})();</script>`
 }
 
 func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, windowName, body string) string {
@@ -1505,7 +1512,11 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 	if strings.TrimSpace(item.explanation) != "" {
 		explanation = `<p class="field-help">` + esc(item.explanation) + `</p>`
 	}
-	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + `</div><div class="pipeline-health-rail"><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + action + `</div></article>`
+	details := ""
+	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
+		details = `<details class="pipeline-health-diagnostic"><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-diagnostic-content">` + item.details + `</div></details>`
+	}
+	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + details + `</div><div class="pipeline-health-rail"><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + action + `</div></article>`
 }
 
 func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string, sharedMax ...float64) string {
@@ -1520,7 +1531,7 @@ func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowNa
 	}
 	normalMeta := fmt.Sprintf("%s %s", t(lang, "最終更新", "Last updated"), last.At.Local().Format("15:04:05"))
 	scale := stableObservationScale(service, windowName, items)
-	return `<div class="api-observation-latency"><div class="api-observation-primary"><strong data-telemetry-value>` + esc(value) + `</strong><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationLineGraphWithScale(items, lang, windowName, scale)
+	return `<div class="api-observation-latency"><div class="api-observation-primary"><strong data-telemetry-value>` + esc(value) + `</strong></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationLineGraphWithScale(items, lang, windowName, scale)
 }
 
 func systemStatusProjectAction(lang string, r *http.Request, db *gorm.DB) string {
@@ -1558,15 +1569,13 @@ func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName 
 	type chartPoint struct{ x, y float64 }
 	var successful []chartPoint
 	var points strings.Builder
-	var failures strings.Builder
 	for _, item := range items {
 		x := geometry.PlotLeft + math.Max(0, math.Min(1, item.At.Sub(start).Seconds()/window.Seconds()))*plotWidth
-		label := telemetryObservationLabel(lang, item)
 		if !item.Success {
-			failures.WriteString(`<path class="telemetry-failure" d="M` + fmt.Sprintf("%.1f", x-3) + `,86 L` + fmt.Sprintf("%.1f", x+3) + `,92 M` + fmt.Sprintf("%.1f", x+3) + `,86 L` + fmt.Sprintf("%.1f", x-3) + `,92" data-telemetry-at="` + esc(item.At.UTC().Format(time.RFC3339)) + `" tabindex="0" role="img" aria-label="` + esc(label) + `"><title>` + esc(label) + `</title></path>`)
 			successful = append(successful, chartPoint{x: math.NaN(), y: math.NaN()}) // keep the line discontinuous at failed observations
 			continue
 		}
+		label := telemetryObservationLabel(lang, item)
 		value := math.Max(0, float64(item.Duration.Milliseconds()))
 		y := geometry.PlotBottom - (geometry.PlotBottom-geometry.PlotTop)*math.Min(1, value/domain.Upper)
 		xText, yText := fmt.Sprintf("%.1f", x), fmt.Sprintf("%.1f", y)
@@ -1606,7 +1615,7 @@ func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName 
 		labels[2] = "Now"
 	}
 	middle := domain.Upper / 2
-	svg := `<svg class="api-sparkline" viewBox="0 0 496 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", len(items))) + `"><line class="chart-guide" x1="54" y1="45" x2="484" y2="45"></line><line class="chart-baseline" x1="54" y1="82" x2="484" y2="82"></line><text class="chart-tick" text-anchor="end" x="50" y="12">` + esc(formatLatencyTick(domain.Upper)) + `</text><text class="chart-tick" text-anchor="end" x="50" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="50" y="84">0ms</text>` + line.String() + points.String() + failures.String() + `<text class="chart-time-label" text-anchor="start" x="54" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="269" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="484" y="100">` + esc(labels[2]) + `</text></svg>`
+	svg := `<svg class="api-sparkline" viewBox="0 0 496 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", len(items))) + `"><line class="chart-guide" x1="54" y1="45" x2="484" y2="45"></line><line class="chart-baseline" x1="54" y1="82" x2="484" y2="82"></line><text class="chart-tick" text-anchor="end" x="50" y="12">` + esc(formatLatencyTick(domain.Upper)) + `</text><text class="chart-tick" text-anchor="end" x="50" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="50" y="84">0ms</text>` + line.String() + points.String() + `<text class="chart-time-label" text-anchor="start" x="54" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="269" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="484" y="100">` + esc(labels[2]) + `</text></svg>`
 	return svg
 }
 

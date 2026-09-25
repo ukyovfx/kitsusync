@@ -64,20 +64,20 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
-func TestSystemStatusKeepsOperationalRowsCompactWithoutDiagnostics(t *testing.T) {
-	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Observation diagnostics"}
+func TestSystemStatusKeepsOperationalRowsCompactWithSecondaryDiagnostics(t *testing.T) {
+	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl><dd>extra info</dd></dl>", detailsLabel: "Observation diagnostics"}
 	rendered := renderPipelineHealthItem("en", item, 0)
-	if strings.Contains(rendered, `class="field-help"`) {
-		t.Fatal("healthy operational row should not repeat a redundant explanation")
-	}
 	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
 		t.Fatal("operational row lost its compact structure")
 	}
-	if strings.Contains(rendered, `<details`) || strings.Contains(rendered, "pipeline-health-details") || strings.Contains(rendered, "Observation diagnostics") {
-		t.Fatal("normal System Status rows must omit diagnostic disclosures and their content")
+	if !strings.Contains(rendered, `<details class="pipeline-health-diagnostic"><summary>Observation diagnostics</summary><div class="pipeline-health-diagnostic-content"><dl><dd>extra info</dd></dl></div></details>`) {
+		t.Fatal("useful diagnostics should be available in a compact secondary disclosure")
 	}
 	if !strings.Contains(rendered, `class="pipeline-health-rail"`) {
 		t.Fatal("operational row status is missing its right-side rail")
+	}
+	if strings.Index(rendered, `<summary>`) > strings.Index(rendered, `class="pipeline-health-rail"`) {
+		t.Fatal("diagnostics should remain on the left, separate from the right-side status/action rail")
 	}
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
@@ -1673,8 +1673,8 @@ func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *tes
 func TestStatusPolishUsesRealSparkline(t *testing.T) {
 	items := []APIObservation{{At: time.Now().Add(-30 * time.Second), Duration: 10 * time.Millisecond, Success: true}, {At: time.Now().Add(-5 * time.Second), Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
-	if !strings.Contains(graph, `class="telemetry-point success"`) || !strings.Contains(graph, `class="telemetry-failure"`) || !strings.Contains(graph, `viewBox="0 0 496 104"`) {
-		t.Fatal("line graph did not reflect the recorded observations")
+	if !strings.Contains(graph, `class="telemetry-point success"`) || strings.Contains(graph, `class="telemetry-failure"`) || !strings.Contains(graph, `viewBox="0 0 496 104"`) {
+		t.Fatal("line graph omitted successes or rendered noisy failure marks")
 	}
 	if strings.Contains(apiObservationGraph(nil), "telemetry-point") {
 		t.Fatal("empty telemetry should not render a fake graph")
@@ -1792,11 +1792,8 @@ func TestSystemStatusOmitsNormalPageDiagnosticsAndRefreshesSnapshot(t *testing.T
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Contains(body, `<details class="advanced-details`) || strings.Contains(body, `pipeline-health-details-toggle`) || strings.Contains(body, `観測診断`) || strings.Contains(body, `通知診断`) || strings.Contains(body, `Connection and routing diagnostics`) {
-		t.Fatalf("normal System Status rendered expandable diagnostics")
-	}
-	if strings.Contains(body, "Internal data diagnostics") || strings.Contains(body, "内部データ診断") {
-		t.Fatal("system status exposed a datastore-only diagnostic disclosure")
+	if !strings.Contains(body, `pipeline-health-diagnostic`) || !strings.Contains(body, `観測診断`) || !strings.Contains(body, `通知診断`) || !strings.Contains(body, `接続・ルーティング診断`) {
+		t.Fatalf("System Status omitted useful compact diagnostic disclosures")
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
@@ -1841,6 +1838,12 @@ func TestSystemStatusOmitsNormalPageDiagnosticsAndRefreshesSnapshot(t *testing.T
 	if !strings.Contains(body, `data-telemetry-meta`) || !strings.Contains(body, `Last updated`) {
 		t.Fatal("normal API card is missing the last-updated metadata")
 	}
+	if strings.Contains(body, `Current response time`) || strings.Contains(body, `現在の応答時間`) || strings.Contains(body, `telemetry-failure`) {
+		t.Fatal("System Status retained the removed response label or failure X markers")
+	}
+	if !strings.Contains(body, `pipeline-health-diagnostic`) || !strings.Contains(body, `.pipeline-health-rail{grid-area:rail;display:flex;flex-direction:column`) {
+		t.Fatal("processing rows lost concise disclosures or their vertically structured right rail")
+	}
 }
 
 func TestPreviewSystemStatusHTMLMatchesCurrentDOMContract(t *testing.T) {
@@ -1853,7 +1856,7 @@ func TestPreviewSystemStatusHTMLMatchesCurrentDOMContract(t *testing.T) {
 			t.Errorf("preview System Status HTML is missing %q", required)
 		}
 	}
-	for _, obsolete := range []string{"telemetry-bar", "pipeline-health-details", "data-open-pipeline-details", "観測診断を確認"} {
+	for _, obsolete := range []string{"telemetry-bar", "data-open-pipeline-details"} {
 		if strings.Contains(body, obsolete) {
 			t.Errorf("preview System Status HTML contains obsolete DOM marker %q", obsolete)
 		}
@@ -1861,11 +1864,14 @@ func TestPreviewSystemStatusHTMLMatchesCurrentDOMContract(t *testing.T) {
 }
 
 func TestSystemStatusUsesRealRoutingActionInRightRail(t *testing.T) {
-	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Needs review", class: "warning", action: "/bot/admin/projects", actionLabel: "Review Productions", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
-	if strings.Contains(rendered, "<details") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, "Connection and routing diagnostics") {
-		t.Fatal("system status should not render expandable diagnostics")
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Needs review", class: "warning", explanation: "Routing needs attention.", action: "/bot/admin/projects", actionLabel: "Review Productions", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
+	if !strings.Contains(rendered, `<details class="pipeline-health-diagnostic"><summary>Connection and routing diagnostics</summary><div class="pipeline-health-diagnostic-content"><dl></dl></div></details>`) {
+		t.Fatal("system status should retain useful expandable diagnostic details")
 	}
-	if !strings.Contains(rendered, `class="pipeline-health-rail"`) || !strings.Contains(rendered, `href="/bot/admin/projects"`) {
+	badge := strings.Index(rendered, `class="pipeline-health-rail"><span class="status-badge`)
+	action := strings.Index(rendered, `class="btn-ghost pipeline-health-action"`)
+	disclosureEnd := strings.Index(rendered, `</details>`)
+	if !strings.Contains(rendered, `class="pipeline-health-rail"`) || !strings.Contains(rendered, `href="/bot/admin/projects"`) || badge < 0 || action <= badge || action < disclosureEnd {
 		t.Fatal("status and its real destination are not aligned in the right rail")
 	}
 }

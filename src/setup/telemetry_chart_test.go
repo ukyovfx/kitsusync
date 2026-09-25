@@ -22,8 +22,8 @@ func TestTelemetryLineGraphUsesTimestampPositionsAndBreaksAcrossFailures(t *test
 	if strings.Count(graph, `class="telemetry-line success"`) != 2 || strings.Count(graph, `class="telemetry-point success"`) != 4 {
 		t.Fatalf("successful observations are not drawn as two line segments with four points: %s", graph)
 	}
-	if !strings.Contains(graph, `class="telemetry-failure"`) || strings.Contains(graph, `class="telemetry-bar`) || strings.Contains(graph, "<rect") {
-		t.Fatalf("graph must use line/point marks and a latency-free failure marker: %s", graph)
+	if strings.Contains(graph, `class="telemetry-failure"`) || strings.Contains(graph, `class="telemetry-bar`) || strings.Contains(graph, "<rect") {
+		t.Fatalf("graph must omit failure markers and bars while preserving the successful line segments: %s", graph)
 	}
 	if strings.Contains(graph, `data-telemetry-duration="9000"`) || strings.Contains(graph, "9000 ms Request failed") {
 		t.Fatal("failed observation fabricated or exposed latency")
@@ -34,16 +34,6 @@ func TestTelemetryLineGraphUsesTimestampPositionsAndBreaksAcrossFailures(t *test
 	for _, fragment := range []string{`>50ms</text>`, `>25ms</text>`, `>0ms</text>`, `x1="54"`, `x2="484"`, `x="269"`, `60s`, `30s`, `Now`} {
 		if !strings.Contains(graph, fragment) {
 			t.Fatalf("graph is missing canonical line geometry/label %q: %s", fragment, graph)
-		}
-	}
-	failureStart := strings.Index(graph, `class="telemetry-failure"`)
-	if failureStart >= 0 {
-		failureEnd := strings.Index(graph[failureStart:], `></path>`)
-		if failureEnd < 0 {
-			t.Fatalf("failure marker was not closed: %s", graph[failureStart:])
-		}
-		if strings.Contains(graph[failureStart:failureStart+failureEnd], `data-telemetry-duration`) {
-			t.Fatal("failure mark includes a latency data attribute")
 		}
 	}
 }
@@ -96,10 +86,13 @@ func TestTelemetryLineGraphTooltipsAreKeyboardReachableAndFailureSafe(t *testing
 
 func TestSystemStatusRefreshUsesCanonicalLineGraphContract(t *testing.T) {
 	updated := replaceSystemStatusRefreshScript(`<script data-system-status-refresh></script>`)
-	for _, fragment := range []string{`viewBox=\"0 0 496 104\"`, `telemetry-line`, `Date.parse(item.at)`, `telemetry-failure`, `item.success&&isFinite(value)`, `Request failed`, `60s`, `2m30s`, `Now`, `x1=\"54\"`, `x2=\"484\"`} {
+	for _, fragment := range []string{`viewBox=\"0 0 496 104\"`, `telemetry-line`, `Date.parse(item.at)`, `points.push(null)`, `item.success&&isFinite(value)`, `Request failed`, `60s`, `2m30s`, `Now`, `x1=\"54\"`, `x2=\"484\"`} {
 		if !strings.Contains(updated, fragment) {
 			t.Fatalf("refresh graph is missing canonical contract %q", fragment)
 		}
+	}
+	if strings.Contains(updated, "telemetry-failure") || strings.Contains(updated, "Current response time") || strings.Contains(updated, "現在の応答時間") {
+		t.Fatal("refresh rendering retained a bottom failure marker or redundant response label")
 	}
 	for _, obsolete := range []string{"telemetry-bar", "<rect class", "barWidth", "equal sample"} {
 		if strings.Contains(updated, obsolete) {
@@ -130,11 +123,14 @@ func TestSystemStatusMetricAndFailureMetadataRemainSecondaryAndHonest(t *testing
 		"kitsu": {{At: time.Now(), Duration: 600 * time.Millisecond, Success: false}},
 	}}
 	card := apiObservationDetails("en", stats, "kitsu", telemetryWindow60Seconds)
-	if !strings.Contains(card, `class="api-observation-primary"><strong`) || !strings.Contains(card, "Current response time") || !strings.Contains(card, "Request failed") {
-		t.Fatalf("response value and label do not form a coherent group: %s", card)
+	if !strings.Contains(card, `class="api-observation-primary"><strong`) || strings.Contains(card, "Current response time") || !strings.Contains(card, "Request failed") {
+		t.Fatalf("response state should be the primary value without a redundant label: %s", card)
 	}
-	if strings.Contains(card, "600 ms") || !strings.Contains(card, "Last updated") {
+	if strings.Contains(card, "600 ms") || !strings.Contains(card, `class="api-observation-meta"`) || !strings.Contains(card, "Last updated") {
 		t.Fatal("failed sample displayed latency or omitted secondary last-updated metadata")
+	}
+	if strings.Index(card, `class="api-observation-primary"`) > strings.Index(card, `class="api-observation-meta"`) {
+		t.Fatal("last-updated metadata should share the response row after the primary state")
 	}
 }
 
@@ -142,8 +138,8 @@ func TestSystemStatusUsesSharedViewerLocalFormatterForLineTooltips(t *testing.T)
 	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{
 		"kitsu": {{At: time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC), Duration: 42 * time.Millisecond, Success: true}},
 	}}
-	initial := addTelemetryViewerLocalTimes(`<span class="api-observation-meta" data-telemetry-meta>Last updated 00:00:00</span><svg><circle class="telemetry-point success" data-telemetry-at="2026-08-10T12:34:56Z" data-telemetry-duration="42" data-telemetry-success="true"><title>old</title></circle><path class="telemetry-failure" data-telemetry-at="2026-08-10T12:34:56Z"><title>old</title></path></svg>`, stats, telemetryWindow60Seconds)
-	for _, fragment := range []string{`window.kitsuSyncSystemStatusTime=function(value)`, `[data-telemetry-meta][data-telemetry-at]`, `.telemetry-point[data-telemetry-at],.telemetry-failure[data-telemetry-at]`} {
+	initial := addTelemetryViewerLocalTimes(`<span class="api-observation-meta" data-telemetry-meta>Last updated 00:00:00</span><svg><circle class="telemetry-point success" data-telemetry-at="2026-08-10T12:34:56Z" data-telemetry-duration="42" data-telemetry-success="true"><title>old</title></circle></svg>`, stats, telemetryWindow60Seconds)
+	for _, fragment := range []string{`window.kitsuSyncSystemStatusTime=function(value)`, `[data-telemetry-meta][data-telemetry-at]`, `.telemetry-point[data-telemetry-at]`} {
 		if !strings.Contains(initial, fragment) {
 			t.Fatalf("line tooltip localization is missing %q", fragment)
 		}

@@ -787,25 +787,31 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
    .editorial-workbench .user-linking-page.has-selected-guild .user-linking-table table{border:0}
    .editorial-workbench .user-linking-table .user-link-form .btn{min-width:5.5rem;border:1px solid rgba(255,141,72,.55);box-shadow:0 4px 12px rgba(232,90,26,.18)}
    .editorial-workbench .user-linking-table .user-link-form .btn:disabled{opacity:.55;filter:saturate(.55);box-shadow:none}
-   .system-status-sections .api-observation-latency{display:grid;justify-content:start;gap:3px;min-width:0}
+   .system-status-sections .api-observation-latency{display:flex;align-items:baseline;justify-content:space-between;gap:16px;min-width:0}
    .system-status-sections .api-observation-primary{display:flex;align-items:baseline;gap:9px;min-width:0}
    .system-status-sections .api-observation-primary strong{font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums}
-   .system-status-sections .api-observation-primary .api-observation-label{white-space:nowrap;color:var(--muted)}
-   .system-status-sections .api-observation-latency .api-observation-meta{justify-self:start;color:var(--muted-2);font-size:13px;white-space:nowrap}
+   .system-status-sections .api-observation-latency .api-observation-meta{margin-left:auto;color:var(--muted-2);font-size:13px;white-space:nowrap}
    .system-status-sections .api-sparkline .telemetry-line{fill:none;stroke:#8ecf8b;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
    .system-status-sections .api-sparkline .telemetry-point.success{fill:#8ecf8b;stroke:var(--surface);stroke-width:1}
-   .system-status-sections .api-sparkline .telemetry-failure{fill:none;stroke:#ff6a50;stroke-width:2;stroke-linecap:round}
-   .system-status-sections .api-sparkline .telemetry-point:focus,.system-status-sections .api-sparkline .telemetry-failure:focus{outline:none;filter:drop-shadow(0 0 2px #fff)}
+   .system-status-sections .api-sparkline .telemetry-point:focus{outline:none;filter:drop-shadow(0 0 2px #fff)}
    .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) minmax(130px,auto);grid-template-areas:"copy rail";align-items:center;gap:8px 16px}
    .system-status-sections .pipeline-health-copy{grid-area:copy;min-width:0}
-   .system-status-sections .pipeline-health-rail{grid-area:rail;display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;min-width:0}
+   .system-status-sections .pipeline-health-rail{grid-area:rail;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-start;gap:8px;min-width:130px}
    .system-status-sections .pipeline-health-rail .status-badge{white-space:nowrap}
-   .system-status-sections .pipeline-health-rail .pipeline-health-action{margin:0;white-space:nowrap}
+   .system-status-sections .pipeline-health-rail .pipeline-health-action{margin:0;max-width:180px;white-space:normal;text-align:right}
+   .system-status-sections .pipeline-health-diagnostic{margin-top:8px;width:max-content;max-width:100%;color:var(--muted-2);font-size:12px}
+   .system-status-sections .pipeline-health-diagnostic summary{cursor:pointer;list-style:disclosure-closed;line-height:1.4}
+   .system-status-sections .pipeline-health-diagnostic[open] summary{margin-bottom:6px}
+   .system-status-sections .pipeline-health-diagnostic-content{max-width:100%;overflow-x:auto}
+   .system-status-sections .pipeline-detail-list{display:grid;gap:4px;margin:0;color:var(--muted);font-size:12px}
+   .system-status-sections .pipeline-detail-list>div{display:grid;grid-template-columns:minmax(110px,auto) minmax(0,1fr);gap:8px}
+   .system-status-sections .pipeline-detail-list dt{color:var(--muted-2)}
+   .system-status-sections .pipeline-detail-list dd{margin:0;overflow-wrap:anywhere}
    .system-status-sections .pipeline-health-next-action{display:none}
   .setup-required-state{display:grid;gap:24px;max-width:640px}
   .setup-required-message{margin:0;color:var(--muted);font-size:14px}
   .editorial-workbench .connections-footer{margin-top:24px}
-  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:28px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{grid-template-columns:1fr;padding-top:20px}.editorial-advanced-settings .editorial-advanced-heading,.editorial-advanced-settings .editorial-advanced-explanation,.editorial-advanced-settings>.connection-external-url-field,.editorial-advanced-settings>.connection-expert-network{grid-column:1;grid-row:auto}.editorial-workbench .connection-external-url-controls{align-items:stretch;flex-wrap:wrap}.editorial-workbench .connection-external-url-controls input{flex-basis:100%}.editorial-workbench .connection-external-url-controls .btn-ghost{margin-left:auto}.editorial-workbench .user-linking-selector .form-action-row{grid-template-columns:1fr;gap:6px}.editorial-workbench .user-linking-selector .form-action-row select{max-width:none}.system-status-sections .api-observation-latency{align-items:flex-start;flex-direction:column;gap:4px}.system-status-sections .api-observation-primary{flex-wrap:wrap}.system-status-sections .api-observation-latency .api-observation-meta{white-space:normal}.system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"copy rail";align-items:start}.system-status-sections .pipeline-health-rail{flex-direction:column;align-items:flex-end}.system-status-sections .pipeline-health-rail .pipeline-health-action{max-width:150px;white-space:normal;text-align:center}}
+  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:28px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{grid-template-columns:1fr;padding-top:20px}.editorial-advanced-settings .editorial-advanced-heading,.editorial-advanced-settings .editorial-advanced-explanation,.editorial-advanced-settings>.connection-external-url-field,.editorial-advanced-settings>.connection-expert-network{grid-column:1;grid-row:auto}.editorial-workbench .connection-external-url-controls{align-items:stretch;flex-wrap:wrap}.editorial-workbench .connection-external-url-controls input{flex-basis:100%}.editorial-workbench .connection-external-url-controls .btn-ghost{margin-left:auto}.editorial-workbench .user-linking-selector .form-action-row{grid-template-columns:1fr;gap:6px}.editorial-workbench .user-linking-selector .form-action-row select{max-width:none}.system-status-sections .api-observation-latency{align-items:baseline;flex-direction:row;gap:8px}.system-status-sections .api-observation-primary{flex-wrap:wrap}.system-status-sections .api-observation-latency .api-observation-meta{white-space:normal;text-align:right}.system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) minmax(110px,auto);grid-template-areas:"copy rail";align-items:start}.system-status-sections .pipeline-health-rail{flex-direction:column;align-items:flex-end;min-width:0}.system-status-sections .pipeline-health-rail .pipeline-health-action{max-width:150px;white-space:normal;text-align:right}}
 `
 
 func shellHeadExtras() string {
