@@ -15,9 +15,9 @@ function_source="$(awk '
 
 eval "${function_source}"
 
-python3() {
-  "${TEST_PYTHON:-python3}" "$@"
-}
+if [[ -n "${TEST_PYTHON:-}" ]]; then
+  python3() { "${TEST_PYTHON}" "$@"; }
+fi
 
 full_id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 short_id="${full_id:0:12}"
