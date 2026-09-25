@@ -2,7 +2,6 @@ package setup
 
 import (
 	"fmt"
-	"html"
 	"net/http"
 )
 
