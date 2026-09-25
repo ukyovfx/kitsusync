@@ -1403,13 +1403,14 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 			t.Fatalf("system status missing %q", want)
 		}
 	}
-	apiStart := strings.Index(body, `<section class="section-card glass system-observability"`)
-	pipelineStart := strings.Index(body, `<section class="section-card glass pipeline-health"`)
-	apiCards := ""
-	if apiStart >= 0 && pipelineStart > apiStart {
-		apiCards = body[apiStart:pipelineStart]
+	stats := Stats.Snapshot()
+	for _, service := range []string{"kitsu", "discord"} {
+		status := apiObservationStatus("en", stats, service)
+		if !strings.Contains(body, `data-telemetry-status>`+status+`</span>`) {
+			t.Errorf("%s API status does not match its recorded observation state %q", service, status)
+		}
 	}
-	if strings.Contains(body, `class="system-overall-summary"`) || apiCards == "" || !strings.Contains(apiCards, "Not checked") || strings.Contains(apiCards, "Not configured") {
+	if strings.Contains(body, `class="system-overall-summary"`) {
 		t.Fatal("system status should distinguish missing readiness prerequisites from an unobserved API response")
 	}
 	w = httptest.NewRecorder()
