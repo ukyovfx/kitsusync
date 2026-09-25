@@ -1853,6 +1853,23 @@ func TestSystemStatusUsesContextualDiagnosticsLabels(t *testing.T) {
 	}
 }
 
+func TestPreviewSystemStatusHTMLMatchesCurrentDOMContract(t *testing.T) {
+	body, err := RenderPreviewSystemStatusHTML(newIAViewDB(t))
+	if err != nil {
+		t.Fatalf("render preview System Status HTML: %v", err)
+	}
+	for _, required := range []string{"telemetry-line", "api-observation-latency"} {
+		if !strings.Contains(body, required) {
+			t.Errorf("preview System Status HTML is missing %q", required)
+		}
+	}
+	for _, obsolete := range []string{"telemetry-bar", "pipeline-health-details", "data-open-pipeline-details", "観測診断を確認"} {
+		if strings.Contains(body, obsolete) {
+			t.Errorf("preview System Status HTML contains obsolete DOM marker %q", obsolete)
+		}
+	}
+}
+
 func TestProductionListRowsRemoveRedundantStatusCopy(t *testing.T) {
 	rows := `<article class="section-card glass production-list-item"><div><h2>Test</h2><p class="field-help">Current state</p></div><div class="production-list-state"><span class="status-pill warning">Disconnected</span><span class="field-help">No route</span></div><a class="btn" href="#">Open Production</a></article>`
 	clean := simplifyProductionListRows(rows)

@@ -135,6 +135,11 @@ jobs:
           bash scripts/test-deploy-legacy-detection.sh
           bash scripts/test-fresh-install-contract.sh
 
+      - name: Staging Docker network metadata integration test
+        env:
+          STAGING_REQUIRE_DOCKER_FIXTURE: "1"
+        run: bash scripts/test-staging-network-membership.sh
+
       - name: Docker Compose build app
         env:
           FB_USERNAME: ci-user

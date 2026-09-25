@@ -8,8 +8,7 @@ $repo = 'ukyovfx/kitsusync'
 $bundle = (Resolve-Path -LiteralPath $BundleDirectory).Path
 $expectedFiles = @(
     'deployment-mode', 'docker-compose.yml', 'kitsusync-bootstrap', 'kitsusync-deploy',
-    'kitsusync-deploy-transaction', 'kitsusync-image-identity', 'kitsusync-image.tar',
-    'kitsusync-inspect', 'kitsusync-preview-deploy', 'kitsusync-restore-state',
+    'kitsusync-image-identity', 'kitsusync-image.tar', 'kitsusync-inspect', 'kitsusync-restore-state',
     'kitsusync-runtime-state', 'kitsusync-sqlite-backup', 'provenance.txt'
 )
 
@@ -36,8 +35,6 @@ $digestMap = @{
     'kitsusync-image.tar' = 'image_archive_sha256'
     'docker-compose.yml' = 'compose_sha256'
     'kitsusync-deploy' = 'deployment_tool_sha256'
-    'kitsusync-preview-deploy' = 'preview_deployment_tool_sha256'
-    'kitsusync-deploy-transaction' = 'deployment_core_sha256'
     'kitsusync-inspect' = 'inspection_tool_sha256'
     'kitsusync-sqlite-backup' = 'sqlite_backup_tool_sha256'
     'kitsusync-bootstrap' = 'bootstrap_tool_sha256'
@@ -62,7 +59,7 @@ foreach ($workflowName in @('CI', 'Security Audit')) {
 
 $ssh = (Get-Command ssh.exe -ErrorAction Stop).Source
 $scp = (Get-Command scp.exe -ErrorAction Stop).Source
-$stage = "/var/tmp/kitsusync-preview-candidate-$CommitSha"
+$stage = "/var/tmp/kitsusync-staging-candidate-$CommitSha"
 & $ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio "umask 077 && mkdir -m 700 -- $stage"
 if ($LASTEXITCODE -ne 0) { throw 'Could not create the private candidate staging directory.' }
 foreach ($name in $expectedFiles) {

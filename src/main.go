@@ -795,7 +795,41 @@ func newApplicationHTTPServer(handler http.Handler) *http.Server {
 	}
 }
 
+const previewSystemStatusDOMFlag = "--preview-system-status-dom"
+
+func renderPreviewSystemStatusDOM() error {
+	databasePath, err := filepath.Abs(filepath.Join("data", "sqlite.db"))
+	if err != nil {
+		return err
+	}
+	db, err := gorm.Open(sqlite.Open("file:"+filepath.ToSlash(databasePath)+"?mode=ro&_query_only=1"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		return err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
+	defer sqlDB.Close()
+	body, err := setup.RenderPreviewSystemStatusHTML(db)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.WriteString(body)
+	return err
+}
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == previewSystemStatusDOMFlag {
+		if os.Getenv("KITSUSYNC_DEPLOY_POLICY") != "preview" || renderPreviewSystemStatusDOM() != nil {
+			fmt.Fprintln(os.Stderr, "PREVIEW_SYSTEM_STATUS_DOM_RENDER_FAILED")
+			os.Exit(2)
+		}
+		return
+	}
+
 	// The standard library logger writes to stderr and is used by the CLI
 	// paths. Keep it on the same redacting boundary as the application logger.
 	log.SetOutput(logutil.NewRedactingWriter(os.Stderr))
