@@ -15,10 +15,13 @@ function Resolve-NativeCommand([string]$Name) {
 }
 
 function Get-StagingHelperUpgradeAction([int]$Status, [string]$Output) {
-    $currentContract = 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-    $predecessorContract = 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    $currentContract = 'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    $predecessorContracts = @(
+        'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass',
+        'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    )
     if ($Status -eq 0 -and $Output -ceq $currentContract) { return 'ALREADY_CURRENT' }
-    if ($Status -eq 0 -and $Output -ceq $predecessorContract) { return 'UPGRADE' }
+    if ($Status -eq 0 -and $Output -cin $predecessorContracts) { return 'UPGRADE' }
     if ($Status -eq 1 -and $Output -match '(?m)^STAGING_DEPLOY_ERROR=INVALID_ARGUMENT$') { return 'UPGRADE' }
     throw "Could not safely identify the installed Staging helper: $Output"
 }
@@ -139,7 +142,7 @@ except Exception:
     & $ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio-breakglass "sudo /bin/bash $remoteDir/upgrade-root.sh $CommitSha $helperSha $upgradeSha"
     if ($LASTEXITCODE -ne 0) { throw 'Privileged Staging helper upgrade failed.' }
     $installed = @(& $ssh @sshArgs $stagingHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
-    if ($LASTEXITCODE -ne 0 -or ($installed -join "`n") -notmatch 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass') {
+    if ($LASTEXITCODE -ne 0 -or ($installed -join "`n") -notmatch 'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass') {
         throw "Installed Staging helper contract verification failed: $($installed -join ' ')"
     }
     Write-Output "STAGING_HELPER_UPGRADE=PASS source_sha=$CommitSha helper_sha256=$helperSha"

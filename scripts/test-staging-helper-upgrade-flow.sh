@@ -20,7 +20,7 @@ cat >"${helper_file}" <<'HELPER'
 set -euo pipefail
 [[ "$#" -eq 1 && "$1" == --contract-info ]]
 printf '%s\n' "$(stat -c '%a' "$0")" >> "$MODE_LOG"
-printf 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+printf 'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
 HELPER
 cat >"${old_file}" <<'OLD_HELPER'
 #!/usr/bin/env bash
@@ -42,6 +42,7 @@ replacements = {
     'readonly TARGET=/usr/local/sbin/kitsusync-staging-deploy': f'readonly TARGET={sandbox}/usr-local-sbin/kitsusync-staging-deploy',
     '  63d53cedfced32f26f4edc7338ee38d3a4c38e816a8427a6c7194bc366d25fc8': f'  {old_sha}',
     '  41dec98c9e6e6f7165733212bb3518b1cb08bcb19a17fad047fd0c76ae5f7704': f'  {old_sha}',
+    '  b43df984dd87321c4f9eb76478557b23db35cac8986b01ddd4b3af5a2353e5ae': f'  {old_sha}',
     'id -u ukyo_vfx': f'printf {uid}',
     'id -u vfx-breakglass': f'printf {uid}',
     'mktemp -d /var/tmp/kitsusync-staging-helper-upgrade-root.XXXXXX': f'mktemp -d "{sandbox}/var-tmp/kitsusync-staging-helper-upgrade-root.XXXXXX"',

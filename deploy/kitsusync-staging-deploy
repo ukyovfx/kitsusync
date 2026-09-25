@@ -53,16 +53,18 @@ rollback_staging() {
         rollback_container="$(docker ps --filter "label=com.docker.compose.project=${PROJECT}" --filter status=running -q)"
         [[ -n "$rollback_container" && "$(printf '%s\n' "$rollback_container" | wc -l)" -eq 1 ]] || rollback_status=1
         [[ "$rollback_status" -ne 0 || "$(docker inspect --format '{{.Config.Image}}' "$rollback_container")" == "kitsusync:ci-${previous_sha}" ]] || rollback_status=1
+        [[ "$rollback_status" -ne 0 || "$(docker port "$rollback_container" 8090/tcp)" == 127.0.0.1:8091 ]] || rollback_status=1
+        [[ "$rollback_status" -ne 0 ]] || verify_staging_network_attachment_count "$rollback_container" || rollback_status=1
+        [[ "$rollback_status" -ne 0 ]] || verify_staging_network_name "$rollback_container" || rollback_status=1
+        [[ "$rollback_status" -ne 0 ]] || verify_staging_network_membership "$rollback_container" || rollback_status=1
       fi
       if [[ "$rollback_status" -eq 0 ]]; then
-        restored_health=0
-        for _ in {1..30}; do
-          if curl --silent --show-error --output "$STAGE_ROOT/rollback-health.json" http://127.0.0.1:8091/health && grep -Fq '"status":"ok"' "$STAGE_ROOT/rollback-health.json"; then restored_health=1; break; fi
-          sleep 2
-        done
-        [[ "$restored_health" -eq 1 ]] || rollback_status=1
-        restored_ready_code="$(curl --silent --show-error --output "$STAGE_ROOT/rollback-ready.json" --write-out '%{http_code}' http://127.0.0.1:8091/ready || true)"
-        [[ "$restored_ready_code" =~ ^(200|503)$ ]] && grep -Fq '"base_commit":"'"$previous_sha"'"' "$STAGE_ROOT/rollback-ready.json" && grep -Fq '"build_source_id":"'"$previous_sha"'"' "$STAGE_ROOT/rollback-ready.json" || rollback_status=1
+        if ! wait_staging_http health "$previous_sha" "$STAGE_ROOT/rollback-health.json" http://127.0.0.1:8091 30 1 ||
+           ! wait_staging_http ready "$previous_sha" "$STAGE_ROOT/rollback-ready.json" http://127.0.0.1:8091 30 1 ||
+           ! wait_staging_http admin-users "$previous_sha" "$STAGE_ROOT/rollback-admin-users.json" http://127.0.0.1:8091 30 1 ||
+           ! wait_staging_http admin-health "$previous_sha" "$STAGE_ROOT/rollback-admin-health.json" http://127.0.0.1:8091 30 1; then
+          rollback_status=1
+        fi
       fi
     fi
     if [[ "$rollback_status" -eq 0 && -f "$PRIVATE/prior-current-source" && -f "$PRIVATE/prior-current-provenance" ]]; then
@@ -71,6 +73,7 @@ rollback_staging() {
       [[ "$rollback_status" -ne 0 ]] || mv -f "$STAGE_ROOT/current-provenance.restore" "$STAGE_ROOT/current-provenance.txt" || rollback_status=1
       [[ "$rollback_status" -ne 0 ]] || mv -f "$STAGE_ROOT/current-source.restore" "$STAGE_ROOT/current-source" || rollback_status=1
     fi
+    if [[ "$rollback_status" -eq 0 ]]; then verify_production_unchanged || rollback_status=1; fi
     if [[ "$rollback_status" -eq 0 ]]; then printf 'STAGING_ROLLBACK=PREVIOUS_CANDIDATE_AND_DATA\n' >&2; return 0; fi
   else
     docker compose --project-name "$PROJECT" --env-file "$compose_env" --file "$COMPOSE_FILE" down || rollback_status=1
@@ -78,12 +81,67 @@ rollback_staging() {
       docker volume rm kitsusync-staging-data >/dev/null || rollback_status=1
     fi
     rm -f "$STAGE_ROOT/current-source" "$STAGE_ROOT/current-provenance.txt" "$STAGE_ROOT/current-source.tmp" "$STAGE_ROOT/current-provenance.tmp"
+    if [[ "$rollback_status" -eq 0 ]]; then verify_production_unchanged || rollback_status=1; fi
     if [[ "$rollback_status" -eq 0 ]]; then printf 'STAGING_ROLLBACK=FIRST_DEPLOY_REMOVED\n' >&2; return 0; fi
   fi
   printf 'STAGING_ROLLBACK=FAILED\n' >&2
   return 1
 }
 die() { printf 'STAGING_DEPLOY_ERROR=%s\n' "$1" >&2; exit 1; }
+verify_production_unchanged() {
+  local observed
+  observed="$(docker ps -q --filter publish=8090 | sort)" || return 1
+  if [[ "$observed" == "$prod_before" ]]; then return 0; fi
+  printf 'PRODUCTION_RUNTIME=CHANGED expected_container_ids=%s observed_container_ids=%s\n' \
+    "${prod_before//[[:space:]]/,}" "${observed//[[:space:]]/,}" >&2
+  return 1
+}
+wait_staging_http() {
+  local endpoint="$1" expected_sha="$2" response_file="$3" base_url="$4" max_attempts="$5" retry_delay="$6"
+  local path http_code=000 curl_status=0 attempt valid=0
+  case "$endpoint" in
+    health) path=/health ;;
+    ready) path=/ready ;;
+    admin-users) path=/bot/admin/users ;;
+    admin-health) path=/bot/admin/health ;;
+    *) printf 'STAGING_HTTP_WAIT_FAILED endpoint=invalid attempts=0 last_http_code=000 last_curl_status=0\n' >&2; return 1 ;;
+  esac
+  [[ "$expected_sha" =~ ^[0-9a-f]{40}$ && "$max_attempts" =~ ^[1-9][0-9]*$ && "$max_attempts" -le 30 && "$retry_delay" =~ ^[0-9]+$ ]] || {
+    printf 'STAGING_HTTP_WAIT_FAILED endpoint=%s attempts=0 last_http_code=000 last_curl_status=0\n' "$endpoint" >&2
+    return 1
+  }
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    http_code=000
+    curl_status=0
+    if http_code="$(curl --silent --output "$response_file" --write-out '%{http_code}' --max-time 1 "${base_url}${path}" 2>/dev/null)"; then
+      [[ "$http_code" =~ ^[0-9]{3}$ ]] || http_code=000
+    else
+      curl_status=$?
+      [[ "$http_code" =~ ^[0-9]{3}$ ]] || http_code=000
+    fi
+    valid=0
+    case "$endpoint" in
+      health)
+        [[ "$http_code" == 200 ]] && grep -Fq '"status":"ok"' "$response_file" && valid=1
+        ;;
+      ready)
+        if { [[ "$http_code" == 200 ]] && grep -Fq '"status":"ready"' "$response_file"; } ||
+           { [[ "$http_code" == 503 ]] && grep -Fq '"status":"setup_required"' "$response_file"; }; then
+          grep -Fq '"base_commit":"'"$expected_sha"'"' "$response_file" &&
+            grep -Fq '"build_source_id":"'"$expected_sha"'"' "$response_file" && valid=1
+        fi
+        ;;
+      admin-users|admin-health)
+        [[ "$http_code" =~ ^(200|302|303|401|403)$ ]] && valid=1
+        ;;
+    esac
+    [[ "$valid" -eq 1 ]] && return 0
+    [[ "$attempt" -lt "$max_attempts" ]] && sleep "$retry_delay"
+  done
+  printf 'STAGING_HTTP_WAIT_FAILED endpoint=%s attempts=%s last_http_code=%s last_curl_status=%s\n' \
+    "$endpoint" "$max_attempts" "$http_code" "$curl_status" >&2
+  return 1
+}
 verify_staging_network_membership() {
   local container_ref="$1" container_id container_ref_prefix container_id_prefix network_containers result classification observed_count observed_prefixes
   local attempt max_attempts=15 attachment_json attachment_summary attachment_count attachment_networks
@@ -167,7 +225,7 @@ verify_staging_network_name() {
   docker inspect --format '{{json .NetworkSettings.Networks}}' "$1" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)'
 }
 if [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" == --contract-info ]]; then
-  printf 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+  printf 'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
   exit 0
 fi
 [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
@@ -376,21 +434,13 @@ if len(mounts) != 2 or actual != expected:
     sys.exit(1)
 ' || die STAGING_MOUNT_ISOLATION_INVALID
 
-health_code="$(curl --silent --show-error --output "$STAGE_ROOT/health.json" --write-out '%{http_code}' http://127.0.0.1:8091/health)"
-[[ "$health_code" == 200 ]] && grep -Fq '"status":"ok"' "$STAGE_ROOT/health.json" || die STAGING_HEALTH_FAILED
-ready_code="$(curl --silent --show-error --output "$STAGE_ROOT/ready.json" --write-out '%{http_code}' http://127.0.0.1:8091/ready)"
-if [[ "$ready_code" == 200 ]]; then grep -Fq '"status":"ready"' "$STAGE_ROOT/ready.json" || die STAGING_READY_INVALID
-elif [[ "$ready_code" == 503 ]]; then grep -Fq '"status":"setup_required"' "$STAGE_ROOT/ready.json" || die STAGING_SETUP_REQUIRED_INVALID
-else die STAGING_READINESS_HTTP_INVALID; fi
-grep -Fq '"base_commit":"'"$SOURCE_SHA"'"' "$STAGE_ROOT/ready.json" && grep -Fq '"build_source_id":"'"$SOURCE_SHA"'"' "$STAGE_ROOT/ready.json" || die STAGING_RUNTIME_SOURCE_MISMATCH
+wait_staging_http health "$SOURCE_SHA" "$STAGE_ROOT/health.json" http://127.0.0.1:8091 30 1 || die STAGING_HEALTH_FAILED
+wait_staging_http ready "$SOURCE_SHA" "$STAGE_ROOT/ready.json" http://127.0.0.1:8091 30 1 || die STAGING_READINESS_FAILED
+if grep -Fq '"status":"setup_required"' "$STAGE_ROOT/ready.json"; then ready_code=503; else ready_code=200; fi
+wait_staging_http admin-users "$SOURCE_SHA" "$STAGE_ROOT/admin-users.json" http://127.0.0.1:8091 30 1 || die STAGING_ADMIN_USERS_FAILED
+wait_staging_http admin-health "$SOURCE_SHA" "$STAGE_ROOT/admin-health.json" http://127.0.0.1:8091 30 1 || die STAGING_ADMIN_HEALTH_FAILED
 
-for route in users health; do
-  code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8091/bot/admin/${route}")"
-  [[ "$code" =~ ^(200|302|303|401|403)$ ]] || die STAGING_ADMIN_ROUTE_INVALID
-done
-
-prod_after="$(docker ps -q --filter publish=8090 | sort)"
-[[ "$prod_after" == "$prod_before" ]] || die PRODUCTION_RUNTIME_CHANGED
+verify_production_unchanged || die PRODUCTION_RUNTIME_CHANGED
 printf '%s\n' "$SOURCE_SHA" > "$STAGE_ROOT/current-source.tmp"
 chmod 0600 "$STAGE_ROOT/current-source.tmp"
 install -o root -g root -m 0600 "$PRIVATE/provenance.txt" "$STAGE_ROOT/current-provenance.tmp"

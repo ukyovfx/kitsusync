@@ -158,7 +158,7 @@ function Get-RemoteHelperContract {
 }
 
 function Assert-RoutineStagingHelperContract([int]$Status, [string]$Output) {
-    $expected = 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    $expected = 'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
     if ($Status -ne 0 -or $Output -notmatch [regex]::Escape($expected)) {
         throw "STAGING_BOOTSTRAP_REQUIRED expected='$expected' observed_status=$Status observed_output='$Output'"
     }
