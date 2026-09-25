@@ -323,104 +323,22 @@ func replaceSystemStatusRefreshScript(body string) string {
 		return body
 	}
 	end := start + relEnd + len(`</script>`)
-	if canonical := systemStatusRefreshScriptCanonical(); canonical != "" {
-		return body[:start] + canonical + body[end:]
-	}
-	script := systemStatusRefreshScriptReadable()
-	script = strings.ReplaceAll(script, "function updateCard", sparklineInteractionScript()+"Array.prototype.forEach.call(document.querySelectorAll(\"[data-telemetry-card]\"),function(card){bindSparkline(card,[])});function updateCard")
-	script = strings.ReplaceAll(script, `+graph(items,maxValue)}function refresh`, `+graph(items,maxValue);bindSparkline(card,items)}function refresh`)
-	script = strings.ReplaceAll(script, `+graph(items,domain)}function refresh`, `+graph(items,domain);bindSparkline(card,items)}function refresh`)
-	script = strings.NewReplacer(
-		"width=466,height=104,left=54,right=2", "width=394,height=104,left=0,right=2",
-		`x1="54"`, `x1="0"`,
-		`x="48"`, `x="66"`,
-		`var mid=(domain.lower+domain.upper)/2;`, "",
-		`<text class="chart-tick" text-anchor="end" x="66" y="48">"+tick(mid)+"</text>`, "",
-		`<text class="chart-tick" text-anchor="end" x="66" y="12">"+tick(domain.upper)+"</text>`, "",
-		`<text class="chart-tick" text-anchor="end" x="66" y="84">"+tick(domain.lower)+"</text>`, "",
-		`return "<svg class=\"api-sparkline\" viewBox=\"0 0 466 104\" role=\"img\" aria-label=\""+items.length+" observations, "+tick(domain.lower)+" to "+tick(domain.upper)+"\"><line`,
-		`return "<div class=\"api-sparkline-row\"><div class=\"api-sparkline-y-labels\" aria-hidden=\"true\"><span class=\"api-sparkline-y-label api-sparkline-y-label-max\">"+tick(domain.upper)+"</span><span class=\"api-sparkline-y-label api-sparkline-y-label-min\">"+tick(domain.lower)+"</span></div><svg class=\"api-sparkline\" viewBox=\"0 0 394 104\" role=\"img\" aria-label=\""+items.length+" observations, "+tick(domain.lower)+" to "+tick(domain.upper)+"\"><line`,
-		`</path></svg>"`, `</path></svg></div>"`,
-	).Replace(script)
-	// The refresh template is embedded JavaScript, so keep both quote forms
-	// normalized before the external label-column rewrite.
-	for _, replacement := range []struct{ old, new string }{
-		{`x1=\"54\"`, `x1=\"0\"`},
-		{`x2=\"464\"`, `x2=\"392\"`},
-		{`x1="54"`, `x1="0"`},
-		{`x2="464"`, `x2="392"`},
-		{`x=\"48\"`, `x=\"66\"`},
-		{`x="48"`, `x="66"`},
-		{`var mid=(domain.lower+domain.upper)/2;`, ""},
-		{`<text class=\"chart-tick\" text-anchor=\"end\" x=\"66\" y=\"48\">\"+tick(mid)+\"</text>`, ""},
-		{`<text class=\"chart-tick\" text-anchor=\"end\" x=\"66\" y=\"12\">\"+tick(domain.upper)+\"</text>`, ""},
-		{`<text class=\"chart-tick\" text-anchor=\"end\" x=\"66\" y=\"84\">\"+tick(domain.lower)+\"</text>`, ""},
-		{`<text class="chart-tick" text-anchor="end" x="66" y="48">"+tick(mid)+"</text>`, ""},
-		{`<text class="chart-tick" text-anchor="end" x="66" y="12">"+tick(domain.upper)+"</text>`, ""},
-		{`<text class="chart-tick" text-anchor="end" x="66" y="84">"+tick(domain.lower)+"</text>`, ""},
-	} {
-		script = strings.ReplaceAll(script, replacement.old, replacement.new)
-	}
-	for {
-		start := strings.Index(script, `<text class=\"chart-tick\"`)
-		if start < 0 {
-			start = strings.Index(script, `<text class="chart-tick"`)
-		}
-		if start < 0 {
-			break
-		}
-		relEnd := strings.Index(script[start:], `</text>`)
-		if relEnd < 0 {
-			break
-		}
-		script = script[:start] + script[start+relEnd+len(`</text>`):]
-	}
-	script = strings.ReplaceAll(script, "var mid=(domain.lower+domain.upper)/2;", "")
-	return body[:start] + script + body[end:]
-}
-
-func sparklineInteractionScript() string {
-	return `function bindSparkline(card,items){var svg=card&&card.querySelector(".api-sparkline");if(!svg){return}if(!items||!items.length){var values=(svg.getAttribute("data-sparkline-values")||"").split(",").filter(Boolean),times=(svg.getAttribute("data-sparkline-times")||"").split(",");items=values.map(function(value,index){return {duration_ms:Number(value)||0,at:times[index]||""}})}if(!items.length){return}var ns="http://www.w3.org/2000/svg",left=0,right=392,top=8,bottom=82,plotWidth=right-left,selected=-1,originalLabel=svg.getAttribute("aria-label")||"";svg.setAttribute("tabindex","0");svg.setAttribute("focusable","true");var overlay=document.createElementNS(ns,"rect");overlay.setAttribute("x",String(left));overlay.setAttribute("y",String(top));overlay.setAttribute("width",String(plotWidth));overlay.setAttribute("height",String(bottom-top));overlay.setAttribute("fill","transparent");overlay.setAttribute("data-sparkline-hit-area","true");overlay.style.cursor="crosshair";var indicator=document.createElementNS(ns,"g"),guide=document.createElementNS(ns,"line"),marker=document.createElementNS(ns,"circle"),tooltip=document.createElementNS(ns,"g"),tipBackground=document.createElementNS(ns,"rect"),tipText=document.createElementNS(ns,"text");indicator.setAttribute("data-sparkline-hover-indicator","true");guide.setAttribute("class","sparkline-hover-guide");guide.setAttribute("y1",String(top));guide.setAttribute("y2",String(bottom));marker.setAttribute("class","sparkline-hover-marker");marker.setAttribute("r","3");tooltip.setAttribute("data-sparkline-tooltip","true");tipBackground.setAttribute("class","sparkline-tooltip-background");tipText.setAttribute("class","sparkline-tooltip-text");tipText.setAttribute("y","24");tooltip.appendChild(tipBackground);tooltip.appendChild(tipText);indicator.appendChild(guide);indicator.appendChild(marker);svg.appendChild(overlay);svg.appendChild(indicator);svg.appendChild(tooltip);indicator.style.display="none";tooltip.style.display="none";function xFor(index){return items.length===1?left+plotWidth/2:left+index*plotWidth/(items.length-1)}function inspect(index){selected=Math.max(0,Math.min(items.length-1,index));var item=items[selected],x=xFor(selected),value=Number(item.duration_ms)||0,time=item.at?new Date(item.at).toLocaleTimeString():"",label=value+" ms"+(time?"  "+time:"");guide.setAttribute("x1",x.toFixed(1));guide.setAttribute("x2",x.toFixed(1));marker.setAttribute("cx",x.toFixed(1));var tooltipWidth=Math.max(58,label.length*6.2+12),tooltipX=x>left+plotWidth/2?Math.max(left,x-tooltipWidth-8):Math.min(right-tooltipWidth,x+8);tipBackground.setAttribute("x",tooltipX.toFixed(1));tipBackground.setAttribute("y","8");tipBackground.setAttribute("width",tooltipWidth.toFixed(1));tipBackground.setAttribute("height","24");tipText.setAttribute("x",(tooltipX+6).toFixed(1));tipText.textContent=label;indicator.style.display="block";tooltip.style.display="block";svg.setAttribute("aria-label",originalLabel+", "+label)}function hide(){selected=-1;indicator.style.display="none";tooltip.style.display="none";svg.setAttribute("aria-label",originalLabel)}function nearest(event){var rect=svg.getBoundingClientRect(),x=(event.clientX-rect.left)/rect.width*394,ratio=(x-left)/plotWidth;inspect(Math.round(Math.max(0,Math.min(1,ratio))*(items.length-1)))}overlay.addEventListener("pointermove",nearest);overlay.addEventListener("pointerleave",hide);svg.addEventListener("keydown",function(event){if(event.key!=="ArrowLeft"&&event.key!=="ArrowRight"){return}event.preventDefault();if(selected<0){selected=event.key==="ArrowLeft"?items.length-1:0}else{selected+=event.key==="ArrowLeft"?-1:1}inspect(selected)});}`
-}
-
-func sparklineDataAttributes(items []APIObservation) string {
-	values := make([]string, 0, len(items))
-	times := make([]string, 0, len(items))
-	for _, item := range items {
-		values = append(values, strconv.FormatInt(item.Duration.Milliseconds(), 10))
-		times = append(times, item.At.UTC().Format(time.RFC3339))
-	}
-	return ` data-sparkline-values="` + esc(strings.Join(values, ",")) + `" data-sparkline-times="` + esc(strings.Join(times, ",")) + `"`
-}
-
-func systemStatusRefreshScriptReadable() string {
-	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,timer,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function niceStep(value){if(!isFinite(value)||value<=0){return 1}var magnitude=Math.pow(10,Math.floor(Math.log(value)/Math.LN10)),normalized=value/magnitude;return (normalized>5?10:normalized>2?5:normalized>1?2:1)*magnitude}function requiredDomain(items){if(!items.length){return {lower:0,upper:10}}var min=Infinity,max=0;items.forEach(function(item){var value=Number(item.duration_ms);if(isFinite(value)&&value>=0){min=Math.min(min,value);max=Math.max(max,value)}});if(!isFinite(min)){return {lower:0,upper:10}}var span=max-min,minSpan=Math.max(10,max*.25);span=Math.max(span,minSpan);var lower=Math.max(0,min-Math.max(span*.15,minSpan*.4)),upper=max+Math.max(span*.15,minSpan*.6),step=niceStep((upper-lower)/4);lower=Math.max(0,Math.floor(lower/step)*step);upper=Math.ceil(upper/step)*step;if(upper-lower<minSpan){upper=lower+Math.ceil(minSpan/step)*step}return {lower:lower,upper:upper}}var domains={};function stableDomain(name,items){var required=requiredDomain(items),state=domains[name]||{lower:0,upper:0,downSince:0},now=Date.now();if(!state.upper||required.lower<state.lower||required.upper>state.upper){state.lower=Math.min(state.lower||required.lower,required.lower);state.upper=Math.max(state.upper,required.upper);state.downSince=0}else if(required.lower>state.lower||required.upper<state.upper){if(!state.downSince){state.downSince=now}else if(now-state.downSince>=15000){state.lower=required.lower;state.upper=required.upper;state.downSince=0}}domains[name]=state;return state}function tick(value){return Math.max(0,Math.round(value))+"ms"}function graph(items,domain){if(!items.length){return ""}var width=466,height=104,left=54,right=2,top=8,bottom=82,plotWidth=width-left-right,points=[];items.forEach(function(item,index){var x=items.length>1?left+index*plotWidth/(items.length-1):left+plotWidth/2,value=Number(item.duration_ms)||0,y=bottom-(bottom-top)*(value-domain.lower)/(domain.upper-domain.lower);y=Math.max(top,Math.min(bottom,y));points.push(x.toFixed(1)+","+y.toFixed(1))});var mid=(domain.lower+domain.upper)/2;return "<svg class=\"api-sparkline\" viewBox=\"0 0 466 104\" role=\"img\" aria-label=\""+items.length+" observations, "+tick(domain.lower)+" to "+tick(domain.upper)+"\"><line class=\"chart-guide\" x1=\"54\" y1=\"45\" x2=\"464\" y2=\"45\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"12\">"+tick(domain.upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"48\" y=\"84\">"+tick(domain.lower)+"</text><path class=\"telemetry-line\" d=\"M"+points.join(" L")+"\"></path></svg>"}function setLive(value){if(live){live.textContent=value}}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,label=select.value==="5m"?text("直近5分","Last 5 minutes"):text("直近60秒","Last 60 seconds"),domain=stableDomain(service,items);status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+value+" ms</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+label+" · "+text("最終更新","Last updated")+" "+new Date(last.at).toLocaleTimeString()+"</span></div>"+graph(items,domain)}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")}return response.json()}).then(function(payload){var observations=payload.observations||{};updateCard("kitsu",observations.kitsu||[]);updateCard("discord",observations.discord||[]);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});refresh()})();</script>`
+	return body[:start] + systemStatusRefreshScriptCanonical() + body[end:]
 }
 
 func systemStatusRefreshScriptCanonicalRaw() string {
-	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,timer,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root){return}function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function windowMS(){return select.value==="5m"?300000:60000}function tick(value){return Math.max(0,Math.round(value))+"ms"}function scale(items){var max=1,ceilings=[10,25,50,100,250,500,1000,2000];items.forEach(function(item){var value=Number(item.duration_ms);if(isFinite(value)&&value>max){max=value}});for(var i=0;i<ceilings.length;i++){if(max<=ceilings[i]){return ceilings[i]}}return Math.ceil(max/100)*100}function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":date.toLocaleTimeString()}function chartLabel(item){var status=item.success?text("正常","Healthy"):text("リクエスト失敗","Request failed"),duration=item.success?(Number(item.duration_ms)||0)+" ms ":"";return (localTime(item.at)+" "+duration+status).trim()}function localizeChart(svg){if(!svg){return}svg.querySelectorAll("[data-telemetry-at]").forEach(function(bar){var label=chartLabel({at:bar.getAttribute("data-telemetry-at"),duration_ms:bar.getAttribute("data-telemetry-duration"),success:bar.getAttribute("data-telemetry-success")==="true"});bar.setAttribute("aria-label",label);var title=bar.querySelector("title");if(title){title.textContent=label}})}function graph(items){if(!items.length){return ""}var left=34,right=464,top=8,bottom=82,plotWidth=right-left,window=windowMS(),start=Date.now()-window,upper=scale(items),mid=upper/2,bars="";items.forEach(function(item){var at=Date.parse(item.at);if(!isFinite(at)){at=Date.now()}var x=left+Math.max(0,Math.min(1,(at-start)/window))*plotWidth,value=Number(item.duration_ms);if(!isFinite(value)||value<0){value=0}var height=(bottom-top)*Math.min(1,value/upper),y=bottom-height,success=!!item.success,cls=success?"success":"failure",label=chartLabel(item);bars+="<rect class=\"telemetry-bar "+cls+"\" x=\""+(x-4).toFixed(1)+"\" y=\""+y.toFixed(1)+"\" width=\"8\" height=\""+height.toFixed(1)+"\" data-telemetry-at=\""+item.at+"\" data-telemetry-duration=\""+value+"\" data-telemetry-success=\""+success+"\" tabindex=\"0\" role=\"img\" aria-label=\""+label+"\"><title>"+label+"</title></rect>"});var labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")];return "<svg class=\"api-sparkline\" viewBox=\"0 0 466 104\" role=\"img\" aria-label=\""+items.length+" observations\"><line class=\"chart-guide\" x1=\"34\" y1=\"45\" x2=\"464\" y2=\"45\"></line><line class=\"chart-baseline\" x1=\"34\" y1=\"82\" x2=\"464\" y2=\"82\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"30\" y=\"12\">"+tick(upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"30\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"30\" y=\"84\">0ms</text>"+bars+"<text class=\"chart-time-label\" text-anchor=\"start\" x=\"34\" y=\"100\">"+labels[0]+"</text><text class=\"chart-time-label\" text-anchor=\"middle\" x=\"233\" y=\"100\">"+labels[1]+"</text><text class=\"chart-time-label\" text-anchor=\"end\" x=\"464\" y=\"100\">"+labels[2]+"</text></svg>"}function setLive(value){if(live){live.textContent=value}}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details){return}if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],value=Number(last.duration_ms)||0,statusValue=last.success?value+" ms":text("リクエスト失敗","Request failed");status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><strong data-telemetry-value>"+statusValue+"</strong><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><span class=\"api-observation-meta\" data-telemetry-meta>"+text("最終更新","Last updated")+" "+localTime(last.at)+"</span></div>"+graph(items);localizeChart(details.querySelector(".api-sparkline"))}function refresh(){if(busy){return}busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok){throw new Error("snapshot failed")}return response.json()}).then(function(payload){var observations=payload.observations||{};updateCard("kitsu",observations.kitsu||[]);updateCard("discord",observations.discord||[]);setLive(text("自動更新","Auto-refresh"))}).catch(function(){setLive(text("更新失敗","Refresh unavailable"))}).finally(function(){busy=false})}select.addEventListener("change",refresh);timer=window.setInterval(refresh,interval);window.addEventListener("beforeunload",function(){window.clearInterval(timer)});root.querySelectorAll(".api-sparkline").forEach(localizeChart);refresh()})();</script>`
+	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root)return;function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function windowMS(){return select.value==="5m"?300000:60000}function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":[date.getHours(),date.getMinutes(),date.getSeconds()].map(function(n){return String(n).padStart(2,"0")}).join(":")}function tick(value){return Math.max(0,Math.round(value))+"ms"}function scale(items){var max=1,ceilings=[10,25,50,100,250,500,1000,2000];items.forEach(function(item){var value=Number(item.duration_ms);if(item.success&&isFinite(value)&&value>=0)max=Math.max(max,value)});for(var i=0;i<ceilings.length;i++)if(max<=ceilings[i])return ceilings[i];return Math.ceil(max/100)*100}function label(item){return (localTime(item.at)+" "+(item.success?Number(item.duration_ms)+" ms "+text("正常","Healthy"):text("リクエスト失敗","Request failed"))).trim()}function graph(items){if(!items.length)return "";var left=54,right=484,top=8,bottom=82,window=windowMS(),start=Date.now()-window,upper=scale(items),points=[],marks=[];items.forEach(function(item){var at=Date.parse(item.at);if(!isFinite(at))return;var x=left+Math.max(0,Math.min(1,(at-start)/window))*(right-left);if(!item.success){points.push(null);marks.push("<path class=\"telemetry-failure\" d=\"M"+(x-3)+",86 L"+(x+3)+",92 M"+(x+3)+",86 L"+(x-3)+",92\" data-telemetry-at=\""+item.at+"\" tabindex=\"0\" role=\"img\" aria-label=\""+label(item)+"\"><title>"+label(item)+"</title></path>");return}var value=Number(item.duration_ms);if(!isFinite(value)||value<0){points.push(null);return}var y=bottom-(bottom-top)*Math.min(1,value/upper);points.push({x:x,y:y,item:item});marks.push("<circle class=\"telemetry-point success\" cx=\""+x.toFixed(1)+"\" cy=\""+y.toFixed(1)+"\" r=\"3\" data-telemetry-at=\""+item.at+"\" data-telemetry-duration=\""+value+"\" tabindex=\"0\" role=\"img\" aria-label=\""+label(item)+"\"><title>"+label(item)+"</title></circle>")});var segments=[],segment=[];points.forEach(function(point){if(!point){if(segment.length>1)segments.push(segment);segment=[];return}segment.push(point)});if(segment.length>1)segments.push(segment);var paths=segments.map(function(points){return "<path class=\"telemetry-line success\" d=\"M"+points.map(function(p){return p.x.toFixed(1)+","+p.y.toFixed(1)}).join(" L")+"\"></path>"}).join("");var mid=upper/2,labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")];return "<svg class=\"api-sparkline\" viewBox=\"0 0 496 104\" role=\"img\" aria-label=\""+items.length+" observations\"><line class=\"chart-guide\" x1=\"54\" y1=\"45\" x2=\"484\" y2=\"45\"></line><line class=\"chart-baseline\" x1=\"54\" y1=\"82\" x2=\"484\" y2=\"82\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"50\" y=\"12\">"+tick(upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"50\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"50\" y=\"84\">0ms</text>"+paths+marks.join("")+"<text class=\"chart-time-label\" text-anchor=\"start\" x=\"54\" y=\"100\">"+labels[0]+"</text><text class=\"chart-time-label\" text-anchor=\"middle\" x=\"269\" y=\"100\">"+labels[1]+"</text><text class=\"chart-time-label\" text-anchor=\"end\" x=\"484\" y=\"100\">"+labels[2]+"</text></svg>"}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details)return;if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],statusValue=last.success?Number(last.duration_ms)+" ms":text("リクエスト失敗","Request failed");status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><div class=\"api-observation-primary\"><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><strong data-telemetry-value>"+statusValue+"</strong></div><span class=\"api-observation-meta\" data-telemetry-meta>"+text("最終更新","Last updated")+" "+localTime(last.at)+"</span></div>"+graph(items)}function refresh(){if(busy)return;busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok)throw new Error("snapshot failed");return response.json()}).then(function(payload){var data=payload.observations||{};updateCard("kitsu",data.kitsu||[]);updateCard("discord",data.discord||[]);if(live)live.textContent=text("自動更新","Auto-refresh")}).catch(function(){if(live)live.textContent=text("更新失敗","Refresh unavailable")}).finally(function(){busy=false})}select.addEventListener("change",refresh);window.setInterval(refresh,interval);refresh()})();</script>`
 }
 
 func systemStatusRefreshScriptCanonical() string {
-	const localTimeSource = `function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":date.toLocaleTimeString()}`
-	const sharedLocalTimeSource = `function localTime(value){return window.kitsuSyncSystemStatusTime(value)}`
 	script := systemStatusRefreshScriptCanonicalRaw()
-	script = strings.ReplaceAll(script, `labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")]`, `labels=select.value==="5m"?["5m","2.5m","0s"]:["60s","30s","0s"]`)
-	metadataParity := `function alignMetadata(row){if(!row||row.querySelector(".api-observation-primary")){return}var label=row.querySelector(".api-observation-label"),value=row.querySelector("[data-telemetry-value]"),meta=row.querySelector(".api-observation-meta");if(!label||!value||!meta){return}var primary=document.createElement("div");primary.className="api-observation-primary";primary.appendChild(label);primary.appendChild(value);row.insertBefore(primary,meta)}root.querySelectorAll(".api-observation-latency").forEach(alignMetadata);var metadataObserver=new MutationObserver(function(){root.querySelectorAll(".api-observation-latency").forEach(alignMetadata)});metadataObserver.observe(root,{subtree:true,childList:true});`
-	if end := strings.LastIndex(script, `</script>`); end >= 0 {
-		script = script[:end] + metadataParity + script[end:]
+	if start := strings.Index(script, `if(!item.success){`); start >= 0 {
+		if end := strings.Index(script[start:], `var value=Number(item.duration_ms);`); end >= 0 {
+			script = script[:start] + `if(!item.success){points.push(null);return}` + script[start+end:]
+		}
 	}
-	return strings.ReplaceAll(script, localTimeSource, sharedLocalTimeSource)
-}
-
-func addDynamicObservationAccessibility(graph string) string {
-	graph = strings.ReplaceAll(graph,
-		`bars+="<rect class='"+cls+"'`,
-		`var tooltipStatus=item.success?text("正常","Healthy"):text("リクエスト失敗","Request failed"),tooltipDuration=item.success?value+" ms":"",tooltipText=(new Date(item.at).toLocaleTimeString()+" "+tooltipDuration+" "+tooltipStatus).trim();bars+="<rect class='"+cls+"' tabindex='0' role='img' aria-label='"+tooltipText+"'`)
-	graph = strings.ReplaceAll(graph,
-		`<title>"+value+" ms</title>`,
-		`<title>"+tooltipText+"</title>`)
-	return graph
+	script = strings.ReplaceAll(script, `<div class=\"api-observation-primary\"><span class=\"api-observation-label\">"+text("現在の応答時間","Current response time")+"</span><strong data-telemetry-value>`, `<div class=\"api-observation-primary\"><strong data-telemetry-value>`)
+	return script
 }
 
 func applyDashboardMetricSemantics(body string, attentionCount, failureCount int, readinessClass string) string {
@@ -1463,17 +1381,23 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	issues := recentSystemIssues(lang, db)
 	eventAction, eventActionLabel := "", ""
 	if stats.LastPollErr != "" && readiness.PrerequisitesReady {
-		if issues != "" {
-			eventAction, eventActionLabel = withLang("/bot/admin/audit", r), t(lang, "最近の問題を確認", "Review recent issues")
-		} else {
-			eventAction, eventActionLabel = "#pipeline-event-monitoring", t(lang, "観測診断を確認", "Review observation diagnostics")
-		}
+		eventAction, eventActionLabel = withLang("/bot/admin/audit", r), t(lang, "監査ログを確認", "Review audit log")
+	}
+	notificationAction, notificationActionLabel := "", ""
+	if !readiness.OverallReady {
+		view := readinessViewFor(lang, r, readiness)
+		notificationAction, notificationActionLabel = view.ActionURL, view.ActionLabel
+	}
+	routingAction, routingActionLabel := "", ""
+	if !readiness.RoutingReady && readiness.ProductionConnected {
+		routingAction = systemStatusProjectAction(lang, r, db)
+		routingActionLabel = t(lang, "Productionを確認", "Review Productions")
 	}
 	items := []pipelineHealthItem{
-		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics"), action: eventAction, actionLabel: eventActionLabel, detailsID: "pipeline-event-monitoring"},
-		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics")},
+		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics"), action: eventAction, actionLabel: eventActionLabel},
+		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics"), action: notificationAction, actionLabel: notificationActionLabel},
 		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success"},
-		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics")},
+		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics"), action: routingAction, actionLabel: routingActionLabel},
 	}
 	var healthRows strings.Builder
 	for index, item := range items {
@@ -1483,13 +1407,11 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if issues != "" {
 		issuesSection = `<section class="section-card glass system-issues" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + issues + `</section>`
 	}
-	sectionAction := pipelineReadinessNextAction(lang, r, readiness)
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p>` + sectionAction + `</div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + `</div>`
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
-	body += `<script data-pipeline-health-actions>(function(){document.addEventListener('click',function(event){var link=event.target.closest('[data-open-pipeline-details]');if(!link)return;var summary=document.getElementById(link.getAttribute('data-open-pipeline-details'));var details=summary&&summary.closest('details');if(details){details.open=true;}});})();</script>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
 }
 
@@ -1566,7 +1488,7 @@ func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName
 		replacement := `<span class="api-observation-meta" data-telemetry-meta data-telemetry-at="` + esc(items[len(items)-1].At.UTC().Format(time.RFC3339)) + `">`
 		body = strings.Replace(body, marker, replacement, 1)
 	}
-	return body + `<script data-telemetry-local-time>(function(){window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll("[data-telemetry-meta][data-telemetry-at]").forEach(function(node){node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"));node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone});document.querySelectorAll(".telemetry-bar[data-telemetry-at]").forEach(function(node){var success=node.getAttribute("data-telemetry-success")==="true",duration=Number(node.getAttribute("data-telemetry-duration"))||0,status=success?(document.documentElement.lang==="ja"?"正常":"Healthy"):(document.documentElement.lang==="ja"?"リクエスト失敗":"Request failed"),label=(window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))+" "+(success?duration+" ms ":"")+status).trim();node.setAttribute("aria-label",label);var title=node.querySelector("title");if(title){title.textContent=label}})})();</script>`
+	return body + `<script data-telemetry-local-time>(function(){window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll("[data-telemetry-meta][data-telemetry-at]").forEach(function(node){node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"));node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone});document.querySelectorAll(".telemetry-point[data-telemetry-at]").forEach(function(node){var duration=Number(node.getAttribute("data-telemetry-duration"))||0,label=(window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))+" "+duration+" ms "+(document.documentElement.lang==="ja"?"正常":"Healthy")).trim();node.setAttribute("aria-label",label);var title=node.querySelector("title");if(title){title.textContent=label}})})();</script>`
 }
 
 func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, windowName, body string) string {
@@ -1584,27 +1506,17 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 	_ = index
 	action := ""
 	if item.action != "" && item.actionLabel != "" {
-		openDetails := ""
-		href := item.action
-		if strings.HasPrefix(item.action, "#") && item.detailsID != "" {
-			openDetails = ` data-open-pipeline-details="` + esc(item.detailsID) + `"`
-			href = item.action
-		}
-		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(href) + `"` + openDetails + `>` + esc(item.actionLabel) + `</a>`
-	}
-	details := ""
-	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
-		summaryID := ""
-		if item.detailsID != "" {
-			summaryID = ` id="` + esc(item.detailsID) + `"`
-		}
-		details = `<details class="pipeline-health-details"><summary` + summaryID + `>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-details-content">` + item.details + `</div></details>`
+		action = `<a class="btn-ghost pipeline-health-action" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
 	}
 	explanation := ""
 	if strings.TrimSpace(item.explanation) != "" {
 		explanation = `<p class="field-help">` + esc(item.explanation) + `</p>`
 	}
-	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + `</div><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + details + action + `</article>`
+	details := ""
+	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
+		details = `<details class="pipeline-health-diagnostic"><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-diagnostic-content">` + item.details + `</div></details>`
+	}
+	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + details + `</div><div class="pipeline-health-rail"><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + action + `</div></article>`
 }
 
 func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string, sharedMax ...float64) string {
@@ -1619,19 +1531,24 @@ func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowNa
 	}
 	normalMeta := fmt.Sprintf("%s %s", t(lang, "最終更新", "Last updated"), last.At.Local().Format("15:04:05"))
 	scale := stableObservationScale(service, windowName, items)
-	return `<div class="api-observation-latency"><div class="api-observation-primary"><span class="api-observation-label">` + esc(t(lang, "現在の応答時間", "Current response time")) + `</span><strong data-telemetry-value>` + esc(value) + `</strong></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationBarGraphWithScale(items, lang, windowName, scale)
+	return `<div class="api-observation-latency"><div class="api-observation-primary"><strong data-telemetry-value>` + esc(value) + `</strong></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationLineGraphWithScale(items, lang, windowName, scale)
+}
+
+func systemStatusProjectAction(lang string, r *http.Request, db *gorm.DB) string {
+	for _, project := range model.ListProjects(db) {
+		if len(model.ListNotificationRoutingDiagnoses(db, project.KitsuProjectID, 1)) > 0 {
+			return withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&tab=notifications", r)
+		}
+	}
+	return withLang("/bot/admin/projects", r)
 }
 
 func apiObservationGraph(items []APIObservation) string {
-	return apiObservationBarGraph(items, "en", telemetryWindow60Seconds)
+	return apiObservationLineGraph(items, "en", telemetryWindow60Seconds)
 }
 
-func apiObservationBarGraph(items []APIObservation, lang, windowName string) string {
-	return apiObservationBarGraphWithScale(items, lang, windowName, observationScaleForItems(items))
-}
-
-func apiObservationBarGraphWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
-	return apiObservationBarsWithScale(items, lang, windowName, maxValue)
+func apiObservationLineGraph(items []APIObservation, lang, windowName string) string {
+	return apiObservationLineGraphWithScale(items, lang, windowName, observationScaleForItems(items))
 }
 
 func apiObservationLineGraphWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
@@ -1639,40 +1556,66 @@ func apiObservationLineGraphWithScale(items []APIObservation, lang, windowName s
 }
 
 func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName string, domain observationYDomain) string {
-	return apiObservationBarsWithScale(items, lang, windowName, domain.Upper)
-}
-
-func apiObservationBarsWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
 	if len(items) == 0 {
 		return ""
 	}
 	geometry := telemetryChartGeometry()
-	if maxValue <= 0 {
-		maxValue = 10
+	if domain.Upper <= domain.Lower {
+		domain = observationYDomain{Lower: 0, Upper: 10}
 	}
 	plotWidth := geometry.PlotRight - geometry.PlotLeft
 	window := telemetryWindowDuration(windowName)
 	start := time.Now().Add(-window)
-	barWidth := 8.0
-	var bars strings.Builder
+	type chartPoint struct{ x, y float64 }
+	var successful []chartPoint
+	var points strings.Builder
 	for _, item := range items {
 		x := geometry.PlotLeft + math.Max(0, math.Min(1, item.At.Sub(start).Seconds()/window.Seconds()))*plotWidth
-		value := math.Max(0, float64(item.Duration.Milliseconds()))
-		height := (geometry.PlotBottom - geometry.PlotTop) * math.Min(1, value/maxValue)
-		y := geometry.PlotBottom - height
-		class := "failure"
-		if item.Success {
-			class = "success"
+		if !item.Success {
+			successful = append(successful, chartPoint{x: math.NaN(), y: math.NaN()}) // keep the line discontinuous at failed observations
+			continue
 		}
 		label := telemetryObservationLabel(lang, item)
-		bars.WriteString(`<rect class="telemetry-bar ` + class + `" x="` + fmt.Sprintf("%.1f", x-barWidth/2) + `" y="` + fmt.Sprintf("%.1f", y) + `" width="` + fmt.Sprintf("%.1f", barWidth) + `" height="` + fmt.Sprintf("%.1f", height) + `" data-telemetry-at="` + esc(item.At.UTC().Format(time.RFC3339)) + `" data-telemetry-duration="` + strconv.FormatInt(item.Duration.Milliseconds(), 10) + `" data-telemetry-success="` + strconv.FormatBool(item.Success) + `" tabindex="0" role="img" aria-label="` + esc(label) + `"><title>` + esc(label) + `</title></rect>`)
+		value := math.Max(0, float64(item.Duration.Milliseconds()))
+		y := geometry.PlotBottom - (geometry.PlotBottom-geometry.PlotTop)*math.Min(1, value/domain.Upper)
+		xText, yText := fmt.Sprintf("%.1f", x), fmt.Sprintf("%.1f", y)
+		points.WriteString(`<circle class="telemetry-point success" cx="` + xText + `" cy="` + yText + `" r="3" data-telemetry-at="` + esc(item.At.UTC().Format(time.RFC3339)) + `" data-telemetry-duration="` + strconv.FormatInt(item.Duration.Milliseconds(), 10) + `" data-telemetry-success="true" tabindex="0" role="img" aria-label="` + esc(label) + `"><title>` + esc(label) + `</title></circle>`)
+		successful = append(successful, chartPoint{x: x, y: y})
 	}
-	labels := []string{"60s", "30s", "0s"}
+	// Each successful run is a separate path; failed samples never acquire a latency value.
+	var line strings.Builder
+	var run []chartPoint
+	flush := func() {
+		if len(run) > 1 {
+			line.WriteString(`<path class="telemetry-line success" d="M`)
+			for index, point := range run {
+				if index > 0 {
+					line.WriteString(` L`)
+				}
+				line.WriteString(fmt.Sprintf("%.1f,%.1f", point.x, point.y))
+			}
+			line.WriteString(`"></path>`)
+		}
+		run = nil
+	}
+	for _, point := range successful {
+		if math.IsNaN(point.x) {
+			flush()
+			continue
+		}
+		run = append(run, point)
+	}
+	flush()
+	labels := []string{"60s", "30s", "Now"}
 	if windowName == telemetryWindow5Minutes {
-		labels = []string{"5m", "2.5m", "0s"}
+		labels = []string{"5m", "2m30s", "Now"}
+	} else if lang == "ja" {
+		labels = []string{"60秒", "30秒", "今"}
+	} else {
+		labels[2] = "Now"
 	}
-	middle := maxValue / 2
-	svg := `<svg class="api-sparkline" viewBox="0 0 466 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", len(items))) + `"` + sparklineDataAttributes(items) + `><line class="chart-guide" x1="34" y1="45" x2="464" y2="45"></line><line class="chart-baseline" x1="34" y1="82" x2="464" y2="82"></line><text class="chart-tick" text-anchor="end" x="30" y="12">` + esc(formatLatencyTick(maxValue)) + `</text><text class="chart-tick" text-anchor="end" x="30" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="30" y="84">0ms</text>` + bars.String() + `<text class="chart-time-label" text-anchor="start" x="34" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="233" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="464" y="100">` + esc(labels[2]) + `</text></svg>`
+	middle := domain.Upper / 2
+	svg := `<svg class="api-sparkline" viewBox="0 0 496 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", len(items))) + `"><line class="chart-guide" x1="54" y1="45" x2="484" y2="45"></line><line class="chart-baseline" x1="54" y1="82" x2="484" y2="82"></line><text class="chart-tick" text-anchor="end" x="50" y="12">` + esc(formatLatencyTick(domain.Upper)) + `</text><text class="chart-tick" text-anchor="end" x="50" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="50" y="84">0ms</text>` + line.String() + points.String() + `<text class="chart-time-label" text-anchor="start" x="54" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="269" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="484" y="100">` + esc(labels[2]) + `</text></svg>`
 	return svg
 }
 
@@ -1776,6 +1719,9 @@ func observationYDomainForItems(items []APIObservation) observationYDomain {
 	}
 	minValue, maxValue := math.Inf(1), 0.0
 	for _, item := range items {
+		if !item.Success {
+			continue
+		}
 		value := float64(item.Duration.Milliseconds())
 		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
 			continue
@@ -1820,12 +1766,15 @@ func niceObservationStep(value float64) float64 {
 }
 
 func telemetryChartGeometry() telemetryChartLayout {
-	return telemetryChartLayout{Width: 466, Height: 104, PlotLeft: 34, PlotRight: 464, PlotTop: 8, PlotMiddle: 45, PlotBottom: 82}
+	return telemetryChartLayout{Width: 496, Height: 104, PlotLeft: 54, PlotRight: 484, PlotTop: 8, PlotMiddle: 45, PlotBottom: 82}
 }
 
 func observationScaleForItems(items []APIObservation) float64 {
 	maxValue := 1.0
 	for _, item := range items {
+		if !item.Success {
+			continue
+		}
 		if value := float64(item.Duration.Milliseconds()); value > maxValue {
 			maxValue = value
 		}
@@ -2434,7 +2383,7 @@ func globalUserLinkingPeople(db *gorm.DB) ([]KitsuPerson, string) {
 	return people, "local_user_map"
 }
 
-func renderGlobalUserLinkingLegacy(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	people, _ := globalUserLinkingPeople(db)
 	selectedGuildID := strings.TrimSpace(r.URL.Query().Get("discord_guild_id"))

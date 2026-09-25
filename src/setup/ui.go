@@ -534,7 +534,7 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
 @media (max-width:640px){.top-actions{flex-direction:column;align-items:stretch}.top-actions nav{width:100%;flex:0 0 auto}.lang-toggle{align-self:flex-start}}
 @media (max-width:760px){.primary-nav>.nav-card{display:none}.primary-nav>.mobile-nav{display:block;max-width:100%;overflow:visible}.primary-nav>.mobile-nav .nav-card{display:grid;grid-template-columns:1fr;max-width:none;overflow:visible}}
  :root{--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:32px;--space-action-section:24px}.dashboard-menu-card{min-height:226px;padding:20px}.dashboard-menu-status{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}.dashboard-status-chip{display:inline-flex;align-items:center;min-height:24px;padding:3px 8px;border:1px solid rgba(255,255,255,.14);border-radius:999px;background:rgba(255,255,255,.06);color:var(--muted);font-size:11px;font-weight:700;line-height:1.2}.dashboard-status-chip.ok{border-color:rgba(142,207,139,.28);background:rgba(142,207,139,.12);color:#a6e0a2}.dashboard-status-chip.warning{border-color:rgba(255,200,80,.34);background:rgba(255,200,80,.12);color:#ffd978}.dashboard-status-chip.muted{color:var(--muted-2)}.dashboard-menu-card .dashboard-menu-arrow{margin-top:0}.wizard-connection-summary{grid-template-columns:1fr}.wizard-plan-table table{min-width:650px}.wizard-plan-actions{justify-content:flex-start}
- .dashboard-menu-status{display:flex;align-items:center;flex-wrap:nowrap;gap:6px;margin-top:auto;min-width:0}.dashboard-status-chip{white-space:nowrap}.dashboard-service-status{display:flex;align-items:center;justify-content:flex-start;gap:24px;width:100%;min-width:0}.dashboard-service-status>span{display:flex;align-items:center;gap:8px;min-width:0;flex:0 0 auto}.dashboard-service-status strong{font-size:11px;color:var(--muted)}.api-observation-card{display:grid;gap:8px}.api-observation-summary{display:flex;align-items:center;justify-content:space-between;gap:8px}.api-observation-latency{display:grid;gap:2px;font-variant-numeric:tabular-nums;color:var(--muted)}.api-observation-latency strong{font-size:20px;line-height:1.1;color:var(--text)}.api-observation-label{font-size:12px;color:var(--muted)}.api-observation-meta{font-size:11px;color:var(--muted-2)}.api-observation-not-checked{padding:20px 0;color:var(--muted)}.api-sparkline{display:block;width:100%;height:104px;border-radius:8px;background:rgba(255,255,255,.025)}.system-live-indicator{display:inline-flex;align-items:center;gap:6px;color:var(--muted-2);font-size:11px;white-space:nowrap}.system-live-indicator i{width:7px;height:7px;border-radius:50%;background:#8ecf8b;box-shadow:0 0 0 3px rgba(142,207,139,.1)}.telemetry-window-actions{display:flex;align-items:center;gap:12px}.telemetry-window-control{display:inline-flex;align-items:center;gap:6px;color:var(--muted-2);font-size:11px;white-space:nowrap}.telemetry-window-control select{width:auto;min-width:8rem;padding:6px 28px 6px 9px;border-radius:8px;font-size:12px}.system-observability,.pipeline-health,.system-issues{margin-top:0}.system-observability-grid{gap:16px}.pipeline-health-grid{gap:16px;margin-top:16px}.pipeline-health-details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}.pipeline-health-details summary{cursor:pointer;color:var(--muted);font-size:12px}.pipeline-detail-list{display:grid;gap:8px;margin:10px 0 0}.pipeline-detail-list>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px}.pipeline-detail-list dt{color:var(--muted-2);font-size:12px}.pipeline-detail-list dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}.system-status-sections{gap:24px}.connections-edit-grid{gap:16px}.dashboard-menu-wrap,.section-stack{gap:24px}.button-row.connections-actions,.button-row.connections-navigation{gap:12px;margin-top:var(--space-action-section,24px)}.connections-edit-grid .connections-actions{margin-top:var(--space-action-section,24px)}.status-pill.success{color:#d7f4d4;border-color:rgba(142,207,139,.28);background:rgba(142,207,139,.08)}.status-pill.warning{color:#fff1c4;border-color:rgba(255,200,80,.3);background:rgba(255,200,80,.1)}.status-pill.danger,.status-pill.blocked{color:#ffd3ca;border-color:rgba(255,106,80,.28);background:rgba(255,106,80,.08)}.status-pill.neutral{color:var(--muted);border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.04)}
+ .dashboard-menu-status{display:flex;align-items:center;flex-wrap:nowrap;gap:6px;margin-top:auto;min-width:0}.dashboard-status-chip{white-space:nowrap}.dashboard-service-status{display:flex;align-items:center;justify-content:flex-start;gap:24px;width:100%;min-width:0}.dashboard-service-status>span{display:flex;align-items:center;gap:8px;min-width:0;flex:0 0 auto}.dashboard-service-status strong{font-size:11px;color:var(--muted)}.api-observation-card{display:grid;gap:8px}.api-observation-summary{display:flex;align-items:center;justify-content:space-between;gap:8px}.api-observation-latency{display:grid;gap:2px;font-variant-numeric:tabular-nums;color:var(--muted)}.api-observation-latency strong{font-size:20px;line-height:1.1;color:var(--text)}.api-observation-label{font-size:12px;color:var(--muted)}.api-observation-meta{font-size:11px;color:var(--muted-2)}.api-observation-not-checked{padding:20px 0;color:var(--muted)}.api-sparkline{display:block;width:100%;height:104px;border-radius:8px;background:rgba(255,255,255,.025)}.system-live-indicator{display:inline-flex;align-items:center;gap:6px;color:var(--muted-2);font-size:11px;white-space:nowrap}.system-live-indicator i{width:7px;height:7px;border-radius:50%;background:#8ecf8b;box-shadow:0 0 0 3px rgba(142,207,139,.1)}.telemetry-window-actions{display:flex;align-items:center;gap:12px}.telemetry-window-control{display:inline-flex;align-items:center;gap:6px;color:var(--muted-2);font-size:11px;white-space:nowrap}.telemetry-window-control select{width:auto;min-width:8rem;padding:6px 28px 6px 9px;border-radius:8px;font-size:12px}.system-observability,.pipeline-health,.system-issues{margin-top:0}.system-observability-grid{gap:16px}.pipeline-health-grid{gap:16px;margin-top:16px}.system-status-sections{gap:24px}.connections-edit-grid{gap:16px}.dashboard-menu-wrap,.section-stack{gap:24px}.button-row.connections-actions,.button-row.connections-navigation{gap:12px;margin-top:var(--space-action-section,24px)}.connections-edit-grid .connections-actions{margin-top:var(--space-action-section,24px)}.status-pill.success{color:#d7f4d4;border-color:rgba(142,207,139,.28);background:rgba(142,207,139,.08)}.status-pill.warning{color:#fff1c4;border-color:rgba(255,200,80,.3);background:rgba(255,200,80,.1)}.status-pill.danger,.status-pill.blocked{color:#ffd3ca;border-color:rgba(255,106,80,.28);background:rgba(255,106,80,.08)}.status-pill.neutral{color:var(--muted);border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.04)}
  @media (max-width:760px){.dashboard-service-status{gap:12px;flex-wrap:wrap}.telemetry-window-actions{align-items:flex-start;flex-direction:column;gap:8px}.telemetry-window-control{width:100%;justify-content:space-between}.telemetry-window-control select{flex:1}}
   @media (max-width:640px){.dashboard-menu-status{flex-wrap:wrap}.dashboard-service-status{flex-wrap:wrap;gap:8px}}
   /* Current IA order follows the source DOM; clear the obsolete visual reordering rules. */
@@ -561,7 +561,6 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections .api-observation-label,.system-status-sections .pipeline-health-item .field-help{font-size:13px}
   .system-status-sections .api-observation-meta{font-size:12px}
   .system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:9px}
-  .system-status-sections .pipeline-health-details summary{font-size:13px}
   @media (prefers-reduced-motion: reduce){
    body::before{animation:none!important}
    .tile,.section-card,.page-card{animation:none!important}
@@ -624,12 +623,12 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
 
   /* Phase 9 interaction grammar: stable surfaces, one focus treatment, no hover jumps. */
   :root{--interaction-hover:rgba(255,255,255,.08);--interaction-border:rgba(255,141,72,.62);--interaction-focus:var(--border-focus);--divider-color:var(--line);--divider-width:1px;--sparkline-axis-gap:2px;--sparkline-axis-label-width:40px}
-  .nav-chip,.home-link,.action-link,.btn,.btn-sm,.btn-ghost,.btn-danger,.routing-row-menu summary,.wizard-exclude,.pipeline-health-details summary,.advanced-details summary{transition:color .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease,opacity .18s ease}
-  .nav-chip:hover,.home-link:hover,.action-link:hover,.btn:hover,.btn-sm:hover,.btn-ghost:hover,.btn-danger:hover,.routing-row-menu summary:hover,.wizard-exclude:hover,.pipeline-health-details summary:hover,.advanced-details summary:hover{transform:none!important}
+  .nav-chip,.home-link,.action-link,.btn,.btn-sm,.btn-ghost,.btn-danger,.routing-row-menu summary,.wizard-exclude,.advanced-details summary{transition:color .18s ease,background-color .18s ease,border-color .18s ease,box-shadow .18s ease,opacity .18s ease}
+  .nav-chip:hover,.home-link:hover,.action-link:hover,.btn:hover,.btn-sm:hover,.btn-ghost:hover,.btn-danger:hover,.routing-row-menu summary:hover,.wizard-exclude:hover:hover,.advanced-details summary:hover{transform:none!important}
   .nav-chip:hover,.home-link:hover,.action-link:hover,.btn-ghost:hover,.routing-row-menu summary:hover,.wizard-exclude:hover{color:var(--text);background:var(--interaction-hover);border-color:var(--interaction-border)}
   .btn:hover,.btn-sm:hover{box-shadow:0 8px 20px rgba(232,90,26,.18)}
   .btn-danger:hover{background:rgba(255,106,80,.24);border-color:rgba(255,106,80,.58)}
-  .nav-chip:focus-visible,.home-link:focus-visible,.action-link:focus-visible,.btn:focus-visible,.btn-sm:focus-visible,.btn-ghost:focus-visible,.btn-danger:focus-visible,.routing-row-menu summary:focus-visible,.wizard-exclude:focus-visible,.pipeline-health-details summary:focus-visible,.advanced-details summary:focus-visible{outline:3px solid var(--interaction-focus);outline-offset:3px}
+  .nav-chip:focus-visible,.home-link:focus-visible,.action-link:focus-visible,.btn:focus-visible,.btn-sm:focus-visible,.btn-ghost:focus-visible,.btn-danger:focus-visible,.routing-row-menu summary:focus-visible,.wizard-exclude:focus-visible:focus-visible,.advanced-details summary:focus-visible{outline:3px solid var(--interaction-focus);outline-offset:3px}
   .nav-chip.active,.nav-chip[aria-current="page"]{color:var(--text);background:var(--interaction-hover);border-color:rgba(255,141,72,.46);box-shadow:none;transform:none}
   .dashboard-menu-card:hover,.dashboard-menu-card:focus,.dashboard-menu-card:focus-visible,.dashboard-menu-card:active,.dashboard-menu-card[aria-current="page"]{border-color:var(--line);border-right-color:var(--line);border-inline-end-color:var(--line);box-shadow:none;transform:none}
   .status-pill,.status-badge{max-width:100%;overflow-wrap:anywhere}
@@ -650,15 +649,10 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections .pipeline-health-copy{min-width:0}
   .system-status-sections .pipeline-health-copy h3{margin:0 0 6px}
   .system-status-sections .pipeline-health-controls{display:flex;align-items:center;justify-content:flex-end;gap:12px;min-width:0}
-  .system-status-sections .pipeline-health-details{margin:0;padding:0;border:0}
   .system-status-sections .pipeline-health-action{align-self:center}
   .system-status-sections .pipeline-health-item:last-child{border-bottom:0}
-  .system-status-sections .pipeline-health-details{border-top:0;padding-top:0;margin-top:8px}
   .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) auto auto;align-items:start;column-gap:12px;row-gap:10px}
   .system-status-sections .pipeline-health-item>.status-badge{grid-column:2;grid-row:1;align-self:start;justify-self:end;white-space:nowrap}
-  .system-status-sections .pipeline-health-details-content{grid-column:1 / -1;grid-row:2;min-width:0;width:auto;border-top:1px solid var(--line);padding-top:10px}
-  .system-status-sections .pipeline-health-details-content .pipeline-detail-list{margin:0}
-  .system-status-sections .pipeline-health-details-content[hidden]{display:none}
   .system-status-sections .api-sparkline:focus-visible{outline:3px solid var(--interaction-focus);outline-offset:3px}
   .system-status-sections .sparkline-hover-guide{stroke:rgba(255,141,72,.45);stroke-width:1;stroke-dasharray:2 3;pointer-events:none}
   .system-status-sections .sparkline-hover-marker{fill:var(--accent-2);stroke:var(--surface);stroke-width:1.5;pointer-events:none}
@@ -676,7 +670,6 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections>.section-stack>.system-issues>.empty,.system-status-sections>.section-stack>.system-issues>.pipeline-issues{margin-inline:var(--system-status-content-inset)}
   .system-status-sections .system-observability-grid>article{min-width:0}
   .system-status-sections .pipeline-health-item{min-width:0}
-  @media(max-width:760px){.system-status-sections .pipeline-health-details-content .pipeline-detail-list>div{grid-template-columns:1fr;gap:4px}.system-status-sections .pipeline-health-details-content .pipeline-detail-list dd{text-align:left}}
   /* Phase 20: explicit vertical rhythm for the three System Status sections. */
   :root{--system-status-page-title-to-section:var(--space-5);--system-status-heading-to-content:var(--space-3);--system-status-internal-item-gap:var(--space-2);--system-status-section-to-section:var(--space-5)}
   .page-card:has(.system-status-sections)>.page-heading{margin-bottom:var(--system-status-page-title-to-section)}
@@ -688,8 +681,6 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections .system-observability-grid>article{gap:var(--system-status-internal-item-gap)}
   .system-status-sections .pipeline-health-grid{margin-top:var(--system-status-heading-to-content);row-gap:0}
   .system-status-sections .pipeline-health-item{padding-block:var(--system-status-heading-to-content)}
-  .system-status-sections .pipeline-health-details{margin-top:var(--system-status-internal-item-gap)}
-  .system-status-sections .pipeline-health-details-content{padding-top:var(--system-status-internal-item-gap)}
   .system-status-sections>.section-stack>.system-issues>.empty,.system-status-sections>.section-stack>.system-issues>.pipeline-issues{margin-top:var(--system-status-heading-to-content)}
   @media(max-width:760px){.system-status-sections>.system-observability,.system-status-sections>.section-stack>.pipeline-health,.system-status-sections>.section-stack>.system-issues{padding-top:var(--system-status-heading-to-content)}.system-status-sections>.system-observability{padding-top:0}}
   /* Mobile navigation: one shared panel boundary, restrained inner rows. */
@@ -717,14 +708,11 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .system-status-sections .api-observation-card h3{font-size:16px}
   .system-status-sections .api-observation-latency strong{font-size:24px}
   .system-status-sections .api-observation-label,.system-status-sections .field-help,.system-status-sections .hint{font-size:14px}
-  .system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:13px}
+  .system-status-sections .api-observation-meta{font-size:13px}
   .system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}
   .system-status-sections .api-sparkline .chart-axis-label,.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{fill:var(--muted)}
   .page-card:has(.system-status-sections)>.page-heading h1{font-size:28px}
   .page-card:has(.system-status-sections)>.page-heading h2{font-size:20px}
-  .api-sparkline .telemetry-bar.success{fill:#8ecf8b;stroke:#8ecf8b}
-  .api-sparkline .telemetry-bar.failure{fill:#ff6a50;stroke:#ff6a50}
-  .api-sparkline .telemetry-bar:focus{stroke:#fff;stroke-width:1.5;outline:none}
   .api-sparkline .chart-baseline{stroke:var(--line);stroke-width:1}
   .system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{fill:#b8b5ae!important}
   .system-status-sections .api-sparkline .chart-guide,.system-status-sections .api-sparkline .chart-baseline{stroke:#56616a!important}
@@ -765,9 +753,6 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .system-status-sections .system-observability-grid{gap:16px}
   .editorial-workbench .system-status-sections .system-observability-grid>article{display:grid;grid-template-rows:auto 1fr;min-height:224px;padding:16px;border:1px solid var(--border-default);border-radius:8px;background:var(--surface-subtle);box-shadow:none}
   .editorial-workbench .system-status-sections .api-sparkline{background:transparent;border-radius:0}
-  .editorial-workbench .system-status-sections .pipeline-health-details{grid-column:1 / -1;grid-row:2;margin:0;padding:0;border:0}
-  .editorial-workbench .system-status-sections .pipeline-health-details summary{cursor:pointer;color:var(--muted);font-size:14px}
-  .editorial-workbench .system-status-sections .pipeline-health-details-content{min-width:0;padding-top:10px;color:var(--muted)}
   .editorial-workbench .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) auto;row-gap:8px}
   .editorial-workbench .system-status-sections .pipeline-health-item>.status-badge{grid-column:2;grid-row:1}
   .editorial-workbench .connection-host-value-row{display:flex;align-items:center;gap:12px;min-width:0}
@@ -793,11 +778,31 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .production-context #panel-overview>.section-card{border-top:0;padding-top:0}
   .editorial-workbench .production-context #panel-notifications>.section-card>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:16px 0;margin-top:0}
   .editorial-workbench .production-context #panel-notifications>.section-card>.section-card:first-child{border-top:0;padding-top:0}
-  .editorial-workbench .user-linking-page>.section-card{border:0;border-bottom:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
+   .system-status-sections .api-observation-latency{display:flex;align-items:baseline;justify-content:space-between;gap:16px;min-width:0}
+   .system-status-sections .api-observation-primary{display:flex;align-items:baseline;gap:9px;min-width:0}
+   .system-status-sections .api-observation-primary strong{font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums}
+   .system-status-sections .api-observation-latency .api-observation-meta{margin-left:auto;color:var(--muted-2);font-size:13px;white-space:nowrap}
+   .system-status-sections .api-sparkline .telemetry-line{fill:none;stroke:#8ecf8b;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+   .system-status-sections .api-sparkline .telemetry-point.success{fill:#8ecf8b;stroke:var(--surface);stroke-width:1}
+   .system-status-sections .api-sparkline .telemetry-point:focus{outline:none;filter:drop-shadow(0 0 2px #fff)}
+   .system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) minmax(130px,auto);grid-template-areas:"copy rail";align-items:start;gap:8px 16px}
+   .system-status-sections .pipeline-health-copy{grid-area:copy;min-width:0}
+   .system-status-sections .pipeline-health-rail{grid-area:rail;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-start;gap:8px;min-width:130px}
+   .system-status-sections .pipeline-health-rail .status-badge{white-space:nowrap}
+   .system-status-sections .pipeline-health-rail .pipeline-health-action{margin:0;max-width:180px;white-space:normal;text-align:right}
+   .system-status-sections .pipeline-health-diagnostic{margin-top:8px;width:max-content;max-width:100%;color:var(--muted-2);font-size:12px}
+   .system-status-sections .pipeline-health-diagnostic summary{cursor:pointer;list-style:disclosure-closed;line-height:1.4}
+   .system-status-sections .pipeline-health-diagnostic[open] summary{margin-bottom:6px}
+   .system-status-sections .pipeline-health-diagnostic-content{max-width:100%;overflow-x:auto}
+   .system-status-sections .pipeline-detail-list{display:grid;gap:4px;margin:0;color:var(--muted);font-size:12px}
+   .system-status-sections .pipeline-detail-list>div{display:grid;grid-template-columns:minmax(110px,auto) minmax(0,1fr);gap:8px}
+   .system-status-sections .pipeline-detail-list dt{color:var(--muted-2)}
+   .system-status-sections .pipeline-detail-list dd{margin:0;overflow-wrap:anywhere}
+   .system-status-sections .pipeline-health-next-action{display:none}
   .setup-required-state{display:grid;gap:24px;max-width:640px}
   .setup-required-message{margin:0;color:var(--muted);font-size:14px}
   .editorial-workbench .connections-footer{margin-top:24px}
-  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:28px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{grid-template-columns:1fr;padding-top:20px}.editorial-advanced-settings .editorial-advanced-heading,.editorial-advanced-settings .editorial-advanced-explanation,.editorial-advanced-settings>.connection-external-url-field,.editorial-advanced-settings>.connection-expert-network{grid-column:1;grid-row:auto}.editorial-workbench .connection-external-url-controls{align-items:stretch;flex-wrap:wrap}.editorial-workbench .connection-external-url-controls input{flex-basis:100%}.editorial-workbench .connection-external-url-controls .btn-ghost{margin-left:auto}.system-status-sections .api-observation-latency{align-items:flex-start;flex-direction:column;gap:4px}.system-status-sections .api-observation-primary{flex-wrap:wrap}.system-status-sections .api-observation-latency .api-observation-meta{white-space:normal}.system-status-sections .pipeline-health-next-action{align-items:flex-start;flex-direction:column}}
+  @media(max-width:760px){.editorial-workbench>.page-heading h1{font-size:28px}.editorial-workbench .connections-edit-stack{gap:24px}.editorial-advanced-settings{grid-template-columns:1fr;padding-top:20px}.editorial-advanced-settings .editorial-advanced-heading,.editorial-advanced-settings .editorial-advanced-explanation,.editorial-advanced-settings>.connection-external-url-field,.editorial-advanced-settings>.connection-expert-network{grid-column:1;grid-row:auto}.editorial-workbench .connection-external-url-controls{align-items:stretch;flex-wrap:wrap}.editorial-workbench .connection-external-url-controls input{flex-basis:100%}.editorial-workbench .connection-external-url-controls .btn-ghost{margin-left:auto}.system-status-sections .api-observation-latency{align-items:baseline;flex-direction:row;gap:8px}.system-status-sections .api-observation-primary{flex-wrap:wrap}.system-status-sections .api-observation-latency .api-observation-meta{white-space:normal;text-align:right}.system-status-sections .pipeline-health-item{grid-template-columns:minmax(0,1fr) minmax(110px,auto);grid-template-areas:"copy rail";align-items:start}.system-status-sections .pipeline-health-rail{flex-direction:column;align-items:flex-end;min-width:0}.system-status-sections .pipeline-health-rail .pipeline-health-action{max-width:150px;white-space:normal;text-align:right}}
 `
 
 func shellHeadExtras() string {
@@ -824,7 +829,7 @@ func langToggleHTML(r *http.Request, lang string) string {
 	return fmt.Sprintf(
 		`<a class="lang-toggle glass" data-lang="%s" href="%s" aria-label="Toggle language"><span class="lang-thumb"></span><span class="lang-option %s">JP</span><span class="lang-option %s">EN</span></a>`,
 		lang,
-		html.EscapeString(toggleLangURL(r)),
+		toggleLangURL(r),
 		map[bool]string{true: "active", false: ""}[lang == "ja"],
 		map[bool]string{true: "active", false: ""}[lang == "en"],
 	)
