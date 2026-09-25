@@ -711,6 +711,7 @@ if [[ "${deployment_policy}" == preview ]]; then
     [[ "${preview_system_status_dom}" != *"${obsolete}"* ]] || die "preview System Status DOM contract mismatch: obsolete marker present"
   done
   log "preview System Status DOM contract passed"
+  printf 'PREVIEW_SYSTEM_STATUS_DOM=PASS\n'
 fi
 transaction_phase=validated
 if [[ "${deployment_mode}" == legacy-migration ]]; then

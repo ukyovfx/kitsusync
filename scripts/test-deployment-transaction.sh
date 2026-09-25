@@ -320,7 +320,7 @@ sudo rm -f -- "$runtime/data/fail-preview-dom"
 sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-preview-deploy "$source_commit" PREVIEW >"$work/successful-preview.log" 2>&1
 stage=preview-success-marker
 grep -Fq "PREVIEW / NON-RELEASE KitsuSync deployment completed: source_commit=${source_commit}" "$work/successful-preview.log"
-grep -Fq 'preview System Status DOM contract passed' "$work/successful-preview.log"
+grep -Fxq 'PREVIEW_SYSTEM_STATUS_DOM=PASS' "$work/successful-preview.log"
 stage=preview-container-count
 preview_container="$(docker ps -q --no-trunc --filter name='^/kitsusync-app-1$')"
 [[ -n "$preview_container" ]]
