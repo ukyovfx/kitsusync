@@ -5,6 +5,7 @@ helper="${root}/deploy/kitsusync-staging-deploy"
 bootstrap="${root}/deploy/kitsusync-staging-bootstrap"
 compose="${root}/deploy/kitsusync-staging-compose.yml"
 
+bash "${root}/scripts/test-staging-network-membership.sh"
 bash -n "${helper}"
 bash -n "${bootstrap}"
 grep -Fq 'set -Eeuo pipefail' "${helper}"

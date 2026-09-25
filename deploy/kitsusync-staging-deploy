@@ -84,6 +84,18 @@ rollback_staging() {
   return 1
 }
 die() { printf 'STAGING_DEPLOY_ERROR=%s\n' "$1" >&2; exit 1; }
+verify_staging_network_membership() {
+  local container_ref="$1" container_id network_containers
+  container_id="$(docker inspect --format '{{.Id}}' "$container_ref")" || return 1
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ && "$container_id" == "$container_ref"* ]] || return 1
+  network_containers="$(docker network inspect --format '{{json .Containers}}' kitsusync-staging-network)" || return 1
+  printf '%s\n' "$network_containers" | python3 -c '
+import json, sys
+containers = json.load(sys.stdin) or {}
+expected_id = sys.argv[1]
+sys.exit(0 if isinstance(containers, dict) and len(containers) == 1 and expected_id in containers else 1)
+' "$container_id"
+}
 [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
 readonly SOURCE_SHA="$1"
 readonly INCOMING="/var/tmp/kitsusync-preview-candidate-${SOURCE_SHA}"
@@ -246,7 +258,7 @@ all_staging_containers="$(docker ps -a --filter "label=com.docker.compose.projec
 [[ "$(docker network inspect --format '{{.Internal}}' kitsusync-staging-network)" == false ]] || die STAGING_NETWORK_EGRESS_UNAVAILABLE
 [[ "$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$container")" == 1 ]] || die STAGING_NETWORK_COUNT_INVALID
 docker inspect --format '{{json .NetworkSettings.Networks}}' "$container" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)' || die STAGING_NETWORK_COUNT_INVALID
-docker network inspect --format '{{json .Containers}}' kitsusync-staging-network | python3 -c 'import json,sys; c=json.load(sys.stdin) or {}; sys.exit(0 if set(c)=={sys.argv[1]} else 1)' "$container" || die STAGING_NETWORK_COUNT_INVALID
+verify_staging_network_membership "$container" || die STAGING_NETWORK_COUNT_INVALID
 docker inspect --format '{{json .Config.Env}}' "$container" | python3 -c '
 import json, sys
 env = dict(item.split("=", 1) for item in json.load(sys.stdin) if "=" in item)
