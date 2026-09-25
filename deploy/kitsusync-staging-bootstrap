@@ -32,9 +32,9 @@ cat > /etc/kitsusync-staging/conf.toml <<'CONFIG'
 embedsPerRequests = 10
 RequestsPerMinute = 50
 CONFIG
-chown root:root /etc/kitsusync-staging/conf.toml
-chmod 0400 /etc/kitsusync-staging/conf.toml
-[[ "$(sha256sum /usr/local/sbin/kitsusync-staging-deploy | cut -d' ' -f1)" == "$helper_sha" && "$(sha256sum /etc/kitsusync-staging/compose.yml | cut -d' ' -f1)" == "$compose_sha" && "$(stat -c '%u:%g:%a' /etc/kitsusync-staging/conf.toml)" == 0:0:400 ]] || die INSTALLED_FILE_CHECKSUM_MISMATCH
+chown root:10001 /etc/kitsusync-staging/conf.toml
+chmod 0440 /etc/kitsusync-staging/conf.toml
+[[ "$(sha256sum /usr/local/sbin/kitsusync-staging-deploy | cut -d' ' -f1)" == "$helper_sha" && "$(sha256sum /etc/kitsusync-staging/compose.yml | cut -d' ' -f1)" == "$compose_sha" && "$(stat -c '%u:%g:%a' /etc/kitsusync-staging/conf.toml)" == 0:10001:440 ]] || die INSTALLED_FILE_CHECKSUM_MISMATCH
 
 operator_uid="$(id -u ukyo_vfx)" || die OPERATOR_ACCOUNT_MISSING
 [[ "$operator_uid" -eq 1000 ]] || die OPERATOR_ACCOUNT_UNEXPECTED

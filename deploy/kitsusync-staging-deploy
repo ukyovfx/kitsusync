@@ -225,7 +225,7 @@ verify_staging_network_name() {
   docker inspect --format '{{json .NetworkSettings.Networks}}' "$1" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)'
 }
 if [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" == --contract-info ]]; then
-  printf 'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+  printf 'STAGING_HELPER_CONTRACT=staging-v6 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
   exit 0
 fi
 [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
@@ -245,7 +245,7 @@ verify_trusted_candidate_tool() {
 
 [[ -d "$STAGE_ROOT" && ! -L "$STAGE_ROOT" && "$(stat -c '%u:%g:%a' "$STAGE_ROOT")" == 0:0:700 ]] || die STAGING_ROOT_UNSAFE
 [[ -d "$CONFIG_ROOT" && ! -L "$CONFIG_ROOT" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT")" == 0:0:700 ]] || die STAGING_CONFIG_UNSAFE
-[[ -f "$CONFIG_ROOT/conf.toml" && ! -L "$CONFIG_ROOT/conf.toml" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT/conf.toml")" == 0:0:400 ]] || die STAGING_CONFIG_FILE_UNSAFE
+[[ -f "$CONFIG_ROOT/conf.toml" && ! -L "$CONFIG_ROOT/conf.toml" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT/conf.toml")" == 0:10001:440 ]] || die STAGING_CONFIG_FILE_UNSAFE
 exec 9>>"$STAGE_ROOT/deploy.lock"
 flock -w 1800 -x 9 || die STAGING_DEPLOY_LOCK_TIMEOUT
 incoming_owner_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"
@@ -396,6 +396,10 @@ fi
 printf 'KITSUSYNC_IMAGE_TAG=ci-%s\n' "$SOURCE_SHA" > "$compose_env"
 chmod 0600 "$compose_env"
 docker compose --project-name "$PROJECT" --env-file "$compose_env" --file "$COMPOSE_FILE" config -q || die STAGING_COMPOSE_INVALID
+
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user 10001:10001 --mount "type=bind,src=$CONFIG_ROOT/conf.toml,dst=/app/conf.toml,readonly" \
+  --entrypoint /bin/sh "$IMAGE_REF" -ec 'test -r /app/conf.toml' || die STAGING_CONFIG_RUNTIME_READ_INVALID
 
 deployment_started=1
 docker compose --project-name "$PROJECT" --env-file "$compose_env" --file "$COMPOSE_FILE" up -d --force-recreate || die COMPOSE_START_FAILED

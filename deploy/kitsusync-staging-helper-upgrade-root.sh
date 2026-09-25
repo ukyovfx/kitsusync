@@ -11,10 +11,12 @@ readonly NEW_HELPER_SHA="$2"
 readonly UPGRADE_SCRIPT_SHA="$3"
 readonly INCOMING="/var/tmp/kitsusync-staging-helper-upgrade-${SOURCE_SHA}"
 readonly TARGET=/usr/local/sbin/kitsusync-staging-deploy
+readonly CONFIG_ROOT=/etc/kitsusync-staging
 readonly EXPECTED_OLD_HELPER_SHAS=(
   63d53cedfced32f26f4edc7338ee38d3a4c38e816a8427a6c7194bc366d25fc8
   41dec98c9e6e6f7165733212bb3518b1cb08bcb19a17fad047fd0c76ae5f7704
   b43df984dd87321c4f9eb76478557b23db35cac8986b01ddd4b3af5a2353e5ae
+  4550cecbb12e83ca8647127624ec1062f5a11c63e37171015677efb8c2e88443
 )
 
 incoming_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"
@@ -42,10 +44,24 @@ for expected_old_sha in "${EXPECTED_OLD_HELPER_SHAS[@]}"; do
   if [[ "$old_helper_sha" == "$expected_old_sha" ]]; then old_helper_accepted=1; break; fi
 done
 [[ "$old_helper_accepted" -eq 1 ]] || die "OLD_HELPER_IDENTITY_MISMATCH expected=${EXPECTED_OLD_HELPER_SHAS[*]} observed=$old_helper_sha"
+[[ -d "$CONFIG_ROOT" && ! -L "$CONFIG_ROOT" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT")" == 0:0:700 ]] || die STAGING_CONFIG_DIRECTORY_INVALID
+[[ -f "$CONFIG_ROOT/conf.toml" && ! -L "$CONFIG_ROOT/conf.toml" ]] || die STAGING_CONFIG_FILE_INVALID
+config_metadata="$(stat -c '%u:%g:%a' "$CONFIG_ROOT/conf.toml")"
+case "$config_metadata" in
+  0:0:400|0:10001:440) ;;
+  *) die STAGING_CONFIG_METADATA_UNSUPPORTED ;;
+esac
+config_digest_before="$(sha256sum "$CONFIG_ROOT/conf.toml" | cut -d' ' -f1)"
 
 root_tmp="$(mktemp -d /var/tmp/kitsusync-staging-helper-upgrade-root.XXXXXX)"
 target_tmp=""
+config_migration_attempted=0
+helper_replaced=0
 cleanup_upgrade() {
+  if [[ "$config_migration_attempted" -eq 1 && "$helper_replaced" -eq 0 ]]; then
+    chown root:root "$CONFIG_ROOT/conf.toml" 2>/dev/null || true
+    chmod 0400 "$CONFIG_ROOT/conf.toml" 2>/dev/null || true
+  fi
   rm -rf -- "$root_tmp"
   [[ -z "$target_tmp" ]] || rm -f -- "$target_tmp"
 }
@@ -53,13 +69,20 @@ trap cleanup_upgrade EXIT
 install -o root -g root -m 0600 "$helper_file" "$root_tmp/kitsusync-staging-deploy"
 [[ "$(sha256sum "$root_tmp/kitsusync-staging-deploy" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die ROOT_COPY_DIGEST_INVALID
 bash -n "$root_tmp/kitsusync-staging-deploy" || die NEW_HELPER_SYNTAX_INVALID
-/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v5' || die NEW_HELPER_CONTRACT_INVALID
+/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v6' || die NEW_HELPER_CONTRACT_INVALID
 
 target_tmp="$(mktemp /usr/local/sbin/.kitsusync-staging-deploy.XXXXXX)"
 install -o root -g root -m 0750 "$root_tmp/kitsusync-staging-deploy" "$target_tmp"
+if [[ "$config_metadata" == 0:0:400 ]]; then
+  config_migration_attempted=1
+  chown root:10001 "$CONFIG_ROOT/conf.toml" || die STAGING_CONFIG_MIGRATION_FAILED
+  chmod 0440 "$CONFIG_ROOT/conf.toml" || die STAGING_CONFIG_MIGRATION_FAILED
+fi
+[[ "$(stat -c '%u:%g:%a' "$CONFIG_ROOT/conf.toml")" == 0:10001:440 && "$(sha256sum "$CONFIG_ROOT/conf.toml" | cut -d' ' -f1)" == "$config_digest_before" ]] || die STAGING_CONFIG_MIGRATION_FAILED
 mv -f -- "$target_tmp" "$TARGET"
 target_tmp=""
+helper_replaced=1
 [[ "$(sha256sum "$TARGET" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die INSTALLED_HELPER_DIGEST_INVALID
-"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v5' || die INSTALLED_HELPER_CONTRACT_INVALID
+"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v6' || die INSTALLED_HELPER_CONTRACT_INVALID
 rm -rf -- "$INCOMING"
-printf 'STAGING_HELPER_UPGRADE=PASS source_sha=%s helper_sha256=%s\n' "$SOURCE_SHA" "$NEW_HELPER_SHA"
+printf 'STAGING_HELPER_UPGRADE=PASS source_sha=%s helper_sha256=%s config_migration=ROOT_10001_0440\n' "$SOURCE_SHA" "$NEW_HELPER_SHA"

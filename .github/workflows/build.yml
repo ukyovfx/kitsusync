@@ -180,6 +180,12 @@ jobs:
           IMAGE_ID="$image_id" bash scripts/generate-provenance.sh
           cat provenance.txt
 
+      - name: Staging actual application runtime permission E2E
+        env:
+          SOURCE_SHA: ${{ steps.identity.outputs.source_commit }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
+        run: bash scripts/test-staging-runtime-e2e.sh
+
       - name: Build and load-back deployment bundle
         env:
           KITSUSYNC_APP_VERSION: ${{ steps.identity.outputs.version }}
