@@ -1403,7 +1403,13 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 			t.Fatalf("system status missing %q", want)
 		}
 	}
-	if strings.Contains(body, `class="system-overall-summary"`) || strings.Contains(body, "Not configured") {
+	apiStart := strings.Index(body, `<section class="section-card glass system-observability"`)
+	pipelineStart := strings.Index(body, `<section class="section-card glass pipeline-health"`)
+	apiCards := ""
+	if apiStart >= 0 && pipelineStart > apiStart {
+		apiCards = body[apiStart:pipelineStart]
+	}
+	if strings.Contains(body, `class="system-overall-summary"`) || apiCards == "" || !strings.Contains(apiCards, "Not checked") || strings.Contains(apiCards, "Not configured") {
 		t.Fatal("system status should distinguish missing readiness prerequisites from an unobserved API response")
 	}
 	w = httptest.NewRecorder()
@@ -1787,13 +1793,20 @@ func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
 	}
 }
 
-func TestSystemStatusOmitsNormalPageDiagnosticsAndRefreshesSnapshot(t *testing.T) {
+func TestSystemStatusShowsCompactDiagnosticsAndRefreshesSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if !strings.Contains(body, `pipeline-health-diagnostic`) || !strings.Contains(body, `観測診断`) || !strings.Contains(body, `通知診断`) || !strings.Contains(body, `接続・ルーティング診断`) {
+	if !strings.Contains(body, `pipeline-health-diagnostic`) || !strings.Contains(body, `Observation diagnostics`) || !strings.Contains(body, `Notification diagnostics`) || !strings.Contains(body, `Connection and routing diagnostics`) {
 		t.Fatalf("System Status omitted useful compact diagnostic disclosures")
+	}
+	ja := httptest.NewRecorder()
+	renderIAHealth(ja, httptest.NewRequest("GET", "/bot/admin/health?lang=ja", nil), db)
+	for _, label := range []string{"観測診断", "通知診断", "接続・ルーティング診断"} {
+		if !strings.Contains(ja.Body.String(), label) {
+			t.Errorf("Japanese System Status omitted compact diagnostic %q", label)
+		}
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
