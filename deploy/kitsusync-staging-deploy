@@ -212,7 +212,7 @@ else
   [[ -z "$previous_sha" ]] || die STAGING_VOLUME_MISSING
 fi
 if docker network inspect kitsusync-staging-network >/dev/null 2>&1; then
-  [[ -n "$previous_sha" && "$(docker network inspect --format '{{index .Labels "com.docker.compose.project"}}' kitsusync-staging-network)" == "$PROJECT" && "$(docker network inspect --format '{{index .Labels "com.docker.compose.network"}}' kitsusync-staging-network)" == staging && "$(docker network inspect --format '{{.Internal}}' kitsusync-staging-network)" == true ]] || die STAGING_NETWORK_PREEXISTS
+  [[ -n "$previous_sha" && "$(docker network inspect --format '{{index .Labels "com.docker.compose.project"}}' kitsusync-staging-network)" == "$PROJECT" && "$(docker network inspect --format '{{index .Labels "com.docker.compose.network"}}' kitsusync-staging-network)" == staging && "$(docker network inspect --format '{{.Internal}}' kitsusync-staging-network)" == false ]] || die STAGING_NETWORK_PREEXISTS
 else
   [[ -z "$previous_sha" ]] || die STAGING_NETWORK_MISSING
 fi
@@ -243,9 +243,21 @@ all_staging_containers="$(docker ps -a --filter "label=com.docker.compose.projec
 [[ "$(printf '%s\n' "$all_staging_containers" | wc -l)" -eq 1 && "$all_staging_containers" == "$container" ]] || die STAGING_CONTAINER_COUNT_INVALID
 [[ "$(docker inspect --format '{{.Config.Image}}' "$container")" == "$IMAGE_REF" ]] || die STAGING_RUNTIME_IMAGE_MISMATCH
 [[ "$(docker port "$container" 8090/tcp)" == 127.0.0.1:8091 ]] || die STAGING_BIND_INVALID
-[[ "$(docker network inspect --format '{{.Internal}}' kitsusync-staging-network)" == true ]] || die STAGING_EGRESS_NETWORK_INVALID
+[[ "$(docker network inspect --format '{{.Internal}}' kitsusync-staging-network)" == false ]] || die STAGING_NETWORK_EGRESS_UNAVAILABLE
 [[ "$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$container")" == 1 ]] || die STAGING_NETWORK_COUNT_INVALID
 docker inspect --format '{{json .NetworkSettings.Networks}}' "$container" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)' || die STAGING_NETWORK_COUNT_INVALID
+docker network inspect --format '{{json .Containers}}' kitsusync-staging-network | python3 -c 'import json,sys; c=json.load(sys.stdin) or {}; sys.exit(0 if set(c)=={sys.argv[1]} else 1)' "$container" || die STAGING_NETWORK_COUNT_INVALID
+docker inspect --format '{{json .Config.Env}}' "$container" | python3 -c '
+import json, sys
+env = dict(item.split("=", 1) for item in json.load(sys.stdin) if "=" in item)
+if env.get("KITSUSYNC_DISABLE_POLL") != "1" or env.get("APP_ENV") != "staging":
+    print("STAGING_RUNTIME_POLICY_INVALID", file=sys.stderr)
+    sys.exit(1)
+for name in ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "DISCORD_WEBHOOK_URL"):
+    if env.get(name, "").strip():
+        print("STAGING_DISCORD_ENV_ISOLATION_INVALID", file=sys.stderr)
+        sys.exit(1)
+' || die STAGING_DISCORD_ENV_ISOLATION_INVALID
 docker inspect --format '{{json .Mounts}}' "$container" | python3 -c '
 import json, sys
 mounts = json.load(sys.stdin)
@@ -288,4 +300,4 @@ trap - ERR
 deployment_committed=1
 artifact_cleanup=RETAINED
 if [[ -d "$INCOMING" && ! -L "$INCOMING" ]] && rm -rf -- "$INCOMING"; then artifact_cleanup=REMOVED; fi
-printf 'STAGING_DEPLOY=PASS\nSTAGING_SOURCE_SHA=%s\nSTAGING_CONTAINER_COUNT=1\nSTAGING_BIND=127.0.0.1:8091\nSTAGING_HEALTH=200\nSTAGING_READY=%s\nSTAGING_ADMIN_USERS=PASS\nSTAGING_ADMIN_HEALTH=PASS\nSTAGING_DOM=PASS\nSTAGING_DISCORD_EGRESS=BLOCKED\nSTAGING_DATA_VOLUME=kitsusync-staging-data\nSTAGING_ARTIFACT_CLEANUP=%s\nPRODUCTION_RUNTIME=UNCHANGED\n' "$SOURCE_SHA" "$ready_code" "$artifact_cleanup"
+printf 'STAGING_DEPLOY=PASS\nSTAGING_SOURCE_SHA=%s\nSTAGING_CONTAINER_COUNT=1\nSTAGING_BIND=127.0.0.1:8091\nSTAGING_HEALTH=200\nSTAGING_READY=%s\nSTAGING_ADMIN_USERS=PASS\nSTAGING_ADMIN_HEALTH=PASS\nSTAGING_DOM=PASS\nSTAGING_KITSU_NETWORK=DEFAULT_EGRESS_AVAILABLE\nSTAGING_DISCORD=NO_PRODUCTION_CREDENTIALS_OR_STATE\nSTAGING_DATA_VOLUME=kitsusync-staging-data\nSTAGING_ARTIFACT_CLEANUP=%s\nPRODUCTION_RUNTIME=UNCHANGED\n' "$SOURCE_SHA" "$ready_code" "$artifact_cleanup"
