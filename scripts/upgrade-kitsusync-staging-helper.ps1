@@ -64,7 +64,7 @@ try {
     }
     $contract = @(& $ssh @sshArgs $stagingHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
     $contractStatus = $LASTEXITCODE
-    if ($contractStatus -eq 0 -and ($contract -join "`n") -match 'STAGING_HELPER_CONTRACT=staging-v3') {
+    if ($contractStatus -eq 0 -and ($contract -join "`n") -match 'STAGING_HELPER_CONTRACT=staging-v4') {
         Write-Output 'STAGING_HELPER_UPGRADE=ALREADY_CURRENT'
         exit 0
     }
@@ -132,7 +132,7 @@ except Exception:
     & $ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio-breakglass "sudo /bin/bash $remoteDir/upgrade-root.sh $CommitSha $helperSha $upgradeSha"
     if ($LASTEXITCODE -ne 0) { throw 'Privileged Staging helper upgrade failed.' }
     $installed = @(& $ssh @sshArgs $stagingHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
-    if ($LASTEXITCODE -ne 0 -or ($installed -join "`n") -notmatch 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass') {
+    if ($LASTEXITCODE -ne 0 -or ($installed -join "`n") -notmatch 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass') {
         throw "Installed Staging helper contract verification failed: $($installed -join ' ')"
     }
     Write-Output "STAGING_HELPER_UPGRADE=PASS source_sha=$CommitSha helper_sha256=$helperSha"

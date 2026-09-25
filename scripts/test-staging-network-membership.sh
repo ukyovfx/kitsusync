@@ -23,9 +23,14 @@ full_id=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 short_id="${full_id:0:12}"
 network_output="{\"${full_id}\":{\"Name\":\"kitsusync-staging\",\"EndpointID\":\"fedcba9876543210\"}}"
 network_mode=expected
+network_calls_file="$(mktemp)"
+printf '0\n' >"${network_calls_file}"
 attachment_count=1
 attachment_output='{"kitsusync-staging-network":{"NetworkID":"network-id"}}'
 
+sleep() { :; }
+reset_network_calls() { printf '0\n' >"${network_calls_file}"; }
+get_network_calls() { cat "${network_calls_file}"; }
 docker() {
   if [[ "$1" == inspect && "$2" == --format && "$3" == '{{.Id}}' && "$4" == "${short_id}" ]]; then
     printf '%s\n' "${full_id}"
@@ -34,8 +39,13 @@ docker() {
   elif [[ "$1" == inspect && "$2" == --format && "$3" == '{{json .NetworkSettings.Networks}}' && "$4" == "${short_id}" ]]; then
     printf '%s\n' "${attachment_output}"
   elif [[ "$1" == network && "$2" == inspect && "$3" == --format && "$4" == '{{json .Containers}}' && "$5" == kitsusync-staging-network ]]; then
+    network_calls="$(get_network_calls)"
+    call_number="$((network_calls + 1))"
+    printf '%s\n' "${call_number}" >"${network_calls_file}"
     case "${network_mode}" in
       expected) printf '%s\n' "${network_output}" ;;
+      delayed) if [[ "$call_number" -eq 1 ]]; then printf '{}\n'; else printf '%s\n' "${network_output}"; fi ;;
+      empty) printf '{}\n' ;;
       unrelated) printf '%s\n' '{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":{"Name":"other"}}' ;;
       multiple) printf '%s\n' "{\"${full_id}\":{\"Name\":\"kitsusync-staging\"},\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\":{\"Name\":\"other\"}}" ;;
       *) return 2 ;;
@@ -49,6 +59,20 @@ docker() {
 verify_staging_network_attachment_count "${short_id}"
 verify_staging_network_name "${short_id}"
 verify_staging_network_membership "${short_id}"
+network_mode=delayed
+reset_network_calls
+verify_staging_network_membership "${short_id}"
+[[ "$(get_network_calls)" -eq 2 ]] || { printf 'staging-network-membership=FAIL did-not-retry-empty-metadata\n' >&2; exit 1; }
+network_mode=empty
+reset_network_calls
+if empty_diagnostic="$(verify_staging_network_membership "${short_id}" 2>&1)"; then
+  printf 'staging-network-membership=FAIL accepted-permanently-empty-network\n' >&2
+  exit 1
+fi
+[[ "$(get_network_calls)" -eq 15 ]] && grep -Fq 'attempts=15' <<<"${empty_diagnostic}" && grep -Fq 'observed_container_count=0 observed_container_id_prefixes=none' <<<"${empty_diagnostic}" || {
+  printf 'staging-network-membership=FAIL missing-empty-network-diagnostic\n' >&2
+  exit 1
+}
 attachment_count=2
 if verify_staging_network_attachment_count "${short_id}"; then
   printf 'staging-network-membership=FAIL accepted-multiple-attachments\n' >&2
@@ -62,17 +86,31 @@ if verify_staging_network_name "${short_id}"; then
 fi
 attachment_output='{"kitsusync-staging-network":{"NetworkID":"network-id"}}'
 network_mode=unrelated
-if verify_staging_network_membership "${short_id}"; then
+reset_network_calls
+if unrelated_diagnostic="$(verify_staging_network_membership "${short_id}" 2>&1)"; then
   printf 'staging-network-membership=FAIL accepted-unrelated-container\n' >&2
   exit 1
 fi
+[[ "$(get_network_calls)" -eq 1 ]] || { printf 'staging-network-membership=FAIL retried-unrelated-container\n' >&2; exit 1; }
+grep -Fq 'observed_container_count=1 observed_container_id_prefixes=aaaaaaaaaaaa' <<<"${unrelated_diagnostic}" || {
+  printf 'staging-network-membership=FAIL missing-unrelated-container-diagnostic\n' >&2
+  exit 1
+}
 network_mode=multiple
-if verify_staging_network_membership "${short_id}"; then
+reset_network_calls
+if multiple_diagnostic="$(verify_staging_network_membership "${short_id}" 2>&1)"; then
   printf 'staging-network-membership=FAIL accepted-multiple-containers\n' >&2
   exit 1
 fi
+[[ "$(get_network_calls)" -eq 1 ]] || { printf 'staging-network-membership=FAIL retried-multiple-containers\n' >&2; exit 1; }
+grep -Fq 'observed_container_count=2 observed_container_id_prefixes=0123456789ab,aaaaaaaaaaaa' <<<"${multiple_diagnostic}" || {
+  printf 'staging-network-membership=FAIL missing-multiple-container-diagnostic\n' >&2
+  exit 1
+}
 
 unset -f docker
+unset -f sleep
+rm -f -- "$network_calls_file"
 docker_fixture_available=0
 if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
   docker_fixture_available=1

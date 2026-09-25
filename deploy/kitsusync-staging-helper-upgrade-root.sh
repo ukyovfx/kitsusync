@@ -11,7 +11,10 @@ readonly NEW_HELPER_SHA="$2"
 readonly UPGRADE_SCRIPT_SHA="$3"
 readonly INCOMING="/var/tmp/kitsusync-staging-helper-upgrade-${SOURCE_SHA}"
 readonly TARGET=/usr/local/sbin/kitsusync-staging-deploy
-readonly EXPECTED_OLD_HELPER_SHA=63d53cedfced32f26f4edc7338ee38d3a4c38e816a8427a6c7194bc366d25fc8
+readonly EXPECTED_OLD_HELPER_SHAS=(
+  63d53cedfced32f26f4edc7338ee38d3a4c38e816a8427a6c7194bc366d25fc8
+  41dec98c9e6e6f7165733212bb3518b1cb08bcb19a17fad047fd0c76ae5f7704
+)
 
 incoming_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"
 incoming_mode="$(stat -c '%a' "$INCOMING" 2>/dev/null || printf missing)"
@@ -33,7 +36,11 @@ helper_sha="$(sha256sum "$helper_file" | cut -d' ' -f1)"
 [[ "$helper_sha" == "$NEW_HELPER_SHA" ]] || die "NEW_HELPER_DIGEST_INVALID expected=$NEW_HELPER_SHA observed=$helper_sha"
 [[ -f "$TARGET" && ! -L "$TARGET" && "$(stat -c '%u:%g:%a' "$TARGET")" == 0:0:750 ]] || die INSTALLED_HELPER_METADATA_INVALID
 old_helper_sha="$(sha256sum "$TARGET" | cut -d' ' -f1)"
-[[ "$old_helper_sha" == "$EXPECTED_OLD_HELPER_SHA" ]] || die "OLD_HELPER_IDENTITY_MISMATCH expected=$EXPECTED_OLD_HELPER_SHA observed=$old_helper_sha"
+old_helper_accepted=0
+for expected_old_sha in "${EXPECTED_OLD_HELPER_SHAS[@]}"; do
+  if [[ "$old_helper_sha" == "$expected_old_sha" ]]; then old_helper_accepted=1; break; fi
+done
+[[ "$old_helper_accepted" -eq 1 ]] || die "OLD_HELPER_IDENTITY_MISMATCH expected=${EXPECTED_OLD_HELPER_SHAS[*]} observed=$old_helper_sha"
 
 root_tmp="$(mktemp -d /var/tmp/kitsusync-staging-helper-upgrade-root.XXXXXX)"
 target_tmp=""
@@ -45,13 +52,13 @@ trap cleanup_upgrade EXIT
 install -o root -g root -m 0600 "$helper_file" "$root_tmp/kitsusync-staging-deploy"
 [[ "$(sha256sum "$root_tmp/kitsusync-staging-deploy" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die ROOT_COPY_DIGEST_INVALID
 bash -n "$root_tmp/kitsusync-staging-deploy" || die NEW_HELPER_SYNTAX_INVALID
-/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v3' || die NEW_HELPER_CONTRACT_INVALID
+/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v4' || die NEW_HELPER_CONTRACT_INVALID
 
 target_tmp="$(mktemp /usr/local/sbin/.kitsusync-staging-deploy.XXXXXX)"
 install -o root -g root -m 0750 "$root_tmp/kitsusync-staging-deploy" "$target_tmp"
 mv -f -- "$target_tmp" "$TARGET"
 target_tmp=""
 [[ "$(sha256sum "$TARGET" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die INSTALLED_HELPER_DIGEST_INVALID
-"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v3' || die INSTALLED_HELPER_CONTRACT_INVALID
+"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v4' || die INSTALLED_HELPER_CONTRACT_INVALID
 rm -rf -- "$INCOMING"
 printf 'STAGING_HELPER_UPGRADE=PASS source_sha=%s helper_sha256=%s\n' "$SOURCE_SHA" "$NEW_HELPER_SHA"
