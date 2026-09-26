@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
+
+	"app/src/utils/request"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -24,6 +27,16 @@ func newSupervisorResolutionTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("migrate test schema: %v", err)
 	}
 	return db
+}
+
+func configureSupervisorResolutionTestOrigin(t *testing.T, baseURL string) {
+	t.Helper()
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{
+		BaseURL:   baseURL,
+		PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestResolveReviewersForProjectPrecedence(t *testing.T) {
@@ -148,6 +161,7 @@ func TestResolveReviewersForProjectPrecedence(t *testing.T) {
 				}
 			}))
 			defer server.Close()
+			configureSupervisorResolutionTestOrigin(t, server.URL)
 
 			got, err := ResolveReviewersForProjectWithSupervisors(db, server.URL, "resolver-test-token", "production-1", "task-type-1", "Animation")
 			if (err != nil) != tc.wantErr {
@@ -302,6 +316,7 @@ func TestResolveProjectTaskTypeSupervisorDiscordIDs(t *testing.T) {
 				}
 			}))
 			defer server.Close()
+			configureSupervisorResolutionTestOrigin(t, server.URL)
 
 			got, err := ResolveProjectTaskTypeSupervisorDiscordIDs(db, server.URL, "resolver-test-token", "production-1", "task-type-1")
 			if (err != nil) != tc.wantErr {
