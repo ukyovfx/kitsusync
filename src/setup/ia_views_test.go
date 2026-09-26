@@ -2124,7 +2124,7 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 		taskReads++
 		return []kitsu.TaskType{
 			{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"},
-			{ID: "task-roto", Name: "Roto", DepartmentID: "dept-comp", DepartmentName: "Compositing"},
+			{ID: "task-roto", Name: "Roto", DepartmentID: "dept-comp", DepartmentName: "Comp"},
 			{ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"},
 		}
 	}

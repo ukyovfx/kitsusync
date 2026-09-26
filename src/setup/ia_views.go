@@ -1140,8 +1140,7 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 			name = label("Discordユーザー", "Discord User")
 		}
 		overrides.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(name) + `</strong></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="remove_legacy_production_reviewer"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="task_type_name" value="` + esc(selectedTaskType.Name) + `"><button class="btn-ghost" type="submit">` + esc(label("解除", "Remove")) + `</button></form></li>`)
-	}
-	if selectedTaskType.ID != "" {
+	} else if selectedTaskType.ID != "" {
 		if teamErr != nil {
 			automatic.WriteString(`<li class="field-help">` + esc(label("Production Teamを読み込めません。", "Production Team unavailable.")) + `</li>`)
 		} else if baseURL, token, ok := runtimeKitsuDataSource(db); ok {
@@ -1169,7 +1168,11 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		}
 	}
 	if automatic.Len() == 0 {
-		automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
+		if hasOverrides {
+			automatic.WriteString(`<li class="field-help">` + esc(label("Override設定中は自動Reviewerを使用しません。", "Not active while an override is set.")) + `</li>`)
+		} else {
+			automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
+		}
 	}
 	if overrides.Len() == 0 {
 		overrides.WriteString(`<li class="field-help">` + esc(label("なし", "None")) + `</li>`)
@@ -1217,11 +1220,7 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	if len(taskTypes) == 0 {
 		taskOptions.WriteString(`<option value="">` + esc(label("Task Typeを利用できません", "Task Types unavailable")) + `</option>`)
 	}
-	automaticNote := ""
-	if hasOverrides {
-		automaticNote = `<small class="reviewer-automatic-note">` + esc(label("Overrideがある場合は使用されません。", "Not active while an override is set.")) + `</small>`
-	}
-	return `<section class="production-users-simple-section production-reviewer-manager"><h3>Reviewer</h3><form method="get" class="reviewer-task-type-select" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="users"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>` + esc(label("Task Type", "Task Type")) + `<select name="reviewer_task_type">` + taskOptions.String() + `</select></label><button class="btn-ghost" type="submit">` + esc(label("表示", "View")) + `</button></form><div class="reviewer-group"><h4>` + esc(label("自動", "Automatic")) + `</h4>` + automaticNote + `<ul class="production-users-simple-list reviewer-target-list">` + automatic.String() + `</ul></div><div class="reviewer-group"><h4>` + esc(label("Overrides", "Overrides")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + overrides.String() + `</ul></div><div class="reviewer-target-add">` + addForm + `</div><div class="reviewer-target-reset">` + reset + `</div></section>`
+	return `<section class="production-users-simple-section production-reviewer-manager"><h3>Reviewer</h3><form method="get" class="reviewer-task-type-select" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="users"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>` + esc(label("Task Type", "Task Type")) + `<select name="reviewer_task_type">` + taskOptions.String() + `</select></label><button class="btn-ghost" type="submit">` + esc(label("表示", "View")) + `</button></form><div class="reviewer-group"><h4>` + esc(label("自動", "Automatic")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + automatic.String() + `</ul></div><div class="reviewer-group"><h4>` + esc(label("Overrides", "Overrides")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + overrides.String() + `</ul></div><div class="reviewer-target-add">` + addForm + `</div><div class="reviewer-target-reset">` + reset + `</div></section>`
 }
 
 func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request, db *gorm.DB, botTokens ...string) bool {
