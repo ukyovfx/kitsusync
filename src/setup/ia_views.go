@@ -1108,6 +1108,7 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 			break
 		}
 	}
+	hasOverrides := len(explicitRows) > 0 || legacy != nil
 	var overrides, automatic strings.Builder
 	if len(explicitRows) > 0 {
 		for _, target := range explicitRows {
@@ -1217,7 +1218,7 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		taskOptions.WriteString(`<option value="">` + esc(label("Task Typeを利用できません", "Task Types unavailable")) + `</option>`)
 	}
 	automaticNote := ""
-	if overrides.Len() > 0 {
+	if hasOverrides {
 		automaticNote = `<small class="reviewer-automatic-note">` + esc(label("Overrideがある場合は使用されません。", "Not active while an override is set.")) + `</small>`
 	}
 	return `<section class="production-users-simple-section production-reviewer-manager"><h3>Reviewer</h3><form method="get" class="reviewer-task-type-select" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="users"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>` + esc(label("Task Type", "Task Type")) + `<select name="reviewer_task_type">` + taskOptions.String() + `</select></label><button class="btn-ghost" type="submit">` + esc(label("表示", "View")) + `</button></form><div class="reviewer-group"><h4>` + esc(label("自動", "Automatic")) + `</h4>` + automaticNote + `<ul class="production-users-simple-list reviewer-target-list">` + automatic.String() + `</ul></div><div class="reviewer-group"><h4>` + esc(label("Overrides", "Overrides")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + overrides.String() + `</ul></div><div class="reviewer-target-add">` + addForm + `</div><div class="reviewer-target-reset">` + reset + `</div></section>`

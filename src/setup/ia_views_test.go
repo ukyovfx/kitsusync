@@ -2086,18 +2086,18 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader = oldTasks, oldRoles, oldTeam
 	})
 
-	for _, tc := range []struct{ lang, wantSource, wantUser, wantUserLabel, wantRole string }{
-		{"ja", "自動", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
-		{"en", "Automatic", "Add user", "Discord user", "Add role"},
+	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole string }{
+		{"ja", "自動", "Overrides", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
+		{"en", "Automatic", "Overrides", "None", "Add user", "Discord user", "Add role"},
 	} {
 		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
 		body := renderCurrentProductionUserSettings(db, request, project, tc.lang, "bot-token")
-		for _, want := range []string{tc.wantSource, "Compositing", "Comp", "@Discord Artist", tc.wantUserLabel, tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
+		for _, want := range []string{tc.wantAutomatic, "Compositing", "Comp", "@Discord Artist", tc.wantUserLabel, tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s Reviewer UI missing %q", tc.lang, want)
 			}
 		}
-		if !strings.Contains(body, "Overrides") || !strings.Contains(body, "None") {
+		if !strings.Contains(body, tc.wantOverrides) || !strings.Contains(body, tc.wantNone) || strings.Contains(body, "Not active while an override is set.") {
 			t.Fatalf("%s Reviewer UI must state that no override exists", tc.lang)
 		}
 		if strings.Contains(body, `value="123456789012345678"`) || strings.Contains(body, `value="123456789012345681"`) || strings.Contains(body, `value="123456789012345682"`) || strings.Contains(body, "unlinked-person") {
@@ -2149,7 +2149,7 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 	})
 
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en")
-	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo", "Supervisor", "Comp", "Roto", "Comp Supervisor", "Automatic", "Overrides", "None", "Linked"} {
+	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo", "Supervisor", "Comp: Compositing, Roto", "Automatic", "Overrides", "None", "Linked"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Production Users UI missing %q: %s", want, body)
 		}
