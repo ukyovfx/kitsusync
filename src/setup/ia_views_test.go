@@ -2086,13 +2086,13 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader = oldTasks, oldRoles, oldTeam
 	})
 
-	for _, tc := range []struct{ lang, wantSource, wantUser, wantRole string }{
-		{"ja", "Kitsu Supervisor（自動）", "ユーザーを追加", "ロールを追加"},
-		{"en", "Kitsu Supervisor (Automatic)", "Add user", "Add role"},
+	for _, tc := range []struct{ lang, wantSource, wantUser, wantUserLabel, wantRole string }{
+		{"ja", "Kitsu Supervisor（自動）", "ユーザーを追加", "Kitsu Production Team内のDiscordユーザー", "ロールを追加"},
+		{"en", "Kitsu Supervisor (Automatic)", "Add user", "Linked Discord users in the Kitsu Production Team", "Add role"},
 	} {
 		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
 		body := renderCurrentProductionUserSettings(db, request, project, tc.lang, "bot-token")
-		for _, want := range []string{tc.wantSource, "Compositing", "Comp", "@Discord Artist", "Linked Discord users in the Kitsu Production Team", tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
+		for _, want := range []string{tc.wantSource, "Compositing", "Comp", "@Discord Artist", tc.wantUserLabel, tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s Reviewer UI missing %q", tc.lang, want)
 			}

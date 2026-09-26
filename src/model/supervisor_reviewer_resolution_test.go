@@ -271,12 +271,12 @@ func TestResolveProjectTaskTypeSupervisorDiscordIDs(t *testing.T) {
 			want:       []string{"same-discord"},
 		},
 		{
-			name:       "Production mapping takes precedence over global person identity",
+			name:       "global stable person identity takes precedence over legacy Production mapping",
 			people:     []map[string]string{{"id": "p-1", "role": "supervisor"}},
 			details:    map[string]map[string]any{"p-1": {"id": "p-1", "full_name": "Sam One", "email": "sam@example.test", "role": "supervisor", "departments": []string{"dept-1"}}},
 			globalMaps: []UserMap{{KitsuID: "p-1", KitsuName: "Sam One", KitsuEmail: "sam@example.test", DiscordID: "global-discord"}},
 			projectMap: []ProjectUserMap{{KitsuName: "Different display name", KitsuEmail: "sam@example.test", DiscordUserID: "production-discord"}},
-			want:       []string{"production-discord"},
+			want:       []string{"global-discord"},
 		},
 		{
 			name:       "stable person identity takes precedence over Production name-only fallback",

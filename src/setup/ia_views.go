@@ -822,7 +822,15 @@ var reviewerProductionTeamReader = func(db *gorm.DB, projectID string) ([]kitsu.
 }
 
 func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string, botTokens ...string) string {
-	team, teamErr := reviewerProductionTeamReader(db, p.KitsuProjectID)
+	var team []kitsu.Person
+	var teamErr error
+	if p.ValidationOnly || p.ReadOnlyPreview {
+		for _, person := range p.ValidationData().Participants {
+			team = append(team, kitsu.Person{ID: person.ID, FullName: person.FullName, Email: person.Email})
+		}
+	} else {
+		team, teamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
+	}
 	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
 	linkedUsers := productionTeamLinkedUsers(db, p.KitsuProjectID, team, globalUsers)
 
