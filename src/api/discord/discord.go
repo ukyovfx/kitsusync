@@ -97,6 +97,7 @@ type Template struct {
 	NotificationLanguage    string
 	CardContext             string // optional secondary context such as a test-notification marker
 	AllowedUserIDs          []string
+	AllowedRoleIDs          []string
 	Color                   int
 }
 
@@ -124,7 +125,12 @@ var CheckerResolver func(projectID, taskTypeID, taskTypeName string) []string
 
 // ReviewerResolver supplies the ordered WFA Reviewer recipients. It returns
 // legacy/global Checkers with a non-nil error when Supervisor reads fail.
-var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]string, error)
+type ReviewerTarget struct {
+	Kind string
+	ID   string
+}
+
+var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, bool, error)
 
 // GoogleDriveURLResolver はプロジェクト ID に対応するファイルストレージ URL を返すフック。
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
@@ -363,6 +369,60 @@ func uniqueDiscordIDs(ids []string) []string {
 		}
 	}
 	return result
+}
+
+func uniqueDiscordRoleIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if len(id) < 17 || len(id) > 20 || !isValidDiscordUserID(id) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+		if len(result) >= maxNotificationRecipients {
+			break
+		}
+	}
+	return result
+}
+
+func uniqueReviewerTargets(targets []ReviewerTarget) []ReviewerTarget {
+	seen := make(map[string]struct{}, len(targets))
+	result := make([]ReviewerTarget, 0, len(targets))
+	for _, target := range targets {
+		id := strings.TrimSpace(target.ID)
+		if target.Kind != "user" && target.Kind != "role" || len(id) < 17 || len(id) > 20 || !isValidDiscordUserID(id) {
+			continue
+		}
+		key := target.Kind + ":" + id
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, ReviewerTarget{Kind: target.Kind, ID: id})
+		if len(result) >= maxNotificationRecipients {
+			break
+		}
+	}
+	return result
+}
+
+func reviewerTargetMentions(targets []ReviewerTarget) string {
+	mentions := make([]string, 0, len(targets))
+	for _, target := range targets {
+		switch target.Kind {
+		case "user":
+			mentions = append(mentions, "<@"+target.ID+">")
+		case "role":
+			mentions = append(mentions, "<@&"+target.ID+">")
+		}
+	}
+	return strings.Join(mentions, " ")
 }
 
 func mentionContent(ids []string) string {
@@ -809,15 +869,27 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// WFA status notifications use the Reviewer precedence chain. Assignment
 		// and other status notifications keep the existing Checker resolution.
 		var checkerIDs []string
+		var reviewerTargets []ReviewerTarget
+		explicitReviewerTargets := false
+		usedReviewerResolver := false
 		if !elem.IsAssignNotification && currentStatus == "WFA" && ReviewerResolver != nil {
+			usedReviewerResolver = true
 			var resolveErr error
-			checkerIDs, resolveErr = ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
+			rawTargets, explicit, err := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
+			resolveErr = err
+			explicitReviewerTargets = explicit
+			reviewerTargets = uniqueReviewerTargets(rawTargets)
 			if resolveErr != nil {
-				slog.Warn("Kitsu Supervisor Reviewer lookup failed; explicit legacy fallbacks remain active",
+				slog.Warn("Reviewer lookup failed; safe fallback policy applied",
 					"error_class", "kitsu_supervisor_resolution_failed",
 					"taskType", elem.TaskType.Name,
 					"taskID", elem.Task.ID,
 				)
+			}
+			for _, target := range reviewerTargets {
+				if target.Kind == "user" {
+					checkerIDs = append(checkerIDs, target.ID)
+				}
 			}
 		} else if CheckerResolver != nil {
 			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name); len(dids) > 0 {
@@ -826,7 +898,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 				}
 			}
 		}
-		if len(checkerIDs) == 0 {
+		if len(checkerIDs) == 0 && len(reviewerTargets) == 0 && !explicitReviewerTargets {
 			for _, c := range conf.Mention.Checkers {
 				if strings.EqualFold(c.TaskType, elem.TaskType.Name) {
 					checkerIDs = append(checkerIDs, c.DiscordID)
@@ -840,7 +912,21 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
 		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
-		if len(recipientIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
+		var recipientRoleIDs []string
+		if usedReviewerResolver && (explicitReviewerTargets || len(reviewerTargets) > 0) {
+			targets := uniqueReviewerTargets(reviewerTargets)
+			recipientIDs = recipientIDs[:0]
+			for _, target := range targets {
+				if target.Kind == "user" {
+					recipientIDs = append(recipientIDs, target.ID)
+				} else if target.Kind == "role" {
+					recipientRoleIDs = append(recipientRoleIDs, target.ID)
+				}
+			}
+			recipientIDs = uniqueDiscordIDs(recipientIDs)
+			recipientRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
+		}
+		if len(recipientIDs) == 0 && len(recipientRoleIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
 			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
 				"taskType", elem.TaskType.Name,
 				"status", currentStatus,
@@ -849,10 +935,20 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		}
 		// 緊急ステータスは @here でチャンネル全員に通知
 		// @here and @everyone are never emitted by KitsuSync.
-		mentionContent := mentionContent(recipientIDs)
+		mentionText := mentionContent(recipientIDs)
+		if usedReviewerResolver && (explicitReviewerTargets || len(reviewerTargets) > 0) {
+			targets := make([]ReviewerTarget, 0, len(recipientIDs)+len(recipientRoleIDs))
+			for _, id := range recipientIDs {
+				targets = append(targets, ReviewerTarget{Kind: "user", ID: id})
+			}
+			for _, id := range recipientRoleIDs {
+				targets = append(targets, ReviewerTarget{Kind: "role", ID: id})
+			}
+			mentionText = reviewerTargetMentions(targets)
+		}
 		statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
 
-		placeholders.MentionContent = mentionContent
+		placeholders.MentionContent = mentionText
 		placeholders.StatusMessage = statusMessage
 		placeholders.StatusEmoji = statusEmoji
 		// ストレージ URL はプロジェクト別 DB 優先、なければ conf.toml のグローバル値
@@ -907,6 +1003,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 
 		placeholders.NotificationLanguage = notifLang
 		placeholders.AllowedUserIDs = uniqueDiscordIDs(recipientIDs)
+		placeholders.AllowedRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
 		placeholders.Color = int(intColor)
 		payload := RenderNotificationPayload(placeholders, tplPreset)
 

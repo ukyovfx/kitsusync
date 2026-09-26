@@ -531,15 +531,19 @@ func canonicalDashboardBadgeClass(class string) string {
 	}
 }
 
-func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB, fallbackGuildID string) {
+func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB, fallbackGuildID string, botTokens ...string) {
 	lang := currentLang(r)
+	botToken := ""
+	if len(botTokens) > 0 {
+		botToken = botTokens[0]
+	}
 	if selectedID := strings.TrimSpace(r.URL.Query().Get("project")); selectedID != "" {
 		if p := model.FindProjectByKitsuID(db, selectedID); p != nil {
-			renderIASelectedProduction(w, r, db, *p, fallbackGuildID)
+			renderIASelectedProduction(w, r, db, *p, fallbackGuildID, botToken)
 			return
 		}
 		if p := liveProjectPreview(db, selectedID); p != nil {
-			renderIASelectedProduction(w, r, db, *p, fallbackGuildID)
+			renderIASelectedProduction(w, r, db, *p, fallbackGuildID, botToken)
 			return
 		}
 	}
@@ -616,7 +620,7 @@ func auditActorLabel(lang string, log model.AuditLog) string {
 	return t(lang, "不明", "Unknown")
 }
 
-func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm.DB, p model.Project, fallbackGuildID string) {
+func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm.DB, p model.Project, fallbackGuildID string, botTokens ...string) {
 	lang := currentLang(r)
 	if p.ReadOnlyPreview {
 		fmt.Fprint(w, adminPage(lang, "", r, renderIAUnconnectedProduction(r, p, lang)))
@@ -648,7 +652,7 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 	if tab == "storage-settings" && !p.ValidationOnly && !p.ReadOnlyPreview {
 		feedback = renderStorageSettingsFeedback(r, lang)
 	}
-	body := feedback + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, serverName) + `</section></div>`
+	body := feedback + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, serverName, botTokens...) + `</section></div>`
 	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
@@ -697,8 +701,8 @@ func selectedProductionTab(raw string) string {
 	}
 }
 
-func renderProductionPanelMarkup(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string) string {
-	panel := renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName)
+func renderProductionPanelMarkup(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string, botTokens ...string) string {
+	panel := renderSelectedProductionPanel(db, r, p, lang, tab, class, label, hint, serverName, botTokens...)
 	if tab != "overview" {
 		if tab == "notifications" && strings.TrimSpace(hint) != "" {
 			panel = strings.Replace(panel, esc(hint), "", 1)
@@ -728,7 +732,7 @@ func renderProductionPanelMarkup(db *gorm.DB, r *http.Request, p model.Project, 
 	return panel
 }
 
-func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string) string {
+func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project, lang, tab, class, label, hint, serverName string, botTokens ...string) string {
 	switch tab {
 	case "notifications":
 		if p.ReadOnlyPreview {
@@ -739,7 +743,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		}
 		return renderSelectedProductionNotifications(db, r, p, lang, class, label, hint)
 	case "users", "user-settings":
-		return renderCurrentProductionUserSettings(db, r, p, lang)
+		return renderCurrentProductionUserSettings(db, r, p, lang, botTokens...)
 	case "storage-settings":
 		if p.ValidationOnly || p.ReadOnlyPreview {
 			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.storage_settings")) + `</h2><p class="field-help" role="status">` + esc(t(lang, "検証専用Productionではストレージ設定を変更できません。", "Storage settings are read-only for validation-only Productions.")) + `</p></section>`
@@ -847,9 +851,9 @@ func renderLegacyCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p m
 	return body
 }
 
-func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string, botTokens ...string) string {
 	if p.ValidationOnly || p.ReadOnlyPreview {
-		return renderCurrentProductionUserSettingsScalable(db, r, p, lang)
+		return renderCurrentProductionUserSettingsScalable(db, r, p, lang, botTokens...)
 	}
 	postURL := withLang("/bot/admin/projects", r)
 	userText := func(ja, en string) string {
@@ -899,38 +903,179 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 	}
 	add += `</div>`
 
-	var assignmentRows strings.Builder
-	for _, assignment := range assignments {
-		assignmentRows.WriteString(`<li class="production-user-simple-row"><span><strong>` + esc(assignment.KitsuName) + `</strong><small>` + esc(assignment.TaskType) + `</small></span><form method="post" class="delete-form" data-confirm="` + esc(userText("「"+assignment.KitsuName+"」の"+assignment.TaskType+" Reviewer / Checker割り当てを解除します。", "Remove the "+assignment.TaskType+" Reviewer / Checker assignment for \""+assignment.KitsuName+"\".")) + `" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type" value="` + esc(assignment.TaskType) + `"><input type="hidden" name="action" value="remove_production_checker"><button class="btn-ghost" type="submit">` + esc(userText("解除", "Remove")) + `</button></form></li>`)
+	botToken := ""
+	if len(botTokens) > 0 {
+		botToken = botTokens[0]
 	}
-	assignmentSection := ""
-	if len(assignments) > 0 {
-		assignmentSection = `<h4>` + esc(userText("割り当て済み", "Assigned")) + `</h4><ul class="production-users-simple-list">` + assignmentRows.String() + `</ul>`
-	}
-	var roleForm string
-	if len(projectUsers) == 0 {
-		roleForm = `<p class="empty-state field-help">` + esc(userText("先にプロダクションユーザーを追加してください。", "Add a Production user first.")) + `</p>`
-	} else {
-		var userOptions, taskOptions strings.Builder
-		userOptions.WriteString(`<option value="" selected disabled>` + esc(userText("ユーザーを選択", "Select user")) + `</option>`)
-		for _, user := range projectUsers {
-			userOptions.WriteString(`<option value="` + strconv.FormatUint(uint64(user.ID), 10) + `">` + esc(user.KitsuName) + `</option>`)
-		}
-		taskOptions.WriteString(`<option value="" selected disabled>` + esc(userText("Task Typeを選択", "Select Task Type")) + `</option>`)
-		for _, taskType := range assignmentTaskTypes(db, &p) {
-			taskOptions.WriteString(`<option value="` + esc(taskType) + `">` + esc(taskType) + `</option>`)
-		}
-		if taskOptions.Len() == 0 {
-			roleForm = `<p class="empty-state field-help">` + esc(userText("利用可能なTask Typeがありません。", "No Task Types are available.")) + `</p>`
-		} else {
-			roleForm = `<form method="post" class="production-user-inline-form production-user-role-form-simple" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="save_production_checker"><label>` + esc(userText("Production user", "Production user")) + `<select name="user_id" required onchange="this.form.querySelector('button[type=submit]').disabled=this.value===''||this.form.querySelector('[name=task_type]').value===''">` + userOptions.String() + `</select></label><label>Kitsu Task Type<select name="task_type" required onchange="this.form.querySelector('button[type=submit]').disabled=this.value===''||this.form.querySelector('[name=user_id]').value===''">` + taskOptions.String() + `</select></label><button class="btn" type="submit" disabled>` + esc(userText("追加", "Add")) + `</button></form>`
-		}
-	}
-
-	return `<section class="section-card glass production-users-panel"><h2>` + esc(userText("プロダクションユーザー", "Production users")) + `</h2>` + add + `<div class="production-users-simple-section"><h3>` + esc(userText("割り当て済み", "Assigned")) + `</h3><ul class="production-users-simple-list">` + users.String() + `</ul></div><div class="production-users-simple-section"><h3>Reviewer / Checker</h3>` + roleForm + assignmentSection + `</div></section>`
+	reviewerSection := renderProductionReviewerManager(db, r, p, lang, botToken, assignments)
+	return `<section class="section-card glass production-users-panel"><h2>` + esc(userText("プロダクションユーザー", "Production users")) + `</h2>` + add + `<div class="production-users-simple-section"><h3>` + esc(userText("割り当て済み", "Assigned")) + `</h3><ul class="production-users-simple-list">` + users.String() + `</ul></div>` + reviewerSection + `</section>`
 }
 
-func renderCurrentProductionUserSettingsScalable(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+var reviewerTaskTypesForProduction = setupKitsuTaskTypes
+var reviewerDiscordRolesForGuild = ListGuildRoles
+
+func productionLinkedHumanDiscordIDs(db *gorm.DB, projectID uint) map[string]string {
+	globalNames := map[string]string{}
+	for _, user := range filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)) {
+		id := strings.TrimSpace(user.DiscordID)
+		if isDiscordSnowflake(id) {
+			globalNames[id] = strings.TrimSpace(user.DiscordDisplayName)
+		}
+	}
+	linked := map[string]string{}
+	for _, user := range model.ListProjectUserMaps(db, projectID) {
+		id := strings.TrimSpace(user.DiscordUserID)
+		if name, ok := globalNames[id]; ok {
+			if name == "" {
+				name = user.KitsuName
+			}
+			linked[id] = name
+		}
+	}
+	return linked
+}
+
+func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, legacyRows []model.ProjectCheckerMap) string {
+	label := func(ja, en string) string { return t(lang, ja, en) }
+	taskTypes := reviewerTaskTypesForProduction(db, p.KitsuProjectID)
+	selectedID := strings.TrimSpace(r.URL.Query().Get("reviewer_task_type"))
+	selectedTaskType := kitsu.TaskType{}
+	var taskOptions strings.Builder
+	for _, taskType := range taskTypes {
+		if selectedID == "" {
+			selectedID = strings.TrimSpace(taskType.ID)
+		}
+		selected := strings.TrimSpace(taskType.ID) == selectedID
+		if selected {
+			selectedTaskType = taskType
+		}
+		taskOptions.WriteString(`<option value="` + esc(taskType.ID) + `"` + map[bool]string{true: ` selected`}[selected] + `>` + esc(taskType.Name) + `</option>`)
+	}
+	if selectedTaskType.ID == "" && len(taskTypes) > 0 {
+		selectedTaskType = taskTypes[0]
+		selectedID = selectedTaskType.ID
+	}
+	postURL := withLang("/bot/admin/projects", r)
+	baseURL, kitsuToken, hasKitsu := runtimeKitsuDataSource(db)
+	roles := []DiscordGuildRole{}
+	rolesReady := false
+	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
+		if listed, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, botToken); err == nil {
+			roles = mentionableReviewerRoles(p.DiscordGuildID, listed)
+			rolesReady = true
+		}
+	}
+	var explicitRows []model.ProjectReviewerTarget
+	for _, target := range model.ListProjectReviewerTargets(db, p.ID) {
+		if target.TaskTypeID == selectedID {
+			explicitRows = append(explicitRows, target)
+		}
+	}
+	var legacy *model.ProjectCheckerMap
+	for i := range legacyRows {
+		if legacyRows[i].TaskTypeID == selectedID || (legacyRows[i].TaskTypeID == "" && legacyRows[i].TaskType == selectedTaskType.Name) {
+			legacy = &legacyRows[i]
+			break
+		}
+	}
+	source := label("Kitsu Supervisor（自動）", "Kitsu Supervisor (Automatic)")
+	var current strings.Builder
+	if len(explicitRows) > 0 {
+		source = label("KitsuSync Override", "KitsuSync Override")
+		for _, target := range explicitRows {
+			name := label("Discordロール", "Discord Role")
+			if target.TargetKind == model.ReviewerTargetUser {
+				name = label("Discordユーザー", "Discord User")
+				for _, linked := range model.ListProjectUserMaps(db, p.ID) {
+					if linked.DiscordUserID == target.DiscordID {
+						name = linked.KitsuName
+						break
+					}
+				}
+			} else {
+				for _, role := range roles {
+					if role.ID == target.DiscordID {
+						name = "@" + role.Name
+						break
+					}
+				}
+			}
+			current.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(name) + `</strong><small>` + esc(map[string]string{model.ReviewerTargetUser: label("ユーザー", "User"), model.ReviewerTargetRole: label("ロール", "Role")}[target.TargetKind]) + `</small></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="remove_production_reviewer_target"><input type="hidden" name="target_id" value="` + strconv.FormatUint(uint64(target.ID), 10) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><button class="btn-ghost" type="submit">` + esc(label("解除", "Remove")) + `</button></form></li>`)
+		}
+	} else if legacy != nil {
+		source = label("既存のProduction Reviewer設定", "Legacy Production Reviewer override")
+		name := strings.TrimSpace(legacy.KitsuName)
+		if name == "" {
+			name = label("Discordユーザー", "Discord User")
+		}
+		current.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(name) + `</strong><small>` + esc(label("既存の単一ユーザー設定", "Existing single-user mapping")) + `</small></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="remove_legacy_production_reviewer"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="task_type_name" value="` + esc(selectedTaskType.Name) + `"><button class="btn-ghost" type="submit">` + esc(label("解除", "Remove")) + `</button></form></li>`)
+	} else if selectedTaskType.ID != "" {
+		if hasKitsu {
+			supervisors, err := kitsu.GetProjectTaskTypeSupervisorsWithCredentials(baseURL, kitsuToken, p.KitsuProjectID, selectedTaskType.ID)
+			if err == nil {
+				for _, person := range supervisors {
+					status := label("Discord未リンク", "Discord not linked")
+					if discordID := model.GetUserMapForProjectWithIdentity(db, p.KitsuProjectID, person.ID, person.FullName, person.Email); isDiscordSnowflake(discordID) {
+						status = label("リンク済み", "Linked")
+					}
+					current.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(person.FullName) + `</strong></span><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[status == label("リンク済み", "Linked")] + `">` + esc(status) + `</span></li>`)
+				}
+				if current.Len() == 0 {
+					current.WriteString(`<li class="field-help">` + esc(label("Productionチーム内で対象Departmentを担当するSupervisorはいません。", "No Production team Supervisor matches this Task Type Department.")) + `</li>`)
+				}
+			} else {
+				current.WriteString(`<li class="field-help">` + esc(label("Kitsu Supervisor情報を取得できません。", "Kitsu Supervisor information is unavailable.")) + `</li>`)
+			}
+		} else {
+			current.WriteString(`<li class="field-help">` + esc(label("Kitsu接続を設定するとAutomatic Reviewerを確認できます。", "Configure Kitsu to view automatic Reviewers.")) + `</li>`)
+		}
+	}
+	if current.Len() == 0 {
+		current.WriteString(`<li class="empty-state">` + esc(label("Reviewerが未設定です。", "No Reviewers are configured.")) + `</li>`)
+	}
+	var userOptions strings.Builder
+	linkedUsers := productionLinkedHumanDiscordIDs(db, p.ID)
+	userIDs := make([]string, 0, len(linkedUsers))
+	for id := range linkedUsers {
+		userIDs = append(userIDs, id)
+	}
+	sort.Strings(userIDs)
+	for _, id := range userIDs {
+		name := linkedUsers[id]
+		userOptions.WriteString(`<option value="` + esc(id) + `">` + esc(name) + `</option>`)
+	}
+	addForm := `<p class="field-help">` + esc(label("Kitsu接続からTask Typeを選択してください。", "Load available Task Types from Kitsu.")) + `</p>`
+	if selectedTaskType.ID != "" {
+		disabled := ""
+		if userOptions.Len() == 0 {
+			disabled = ` disabled`
+		}
+		addForm = `<form method="post" class="reviewer-target-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="action" value="add_production_reviewer_target"><input type="hidden" name="target_kind" value="user"><label>` + esc(label("Productionに関連付け済みのDiscordユーザー", "Production-linked Discord user")) + `<select name="target_id" required>` + userOptions.String() + `</select></label><button class="btn" type="submit"` + disabled + `>` + esc(label("ユーザーを追加", "Add user")) + `</button></form>`
+		if rolesReady && len(roles) > 0 {
+			var roleOptions strings.Builder
+			for _, role := range roles {
+				roleOptions.WriteString(`<option value="` + esc(role.ID) + `">@` + esc(role.Name) + `</option>`)
+			}
+			addForm += `<form method="post" class="reviewer-target-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="action" value="add_production_reviewer_target"><input type="hidden" name="target_kind" value="role"><label>` + esc(label("Discordサーバーのメンション可能なロール", "Mentionable Discord guild role")) + `<select name="target_id" required>` + roleOptions.String() + `</select></label><button class="btn" type="submit">` + esc(label("ロールを追加", "Add role")) + `</button></form>`
+		} else {
+			addForm += `<p class="field-help">` + esc(label("メンション可能なDiscordロールはありません。", "No mentionable Discord roles are available.")) + `</p>`
+		}
+	}
+	reset := ""
+	if len(explicitRows) > 0 {
+		resetLabel := label("自動設定に戻す", "Reset to Automatic")
+		if legacy != nil {
+			resetLabel = label("既存のReviewer設定に戻す", "Reset to legacy Reviewer")
+		}
+		reset = `<form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="reset_production_reviewers"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="task_type_name" value="` + esc(selectedTaskType.Name) + `"><button class="btn-ghost" type="submit">` + esc(resetLabel) + `</button></form>`
+	}
+	if len(taskTypes) == 0 {
+		taskOptions.WriteString(`<option value="">` + esc(label("Task Typeを利用できません", "Task Types unavailable")) + `</option>`)
+	}
+	return `<section class="production-users-simple-section production-reviewer-manager"><h3>Reviewer</h3><p class="field-help">` + esc(label("明示設定は自動Supervisorを置き換えます。最大20件まで通知されます。", "Explicit targets replace automatic Supervisors. Up to 20 targets are mentioned per notification.")) + `</p><form method="get" class="reviewer-task-type-select" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="users"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>Kitsu Task Type<select name="reviewer_task_type">` + taskOptions.String() + `</select></label><button class="btn-ghost" type="submit">` + esc(label("表示", "View")) + `</button></form><div class="reviewer-source"><span>` + esc(label("設定元", "Source")) + `</span><strong>` + esc(source) + `</strong><span>` + esc(label("Department", "Department")) + `: ` + esc(fallbackText(selectedTaskType.DepartmentName, label("未設定", "Unavailable"))) + `</span></div><ul class="production-users-simple-list reviewer-target-list">` + current.String() + `</ul><div class="reviewer-target-add">` + addForm + `</div><div class="reviewer-target-reset">` + reset + `</div></section>`
+}
+
+func renderCurrentProductionUserSettingsScalable(db *gorm.DB, r *http.Request, p model.Project, lang string, botTokens ...string) string {
 	if p.ValidationOnly || p.ReadOnlyPreview {
 		return renderCurrentProductionUserSettingsLegacyStacked(db, r, p, lang)
 	}
@@ -1108,17 +1253,109 @@ func renderCurrentProductionUserSettingsLegacyStacked(db *gorm.DB, r *http.Reque
 	return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.user_settings")) + `</h2><div class="settings-block"><h3>` + esc(t(lang, "プロダクション参加者", "Production participants")) + `</h3><p class="field-help">` + esc(t(lang, "Kitsuから返された参加者", "Participants returned by Kitsu")) + `</p><ul class="mapping-list">` + kitsuRows.String() + `</ul><h3>` + esc(t(lang, "プロダクションに関連付けたユーザー", "Production-associated users")) + `</h3><ul class="mapping-list">` + associatedRows.String() + `</ul></div><div class="settings-block"><h3>` + esc(t(lang, "グローバルにリンク済みのユーザー", "Globally linked users")) + `</h3><p class="field-help">` + esc(t(lang, "グローバルUser Linkingは人間ユーザーのリンク、ここではこのプロダクションへのローカル関連付けを管理します。Botは対象外です。", "Global User Linking links human users; this section adds them locally to this Production. Bots are excluded.")) + `</p><ul class="mapping-list">` + candidates.String() + `</ul><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(tr(lang, "ia.user_mapping")) + `</a></div><div class="settings-block"><h3>` + esc(t(lang, "Reviewer / Checker", "Reviewer / Checker")) + `</h3><p class="field-help">` + esc(t(lang, "関連付け済みのProductionユーザーだけを選択できます。", "Only Production-associated users can be selected.")) + `</p><ul class="mapping-list">` + roleRows.String() + `</ul></div></section>`
 }
 
-func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request, db *gorm.DB) bool {
+func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request, db *gorm.DB, botTokens ...string) bool {
 	if r.Method != http.MethodPost {
 		return false
 	}
 	action := strings.TrimSpace(r.FormValue("action"))
-	if action != "add_production_user" && action != "remove_production_user" && action != "save_production_checker" && action != "remove_production_checker" {
+	targetAction := action == "add_production_reviewer_target" || action == "remove_production_reviewer_target" || action == "reset_production_reviewers" || action == "remove_legacy_production_reviewer"
+	if action != "add_production_user" && action != "remove_production_user" && action != "save_production_checker" && action != "remove_production_checker" && !targetAction {
 		return false
 	}
 	project := model.FindProjectByKitsuID(db, strings.TrimSpace(r.FormValue("project_id")))
 	if project == nil || model.IsValidationOnlyProject(db, project.KitsuProjectID) {
 		http.Error(w, "Production is not writable", http.StatusForbidden)
+		return true
+	}
+	if targetAction {
+		writeReviewerMutationError := func() {
+			http.Error(w, "Invalid Production Reviewer target", http.StatusBadRequest)
+		}
+		taskTypeID := strings.TrimSpace(r.FormValue("task_type_id"))
+		var taskType *kitsu.TaskType
+		for _, candidate := range reviewerTaskTypesForProduction(db, project.KitsuProjectID) {
+			if strings.TrimSpace(candidate.ID) == taskTypeID && taskTypeID != "" {
+				copy := candidate
+				taskType = &copy
+				break
+			}
+		}
+		if taskType == nil {
+			writeReviewerMutationError()
+			return true
+		}
+		var mutationErr error
+		switch action {
+		case "add_production_reviewer_target":
+			kind := strings.TrimSpace(r.FormValue("target_kind"))
+			id := strings.TrimSpace(r.FormValue("target_id"))
+			if !isDiscordSnowflake(id) {
+				writeReviewerMutationError()
+				return true
+			}
+			switch kind {
+			case model.ReviewerTargetUser:
+				if _, linked := productionLinkedHumanDiscordIDs(db, project.ID)[id]; !linked {
+					writeReviewerMutationError()
+					return true
+				}
+			case model.ReviewerTargetRole:
+				botToken := ""
+				if len(botTokens) > 0 {
+					botToken = botTokens[0]
+				}
+				roles, err := reviewerDiscordRolesForGuild(project.DiscordGuildID, botToken)
+				if err != nil {
+					writeReviewerMutationError()
+					return true
+				}
+				eligible := false
+				for _, role := range mentionableReviewerRoles(project.DiscordGuildID, roles) {
+					if role.ID == id {
+						eligible = true
+						break
+					}
+				}
+				if !eligible {
+					writeReviewerMutationError()
+					return true
+				}
+			default:
+				writeReviewerMutationError()
+				return true
+			}
+			mutationErr = model.UpsertProjectReviewerTarget(db, project.ID, taskType.ID, taskType.Name, kind, id)
+		case "remove_production_reviewer_target":
+			targetID := parseUint(r.FormValue("target_id"))
+			targets := model.ListProjectReviewerTargets(db, project.ID)
+			found := false
+			for _, target := range targets {
+				if target.ID == targetID && target.TaskTypeID == taskType.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				writeReviewerMutationError()
+				return true
+			}
+			mutationErr = model.DeleteProjectReviewerTarget(db, project.ID, targetID)
+		case "reset_production_reviewers":
+			mutationErr = model.DeleteProjectReviewerTargetsForTaskType(db, project.ID, taskType.ID)
+		case "remove_legacy_production_reviewer":
+			for _, legacy := range model.ListProjectCheckerMaps(db, project.ID) {
+				if legacy.TaskTypeID == taskType.ID || (legacy.TaskTypeID == "" && legacy.TaskType == taskType.Name) {
+					mutationErr = db.Delete(&model.ProjectCheckerMap{}, legacy.ID).Error
+					break
+				}
+			}
+		}
+		if mutationErr != nil {
+			http.Error(w, "Production Reviewer target could not be saved", http.StatusInternalServerError)
+			return true
+		}
+		target := withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&tab=users&reviewer_task_type="+url.QueryEscape(taskType.ID)+"&msg=saved", r)
+		http.Redirect(w, r, target, http.StatusSeeOther)
 		return true
 	}
 	if action == "add_production_user" {
@@ -1129,6 +1366,7 @@ func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request,
 		if row := model.FindProjectUserMapByID(db, parseUint(r.FormValue("user_id"))); row != nil && row.ProjectID == project.ID {
 			model.DeleteProjectUserMapByID(db, row.ID)
 			deleteProjectCheckerAssignmentsForUser(db, project.ID, row.KitsuName, row.KitsuEmail)
+			_ = model.DeleteProjectReviewerTargetsForDiscordUser(db, project.ID, row.DiscordUserID)
 		}
 	} else if action == "save_production_checker" {
 		row := model.FindProjectUserMapByID(db, parseUint(r.FormValue("user_id")))

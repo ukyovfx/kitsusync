@@ -1542,6 +1542,7 @@ func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) error {
 	for _, table := range []interface{}{
 		&ProjectUserMap{},
 		&ProjectCheckerMap{},
+		&ProjectReviewerTarget{},
 		&ProjectSetting{},
 	} {
 		if !db.Migrator().HasTable(table) {

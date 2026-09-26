@@ -73,13 +73,16 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 
 ## Production Users simple-flow checks
 
-- [ ] Normal Users view has the order: Production users, Add a user, Assigned, Reviewer / Checker.
+- [ ] Normal Users view has the order: Production users, Add a user, Assigned, Reviewer.
 - [ ] The associated-user list contains only local Production associations and shows User, Discord, associated status, and remove.
 - [ ] No search, status filter, expandable row details, or visible Kitsu participant section is rendered in the normal Current IA.
 - [ ] The add dropdown contains only globally linked human users not already associated; bots never appear.
 - [ ] Adding creates only a local Production association and leaves global User Linking and Kitsu membership unchanged.
-- [ ] Reviewer / Checker uses an associated Production user plus a Task Type; assignments are compact and removable.
-- [ ] Removing a role leaves the Production association; removing a Production user removes or blocks that user's local roles without removing global linking.
+- [ ] Reviewer uses a stable Kitsu Task Type ID and shows the current source: Kitsu Supervisor, legacy Production mapping, or KitsuSync override.
+- [ ] Automatic Reviewer view distinguishes eligible Department Supervisors in the Production team and their linked/unlinked state.
+- [ ] Explicit Reviewer overrides support multiple linked Discord Users and mentionable guild Roles, individual removal, and reset without mixing notification routing; reset preserves legacy Production mappings and returns to them when present.
+- [ ] Role choices exclude `@everyone` and non-mentionable roles; stored target IDs and outgoing allowed-mention lists are exact and capped at 20.
+- [ ] Removing a Production user removes that user's explicit Reviewer targets without removing global linking.
 - [ ] Empty states explain the next action when no associated users or eligible linked users exist.
 - [ ] JP and EN have equivalent structure, no unintended language leakage, and no page overflow.
 

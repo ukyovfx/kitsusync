@@ -348,6 +348,8 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	oldCheckerResolver := CheckerResolver
 	oldReviewerResolver := ReviewerResolver
 	checkerIDs := []string{"202"}
+	reviewerTargets := []ReviewerTarget{{Kind: "user", ID: "123456789012345670"}}
+	explicitReviewerTargets := false
 	reviewerResolverCalls := 0
 	var reviewerResolveErr error
 	checkResolverArgs := func(projectID, taskTypeID, taskTypeName string) {
@@ -359,10 +361,10 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
 		return checkerIDs
 	}
-	ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]string, error) {
+	ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, bool, error) {
 		reviewerResolverCalls++
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
-		return checkerIDs, reviewerResolveErr
+		return reviewerTargets, explicitReviewerTargets, reviewerResolveErr
 	}
 	KitsuPublicURLResolver = func() string { return "https://kitsu.example.com" }
 	GoogleDriveURLResolver = nil
@@ -380,9 +382,11 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("delivery method = %s, want POST", r.Method)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+		var decoded Payload
+		if err := json.NewDecoder(r.Body).Decode(&decoded); err != nil {
 			t.Fatal(err)
 		}
+		sent = decoded
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
@@ -434,10 +438,32 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	event.TaskStatus.TaskStatus = kitsu.TaskStatus{ID: "wfa", ShortName: "WFA"}
 	event.PreviousStatusName = "WIP"
 	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
-	if results["task-1"].MessageID != "message-1" || sent.Content != "<@202>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "202" {
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345670>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "123456789012345670" {
 		t.Fatalf("WFA recipients changed with DB Checker: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 
+	reviewerTargets = []ReviewerTarget{
+		{Kind: "user", ID: "123456789012345671"},
+		{Kind: "role", ID: "123456789012345672"},
+		{Kind: "role", ID: "123456789012345672"},
+		{Kind: "role", ID: "@everyone"},
+	}
+	explicitReviewerTargets = true
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345671> <@&123456789012345672>" {
+		t.Fatalf("mixed explicit targets were not safely deduplicated: content=%q result=%+v", sent.Content, results["task-1"])
+	}
+	if len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "123456789012345671" || len(sent.AllowedMentions.Roles) != 1 || sent.AllowedMentions.Roles[0] != "123456789012345672" || len(sent.AllowedMentions.Parse) != 0 {
+		t.Fatalf("mixed explicit target allowlist was not exact: %+v", sent.AllowedMentions)
+	}
+
+	reviewerTargets = nil
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 || len(sent.AllowedMentions.Roles) != 0 {
+		t.Fatalf("empty explicit override fell through to config Reviewer: content=%q allowed=%+v", sent.Content, sent.AllowedMentions)
+	}
+
+	explicitReviewerTargets = false
 	checkerIDs = nil
 	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "<@303>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "303" {

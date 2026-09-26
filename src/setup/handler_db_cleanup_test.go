@@ -38,6 +38,7 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 		&model.ProductionNotificationRoute{},
 		&model.ProjectUserMap{},
 		&model.ProjectCheckerMap{},
+		&model.ProjectReviewerTarget{},
 		&model.ProjectSetting{},
 		&model.UserMap{},
 		&model.CheckerMap{},
@@ -297,6 +298,7 @@ func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
 	db.Create(&model.ProductionNotificationRoute{ProductionID: "kitsu-proj-unlink", TaskTypeID: "tt-1", DestinationWebhookID: 1, DestinationChannelID: "channel-1"})
 	model.UpsertProjectUserMap(db, project.ID, "Artist A", "artist@example.com", "discord-user-1")
 	model.UpsertProjectCheckerMap(db, project.ID, "Animation", "discord-reviewer-1")
+	db.Create(&model.ProjectReviewerTarget{ProjectID: project.ID, TaskTypeID: "task-animation", TaskTypeName: "Animation", TargetKind: model.ReviewerTargetRole, DiscordID: "123456789012345678"})
 	db.Create(&model.ProjectSetting{ProjectID: project.ID, Key: "storage_url", Value: "s3://bucket/project"})
 	db.Create(&model.UserMap{KitsuName: "Global User", KitsuEmail: "global@example.com", DiscordID: "global-discord"})
 	db.Create(&model.CheckerMap{TaskType: "GlobalTask", KitsuName: "Global Reviewer", KitsuEmail: "reviewer@example.com", DiscordID: "global-reviewer"})
@@ -324,6 +326,9 @@ func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
 	}
 	if got := model.ListProjectCheckerMaps(db, project.ID); len(got) != 0 {
 		t.Fatalf("expected project checker maps to be deleted, got %d", len(got))
+	}
+	if got := model.ListProjectReviewerTargets(db, project.ID); len(got) != 0 {
+		t.Fatalf("expected project Reviewer targets to be deleted, got %d", len(got))
 	}
 
 	var projectSettings []model.ProjectSetting
