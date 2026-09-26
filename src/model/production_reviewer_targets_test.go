@@ -45,7 +45,7 @@ func TestProjectReviewerTargetsAreAdditiveScopedAndResettable(t *testing.T) {
 	if err := UpsertProjectReviewerTarget(db, first.ID, "task-comp", "Compositing Updated", ReviewerTargetUser, "123456789012345679"); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpsertProjectReviewerTarget(db, first.ID, "task-comp", "Compositing", ReviewerTargetUser, "123456789012345679"); err != nil {
+	if err := UpsertProjectReviewerTarget(db, first.ID, "task-comp", "Compositing Updated", ReviewerTargetUser, "123456789012345679"); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpsertProjectReviewerTarget(db, first.ID, "task-comp", "Compositing", ReviewerTargetRole, "123456789012345680"); err != nil {
