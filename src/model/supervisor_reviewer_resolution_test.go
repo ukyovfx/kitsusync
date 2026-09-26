@@ -314,6 +314,8 @@ func TestResolveProjectTaskTypeSupervisorDiscordIDs(t *testing.T) {
 				switch r.URL.Path {
 				case "/api/data/projects/production-1/task-types":
 					_, _ = w.Write([]byte(`[{"id":"task-type-1","name":"Animation","department_id":"dept-1"}]`))
+				case "/api/data/projects/production-1/team":
+					_ = json.NewEncoder(w).Encode(tc.people)
 				case "/api/data/persons/":
 					_ = json.NewEncoder(w).Encode(tc.people)
 				default:
