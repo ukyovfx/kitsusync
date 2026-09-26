@@ -2154,8 +2154,17 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 			t.Fatalf("Production Users UI missing %q: %s", want, body)
 		}
 	}
-	if strings.Contains(body, "task-anim") || strings.Contains(body, "Unknown Supervisor") || taskReads != 1 || teamReads != 1 {
-		t.Fatalf("Production Users summary guessed unrelated metadata or repeated reads: taskReads=%d teamReads=%d body=%s", taskReads, teamReads, body)
+	teamStart := strings.Index(body, `<ul class="production-users-simple-list">`)
+	if teamStart < 0 {
+		t.Fatalf("Production Team member list is missing: %s", body)
+	}
+	teamEnd := strings.Index(body[teamStart:], `</ul>`)
+	if teamEnd < 0 {
+		t.Fatalf("Production Team member list is missing: %s", body)
+	}
+	teamHTML := body[teamStart : teamStart+teamEnd]
+	if !strings.Contains(teamHTML, "Unknown Supervisor") || strings.Contains(teamHTML, `Unknown Supervisor</strong><small>Discord not linked</small><small class="production-user-role">Supervisor</small><small class="production-user-supervision">`) || taskReads != 1 || teamReads != 1 {
+		t.Fatalf("Production Users summary guessed unrelated metadata or repeated reads: taskReads=%d teamReads=%d team=%s", taskReads, teamReads, teamHTML)
 	}
 	for _, stale := range []string{"Explicit targets replace automatic Supervisors", "Linked Discord users in the Kitsu Production Team", "Department:"} {
 		if strings.Contains(body, stale) {
