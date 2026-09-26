@@ -82,6 +82,7 @@ func renderCurrentNotificationCardPayload(data Template) Payload {
 		Embeds:  []Embed{embed},
 		AllowedMentions: &AllowedMentions{
 			Users: uniqueDiscordIDs(data.AllowedUserIDs),
+			Roles: uniqueDiscordRoleIDs(data.AllowedRoleIDs),
 		},
 	}
 }
@@ -119,6 +120,7 @@ func renderTemplateNotificationPayload(data Template, preset string) Payload {
 		Embeds:  []Embed{embed},
 		AllowedMentions: &AllowedMentions{
 			Users: uniqueDiscordIDs(data.AllowedUserIDs),
+			Roles: uniqueDiscordRoleIDs(data.AllowedRoleIDs),
 		},
 	}
 }

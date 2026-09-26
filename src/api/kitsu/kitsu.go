@@ -535,6 +535,18 @@ func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, tas
 	if err != nil {
 		return nil, fmt.Errorf("read Kitsu Production team: %w", err)
 	}
+	return GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, departmentID, team)
+}
+
+// GetDepartmentSupervisorsForProductionTeamWithCredentials resolves only
+// supervisors in the supplied live Production team whose Kitsu Department
+// membership matches departmentID. The caller can reuse a team read already
+// made for the same page request.
+func GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, departmentID string, team []Person) ([]Person, error) {
+	departmentID = strings.TrimSpace(departmentID)
+	if departmentID == "" {
+		return nil, errors.New("Kitsu Department ID is required")
+	}
 	teamIDs := make(map[string]struct{}, len(team))
 	for _, person := range team {
 		if id := strings.TrimSpace(person.ID); id != "" {

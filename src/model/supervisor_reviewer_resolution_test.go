@@ -39,6 +39,30 @@ func configureSupervisorResolutionTestOrigin(t *testing.T, baseURL string) {
 	}
 }
 
+func TestProductionTeamIdentityPrefersGlobalStableKitsuIDThenLegacyMappings(t *testing.T) {
+	db := newSupervisorResolutionTestDB(t)
+	project := Project{KitsuProjectID: "team-identity"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&UserMap{KitsuID: "person-1", KitsuEmail: "person@example.test", KitsuName: "Person", DiscordID: "global-id"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ProjectUserMap{ProjectID: project.ID, KitsuEmail: "person@example.test", KitsuName: "Person", DiscordUserID: "legacy-project-email"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := GetUserMapForProjectWithIdentity(db, project.KitsuProjectID, "person-1", "Person", "person@example.test"); got != "global-id" {
+		t.Fatalf("stable global Kitsu identity resolved %q, want global-id", got)
+	}
+
+	if err := db.Where("kitsu_id = ?", "person-1").Delete(&UserMap{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := GetUserMapForProjectWithIdentity(db, project.KitsuProjectID, "person-1", "Person", "person@example.test"); got != "legacy-project-email" {
+		t.Fatalf("legacy project mapping resolved %q, want legacy-project-email", got)
+	}
+}
+
 func TestResolveReviewersForProjectPrecedence(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -247,12 +271,12 @@ func TestResolveProjectTaskTypeSupervisorDiscordIDs(t *testing.T) {
 			want:       []string{"same-discord"},
 		},
 		{
-			name:       "Production mapping takes precedence over global person identity",
+			name:       "global stable person identity takes precedence over legacy Production mapping",
 			people:     []map[string]string{{"id": "p-1", "role": "supervisor"}},
 			details:    map[string]map[string]any{"p-1": {"id": "p-1", "full_name": "Sam One", "email": "sam@example.test", "role": "supervisor", "departments": []string{"dept-1"}}},
 			globalMaps: []UserMap{{KitsuID: "p-1", KitsuName: "Sam One", KitsuEmail: "sam@example.test", DiscordID: "global-discord"}},
 			projectMap: []ProjectUserMap{{KitsuName: "Different display name", KitsuEmail: "sam@example.test", DiscordUserID: "production-discord"}},
-			want:       []string{"production-discord"},
+			want:       []string{"global-discord"},
 		},
 		{
 			name:       "stable person identity takes precedence over Production name-only fallback",

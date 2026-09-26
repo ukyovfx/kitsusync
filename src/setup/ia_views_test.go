@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -1278,9 +1279,13 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production"}
 	db.Create(&p)
-	db.Create(&model.UserMap{KitsuName: "Synthetic Participant", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord Name"})
-	db.Create(&model.ProjectUserMap{ProjectID: p.ID, KitsuName: "Synthetic Participant"})
-	body := renderSelectedProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
+	db.Create(&model.UserMap{KitsuID: "synthetic-participant", KitsuName: "Synthetic Participant", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord Name"})
+	oldReader := reviewerProductionTeamReader
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "synthetic-participant", FullName: "Synthetic Participant"}}, nil
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
 	if !strings.Contains(body, "Synthetic Discord Name") {
 		t.Fatal("Production User Settings did not show the linked Discord display name")
 	}
@@ -1334,39 +1339,6 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	}
 	if strings.Contains(body, "変更者:") {
 		t.Fatalf("English notification preview leaked the Japanese author label: %s", body)
-	}
-}
-
-func TestProductionUserSettingsCurrentEmptyStateExplainsKitsuParticipants(t *testing.T) {
-	t.Skip("superseded by the simple Production Users flow test")
-	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "empty-current-users", Name: "Empty Current Users"}
-	db.Create(&p)
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
-	for _, want := range []string{"プロダクションユーザー", "ユーザーを追加", "Reviewer / Checker", "No Production users yet"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("simple empty state missing %q: %s", want, body)
-		}
-	}
-	if strings.Contains(body, "user_search") || strings.Contains(body, "production-user-details") || strings.Contains(body, "production-participant-details") {
-		t.Fatalf("simple user view still contains removed controls: %s", body)
-	}
-}
-
-func TestProductionUserSettingsShowsGlobalLinkedHumansSeparately(t *testing.T) {
-	t.Skip("superseded by the simple Production Users flow test")
-	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "linked-users-production", Name: "Linked Users Production"}
-	db.Create(&p)
-	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordDisplayName: "Discord Human", DiscordID: "discord-human"})
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Add a user", "Linked Human", "Discord Human", `action="add_production_user`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("simple linked-user form missing %q: %s", want, body)
-		}
-	}
-	if strings.Contains(body, "user_search") || strings.Contains(body, "user_status") || strings.Contains(body, "Available") {
-		t.Fatalf("simple linked-user view still contains filter UI: %s", body)
 	}
 }
 
@@ -1455,7 +1427,10 @@ func TestProductionUserSettingsEmptyStatesHaveNoDecorativeBullets(t *testing.T) 
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "empty-user-settings", Name: "Empty User Settings"}
 	db.Create(&p)
-	body := renderSelectedProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
+	oldReader := reviewerProductionTeamReader
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, nil }
+	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
 	if strings.Contains(body, "empty-state-mark") || strings.Contains(body, "aria-hidden=\"true\"") || strings.Contains(body, "•") {
 		t.Fatal("Production User Settings empty state contains a decorative bullet")
 	}
@@ -1908,36 +1883,6 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 	}
 }
 
-func TestCurrentProductionUsersOfferLocalAssociationAndRoleEligibility(t *testing.T) {
-	t.Skip("superseded by the simple Production Users flow test")
-	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "association-production", Name: "Association Production"}
-	db.Create(&p)
-	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en&add_users=1", nil), p, "en")
-	for _, want := range []string{"Add a user", "Add", "No Production users yet"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("production association UI missing %q: %s", want, body)
-		}
-	}
-	req := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader("action=add_production_user&project_id=association-production&user_id=1"))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	if !handleCurrentProductionUserMutation(w, req, db) {
-		t.Fatal("association action was not handled")
-	}
-	if len(model.ListProjectUserMaps(db, p.ID)) != 1 {
-		t.Fatal("local Production association was not persisted")
-	}
-	body = renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=association-production&tab=users&lang=en", nil), p, "en")
-	if strings.Contains(body, "production-user-details") || !strings.Contains(body, "production-participant-details") || !strings.Contains(body, "save_production_checker") {
-		t.Fatal("associated user view still exposes detached details or role form")
-	}
-	if !strings.Contains(body, "Reviewer / Checker") || !strings.Contains(body, "Assigned") {
-		t.Fatal("associated user did not become role-eligible")
-	}
-}
-
 func TestCurrentNotificationRoutingIsReadOnlyUntilExplicitEdit(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "summary-routing", Name: "Summary Routing"}
@@ -1961,9 +1906,12 @@ func TestCurrentProductionUsersScaleWithoutSearchOrDetails(t *testing.T) {
 		db.Create(&model.UserMap{KitsuName: name, KitsuEmail: email, DiscordID: fmt.Sprintf("discord-%02d", i), DiscordDisplayName: "Discord " + name})
 		model.UpsertProjectUserMap(db, p.ID, name, email, fmt.Sprintf("discord-%02d", i))
 	}
+	oldReader := reviewerProductionTeamReader
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
+	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en", nil), p, "en")
-	if !strings.Contains(body, "User-49") || !strings.Contains(body, "User-00") {
-		t.Fatalf("simple user list omitted associated users: %s", body)
+	if strings.Contains(body, "User-49") || strings.Contains(body, "User-00") {
+		t.Fatalf("legacy ProjectUserMap rows were rendered as current Kitsu membership: %s", body)
 	}
 	if strings.Contains(body, "user_search") || strings.Contains(body, "user_status") || strings.Contains(body, "production-user-details") || strings.Contains(body, "production-participant-details") {
 		t.Fatal("simple user view still contains scalable UI controls")
@@ -1975,46 +1923,389 @@ func TestCurrentProductionUsersSimpleFlowUsesAssignedBeforeRoles(t *testing.T) {
 	p := model.Project{KitsuProjectID: "simple-flow-production", Name: "Simple Flow Production"}
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
+	oldReader := reviewerProductionTeamReader
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
+	oldTasks := reviewerTaskTypesForProduction
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "task-animation", Name: "Animation"}}
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Production users", "Add a user", "add_production_user", "Assigned", "Reviewer / Checker"} {
+	for _, want := range []string{"Production Team", "Reviewer", "Automatic"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"Add a user", "add_production_user", "Assigned", "remove_production_user"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("normal Production Users view still exposes manual membership %q: %s", forbidden, body)
 		}
 	}
 	if strings.Contains(body, "user_search") || strings.Contains(body, "user_status") || strings.Contains(body, "production-user-details") || strings.Contains(body, "production-participant-details") {
 		t.Fatalf("simple flow contains removed UI: %s", body)
 	}
-	if strings.Index(body, "Add a user") > strings.Index(body, "Assigned") || strings.Index(body, "Assigned") > strings.Index(body, "Reviewer / Checker") {
-		t.Fatalf("simple flow sections are out of order: %s", body)
+}
+
+func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "kitsu-team-production", Name: "Kitsu Team Production"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-linked", KitsuName: "Linked Person", DiscordID: "123456789012345678", DiscordDisplayName: "ukyo"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-unlinked", KitsuName: "Unlinked Person", DiscordID: "", DiscordDisplayName: ""}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-not-on-team", KitsuName: "Non Team Person", DiscordID: "123456789012345679", DiscordDisplayName: "outsider"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-bot", KitsuName: "Kitsu Bot", DiscordID: "123456789012345681", DiscordDisplayName: "bot"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProjectUserMap{ProjectID: project.ID, KitsuName: "Legacy Person", DiscordUserID: "123456789012345680"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldReader := reviewerProductionTeamReader
+	reviewerProductionTeamReader = func(_ *gorm.DB, projectID string) ([]kitsu.Person, error) {
+		if projectID != project.KitsuProjectID {
+			t.Fatalf("Kitsu team read project ID = %q, want %q", projectID, project.KitsuProjectID)
+		}
+		return []kitsu.Person{
+			{ID: "person-linked", FullName: "Linked Person", Email: "linked@example.test"},
+			{ID: "person-unlinked", FullName: "Unlinked Person", Email: "unlinked@example.test"},
+			{ID: "person-bot", FullName: "Kitsu Bot", IsBot: true},
+		}, nil
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
+
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en")
+	for _, want := range []string{"Production Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Discord not linked", "/bot/admin/users", "Production members are synchronized from Kitsu"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"add_production_user", "remove_production_user", "Add a user", "Assigned", "Legacy Person", "Non Team Person", "Kitsu Bot"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("Production Users view still exposes or lists %q: %s", forbidden, body)
+		}
+	}
+	if got := len(model.ListProjectUserMaps(db, project.ID)); got != 1 {
+		t.Fatalf("rendering the Production Users page changed ProjectUserMap rows: got %d, want 1", got)
 	}
 }
 
-func TestCurrentProductionUserMutationPreservesAssociationAndPreventsDuplicates(t *testing.T) {
+func TestCurrentProductionUsersDistinguishKitsuEmptyAndReadFailure(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "team-state-production"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldReader := reviewerProductionTeamReader
+	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
+	render := func() string {
+		return renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=team-state-production&tab=users&lang=en", nil), project, "en")
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
+	empty := render()
+	if !strings.Contains(empty, "The Kitsu Production Team is empty") || strings.Contains(empty, "could not load") {
+		t.Fatalf("successful empty Production Team was not distinguished: %s", empty)
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, errors.New("fixture read failure") }
+	failed := render()
+	if !strings.Contains(failed, "Could not load the Kitsu Production Team") || strings.Contains(failed, "The Kitsu Production Team is empty") {
+		t.Fatalf("Production Team read failure was collapsed into empty: %s", failed)
+	}
+	if strings.Contains(failed, `name="target_id"`) {
+		t.Fatalf("Reviewer user target remained selectable after a team read failure: %s", failed)
+	}
+}
+
+func TestProductionTeamViewUsesFreshKitsuMembershipOnEveryRender(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "live-team-production"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldReader := reviewerProductionTeamReader
+	reads := 0
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		reads++
+		if reads == 1 {
+			return []kitsu.Person{{ID: "removed-person", FullName: "Former Team Member"}}, nil
+		}
+		return []kitsu.Person{}, nil
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=live-team-production&tab=users&lang=en", nil)
+	first := renderCurrentProductionUserSettings(db, request, project, "en")
+	second := renderCurrentProductionUserSettings(db, request, project, "en")
+	if !strings.Contains(first, "Former Team Member") || strings.Contains(second, "Former Team Member") || reads != 2 {
+		t.Fatalf("Production Team did not reflect the next live read: reads=%d first=%s second=%s", reads, first, second)
+	}
+	if got := len(model.ListProjectUserMaps(db, project.ID)); got != 0 {
+		t.Fatalf("live team rendering persisted %d ProjectUserMap rows", got)
+	}
+}
+
+func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "reviewer-manager", Name: "Reviewer Manager", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProjectUserMap{ProjectID: project.ID, KitsuName: "Linked Artist", DiscordUserID: "123456789012345679"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "linked-artist", KitsuName: "Linked Artist", KitsuEmail: "artist@example.test", DiscordID: "123456789012345679", DiscordDisplayName: "Discord Artist"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "non-team-user", KitsuName: "Outsider", KitsuEmail: "outside@example.test", DiscordID: "123456789012345682", DiscordDisplayName: "Outside Discord"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTasks, oldRoles := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild
+	oldTeam := reviewerProductionTeamReader
+	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentName: "Comp"}}
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{
+			{ID: "linked-artist", FullName: "Linked Artist", Email: "artist@example.test"},
+			{ID: "unlinked-person", FullName: "Unlinked Person", Email: "unlinked@example.test"},
+		}, nil
+	}
+	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
+		return []DiscordGuildRole{
+			{ID: guildID, Name: "@everyone", Mentionable: true},
+			{ID: "123456789012345680", Name: "Mentionable", Mentionable: true},
+			{ID: "123456789012345681", Name: "Not Mentionable", Mentionable: false},
+		}, nil
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader = oldTasks, oldRoles, oldTeam
+	})
+
+	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole string }{
+		{"ja", "自動", "Overrides", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
+		{"en", "Automatic", "Overrides", "None", "Add user", "Discord user", "Add role"},
+	} {
+		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
+		body := renderCurrentProductionUserSettings(db, request, project, tc.lang, "bot-token")
+		for _, want := range []string{tc.wantAutomatic, "Compositing", "Comp", "@Discord Artist", tc.wantUserLabel, tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s Reviewer UI missing %q", tc.lang, want)
+			}
+		}
+		if !strings.Contains(body, tc.wantOverrides) || !strings.Contains(body, tc.wantNone) || strings.Contains(body, "Not active while an override is set.") {
+			t.Fatalf("%s Reviewer UI must state that no override exists", tc.lang)
+		}
+		if strings.Contains(body, `value="123456789012345678"`) || strings.Contains(body, `value="123456789012345681"`) || strings.Contains(body, `value="123456789012345682"`) || strings.Contains(body, "unlinked-person") {
+			t.Fatalf("%s Reviewer UI exposed @everyone, a non-mentionable role, a non-Team user, or an unlinked ID", tc.lang)
+		}
+		if strings.Contains(body, "save_production_checker") {
+			t.Fatalf("%s Reviewer UI still exposes the single-target legacy form", tc.lang)
+		}
+	}
+}
+
+func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "supervisor-summary", Name: "Supervisor Summary", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "comp-supervisor", KitsuName: "Ukyo Matsuo", KitsuEmail: "ukyo@example.test", DiscordID: "123456789012345679", DiscordDisplayName: "ukyo"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTasks, oldRoles, oldTeam, oldSupervisors := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerDepartmentSupervisorsForTeam
+	taskReads, teamReads := 0, 0
+	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
+		taskReads++
+		return []kitsu.TaskType{
+			{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"},
+			{ID: "task-roto", Name: "Roto", DepartmentID: "dept-comp", DepartmentName: "Comp"},
+			{ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"},
+		}
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		teamReads++
+		return []kitsu.Person{
+			{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Email: "ukyo@example.test", Role: "supervisor", Departments: []string{"dept-comp"}},
+			{ID: "animation-supervisor", FullName: "Animation Supervisor", Role: "supervisor", Departments: []string{"dept-anim"}},
+			{ID: "comp-artist", FullName: "Comp Artist", Role: "artist", Departments: []string{"dept-comp"}},
+			{ID: "unknown-supervisor", FullName: "Unknown Supervisor", Role: "supervisor", Departments: []string{"dept-unknown"}},
+		}, nil
+	}
+	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) { return nil, nil }
+	reviewerDepartmentSupervisorsForTeam = func(_, _, departmentID string, team []kitsu.Person) ([]kitsu.Person, error) {
+		if departmentID != "dept-comp" || len(team) == 0 {
+			return nil, nil
+		}
+		return []kitsu.Person{{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Role: "supervisor"}}, nil
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerDepartmentSupervisorsForTeam = oldTasks, oldRoles, oldTeam, oldSupervisors
+	})
+
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en")
+	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo", "Supervisor", "Comp: Compositing, Roto", "Automatic", "Overrides", "None", "Linked"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Production Users UI missing %q: %s", want, body)
+		}
+	}
+	teamStart := strings.Index(body, `<ul class="production-users-simple-list">`)
+	if teamStart < 0 {
+		t.Fatalf("Production Team member list is missing: %s", body)
+	}
+	teamEnd := strings.Index(body[teamStart:], `</ul>`)
+	if teamEnd < 0 {
+		t.Fatalf("Production Team member list is missing: %s", body)
+	}
+	teamHTML := body[teamStart : teamStart+teamEnd]
+	if !strings.Contains(teamHTML, "Unknown Supervisor") || strings.Contains(teamHTML, `Unknown Supervisor</strong><small>Discord not linked</small><small class="production-user-role">Supervisor</small><small class="production-user-supervision">`) || taskReads != 1 || teamReads != 1 {
+		t.Fatalf("Production Users summary guessed unrelated metadata or repeated reads: taskReads=%d teamReads=%d team=%s", taskReads, teamReads, teamHTML)
+	}
+	for _, stale := range []string{"Explicit targets replace automatic Supervisors", "Linked Discord users in the Kitsu Production Team", "Department:"} {
+		if strings.Contains(body, stale) {
+			t.Fatalf("verbose Reviewer explanation %q remains in the UI", stale)
+		}
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345679"); err != nil {
+		t.Fatal(err)
+	}
+	overridden := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en")
+	for _, want := range []string{"Ukyo Matsuo", "Overrides", "Not active while an override is set."} {
+		if !strings.Contains(overridden, want) {
+			t.Fatalf("automatic Reviewer/override state missing %q: %s", want, overridden)
+		}
+	}
+}
+
+func TestProductionSupervisorTaskTypeSummariesUseOnlyKnownMatchingMetadata(t *testing.T) {
+	team := []kitsu.Person{
+		{ID: "supervisor", Role: "supervisor", Departments: []string{"dept-comp", "dept-anim"}},
+		{ID: "artist", Role: "artist", Departments: []string{"dept-comp"}},
+		{ID: "unknown", Role: "supervisor", Departments: []string{"dept-missing"}},
+	}
+	taskTypes := []kitsu.TaskType{
+		{ID: "task-paint", Name: "Paint", DepartmentID: "dept-comp", DepartmentName: "Comp"},
+		{ID: "task-roto", Name: "Roto", DepartmentID: "dept-comp", DepartmentName: "Comp"},
+		{ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"},
+		{ID: "task-no-name", Name: "No Department Name", DepartmentID: "dept-hidden"},
+	}
+	got := productionSupervisorTaskTypeSummaries(team, taskTypes)
+	if want := "Animation: Animation / Comp: Paint, Roto"; got["supervisor"] != want {
+		t.Fatalf("Supervisor summary = %q, want %q", got["supervisor"], want)
+	}
+	if _, ok := got["artist"]; ok {
+		t.Fatal("non-Supervisor received a supervision summary")
+	}
+	if _, ok := got["unknown"]; ok {
+		t.Fatal("Supervisor received a summary without matching Production Task Type metadata")
+	}
+}
+
+func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "reviewer-mutations", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProjectUserMap{ProjectID: project.ID, KitsuName: "Linked", DiscordUserID: "123456789012345679"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-linked", KitsuName: "Linked", KitsuEmail: "linked@example.com", DiscordID: "123456789012345679", DiscordDisplayName: "Linked Discord User"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-outsider", KitsuName: "Outsider", KitsuEmail: "outsider@example.com", DiscordID: "123456789012345683", DiscordDisplayName: "Outsider Discord User"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacy := model.ProjectCheckerMap{ProjectID: project.ID, TaskTypeID: "task-comp", TaskType: "Compositing", OverrideDiscordID: "123456789012345682"}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTasks, oldRoles, oldTeam := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader
+	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "person-linked", FullName: "Linked", Email: "linked@example.com"}}, nil
+	}
+	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
+		return []DiscordGuildRole{{ID: guildID, Name: "@everyone", Mentionable: true}, {ID: "123456789012345680", Name: "Reviewers", Mentionable: true}, {ID: "123456789012345681", Name: "Private", Mentionable: false}}, nil
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader = oldTasks, oldRoles, oldTeam
+	})
+	post := func(values string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader(values+"&project_id=reviewer-mutations"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		if !handleCurrentProductionUserMutation(w, r, db, "bot-token") {
+			t.Fatal("Reviewer mutation was not handled")
+		}
+		return w
+	}
+	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=user&target_id=123456789012345679"); w.Code != http.StatusSeeOther {
+		t.Fatalf("user add status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=role&target_id=123456789012345680"); w.Code != http.StatusSeeOther {
+		t.Fatalf("role add status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=user&target_id=123456789012345679"); w.Code != http.StatusSeeOther {
+		t.Fatalf("duplicate add status=%d", w.Code)
+	}
+	targets := model.ListProjectReviewerTargets(db, project.ID)
+	if len(targets) != 2 {
+		t.Fatalf("target set=%+v, want one user and one role", targets)
+	}
+	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=role&target_id=123456789012345681"); w.Code != http.StatusBadRequest {
+		t.Fatalf("non-mentionable role status=%d, want 400", w.Code)
+	}
+	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=user&target_id=123456789012345683"); w.Code != http.StatusBadRequest {
+		t.Fatalf("globally linked non-Team user status=%d, want 400", w.Code)
+	}
+	if w := post("action=add_production_reviewer_target&task_type_id=unknown&target_kind=user&target_id=123456789012345679"); w.Code != http.StatusBadRequest {
+		t.Fatalf("unknown Task Type status=%d, want 400", w.Code)
+	}
+	if w := post("action=remove_production_reviewer_target&task_type_id=task-comp&target_id=" + strconv.FormatUint(uint64(targets[0].ID), 10)); w.Code != http.StatusSeeOther {
+		t.Fatalf("remove status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(model.ListProjectReviewerTargets(db, project.ID)) != 1 {
+		t.Fatal("removing one target removed more than the selected row")
+	}
+	if w := post("action=reset_production_reviewers&task_type_id=task-comp"); w.Code != http.StatusSeeOther {
+		t.Fatalf("reset status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(model.ListProjectReviewerTargets(db, project.ID)) != 0 || len(model.ListProjectCheckerMaps(db, project.ID)) != 1 {
+		t.Fatal("reset removed legacy ProjectCheckerMap rows or left explicit targets")
+	}
+}
+
+func TestCurrentProductionUserMutationLeavesLegacyMembershipRowsUntouched(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "simple-mutation-production", Name: "Simple Mutation Production"}
 	db.Create(&p)
-	user := model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"}
-	db.Create(&user)
-	post := func(values string) {
+	model.UpsertProjectUserMap(db, p.ID, "Legacy Person", "legacy@example.com", "123456789012345678")
+	model.UpsertProjectCheckerMapWithUserAndTaskTypeID(db, p.ID, "task-animation", "Animation", "Legacy Person", "legacy@example.com", "123456789012345678", "")
+	post := func(values string) bool {
 		req := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader(values))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		if !handleCurrentProductionUserMutation(httptest.NewRecorder(), req, db) {
-			t.Fatalf("mutation was not handled: %s", values)
+		return handleCurrentProductionUserMutation(httptest.NewRecorder(), req, db)
+	}
+	for _, action := range []string{
+		"action=add_production_user&project_id=simple-mutation-production&user_id=1",
+		"action=remove_production_user&project_id=simple-mutation-production&user_id=1",
+		"action=save_production_checker&project_id=simple-mutation-production&user_id=1&task_type=Animation",
+		"action=remove_production_checker&project_id=simple-mutation-production&task_type=Animation",
+	} {
+		if post(action) {
+			t.Fatalf("obsolete manual Production membership action was still handled: %s", action)
 		}
 	}
-	post("action=add_production_user&project_id=simple-mutation-production&user_id=1")
-	post("action=add_production_user&project_id=simple-mutation-production&user_id=1")
-	if got := len(model.ListProjectUserMaps(db, p.ID)); got != 1 {
-		t.Fatalf("Production association count = %d, want 1", got)
-	}
-	post("action=save_production_checker&project_id=simple-mutation-production&user_id=1&task_type=Animation")
-	post("action=save_production_checker&project_id=simple-mutation-production&user_id=1&task_type=Animation")
-	if got := len(model.ListProjectCheckerMaps(db, p.ID)); got != 1 {
-		t.Fatalf("checker assignment count = %d, want 1", got)
-	}
-	post("action=remove_production_checker&project_id=simple-mutation-production&task_type=Animation")
-	if len(model.ListProjectUserMaps(db, p.ID)) != 1 || len(model.ListProjectCheckerMaps(db, p.ID)) != 0 {
-		t.Fatal("removing a role changed the Production association")
+	if len(model.ListProjectUserMaps(db, p.ID)) != 1 || len(model.ListProjectCheckerMaps(db, p.ID)) != 1 {
+		t.Fatal("removing the manual workflow changed preserved legacy membership or Reviewer rows")
 	}
 }
 
