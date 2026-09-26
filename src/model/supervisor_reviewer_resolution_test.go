@@ -222,6 +222,7 @@ func TestResolveProjectTaskTypeSupervisorDiscordIDs(t *testing.T) {
 			name:    "all supervisors unlinked returns empty result",
 			people:  []map[string]string{{"id": "p-1", "role": "supervisor"}},
 			details: map[string]map[string]any{"p-1": {"id": "p-1", "full_name": "Unlinked", "email": "unlinked@example.test", "role": "supervisor", "departments": []string{"dept-1"}}},
+			want:    []string{},
 		},
 		{
 			name:   "duplicate Discord targets are returned once",

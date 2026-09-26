@@ -74,7 +74,8 @@ func TestMigrateApplicationSchemaAddsNullableCheckerTaskTypeIDs(t *testing.T) {
 	}
 	legacySQL := []string{
 		`CREATE TABLE checker_maps (id integer primary key autoincrement, task_type text, kitsu_name text, kitsu_email text, discord_id text, override_discord_id text)`,
-		`CREATE TABLE project_checker_maps (id integer primary key autoincrement, project_id integer not null, task_type text not null, kitsu_name text, kitsu_email text, discord_user_id text, override_discord_id text, created_at datetime, CONSTRAINT idx_projcheckermap UNIQUE (project_id, task_type))`,
+		`CREATE TABLE "project_checker_maps" (id integer primary key autoincrement, project_id integer not null, task_type text not null, kitsu_name text, kitsu_email text, discord_user_id text, override_discord_id text, created_at datetime)`,
+		`CREATE UNIQUE INDEX idx_projcheckermap ON project_checker_maps(project_id, task_type)`,
 		`INSERT INTO checker_maps (task_type, kitsu_name, discord_id) VALUES ('Animation', 'Legacy', 'global-reviewer')`,
 		`INSERT INTO project_checker_maps (project_id, task_type, kitsu_name, override_discord_id) VALUES (1, 'Animation', 'Legacy', 'production-reviewer')`,
 	}
