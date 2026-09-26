@@ -44,6 +44,7 @@ func TestResolveReviewersForProjectPrecedence(t *testing.T) {
 		name            string
 		people          []map[string]string
 		details         map[string]map[string]any
+		projectTeam     []map[string]string
 		projectCheckers []ProjectCheckerMap
 		globalCheckers  []CheckerMap
 		globalMaps      []UserMap
@@ -62,14 +63,16 @@ func TestResolveReviewersForProjectPrecedence(t *testing.T) {
 			name:           "linked Supervisor precedes legacy global CheckerMap",
 			people:         []map[string]string{{"id": "p-1", "role": "supervisor"}},
 			details:        map[string]map[string]any{"p-1": {"id": "p-1", "full_name": "Sam One", "email": "sam@example.test", "role": "supervisor", "departments": []string{"dept-1"}}},
+			projectTeam:    []map[string]string{{"id": "p-1"}},
 			globalCheckers: []CheckerMap{{TaskType: "Animation", DiscordID: "legacy-reviewer"}},
 			globalMaps:     []UserMap{{KitsuID: "p-1", DiscordID: "supervisor-reviewer"}},
 			want:           []string{"supervisor-reviewer"},
 			wantKitsuReads: true,
 		},
 		{
-			name:   "multiple linked Supervisors are returned",
-			people: []map[string]string{{"id": "p-2", "role": "supervisor"}, {"id": "p-1", "role": "supervisor"}},
+			name:        "multiple linked Supervisors are returned",
+			people:      []map[string]string{{"id": "p-2", "role": "supervisor"}, {"id": "p-1", "role": "supervisor"}},
+			projectTeam: []map[string]string{{"id": "p-1"}, {"id": "p-2"}},
 			details: map[string]map[string]any{
 				"p-1": {"id": "p-1", "full_name": "One", "email": "one@example.test", "role": "supervisor", "departments": []string{"dept-1"}},
 				"p-2": {"id": "p-2", "full_name": "Two", "email": "two@example.test", "role": "supervisor", "departments": []string{"dept-1"}},
@@ -82,6 +85,13 @@ func TestResolveReviewersForProjectPrecedence(t *testing.T) {
 			name:           "unlinked Supervisors fall back to global CheckerMap",
 			people:         []map[string]string{{"id": "p-1", "role": "supervisor"}},
 			details:        map[string]map[string]any{"p-1": {"id": "p-1", "full_name": "Unlinked", "email": "unlinked@example.test", "role": "supervisor", "departments": []string{"dept-1"}}},
+			projectTeam:    []map[string]string{{"id": "p-1"}},
+			globalCheckers: []CheckerMap{{TaskType: "Animation", DiscordID: "legacy-reviewer"}},
+			want:           []string{"legacy-reviewer"},
+			wantKitsuReads: true,
+		},
+		{
+			name:           "empty Production team falls back to global CheckerMap",
 			globalCheckers: []CheckerMap{{TaskType: "Animation", DiscordID: "legacy-reviewer"}},
 			want:           []string{"legacy-reviewer"},
 			wantKitsuReads: true,
@@ -146,6 +156,8 @@ func TestResolveReviewersForProjectPrecedence(t *testing.T) {
 				switch r.URL.Path {
 				case "/api/data/projects/production-1/task-types":
 					_, _ = w.Write([]byte(`[{"id":"task-type-1","name":"Animation","department_id":"dept-1"}]`))
+				case "/api/data/projects/production-1/team":
+					_ = json.NewEncoder(w).Encode(tc.projectTeam)
 				case "/api/data/persons/":
 					_ = json.NewEncoder(w).Encode(tc.people)
 				default:
