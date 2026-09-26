@@ -40,10 +40,11 @@ for file in README.md docs/QUICK_START.md docs/SETUP_FOR_STUDIOS.md docs/TROUBLE
   fi
 done
 
-grep -Fq 'ENV_FILE=${CONTROL_DIR}/.env.local' "$wrapper"
-grep -Fq 'PROJECT_NAME=kitsusync' "$wrapper"
-grep -Fq -- '--project-name "${PROJECT_NAME}"' "$wrapper"
-grep -Fq 'APP_ENV: production' "$wrapper"
+core="$root/deploy/kitsusync-deploy-transaction"
+grep -Fq 'ENV_FILE=${CONTROL_DIR}/.env.local' "$core"
+grep -Fq 'PROJECT_NAME=kitsusync' "$core"
+grep -Fq -- '--project-name "${PROJECT_NAME}"' "$core"
+grep -Fq 'APP_ENV: production' "$core"
 grep -Fq 'APP_ENV=development' "$root/docker-compose.yml"
 if grep -Fq 'deploy/docker-compose.yml' "$root/.env.example"; then
   printf 'stale retired Compose reference remains in .env.example\n' >&2

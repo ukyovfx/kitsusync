@@ -3,6 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 wrapper="${root}/deploy/kitsusync-deploy"
+core="${root}/deploy/kitsusync-deploy-transaction"
 image="kitsusync:${KITSUSYNC_IMAGE_TAG:?KITSUSYNC_IMAGE_TAG is required}"
 suffix="$RANDOM-$$"
 network="ks-state-${suffix}"
@@ -29,7 +30,9 @@ trap cleanup EXIT
 
 expect_readiness() {
   local expected="$1" mode="$2" status="$3"
-  if KITSUSYNC_DEPLOY_TEST_MODE=readiness bash "${wrapper}" "${mode}" "${status}"; then
+  local selected_wrapper="${wrapper}"
+  [[ "${mode}" != preview ]] || selected_wrapper="${core}"
+  if KITSUSYNC_DEPLOY_TEST_MODE=readiness bash "${selected_wrapper}" "${mode}" "${status}"; then
     [[ "${expected}" == pass ]] || { printf 'readiness unexpectedly allowed %s:%s\n' "${mode}" "${status}" >&2; exit 1; }
   else
     [[ "${expected}" == fail ]] || { printf 'readiness unexpectedly rejected %s:%s\n' "${mode}" "${status}" >&2; exit 1; }
@@ -47,6 +50,9 @@ expect_readiness fail legacy-migration setup_required
 expect_readiness pass fresh-install setup_required
 expect_readiness fail fresh-install ready
 expect_readiness fail fresh-install degraded
+expect_readiness pass preview ready
+expect_readiness pass preview setup_required
+expect_readiness fail preview degraded
 
 expect_restored_readiness() {
   local expected="$1" prior_mode="$2" status="$3"

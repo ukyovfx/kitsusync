@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+for inherited_name in $(compgen -e); do
+  case "${inherited_name}" in DOCKER_*|COMPOSE_*) printf 'ERROR: inherited Docker/Compose control variables are not accepted\n' >&2; exit 1 ;; esac
+done
+
+preview_identity_allows() {
+  local expected="$1" kind="$2" source="$3" source_id="$4" release_commit="$5" release_tag="$6" image="$7" image_id="$8"
+  [[ "${expected}" =~ ^[0-9a-f]{40}$ && "${kind}" == candidate && "${source}" == "${expected}" && "${source_id}" == "${expected}" \
+    && -z "${release_commit}" && -z "${release_tag}" && "${image}" == "kitsusync:ci-${expected}" && "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]
+}
+
+if [[ "${KITSUSYNC_DEPLOY_TEST_MODE:-}" == preview-identity ]]; then
+  [[ "${EUID}" -ne 0 ]] || exit 1
+  preview_identity_allows "$@"
+  exit $?
+fi
+[[ "$#" -eq 2 && "$1" =~ ^[0-9a-f]{40}$ && "$2" == PREVIEW ]] || { printf 'ERROR: usage: kitsusync-preview-deploy <exact-source-sha> PREVIEW\n' >&2; exit 1; }
+if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
+  export KITSUSYNC_DEPLOY_POLICY=preview
+  exec /usr/bin/env bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/kitsusync-deploy-transaction" "$@"
+fi
+[[ "${EUID}" -eq 0 ]] || { printf 'ERROR: root execution required\n' >&2; exit 1; }
+[[ -d /etc/kitsusync-deploy && ! -L /etc/kitsusync-deploy && "$(/usr/bin/stat -c '%u:%g:%a' /etc/kitsusync-deploy)" == 0:0:700 ]] || { printf 'ERROR: trusted deployment directory is unsafe\n' >&2; exit 1; }
+provenance=/etc/kitsusync-deploy/provenance
+[[ -f "${provenance}" && ! -L "${provenance}" && "$(/usr/bin/stat -c '%u:%g:%a' "${provenance}")" == 0:0:600 ]] || { printf 'ERROR: trusted preview provenance is unsafe\n' >&2; exit 1; }
+field() { /usr/bin/sed -n "s/^$1=//p" "${provenance}" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r'; }
+expected="$1" kind="$(field artifact_kind)" source="$(field source_commit)" source_id="$(field source_id)" release_commit="$(field release_commit)" release_tag="$(field release_tag)" image="$(field image_ref)" image_id="$(field build_daemon_image_id)"
+preview_identity_allows "${expected}" "${kind}" "${source}" "${source_id}" "${release_commit}" "${release_tag}" "${image}" "${image_id}" || { printf 'ERROR: preview candidate source or image identity mismatch\n' >&2; exit 1; }
+export KITSUSYNC_DEPLOY_POLICY=preview KITSUSYNC_EXPECTED_SOURCE_SHA="${expected}"
+exec /usr/local/libexec/kitsusync-deploy-transaction "$1" "$2"

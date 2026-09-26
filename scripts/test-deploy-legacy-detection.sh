@@ -6,7 +6,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
 awk '/^resolve_legacy_prior_container\(\)/ { emit=1 } emit { print } emit && /^}$/ { exit }' \
-  "${ROOT}/deploy/kitsusync-deploy" >"${TMP}/detector.sh"
+  "${ROOT}/deploy/kitsusync-deploy-transaction" >"${TMP}/detector.sh"
 
 cat >"${TMP}/docker" <<'EOF'
 #!/bin/bash
@@ -78,7 +78,7 @@ run_case wrong-ready reject
 run_case plan-fail reject
 run_case validate-fail reject
 
-grep -Fq 'if [[ "${deployment_mode}" == legacy-migration ]]; then' "${ROOT}/deploy/kitsusync-deploy"
-grep -Fq 'duplicate retained service containers require operator preflight' "${ROOT}/deploy/kitsusync-deploy"
-grep -Fq 'service_ids' "${ROOT}/deploy/kitsusync-deploy"
+grep -Fq 'if [[ "${deployment_mode}" == legacy-migration ]]; then' "${ROOT}/deploy/kitsusync-deploy-transaction"
+grep -Fq 'duplicate retained service containers require operator preflight' "${ROOT}/deploy/kitsusync-deploy-transaction"
+grep -Fq 'service_ids' "${ROOT}/deploy/kitsusync-deploy-transaction"
 printf 'deploy-legacy-detector-contract=PASS\n'

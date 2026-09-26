@@ -129,6 +129,8 @@ jobs:
           python3 scripts/test-image-identity.py
           bash scripts/test-release-hardening.sh
           bash scripts/test-release-identity.sh
+          bash scripts/test-preview-deploy-contract.sh
+          bash scripts/test-staging-deployment-contract.sh
           bash scripts/test-production-path-contract.sh
           bash scripts/test-bootstrap-security.sh
           bash scripts/test-deploy-legacy-detection.sh
