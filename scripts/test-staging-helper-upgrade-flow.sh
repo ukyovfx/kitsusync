@@ -27,7 +27,7 @@ cat >"${helper_file}" <<'HELPER'
 set -euo pipefail
 [[ "$#" -eq 1 && "$1" == --contract-info ]]
 printf '%s\n' "$(stat -c '%a' "$0")" >> "$MODE_LOG"
-printf 'STAGING_HELPER_CONTRACT=staging-v6 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+printf 'STAGING_HELPER_CONTRACT=staging-v7 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
 HELPER
 cat >"${old_file}" <<'OLD_HELPER'
 #!/usr/bin/env bash
@@ -52,6 +52,7 @@ replacements = {
     '  41dec98c9e6e6f7165733212bb3518b1cb08bcb19a17fad047fd0c76ae5f7704': f'  {old_sha}',
     '  b43df984dd87321c4f9eb76478557b23db35cac8986b01ddd4b3af5a2353e5ae': f'  {old_sha}',
     '  4550cecbb12e83ca8647127624ec1062f5a11c63e37171015677efb8c2e88443': f'  {old_sha}',
+    '  eb0ec326c89c0414cceb15390e58c4a2195b4f9377cdbbc8b5e8fe2d38b0f77b': f'  {old_sha}',
     'id -u ukyo_vfx': f'printf {uid}',
     'id -u vfx-breakglass': f'printf {uid}',
     '0:0:700': f'{uid}:{gid}:700',

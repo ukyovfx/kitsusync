@@ -11,11 +11,11 @@ $assertAst = $ast.Find({ param($node) $node -is [System.Management.Automation.La
 if (-not $assertAst) { throw 'Routine staging helper contract gate is missing.' }
 . ([scriptblock]::Create($assertAst.Extent.Text))
 
-$healthy = 'STAGING_HELPER_CONTRACT=staging-v6 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+$healthy = 'STAGING_HELPER_CONTRACT=staging-v7 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
 Assert-RoutineStagingHelperContract 0 $healthy
 
 $outdatedFailedClosed = $false
-try { Assert-RoutineStagingHelperContract 0 ($healthy.Replace('staging-v6', 'staging-v5')) }
+try { Assert-RoutineStagingHelperContract 0 ($healthy.Replace('staging-v7', 'staging-v6')) }
 catch { $outdatedFailedClosed = $_.Exception.Message -like 'STAGING_BOOTSTRAP_REQUIRED*' }
 if (-not $outdatedFailedClosed) { throw 'Routine deploy accepted an outdated v3 helper contract.' }
 
