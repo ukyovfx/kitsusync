@@ -1,0 +1,491 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+readonly STAGE_ROOT=/var/lib/kitsusync-staging
+readonly CONFIG_ROOT=/etc/kitsusync-staging
+readonly COMPOSE_FILE=/etc/kitsusync-staging/compose.yml
+compose_files=(--file "$COMPOSE_FILE")
+
+deployment_started=0
+deployment_committed=0
+data_mount=
+sqlite_backup=
+rollback_staging() {
+  [[ "$deployment_started" -eq 1 && "$deployment_committed" -eq 0 ]] || return 0
+  local rollback_status=0
+  if [[ -n "${previous_sha:-}" ]]; then
+    printf 'KITSUSYNC_IMAGE_TAG=ci-%s\n' "$previous_sha" > "$compose_env"
+    docker compose --project-name "$PROJECT" --env-file "$compose_env" "${compose_files[@]}" stop app || rollback_status=1
+    [[ -n "$sqlite_backup" && -f "$sqlite_backup" && ! -L "$sqlite_backup" && -d "$data_mount" && ! -L "$data_mount" ]] || rollback_status=1
+    if [[ "$rollback_status" -eq 0 ]]; then
+      for suffix in -wal -shm; do
+        path="$data_mount/sqlite.db${suffix}"
+        if [[ -e "$path" || -L "$path" ]]; then
+          [[ -f "$path" && ! -L "$path" ]] || { rollback_status=1; break; }
+          rm -f -- "$path" || { rollback_status=1; break; }
+        fi
+      done
+    fi
+    if [[ "$rollback_status" -eq 0 ]]; then
+      install -o 10001 -g 10001 -m 0600 "$sqlite_backup" "$data_mount/sqlite.db.restore" || rollback_status=1
+      [[ "$rollback_status" -ne 0 ]] || mv -f "$data_mount/sqlite.db.restore" "$data_mount/sqlite.db" || rollback_status=1
+      if [[ -f "$PRIVATE/prior-runtime-secret" && ! -L "$PRIVATE/prior-runtime-secret" ]]; then
+        install -o 10001 -g 10001 -m 0600 "$PRIVATE/prior-runtime-secret" "$data_mount/runtime-secret.key.restore" || rollback_status=1
+        [[ "$rollback_status" -ne 0 ]] || mv -f "$data_mount/runtime-secret.key.restore" "$data_mount/runtime-secret.key" || rollback_status=1
+      elif [[ -f "$PRIVATE/prior-runtime-secret-absent" && ! -L "$PRIVATE/prior-runtime-secret-absent" ]]; then
+        if [[ -e "$data_mount/runtime-secret.key" || -L "$data_mount/runtime-secret.key" ]]; then
+          [[ -f "$data_mount/runtime-secret.key" && ! -L "$data_mount/runtime-secret.key" ]] || rollback_status=1
+          [[ "$rollback_status" -ne 0 ]] || rm -f -- "$data_mount/runtime-secret.key" || rollback_status=1
+        fi
+      else
+        rollback_status=1
+      fi
+      if [[ "$rollback_status" -eq 0 ]]; then
+        rm -f -- "$data_mount/sqlite.db-wal" "$data_mount/sqlite.db-shm" || rollback_status=1
+        [[ ! -e "$data_mount/sqlite.db-wal" && ! -e "$data_mount/sqlite.db-shm" ]] || rollback_status=1
+      fi
+      if [[ "$rollback_status" -eq 0 ]]; then
+        docker compose --project-name "$PROJECT" --env-file "$compose_env" "${compose_files[@]}" up -d --force-recreate || rollback_status=1
+      fi
+      if [[ "$rollback_status" -eq 0 ]]; then
+        rollback_container="$(docker ps --filter "label=com.docker.compose.project=${PROJECT}" --filter status=running -q)"
+        [[ -n "$rollback_container" && "$(printf '%s\n' "$rollback_container" | wc -l)" -eq 1 ]] || rollback_status=1
+        [[ "$rollback_status" -ne 0 || "$(docker inspect --format '{{.Config.Image}}' "$rollback_container")" == "kitsusync:ci-${previous_sha}" ]] || rollback_status=1
+        [[ "$rollback_status" -ne 0 || "$(docker port "$rollback_container" 8090/tcp)" == 127.0.0.1:8091 ]] || rollback_status=1
+        [[ "$rollback_status" -ne 0 ]] || verify_staging_network_attachment_count "$rollback_container" || rollback_status=1
+        [[ "$rollback_status" -ne 0 ]] || verify_staging_network_name "$rollback_container" || rollback_status=1
+        [[ "$rollback_status" -ne 0 ]] || verify_staging_network_membership "$rollback_container" || rollback_status=1
+      fi
+      if [[ "$rollback_status" -eq 0 ]]; then
+        if ! wait_staging_http health "$previous_sha" "$STAGE_ROOT/rollback-health.json" http://127.0.0.1:8091 30 1 ||
+           ! wait_staging_http ready "$previous_sha" "$STAGE_ROOT/rollback-ready.json" http://127.0.0.1:8091 30 1 ||
+           ! wait_staging_http admin-users "$previous_sha" "$STAGE_ROOT/rollback-admin-users.json" http://127.0.0.1:8091 30 1 ||
+           ! wait_staging_http admin-health "$previous_sha" "$STAGE_ROOT/rollback-admin-health.json" http://127.0.0.1:8091 30 1; then
+          rollback_status=1
+        fi
+      fi
+    fi
+    if [[ "$rollback_status" -eq 0 && -f "$PRIVATE/prior-current-source" && -f "$PRIVATE/prior-current-provenance" ]]; then
+      install -o root -g root -m 0600 "$PRIVATE/prior-current-source" "$STAGE_ROOT/current-source.restore" || rollback_status=1
+      install -o root -g root -m 0600 "$PRIVATE/prior-current-provenance" "$STAGE_ROOT/current-provenance.restore" || rollback_status=1
+      [[ "$rollback_status" -ne 0 ]] || mv -f "$STAGE_ROOT/current-provenance.restore" "$STAGE_ROOT/current-provenance.txt" || rollback_status=1
+      [[ "$rollback_status" -ne 0 ]] || mv -f "$STAGE_ROOT/current-source.restore" "$STAGE_ROOT/current-source" || rollback_status=1
+    fi
+    if [[ "$rollback_status" -eq 0 ]]; then verify_production_unchanged || rollback_status=1; fi
+    if [[ "$rollback_status" -eq 0 ]]; then printf 'STAGING_ROLLBACK=PREVIOUS_CANDIDATE_AND_DATA\n' >&2; return 0; fi
+  else
+    docker compose --project-name "$PROJECT" --env-file "$compose_env" "${compose_files[@]}" down || rollback_status=1
+    if docker volume inspect kitsusync-staging-data >/dev/null 2>&1 && [[ "$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' kitsusync-staging-data)" == "$PROJECT" ]]; then
+      docker volume rm kitsusync-staging-data >/dev/null || rollback_status=1
+    fi
+    rm -f "$STAGE_ROOT/current-source" "$STAGE_ROOT/current-provenance.txt" "$STAGE_ROOT/current-source.tmp" "$STAGE_ROOT/current-provenance.tmp"
+    if [[ "$rollback_status" -eq 0 ]]; then verify_production_unchanged || rollback_status=1; fi
+    if [[ "$rollback_status" -eq 0 ]]; then printf 'STAGING_ROLLBACK=FIRST_DEPLOY_REMOVED\n' >&2; return 0; fi
+  fi
+  printf 'STAGING_ROLLBACK=FAILED\n' >&2
+  return 1
+}
+die() { printf 'STAGING_DEPLOY_ERROR=%s\n' "$1" >&2; exit 1; }
+verify_production_unchanged() {
+  local observed
+  observed="$(docker ps -q --filter publish=8090 | sort)" || return 1
+  if [[ "$observed" == "$prod_before" ]]; then return 0; fi
+  printf 'PRODUCTION_RUNTIME=CHANGED expected_container_ids=%s observed_container_ids=%s\n' \
+    "${prod_before//[[:space:]]/,}" "${observed//[[:space:]]/,}" >&2
+  return 1
+}
+wait_staging_http() {
+  local endpoint="$1" expected_sha="$2" response_file="$3" base_url="$4" max_attempts="$5" retry_delay="$6"
+  local path http_code=000 curl_status=0 attempt valid=0
+  case "$endpoint" in
+    health) path=/health ;;
+    ready) path=/ready ;;
+    admin-users) path=/bot/admin/users ;;
+    admin-health) path=/bot/admin/health ;;
+    *) printf 'STAGING_HTTP_WAIT_FAILED endpoint=invalid attempts=0 last_http_code=000 last_curl_status=0\n' >&2; return 1 ;;
+  esac
+  [[ "$expected_sha" =~ ^[0-9a-f]{40}$ && "$max_attempts" =~ ^[1-9][0-9]*$ && "$max_attempts" -le 30 && "$retry_delay" =~ ^[0-9]+$ ]] || {
+    printf 'STAGING_HTTP_WAIT_FAILED endpoint=%s attempts=0 last_http_code=000 last_curl_status=0\n' "$endpoint" >&2
+    return 1
+  }
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    http_code=000
+    curl_status=0
+    if http_code="$(curl --silent --output "$response_file" --write-out '%{http_code}' --max-time 1 "${base_url}${path}" 2>/dev/null)"; then
+      [[ "$http_code" =~ ^[0-9]{3}$ ]] || http_code=000
+    else
+      curl_status=$?
+      [[ "$http_code" =~ ^[0-9]{3}$ ]] || http_code=000
+    fi
+    valid=0
+    case "$endpoint" in
+      health)
+        [[ "$http_code" == 200 ]] && grep -Fq '"status":"ok"' "$response_file" && valid=1
+        ;;
+      ready)
+        if { [[ "$http_code" == 200 ]] && grep -Fq '"status":"ready"' "$response_file"; } ||
+           { [[ "$http_code" == 503 ]] && grep -Fq '"status":"setup_required"' "$response_file"; }; then
+          grep -Fq '"base_commit":"'"$expected_sha"'"' "$response_file" &&
+            grep -Fq '"build_source_id":"'"$expected_sha"'"' "$response_file" && valid=1
+        fi
+        ;;
+      admin-users|admin-health)
+        [[ "$http_code" =~ ^(200|302|303|401|403)$ ]] && valid=1
+        ;;
+    esac
+    [[ "$valid" -eq 1 ]] && return 0
+    [[ "$attempt" -lt "$max_attempts" ]] && sleep "$retry_delay"
+  done
+  printf 'STAGING_HTTP_WAIT_FAILED endpoint=%s attempts=%s last_http_code=%s last_curl_status=%s\n' \
+    "$endpoint" "$max_attempts" "$http_code" "$curl_status" >&2
+  return 1
+}
+verify_staging_network_membership() {
+  local container_ref="$1" container_id container_ref_prefix container_id_prefix network_containers result classification observed_count observed_prefixes
+  local attempt max_attempts=15 attachment_json attachment_summary attachment_count attachment_networks
+  container_ref_prefix=invalid
+  [[ "$container_ref" =~ ^[0-9a-f]{12,64}$ ]] && container_ref_prefix="${container_ref:0:12}"
+  container_id="$(docker inspect --format '{{.Id}}' "$container_ref" 2>/dev/null)" || {
+    printf 'STAGING_NETWORK_MEMBERSHIP_DIAGNOSTIC result=container-inspect-error attempts=0 expected_container_id_prefix=%s observed_container_count=unavailable observed_container_id_prefixes=unavailable attachment_count=unavailable attachment_networks=unavailable\n' "$container_ref_prefix" >&2
+    return 1
+  }
+  container_id_prefix=invalid
+  [[ "$container_id" =~ ^[0-9a-f]{64}$ ]] && container_id_prefix="${container_id:0:12}"
+  if [[ "$container_id" != "$container_ref"* || "$container_id_prefix" == invalid ]]; then
+    printf 'STAGING_NETWORK_MEMBERSHIP_DIAGNOSTIC result=container-id-invalid attempts=0 expected_container_id_prefix=%s observed_container_count=unavailable observed_container_id_prefixes=%s attachment_count=unavailable attachment_networks=unavailable\n' "$container_ref_prefix" "$container_id_prefix" >&2
+    return 1
+  fi
+  observed_count=0
+  observed_prefixes=none
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    network_containers="$(docker network inspect --format '{{json .Containers}}' kitsusync-staging-network)" || {
+      classification=inspect-error
+      observed_count=unavailable
+      observed_prefixes=unavailable
+      break
+    }
+    result="$(printf '%s\n' "$network_containers" | python3 -c '
+import json, re, sys
+expected = sys.argv[1]
+try:
+    containers = json.load(sys.stdin) or {}
+except Exception:
+    print("invalid|invalid|malformed")
+    raise SystemExit(0)
+if not isinstance(containers, dict):
+    print("invalid|invalid|not-a-map")
+    raise SystemExit(0)
+ids = sorted(containers)
+prefixes = [key[:12] if isinstance(key, str) and re.fullmatch(r"[0-9a-f]{64}", key) else "invalid-id" for key in ids[:8]]
+shown = ",".join(prefixes) if prefixes else "none"
+if len(ids) == 1 and ids[0] == expected:
+    print("match|1|" + shown)
+elif not ids:
+    print("empty|0|none")
+else:
+    print("invalid|" + str(len(ids)) + "|" + shown + (",+more" if len(ids) > 8 else ""))
+' "$container_id")" || {
+      classification=parse-error
+      observed_count=invalid
+      observed_prefixes=invalid
+      break
+    }
+    IFS='|' read -r classification observed_count observed_prefixes <<<"$result"
+    case "$classification" in
+      match) return 0 ;;
+      invalid) break ;;
+      empty) ;;
+      *) classification=invalid; observed_count=invalid; observed_prefixes=invalid; break ;;
+    esac
+    [[ "$attempt" -lt "$max_attempts" ]] && sleep 1
+  done
+  [[ "$attempt" -le "$max_attempts" ]] || attempt="$max_attempts"
+  attachment_json="$(docker inspect --format '{{json .NetworkSettings.Networks}}' "$container_ref" 2>/dev/null || printf '{}')"
+  attachment_summary="$(printf '%s\n' "$attachment_json" | python3 -c '
+import json, re, sys
+try:
+    networks = json.load(sys.stdin)
+    if not isinstance(networks, dict): raise ValueError
+    names = sorted(name if isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name) else "invalid-name" for name in networks)
+    print(str(len(networks)) + "|" + ((",".join(names[:8]) or "none") + (",+more" if len(names) > 8 else "")))
+except Exception:
+    print("invalid|unavailable")
+')" || attachment_summary='invalid|unavailable'
+  IFS='|' read -r attachment_count attachment_networks <<<"$attachment_summary"
+  printf 'STAGING_NETWORK_MEMBERSHIP_DIAGNOSTIC result=%s attempts=%s expected_container_id_prefix=%s observed_container_count=%s observed_container_id_prefixes=%s attachment_count=%s attachment_networks=%s\n' \
+    "$classification" "$attempt" "$container_id_prefix" "$observed_count" "$observed_prefixes" "$attachment_count" "$attachment_networks" >&2
+  return 1
+}
+verify_staging_network_attachment_count() {
+  [[ "$(docker inspect --format '{{len .NetworkSettings.Networks}}' "$1")" == 1 ]]
+}
+verify_staging_network_name() {
+  docker inspect --format '{{json .NetworkSettings.Networks}}' "$1" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)'
+}
+if [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" == --contract-info ]]; then
+  printf 'STAGING_HELPER_CONTRACT=staging-v7 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+  exit 0
+fi
+[[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
+readonly SOURCE_SHA="$1"
+readonly INCOMING="/var/tmp/kitsusync-staging-candidate-${SOURCE_SHA}"
+readonly PRIVATE="${STAGE_ROOT}/incoming-${SOURCE_SHA}"
+readonly IMAGE_REF="kitsusync:ci-${SOURCE_SHA}"
+readonly PROJECT=kitsusync-staging
+readonly TRUSTED_IMAGE_IDENTITY_SHA256=7698731a4f4b30bca140b700b6716afee6a7dd35ce73f84e3bf11d6676372d0b
+readonly TRUSTED_SQLITE_BACKUP_SHA256=6554ca0c07e171b27f039db513d8a929c974fbea1ca0df4efb810081ae11b960
+
+verify_trusted_candidate_tool() {
+  local tool_path="$1" expected_sha256="$2" observed_sha256
+  observed_sha256="$(sha256sum "$tool_path" | cut -d' ' -f1)" || return 1
+  [[ "$observed_sha256" == "$expected_sha256" ]]
+}
+
+[[ -d "$STAGE_ROOT" && ! -L "$STAGE_ROOT" && "$(stat -c '%u:%g:%a' "$STAGE_ROOT")" == 0:0:700 ]] || die STAGING_ROOT_UNSAFE
+[[ -d "$CONFIG_ROOT" && ! -L "$CONFIG_ROOT" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT")" == 0:0:700 ]] || die STAGING_CONFIG_UNSAFE
+[[ -f "$CONFIG_ROOT/conf.toml" && ! -L "$CONFIG_ROOT/conf.toml" && "$(stat -c '%u:%g:%a' "$CONFIG_ROOT/conf.toml")" == 0:10001:440 ]] || die STAGING_CONFIG_FILE_UNSAFE
+exec 9>>"$STAGE_ROOT/deploy.lock"
+flock -w 1800 -x 9 || die STAGING_DEPLOY_LOCK_TIMEOUT
+incoming_owner_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"
+incoming_mode="$(stat -c '%a' "$INCOMING" 2>/dev/null || printf missing)"
+trusted_owner_uids="$(id -u ukyo_vfx),$(id -u vfx-breakglass)"
+if [[ ! -d "$INCOMING" || -L "$INCOMING" || ",$trusted_owner_uids," != *",$incoming_owner_uid,"* || "$incoming_mode" != 700 ]]; then
+  printf 'STAGING_DEPLOY_ERROR=CANDIDATE_DIRECTORY_UNSAFE observed_owner_uid=%s observed_mode=%s expected_owner_uids=%s expected_mode=700 expected_owner_class=ukyo_vfx,vfx-breakglass\n' \
+    "$incoming_owner_uid" "$incoming_mode" "$trusted_owner_uids" >&2
+  exit 1
+fi
+[[ ! -e "$PRIVATE" && ! -L "$PRIVATE" ]] || die CANDIDATE_ALREADY_IMPORTED
+
+prod_before="$(docker ps -q --filter publish=8090 | sort)"
+[[ -n "$prod_before" ]] || die PRODUCTION_RUNTIME_NOT_FOUND
+install -d -o root -g root -m 0700 "$PRIVATE"
+cleanup() { rm -rf -- "$PRIVATE"; }
+on_exit() {
+  status=$?; trap - EXIT
+  if [[ "$status" -ne 0 ]] && ! rollback_staging; then
+    failed_backup="$STAGE_ROOT/failed-rollback-${SOURCE_SHA}"
+    if [[ ! -e "$failed_backup" && ! -L "$failed_backup" ]]; then mv -f "$PRIVATE" "$failed_backup" || true; fi
+    printf 'STAGING_ROLLBACK_BACKUP=%s\n' "$failed_backup" >&2
+  fi
+  [[ ! -d "$PRIVATE" ]] || cleanup
+  exit "$status"
+}
+trap on_exit EXIT
+
+allowed=(deployment-mode docker-compose.yml kitsusync-bootstrap kitsusync-deploy kitsusync-image-identity kitsusync-image.tar kitsusync-inspect kitsusync-restore-state kitsusync-runtime-state kitsusync-sqlite-backup provenance.txt)
+python3 - "$INCOMING" "$PRIVATE" "${allowed[@]}" <<'PY' || die CANDIDATE_COPY_VALIDATION_FAILED
+import os, pwd, shutil, stat, sys
+
+incoming, private = sys.argv[1:3]
+required = set(sys.argv[3:])
+flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+try:
+    source_dir = os.open(incoming, flags)
+    destination_dir = os.open(private, flags)
+    source_stat = os.fstat(source_dir)
+    trusted_uids = {pwd.getpwnam(name).pw_uid for name in ("ukyo_vfx", "vfx-breakglass")}
+    if not stat.S_ISDIR(source_stat.st_mode) or source_stat.st_uid not in trusted_uids or stat.S_IMODE(source_stat.st_mode) != 0o700:
+        raise ValueError("candidate directory metadata rejected")
+    names = set(os.listdir(source_dir))
+    if names != required:
+        raise ValueError("candidate entries rejected")
+    for name in sorted(names):
+        fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=source_dir)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_uid != source_stat.st_uid or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) not in (0o600, 0o700):
+                raise ValueError("candidate file metadata rejected")
+            out = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=destination_dir)
+            try:
+                os.fchown(out, 0, 0)
+                os.fchmod(out, 0o600)
+                with os.fdopen(os.dup(fd), "rb") as src, os.fdopen(os.dup(out), "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                after = os.fstat(fd)
+                if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+                    raise ValueError("candidate changed while copying")
+            finally:
+                os.close(out)
+        finally:
+            os.close(fd)
+except Exception:
+    print("STAGING_DEPLOY_ERROR=CANDIDATE_COPY_VALIDATION_FAILED", file=sys.stderr)
+    sys.exit(1)
+finally:
+    for handle in (locals().get("source_dir"), locals().get("destination_dir")):
+        if handle is not None:
+            os.close(handle)
+PY
+
+field() { sed -n "s/^$1=//p" "$PRIVATE/provenance.txt" | head -n 1 | tr -d '\r'; }
+[[ "$(tr -d '\r\n' < "$PRIVATE/deployment-mode")" == normal ]] || die DEPLOYMENT_MODE_INVALID
+source="$(field source_commit)" source_id="$(field source_id)" kind="$(field artifact_kind)" release_commit="$(field release_commit)" release_tag="$(field release_tag)" image="$(field image_ref)"
+[[ "$source" == "$SOURCE_SHA" && "$source_id" == "$SOURCE_SHA" && "$kind" == candidate && -z "$release_commit" && -z "$release_tag" && "$image" == "$IMAGE_REF" ]] || die CANDIDATE_PROVENANCE_MISMATCH
+
+for pair in \
+  'kitsusync-image.tar:image_archive_sha256' 'docker-compose.yml:compose_sha256' \
+  'kitsusync-deploy:deployment_tool_sha256' 'kitsusync-inspect:inspection_tool_sha256' \
+  'kitsusync-sqlite-backup:sqlite_backup_tool_sha256' 'kitsusync-bootstrap:bootstrap_tool_sha256' \
+  'kitsusync-image-identity:image_identity_tool_sha256' 'kitsusync-runtime-state:runtime_state_tool_sha256' \
+  'kitsusync-restore-state:restore_state_tool_sha256'; do
+  file="${pair%%:*}" key="${pair#*:}" expected="$(field "$key")"
+  [[ "$expected" =~ ^[0-9a-f]{64}$ && "$(sha256sum "$PRIVATE/$file" | cut -d' ' -f1)" == "$expected" ]] || die ARTIFACT_FILE_DIGEST_MISMATCH
+done
+
+# These artifact-provided programs execute as root below. Provenance only proves
+# that the candidate supplied a file; pin the reviewed implementations so a
+# routine candidate cannot turn validation/backup into arbitrary root code.
+verify_trusted_candidate_tool "$PRIVATE/kitsusync-image-identity" "$TRUSTED_IMAGE_IDENTITY_SHA256" || die STAGING_TRUSTED_TOOL_MISMATCH
+verify_trusted_candidate_tool "$PRIVATE/kitsusync-sqlite-backup" "$TRUSTED_SQLITE_BACKUP_SHA256" || die STAGING_TRUSTED_TOOL_MISMATCH
+
+archive_sha="$(sha256sum "$PRIVATE/kitsusync-image.tar" | cut -d' ' -f1)"
+[[ "$archive_sha" == "$(field image_archive_sha256)" ]] || die IMAGE_ARCHIVE_DIGEST_MISMATCH
+archive_identity="$(python3 "$PRIVATE/kitsusync-image-identity" archive "$PRIVATE/kitsusync-image.tar" "$IMAGE_REF")" || die IMAGE_ARCHIVE_INVALID
+for key in image_config_digest image_manifest_digest image_content_digest; do value="$(printf '%s\n' "$archive_identity" | sed -n "s/^${key}=//p")"; [[ "$value" == "$(field "$key")" ]] || die IMAGE_ARCHIVE_IDENTITY_MISMATCH; done
+
+docker load --input "$PRIVATE/kitsusync-image.tar" >/dev/null || die IMAGE_LOAD_FAILED
+loaded_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")"
+[[ "$loaded_id" == "$(field image_config_digest)" || "$loaded_id" == "$(field image_manifest_digest)" ]] || die LOADED_IMAGE_ID_MISMATCH
+loaded_content="$(docker image inspect --format '{{json .}}' "$IMAGE_REF" | python3 "$PRIVATE/kitsusync-image-identity" inspect | sed -n 's/^image_content_digest=//p')"
+[[ "$loaded_content" == "$(field image_content_digest)" ]] || die LOADED_IMAGE_CONTENT_MISMATCH
+[[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_REF")" == "$SOURCE_SHA" ]] || die IMAGE_REVISION_MISMATCH
+[[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "$IMAGE_REF")" == "$SOURCE_SHA" ]] || die IMAGE_SOURCE_MISMATCH
+
+compose_env="$CONFIG_ROOT/compose.env"
+previous_sha=""
+if [[ -e "$STAGE_ROOT/current-source" || -L "$STAGE_ROOT/current-source" ]]; then
+  [[ -f "$STAGE_ROOT/current-source" && ! -L "$STAGE_ROOT/current-source" && "$(stat -c '%u:%g:%a' "$STAGE_ROOT/current-source")" == 0:0:600 ]] || die CURRENT_STAGING_SOURCE_INVALID
+  previous_sha="$(cat "$STAGE_ROOT/current-source")"
+fi
+if [[ -n "$previous_sha" ]]; then
+  [[ "$previous_sha" =~ ^[0-9a-f]{40}$ && "$(docker image inspect --format '{{.Id}}' "kitsusync:ci-${previous_sha}" 2>/dev/null || true)" != "" ]] || die PREVIOUS_STAGING_IMAGE_INVALID
+  [[ -f "$STAGE_ROOT/current-provenance.txt" && ! -L "$STAGE_ROOT/current-provenance.txt" && "$(stat -c '%u:%g:%a' "$STAGE_ROOT/current-provenance.txt")" == 0:0:600 ]] || die PREVIOUS_STAGING_PROVENANCE_INVALID
+  current_source="$(sed -n 's/^source_commit=//p' "$STAGE_ROOT/current-provenance.txt" | head -n 1 | tr -d '\r')"
+  [[ "$current_source" == "$previous_sha" ]] || die CURRENT_STAGING_PROVENANCE_MISMATCH
+  install -o root -g root -m 0600 "$STAGE_ROOT/current-source" "$PRIVATE/prior-current-source"
+  install -o root -g root -m 0600 "$STAGE_ROOT/current-provenance.txt" "$PRIVATE/prior-current-provenance"
+else
+  [[ ! -e "$STAGE_ROOT/current-provenance.txt" && ! -L "$STAGE_ROOT/current-provenance.txt" ]] || die ORPHAN_STAGING_PROVENANCE
+fi
+if docker volume inspect kitsusync-staging-data >/dev/null 2>&1; then
+  [[ -n "$previous_sha" && "$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' kitsusync-staging-data)" == "$PROJECT" && "$(docker volume inspect --format '{{index .Labels "com.docker.compose.volume"}}' kitsusync-staging-data)" == kitsusync_staging_data ]] || die STAGING_VOLUME_PREEXISTS
+else
+  [[ -z "$previous_sha" ]] || die STAGING_VOLUME_MISSING
+fi
+if docker network inspect kitsusync-staging-network >/dev/null 2>&1; then
+  [[ -n "$previous_sha" && "$(docker network inspect --format '{{index .Labels "com.docker.compose.project"}}' kitsusync-staging-network)" == "$PROJECT" && "$(docker network inspect --format '{{index .Labels "com.docker.compose.network"}}' kitsusync-staging-network)" == staging && "$(docker network inspect --format '{{.Internal}}' kitsusync-staging-network)" == false ]] || die STAGING_NETWORK_PREEXISTS
+else
+  [[ -z "$previous_sha" ]] || die STAGING_NETWORK_MISSING
+fi
+if [[ -n "$previous_sha" ]]; then
+  data_mount="$(docker volume inspect --format '{{.Mountpoint}}' kitsusync-staging-data)"
+  [[ "$data_mount" == /* && -d "$data_mount" && ! -L "$data_mount" ]] || die STAGING_DATA_MOUNT_INVALID
+  [[ -f "$data_mount/sqlite.db" && ! -L "$data_mount/sqlite.db" ]] || die STAGING_DATABASE_INVALID
+  sqlite_backup="$PRIVATE/prior-staging.sqlite"
+  python3 "$PRIVATE/kitsusync-sqlite-backup" "$data_mount/sqlite.db" "$sqlite_backup" >/dev/null || die STAGING_DATABASE_BACKUP_FAILED
+  if [[ -e "$data_mount/runtime-secret.key" || -L "$data_mount/runtime-secret.key" ]]; then
+    [[ -f "$data_mount/runtime-secret.key" && ! -L "$data_mount/runtime-secret.key" ]] || die STAGING_RUNTIME_SECRET_INVALID
+    install -o root -g root -m 0600 "$data_mount/runtime-secret.key" "$PRIVATE/prior-runtime-secret"
+  else
+    : > "$PRIVATE/prior-runtime-secret-absent"
+    chmod 0600 "$PRIVATE/prior-runtime-secret-absent"
+  fi
+fi
+[[ -f /etc/kitsusync-deploy/.env.local && ! -L /etc/kitsusync-deploy/.env.local && "$(stat -c '%u:%g:%a' /etc/kitsusync-deploy/.env.local)" == 0:0:600 ]] || die STAGING_KITSU_HOSTNAME_SOURCE_INVALID
+staging_kitsu_hostname="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 - /etc/kitsusync-deploy/.env.local <<'PY'
+import ipaddress, pathlib, sys
+from urllib.parse import urlsplit, urlunsplit
+try:
+    lines = [line.split("=", 1)[1].strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.startswith("KITSU_HOSTNAME=")]
+    if len(lines) != 1 or not lines[0] or any(ord(ch) < 33 or ch in "#$\\\"'" for ch in lines[0]):
+        raise ValueError
+    parsed = urlsplit(lines[0])
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError
+    host = parsed.hostname.lower()
+    if ":" in host:
+        host = "[" + ipaddress.IPv6Address(host).compressed + "]"
+    netloc = host + ((":" + str(parsed.port)) if parsed.port else "")
+    print(urlunsplit((parsed.scheme.lower(), netloc, parsed.path.rstrip("/") + "/", "", "")))
+except Exception:
+    print("STAGING_KITSU_HOSTNAME_SOURCE_INVALID", file=sys.stderr)
+    raise SystemExit(1)
+PY
+)" || die STAGING_KITSU_HOSTNAME_SOURCE_INVALID
+/usr/bin/python3 - "$PRIVATE/compose-override.yml" "$staging_kitsu_hostname" <<'PY' || die STAGING_KITSU_OVERRIDE_INVALID
+import json, os, sys
+path, hostname = sys.argv[1:3]
+with open(path, "x", encoding="utf-8") as output:
+    output.write("services:\n  app:\n    environment:\n      KITSU_HOSTNAME: " + json.dumps(hostname) + "\n")
+os.chmod(path, 0o600)
+PY
+[[ -f "$PRIVATE/compose-override.yml" && ! -L "$PRIVATE/compose-override.yml" && "$(stat -c '%u:%g:%a' "$PRIVATE/compose-override.yml")" == 0:0:600 ]] || die STAGING_KITSU_OVERRIDE_INVALID
+compose_files+=(--file "$PRIVATE/compose-override.yml")
+printf 'KITSUSYNC_IMAGE_TAG=ci-%s\n' "$SOURCE_SHA" > "$compose_env"
+chmod 0600 "$compose_env"
+docker compose --project-name "$PROJECT" --env-file "$compose_env" "${compose_files[@]}" config -q || die STAGING_COMPOSE_INVALID
+
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --user 10001:10001 --mount "type=bind,src=$CONFIG_ROOT/conf.toml,dst=/app/conf.toml,readonly" \
+  --entrypoint /bin/sh "$IMAGE_REF" -ec 'test -r /app/conf.toml' || die STAGING_CONFIG_RUNTIME_READ_INVALID
+
+deployment_started=1
+docker compose --project-name "$PROJECT" --env-file "$compose_env" "${compose_files[@]}" up -d --force-recreate || die COMPOSE_START_FAILED
+
+container="$(docker ps --filter "label=com.docker.compose.project=${PROJECT}" --filter status=running -q)"
+[[ -n "$container" && "$(printf '%s\n' "$container" | wc -l)" -eq 1 ]] || die STAGING_CONTAINER_COUNT_INVALID
+all_staging_containers="$(docker ps -a --filter "label=com.docker.compose.project=${PROJECT}" -q)"
+[[ "$(printf '%s\n' "$all_staging_containers" | wc -l)" -eq 1 && "$all_staging_containers" == "$container" ]] || die STAGING_CONTAINER_COUNT_INVALID
+[[ "$(docker inspect --format '{{.Config.Image}}' "$container")" == "$IMAGE_REF" ]] || die STAGING_RUNTIME_IMAGE_MISMATCH
+[[ "$(docker port "$container" 8090/tcp)" == 127.0.0.1:8091 ]] || die STAGING_BIND_INVALID
+[[ "$(docker network inspect --format '{{.Internal}}' kitsusync-staging-network)" == false ]] || die STAGING_NETWORK_EGRESS_UNAVAILABLE
+verify_staging_network_attachment_count "$container" || die STAGING_NETWORK_ATTACHMENT_COUNT_INVALID
+verify_staging_network_name "$container" || die STAGING_NETWORK_NAME_INVALID
+verify_staging_network_membership "$container" || die STAGING_NETWORK_MEMBERSHIP_INVALID
+docker inspect --format '{{json .Config.Env}}' "$container" | python3 -c '
+import json, sys
+env = dict(item.split("=", 1) for item in json.load(sys.stdin) if "=" in item)
+if env.get("KITSUSYNC_DISABLE_POLL") != "1" or env.get("APP_ENV") != "staging":
+    print("STAGING_RUNTIME_POLICY_INVALID", file=sys.stderr)
+    sys.exit(1)
+if env.get("KITSU_HOSTNAME") != sys.argv[1]:
+    print("STAGING_KITSU_HOSTNAME_RUNTIME_INVALID", file=sys.stderr)
+    sys.exit(1)
+for name in ("DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID", "DISCORD_WEBHOOK_URL"):
+    if env.get(name, "").strip():
+        print("STAGING_DISCORD_ENV_ISOLATION_INVALID", file=sys.stderr)
+        sys.exit(1)
+' "$staging_kitsu_hostname" || die STAGING_RUNTIME_ENVIRONMENT_INVALID
+docker inspect --format '{{json .Mounts}}' "$container" | python3 -c '
+import json, sys
+mounts = json.load(sys.stdin)
+expected = {
+    ("volume", "kitsusync-staging-data", "/app/data", True),
+    ("bind", "/etc/kitsusync-staging/conf.toml", "/app/conf.toml", False),
+}
+actual = {(m.get("Type"), m.get("Name") or m.get("Source"), m.get("Destination"), m.get("RW")) for m in mounts}
+if len(mounts) != 2 or actual != expected:
+    print("STAGING_MOUNT_ISOLATION_INVALID", file=sys.stderr)
+    sys.exit(1)
+' || die STAGING_MOUNT_ISOLATION_INVALID
+
+wait_staging_http health "$SOURCE_SHA" "$STAGE_ROOT/health.json" http://127.0.0.1:8091 30 1 || die STAGING_HEALTH_FAILED
+wait_staging_http ready "$SOURCE_SHA" "$STAGE_ROOT/ready.json" http://127.0.0.1:8091 30 1 || die STAGING_READINESS_FAILED
+if grep -Fq '"status":"setup_required"' "$STAGE_ROOT/ready.json"; then ready_code=503; else ready_code=200; fi
+wait_staging_http admin-users "$SOURCE_SHA" "$STAGE_ROOT/admin-users.json" http://127.0.0.1:8091 30 1 || die STAGING_ADMIN_USERS_FAILED
+wait_staging_http admin-health "$SOURCE_SHA" "$STAGE_ROOT/admin-health.json" http://127.0.0.1:8091 30 1 || die STAGING_ADMIN_HEALTH_FAILED
+
+verify_production_unchanged || die PRODUCTION_RUNTIME_CHANGED
+printf '%s\n' "$SOURCE_SHA" > "$STAGE_ROOT/current-source.tmp"
+chmod 0600 "$STAGE_ROOT/current-source.tmp"
+install -o root -g root -m 0600 "$PRIVATE/provenance.txt" "$STAGE_ROOT/current-provenance.tmp"
+mv -f "$STAGE_ROOT/current-provenance.tmp" "$STAGE_ROOT/current-provenance.txt"
+mv -f "$STAGE_ROOT/current-source.tmp" "$STAGE_ROOT/current-source"
+trap - ERR
+deployment_committed=1
+artifact_cleanup=RETAINED
+if [[ -d "$INCOMING" && ! -L "$INCOMING" ]] && rm -rf -- "$INCOMING"; then artifact_cleanup=REMOVED; fi
+printf 'STAGING_DEPLOY=PASS\nSTAGING_SOURCE_SHA=%s\nSTAGING_CONTAINER_COUNT=1\nSTAGING_BIND=127.0.0.1:8091\nSTAGING_HEALTH=200\nSTAGING_READY=%s\nSTAGING_ADMIN_USERS=PASS\nSTAGING_ADMIN_HEALTH=PASS\nSTAGING_KITSU_NETWORK=DEFAULT_EGRESS_AVAILABLE\nSTAGING_DISCORD=NO_PRODUCTION_CREDENTIALS_OR_STATE\nSTAGING_DATA_VOLUME=kitsusync-staging-data\nSTAGING_ARTIFACT_CLEANUP=%s\nPRODUCTION_RUNTIME=UNCHANGED\n' "$SOURCE_SHA" "$ready_code" "$artifact_cleanup"

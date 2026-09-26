@@ -129,10 +129,17 @@ jobs:
           python3 scripts/test-image-identity.py
           bash scripts/test-release-hardening.sh
           bash scripts/test-release-identity.sh
+          bash scripts/test-staging-deployment-contract.sh
+          python3 scripts/test-staging-kitsu-hostname-source.py
           bash scripts/test-production-path-contract.sh
           bash scripts/test-bootstrap-security.sh
           bash scripts/test-deploy-legacy-detection.sh
           bash scripts/test-fresh-install-contract.sh
+
+      - name: Staging Docker network metadata integration test
+        env:
+          STAGING_REQUIRE_DOCKER_FIXTURE: "1"
+        run: bash scripts/test-staging-network-membership.sh
 
       - name: Docker Compose build app
         env:
@@ -173,6 +180,12 @@ jobs:
           test "$version" = "$RELEASE_VERSION"
           IMAGE_ID="$image_id" bash scripts/generate-provenance.sh
           cat provenance.txt
+
+      - name: Staging actual application runtime permission E2E
+        env:
+          SOURCE_SHA: ${{ steps.identity.outputs.source_commit }}
+          KITSUSYNC_IMAGE_TAG: ci-${{ steps.identity.outputs.source_commit }}
+        run: bash scripts/test-staging-runtime-e2e.sh
 
       - name: Build and load-back deployment bundle
         env:

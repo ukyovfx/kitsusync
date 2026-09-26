@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+
+die() { printf 'STAGING_BOOTSTRAP_ERROR=%s\n' "$1" >&2; exit 1; }
+[[ "${EUID}" -eq 0 && "$#" -eq 4 && "$1" =~ ^[0-9a-f]{40}$ && "$2" =~ ^[0-9a-f]{64}$ && "$3" =~ ^[0-9a-f]{64}$ && "$4" =~ ^[0-9a-f]{64}$ ]] || die INVALID_ARGUMENT
+source_sha="$1" helper_sha="$2" compose_sha="$3" bootstrap_sha="$4"
+bundle="/var/tmp/kitsusync-staging-bootstrap-${source_sha}-v2"
+helper="${bundle}/kitsusync-staging-deploy"
+compose="${bundle}/kitsusync-staging-compose.yml"
+bootstrap="${bundle}/kitsusync-staging-bootstrap"
+[[ -d "$bundle" && ! -L "$bundle" && "$(stat -c '%a' "$bundle")" == 700 ]] || die CANDIDATE_DIRECTORY_UNSAFE
+[[ -f "$helper" && ! -L "$helper" && "$(sha256sum "$helper" | cut -d' ' -f1)" == "$helper_sha" ]] || die HELPER_CHECKSUM_MISMATCH
+[[ -f "$compose" && ! -L "$compose" && "$(sha256sum "$compose" | cut -d' ' -f1)" == "$compose_sha" ]] || die COMPOSE_CHECKSUM_MISMATCH
+[[ -f "$bootstrap" && ! -L "$bootstrap" && "$(sha256sum "$bootstrap" | cut -d' ' -f1)" == "$bootstrap_sha" ]] || die BOOTSTRAP_CHECKSUM_MISMATCH
+/bin/bash -n "$helper" && /bin/bash -n "$bootstrap" || die BASH_SYNTAX_INVALID
+[[ "$(sed -n '2p' "$helper")" == 'set -Eeuo pipefail' ]] || die HELPER_STRICT_MODE_INVALID
+! LC_ALL=C grep -q $'\r' "$helper" && ! LC_ALL=C grep -q $'\r' "$compose" && ! LC_ALL=C grep -q $'\r' "$bootstrap" || die CRLF_NOT_ALLOWED
+
+[[ ! -e /etc/kitsusync-staging && ! -L /etc/kitsusync-staging ]] || die CONFIG_ALREADY_EXISTS
+[[ ! -e /var/lib/kitsusync-staging && ! -L /var/lib/kitsusync-staging ]] || die DATA_ROOT_ALREADY_EXISTS
+[[ ! -e /usr/local/sbin/kitsusync-staging-deploy && ! -L /usr/local/sbin/kitsusync-staging-deploy ]] || die DEPLOY_HELPER_ALREADY_EXISTS
+[[ ! -e /etc/sudoers.d/kitsusync-staging-deploy && ! -L /etc/sudoers.d/kitsusync-staging-deploy ]] || die SUDOERS_ALREADY_EXISTS
+
+install -d -o root -g root -m 0700 /etc/kitsusync-staging /var/lib/kitsusync-staging
+install -o root -g root -m 0750 "$helper" /usr/local/sbin/kitsusync-staging-deploy
+install -o root -g root -m 0600 "$compose" /etc/kitsusync-staging/compose.yml
+cat > /etc/kitsusync-staging/conf.toml <<'CONFIG'
+[discord]
+embedsPerRequests = 10
+RequestsPerMinute = 50
+CONFIG
+chown root:10001 /etc/kitsusync-staging/conf.toml
+chmod 0440 /etc/kitsusync-staging/conf.toml
+[[ "$(sha256sum /usr/local/sbin/kitsusync-staging-deploy | cut -d' ' -f1)" == "$helper_sha" && "$(sha256sum /etc/kitsusync-staging/compose.yml | cut -d' ' -f1)" == "$compose_sha" && "$(stat -c '%u:%g:%a' /etc/kitsusync-staging/conf.toml)" == 0:10001:440 ]] || die INSTALLED_FILE_CHECKSUM_MISMATCH
+
+operator_uid="$(id -u ukyo_vfx)" || die OPERATOR_ACCOUNT_MISSING
+[[ "$operator_uid" -eq 1000 ]] || die OPERATOR_ACCOUNT_UNEXPECTED
+sudoers_tmp=/etc/sudoers.d/.kitsusync-staging-deploy.tmp
+[[ ! -e "$sudoers_tmp" && ! -L "$sudoers_tmp" ]] || die SUDOERS_TEMP_ALREADY_EXISTS
+printf 'ukyo_vfx ALL=(root) NOPASSWD: /usr/local/sbin/kitsusync-staging-deploy *\n' > "$sudoers_tmp"
+chown root:root "$sudoers_tmp"
+chmod 0440 "$sudoers_tmp"
+visudo -cf "$sudoers_tmp" >/dev/null || die SUDOERS_SYNTAX_INVALID
+mv "$sudoers_tmp" /etc/sudoers.d/kitsusync-staging-deploy
+visudo -cf /etc/sudoers >/dev/null || die SUDOERS_POLICY_INVALID
+
+printf 'STAGING_BOOTSTRAP_PRIVILEGE=PASS\nSTAGING_DEPLOY_HELPER=INSTALLED\nSTAGING_SUDOERS=EXACT_HELPER_ONLY\nSTAGING_COMPOSE=ISOLATED\nSTAGING_OUTBOUND=POLL_DISABLED\n'
+/usr/local/sbin/kitsusync-staging-deploy "$source_sha"
