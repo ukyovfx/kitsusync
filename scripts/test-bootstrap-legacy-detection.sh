@@ -68,5 +68,5 @@ run_case invalid-image reject
 run_case wrong-ready reject
 
 grep -Fq 'if [[ "${mode}" == legacy-migration ]]; then' "${ROOT}/deploy/kitsusync-bootstrap"
-grep -Fq 'duplicate retained service containers require operator preflight' "${ROOT}/deploy/kitsusync-deploy"
+grep -Fq 'duplicate retained service containers require operator preflight' "${ROOT}/deploy/kitsusync-deploy-transaction"
 echo 'bootstrap legacy detector contract: PASS'

@@ -66,6 +66,9 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] A genuine Kitsu lookup failure is distinct from a successful zero-user result; neither state renders blocked Discord mapping controls.
 - [ ] A genuine Discord lookup failure is distinct from zero joined servers and from a selected server with zero selectable human members.
 - [ ] The Discord server selector appears only when joined guild data is meaningful; multiple joined servers wait for an explicit selection before mapping rows appear.
+- [ ] The selector is compact. With multiple servers and none selected, the page has no mapping table and no bottom divider below the selector.
+- [ ] After server selection, exactly one separator appears before the mapping table; selected-server context stays in the selector instead of a separate redundant row.
+- [ ] Select, status, Save, and Unlink controls align intentionally, use clear button styling, and remain mobile-safe.
 - [ ] Ready state shows exactly four mapping columns: Kitsu user, Discord user, state, and action. Real display names are used and raw Discord IDs are not visible as identity text.
 - [ ] Save starts disabled and becomes actionable only after the Discord selection changes; existing mappings show their linked state and Unlink action, and save/unlink persist across refresh.
 - [ ] Kitsu Bot and Discord bot identities are excluded from normal human linking.
@@ -90,34 +93,39 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] Kitsu and Discord API cards have equal peer widths/heights and equal graph plot regions.
 - [ ] Graph outer containers and plotting regions have equal widths and heights.
 - [ ] Graph x positions use observation timestamps; sparse observations do not stretch to fill the sample count.
-- [ ] Both graphs use independent zero-based stepped ceilings, exactly three readable Y ticks outside the plot, shared timestamp positioning, metadata slots, and fixed 60s/5m geometry.
-- [ ] Each service plot uses x=34 through x=464 in the 466×104 viewBox, with midpoint x=233; the Y tick column is outside the plot and the browser-measured right gap is at most 6px.
+- [ ] Both graphs are lines, use independent zero-based stepped ceilings, exactly three readable Y ticks, timestamp-positioned observations, and fixed 60s/5m geometry.
+- [ ] Successful observations connect as green line segments; failed observations break the line without bottom-row X markers or latency values.
+- [ ] Each service plot uses x=54 through x=484 in the 496×104 viewBox, with midpoint x=269; Y-axis labels remain fully visible and the browser-measured right gap is at most 6px.
 - [ ] Browser measurement, not viewBox ratio alone, proves the rendered baseline/grid leaves at most 6px on each side of the SVG and the graph surface has no unnecessary side padding or Y-axis gutter.
 - [ ] Computed System Status typography uses the compact operational hierarchy: 28px page title, 20px major titles, 16px card titles, 24px response values, 14px body/helper, 13px metadata, and 12px chart labels.
-- [ ] Exact chart labels are language-independent `60s`, `30s`, `0s` and `5m`, `2.5m`, `0s`.
+- [ ] Exact chart labels are JP `60秒`, `30秒`, `今` and `5分`, `2分30秒`, `今`; EN `60s`, `30s`, `Now` and `5m`, `2m30s`, `Now`.
 - [ ] Both graphs show exactly three Y ticks at the same positions: maximum, midpoint, and 0, with an optional subtle midpoint guide.
-- [ ] Both graphs use the same x-label positions: 60s uses `60s`, `30s`, `0s`; 5m uses `5m`, `2.5m`, `0s`.
+- [ ] Both graphs use matching x-label positions for the selected range and current time.
 - [ ] Kitsu and Discord each use independent zero-based Y scales so low Kitsu latency remains visibly readable; exact current values remain the cross-service comparison.
 - [ ] The current response-time value is visually primary and readable above the graph.
 - [ ] The 60s / 5m selector changes the visible window without full-page reload or URL navigation.
-- [ ] API graphs use chronological bars, green for success, red for failure, and explain response time in ms.
+- [ ] API graphs use chronological lines, green for success, red for failure, and explain response time in ms.
 - [ ] Kitsu and Discord receive real read-only observations; unavailable data is not fabricated.
 - [ ] The auto-refresh indicator remains visible while snapshot updates occur without overlapping requests.
 - [ ] A transient refresh failure is visibly recoverable on the next refresh without a full-page reload.
-- [ ] Expandable operational details work and contain materially useful, secret-safe data.
+- [ ] Useful processing-row diagnostics appear in compact disclosures beneath the left-side summary; status badges and primary actions remain outside disclosures.
+- [ ] The response value or failure state sits directly below the API title; `Last updated` is right-aligned on the same row as secondary metadata.
+- [ ] Status badges and real actions align in a right-side rail; `New Production Connection` does not float in the content center.
+- [ ] Kitsu/Discord issues link to `/bot/admin/bot`; no Production links to `/bot/setup`; routing links to `/bot/admin/projects` or the affected Production `?tab=notifications`; event/runtime failures link to `/bot/admin/audit`.
+- [ ] Healthy rows and internal-data rows have no unnecessary action; no diagnostic anchor actions or placeholder buttons appear.
 - [ ] Recent system issues are omitted when there are no issues.
 - [ ] A non-ready readiness state exposes one compact section-level next action: Kitsu setup → Connection settings, Discord Bot setup → Discord Bot settings, Production required → New Production Connection, and Routing required → notification settings/Productions. Readiness actions are not repeated on every operational row.
-- [ ] Event runtime failures may expose one independent safe Recent issues/diagnostics action; waiting for a first observation has concise guidance without a misleading action.
+- [ ] Event/runtime failures link to Audit Log only when an actual failure is recorded; waiting for a first observation has concise guidance without a misleading action.
 - [ ] JP and EN status labels and explanatory text are semantically equivalent.
 - [ ] Console errors/warnings are zero, major GET requests succeed, and page-level horizontal overflow is absent.
 ## Final System Status observability checks
 
 - [ ] Each API card shows the current value, health badge, and one local `Last updated` line only; no normal-card `15 / 20` count or duplicate selected-window sentence is visible.
-- [ ] Every real bar has a native tooltip and keyboard-reachable accessible name containing only its local timestamp, measured duration for success, and the localized success/failure status.
-- [ ] Failure tooltips say `Request failed` / the Japanese equivalent and do not fabricate a duration.
+- [ ] Every successful line point has a native tooltip and keyboard-reachable accessible name containing only its local timestamp, measured duration, and localized success status.
+- [ ] Failed observations break the graph line and never fabricate a duration or add X marks along the graph baseline; the main API response state says `Request failed` / the Japanese equivalent when the latest observation failed.
 - [ ] API snapshot timestamps are UTC RFC3339 and displayed in the viewer's IANA timezone; changing language does not change the timezone, and Audit Log times show the timezone context.
-- [ ] Chart labels are exactly `60s / 30s / 0s` and `5m / 2.5m / 0s` in both JP and EN.
-- [ ] The browser confirms the bars remain timestamp-positioned, full-width, zero-based, independently scaled, orthogonal, and auto-refreshed without a page reload.
+- [ ] Chart labels use the documented JP/EN values for `60s` and `5m` in both initial render and refresh.
+- [ ] The browser confirms the line graph remains timestamp-positioned, full-width, zero-based, independently scaled, orthogonal, and auto-refreshed without a page reload.
 - [ ] No telemetry tooltip, HTML attribute, log, or API response exposes credentials, authorization headers, response bodies, URLs containing secrets, or internal IDs.
 
 ## Current Production detail integration checks

@@ -16,6 +16,8 @@ mkdir -m 0700 "${output}"
 
 install -m 0600 "${compose_source}" "${output}/docker-compose.yml"
 install -m 0600 "${root}/deploy/kitsusync-deploy" "${output}/kitsusync-deploy"
+install -m 0600 "${root}/deploy/kitsusync-preview-deploy" "${output}/kitsusync-preview-deploy"
+install -m 0600 "${root}/deploy/kitsusync-deploy-transaction" "${output}/kitsusync-deploy-transaction"
 install -m 0600 "${root}/deploy/kitsusync-inspect" "${output}/kitsusync-inspect"
 install -m 0600 "${root}/deploy/kitsusync-sqlite-backup" "${output}/kitsusync-sqlite-backup"
 install -m 0600 "${root}/deploy/kitsusync-bootstrap" "${output}/kitsusync-bootstrap"
@@ -46,6 +48,8 @@ chmod 0600 "${output}/kitsusync-image.tar"
 archive_sha="$(sha256sum "${output}/kitsusync-image.tar" | cut -d' ' -f1)"
 compose_sha="$(sha256sum "${output}/docker-compose.yml" | cut -d' ' -f1)"
 deploy_sha="$(sha256sum "${output}/kitsusync-deploy" | cut -d' ' -f1)"
+preview_sha="$(sha256sum "${output}/kitsusync-preview-deploy" | cut -d' ' -f1)"
+core_sha="$(sha256sum "${output}/kitsusync-deploy-transaction" | cut -d' ' -f1)"
 inspect_sha="$(sha256sum "${output}/kitsusync-inspect" | cut -d' ' -f1)"
 backup_sha="$(sha256sum "${output}/kitsusync-sqlite-backup" | cut -d' ' -f1)"
 bootstrap_sha="$(sha256sum "${output}/kitsusync-bootstrap" | cut -d' ' -f1)"
@@ -60,6 +64,7 @@ image_content_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_c
 
 IMAGE_ARCHIVE_SHA256="${archive_sha}" COMPOSE_SHA256="${compose_sha}" \
 DEPLOYMENT_TOOL_SHA256="${deploy_sha}" INSPECTION_TOOL_SHA256="${inspect_sha}" \
+PREVIEW_DEPLOYMENT_TOOL_SHA256="${preview_sha}" DEPLOYMENT_CORE_SHA256="${core_sha}" \
 SQLITE_BACKUP_TOOL_SHA256="${backup_sha}" BOOTSTRAP_TOOL_SHA256="${bootstrap_sha}" IMAGE_IDENTITY_TOOL_SHA256="${identity_sha}" \
 RUNTIME_STATE_TOOL_SHA256="${runtime_state_sha}" RESTORE_STATE_TOOL_SHA256="${restore_state_sha}" \
 FRESH_CONF_SHA256="${fresh_conf_sha}" FRESH_ENV_SHA256="${fresh_env_sha}" \

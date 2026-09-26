@@ -14,6 +14,8 @@ image_manifest_digest="${IMAGE_MANIFEST_DIGEST:-}"
 image_content_digest="${IMAGE_CONTENT_DIGEST:-}"
 compose_sha="${COMPOSE_SHA256:-}"
 deploy_sha="${DEPLOYMENT_TOOL_SHA256:-}"
+preview_deploy_sha="${PREVIEW_DEPLOYMENT_TOOL_SHA256:-}"
+deployment_core_sha="${DEPLOYMENT_CORE_SHA256:-}"
 inspect_sha="${INSPECTION_TOOL_SHA256:-}"
 backup_sha="${SQLITE_BACKUP_TOOL_SHA256:-}"
 bootstrap_sha="${BOOTSTRAP_TOOL_SHA256:-}"
@@ -42,7 +44,7 @@ fi
 if [[ -n "${archive_sha}${image_config_digest}${image_manifest_digest}${image_content_digest}${compose_sha}${deploy_sha}${inspect_sha}${backup_sha}${bootstrap_sha}${identity_sha}${image_ref}" ]]; then
   [[ "${image_ref}" =~ ^kitsusync:(v?[a-zA-Z0-9][a-zA-Z0-9._-]{0,127})$ ]] || { printf 'invalid image reference\n' >&2; exit 1; }
   [[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'invalid portable image identity\n' >&2; exit 1; }
-  for digest in "${archive_sha}" "${compose_sha}" "${deploy_sha}" "${inspect_sha}" "${backup_sha}" "${bootstrap_sha}" "${identity_sha}" "${runtime_state_sha}" "${restore_state_sha}"; do
+  for digest in "${archive_sha}" "${compose_sha}" "${deploy_sha}" "${preview_deploy_sha}" "${deployment_core_sha}" "${inspect_sha}" "${backup_sha}" "${bootstrap_sha}" "${identity_sha}" "${runtime_state_sha}" "${restore_state_sha}"; do
     [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || { printf 'invalid bundle digest\n' >&2; exit 1; }
   done
 fi
@@ -70,6 +72,8 @@ fi
   printf 'image_content_digest=%s\n' "${image_content_digest}"
   printf 'compose_sha256=%s\n' "${compose_sha}"
   printf 'deployment_tool_sha256=%s\n' "${deploy_sha}"
+  printf 'preview_deployment_tool_sha256=%s\n' "${preview_deploy_sha}"
+  printf 'deployment_core_sha256=%s\n' "${deployment_core_sha}"
   printf 'inspection_tool_sha256=%s\n' "${inspect_sha}"
   printf 'sqlite_backup_tool_sha256=%s\n' "${backup_sha}"
   printf 'bootstrap_tool_sha256=%s\n' "${bootstrap_sha}"

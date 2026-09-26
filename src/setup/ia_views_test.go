@@ -64,25 +64,20 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesCompactHealthySummaryAndSelectiveDiagnostics(t *testing.T) {
-	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl></dl>", detailsLabel: "Observation diagnostics"}
+func TestSystemStatusKeepsOperationalRowsCompactWithSecondaryDiagnostics(t *testing.T) {
+	item := pipelineHealthItem{label: "Event monitoring", value: "Running", class: "success", details: "<dl><dd>extra info</dd></dl>", detailsLabel: "Observation diagnostics"}
 	rendered := renderPipelineHealthItem("en", item, 0)
-	if strings.Contains(rendered, `class="field-help"`) {
-		t.Fatal("healthy operational row should not repeat a redundant explanation")
-	}
 	if !strings.Contains(rendered, `class="pipeline-health-item"`) || !strings.Contains(rendered, `class="status-badge`) {
 		t.Fatal("operational row lost its compact structure")
 	}
-	for _, want := range []string{`<details class="pipeline-health-details">`, `<summary>Observation diagnostics</summary>`, `class="pipeline-health-details-content"`} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("operational row missing geometry/detail contract %q", want)
-		}
+	if !strings.Contains(rendered, `<details class="pipeline-health-diagnostic"><summary>Observation diagnostics</summary><div class="pipeline-health-diagnostic-content"><dl><dd>extra info</dd></dl></div></details>`) {
+		t.Fatal("useful diagnostics should be available in a compact secondary disclosure")
 	}
-	if strings.Contains(rendered, `>Details<`) || strings.Contains(rendered, `pipeline-health-details-toggle`) || strings.Contains(rendered, `aria-expanded`) {
-		t.Fatal("operational row should not expose a generic Details control")
+	if !strings.Contains(rendered, `class="pipeline-health-rail"`) {
+		t.Fatal("operational row status is missing its right-side rail")
 	}
-	if noDetails := renderPipelineHealthItem("en", pipelineHealthItem{label: "Healthy", value: "Ready", class: "success"}, 0); strings.Contains(noDetails, "pipeline-health-details") {
-		t.Fatal("operational row without useful diagnostics exposed a disclosure")
+	if strings.Index(rendered, `<summary>`) > strings.Index(rendered, `class="pipeline-health-rail"`) {
+		t.Fatal("diagnostics should remain on the left, separate from the right-side status/action rail")
 	}
 
 	readiness := SharedBotRuntimeReadiness{KitsuConfigured: true, DiscordConfigured: true}
@@ -1403,10 +1398,20 @@ func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
 	renderIAHealth(w, r, db)
 	body := w.Body.String()
-	for _, want := range []string{"System", "Not configured", "Discord API", "Notification processing", "Internal data"} {
+	for _, want := range []string{"System Status", "Discord API", "Notification processing", "Unavailable", "Configure the Kitsu connection before continuing.", `href="/bot/admin/bot?lang=en"`, "Internal data"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("system status missing %q", want)
 		}
+	}
+	stats := Stats.Snapshot()
+	for _, service := range []string{"kitsu", "discord"} {
+		status := apiObservationStatus("en", stats, service)
+		if !strings.Contains(body, `data-telemetry-status>`+status+`</span>`) {
+			t.Errorf("%s API status does not match its recorded observation state %q", service, status)
+		}
+	}
+	if strings.Contains(body, `class="system-overall-summary"`) {
+		t.Fatal("system status should distinguish missing readiness prerequisites from an unobserved API response")
 	}
 	w = httptest.NewRecorder()
 	renderIABot(w, r, db)
@@ -1511,23 +1516,13 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 	}
 }
 
-func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
+func TestSystemStatusUsesOnlyRealStateActions(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
-	setup := SharedBotRuntimeReadiness{State: ReadinessSetupRequired}
-	setupAction := pipelineReadinessNextAction("en", r, setup)
-	if !strings.Contains(setupAction, "Kitsu setup is required") || !strings.Contains(setupAction, "Configure Kitsu connection") || !strings.Contains(setupAction, `href="/bot/admin/bot?lang=en"`) {
-		t.Fatalf("Kitsu section action = %q", setupAction)
-	}
-	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, setup); got != "Configure the Kitsu connection before continuing." {
-		t.Fatalf("Kitsu setup blocker = %q", got)
-	}
-	if got := pipelineNotificationHint("en", setup); got != "Configure the Kitsu connection before continuing." {
-		t.Fatalf("notification setup blocker = %q", got)
+	setup := readinessViewFor("en", r, SharedBotRuntimeReadiness{State: ReadinessSetupRequired})
+	if setup.ActionURL != "/bot/admin/bot?lang=en" || setup.ActionLabel != "Configure Kitsu connection" {
+		t.Fatalf("Kitsu setup action = %#v", setup)
 	}
 	production := SharedBotRuntimeReadiness{State: ReadinessProductionRequired, KitsuConfigured: true, DiscordConfigured: true, PrerequisitesReady: true}
-	if got := pipelineReadinessNextAction("en", r, production); !strings.Contains(got, "No connected and notifiable Production is available.") || !strings.Contains(got, "New Production Connection") {
-		t.Fatalf("Production section action = %q", got)
-	}
 	if got := pipelineRoutingHint("en", production); got != "No Production is currently available for notifications." {
 		t.Fatalf("Production blocker = %q", got)
 	}
@@ -1536,21 +1531,33 @@ func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
 		t.Fatalf("Production action = %#v", view)
 	}
 	routing := SharedBotRuntimeReadiness{State: ReadinessRoutingRequired, KitsuConfigured: true, DiscordConfigured: true, ProductionConnected: true, PrerequisitesReady: true}
-	if got := pipelineReadinessNextAction("en", r, routing); !strings.Contains(got, "Notification routing needs attention.") || !strings.Contains(got, "Review notification settings") {
-		t.Fatalf("routing section action = %q", got)
-	}
 	if got := pipelineRoutingHint("en", routing); got != "A Production exists, but its notification routing is missing or invalid." {
 		t.Fatalf("routing blocker = %q", got)
 	}
+	for _, tc := range []struct {
+		name string
+		item pipelineHealthItem
+		want string
+	}{
+		{name: "production setup", item: pipelineHealthItem{label: "Notification processing", value: "Unavailable", class: "blocked", action: view.ActionURL, actionLabel: view.ActionLabel}, want: `href="/bot/setup?lang=en"`},
+		{name: "audit log", item: pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", action: "/bot/admin/audit", actionLabel: "Review audit log"}, want: `href="/bot/admin/audit"`},
+		{name: "healthy row", item: pipelineHealthItem{label: "Internal data", value: "Available", class: "success"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rendered := renderPipelineHealthItem("en", tc.item, 0)
+			if tc.want != "" && !strings.Contains(rendered, tc.want) {
+				t.Fatalf("real action missing %q: %s", tc.want, rendered)
+			}
+			if strings.Contains(rendered, `href="#`) || strings.Contains(rendered, `data-open-pipeline-details`) || strings.Contains(rendered, "diagnostic") {
+				t.Fatalf("normal status row contains a placeholder or diagnostic action: %s", rendered)
+			}
+			if tc.name == "healthy row" && strings.Contains(rendered, `pipeline-health-action`) {
+				t.Fatalf("healthy row has an unnecessary action: %s", rendered)
+			}
+		})
+	}
 	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "Waiting for the first observation." {
 		t.Fatalf("first-observation guidance = %q", got)
-	}
-	if got := pipelineReadinessNextAction("en", r, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "" {
-		t.Fatalf("ready section should not expose a next action: %q", got)
-	}
-	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", details: "<p>safe</p>", detailsLabel: "Observation diagnostics", detailsID: "pipeline-event-monitoring", action: "#pipeline-event-monitoring", actionLabel: "Review observation diagnostics"}, 0)
-	if !strings.Contains(rendered, `data-open-pipeline-details="pipeline-event-monitoring"`) {
-		t.Fatal("diagnostic action did not target its selective disclosure")
 	}
 }
 
@@ -1673,14 +1680,14 @@ func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *tes
 func TestStatusPolishUsesRealSparkline(t *testing.T) {
 	items := []APIObservation{{At: time.Now().Add(-30 * time.Second), Duration: 10 * time.Millisecond, Success: true}, {At: time.Now().Add(-5 * time.Second), Duration: 20 * time.Millisecond, Success: false}}
 	graph := apiObservationGraph(items)
-	if !strings.Contains(graph, `class="telemetry-bar success"`) || !strings.Contains(graph, `class="telemetry-bar failure"`) || !strings.Contains(graph, `viewBox="0 0 466 104"`) {
-		t.Fatal("bar graph did not reflect the recorded observations")
+	if !strings.Contains(graph, `class="telemetry-point success"`) || strings.Contains(graph, `class="telemetry-failure"`) || !strings.Contains(graph, `viewBox="0 0 496 104"`) {
+		t.Fatal("line graph omitted successes or rendered noisy failure marks")
 	}
-	if strings.Contains(apiObservationGraph(nil), "telemetry-bar") {
+	if strings.Contains(apiObservationGraph(nil), "telemetry-point") {
 		t.Fatal("empty telemetry should not render a fake graph")
 	}
 	if !strings.Contains(apiObservationGraph([]APIObservation{{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}), `tabindex="0"`) {
-		t.Fatal("a single telemetry sample should render an accessible bar")
+		t.Fatal("a single telemetry sample should render an accessible point")
 	}
 }
 
@@ -1787,16 +1794,20 @@ func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
 	}
 }
 
-func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
+func TestSystemStatusShowsCompactDiagnosticsAndRefreshesSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
 	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
 	body := w.Body.String()
-	if strings.Count(body, `<details class="pipeline-health-details">`) < 3 || strings.Contains(body, `class="pipeline-health-details-toggle"`) || strings.Contains(body, `>Details<`) {
-		t.Fatalf("system status operational details are not selectively disclosed")
+	if !strings.Contains(body, `pipeline-health-diagnostic`) || !strings.Contains(body, `Observation diagnostics`) || !strings.Contains(body, `Notification diagnostics`) || !strings.Contains(body, `Connection and routing diagnostics`) {
+		t.Fatalf("System Status omitted useful compact diagnostic disclosures")
 	}
-	if strings.Contains(body, "Internal data diagnostics") || strings.Contains(body, "内部データ診断") {
-		t.Fatal("system status exposed a datastore-only diagnostic disclosure")
+	ja := httptest.NewRecorder()
+	renderIAHealth(ja, httptest.NewRequest("GET", "/bot/admin/health?lang=ja", nil), db)
+	for _, label := range []string{"観測診断", "通知診断", "接続・ルーティング診断"} {
+		if !strings.Contains(ja.Body.String(), label) {
+			t.Errorf("Japanese System Status omitted compact diagnostic %q", label)
+		}
 	}
 	if !strings.Contains(body, `data-system-status-refresh`) {
 		t.Fatal("system status does not include the bounded snapshot refresh marker")
@@ -1804,19 +1815,19 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `window.setInterval(refresh,interval)`) {
 		t.Fatal("system status does not include the bounded snapshot interval")
 	}
-	if !strings.Contains(body, `Date.parse(item.at)`) || !strings.Contains(body, `telemetry-bar`) {
-		t.Fatal("system status graph does not use timestamp-positioned bars")
+	if !strings.Contains(body, `Date.parse(item.at)`) || !strings.Contains(body, `telemetry-line`) || strings.Contains(body, `telemetry-bar`) {
+		t.Fatal("system status graph does not use timestamp-positioned line observations")
 	}
 	if !strings.Contains(body, `function scale(items)`) || !strings.Contains(body, `upper=scale(items)`) {
 		t.Fatal("system status refresh does not apply independent zero-based Y scales")
 	}
-	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2.5m`) {
+	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2m30s`) {
 		t.Fatal("system status refresh is missing canonical time-axis labels")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")
 	}
-	if !strings.Contains(body, `.system-status-sections .api-observation-meta,.system-status-sections .pipeline-detail-list{font-size:13px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
+	if !strings.Contains(body, `.system-status-sections .api-observation-meta{font-size:13px}`) || !strings.Contains(body, `.system-status-sections .api-sparkline .chart-tick,.system-status-sections .api-sparkline .chart-time-label{font-size:12px}`) {
 		t.Fatal("system status text sizing rules are missing")
 	}
 	refreshStart := strings.Index(body, `<script data-system-status-refresh>`)
@@ -1826,8 +1837,8 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 			refreshScript = body[refreshStart : refreshStart+refreshEnd]
 		}
 	}
-	if strings.Contains(refreshScript, `class='chart-axis'`) || strings.Contains(refreshScript, `class="chart-axis"`) || strings.Contains(refreshScript, `telemetry-line`) {
-		t.Fatal("system status refresh retains obsolete line/axis chrome")
+	if strings.Contains(refreshScript, `class='chart-axis'`) || strings.Contains(refreshScript, `class="chart-axis"`) || !strings.Contains(refreshScript, `telemetry-line`) {
+		t.Fatal("system status refresh is missing line graph rendering")
 	}
 	if !strings.Contains(body, `class="api-observation-details"`) {
 		t.Fatal("system status cards do not reserve shared detail geometry")
@@ -1841,15 +1852,41 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `data-telemetry-meta`) || !strings.Contains(body, `Last updated`) {
 		t.Fatal("normal API card is missing the last-updated metadata")
 	}
+	if strings.Contains(body, `Current response time`) || strings.Contains(body, `現在の応答時間`) || strings.Contains(body, `telemetry-failure`) {
+		t.Fatal("System Status retained the removed response label or failure X markers")
+	}
+	if !strings.Contains(body, `pipeline-health-diagnostic`) || !strings.Contains(body, `.pipeline-health-rail{grid-area:rail;display:flex;flex-direction:column`) {
+		t.Fatal("processing rows lost concise disclosures or their vertically structured right rail")
+	}
 }
 
-func TestSystemStatusUsesContextualDiagnosticsLabels(t *testing.T) {
-	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Configured", class: "success", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
-	if strings.Contains(rendered, "pipeline-health-details-toggle") || strings.Contains(rendered, "aria-controls") || strings.Contains(rendered, ">Details<") {
-		t.Fatal("system status should not use a generic Details control")
+func TestPreviewSystemStatusHTMLMatchesCurrentDOMContract(t *testing.T) {
+	body, err := RenderPreviewSystemStatusHTML(newIAViewDB(t))
+	if err != nil {
+		t.Fatalf("render preview System Status HTML: %v", err)
 	}
-	if !strings.Contains(rendered, "Connection and routing diagnostics") {
-		t.Fatal("system status omitted the contextual diagnostics label")
+	for _, required := range []string{"telemetry-line", "api-observation-latency"} {
+		if !strings.Contains(body, required) {
+			t.Errorf("preview System Status HTML is missing %q", required)
+		}
+	}
+	for _, obsolete := range []string{"telemetry-bar", "data-open-pipeline-details"} {
+		if strings.Contains(body, obsolete) {
+			t.Errorf("preview System Status HTML contains obsolete DOM marker %q", obsolete)
+		}
+	}
+}
+
+func TestSystemStatusUsesRealRoutingActionInRightRail(t *testing.T) {
+	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Routing", value: "Needs review", class: "warning", explanation: "Routing needs attention.", action: "/bot/admin/projects", actionLabel: "Review Productions", details: "<dl></dl>", detailsLabel: "Connection and routing diagnostics"}, 0)
+	if !strings.Contains(rendered, `<details class="pipeline-health-diagnostic"><summary>Connection and routing diagnostics</summary><div class="pipeline-health-diagnostic-content"><dl></dl></div></details>`) {
+		t.Fatal("system status should retain useful expandable diagnostic details")
+	}
+	badge := strings.Index(rendered, `class="pipeline-health-rail"><span class="status-badge`)
+	action := strings.Index(rendered, `class="btn-ghost pipeline-health-action"`)
+	disclosureEnd := strings.Index(rendered, `</details>`)
+	if !strings.Contains(rendered, `class="pipeline-health-rail"`) || !strings.Contains(rendered, `href="/bot/admin/projects"`) || badge < 0 || action <= badge || action < disclosureEnd {
+		t.Fatal("status and its real destination are not aligned in the right rail")
 	}
 }
 

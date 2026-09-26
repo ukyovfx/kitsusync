@@ -7,7 +7,8 @@ set -euo pipefail
 # the runtime wrapper enforces before it recreates KitsuSync.
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-wrapper="$root/deploy/kitsusync-deploy"
+wrapper="$root/deploy/kitsusync-deploy-transaction"
+release_entry="$root/deploy/kitsusync-deploy"
 dockerfile="$root/Dockerfile"
 compose="$root/docker-compose.yml"
 
@@ -28,6 +29,9 @@ reject() {
 }
 
 bash -n "$wrapper"
+bash -n "$release_entry"
+require 'KITSUSYNC_DEPLOY_POLICY=release' "$release_entry"
+require 'exec /usr/local/libexec/kitsusync-deploy-transaction' "$release_entry"
 
 # F05: an HTTP response alone is not a deployment success. Setup/recovery and
 # authenticated admin entry points must remain available or correctly protected.
@@ -70,8 +74,8 @@ require 'kitsu.runtime_token_encrypted' "$root/docs/SETUP_WIZARD.md"
 # plus matching OCI labels; a tag by itself is deliberately insufficient.
 require 'build_daemon_image_id' "$wrapper"
 require 'provenance' "$wrapper"
-require 'artifact_kind' "$wrapper"
-require 'release_commit' "$wrapper"
+require 'artifact_kind' "$release_entry"
+require 'release_commit' "$release_entry"
 require 'loaded image content identity does not match approved provenance' "$wrapper"
 require 'image revision label mismatch' "$wrapper"
 require 'image_archive_sha256' "$wrapper"
@@ -82,6 +86,7 @@ require 'image_identity_tool_sha256' "$wrapper"
 require 'archive_image_id_allows' "$wrapper"
 require 'compose_sha256' "$wrapper"
 require 'deployment_tool_sha256' "$wrapper"
+require 'deployment_core_sha256' "$wrapper"
 require 'org.opencontainers.image.revision' "$dockerfile"
 require 'org.opencontainers.image.source-id' "$dockerfile"
 require 'org.opencontainers.image.version' "$dockerfile"
