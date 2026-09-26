@@ -150,22 +150,25 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 		name         string
 		taskTypes    string
 		persons      string
+		projectTeam  string
 		detailStatus int
 		details      map[string]string
 		wantIDs      []string
 		wantErr      bool
 	}{
 		{
-			name:      "one matching supervisor",
-			taskTypes: `[{"id":"tt-1","name":"Animation","department_id":"dept-1"}]`,
-			persons:   `[{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor"}]`,
-			details:   map[string]string{"p-1": `{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
-			wantIDs:   []string{"p-1"},
+			name:        "Production team and Department eligibility does not use task assignments",
+			taskTypes:   `[{"id":"tt-1","name":"Animation","department_id":"dept-1"}]`,
+			persons:     `[{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor"}]`,
+			projectTeam: `[{"id":"p-1"}]`,
+			details:     map[string]string{"p-1": `{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
+			wantIDs:     []string{"p-1"},
 		},
 		{
-			name:      "multiple matching supervisors are ordered by ID",
-			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:   `[{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"supervisor"},{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"supervisor"}]`,
+			name:        "multiple matching supervisors are ordered by ID",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:     `[{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"supervisor"},{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"supervisor"}]`,
+			projectTeam: `[{"id":"p-z"},{"id":"p-a"}]`,
 			details: map[string]string{
 				"p-z": `{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"supervisor","departments":["dept-1"]}`,
 				"p-a": `{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"supervisor","departments":["dept-1"]}`,
@@ -173,15 +176,24 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 			wantIDs: []string{"p-a", "p-z"},
 		},
 		{
-			name:      "supervisor in another department is excluded",
-			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:   `[{"id":"p-1","role":"supervisor"}]`,
-			details:   map[string]string{"p-1": `{"id":"p-1","role":"supervisor","departments":["dept-2"]}`},
+			name:        "matching department supervisor outside Production team is excluded",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:     `[{"id":"p-1","role":"supervisor"}]`,
+			projectTeam: `[{"id":"p-2"}]`,
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
 		},
 		{
-			name:      "non-supervisor in matching department is excluded",
-			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:   `[{"id":"p-1","role":"user"}]`,
+			name:        "supervisor in another department is excluded",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:     `[{"id":"p-1","role":"supervisor"}]`,
+			projectTeam: `[{"id":"p-1"}]`,
+			details:     map[string]string{"p-1": `{"id":"p-1","role":"supervisor","departments":["dept-2"]}`},
+		},
+		{
+			name:        "non-supervisor in matching department is excluded",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:     `[{"id":"p-1","role":"user"}]`,
+			projectTeam: `[{"id":"p-1"}]`,
 		},
 		{
 			name:      "task type without department fails closed",
@@ -199,15 +211,23 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 			name:         "person detail failure fails closed",
 			taskTypes:    `[{"id":"tt-1","department_id":"dept-1"}]`,
 			persons:      `[{"id":"p-1","role":"supervisor"}]`,
+			projectTeam:  `[{"id":"p-1"}]`,
 			detailStatus: http.StatusForbidden,
 			wantErr:      true,
 		},
 		{
-			name:      "duplicate person IDs are fetched and returned once",
-			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:   `[{"id":"p-1","role":"supervisor"},{"id":"p-1","role":"supervisor"}]`,
-			details:   map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
-			wantIDs:   []string{"p-1"},
+			name:        "duplicate person IDs are fetched and returned once",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:     `[{"id":"p-1","role":"supervisor"},{"id":"p-1","role":"supervisor"}]`,
+			projectTeam: `[{"id":"p-1"}]`,
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
+			wantIDs:     []string{"p-1"},
+		},
+		{
+			name:        "empty Production team has no automatic Supervisors",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:     `[{"id":"p-1","role":"supervisor"}]`,
+			projectTeam: `[]`,
 		},
 	}
 
@@ -225,6 +245,8 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 				switch r.URL.Path {
 				case "/api/data/projects/project-1/task-types":
 					_, _ = w.Write([]byte(tc.taskTypes))
+				case "/api/data/projects/project-1/team":
+					_, _ = w.Write([]byte(tc.projectTeam))
 				case "/api/data/persons/":
 					_, _ = w.Write([]byte(tc.persons))
 				default:

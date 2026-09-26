@@ -423,6 +423,19 @@ func GetProjectTeam(projectID string) []Person {
 	return response
 }
 
+// GetProjectTeamWithCredentialsAndError reads one Production's team using the
+// caller's validated runtime endpoint and credential.
+func GetProjectTeamWithCredentialsAndError(baseURL, token, projectID string) ([]Person, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errors.New("Kitsu Production ID is required")
+	}
+	var response []Person
+	path := kitsuBaseFor(baseURL) + "api/data/projects/" + url.PathEscape(projectID) + "/team"
+	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response)
+	return response, err
+}
+
 func GetProjects() Projects {
 	response, _ := GetProjectsWithError()
 	return response
@@ -518,6 +531,20 @@ func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, tas
 		return nil, fmt.Errorf("Kitsu Task Type ID %q has no Department ID", taskTypeID)
 	}
 
+	team, err := GetProjectTeamWithCredentialsAndError(baseURL, token, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("read Kitsu Production team: %w", err)
+	}
+	teamIDs := make(map[string]struct{}, len(team))
+	for _, person := range team {
+		if id := strings.TrimSpace(person.ID); id != "" {
+			teamIDs[id] = struct{}{}
+		}
+	}
+	if len(teamIDs) == 0 {
+		return []Person{}, nil
+	}
+
 	people, err := GetPersonsWithCredentials(baseURL, token)
 	if err != nil {
 		return nil, fmt.Errorf("read Kitsu people: %w", err)
@@ -530,6 +557,9 @@ func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, tas
 		personID := strings.TrimSpace(person.ID)
 		if personID == "" {
 			return nil, errors.New("Kitsu Supervisor record has no person ID")
+		}
+		if _, isProductionMember := teamIDs[personID]; !isProductionMember {
+			continue
 		}
 		candidateIDs[personID] = struct{}{}
 	}
