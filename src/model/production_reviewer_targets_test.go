@@ -95,7 +95,7 @@ func TestProjectReviewerTargetsAreAdditiveScopedAndResettable(t *testing.T) {
 	}
 }
 
-func TestExplicitReviewerTargetsOverrideLegacyAndRejectStaleUsers(t *testing.T) {
+func TestExplicitReviewerTargetsOverrideLegacyAndRequireGlobalUserLink(t *testing.T) {
 	db := reviewerTargetTestDB(t)
 	project := Project{KitsuProjectID: "reviewer-resolution"}
 	if err := db.Create(&project).Error; err != nil {
@@ -107,6 +107,10 @@ func TestExplicitReviewerTargetsOverrideLegacyAndRejectStaleUsers(t *testing.T) 
 	}
 	user := ProjectUserMap{ProjectID: project.ID, KitsuName: "Linked", DiscordUserID: "123456789012345679"}
 	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	globalUser := UserMap{KitsuID: "person-linked", KitsuName: "Linked", DiscordID: user.DiscordUserID}
+	if err := db.Create(&globalUser).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", ReviewerTargetUser, user.DiscordUserID); err != nil {
@@ -123,12 +127,12 @@ func TestExplicitReviewerTargetsOverrideLegacyAndRejectStaleUsers(t *testing.T) 
 	if targets[0].TargetKind != ReviewerTargetRole || targets[1].DiscordID != user.DiscordUserID {
 		t.Fatalf("explicit targets are not deterministic: %+v", targets)
 	}
-	if err := db.Delete(&user).Error; err != nil {
+	if err := db.Delete(&globalUser).Error; err != nil {
 		t.Fatal(err)
 	}
 	targets, explicit, err = ResolveReviewerTargetsForProjectWithSupervisors(db, "", "", project.KitsuProjectID, "task-comp", "Compositing")
 	if !explicit || err != nil || len(targets) != 1 || targets[0].TargetKind != ReviewerTargetRole {
-		t.Fatalf("stale User target was not skipped while preserving the valid Role: targets=%+v explicit=%v err=%v", targets, explicit, err)
+		t.Fatalf("unlinked User target was not skipped while preserving the valid Role: targets=%+v explicit=%v err=%v", targets, explicit, err)
 	}
 	if err := db.Where("project_id = ? AND target_kind = ?", project.ID, ReviewerTargetRole).Delete(&ProjectReviewerTarget{}).Error; err != nil {
 		t.Fatal(err)

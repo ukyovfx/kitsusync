@@ -39,6 +39,30 @@ func configureSupervisorResolutionTestOrigin(t *testing.T, baseURL string) {
 	}
 }
 
+func TestProductionTeamIdentityPrefersGlobalStableKitsuIDThenLegacyMappings(t *testing.T) {
+	db := newSupervisorResolutionTestDB(t)
+	project := Project{KitsuProjectID: "team-identity"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&UserMap{KitsuID: "person-1", KitsuEmail: "person@example.test", KitsuName: "Person", DiscordID: "global-id"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ProjectUserMap{ProjectID: project.ID, KitsuEmail: "person@example.test", KitsuName: "Person", DiscordUserID: "legacy-project-email"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := GetUserMapForProjectWithIdentity(db, project.KitsuProjectID, "person-1", "Person", "person@example.test"); got != "global-id" {
+		t.Fatalf("stable global Kitsu identity resolved %q, want global-id", got)
+	}
+
+	if err := db.Where("kitsu_id = ?", "person-1").Delete(&UserMap{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := GetUserMapForProjectWithIdentity(db, project.KitsuProjectID, "person-1", "Person", "person@example.test"); got != "legacy-project-email" {
+		t.Fatalf("legacy project mapping resolved %q, want legacy-project-email", got)
+	}
+}
+
 func TestResolveReviewersForProjectPrecedence(t *testing.T) {
 	tests := []struct {
 		name            string

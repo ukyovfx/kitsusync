@@ -1362,10 +1362,28 @@ func GetUserMapForProject(db *gorm.DB, kitsuProjectID, kitsuName, kitsuEmail str
 }
 
 // GetUserMapForProjectWithIdentity resolves a Kitsu user to a Discord ID.
-// It only reads mapping rows. Production email mappings retain precedence; the
-// global Kitsu person ID is checked before name-based fallbacks.
+// Global User Linking uses stable Kitsu identity first; legacy project-scoped
+// mappings remain a read-only fallback for older installations.
 func GetUserMapForProjectWithIdentity(db *gorm.DB, kitsuProjectID, kitsuPersonID, kitsuName, kitsuEmail string) string {
 	project := FindProjectByKitsuID(db, kitsuProjectID)
+	if kitsuPersonID != "" {
+		var user UserMap
+		if err := db.Where("kitsu_id = ?", kitsuPersonID).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
+	if kitsuEmail != "" {
+		var user UserMap
+		if err := db.Where("kitsu_email = ?", kitsuEmail).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
+	if kitsuName != "" {
+		var user UserMap
+		if err := db.Where("kitsu_name = ?", kitsuName).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
 	if project != nil {
 		var row ProjectUserMap
 		if kitsuEmail != "" {
@@ -1373,28 +1391,8 @@ func GetUserMapForProjectWithIdentity(db *gorm.DB, kitsuProjectID, kitsuPersonID
 				return row.DiscordUserID
 			}
 		}
-	}
-	if kitsuPersonID != "" {
-		var user UserMap
-		if err := db.Where("kitsu_id = ?", kitsuPersonID).First(&user).Error; err == nil {
-			return user.DiscordID
-		}
-	}
-	if project != nil {
-		var row ProjectUserMap
 		if err := db.Where("project_id = ? AND kitsu_name = ?", project.ID, kitsuName).First(&row).Error; err == nil {
 			return row.DiscordUserID
-		}
-	}
-	var user UserMap
-	if kitsuEmail != "" {
-		if err := db.Where("kitsu_email = ?", kitsuEmail).First(&user).Error; err == nil {
-			return user.DiscordID
-		}
-	}
-	if kitsuName != "" {
-		if err := db.Where("kitsu_name = ?", kitsuName).First(&user).Error; err == nil {
-			return user.DiscordID
 		}
 	}
 	return ""

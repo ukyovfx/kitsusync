@@ -121,7 +121,7 @@ func ResolveProjectReviewerTargets(db *gorm.DB, projectID uint, taskTypeID strin
 		}
 		if row.TargetKind == ReviewerTargetUser {
 			var associations int64
-			if err := db.Model(&ProjectUserMap{}).Where("project_id = ? AND discord_user_id = ?", projectID, strings.TrimSpace(row.DiscordID)).Count(&associations).Error; err != nil {
+			if err := db.Model(&UserMap{}).Where("discord_id = ?", strings.TrimSpace(row.DiscordID)).Count(&associations).Error; err != nil {
 				return nil, true, err
 			}
 			if associations == 0 {
