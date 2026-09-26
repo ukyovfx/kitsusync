@@ -1931,7 +1931,7 @@ func TestCurrentProductionUsersSimpleFlowUsesAssignedBeforeRoles(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Production Team", "Reviewer", "Kitsu Supervisor (Automatic)"} {
+	for _, want := range []string{"Production Team", "Reviewer", "Automatic"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
@@ -2087,8 +2087,8 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 	})
 
 	for _, tc := range []struct{ lang, wantSource, wantUser, wantUserLabel, wantRole string }{
-		{"ja", "Kitsu Supervisor（自動）", "ユーザーを追加", "Kitsu Production Team内のDiscordユーザー", "ロールを追加"},
-		{"en", "Kitsu Supervisor (Automatic)", "Add user", "Linked Discord users in the Kitsu Production Team", "Add role"},
+		{"ja", "自動", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
+		{"en", "Automatic", "Add user", "Discord user", "Add role"},
 	} {
 		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
 		body := renderCurrentProductionUserSettings(db, request, project, tc.lang, "bot-token")
@@ -2097,12 +2097,103 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 				t.Fatalf("%s Reviewer UI missing %q", tc.lang, want)
 			}
 		}
+		if !strings.Contains(body, "Overrides") || !strings.Contains(body, "None") {
+			t.Fatalf("%s Reviewer UI must state that no override exists", tc.lang)
+		}
 		if strings.Contains(body, `value="123456789012345678"`) || strings.Contains(body, `value="123456789012345681"`) || strings.Contains(body, `value="123456789012345682"`) || strings.Contains(body, "unlinked-person") {
 			t.Fatalf("%s Reviewer UI exposed @everyone, a non-mentionable role, a non-Team user, or an unlinked ID", tc.lang)
 		}
 		if strings.Contains(body, "save_production_checker") {
 			t.Fatalf("%s Reviewer UI still exposes the single-target legacy form", tc.lang)
 		}
+	}
+}
+
+func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "supervisor-summary", Name: "Supervisor Summary", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "comp-supervisor", KitsuName: "Ukyo Matsuo", KitsuEmail: "ukyo@example.test", DiscordID: "123456789012345679", DiscordDisplayName: "ukyo"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTasks, oldRoles, oldTeam, oldSupervisors := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerDepartmentSupervisorsForTeam
+	taskReads, teamReads := 0, 0
+	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
+		taskReads++
+		return []kitsu.TaskType{
+			{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"},
+			{ID: "task-roto", Name: "Roto", DepartmentID: "dept-comp", DepartmentName: "Compositing"},
+			{ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"},
+		}
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		teamReads++
+		return []kitsu.Person{
+			{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Email: "ukyo@example.test", Role: "supervisor", Departments: []string{"dept-comp"}},
+			{ID: "animation-supervisor", FullName: "Animation Supervisor", Role: "supervisor", Departments: []string{"dept-anim"}},
+			{ID: "comp-artist", FullName: "Comp Artist", Role: "artist", Departments: []string{"dept-comp"}},
+			{ID: "unknown-supervisor", FullName: "Unknown Supervisor", Role: "supervisor", Departments: []string{"dept-unknown"}},
+		}, nil
+	}
+	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) { return nil, nil }
+	reviewerDepartmentSupervisorsForTeam = func(_, _, departmentID string, team []kitsu.Person) ([]kitsu.Person, error) {
+		if departmentID != "dept-comp" || len(team) == 0 {
+			return nil, nil
+		}
+		return []kitsu.Person{{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Role: "supervisor"}}, nil
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerDepartmentSupervisorsForTeam = oldTasks, oldRoles, oldTeam, oldSupervisors
+	})
+
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en")
+	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo", "Supervisor", "Comp", "Roto", "Comp Supervisor", "Automatic", "Overrides", "None", "Linked"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Production Users UI missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "task-anim") || strings.Contains(body, "Unknown Supervisor") || taskReads != 1 || teamReads != 1 {
+		t.Fatalf("Production Users summary guessed unrelated metadata or repeated reads: taskReads=%d teamReads=%d body=%s", taskReads, teamReads, body)
+	}
+	for _, stale := range []string{"Explicit targets replace automatic Supervisors", "Linked Discord users in the Kitsu Production Team", "Department:"} {
+		if strings.Contains(body, stale) {
+			t.Fatalf("verbose Reviewer explanation %q remains in the UI", stale)
+		}
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345679"); err != nil {
+		t.Fatal(err)
+	}
+	overridden := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en")
+	for _, want := range []string{"Ukyo Matsuo", "Overrides", "Not active while an override is set."} {
+		if !strings.Contains(overridden, want) {
+			t.Fatalf("automatic Reviewer/override state missing %q: %s", want, overridden)
+		}
+	}
+}
+
+func TestProductionSupervisorTaskTypeSummariesUseOnlyKnownMatchingMetadata(t *testing.T) {
+	team := []kitsu.Person{
+		{ID: "supervisor", Role: "supervisor", Departments: []string{"dept-comp", "dept-anim"}},
+		{ID: "artist", Role: "artist", Departments: []string{"dept-comp"}},
+		{ID: "unknown", Role: "supervisor", Departments: []string{"dept-missing"}},
+	}
+	taskTypes := []kitsu.TaskType{
+		{ID: "task-paint", Name: "Paint", DepartmentID: "dept-comp", DepartmentName: "Comp"},
+		{ID: "task-roto", Name: "Roto", DepartmentID: "dept-comp", DepartmentName: "Comp"},
+		{ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"},
+		{ID: "task-no-name", Name: "No Department Name", DepartmentID: "dept-hidden"},
+	}
+	got := productionSupervisorTaskTypeSummaries(team, taskTypes)
+	if want := "Animation: Animation / Comp: Paint, Roto"; got["supervisor"] != want {
+		t.Fatalf("Supervisor summary = %q, want %q", got["supervisor"], want)
+	}
+	if _, ok := got["artist"]; ok {
+		t.Fatal("non-Supervisor received a supervision summary")
+	}
+	if _, ok := got["unknown"]; ok {
+		t.Fatal("Supervisor received a summary without matching Production Task Type metadata")
 	}
 }
 

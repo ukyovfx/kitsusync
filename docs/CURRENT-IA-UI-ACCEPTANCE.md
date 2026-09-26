@@ -74,12 +74,13 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 ## Production Users Kitsu Team checks
 
 - [ ] Normal Users view shows the live Kitsu Production Team before the Reviewer controls; no manual add/remove membership workflow appears.
+- [ ] Each Team row compactly shows name, Discord link state, and Kitsu role; Supervisor Department/Task Type display is derived only by matching Person Department IDs to Task Type Department IDs, and missing metadata is omitted safely.
 - [ ] Each current Team member resolves through global User Linking by stable Kitsu Person ID first; a clear User Linking action appears for unlinked people.
 - [ ] Reviewer User candidates include only globally linked human users in the current Kitsu Production Team; unlinked Team members and linked non-Team users are not selectable.
 - [ ] Page reads do not create/update `ProjectUserMap`; existing legacy rows remain intact and legacy Reviewer rows remain readable.
 - [ ] A successful empty Team and a failed Kitsu Team read have distinct visible states, and a failed read disables User Reviewer selection.
 - [ ] Team membership is fetched afresh on each page render; removing a person from Kitsu removes them from the next rendered Team without local cleanup.
-- [ ] Reviewer uses a stable Kitsu Task Type ID and shows the current source: Kitsu Supervisor, legacy Production mapping, or KitsuSync override.
+- [ ] Reviewer uses a stable Kitsu Task Type ID and stays concise: Task Type selector, automatic Reviewer name/reason, and an `Overrides` list or `None`; redundant implementation explanations are absent.
 - [ ] Automatic Reviewer view distinguishes eligible Department Supervisors in the Production team and their linked/unlinked state.
 - [ ] Explicit Reviewer overrides support multiple linked Discord Users and mentionable guild Roles, individual removal, and reset without mixing notification routing; reset preserves legacy Production mappings and returns to them when present.
 - [ ] Role choices exclude `@everyone` and non-mentionable roles; stored target IDs and outgoing allowed-mention lists are exact and capped at 20.
