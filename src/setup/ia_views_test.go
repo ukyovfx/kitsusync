@@ -2044,6 +2044,9 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	if err := db.Create(&model.ProjectUserMap{ProjectID: project.ID, KitsuName: "Linked", DiscordUserID: "123456789012345679"}).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Create(&model.UserMap{KitsuName: "Linked", KitsuEmail: "linked@example.com", DiscordID: "123456789012345679", DiscordDisplayName: "Linked Discord User"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	legacy := model.ProjectCheckerMap{ProjectID: project.ID, TaskTypeID: "task-comp", TaskType: "Compositing", OverrideDiscordID: "123456789012345682"}
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatal(err)

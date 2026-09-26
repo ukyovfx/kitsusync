@@ -127,8 +127,15 @@ func TestExplicitReviewerTargetsOverrideLegacyAndRejectStaleUsers(t *testing.T) 
 		t.Fatal(err)
 	}
 	targets, explicit, err = ResolveReviewerTargetsForProjectWithSupervisors(db, "", "", project.KitsuProjectID, "task-comp", "Compositing")
+	if !explicit || err != nil || len(targets) != 1 || targets[0].TargetKind != ReviewerTargetRole {
+		t.Fatalf("stale User target was not skipped while preserving the valid Role: targets=%+v explicit=%v err=%v", targets, explicit, err)
+	}
+	if err := db.Where("project_id = ? AND target_kind = ?", project.ID, ReviewerTargetRole).Delete(&ProjectReviewerTarget{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	targets, explicit, err = ResolveReviewerTargetsForProjectWithSupervisors(db, "", "", project.KitsuProjectID, "task-comp", "Compositing")
 	if !explicit || err == nil || len(targets) != 0 {
-		t.Fatalf("stale explicit User Linking target did not fail closed: targets=%+v explicit=%v err=%v", targets, explicit, err)
+		t.Fatalf("all stale explicit targets did not fail closed: targets=%+v explicit=%v err=%v", targets, explicit, err)
 	}
 }
 
