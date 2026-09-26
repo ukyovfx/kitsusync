@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -141,5 +142,131 @@ func TestGetTasksWithErrorAcceptsLegitimateEmptyResponse(t *testing.T) {
 	}
 	if len(got.Each) != 0 {
 		t.Fatalf("expected no tasks, got %+v", got.Each)
+	}
+}
+
+func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
+	tests := []struct {
+		name         string
+		taskTypes    string
+		persons      string
+		detailStatus int
+		details      map[string]string
+		wantIDs      []string
+		wantErr      bool
+	}{
+		{
+			name:      "one matching supervisor",
+			taskTypes: `[{"id":"tt-1","name":"Animation","department_id":"dept-1"}]`,
+			persons:   `[{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor"}]`,
+			details:   map[string]string{"p-1": `{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
+			wantIDs:   []string{"p-1"},
+		},
+		{
+			name:      "multiple matching supervisors are ordered by ID",
+			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:   `[{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"supervisor"},{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"supervisor"}]`,
+			details: map[string]string{
+				"p-z": `{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"supervisor","departments":["dept-1"]}`,
+				"p-a": `{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"supervisor","departments":["dept-1"]}`,
+			},
+			wantIDs: []string{"p-a", "p-z"},
+		},
+		{
+			name:      "supervisor in another department is excluded",
+			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:   `[{"id":"p-1","role":"supervisor"}]`,
+			details:   map[string]string{"p-1": `{"id":"p-1","role":"supervisor","departments":["dept-2"]}`},
+		},
+		{
+			name:      "non-supervisor in matching department is excluded",
+			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:   `[{"id":"p-1","role":"user"}]`,
+		},
+		{
+			name:      "task type without department fails closed",
+			taskTypes: `[{"id":"tt-1","department_id":""}]`,
+			persons:   `[]`,
+			wantErr:   true,
+		},
+		{
+			name:      "unknown task type ID fails closed",
+			taskTypes: `[{"id":"tt-other","department_id":"dept-1"}]`,
+			persons:   `[]`,
+			wantErr:   true,
+		},
+		{
+			name:         "person detail failure fails closed",
+			taskTypes:    `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:      `[{"id":"p-1","role":"supervisor"}]`,
+			detailStatus: http.StatusForbidden,
+			wantErr:      true,
+		},
+		{
+			name:      "duplicate person IDs are fetched and returned once",
+			taskTypes: `[{"id":"tt-1","department_id":"dept-1"}]`,
+			persons:   `[{"id":"p-1","role":"supervisor"},{"id":"p-1","role":"supervisor"}]`,
+			details:   map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
+			wantIDs:   []string{"p-1"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			detailRequests := map[string]int{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Fatalf("unexpected method %s", r.Method)
+				}
+				if r.Header.Get("Authorization") != "Bearer supervisor-test-token" {
+					t.Fatalf("credential-aware request did not use supplied token")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/data/projects/project-1/task-types":
+					_, _ = w.Write([]byte(tc.taskTypes))
+				case "/api/data/persons/":
+					_, _ = w.Write([]byte(tc.persons))
+				default:
+					const prefix = "/api/data/persons/"
+					if !strings.HasPrefix(r.URL.Path, prefix) || r.URL.Query().Get("relations") != "true" {
+						t.Fatalf("unexpected person detail request: %s?%s", r.URL.Path, r.URL.RawQuery)
+					}
+					id := strings.TrimPrefix(r.URL.Path, prefix)
+					detailRequests[id]++
+					if tc.detailStatus != 0 {
+						w.WriteHeader(tc.detailStatus)
+						return
+					}
+					body, ok := tc.details[id]
+					if !ok {
+						t.Fatalf("unexpected detail request for %q", id)
+					}
+					_, _ = w.Write([]byte(body))
+				}
+			}))
+			defer server.Close()
+			configureTestOrigin(t, server.URL)
+
+			got, err := GetProjectTaskTypeSupervisorsWithCredentials(server.URL+"/api", "supervisor-test-token", "project-1", "tt-1")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolver error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			ids := make([]string, 0, len(got))
+			for _, person := range got {
+				ids = append(ids, person.ID)
+			}
+			if strings.Join(ids, ",") != strings.Join(tc.wantIDs, ",") {
+				t.Fatalf("Supervisor IDs = %v, want %v", ids, tc.wantIDs)
+			}
+			for id, count := range detailRequests {
+				if count != 1 {
+					t.Errorf("person %s detail read count = %d, want 1", id, count)
+				}
+			}
+		})
 	}
 }

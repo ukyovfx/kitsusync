@@ -897,8 +897,17 @@ func main() {
 	discord.UserMapResolver = func(projectID, kitsuName, kitsuEmail string) string {
 		return model.GetUserMapForProject(db, projectID, kitsuName, kitsuEmail)
 	}
-	discord.CheckerResolver = func(projectID, taskType string) []string {
-		return model.GetCheckerForProject(db, projectID, taskType)
+	discord.CheckerResolver = func(projectID, taskTypeID, taskTypeName string) []string {
+		return model.GetCheckerForProjectByTaskTypeID(db, projectID, taskTypeID, taskTypeName)
+	}
+	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]string, error) {
+		hostname, _, _ := getKitsuCreds(db, conf)
+		connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
+		baseURL := ""
+		if connectionErr == nil {
+			baseURL = connection.ResolvedAPIBaseURL
+		}
+		return model.ResolveReviewersForProjectWithSupervisors(db, baseURL, setup.StoredRuntimeKitsuToken(db), projectID, taskTypeID, taskTypeName)
 	}
 	discord.GoogleDriveURLResolver = func(projectID string) string {
 		return model.GetProjectStorageURL(db, projectID)

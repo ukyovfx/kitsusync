@@ -58,3 +58,50 @@ func TestMigrateApplicationSchemaUpgradesLegacyV043DatabaseForSessions(t *testin
 		t.Fatalf("session was not preserved across repeated migration: %v", err)
 	}
 }
+
+func TestMigrateApplicationSchemaAddsNullableCheckerTaskTypeIDs(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "legacy-checker-maps.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("get legacy database handle: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatalf("create project table: %v", err)
+	}
+	legacySQL := []string{
+		`CREATE TABLE checker_maps (id integer primary key autoincrement, task_type text, kitsu_name text, kitsu_email text, discord_id text, override_discord_id text)`,
+		`CREATE TABLE "project_checker_maps" (id integer primary key autoincrement, project_id integer not null, task_type text not null, kitsu_name text, kitsu_email text, discord_user_id text, override_discord_id text, created_at datetime)`,
+		`CREATE UNIQUE INDEX idx_projcheckermap ON project_checker_maps(project_id, task_type)`,
+		`INSERT INTO checker_maps (task_type, kitsu_name, discord_id) VALUES ('Animation', 'Legacy', 'global-reviewer')`,
+		`INSERT INTO project_checker_maps (project_id, task_type, kitsu_name, override_discord_id) VALUES (1, 'Animation', 'Legacy', 'production-reviewer')`,
+	}
+	for _, statement := range legacySQL {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatalf("create legacy checker schema: %v", err)
+		}
+	}
+	if err := migrateApplicationSchema(db); err != nil {
+		t.Fatalf("migrate legacy checker schema: %v", err)
+	}
+	var global model.CheckerMap
+	if err := db.Where("task_type = ?", "Animation").First(&global).Error; err != nil {
+		t.Fatal(err)
+	}
+	var project model.ProjectCheckerMap
+	if err := db.Where("project_id = ? AND task_type = ?", 1, "Animation").First(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if global.TaskTypeID != "" || project.TaskTypeID != "" || global.DiscordID != "global-reviewer" || project.OverrideDiscordID != "production-reviewer" {
+		t.Fatalf("legacy checker rows were not preserved: global=%+v project=%+v", global, project)
+	}
+	if !db.Migrator().HasIndex(&model.ProjectCheckerMap{}, "idx_projcheckermap") {
+		t.Fatal("existing Production + Task Type name uniqueness index was removed")
+	}
+	if err := db.Create(&model.ProjectCheckerMap{ProjectID: 1, TaskTypeID: "tt-1", TaskType: "Animation"}).Error; err == nil {
+		t.Fatal("existing Production + Task Type name constraint no longer rejects duplicates")
+	}
+}
