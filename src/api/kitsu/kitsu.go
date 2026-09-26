@@ -4,9 +4,12 @@ package kitsu
 import (
 	"app/src/utils/config"
 	"app/src/utils/request"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -45,29 +48,30 @@ type Tasks struct {
 }
 
 type Person struct {
-	ID                        string `json:"id,omitempty"`
-	CreatedAt                 string `json:"created_at,omitempty"`
-	UpdatedAt                 string `json:"updated_at,omitempty"`
-	FirstName                 string `json:"first_name,omitempty"`
-	LastName                  string `json:"last_name,omitempty"`
-	Email                     string `json:"email,omitempty"`
-	Phone                     string `json:"phone,omitempty"`
-	Active                    bool   `json:"active,omitempty"`
-	Archived                  bool   `json:"archived,omitempty"`
-	IsBot                     bool   `json:"is_bot,omitempty"`
-	LastPresence              string `json:"last_presence,omitempty"`
-	DesktopLogin              string `json:"desktop_login,omitempty"`
-	ShotgunID                 string `json:"shotgun_id,omitempty"`
-	Timezone                  string `json:"timezone,omitempty"`
-	Locale                    string `json:"locale,omitempty"`
-	Data                      string `json:"data,omitempty"`
-	Role                      string `json:"role,omitempty"`
-	HasAvatar                 bool   `json:"has_avatar,omitempty"`
-	NotificationsEnabled      bool   `json:"notifications_enabled,omitempty"`
-	NotificationsSlackEnabled bool   `json:"notifications_slack_enabled,omitempty"`
-	NotificationsSlackUserid  string `json:"notifications_slack_userid,omitempty"`
-	Type                      string `json:"type,omitempty"`
-	FullName                  string `json:"full_name,omitempty"`
+	ID                        string   `json:"id,omitempty"`
+	CreatedAt                 string   `json:"created_at,omitempty"`
+	UpdatedAt                 string   `json:"updated_at,omitempty"`
+	FirstName                 string   `json:"first_name,omitempty"`
+	LastName                  string   `json:"last_name,omitempty"`
+	Email                     string   `json:"email,omitempty"`
+	Phone                     string   `json:"phone,omitempty"`
+	Active                    bool     `json:"active,omitempty"`
+	Archived                  bool     `json:"archived,omitempty"`
+	IsBot                     bool     `json:"is_bot,omitempty"`
+	LastPresence              string   `json:"last_presence,omitempty"`
+	DesktopLogin              string   `json:"desktop_login,omitempty"`
+	ShotgunID                 string   `json:"shotgun_id,omitempty"`
+	Timezone                  string   `json:"timezone,omitempty"`
+	Locale                    string   `json:"locale,omitempty"`
+	Data                      string   `json:"data,omitempty"`
+	Role                      string   `json:"role,omitempty"`
+	Departments               []string `json:"departments,omitempty"`
+	HasAvatar                 bool     `json:"has_avatar,omitempty"`
+	NotificationsEnabled      bool     `json:"notifications_enabled,omitempty"`
+	NotificationsSlackEnabled bool     `json:"notifications_slack_enabled,omitempty"`
+	NotificationsSlackUserid  string   `json:"notifications_slack_userid,omitempty"`
+	Type                      string   `json:"type,omitempty"`
+	FullName                  string   `json:"full_name,omitempty"`
 }
 
 type Persons struct {
@@ -453,4 +457,119 @@ func GetProjectStatus(projectStatusID string) ProjectStatus {
 	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
 
 	return response
+}
+
+// GetProjectTaskTypesWithCredentialsAndError reads Task Types for one Production
+// with the caller's validated runtime endpoint and credential, returning transport
+// and response decoding failures to callers that require a complete resolution.
+func GetProjectTaskTypesWithCredentialsAndError(baseURL, token, projectID string) (TaskTypes, error) {
+	response := TaskTypes{}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return response, errors.New("Kitsu Production ID is required")
+	}
+	path := kitsuBaseFor(baseURL) + "api/data/projects/" + url.PathEscape(projectID) + "/task-types"
+	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response.Each)
+	return response, err
+}
+
+// GetPersonWithCredentials reads a person's detail, including Department
+// memberships, using the supplied validated runtime endpoint and credential.
+func GetPersonWithCredentials(baseURL, token, personID string) (Person, error) {
+	person := Person{}
+	personID = strings.TrimSpace(personID)
+	if personID == "" {
+		return person, errors.New("Kitsu person ID is required")
+	}
+	path := kitsuBaseFor(baseURL) + "api/data/persons/" + url.PathEscape(personID) + "?relations=true"
+	_, err := request.DoWithError(token, http.MethodGet, path, nil, &person)
+	return person, err
+}
+
+// GetProjectTaskTypeSupervisorsWithCredentials resolves the Department
+// Supervisors for an exact Task Type ID in one Production. Kitsu remains the
+// source of truth; this function does not cache or persist the result.
+func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, taskTypeID string) ([]Person, error) {
+	projectID = strings.TrimSpace(projectID)
+	taskTypeID = strings.TrimSpace(taskTypeID)
+	if projectID == "" || taskTypeID == "" {
+		return nil, errors.New("Kitsu Production ID and Task Type ID are required")
+	}
+
+	taskTypes, err := GetProjectTaskTypesWithCredentialsAndError(baseURL, token, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("read Kitsu Production Task Types: %w", err)
+	}
+	var selected *TaskType
+	for i := range taskTypes.Each {
+		if taskTypes.Each[i].ID != taskTypeID {
+			continue
+		}
+		if selected != nil {
+			return nil, fmt.Errorf("Kitsu Task Type ID %q is ambiguous", taskTypeID)
+		}
+		selected = &taskTypes.Each[i]
+	}
+	if selected == nil {
+		return nil, fmt.Errorf("Kitsu Task Type ID %q was not found in Production %q", taskTypeID, projectID)
+	}
+	departmentID := strings.TrimSpace(selected.DepartmentID)
+	if departmentID == "" {
+		return nil, fmt.Errorf("Kitsu Task Type ID %q has no Department ID", taskTypeID)
+	}
+
+	people, err := GetPersonsWithCredentials(baseURL, token)
+	if err != nil {
+		return nil, fmt.Errorf("read Kitsu people: %w", err)
+	}
+	candidateIDs := make(map[string]struct{})
+	for _, person := range people.Each {
+		if strings.TrimSpace(person.Role) != "supervisor" {
+			continue
+		}
+		personID := strings.TrimSpace(person.ID)
+		if personID == "" {
+			return nil, errors.New("Kitsu Supervisor record has no person ID")
+		}
+		candidateIDs[personID] = struct{}{}
+	}
+	orderedIDs := make([]string, 0, len(candidateIDs))
+	for personID := range candidateIDs {
+		orderedIDs = append(orderedIDs, personID)
+	}
+	sort.Strings(orderedIDs)
+
+	result := make([]Person, 0, len(orderedIDs))
+	for _, personID := range orderedIDs {
+		person, err := GetPersonWithCredentials(baseURL, token, personID)
+		if err != nil {
+			return nil, fmt.Errorf("read Kitsu Supervisor person %q: %w", personID, err)
+		}
+		if strings.TrimSpace(person.ID) != personID {
+			return nil, fmt.Errorf("Kitsu person detail ID did not match requested Supervisor %q", personID)
+		}
+		if strings.TrimSpace(person.Role) != "supervisor" {
+			return nil, fmt.Errorf("Kitsu person %q is not a Supervisor", personID)
+		}
+		if !containsKitsuDepartment(person.Departments, departmentID) {
+			continue
+		}
+		if strings.TrimSpace(person.FullName) == "" {
+			person.FullName = strings.TrimSpace(person.FirstName + " " + person.LastName)
+		}
+		if strings.TrimSpace(person.FullName) == "" || strings.TrimSpace(person.Email) == "" {
+			return nil, fmt.Errorf("Kitsu Supervisor person %q is missing name or email", personID)
+		}
+		result = append(result, person)
+	}
+	return result, nil
+}
+
+func containsKitsuDepartment(departments []string, departmentID string) bool {
+	for _, id := range departments {
+		if strings.TrimSpace(id) == departmentID {
+			return true
+		}
+	}
+	return false
 }

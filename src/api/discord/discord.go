@@ -117,10 +117,14 @@ type DiscordMessage struct {
 // projectID はプロジェクトスコープ検索に使用; kitsuEmail はリネーム時のフォールバック検索に使用（空でも可）。
 var UserMapResolver func(projectID, kitsuName, kitsuEmail string) string
 
-// CheckerResolver はタスクタイプ名 → チェッカーの Discord ID 一覧を解決するフック。
+// CheckerResolver はタスクタイプ ID / 名前 → チェッカーの Discord ID 一覧を解決するフック。
 // nil の場合は conf.Mention.Checkers にフォールバックする。
 // projectID はプロジェクトスコープ検索に使用する。
-var CheckerResolver func(projectID, taskType string) []string
+var CheckerResolver func(projectID, taskTypeID, taskTypeName string) []string
+
+// ReviewerResolver supplies the ordered WFA Reviewer recipients. It returns
+// legacy/global Checkers with a non-nil error when Supervisor reads fail.
+var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]string, error)
 
 // GoogleDriveURLResolver はプロジェクト ID に対応するファイルストレージ URL を返すフック。
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
@@ -800,10 +804,23 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.AssigneesStr = "未割り当て"
 		}
 
-		// タスクタイプからチェッカーの Discord ID 一覧を検索（DB 優先、複数人対応）
+		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
+
+		// WFA status notifications use the Reviewer precedence chain. Assignment
+		// and other status notifications keep the existing Checker resolution.
 		var checkerIDs []string
-		if CheckerResolver != nil {
-			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.Name); len(dids) > 0 {
+		if !elem.IsAssignNotification && currentStatus == "WFA" && ReviewerResolver != nil {
+			var resolveErr error
+			checkerIDs, resolveErr = ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
+			if resolveErr != nil {
+				slog.Warn("Kitsu Supervisor Reviewer lookup failed; explicit legacy fallbacks remain active",
+					"error_class", "kitsu_supervisor_resolution_failed",
+					"taskType", elem.TaskType.Name,
+					"taskID", elem.Task.ID,
+				)
+			}
+		} else if CheckerResolver != nil {
+			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name); len(dids) > 0 {
 				for _, did := range dids {
 					checkerIDs = append(checkerIDs, did)
 				}
@@ -822,7 +839,6 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// ArtistStatuses に含まれるステータスではアーティスト全員をメンションする。
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
-		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
 		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
 		if len(recipientIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
 			slog.Warn("No checker configured for task type; checker will not be @-mentioned",

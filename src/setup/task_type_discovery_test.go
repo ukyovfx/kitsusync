@@ -60,6 +60,30 @@ func TestDepartmentDoesNotChangeTaskTypeRoutingIdentity(t *testing.T) {
 	}
 }
 
+func TestTaskTypeIDForNameRequiresOneStableMatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		taskTypes []kitsu.TaskType
+		want      string
+	}{
+		{name: "unique name", taskTypes: []kitsu.TaskType{{ID: "tt-1", Name: "Animation"}}, want: "tt-1"},
+		{name: "duplicate name", taskTypes: []kitsu.TaskType{{ID: "tt-1", Name: "Animation"}, {ID: "tt-2", Name: "Animation"}}},
+		{name: "missing id", taskTypes: []kitsu.TaskType{{Name: "Animation"}}},
+		{name: "unknown name", taskTypes: []kitsu.TaskType{{ID: "tt-1", Name: "Animation"}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			name := "Animation"
+			if tc.name == "unknown name" {
+				name = "Modeling"
+			}
+			if got := taskTypeIDForName(name, tc.taskTypes); got != tc.want {
+				t.Fatalf("taskTypeIDForName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBlockedWizardPlanKeepsBackAndDisablesForwardAction(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/setup?lang=ja", nil)
 	body := renderBlockedWizardPlanNavigation("ja", r, "production-1", "guild-1", false)
