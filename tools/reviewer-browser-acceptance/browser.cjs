@@ -100,7 +100,7 @@ async function assertAutomatic(page, locale, expected, forbidden = []) {
       'Demoted Supervisor', 'Project Manager Override', 'Position Only', 'Inactive Supervisor', 'Kitsu Bot', 'Unlinked Supervisor',
     ]);
     const teamText = await page.locator('main').innerText();
-    for (const expected of ['Global Admin', 'Guild Nick Supervisor', 'Global Name Fallback', 'Username Fallback', 'Synthetic Review Production']) {
+    for (const expected of ['Global Admin', 'Guild Nick Supervisor', 'Global Name Fallback', '@username-fallback', 'Synthetic Review Production']) {
       if (!teamText.includes(expected)) throw new Error(`Production Team view is missing ${expected}`);
     }
     for (const stale of ['Automatic inactive while overridden', 'Add Production member', 'Remove Production member', 'Reviewer / Checker task types', 'Production Manager fallback', 'global CheckerMap']) {
