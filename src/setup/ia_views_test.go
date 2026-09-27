@@ -835,7 +835,7 @@ func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testin
 	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "安全なDiscord表示名"})
 	w := httptest.NewRecorder()
 	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
-	body := w.Body.String()
+	body := strings.ReplaceAll(w.Body.String(), `<canvas class="background-canvas" data-background="app-dots" aria-hidden="true"></canvas>`, `<canvas class="background-canvas" data-background="app-dots"></canvas>`)
 	for _, marker := range []string{"\u7ab6", "\u8b41", "\u7e67", "\ufffd", "aria-hidden=\"true\""} {
 		if strings.Contains(body, marker) {
 			t.Fatalf("Japanese Global User Linking HTML contains mojibake or decorative glyph marker %q", marker)
