@@ -2,7 +2,7 @@
 
 ## Reusable authenticated browser gate
 
-Pull requests to `master` run the `Reviewer Browser Acceptance` workflow on the exact PR head. It launches the normal KitsuSync login and admin handlers against a temporary SQLite database, a loopback-only synthetic Kitsu service, and an intercepted synthetic Discord API. Chromium logs in through `/bot/login`; there is no test authentication bypass and no real Kitsu/Discord credential or outbound service call.
+The existing CI workflow runs a dedicated `reviewer-browser-acceptance` job for pull requests to `master`, checking out the exact PR head. It launches the normal KitsuSync login and admin handlers against a temporary SQLite database, a loopback-only synthetic Kitsu service, and an intercepted synthetic Discord API. Chromium logs in through `/bot/login`; there is no test authentication bypass and no real Kitsu/Discord credential or outbound service call.
 
 The job records Japanese and English Production Users/Reviewer, User Linking, and System Status screens at 1440×1000 and 390×844. It checks the live-team Reviewer eligibility and display-name cases, additive User/Role overrides and filtering, empty/error states, layout overflow, mojibake, and browser console errors. It saves synthetic screenshots and a non-secret state summary as a short-retention Actions artifact. A companion synthetic WFA delivery test verifies recipient union/deduplication, exact allowed mentions, zero-Reviewer card delivery, and fail-closed lookup behavior.
 
