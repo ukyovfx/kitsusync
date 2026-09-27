@@ -74,16 +74,20 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 ## Production Users Kitsu Team checks
 
 - [ ] Normal Users view shows the live Kitsu Production Team before the Reviewer controls; no manual add/remove membership workflow appears.
-- [ ] Each Team row compactly shows name, Discord link state, and Kitsu role; Supervisor Department/Task Type display is derived only by matching Person Department IDs to Task Type Department IDs, and missing metadata is omitted safely.
+- [ ] Each Team row compactly shows name, Discord link state, and effective Kitsu Production role (`project_role` overrides except global admin); Supervisor Department/Task Type display is derived only by matching Person Department IDs to Task Type Department IDs, and missing metadata is omitted safely.
 - [ ] Each current Team member resolves through global User Linking by stable Kitsu Person ID first; a clear User Linking action appears for unlinked people.
-- [ ] Reviewer User candidates include only globally linked human users in the current Kitsu Production Team; unlinked Team members and linked non-Team users are not selectable.
-- [ ] Page reads do not create/update `ProjectUserMap`; existing legacy rows remain intact and legacy Reviewer rows remain readable.
+- [ ] Reviewer User candidates include only globally linked human users in the current Kitsu Production Team who are current members of the linked Discord Guild; unlinked Team members, linked non-Team users, and Guild non-members are not selectable.
+- [ ] Page reads do not create/update `ProjectUserMap`; existing legacy rows remain intact but legacy Reviewer rows do not become WFA recipients.
 - [ ] A successful empty Team and a failed Kitsu Team read have distinct visible states, and a failed read disables User Reviewer selection.
 - [ ] Team membership is fetched afresh on each page render; removing a person from Kitsu removes them from the next rendered Team without local cleanup.
-- [ ] Reviewer uses a stable Kitsu Task Type ID and stays concise: Task Type selector, automatic Reviewer name/reason, and an `Overrides` list or `None`; redundant implementation explanations are absent.
-- [ ] Automatic Reviewer view distinguishes eligible Department Supervisors in the Production team and their linked/unlinked state.
-- [ ] Explicit Reviewer overrides support multiple linked Discord Users and mentionable guild Roles, individual removal, and reset without mixing notification routing; reset preserves legacy Production mappings and returns to them when present.
-- [ ] Role choices exclude `@everyone` and non-mentionable roles; stored target IDs and outgoing allowed-mention lists are exact and capped at 20.
+- [ ] Reviewer uses a stable Kitsu Task Type ID and stays concise: Task Type selector, automatic Reviewer name/reason, and an `Overrides` list or `None`; Automatic remains visible when Overrides exist and no “inactive while overridden” text appears.
+- [ ] Reviewer is presented and delivered as a targeted Discord WFA recipient, not a Kitsu permission Role.
+- [ ] Automatic Reviewer eligibility requires current active human Production Team membership, effective Production role `supervisor` (global admin cannot be overridden), matching Department membership, global User Linking, and current linked-Guild membership; Position does not qualify.
+- [ ] Explicit User overrides are revalidated at delivery against live Team membership, global User Linking, and live Guild membership; explicit Role overrides are revalidated against the linked Guild and current mentionability.
+- [ ] Automatic Users, explicit Users, and explicit Roles are additively combined and deterministically deduplicated; stale User/Role targets are omitted without broadening recipients.
+- [ ] WFA has no fallback to Production Manager, Admin, legacy `ProjectCheckerMap`, global `CheckerMap`, or config Checkers. Legacy rows remain stored. Zero Reviewer or lookup failure still posts the normal WFA card with no targeted Reviewer mention.
+- [ ] RETAKE, DONE, assignment notifications, and non-WFA legacy Checker behavior remain unchanged.
+- [ ] Role choices exclude `@everyone` and non-mentionable roles; outgoing allowed-mention lists contain only the exact eligible users/roles and are capped at 20.
 - [ ] Empty states explain the next action when the Kitsu Team or linked Reviewer candidates are empty.
 - [ ] JP and EN have equivalent structure, no unintended language leakage, and no page overflow.
 
@@ -129,5 +133,5 @@ Use an authenticated 8090 browser session. Browser-rendered output is the final 
 - [ ] Overview shows one current-issues representation, not both a count label and a healthy-value label.
 - [ ] Default Notifications is read-only and shows `Kitsu Task Type → Discord Channel`; only explicit `Edit` exposes routing controls.
 - [ ] Production Users reflects current Kitsu Production Team membership without a local membership write.
-- [ ] A globally linked Team member is selectable for Reviewer / Checker without a separate Production association; a linked non-Team user is not offered.
+- [ ] A globally linked Team member who is also a current linked-Guild member is selectable for Reviewer without a separate Production association; a linked non-Team or Guild non-member is not offered.
 - [ ] Existing `ProjectUserMap` membership rows remain untouched, and bot identities never appear as human Reviewer candidates.

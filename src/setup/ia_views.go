@@ -821,6 +821,8 @@ var reviewerProductionTeamReader = func(db *gorm.DB, projectID string) ([]kitsu.
 	return kitsu.GetProjectTeamWithCredentialsAndError(baseURL, token, projectID)
 }
 
+var reviewerGuildMembersForGuild = ListGuildMembers
+
 func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.Project, lang string, botTokens ...string) string {
 	var team []kitsu.Person
 	var teamErr error
@@ -833,7 +835,15 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 	}
 	taskTypes := reviewerTaskTypesForProduction(db, p.KitsuProjectID)
 	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
-	linkedUsers := productionTeamLinkedUsers(db, p.KitsuProjectID, team, globalUsers)
+	botToken := ""
+	if len(botTokens) > 0 {
+		botToken = botTokens[0]
+	}
+	var guildMembers []DiscordGuildMember
+	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
+		guildMembers, _ = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
+	}
+	linkedUsers := productionTeamLinkedUsers(db, p.KitsuProjectID, team, globalUsers, guildMembers)
 	supervisorSummaries := productionSupervisorTaskTypeSummaries(team, taskTypes)
 
 	userText := func(ja, en string) string { return t(lang, ja, en) }
@@ -844,7 +854,7 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 		for _, member := range linkedUsers {
 			name := kitsuPersonDisplayName(member.Person)
 			var details strings.Builder
-			if role := strings.TrimSpace(member.Person.Role); role != "" {
+			if role := strings.TrimSpace(kitsu.EffectiveProductionRole(member.Person)); role != "" {
 				displayRole := role
 				if role == "supervisor" {
 					displayRole = userText("Supervisor", "Supervisor")
@@ -872,11 +882,7 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 		}
 	}
 
-	botToken := ""
-	if len(botTokens) > 0 {
-		botToken = botTokens[0]
-	}
-	reviewerSection := renderProductionReviewerManager(db, r, p, lang, botToken, model.ListProjectCheckerMaps(db, p.ID), team, teamErr, globalUsers, taskTypes)
+	reviewerSection := renderProductionReviewerManager(db, r, p, lang, botToken, team, teamErr, globalUsers, taskTypes, guildMembers)
 	return `<section class="section-card glass production-users-panel"><h2>` + esc(userText("Production Team", "Production Team")) + `</h2><p class="field-help">` + esc(userText("ProductionメンバーはKitsuから同期されます。DiscordアカウントはUser Linkingで設定します。", "Production members are synchronized from Kitsu. Discord accounts are configured in User Linking.")) + `</p><ul class="production-users-simple-list">` + members.String() + `</ul>` + reviewerSection + `</section>`
 }
 
@@ -907,7 +913,7 @@ func productionSupervisorTaskTypeSummaries(team []kitsu.Person, taskTypes []kits
 	}
 	result := map[string]string{}
 	for _, person := range team {
-		if strings.TrimSpace(person.Role) != "supervisor" || strings.TrimSpace(person.ID) == "" {
+		if kitsu.EffectiveProductionRole(person) != "supervisor" || !person.Active || person.Archived || person.IsBot || strings.TrimSpace(person.ID) == "" {
 			continue
 		}
 		departmentIDs := append([]string(nil), person.Departments...)
@@ -944,12 +950,16 @@ type productionTeamLinkedUser struct {
 	DiscordName string
 }
 
-func productionTeamLinkedUsers(db *gorm.DB, projectID string, team []kitsu.Person, globalUsers []model.UserMap) []productionTeamLinkedUser {
+func productionTeamLinkedUsers(db *gorm.DB, projectID string, team []kitsu.Person, globalUsers []model.UserMap, guildMembers []DiscordGuildMember) []productionTeamLinkedUser {
 	globalByDiscordID := make(map[string]model.UserMap, len(globalUsers))
 	for _, user := range globalUsers {
 		if isDiscordSnowflake(user.DiscordID) {
 			globalByDiscordID[strings.TrimSpace(user.DiscordID)] = user
 		}
+	}
+	memberNames := make(map[string]string, len(guildMembers))
+	for _, member := range guildMembers {
+		memberNames[strings.TrimSpace(member.User.ID)] = discordGuildMemberDisplayName(member)
 	}
 	var legacyUsers []model.ProjectUserMap
 	if project := model.FindProjectByKitsuID(db, projectID); project != nil {
@@ -966,13 +976,19 @@ func productionTeamLinkedUsers(db *gorm.DB, projectID string, team []kitsu.Perso
 		if user != nil {
 			if isDiscordSnowflake(user.DiscordID) {
 				member.DiscordID = strings.TrimSpace(user.DiscordID)
-				member.DiscordName = discordReviewerDisplayName(user.DiscordDisplayName)
+				member.DiscordName = memberNames[member.DiscordID]
+				if member.DiscordName == "" {
+					member.DiscordName = discordReviewerDisplayName(user.DiscordDisplayName)
+				}
 			}
 		} else {
 			if legacy := legacyProjectUserForKitsuPerson(legacyUsers, person); legacy != nil && isDiscordSnowflake(legacy.DiscordUserID) {
 				member.DiscordID = strings.TrimSpace(legacy.DiscordUserID)
-				if linked, ok := globalByDiscordID[member.DiscordID]; ok {
-					member.DiscordName = discordReviewerDisplayName(linked.DiscordDisplayName)
+				member.DiscordName = memberNames[member.DiscordID]
+				if member.DiscordName == "" {
+					if linked, ok := globalByDiscordID[member.DiscordID]; ok {
+						member.DiscordName = discordReviewerDisplayName(linked.DiscordDisplayName)
+					}
 				}
 			}
 		}
@@ -1046,21 +1062,36 @@ func discordReviewerDisplayName(value string) string {
 	return value
 }
 
+func discordGuildMemberDisplayName(member DiscordGuildMember) string {
+	for _, name := range []string{member.Nick, member.User.GlobalName, member.User.DisplayName, member.User.Username} {
+		if name = strings.TrimSpace(name); name != "" {
+			return discordReviewerDisplayName(name)
+		}
+	}
+	return ""
+}
+
 var reviewerTaskTypesForProduction = setupKitsuTaskTypes
 var reviewerDiscordRolesForGuild = ListGuildRoles
 var reviewerDepartmentSupervisorsForTeam = kitsu.GetDepartmentSupervisorsForProductionTeamWithCredentials
 
-func currentProductionLinkedHumanDiscordIDs(team []kitsu.Person, globalUsers []model.UserMap) map[string]string {
+func currentProductionLinkedHumanDiscordIDs(team []kitsu.Person, globalUsers []model.UserMap, guildMembers []DiscordGuildMember) map[string]string {
 	linked := map[string]string{}
+	memberNames := make(map[string]string, len(guildMembers))
+	for _, member := range guildMembers {
+		if !member.User.Bot {
+			memberNames[strings.TrimSpace(member.User.ID)] = discordGuildMemberDisplayName(member)
+		}
+	}
 	for _, person := range team {
-		if person.IsBot || strings.TrimSpace(person.ID) == "" {
+		if !person.Active || person.Archived || person.IsBot || strings.TrimSpace(person.ID) == "" {
 			continue
 		}
 		if user := globalUserForKitsuPerson(globalUsers, person); user != nil && isDiscordSnowflake(user.DiscordID) {
 			id := strings.TrimSpace(user.DiscordID)
-			name := discordReviewerDisplayName(user.DiscordDisplayName)
+			name := memberNames[id]
 			if name == "" {
-				name = kitsuPersonDisplayName(person)
+				continue
 			}
 			linked[id] = name
 		}
@@ -1068,7 +1099,7 @@ func currentProductionLinkedHumanDiscordIDs(team []kitsu.Person, globalUsers []m
 	return linked
 }
 
-func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, legacyRows []model.ProjectCheckerMap, team []kitsu.Person, teamErr error, globalUsers []model.UserMap, taskTypes []kitsu.TaskType) string {
+func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, team []kitsu.Person, teamErr error, globalUsers []model.UserMap, taskTypes []kitsu.TaskType, guildMembers []DiscordGuildMember) string {
 	label := func(ja, en string) string { return t(lang, ja, en) }
 	selectedID := strings.TrimSpace(r.URL.Query().Get("reviewer_task_type"))
 	selectedTaskType := kitsu.TaskType{}
@@ -1101,14 +1132,6 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 			explicitRows = append(explicitRows, target)
 		}
 	}
-	var legacy *model.ProjectCheckerMap
-	for i := range legacyRows {
-		if legacyRows[i].TaskTypeID == selectedID || (legacyRows[i].TaskTypeID == "" && legacyRows[i].TaskType == selectedTaskType.Name) {
-			legacy = &legacyRows[i]
-			break
-		}
-	}
-	hasOverrides := len(explicitRows) > 0 || legacy != nil
 	var overrides, automatic strings.Builder
 	if len(explicitRows) > 0 {
 		for _, target := range explicitRows {
@@ -1117,7 +1140,16 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 				name = label("Discordユーザー", "Discord User")
 				for _, user := range globalUsers {
 					if strings.TrimSpace(user.DiscordID) == target.DiscordID {
-						name = discordReviewerDisplayName(user.DiscordDisplayName)
+						name = ""
+						for _, member := range guildMembers {
+							if strings.TrimSpace(member.User.ID) == target.DiscordID && !member.User.Bot {
+								name = discordGuildMemberDisplayName(member)
+								break
+							}
+						}
+						if name == "" {
+							name = discordReviewerDisplayName(user.DiscordDisplayName)
+						}
 						if name == "" {
 							name = strings.TrimSpace(user.KitsuName)
 						}
@@ -1134,30 +1166,28 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 			}
 			overrides.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(name) + `</strong></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="remove_production_reviewer_target"><input type="hidden" name="target_id" value="` + strconv.FormatUint(uint64(target.ID), 10) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><button class="btn-ghost" type="submit">` + esc(label("解除", "Remove")) + `</button></form></li>`)
 		}
-	} else if legacy != nil {
-		name := strings.TrimSpace(legacy.KitsuName)
-		if name == "" {
-			name = label("Discordユーザー", "Discord User")
-		}
-		overrides.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(name) + `</strong></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="remove_legacy_production_reviewer"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="task_type_name" value="` + esc(selectedTaskType.Name) + `"><button class="btn-ghost" type="submit">` + esc(label("解除", "Remove")) + `</button></form></li>`)
-	} else if selectedTaskType.ID != "" {
+	}
+	if selectedTaskType.ID != "" {
 		if teamErr != nil {
 			automatic.WriteString(`<li class="field-help">` + esc(label("Production Teamを読み込めません。", "Production Team unavailable.")) + `</li>`)
+		} else if strings.TrimSpace(selectedTaskType.DepartmentID) == "" {
+			automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
 		} else if baseURL, token, ok := runtimeKitsuDataSource(db); ok {
 			supervisors, err := reviewerDepartmentSupervisorsForTeam(baseURL, token, selectedTaskType.DepartmentID, team)
 			if err != nil {
 				automatic.WriteString(`<li class="field-help">` + esc(label("Supervisor情報を読み込めません。", "Supervisor data unavailable.")) + `</li>`)
 			} else {
+				linkedIDs := currentProductionLinkedHumanDiscordIDs(team, globalUsers, guildMembers)
 				for _, person := range supervisors {
-					status := label("Discord未リンク", "Discord not linked")
-					if user := globalUserForKitsuPerson(globalUsers, person); user != nil && isDiscordSnowflake(user.DiscordID) {
-						status = label("リンク済み", "Linked")
+					user := globalUserForKitsuPerson(globalUsers, person)
+					if user == nil || linkedIDs[strings.TrimSpace(user.DiscordID)] == "" {
+						continue
 					}
 					reason := label("Supervisor", "Supervisor")
 					if department := strings.TrimSpace(selectedTaskType.DepartmentName); department != "" {
 						reason = label(department+"担当", department+" Supervisor")
 					}
-					automatic.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(kitsuPersonDisplayName(person)) + `</strong><small>` + esc(reason) + `</small></span><span class="status-pill ` + map[bool]string{true: "ok", false: "warn"}[status == label("リンク済み", "Linked")] + `">` + esc(status) + `</span></li>`)
+					automatic.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(kitsuPersonDisplayName(person)) + `</strong><small>` + esc(reason) + `</small></span><span class="status-pill success">` + esc(label("リンク済み", "Linked")) + `</span></li>`)
 				}
 				if automatic.Len() == 0 {
 					automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
@@ -1168,17 +1198,13 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		}
 	}
 	if automatic.Len() == 0 {
-		if hasOverrides {
-			automatic.WriteString(`<li class="field-help">` + esc(label("Override設定中は自動Reviewerを使用しません。", "Not active while an override is set.")) + `</li>`)
-		} else {
-			automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
-		}
+		automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
 	}
 	if overrides.Len() == 0 {
 		overrides.WriteString(`<li class="field-help">` + esc(label("なし", "None")) + `</li>`)
 	}
 	var userOptions strings.Builder
-	linkedUsers := currentProductionLinkedHumanDiscordIDs(team, globalUsers)
+	linkedUsers := currentProductionLinkedHumanDiscordIDs(team, globalUsers, guildMembers)
 	userIDs := make([]string, 0, len(linkedUsers))
 	for id := range linkedUsers {
 		userIDs = append(userIDs, id)
@@ -1212,9 +1238,6 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	reset := ""
 	if len(explicitRows) > 0 {
 		resetLabel := label("自動設定に戻す", "Reset to Automatic")
-		if legacy != nil {
-			resetLabel = label("既存のReviewer設定に戻す", "Reset to legacy Reviewer")
-		}
 		reset = `<form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="reset_production_reviewers"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="task_type_name" value="` + esc(selectedTaskType.Name) + `"><button class="btn-ghost" type="submit">` + esc(resetLabel) + `</button></form>`
 	}
 	if len(taskTypes) == 0 {
@@ -1270,8 +1293,17 @@ func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request,
 					writeReviewerMutationError()
 					return true
 				}
+				botToken := ""
+				if len(botTokens) > 0 {
+					botToken = botTokens[0]
+				}
+				guildMembers, membersErr := reviewerGuildMembersForGuild(project.DiscordGuildID, botToken)
+				if membersErr != nil {
+					writeReviewerMutationError()
+					return true
+				}
 				globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
-				if _, linked := currentProductionLinkedHumanDiscordIDs(team, globalUsers)[id]; !linked {
+				if _, linked := currentProductionLinkedHumanDiscordIDs(team, globalUsers, guildMembers)[id]; !linked {
 					writeReviewerMutationError()
 					return true
 				}

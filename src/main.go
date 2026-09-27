@@ -901,19 +901,19 @@ func main() {
 	discord.CheckerResolver = func(projectID, taskTypeID, taskTypeName string) []string {
 		return model.GetCheckerForProjectByTaskTypeID(db, projectID, taskTypeID, taskTypeName)
 	}
-	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, bool, error) {
+	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
 		baseURL := ""
 		if connectionErr == nil {
 			baseURL = connection.ResolvedAPIBaseURL
 		}
-		targets, explicit, err := model.ResolveReviewerTargetsForProjectWithSupervisors(db, baseURL, setup.StoredRuntimeKitsuToken(db), projectID, taskTypeID, taskTypeName)
+		targets, err := setup.ResolveProductionWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.StoredRuntimeDiscordBotToken(db), projectID, taskTypeID)
 		resolved := make([]discord.ReviewerTarget, 0, len(targets))
 		for _, target := range targets {
 			resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
 		}
-		return resolved, explicit, err
+		return resolved, err
 	}
 	discord.GoogleDriveURLResolver = func(projectID string) string {
 		return model.GetProjectStorageURL(db, projectID)

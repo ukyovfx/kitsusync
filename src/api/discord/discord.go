@@ -123,14 +123,13 @@ var UserMapResolver func(projectID, kitsuName, kitsuEmail string) string
 // projectID はプロジェクトスコープ検索に使用する。
 var CheckerResolver func(projectID, taskTypeID, taskTypeName string) []string
 
-// ReviewerResolver supplies the ordered WFA Reviewer recipients. It returns
-// legacy/global Checkers with a non-nil error when Supervisor reads fail.
+// ReviewerResolver supplies the fully validated WFA Reviewer recipient union.
 type ReviewerTarget struct {
 	Kind string
 	ID   string
 }
 
-var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, bool, error)
+var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, error)
 
 // GoogleDriveURLResolver はプロジェクト ID に対応するファイルストレージ URL を返すフック。
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
@@ -870,25 +869,18 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// and other status notifications keep the existing Checker resolution.
 		var checkerIDs []string
 		var reviewerTargets []ReviewerTarget
-		explicitReviewerTargets := false
-		usedReviewerResolver := false
-		if !elem.IsAssignNotification && currentStatus == "WFA" && ReviewerResolver != nil {
-			usedReviewerResolver = true
-			var resolveErr error
-			rawTargets, explicit, err := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
-			resolveErr = err
-			explicitReviewerTargets = explicit
-			reviewerTargets = uniqueReviewerTargets(rawTargets)
-			if resolveErr != nil {
-				slog.Warn("Reviewer lookup failed; safe fallback policy applied",
-					"error_class", "kitsu_supervisor_resolution_failed",
-					"taskType", elem.TaskType.Name,
-					"taskID", elem.Task.ID,
-				)
-			}
-			for _, target := range reviewerTargets {
-				if target.Kind == "user" {
-					checkerIDs = append(checkerIDs, target.ID)
+		isWFAReviewer := !elem.IsAssignNotification && currentStatus == "WFA"
+		if isWFAReviewer {
+			if ReviewerResolver != nil {
+				rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
+				if resolveErr != nil {
+					slog.Warn("Reviewer lookup failed; WFA will be posted without targeted mentions",
+						"error_class", "reviewer_resolution_failed",
+						"taskType", elem.TaskType.Name,
+						"taskID", elem.Task.ID,
+					)
+				} else {
+					reviewerTargets = uniqueReviewerTargets(rawTargets)
 				}
 			}
 		} else if CheckerResolver != nil {
@@ -898,7 +890,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 				}
 			}
 		}
-		if len(checkerIDs) == 0 && len(reviewerTargets) == 0 && !explicitReviewerTargets {
+		if !isWFAReviewer && len(checkerIDs) == 0 && len(reviewerTargets) == 0 {
 			for _, c := range conf.Mention.Checkers {
 				if strings.EqualFold(c.TaskType, elem.TaskType.Name) {
 					checkerIDs = append(checkerIDs, c.DiscordID)
@@ -911,12 +903,10 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// ArtistStatuses に含まれるステータスではアーティスト全員をメンションする。
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
-		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
+		var recipientIDs []string
 		var recipientRoleIDs []string
-		if usedReviewerResolver && (explicitReviewerTargets || len(reviewerTargets) > 0) {
-			targets := uniqueReviewerTargets(reviewerTargets)
-			recipientIDs = recipientIDs[:0]
-			for _, target := range targets {
+		if isWFAReviewer {
+			for _, target := range reviewerTargets {
 				if target.Kind == "user" {
 					recipientIDs = append(recipientIDs, target.ID)
 				} else if target.Kind == "role" {
@@ -925,8 +915,10 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			}
 			recipientIDs = uniqueDiscordIDs(recipientIDs)
 			recipientRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
+		} else {
+			recipientIDs = notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
 		}
-		if len(recipientIDs) == 0 && len(recipientRoleIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
+		if !isWFAReviewer && len(recipientIDs) == 0 && len(recipientRoleIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
 			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
 				"taskType", elem.TaskType.Name,
 				"status", currentStatus,
@@ -936,15 +928,8 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// 緊急ステータスは @here でチャンネル全員に通知
 		// @here and @everyone are never emitted by KitsuSync.
 		mentionText := mentionContent(recipientIDs)
-		if usedReviewerResolver && (explicitReviewerTargets || len(reviewerTargets) > 0) {
-			targets := make([]ReviewerTarget, 0, len(recipientIDs)+len(recipientRoleIDs))
-			for _, id := range recipientIDs {
-				targets = append(targets, ReviewerTarget{Kind: "user", ID: id})
-			}
-			for _, id := range recipientRoleIDs {
-				targets = append(targets, ReviewerTarget{Kind: "role", ID: id})
-			}
-			mentionText = reviewerTargetMentions(targets)
+		if isWFAReviewer {
+			mentionText = reviewerTargetMentions(reviewerTargets)
 		}
 		statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
 

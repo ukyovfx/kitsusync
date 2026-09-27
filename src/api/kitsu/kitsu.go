@@ -65,6 +65,7 @@ type Person struct {
 	Locale                    string   `json:"locale,omitempty"`
 	Data                      string   `json:"data,omitempty"`
 	Role                      string   `json:"role,omitempty"`
+	ProjectRole               string   `json:"project_role,omitempty"`
 	Departments               []string `json:"departments,omitempty"`
 	HasAvatar                 bool     `json:"has_avatar,omitempty"`
 	NotificationsEnabled      bool     `json:"notifications_enabled,omitempty"`
@@ -499,19 +500,40 @@ func GetPersonWithCredentials(baseURL, token, personID string) (Person, error) {
 	return person, err
 }
 
-// GetProjectTaskTypeSupervisorsWithCredentials resolves the Department
-// Supervisors for an exact Task Type ID in one Production. Kitsu remains the
-// source of truth; this function does not cache or persist the result.
-func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, taskTypeID string) ([]Person, error) {
+// EffectiveProductionRole applies Kitsu's Production membership role rules.
+// A global admin remains an admin; otherwise a Production-specific role
+// overrides the global role when present.
+func EffectiveProductionRole(person Person) string {
+	globalRole := strings.ToLower(strings.TrimSpace(person.Role))
+	if globalRole == "admin" {
+		return globalRole
+	}
+	if projectRole := strings.ToLower(strings.TrimSpace(person.ProjectRole)); projectRole != "" {
+		return projectRole
+	}
+	return globalRole
+}
+
+type ProjectTaskTypeSupervisorResolution struct {
+	TaskType    TaskType
+	Team        []Person
+	Supervisors []Person
+}
+
+// GetProjectTaskTypeSupervisorResolutionWithCredentials resolves one exact
+// Task Type and its eligible current Production Team Supervisors. Kitsu
+// remains the source of truth; results are never cached or persisted.
+func GetProjectTaskTypeSupervisorResolutionWithCredentials(baseURL, token, projectID, taskTypeID string) (ProjectTaskTypeSupervisorResolution, error) {
+	var result ProjectTaskTypeSupervisorResolution
 	projectID = strings.TrimSpace(projectID)
 	taskTypeID = strings.TrimSpace(taskTypeID)
 	if projectID == "" || taskTypeID == "" {
-		return nil, errors.New("Kitsu Production ID and Task Type ID are required")
+		return result, errors.New("Kitsu Production ID and Task Type ID are required")
 	}
 
 	taskTypes, err := GetProjectTaskTypesWithCredentialsAndError(baseURL, token, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("read Kitsu Production Task Types: %w", err)
+		return result, fmt.Errorf("read Kitsu Production Task Types: %w", err)
 	}
 	var selected *TaskType
 	for i := range taskTypes.Each {
@@ -519,23 +541,38 @@ func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, tas
 			continue
 		}
 		if selected != nil {
-			return nil, fmt.Errorf("Kitsu Task Type ID %q is ambiguous", taskTypeID)
+			return result, fmt.Errorf("Kitsu Task Type ID %q is ambiguous", taskTypeID)
 		}
 		selected = &taskTypes.Each[i]
 	}
 	if selected == nil {
-		return nil, fmt.Errorf("Kitsu Task Type ID %q was not found in Production %q", taskTypeID, projectID)
+		return result, fmt.Errorf("Kitsu Task Type ID %q was not found in Production %q", taskTypeID, projectID)
 	}
 	departmentID := strings.TrimSpace(selected.DepartmentID)
-	if departmentID == "" {
-		return nil, fmt.Errorf("Kitsu Task Type ID %q has no Department ID", taskTypeID)
-	}
 
 	team, err := GetProjectTeamWithCredentialsAndError(baseURL, token, projectID)
 	if err != nil {
-		return nil, fmt.Errorf("read Kitsu Production team: %w", err)
+		return result, fmt.Errorf("read Kitsu Production team: %w", err)
 	}
-	return GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, departmentID, team)
+	result.TaskType = *selected
+	result.Team = team
+	if departmentID == "" {
+		result.Supervisors = []Person{}
+		return result, nil
+	}
+	supervisors, err := GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, departmentID, team)
+	if err != nil {
+		return result, err
+	}
+	result.Supervisors = supervisors
+	return result, nil
+}
+
+// GetProjectTaskTypeSupervisorsWithCredentials resolves the Department
+// Supervisors for an exact Task Type ID in one Production.
+func GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, taskTypeID string) ([]Person, error) {
+	resolution, err := GetProjectTaskTypeSupervisorResolutionWithCredentials(baseURL, token, projectID, taskTypeID)
+	return resolution.Supervisors, err
 }
 
 // GetDepartmentSupervisorsForProductionTeamWithCredentials resolves only
@@ -547,30 +584,22 @@ func GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, de
 	if departmentID == "" {
 		return nil, errors.New("Kitsu Department ID is required")
 	}
-	teamIDs := make(map[string]struct{}, len(team))
+	teamByID := make(map[string]Person, len(team))
 	for _, person := range team {
-		if id := strings.TrimSpace(person.ID); id != "" {
-			teamIDs[id] = struct{}{}
+		id := strings.TrimSpace(person.ID)
+		if id != "" {
+			if _, exists := teamByID[id]; !exists {
+				teamByID[id] = person
+			}
 		}
 	}
-	if len(teamIDs) == 0 {
+	if len(teamByID) == 0 {
 		return []Person{}, nil
 	}
 
-	people, err := GetPersonsWithCredentials(baseURL, token)
-	if err != nil {
-		return nil, fmt.Errorf("read Kitsu people: %w", err)
-	}
 	candidateIDs := make(map[string]struct{})
-	for _, person := range people.Each {
-		if strings.TrimSpace(person.Role) != "supervisor" {
-			continue
-		}
-		personID := strings.TrimSpace(person.ID)
-		if personID == "" {
-			return nil, errors.New("Kitsu Supervisor record has no person ID")
-		}
-		if _, isProductionMember := teamIDs[personID]; !isProductionMember {
+	for personID, person := range teamByID {
+		if !person.Active || person.Archived || person.IsBot || EffectiveProductionRole(person) != "supervisor" {
 			continue
 		}
 		candidateIDs[personID] = struct{}{}
@@ -590,7 +619,8 @@ func GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, de
 		if strings.TrimSpace(person.ID) != personID {
 			return nil, fmt.Errorf("Kitsu person detail ID did not match requested Supervisor %q", personID)
 		}
-		if strings.TrimSpace(person.Role) != "supervisor" {
+		teamPerson := teamByID[personID]
+		if EffectiveProductionRole(teamPerson) != "supervisor" {
 			return nil, fmt.Errorf("Kitsu person %q is not a Supervisor", personID)
 		}
 		if !containsKitsuDepartment(person.Departments, departmentID) {
@@ -602,6 +632,11 @@ func GetDepartmentSupervisorsForProductionTeamWithCredentials(baseURL, token, de
 		if strings.TrimSpace(person.FullName) == "" || strings.TrimSpace(person.Email) == "" {
 			return nil, fmt.Errorf("Kitsu Supervisor person %q is missing name or email", personID)
 		}
+		person.Role = EffectiveProductionRole(teamPerson)
+		person.ProjectRole = strings.TrimSpace(teamPerson.ProjectRole)
+		person.Active = teamPerson.Active
+		person.Archived = teamPerson.Archived
+		person.IsBot = teamPerson.IsBot
 		result = append(result, person)
 	}
 	return result, nil

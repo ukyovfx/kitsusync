@@ -1,8 +1,6 @@
 package model
 
 import (
-	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -104,82 +102,4 @@ func DeleteProjectReviewerTargetsForDiscordUser(db *gorm.DB, projectID uint, dis
 		return gorm.ErrInvalidData
 	}
 	return db.Where("project_id = ? AND target_kind = ? AND discord_id = ?", projectID, ReviewerTargetUser, strings.TrimSpace(discordID)).Delete(&ProjectReviewerTarget{}).Error
-}
-
-// ResolveProjectReviewerTargets reports both the selected target set and
-// whether explicit rows exist. Presence suppresses all automatic/legacy
-// fallback even if a stale target is later rejected at delivery time.
-func ResolveProjectReviewerTargets(db *gorm.DB, projectID uint, taskTypeID string) ([]ProjectReviewerTarget, bool, error) {
-	rows, exists, err := ListProjectReviewerTargetsForTaskType(db, projectID, taskTypeID)
-	if err != nil || !exists {
-		return nil, exists, err
-	}
-	valid := rows[:0]
-	for _, row := range rows {
-		if !validReviewerTarget(row.TargetKind, row.DiscordID) {
-			continue
-		}
-		if row.TargetKind == ReviewerTargetUser {
-			var associations int64
-			if err := db.Model(&UserMap{}).Where("discord_id = ?", strings.TrimSpace(row.DiscordID)).Count(&associations).Error; err != nil {
-				return nil, true, err
-			}
-			if associations == 0 {
-				continue
-			}
-		}
-		valid = append(valid, row)
-	}
-	sort.Slice(valid, func(i, j int) bool {
-		if valid[i].TargetKind != valid[j].TargetKind {
-			return valid[i].TargetKind < valid[j].TargetKind
-		}
-		if valid[i].DiscordID != valid[j].DiscordID {
-			return valid[i].DiscordID < valid[j].DiscordID
-		}
-		return valid[i].ID < valid[j].ID
-	})
-	if len(valid) == 0 {
-		return nil, true, fmt.Errorf("explicit Production Reviewer targets are invalid")
-	}
-	return valid, true, nil
-}
-
-// ResolveReviewerTargetsForProjectWithSupervisors applies WFA precedence.
-// The bool is true when new explicit Production targets exist; callers must
-// not fall through to a legacy or automatic target when that set is stale.
-func ResolveReviewerTargetsForProjectWithSupervisors(db *gorm.DB, baseURL, token, kitsuProjectID, taskTypeID, taskTypeName string) ([]ProjectReviewerTarget, bool, error) {
-	if db == nil {
-		return nil, false, gorm.ErrInvalidDB
-	}
-	project := FindProjectByKitsuID(db, kitsuProjectID)
-	if project == nil {
-		return nil, false, nil
-	}
-	if targets, explicit, err := ResolveProjectReviewerTargets(db, project.ID, taskTypeID); explicit || err != nil {
-		return targets, explicit, err
-	}
-	userTargets := func(ids []string) []ProjectReviewerTarget {
-		result := make([]ProjectReviewerTarget, 0, len(ids))
-		for _, id := range ids {
-			if validReviewerTarget(ReviewerTargetUser, id) {
-				result = append(result, ProjectReviewerTarget{TargetKind: ReviewerTargetUser, DiscordID: strings.TrimSpace(id)})
-			}
-		}
-		return result
-	}
-	if ids := GetProjectCheckerForTaskTypeID(db, kitsuProjectID, taskTypeID, taskTypeName); len(ids) > 0 {
-		return userTargets(ids), false, nil
-	}
-	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" {
-		return userTargets(FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName)), false, fmt.Errorf("Kitsu Supervisor resolution requires a runtime endpoint and token")
-	}
-	supervisors, err := ResolveProjectTaskTypeSupervisorDiscordIDs(db, baseURL, token, kitsuProjectID, taskTypeID)
-	if err != nil {
-		return userTargets(FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName)), false, err
-	}
-	if len(supervisors) > 0 {
-		return userTargets(supervisors), false, nil
-	}
-	return userTargets(FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName)), false, nil
 }

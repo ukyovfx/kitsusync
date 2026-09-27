@@ -149,7 +149,6 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 	tests := []struct {
 		name         string
 		taskTypes    string
-		persons      string
 		projectTeam  string
 		detailStatus int
 		details      map[string]string
@@ -159,16 +158,14 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 		{
 			name:        "Production team and Department eligibility does not use task assignments",
 			taskTypes:   `[{"id":"tt-1","name":"Animation","department_id":"dept-1"}]`,
-			persons:     `[{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor"}]`,
-			projectTeam: `[{"id":"p-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"is_bot":false,"role":"artist","project_role":"supervisor"}]`,
 			details:     map[string]string{"p-1": `{"id":"p-1","first_name":"Sam","last_name":"One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
 			wantIDs:     []string{"p-1"},
 		},
 		{
 			name:        "multiple matching supervisors are ordered by ID",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:     `[{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"supervisor"},{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"supervisor"}]`,
-			projectTeam: `[{"id":"p-z"},{"id":"p-a"}]`,
+			projectTeam: `[{"id":"p-z","active":true,"role":"artist","project_role":"supervisor"},{"id":"p-a","active":true,"role":"artist","project_role":"supervisor"}]`,
 			details: map[string]string{
 				"p-z": `{"id":"p-z","full_name":"Zed","email":"zed@example.test","role":"supervisor","departments":["dept-1"]}`,
 				"p-a": `{"id":"p-a","full_name":"Amy","email":"amy@example.test","role":"supervisor","departments":["dept-1"]}`,
@@ -178,56 +175,79 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 		{
 			name:        "matching department supervisor outside Production team is excluded",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:     `[{"id":"p-1","role":"supervisor"}]`,
-			projectTeam: `[{"id":"p-2"}]`,
+			projectTeam: `[{"id":"p-2","active":true,"role":"artist"}]`,
 			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
 		},
 		{
 			name:        "supervisor in another department is excluded",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:     `[{"id":"p-1","role":"supervisor"}]`,
-			projectTeam: `[{"id":"p-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"supervisor"}]`,
 			details:     map[string]string{"p-1": `{"id":"p-1","role":"supervisor","departments":["dept-2"]}`},
+		},
+		{
+			name:        "supervisor with no Department is excluded",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"supervisor"}]`,
+			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","departments":[]}`},
 		},
 		{
 			name:        "non-supervisor in matching department is excluded",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:     `[{"id":"p-1","role":"user"}]`,
-			projectTeam: `[{"id":"p-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"artist"}]`,
 		},
 		{
-			name:      "task type without department fails closed",
-			taskTypes: `[{"id":"tt-1","department_id":""}]`,
-			persons:   `[]`,
-			wantErr:   true,
+			name:        "task type without department has no automatic supervisors but preserves team resolution",
+			taskTypes:   `[{"id":"tt-1","department_id":""}]`,
+			projectTeam: `[]`,
 		},
 		{
 			name:      "unknown task type ID fails closed",
 			taskTypes: `[{"id":"tt-other","department_id":"dept-1"}]`,
-			persons:   `[]`,
 			wantErr:   true,
 		},
 		{
 			name:         "person detail failure fails closed",
 			taskTypes:    `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:      `[{"id":"p-1","role":"supervisor"}]`,
-			projectTeam:  `[{"id":"p-1"}]`,
+			projectTeam:  `[{"id":"p-1","active":true,"role":"supervisor"}]`,
 			detailStatus: http.StatusForbidden,
 			wantErr:      true,
 		},
 		{
 			name:        "duplicate person IDs are fetched and returned once",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:     `[{"id":"p-1","role":"supervisor"},{"id":"p-1","role":"supervisor"}]`,
-			projectTeam: `[{"id":"p-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"supervisor"},{"id":"p-1","active":true,"role":"supervisor"}]`,
 			details:     map[string]string{"p-1": `{"id":"p-1","full_name":"Sam One","email":"sam@example.test","role":"supervisor","departments":["dept-1"]}`},
 			wantIDs:     []string{"p-1"},
 		},
 		{
 			name:        "empty Production team has no automatic Supervisors",
 			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
-			persons:     `[{"id":"p-1","role":"supervisor"}]`,
 			projectTeam: `[]`,
+		},
+		{
+			name:        "global supervisor with project artist is excluded",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"supervisor","project_role":"artist"}]`,
+		},
+		{
+			name:        "global supervisor with project manager is excluded",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"supervisor","project_role":"manager"}]`,
+		},
+		{
+			name:        "global admin remains admin despite stale project supervisor",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"admin","project_role":"supervisor"}]`,
+		},
+		{
+			name:        "Position does not grant Supervisor eligibility",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			projectTeam: `[{"id":"p-1","active":true,"role":"artist","position":"Supervisor"}]`,
+		},
+		{
+			name:        "inactive or bot production team entries are excluded",
+			taskTypes:   `[{"id":"tt-1","department_id":"dept-1"}]`,
+			projectTeam: `[{"id":"p-1","active":false,"role":"supervisor"},{"id":"p-2","active":true,"is_bot":true,"role":"supervisor"}]`,
 		},
 	}
 
@@ -247,8 +267,6 @@ func TestGetProjectTaskTypeSupervisorsWithCredentials(t *testing.T) {
 					_, _ = w.Write([]byte(tc.taskTypes))
 				case "/api/data/projects/project-1/team":
 					_, _ = w.Write([]byte(tc.projectTeam))
-				case "/api/data/persons/":
-					_, _ = w.Write([]byte(tc.persons))
 				default:
 					const prefix = "/api/data/persons/"
 					if !strings.HasPrefix(r.URL.Path, prefix) || r.URL.Query().Get("relations") != "true" {

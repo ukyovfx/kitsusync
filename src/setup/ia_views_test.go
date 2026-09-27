@@ -2064,15 +2064,15 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 	if err := db.Create(&model.UserMap{KitsuID: "non-team-user", KitsuName: "Outsider", KitsuEmail: "outside@example.test", DiscordID: "123456789012345682", DiscordDisplayName: "Outside Discord"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	oldTasks, oldRoles := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild
+	oldTasks, oldRoles, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildMembersForGuild
 	oldTeam := reviewerProductionTeamReader
 	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentName: "Comp"}}
 	}
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
 		return []kitsu.Person{
-			{ID: "linked-artist", FullName: "Linked Artist", Email: "artist@example.test"},
-			{ID: "unlinked-person", FullName: "Unlinked Person", Email: "unlinked@example.test"},
+			{ID: "linked-artist", FullName: "Linked Artist", Email: "artist@example.test", Active: true},
+			{ID: "unlinked-person", FullName: "Unlinked Person", Email: "unlinked@example.test", Active: true},
 		}, nil
 	}
 	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
@@ -2082,8 +2082,11 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 			{ID: "123456789012345681", Name: "Not Mentionable", Mentionable: false},
 		}, nil
 	}
+	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345679", "linked-artist", "", "")}, nil
+	}
 	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader = oldTasks, oldRoles, oldTeam
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
 	})
 
 	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole string }{
@@ -2131,11 +2134,15 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
 		teamReads++
 		return []kitsu.Person{
-			{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Email: "ukyo@example.test", Role: "supervisor", Departments: []string{"dept-comp"}},
-			{ID: "animation-supervisor", FullName: "Animation Supervisor", Role: "supervisor", Departments: []string{"dept-anim"}},
-			{ID: "comp-artist", FullName: "Comp Artist", Role: "artist", Departments: []string{"dept-comp"}},
-			{ID: "unknown-supervisor", FullName: "Unknown Supervisor", Role: "supervisor", Departments: []string{"dept-unknown"}},
+			{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Email: "ukyo@example.test", Active: true, Role: "artist", ProjectRole: "supervisor", Departments: []string{"dept-comp"}},
+			{ID: "animation-supervisor", FullName: "Animation Supervisor", Active: true, Role: "supervisor", Departments: []string{"dept-anim"}},
+			{ID: "comp-artist", FullName: "Comp Artist", Active: true, Role: "artist", Departments: []string{"dept-comp"}},
+			{ID: "unknown-supervisor", FullName: "Unknown Supervisor", Active: true, Role: "supervisor", Departments: []string{"dept-unknown"}},
 		}, nil
+	}
+	oldGuildMembers := reviewerGuildMembersForGuild
+	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345679", "ukyo", "global-ukyo", "ukyo-guild")}, nil
 	}
 	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) { return nil, nil }
 	reviewerDepartmentSupervisorsForTeam = func(_, _, departmentID string, team []kitsu.Person) ([]kitsu.Person, error) {
@@ -2146,10 +2153,11 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 	}
 	t.Cleanup(func() {
 		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerDepartmentSupervisorsForTeam = oldTasks, oldRoles, oldTeam, oldSupervisors
+		reviewerGuildMembersForGuild = oldGuildMembers
 	})
 
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en")
-	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo", "Supervisor", "Comp: Compositing, Roto", "Automatic", "Overrides", "None", "Linked"} {
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
+	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo-guild", "Supervisor", "Comp: Compositing, Roto", "Automatic", "Overrides", "None", "Linked"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Production Users UI missing %q: %s", want, body)
 		}
@@ -2174,19 +2182,22 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345679"); err != nil {
 		t.Fatal(err)
 	}
-	overridden := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en")
-	for _, want := range []string{"Ukyo Matsuo", "Overrides", "Not active while an override is set."} {
+	overridden := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
+	for _, want := range []string{"Ukyo Matsuo", "Overrides", "Comp Supervisor"} {
 		if !strings.Contains(overridden, want) {
 			t.Fatalf("automatic Reviewer/override state missing %q: %s", want, overridden)
 		}
+	}
+	if strings.Contains(overridden, "Not active while an override is set.") {
+		t.Fatal("automatic Reviewer was marked inactive while additive overrides existed")
 	}
 }
 
 func TestProductionSupervisorTaskTypeSummariesUseOnlyKnownMatchingMetadata(t *testing.T) {
 	team := []kitsu.Person{
-		{ID: "supervisor", Role: "supervisor", Departments: []string{"dept-comp", "dept-anim"}},
-		{ID: "artist", Role: "artist", Departments: []string{"dept-comp"}},
-		{ID: "unknown", Role: "supervisor", Departments: []string{"dept-missing"}},
+		{ID: "supervisor", Active: true, Role: "supervisor", Departments: []string{"dept-comp", "dept-anim"}},
+		{ID: "artist", Active: true, Role: "artist", Departments: []string{"dept-comp"}},
+		{ID: "unknown", Active: true, Role: "supervisor", Departments: []string{"dept-missing"}},
 	}
 	taskTypes := []kitsu.TaskType{
 		{ID: "task-paint", Name: "Paint", DepartmentID: "dept-comp", DepartmentName: "Comp"},
@@ -2203,6 +2214,25 @@ func TestProductionSupervisorTaskTypeSummariesUseOnlyKnownMatchingMetadata(t *te
 	}
 	if _, ok := got["unknown"]; ok {
 		t.Fatal("Supervisor received a summary without matching Production Task Type metadata")
+	}
+}
+
+func TestDiscordGuildMemberDisplayNamePriority(t *testing.T) {
+	tests := []struct {
+		name   string
+		member DiscordGuildMember
+		want   string
+	}{
+		{name: "nickname", member: reviewerTestGuildMember("", "username", "Global", "Guild Nick"), want: "@Guild Nick"},
+		{name: "global display name", member: reviewerTestGuildMember("", "username", "Global", ""), want: "@Global"},
+		{name: "username", member: reviewerTestGuildMember("", "username", "", ""), want: "@username"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := discordGuildMemberDisplayName(tc.member); got != tc.want {
+				t.Fatalf("display name=%q want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -2225,18 +2255,21 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatal(err)
 	}
-	oldTasks, oldRoles, oldTeam := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader
+	oldTasks, oldRoles, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild
 	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}
 	}
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
-		return []kitsu.Person{{ID: "person-linked", FullName: "Linked", Email: "linked@example.com"}}, nil
+		return []kitsu.Person{{ID: "person-linked", FullName: "Linked", Email: "linked@example.com", Active: true}}, nil
+	}
+	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345679", "linked", "", "")}, nil
 	}
 	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
 		return []DiscordGuildRole{{ID: guildID, Name: "@everyone", Mentionable: true}, {ID: "123456789012345680", Name: "Reviewers", Mentionable: true}, {ID: "123456789012345681", Name: "Private", Mentionable: false}}, nil
 	}
 	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader = oldTasks, oldRoles, oldTeam
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
 	})
 	post := func(values string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader(values+"&project_id=reviewer-mutations"))

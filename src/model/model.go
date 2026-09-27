@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
-
-	"app/src/api/kitsu"
 
 	"github.com/gookit/slog"
 	"gorm.io/gorm"
@@ -1398,33 +1395,6 @@ func GetUserMapForProjectWithIdentity(db *gorm.DB, kitsuProjectID, kitsuPersonID
 	return ""
 }
 
-// ResolveProjectTaskTypeSupervisorDiscordIDs resolves Kitsu Department
-// Supervisors for one Production Task Type and maps linked people through the
-// existing User Linking records. It is read-only and does not select Checkers.
-func ResolveProjectTaskTypeSupervisorDiscordIDs(db *gorm.DB, baseURL, token, projectID, taskTypeID string) ([]string, error) {
-	if db == nil {
-		return nil, gorm.ErrInvalidDB
-	}
-	supervisors, err := kitsu.GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, taskTypeID)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]struct{}, len(supervisors))
-	for _, supervisor := range supervisors {
-		discordID := strings.TrimSpace(GetUserMapForProjectWithIdentity(db, projectID, supervisor.ID, supervisor.FullName, supervisor.Email))
-		if discordID != "" {
-			seen[discordID] = struct{}{}
-		}
-	}
-	result := make([]string, 0, len(seen))
-	for discordID := range seen {
-		result = append(result, discordID)
-	}
-	sort.Strings(result)
-	return result, nil
-}
-
 // GetProjectCheckerForTaskType resolves only the Production-scoped Reviewer
 // mapping for a Task Type. It returns nil when no usable Production override exists.
 func GetProjectCheckerForTaskType(db *gorm.DB, kitsuProjectID, taskType string) []string {
@@ -1479,30 +1449,6 @@ func GetCheckerForProjectByTaskTypeID(db *gorm.DB, kitsuProjectID, taskTypeID, t
 		return ids
 	}
 	return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName)
-}
-
-// ResolveReviewersForProjectWithSupervisors applies WFA Reviewer precedence:
-// Production override, linked Kitsu Department Supervisors, then legacy global
-// CheckerMap. A Supervisor read error is returned for safe logging while the
-// explicitly configured global fallback remains available.
-func ResolveReviewersForProjectWithSupervisors(db *gorm.DB, baseURL, token, kitsuProjectID, taskTypeID, taskTypeName string) ([]string, error) {
-	if db == nil {
-		return nil, gorm.ErrInvalidDB
-	}
-	if ids := GetProjectCheckerForTaskTypeID(db, kitsuProjectID, taskTypeID, taskTypeName); len(ids) > 0 {
-		return ids, nil
-	}
-	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" {
-		return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName), errors.New("Kitsu Supervisor resolution requires a runtime endpoint and token")
-	}
-	supervisors, err := ResolveProjectTaskTypeSupervisorDiscordIDs(db, baseURL, token, kitsuProjectID, taskTypeID)
-	if err != nil {
-		return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName), err
-	}
-	if len(supervisors) > 0 {
-		return supervisors, nil
-	}
-	return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName), nil
 }
 
 func resolveProjectCheckerDiscordID(db *gorm.DB, row ProjectCheckerMap) string {
