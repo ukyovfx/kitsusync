@@ -23,7 +23,7 @@ func TestLoginMarkupHasAccessibleLabelsAndErrorRegion(t *testing.T) {
 			t.Fatalf("login markup missing %q", want)
 		}
 	}
-	if !strings.Contains(adminThemeCSS, `.login-page{min-height:calc(100vh - 100px);display:flex;align-items:center;justify-content:center`) {
-		t.Fatal("login page is missing the viewport-centering wrapper contract")
+	if !strings.Contains(adminThemeCSS, `body.login-surface main{position:fixed;inset:0;z-index:1;display:grid;place-items:center`) {
+		t.Fatal("login page is missing the viewport-centered composition contract")
 	}
 }

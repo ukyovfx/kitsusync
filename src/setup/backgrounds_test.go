@@ -27,7 +27,8 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`if(!reduced.matches)frame=requestAnimationFrame(tick)`,
 		`pointer.target=1`,
 		`pointer.target=0`,
-		`Math.min(180,available)`,
+		`sheetWidth=180`,
+		`Math.min(sheetWidth,available)`,
 		`const spacing=34`,
 		`const local=Math.exp`,
 	} {

@@ -78,16 +78,36 @@ body{
   color:var(--text);
   font-family:"Outfit","Noto Sans JP",sans-serif;
   font-size:13px;
-  background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%);
+  background:
+    radial-gradient(circle at 20% 12%, rgba(255,119,51,.18), transparent 28%),
+    radial-gradient(circle at 78% 18%, rgba(255,95,31,.12), transparent 24%),
+    linear-gradient(180deg,#0a0a0b 0%, #090909 38%, #050505 100%);
   letter-spacing:.01em;
 }
-body::before,body::after{display:none}
+body::before{
+  content:"";position:fixed;inset:0;z-index:0;
+  background:
+    radial-gradient(circle, rgba(255,190,140,.36) 0 1px, transparent 1.7px) 0 0/32px 32px,
+    radial-gradient(circle, rgba(232,90,26,.18) 0 1px, transparent 2px) 12px 18px/68px 68px,
+    radial-gradient(ellipse at 20% 30%, rgba(118,54,30,.16), transparent 36%),
+    linear-gradient(135deg, rgba(255,255,255,.035), transparent 34%),
+    linear-gradient(180deg, transparent, rgba(255,255,255,.02));
+  pointer-events:none;opacity:.22;animation:particleDrift 52s linear infinite;
+}
+body.admin-surface::before{opacity:.145;animation:particleDrift 60s linear infinite}
+body::after{content:"";position:fixed;inset:0;z-index:0;background:radial-gradient(circle at 50% 20%, rgba(232,90,26,.14), transparent 32%);pointer-events:none;opacity:.55}
+@keyframes particleDrift{from{background-position:0 0,12px 18px,0 0,0 0,0 0}to{background-position:32px 64px,-24px 34px,18px -12px,0 0,0 0}}
+body.login-surface,body.admin-surface{background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%)}
+body.login-surface::before,body.admin-surface::before,body.login-surface::after,body.admin-surface::after{display:none}
 .background-canvas{position:fixed;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;contain:strict}
+body.login-surface main{position:fixed;inset:0;z-index:1;display:grid;place-items:center;padding:20px 14px;pointer-events:none}
+body.login-surface main>.login-page{width:100%;min-height:0;pointer-events:auto}
 @keyframes riseIn{
   from{opacity:0;transform:translateY(10px)}
   to{opacity:1;transform:translateY(0)}
 }
 @media (prefers-reduced-motion: reduce){
+  body::before{animation:none}
   .tile,.section-card,.page-card{animation:none}
   .nav-chip,.home-link,.action-link,.tile{transition:none}
   .nav-chip:hover,.home-link:hover,.action-link:hover,.tile:hover{transform:none}
