@@ -2051,6 +2051,8 @@ func TestProductionTeamViewUsesFreshKitsuMembershipOnEveryRender(t *testing.T) {
 
 func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *testing.T) {
 	db := newIAViewDB(t)
+	t.Setenv("KitsuJWTToken", "reviewer-test-token")
+	t.Setenv("KITSU_API_BASE_URL", "https://kitsu.example.test/api")
 	project := model.Project{KitsuProjectID: "reviewer-manager", Name: "Reviewer Manager", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
@@ -2083,7 +2085,7 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 		}, nil
 	}
 	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
-		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345679", "linked-artist", "", "")}, nil
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345679", "linked-artist", "Discord Artist", "")}, nil
 	}
 	t.Cleanup(func() {
 		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
@@ -2114,6 +2116,8 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 
 func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *testing.T) {
 	db := newIAViewDB(t)
+	t.Setenv("KitsuJWTToken", "reviewer-test-token")
+	t.Setenv("KITSU_API_BASE_URL", "https://kitsu.example.test/api")
 	project := model.Project{KitsuProjectID: "supervisor-summary", Name: "Supervisor Summary", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
