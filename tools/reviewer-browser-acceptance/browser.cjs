@@ -205,7 +205,7 @@ async function assertAutomatic(page, locale, expected, forbidden = []) {
       }
     }
 
-    if (errors.length) throw new Error(`browser console/runtime or external-origin errors: ${errors.length}`);
+    if (errors.length) throw new Error(`browser console/runtime or external-origin errors (${errors.length}): ${errors.slice(0, 12).join(' | ')}`);
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };
     fs.writeFileSync(path.join(output, 'browser-results.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
     await context.close();
