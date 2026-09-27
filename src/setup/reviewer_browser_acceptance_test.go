@@ -187,6 +187,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
 	mux.HandleFunc("/bot/admin/health", RequireSession(HealthHandler(db)))
+	mux.HandleFunc("/bot/api/setup/observability", RequireSession(TelemetrySnapshotHandler()))
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {

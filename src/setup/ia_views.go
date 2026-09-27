@@ -407,7 +407,7 @@ func systemStatusRefreshScriptCanonical() string {
 	script := systemStatusRefreshScriptCanonicalRaw()
 	script = strings.ReplaceAll(script, `labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")]`, `labels=select.value==="5m"?["5m","2.5m","0s"]:["60s","30s","0s"]`)
 	metadataParity := `function alignMetadata(row){if(!row||row.querySelector(".api-observation-primary")){return}var label=row.querySelector(".api-observation-label"),value=row.querySelector("[data-telemetry-value]"),meta=row.querySelector(".api-observation-meta");if(!label||!value||!meta){return}var primary=document.createElement("div");primary.className="api-observation-primary";primary.appendChild(label);primary.appendChild(value);row.insertBefore(primary,meta)}root.querySelectorAll(".api-observation-latency").forEach(alignMetadata);var metadataObserver=new MutationObserver(function(){root.querySelectorAll(".api-observation-latency").forEach(alignMetadata)});metadataObserver.observe(root,{subtree:true,childList:true});`
-	if end := strings.LastIndex(script, `</script>`); end >= 0 {
+	if end := strings.LastIndex(script, `})();</script>`); end >= 0 {
 		script = script[:end] + metadataParity + script[end:]
 	}
 	return strings.ReplaceAll(script, localTimeSource, sharedLocalTimeSource)
