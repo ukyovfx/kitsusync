@@ -71,7 +71,7 @@ const adminThemeCSS = `
   --status-radius:var(--radius-pill);
 }
 *{box-sizing:border-box}
-html{scrollbar-gutter:stable}
+html{scrollbar-gutter:stable;background:#070707}
 html,body{min-height:100%;overflow-x:hidden}
 body{
   margin:0;
@@ -85,34 +85,23 @@ body{
   letter-spacing:.01em;
 }
 body::before{
-  content:"";
-  position:fixed;
-  inset:0;
-  z-index:0;
+  content:"";position:fixed;inset:0;z-index:0;
   background:
     radial-gradient(circle, rgba(255,190,140,.36) 0 1px, transparent 1.7px) 0 0/32px 32px,
     radial-gradient(circle, rgba(232,90,26,.18) 0 1px, transparent 2px) 12px 18px/68px 68px,
     radial-gradient(ellipse at 20% 30%, rgba(118,54,30,.16), transparent 36%),
     linear-gradient(135deg, rgba(255,255,255,.035), transparent 34%),
     linear-gradient(180deg, transparent, rgba(255,255,255,.02));
-  pointer-events:none;
-  opacity:.22;
-  animation:particleDrift 52s linear infinite;
+  pointer-events:none;opacity:.22;animation:particleDrift 52s linear infinite;
 }
 body.admin-surface::before{opacity:.145;animation:particleDrift 60s linear infinite}
-body::after{
-  content:"";
-  position:fixed;
-  inset:0;
-  z-index:0;
-  background:radial-gradient(circle at 50% 20%, rgba(232,90,26,.14), transparent 32%);
-  pointer-events:none;
-  opacity:.55;
-}
-@keyframes particleDrift{
-  from{background-position:0 0,12px 18px,0 0,0 0,0 0}
-  to{background-position:32px 64px,-24px 34px,18px -12px,0 0,0 0}
-}
+body::after{content:"";position:fixed;inset:0;z-index:0;background:radial-gradient(circle at 50% 20%, rgba(232,90,26,.14), transparent 32%);pointer-events:none;opacity:.55}
+@keyframes particleDrift{from{background-position:0 0,12px 18px,0 0,0 0,0 0}to{background-position:32px 64px,-24px 34px,18px -12px,0 0,0 0}}
+body.login-surface,body.admin-surface{background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%)}
+body.login-surface::before,body.admin-surface::before,body.login-surface::after,body.admin-surface::after{display:none}
+.background-canvas{position:fixed;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;contain:strict}
+body.login-surface main{position:fixed;inset:0;z-index:1;display:grid;place-items:center;padding:20px 14px;pointer-events:none}
+body.login-surface main>.login-page{width:100%;min-height:0;pointer-events:auto}
 @keyframes riseIn{
   from{opacity:0;transform:translateY(10px)}
   to{opacity:1;transform:translateY(0)}
@@ -1023,6 +1012,14 @@ func authNoticeHTML(lang, title, body string) string {
 }
 
 func appShell(title, subtitle, lang string, r *http.Request, nav string, body string) string {
+	bodyClass := "public-surface"
+	if nav != "" {
+		bodyClass = "admin-surface"
+	}
+	return appShellWithSurface(title, subtitle, lang, r, nav, bodyClass, body)
+}
+
+func appShellWithSurface(title, subtitle, lang string, r *http.Request, nav, bodyClass, body string) string {
 	subHTML := ""
 	if subtitle != "" {
 		subHTML = `<div class="brand-sub">` + subtitle + `</div>`
@@ -1036,10 +1033,7 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
 		mobileLabel := t(lang, "メニュー", "Menu")
 		navHTML = `<nav class="primary-nav" aria-label="Primary navigation">` + nav + `<details class="mobile-nav glass"><summary>` + esc(mobileLabel) + `</summary>` + nav + `</details></nav>`
 	}
-	bodyClass := "public-surface"
-	if nav != "" {
-		bodyClass = "admin-surface"
-	}
+	background, backgroundScript := backgroundForSurface(bodyClass)
 	return fmt.Sprintf(`<!doctype html>
 <html lang="%s">
 <head>
@@ -1050,6 +1044,7 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
 %s
 </head>
 <body class="%s">
+%s
 <a class="skip-link" href="#main-content">%s</a>
 <div class="shell">
   <div class="topbar">
@@ -1070,6 +1065,7 @@ func appShell(title, subtitle, lang string, r *http.Request, nav string, body st
   %s
   </main>
 </div>
+%s
 </body>
-</html>`, lang, title, adminThemeCSS, shellHeadExtras(), bodyClass, t(lang, "本文へ移動", "Skip to content"), homeHref, title, subHTML, navHTML, langToggleHTML(r, lang), body)
+</html>`, lang, title, adminThemeCSS, shellHeadExtras(), bodyClass, background, t(lang, "本文へ移動", "Skip to content"), homeHref, title, subHTML, navHTML, langToggleHTML(r, lang), body, backgroundScript)
 }

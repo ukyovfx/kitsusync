@@ -21,6 +21,11 @@ const viewports = [
   { name: 'desktop', width: 1440, height: 1000 },
   { name: 'mobile', width: 390, height: 844 },
 ];
+const backgroundViewports = [
+  { name: 'desktop-1440', width: 1440, height: 900 },
+  { name: 'desktop-1920', width: 1920, height: 1080 },
+  { name: 'mobile', width: 390, height: 844 },
+];
 
 async function record(page, route, locale, viewport, state, detail) {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
@@ -55,6 +60,62 @@ async function assertAutomatic(page, locale, expected, forbidden = []) {
   for (const value of forbidden) if (text.includes(value)) throw new Error(`Automatic includes ineligible person ${value}`);
 }
 
+async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotName) {
+  const canvas = page.locator(`canvas[data-background="${mode}"]`);
+  if (await canvas.count() !== 1) throw new Error(`${mode} canvas missing for ${locale.lang}/${viewport.name}`);
+  const details = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[data-background]');
+    const card = document.querySelector('.login-card');
+    const ctx = canvas?.getContext('2d');
+    let visible = 0;
+    if (ctx) {
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 3; i < pixels.length; i += 4 * 16) if (pixels[i] > 8) visible++;
+    }
+    let centered = null;
+    if (card) {
+      const rect = card.getBoundingClientRect();
+      centered = {
+        x: Math.abs(rect.left + rect.width / 2 - innerWidth / 2),
+        y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2),
+      };
+    }
+    return {
+      visible, centered,
+      width: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      lang: document.documentElement.lang,
+      gutterBackground: getComputedStyle(document.documentElement).backgroundColor,
+    };
+  });
+  if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
+  if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
+  if (details.lang !== locale.lang) throw new Error(`${mode} page language mismatch for ${locale.lang}`);
+  if (details.gutterBackground !== 'rgb(7, 7, 7)') throw new Error(`${mode} scrollbar gutter is not using the dark page background at ${viewport.name}`);
+  if (mode === 'login-fabric' && (!details.centered || details.centered.x > 8 || details.centered.y > 8)) {
+    throw new Error(`login card lost centered composition at ${viewport.name}: ${JSON.stringify(details.centered)}`);
+  }
+  await page.screenshot({ path: path.join(output, screenshotName), fullPage: false });
+  await record(page, mode === 'login-fabric' ? '/bot/login' : '/bot/admin', locale.lang, viewport.name, 'background rendered', `${mode}; visible canvas pixels=${details.visible}; centered card=${JSON.stringify(details.centered)}`);
+}
+
+async function localCanvasAlpha(page, x, y, radius) {
+  return page.evaluate(({ x, y, radius }) => {
+    const canvas = document.querySelector('canvas[data-background]');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return 0;
+    const dpr = canvas.width / innerWidth;
+    const left = Math.max(0, Math.floor((x - radius) * dpr));
+    const top = Math.max(0, Math.floor((y - radius) * dpr));
+    const right = Math.min(canvas.width, Math.ceil((x + radius) * dpr));
+    const bottom = Math.min(canvas.height, Math.ceil((y + radius) * dpr));
+    const pixels = ctx.getImageData(left, top, right - left, bottom - top).data;
+    let sum = 0;
+    for (let i = 3; i < pixels.length; i += 4) sum += pixels[i];
+    return sum;
+  }, { x, y, radius });
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
   try {
@@ -73,6 +134,37 @@ async function assertAutomatic(page, locale, expected, forbidden = []) {
       errors.push(`unexpected browser origin ${url.origin}`);
       return route.abort();
     });
+
+    // Background acceptance is independent of the existing Current IA route checks.
+    for (const locale of locales) {
+      for (const viewport of backgroundViewports) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        await page.goto(`${base}/bot/login?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        await assertBackgroundCanvas(page, 'login-fabric', locale, viewport, `login-background-${locale.lang}-${viewport.name}.png`);
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${base}/bot/login?lang=en`, { waitUntil: 'networkidle' });
+    const loginCard = await page.locator('.login-card').boundingBox();
+    const loginPointer = { x: Math.max(5, loginCard.x - 58), y: loginCard.y + loginCard.height * .5 };
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(300);
+    const loginBefore = await localCanvasAlpha(page, loginPointer.x, loginPointer.y, 48);
+    await page.mouse.move(loginPointer.x, loginPointer.y);
+    await page.waitForTimeout(450);
+    const loginAfter = await localCanvasAlpha(page, loginPointer.x, loginPointer.y, 48);
+    if (loginAfter <= loginBefore) throw new Error(`login pointer did not increase local fabric activity (${loginBefore} -> ${loginAfter})`);
+    records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop-1440', state: 'pointer gust', detail: `local canvas alpha increased from ${loginBefore} to ${loginAfter}; no repelling motion` });
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForTimeout(100);
+    const reducedLogin = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
+    await page.waitForTimeout(500);
+    if (await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL()) !== reducedLogin) {
+      throw new Error('login fabric continued animating under reduced-motion preference');
+    }
+    records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop-1440', state: 'reduced motion', detail: 'canvas frame remained stable with reduced motion enabled' });
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
 
     // Enter through the ordinary protected route and complete the ordinary login form.
     await gotoUsers(page, locales[0]);
@@ -193,6 +285,16 @@ async function assertAutomatic(page, locale, expected, forbidden = []) {
         await page.screenshot({ path: path.join(output, `dashboard-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin', locale.lang, viewport.name, 'ready', 'Dashboard rendered without overflow or mojibake');
 
+        if (viewport.name === 'desktop') {
+          for (const backgroundViewport of backgroundViewports) {
+            await page.setViewportSize({ width: backgroundViewport.width, height: backgroundViewport.height });
+            await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+            await assertBackgroundCanvas(page, 'app-dots', locale, backgroundViewport, `app-background-${locale.lang}-${backgroundViewport.name}.png`);
+          }
+          await page.setViewportSize({ width: viewport.width, height: viewport.height });
+          await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        }
+
         await gotoUsers(page, locale);
         if (!(await page.locator('.production-reviewer-manager').count())) throw new Error(`Reviewer UI missing in ${locale.lang}`);
         await assertAutomatic(page, locale, [locale.supervisor, locale.comp, 'Global Name Supervisor', 'Username Supervisor']);
@@ -237,6 +339,27 @@ async function assertAutomatic(page, locale, expected, forbidden = []) {
         await record(page, '/bot/admin/health', locale.lang, viewport.name, '5m', 'localized 5-minute selector refreshed both timestamp-based line graphs');
       }
     }
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
+    const appPointer = { x: 420, y: 380 };
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(250);
+    const appBefore = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
+    await page.mouse.move(appPointer.x, appPointer.y);
+    await page.waitForTimeout(400);
+    const appAfter = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
+    if (appAfter <= appBefore) throw new Error(`app pointer did not subtly activate local dots (${appBefore} -> ${appAfter})`);
+    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local dot alpha increased from ${appBefore} to ${appAfter}; dot positions remain fixed` });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForTimeout(100);
+    const reducedApp = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
+    await page.waitForTimeout(500);
+    if (await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL()) !== reducedApp) {
+      throw new Error('app ambient background continued animating under reduced-motion preference');
+    }
+    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'reduced motion', detail: 'canvas frame remained stable with reduced motion enabled' });
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
 
     if (errors.length) throw new Error(`browser console/runtime or external-origin errors (${errors.length}): ${errors.slice(0, 12).join(' | ')}`);
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };
