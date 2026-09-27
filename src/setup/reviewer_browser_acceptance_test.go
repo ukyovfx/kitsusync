@@ -162,6 +162,11 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
+	for _, service := range []string{"kitsu", "discord"} {
+		Stats.RecordAPIObservation(service, time.Now().Add(-25*time.Millisecond), true, "success")
+		time.Sleep(20 * time.Millisecond)
+		Stats.RecordAPIObservation(service, time.Now().Add(-35*time.Millisecond), true, "success")
+	}
 	for _, user := range reviewerBrowserUserMaps() {
 		if err := db.Create(&user).Error; err != nil {
 			t.Fatal("seed disposable global User Linking")
@@ -184,6 +189,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	}, nil, nil)))
 	mux.Handle("/bot/login", login)
 	ready := func() bool { return true }
+	mux.HandleFunc("/bot/admin", RequireSession(AdminIndexWithRuntime(db, ready)))
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
 	mux.HandleFunc("/bot/admin/health", RequireSession(HealthHandler(db)))
@@ -311,8 +317,10 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 	}
 	status, body := http.StatusOK, "[]"
 	switch {
+	case r.URL.Path == "/api/v10/users/@me":
+		body = `{"id":"11111111111111113","username":"Synthetic KitsuSync Bot"}`
 	case r.URL.Path == "/api/v10/users/@me/guilds":
-		body = `[{"id":"11111111111111111","name":"Synthetic Discord"}]`
+		body = `[{"id":"11111111111111111","name":"Synthetic Discord"},{"id":"11111111111111112","name":"Other Synthetic Discord"}]`
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/members"):
 		if d.scenario.Load().(string) == "discord-failure" {
 			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`

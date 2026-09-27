@@ -187,21 +187,54 @@ async function assertAutomatic(page, locale, expected, forbidden = []) {
     for (const locale of locales) {
       for (const viewport of viewports) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
+
+        await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (!(await page.locator('main').innerText()).trim()) throw new Error(`Dashboard did not render in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `dashboard-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin', locale.lang, viewport.name, 'ready', 'Dashboard rendered without overflow or mojibake');
+
         await gotoUsers(page, locale);
         if (!(await page.locator('.production-reviewer-manager').count())) throw new Error(`Reviewer UI missing in ${locale.lang}`);
         await assertAutomatic(page, locale, [locale.supervisor, locale.comp, 'Global Name Supervisor', 'Username Supervisor']);
         await page.screenshot({ path: path.join(output, `reviewer-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=users', locale.lang, viewport.name, 'ready', 'Production Team and additive Reviewer controls rendered without overflow or mojibake');
 
+        await page.goto(`${base}/bot/admin/users?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (!(await page.locator('#global-discord-guild').count())) throw new Error(`User Linking server selector missing in ${locale.lang}`);
+        if (await page.locator('.user-linking-table').count()) throw new Error(`User Linking table appeared before explicit server selection in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-unselected.png`), fullPage: true });
+        await record(page, '/bot/admin/users', locale.lang, viewport.name, 'server unselected', 'compact server selector rendered without an unselected-state mapping table');
+
         await page.goto(`${base}/bot/admin/users?lang=${locale.lang}&discord_guild_id=${guildID}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('.user-linking-table').count())) throw new Error(`User Linking table missing in ${locale.lang}`);
-        await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-selected.png`), fullPage: true });
         await record(page, '/bot/admin/users', locale.lang, viewport.name, 'ready', 'four-column User Linking table rendered');
 
         await page.goto(`${base}/bot/admin/health?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('main').innerText()).trim()) throw new Error(`System Status did not render in ${locale.lang}`);
+        const graphContract = await page.evaluate(() => ({
+          lines: document.querySelectorAll('.telemetry-line').length,
+          bars: document.querySelectorAll('.telemetry-bar').length,
+          failureMarks: document.querySelectorAll('.telemetry-failure').length,
+          oldDetails: document.querySelectorAll('.pipeline-health-details,[data-open-pipeline-details]').length,
+          redundantResponseLabels: [...document.querySelectorAll('.api-observation-label')].filter(node => /Current response time|現在の応答時間/.test(node.textContent || '')).length,
+        }));
+        if (graphContract.lines !== 2 || graphContract.bars || graphContract.failureMarks || graphContract.oldDetails || graphContract.redundantResponseLabels) {
+          throw new Error(`System Status retained obsolete graph/detail UI in ${locale.lang}: ${JSON.stringify(graphContract)}`);
+        }
         await page.screenshot({ path: path.join(output, `system-status-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/health', locale.lang, viewport.name, 'ready', 'Current IA System Status loaded');
+        await record(page, '/bot/admin/health', locale.lang, viewport.name, 'ready', `Current IA System Status loaded; ${graphContract.lines} line paths`);
+
+        await page.locator('[data-system-status-window]').selectOption('5m');
+        const windowLabels = locale.lang === 'ja' ? ['5分', '2分30秒', '今'] : ['5m', '2m30s', 'Now'];
+        await page.waitForFunction(expected => {
+          const labels = [...document.querySelectorAll('.api-sparkline .chart-time-label')].map(node => node.textContent.trim());
+          return expected.every(label => labels.includes(label));
+        }, windowLabels, { timeout: 5000 });
+        const fiveMinuteLines = await page.locator('.api-sparkline .telemetry-line').count();
+        if (fiveMinuteLines !== 2) throw new Error(`5m System Status graph did not retain both line paths in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `system-status-${locale.lang}-${viewport.name}-5m.png`), fullPage: true });
+        await record(page, '/bot/admin/health', locale.lang, viewport.name, '5m', 'localized 5-minute selector refreshed both timestamp-based line graphs');
       }
     }
 
