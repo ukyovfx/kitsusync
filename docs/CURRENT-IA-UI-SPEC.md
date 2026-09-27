@@ -18,6 +18,12 @@ This is the canonical visual and content contract for the accepted Current IA. I
 
 Current IA links stay within these routes. A legacy renderer must not be reached by a normal Current IA action.
 
+## Background motion
+
+The login page keeps its centered card as the composition anchor. Its background is a lightweight Canvas 2D bilateral particle fabric that flows inward from both sides, with broad slow folds and fine flutter, narrowing and fading before the card. Particle size and brightness vary with depth; the palette moves from dark burnt orange through Kitsu orange to amber. Pointer movement gently increases nearby wave/gust amplitude and eases back when the pointer leaves; particles never repel from the pointer. The background has no vortex, rings, network lines, bloom, or heavy glow.
+
+Normal authenticated app pages use a separate, substantially quieter Canvas 2D ambient layer: a fixed dot grid with very slow soft noise/flow modulation and slight pointer activation. Dots do not materially move or repel. The background remains subordinate to text and controls. Both layers stop continuous animation when reduced motion is requested. Neither background changes page structure, route behavior, or current IA content.
+
 ## Dashboard
 
 The primary content order is fixed:
