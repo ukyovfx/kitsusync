@@ -23,15 +23,18 @@ Assert-CandidateProvenance $outerProvenance $false
 $outerProvenance.artifact_kind = 'candidate'
 Assert-CandidateProvenance $outerProvenance $false
 $bundleProvenance = @{
-    artifact_kind = 'candidate'; source_commit = $CommitSha; source_id = $CommitSha
+    artifact_kind = 'nonrelease'; source_commit = $CommitSha; source_id = $CommitSha
     release_commit = ''; release_tag = ''; image_ref = "kitsusync:ci-$CommitSha"
     image_archive_sha256 = 'a' * 64; image_config_digest = 'sha256:' + ('b' * 64)
     image_manifest_digest = 'sha256:' + ('c' * 64); image_content_digest = 'sha256:' + ('d' * 64)
 }
 Assert-CandidateProvenance $bundleProvenance $true
+$bundleProvenance.artifact_kind = 'candidate'
+Assert-CandidateProvenance $bundleProvenance $true
 foreach ($case in @(
     @{ Name = 'release outer artifact'; Values = (@{ artifact_kind = 'release'; source_commit = $CommitSha; source_id = $CommitSha; release_commit = ''; release_tag = '' }); Bundle = $false },
-    @{ Name = 'nonrelease bundle'; Values = (@{ artifact_kind = 'nonrelease'; source_commit = $CommitSha; source_id = $CommitSha; release_commit = ''; release_tag = ''; image_ref = "kitsusync:ci-$CommitSha"; image_archive_sha256 = 'a' * 64; image_config_digest = 'b' * 64; image_manifest_digest = 'c' * 64; image_content_digest = 'd' * 64 }); Bundle = $true }
+    @{ Name = 'release bundle'; Values = (@{ artifact_kind = 'release'; source_commit = $CommitSha; source_id = $CommitSha; release_commit = ''; release_tag = ''; image_ref = "kitsusync:ci-$CommitSha"; image_archive_sha256 = 'a' * 64; image_config_digest = 'b' * 64; image_manifest_digest = 'c' * 64; image_content_digest = 'd' * 64 }); Bundle = $true },
+    @{ Name = 'release identity on nonrelease artifact'; Values = (@{ artifact_kind = 'nonrelease'; source_commit = $CommitSha; source_id = $CommitSha; release_commit = $CommitSha; release_tag = 'v0.4.9' }); Bundle = $false }
 )) {
     $rejected = $false
     try { Assert-CandidateProvenance $case.Values $case.Bundle }

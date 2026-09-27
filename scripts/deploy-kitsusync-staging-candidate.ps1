@@ -51,8 +51,7 @@ function Read-Provenance([string]$Path) {
 }
 
 function Assert-CandidateProvenance($Values, [bool]$BundleProvenance) {
-    $allowedArtifactKinds = if ($BundleProvenance) { @('candidate') } else { @('candidate', 'nonrelease') }
-    if ($Values.artifact_kind -notin $allowedArtifactKinds -or $Values.source_commit -ne $CommitSha -or
+    if ($Values.artifact_kind -notin @('candidate', 'nonrelease') -or $Values.source_commit -ne $CommitSha -or
         $Values.source_id -ne $CommitSha -or $Values.release_commit -or $Values.release_tag) {
         throw 'Artifact provenance does not identify the exact non-release candidate SHA.'
     }
