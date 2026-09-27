@@ -89,6 +89,12 @@ rollback_staging() {
   return 1
 }
 die() { printf 'STAGING_DEPLOY_ERROR=%s\n' "$1" >&2; exit 1; }
+verify_candidate_provenance() {
+  local expected_sha="$1" source="$2" source_id="$3" kind="$4" release_commit="$5" release_tag="$6" image="$7" expected_image="$8"
+  [[ "$source" == "$expected_sha" && "$source_id" == "$expected_sha" &&
+    ( "$kind" == candidate || "$kind" == nonrelease ) &&
+    -z "$release_commit" && -z "$release_tag" && "$image" == "$expected_image" ]]
+}
 verify_production_unchanged() {
   local observed
   observed="$(docker ps -q --filter publish=8090 | sort)" || return 1
@@ -226,7 +232,7 @@ verify_staging_network_name() {
   docker inspect --format '{{json .NetworkSettings.Networks}}' "$1" | python3 -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)'
 }
 if [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" == --contract-info ]]; then
-  printf 'STAGING_HELPER_CONTRACT=staging-v7 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+  printf 'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
   exit 0
 fi
 [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
@@ -323,7 +329,7 @@ PY
 field() { sed -n "s/^$1=//p" "$PRIVATE/provenance.txt" | head -n 1 | tr -d '\r'; }
 [[ "$(tr -d '\r\n' < "$PRIVATE/deployment-mode")" == normal ]] || die DEPLOYMENT_MODE_INVALID
 source="$(field source_commit)" source_id="$(field source_id)" kind="$(field artifact_kind)" release_commit="$(field release_commit)" release_tag="$(field release_tag)" image="$(field image_ref)"
-[[ "$source" == "$SOURCE_SHA" && "$source_id" == "$SOURCE_SHA" && "$kind" == candidate && -z "$release_commit" && -z "$release_tag" && "$image" == "$IMAGE_REF" ]] || die CANDIDATE_PROVENANCE_MISMATCH
+verify_candidate_provenance "$SOURCE_SHA" "$source" "$source_id" "$kind" "$release_commit" "$release_tag" "$image" "$IMAGE_REF" || die CANDIDATE_PROVENANCE_MISMATCH
 
 for pair in \
   'kitsusync-image.tar:image_archive_sha256' 'docker-compose.yml:compose_sha256' \
