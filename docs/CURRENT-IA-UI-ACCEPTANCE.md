@@ -1,5 +1,13 @@
 # Current IA UI Acceptance Checklist
 
+## Reusable authenticated browser gate
+
+Pull requests to `master` run the `Reviewer Browser Acceptance` workflow on the exact PR head. It launches the normal KitsuSync login and admin handlers against a temporary SQLite database, a loopback-only synthetic Kitsu service, and an intercepted synthetic Discord API. Chromium logs in through `/bot/login`; there is no test authentication bypass and no real Kitsu/Discord credential or outbound service call.
+
+The job records Japanese and English Production Users/Reviewer, User Linking, and System Status screens at 1440×1000 and 390×844. It checks the live-team Reviewer eligibility and display-name cases, additive User/Role overrides and filtering, empty/error states, layout overflow, mojibake, and browser console errors. It saves synthetic screenshots and a non-secret state summary as a short-retention Actions artifact. A companion synthetic WFA delivery test verifies recipient union/deduplication, exact allowed mentions, zero-Reviewer card delivery, and fail-closed lookup behavior.
+
+This CI evidence validates application behavior with synthetic services only. It does not establish deployed runtime identity, production credential validity, live Kitsu data, or real Discord delivery; those remain separate staging/runtime evidence.
+
 Use an authenticated 8090 browser session. Browser-rendered output is the final acceptance evidence. Do not submit write-producing forms during this smoke check.
 
 ## Dashboard — `/bot/admin`
