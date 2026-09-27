@@ -14,6 +14,7 @@ readonly TARGET=/usr/local/sbin/kitsusync-staging-deploy
 readonly CONFIG_ROOT=/etc/kitsusync-staging
 readonly EXPECTED_OLD_HELPER_SHAS=(
   bf3909d5ea2444eb08178425305e190008e534fbee2880b0eea991d51452c845
+  63371b16e7f13af1e1d7046217c8ce0ae200b0e9b42ab1bf342b158af121e78d
   eb0ec326c89c0414cceb15390e58c4a2195b4f9377cdbbc8b5e8fe2d38b0f77b
   63d53cedfced32f26f4edc7338ee38d3a4c38e816a8427a6c7194bc366d25fc8
   41dec98c9e6e6f7165733212bb3518b1cb08bcb19a17fad047fd0c76ae5f7704

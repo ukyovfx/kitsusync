@@ -29,13 +29,13 @@ set -euo pipefail
 printf '%s\n' "$(stat -c '%a' "$0")" >> "$MODE_LOG"
 printf 'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
 HELPER
-cat >"${old_file}" <<'OLD_HELPER'
-#!/usr/bin/env bash
-exit 0
-OLD_HELPER
 chmod 0600 "${helper_file}"
-chmod 0750 "${old_file}"
+deployed_v7_commit=2f08155688b8f6c733d043714016f5d86f4decfc
+deployed_v7_sha=63371b16e7f13af1e1d7046217c8ce0ae200b0e9b42ab1bf342b158af121e78d
+git -C "${root}" cat-file blob "${deployed_v7_commit}:deploy/kitsusync-staging-deploy" >"${old_file}"
 old_sha="$(sha256sum "${old_file}" | cut -d' ' -f1)"
+[[ "${old_sha}" == "${deployed_v7_sha}" ]]
+grep -Fq 'STAGING_HELPER_CONTRACT=staging-v7' "${old_file}"
 
 "${PYTHON:-python3}" - "${upgrade_source}" "${upgrade_file}" "${sandbox}" "${uid}" "${gid}" "${old_sha}" <<'PY'
 from pathlib import Path
