@@ -219,9 +219,7 @@ jobs:
     env:
       CGO_ENABLED: "1"
       KITSUSYNC_RUN_REVIEWER_BROWSER: "1"
-      KITSUSYNC_REVIEWER_BROWSER_OUTPUT: ${{ runner.temp }}/reviewer-browser-evidence
       KITSUSYNC_REVIEWER_BROWSER_SHA: ${{ github.event.pull_request.head.sha }}
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
 
     steps:
       - name: Check out exact PR head
@@ -242,6 +240,7 @@ jobs:
       - name: Install pinned Playwright Chromium dependency
         env:
           PLAYWRIGHT_DEPS: ${{ runner.temp }}/reviewer-browser-deps
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
         run: |
           set -euo pipefail
           node --version
@@ -251,6 +250,9 @@ jobs:
           echo "NODE_PATH=$PLAYWRIGHT_DEPS/node_modules" >> "$GITHUB_ENV"
 
       - name: Run isolated authenticated Reviewer browser acceptance
+        env:
+          KITSUSYNC_REVIEWER_BROWSER_OUTPUT: ${{ runner.temp }}/reviewer-browser-evidence
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
         run: go test ./src/setup -run '^TestReviewerBrowserAcceptance$' -count=1 -timeout=240s -v
 
       - name: Verify synthetic WFA delivery and exact mention allowlist
