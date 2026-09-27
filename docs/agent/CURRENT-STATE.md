@@ -2,10 +2,11 @@
 
 ## Verification basis
 
-Verified against upstream `master` at commit `95a898c3068af473700a92acd436c8ebb6a4f768` on 2026-09-24.
+Verified against upstream `master` at commit `cfae399cb3c5e432f52b5d269f3b1b8823668af4` on 2026-09-27.
 
-Repository version: `0.4.7`.
-Latest GitHub Release: `v0.4.7`.
+Repository version: `0.4.9` (from `VERSION`).
+Latest GitHub Release: `v0.4.9`, targeting `22b3a3c9400dad4ef012a570816934d57e736a06`.
+The release target is an ancestor of, and older than, current `master`; no release has been created for `cfae399cb3c5e432f52b5d269f3b1b8823668af4`.
 
 ## Confirmed default-branch state
 
@@ -17,8 +18,11 @@ Latest GitHub Release: `v0.4.7`.
 - PR #205 is merged and makes saved Kitsu/Discord token replacement reversible without rendering stored secret values.
 - PR #207 is merged and moves Production Setup, Task Type reads, and execution-time revalidation onto the persisted/runtime Kitsu credential source; reviewed `category_id` is preserved into execution revalidation.
 - PR #206 is merged and makes User Linking readiness/failure/empty states explicit, requires explicit guild selection when needed, excludes bot identities from human mapping, and preserves Save/Unlink mapping persistence.
-- Post-merge master CI #528 and Security Audit #110 both pass on `95a898c3068af473700a92acd436c8ebb6a4f768`.
-- The accepted master tree is `5d1bb57ed5fd76665f542e8bc1b87f964a28dc40`, matching the previously browser-tested combined candidate tree.
+- PR #219 is merged and establishes the accepted Kitsu Production Team / Reviewer behavior, including additive explicit overrides and execution-time recipient validation.
+- PR #216 is merged and establishes the isolated Staging deployment infrastructure; it does not authorize or perform Production deployment.
+- PR #215 is merged and applies the UI-only Current IA polish while preserving #219 Reviewer semantics and #216 Staging infrastructure.
+- Post-merge master CI #622 and Security Audit #204 both pass on `cfae399cb3c5e432f52b5d269f3b1b8823668af4`.
+- At this `cfae399cb3c5e432f52b5d269f3b1b8823668af4` verification snapshot, before this documentation refresh was opened, there were no open pull requests.
 
 ## Pre-merge acceptance evidence
 
@@ -28,34 +32,33 @@ Latest GitHub Release: `v0.4.7`.
 - Browser acceptance covered #205 Connections token Change/Cancel/masking behavior, #207 persisted-credential Production Setup/Task Types/execution revalidation, and #206 User Linking JP/EN desktop/mobile readiness states plus Save/refresh/Unlink persistence.
 - Synthetic acceptance proves implementation/browser behavior only; it does not establish production credential validity, live Kitsu visibility, or current deployed-runtime behavior.
 
-## Current active work
+## Current next work
 
-- PR #208 is this documentation refresh. It remains Draft until its refreshed head passes CI/Security and receives explicit merge approval.
-- PR #199 is the old mixed-scope Draft and must not be merged as-is; replacement implementation scopes are now accepted on `master`.
-- PR #203 is the split-design Draft. Its lifecycle can be resolved as superseded after explicit human approval.
-- The next implementation-facing step is deployment preparation from exact accepted master `95a898c3068af473700a92acd436c8ebb6a4f768`, not further acceptance work on #205/#206/#207.
+- No implementation, deployment, or release task is currently selected or approved. The next repo-facing work should be defined from the next explicit product or maintenance request; do not infer a task from closed PR history.
+- `docs/agent/plans/active/` currently contains no active plan beyond `.gitkeep`.
+- Production deployment and release of current master remain separate actions requiring their own explicit authorization and verification.
 
-## Current vfxstudio runtime evidence
+## Historical vfxstudio runtime evidence
 
 - The approved read-only `/usr/local/sbin/kitsusync-inspect all` helper completed on 2026-09-24. It identified image `kitsusync:v0.4.7`, deployed revision/source-id `4879c7f3adb966a4760438f502db1929e76ea51e`, configured Kitsu origin `http://172.17.0.1:8080/`, persisted Kitsu token metadata present, bot metadata present, runtime auth mode `bot_token_failed`, and error class `BOT_TOKEN_EXPIRED_OR_INACTIVE`.
-- Git comparison shows accepted `master` is now 75 commits ahead of the deployed revision.
+- That deployed revision is an ancestor of accepted master and is 150 commits behind `cfae399cb3c5e432f52b5d269f3b1b8823668af4`. This is historical evidence from 2026-09-24, not a current runtime inspection.
 - The latest approved helper observation reported legacy `KitsuJWTToken` and `DISCORD_BOT_TOKEN` environment variables as empty; an earlier observation reported them present. No secret values were printed, and environment presence must not be used as evidence of credential validity or credential-source selection.
 - Current Projects/Persons response shapes/row counts and the production bot principal's actual authorization/visibility remain independently unverified.
 - The old deployment cannot establish behavior now accepted through #204/#205/#206/#207.
 
-## Deployment evidence
+## Historical deployment evidence
 
-- Master CI #528 produced deployment artifact `kitsusync-deployment-95a898c3068af473700a92acd436c8ebb6a4f768` from exact accepted master.
+- Master CI #528 produced deployment artifact `kitsusync-deployment-95a898c3068af473700a92acd436c8ebb6a4f768` from the then-current master; this is not an artifact for current master.
 - Artifact id: `10796346925`.
 - GitHub artifact digest: `sha256:54fe8b340bc666d8474d10919487e847d76dd988956be7037daf0ee27092f12a`.
 - CI verified source/build/image provenance, bundle load-back behavior, deployment behavior tests, and isolated deployment/rollback transaction behavior before upload.
-- Artifact existence and CI success are deployment-preparation evidence only; no production deployment is authorized by this document.
+- Artifact existence and CI success are deployment-preparation evidence only and do not establish or authorize deployment of current master.
 
 ## Production state boundary
 
 - The previous v0.4.6 production-verification plan is historical and is not a current deployment instruction.
-- No deployment of accepted master `95a898c3068af473700a92acd436c8ebb6a4f768` to vfxstudio is verified yet.
-- The current persisted production Kitsu Bot credential is recorded as expired or inactive.
+- No deployment of accepted master `cfae399cb3c5e432f52b5d269f3b1b8823668af4` to vfxstudio is verified, and no Production deployment was performed for the #219 → #216 → #215 merge sequence.
+- As of the 2026-09-24 runtime inspection, the persisted production Kitsu Bot credential was recorded as expired or inactive.
 - Before any production write, verify the exact artifact/provenance and target runtime, then use only the supported deployment wrapper under explicit production approval.
 - After approved deployment, restore/validate a usable Kitsu Bot credential through the supported Connections/setup path and perform live Projects/Persons, Production Setup, Task Type/execution revalidation, and User Linking verification.
 
