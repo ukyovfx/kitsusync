@@ -2466,7 +2466,13 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 				selectedTaskTypes := selectedTaskTypesFromForm(r, taskTypes)
 				if reviewer := findAssignmentUserByIdentity(assignedUsers, strings.TrimSpace(r.FormValue("reviewer_identity"))); reviewer != nil {
 					if useProjectScoped {
-						syncProjectCheckerAssignmentsForUser(db, project.ID, reviewer.KitsuName, reviewer.KitsuEmail, reviewer.DiscordID, selectedTaskTypes)
+						taskTypeIDs := make(map[string]string)
+						currentTaskTypes := setupKitsuTaskTypes(db, project.KitsuProjectID)
+						for _, taskType := range currentTaskTypes {
+							name := strings.TrimSpace(taskType.Name)
+							taskTypeIDs[name] = taskTypeIDForName(name, currentTaskTypes)
+						}
+						syncProjectCheckerAssignmentsForUser(db, project.ID, reviewer.KitsuName, reviewer.KitsuEmail, reviewer.DiscordID, selectedTaskTypes, taskTypeIDs)
 					} else {
 						syncLegacyCheckerAssignmentsForUser(db, reviewer.KitsuName, reviewer.KitsuEmail, selectedTaskTypes)
 					}
@@ -3875,11 +3881,11 @@ func selectedTaskTypesFromForm(r *http.Request, validTaskTypes []string) []strin
 	return selected
 }
 
-func syncProjectCheckerAssignmentsForUser(db *gorm.DB, projectRowID uint, name, email, discordID string, selectedTaskTypes []string) {
+func syncProjectCheckerAssignmentsForUser(db *gorm.DB, projectRowID uint, name, email, discordID string, selectedTaskTypes []string, taskTypeIDs map[string]string) {
 	selectedSet := make(map[string]bool, len(selectedTaskTypes))
 	for _, taskType := range selectedTaskTypes {
 		selectedSet[taskType] = true
-		model.UpsertProjectCheckerMapWithUser(db, projectRowID, taskType, name, email, discordID, "")
+		model.UpsertProjectCheckerMapWithUserAndTaskTypeID(db, projectRowID, taskTypeIDs[taskType], taskType, name, email, discordID, "")
 	}
 	for _, row := range model.ListProjectCheckerMaps(db, projectRowID) {
 		if assignmentIdentityKey(row.KitsuName, row.KitsuEmail) == assignmentIdentityKey(name, email) && !selectedSet[row.TaskType] {

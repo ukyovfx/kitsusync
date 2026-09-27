@@ -3,6 +3,7 @@ package discord
 import (
 	"app/src/api/kitsu"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -345,15 +346,33 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	oldDriveURLResolver := GoogleDriveURLResolver
 	oldUserMapResolver := UserMapResolver
 	oldCheckerResolver := CheckerResolver
+	oldReviewerResolver := ReviewerResolver
+	checkerIDs := []string{"202"}
+	reviewerResolverCalls := 0
+	var reviewerResolveErr error
+	checkResolverArgs := func(projectID, taskTypeID, taskTypeName string) {
+		if projectID != "production-1" || taskTypeID != "task-type-42" || taskTypeName != "Compositing" {
+			t.Errorf("Reviewer resolver arguments = (%q, %q, %q), want (production-1, task-type-42, Compositing)", projectID, taskTypeID, taskTypeName)
+		}
+	}
+	CheckerResolver = func(projectID, taskTypeID, taskTypeName string) []string {
+		checkResolverArgs(projectID, taskTypeID, taskTypeName)
+		return checkerIDs
+	}
+	ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]string, error) {
+		reviewerResolverCalls++
+		checkResolverArgs(projectID, taskTypeID, taskTypeName)
+		return checkerIDs, reviewerResolveErr
+	}
 	KitsuPublicURLResolver = func() string { return "https://kitsu.example.com" }
 	GoogleDriveURLResolver = nil
 	UserMapResolver = func(_, _, _ string) string { return "101" }
-	CheckerResolver = func(_, _ string) []string { return []string{"202"} }
 	t.Cleanup(func() {
 		KitsuPublicURLResolver = oldPublicURLResolver
 		GoogleDriveURLResolver = oldDriveURLResolver
 		UserMapResolver = oldUserMapResolver
 		CheckerResolver = oldCheckerResolver
+		ReviewerResolver = oldReviewerResolver
 	})
 
 	var sent Payload
@@ -375,7 +394,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	event.EntityType.EntityType = kitsu.EntityType{ID: "shot", Name: "Shot"}
 	event.Parent.Entity = kitsu.Entity{ID: "sequence-1", Name: "sc001"}
 	event.Task.Task = kitsu.Task{ID: "task-1"}
-	event.TaskType.TaskType = kitsu.TaskType{ID: "compositing", Name: "Compositing"}
+	event.TaskType.TaskType = kitsu.TaskType{ID: "task-type-42", Name: "Compositing"}
 	event.TaskStatus.TaskStatus = kitsu.TaskStatus{ID: "retake", ShortName: "RETAKE"}
 	event.PreviousStatusName = "WFA"
 	event.Assignees = []kitsu.Person{{FirstName: "侑恭", LastName: "松尾", FullName: "侑恭 松尾"}}
@@ -407,6 +426,41 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	}
 	if strings.Contains(embed.Description, "<@") {
 		t.Fatalf("status-change delivery put a mention in the assignee metadata: %q", embed.Description)
+	}
+
+	// WFA uses the ordered Reviewer resolver, while an empty result continues to
+	// fall back to the existing Task Type name-based config entry.
+	conf.Mention.Checkers = []config.CheckerEntry{{TaskType: "Compositing", DiscordID: "303"}}
+	event.TaskStatus.TaskStatus = kitsu.TaskStatus{ID: "wfa", ShortName: "WFA"}
+	event.PreviousStatusName = "WIP"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@202>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "202" {
+		t.Fatalf("WFA recipients changed with DB Checker: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	}
+
+	checkerIDs = nil
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@303>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "303" {
+		t.Fatalf("WFA config fallback changed with no DB Checker: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	}
+
+	reviewerResolveErr = errors.New("synthetic Supervisor read failure")
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@303>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "303" {
+		t.Fatalf("WFA config fallback changed after Supervisor read failure: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	}
+
+	reviewerCallsBeforeAssignment := reviewerResolverCalls
+	reviewerResolveErr = nil
+	checkerIDs = []string{"202"}
+	conf.Mention.CheckerStatuses = []string{"WFA"}
+	event.IsAssignNotification = true
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@202>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "202" {
+		t.Fatalf("assignment Checker behavior changed: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	}
+	if reviewerResolverCalls != reviewerCallsBeforeAssignment {
+		t.Fatalf("assignment notification invoked automatic Reviewer resolution %d extra times", reviewerResolverCalls-reviewerCallsBeforeAssignment)
 	}
 }
 

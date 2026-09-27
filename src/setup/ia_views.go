@@ -1133,7 +1133,9 @@ func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request,
 	} else if action == "save_production_checker" {
 		row := model.FindProjectUserMapByID(db, parseUint(r.FormValue("user_id")))
 		if row != nil && row.ProjectID == project.ID && strings.TrimSpace(r.FormValue("task_type")) != "" {
-			model.UpsertProjectCheckerMapWithUser(db, project.ID, strings.TrimSpace(r.FormValue("task_type")), row.KitsuName, row.KitsuEmail, row.DiscordUserID, "")
+			taskType := strings.TrimSpace(r.FormValue("task_type"))
+			taskTypes := setupKitsuTaskTypes(db, project.KitsuProjectID)
+			model.UpsertProjectCheckerMapWithUserAndTaskTypeID(db, project.ID, taskTypeIDForName(taskType, taskTypes), taskType, row.KitsuName, row.KitsuEmail, row.DiscordUserID, "")
 		}
 	} else {
 		for _, row := range model.ListProjectCheckerMaps(db, project.ID) {
