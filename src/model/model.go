@@ -4,11 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
-
-	"app/src/api/kitsu"
 
 	"github.com/gookit/slog"
 	"gorm.io/gorm"
@@ -1362,10 +1359,28 @@ func GetUserMapForProject(db *gorm.DB, kitsuProjectID, kitsuName, kitsuEmail str
 }
 
 // GetUserMapForProjectWithIdentity resolves a Kitsu user to a Discord ID.
-// It only reads mapping rows. Production email mappings retain precedence; the
-// global Kitsu person ID is checked before name-based fallbacks.
+// Global User Linking uses stable Kitsu identity first; legacy project-scoped
+// mappings remain a read-only fallback for older installations.
 func GetUserMapForProjectWithIdentity(db *gorm.DB, kitsuProjectID, kitsuPersonID, kitsuName, kitsuEmail string) string {
 	project := FindProjectByKitsuID(db, kitsuProjectID)
+	if kitsuPersonID != "" {
+		var user UserMap
+		if err := db.Where("kitsu_id = ?", kitsuPersonID).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
+	if kitsuEmail != "" {
+		var user UserMap
+		if err := db.Where("kitsu_email = ?", kitsuEmail).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
+	if kitsuName != "" {
+		var user UserMap
+		if err := db.Where("kitsu_name = ?", kitsuName).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
 	if project != nil {
 		var row ProjectUserMap
 		if kitsuEmail != "" {
@@ -1373,58 +1388,11 @@ func GetUserMapForProjectWithIdentity(db *gorm.DB, kitsuProjectID, kitsuPersonID
 				return row.DiscordUserID
 			}
 		}
-	}
-	if kitsuPersonID != "" {
-		var user UserMap
-		if err := db.Where("kitsu_id = ?", kitsuPersonID).First(&user).Error; err == nil {
-			return user.DiscordID
-		}
-	}
-	if project != nil {
-		var row ProjectUserMap
 		if err := db.Where("project_id = ? AND kitsu_name = ?", project.ID, kitsuName).First(&row).Error; err == nil {
 			return row.DiscordUserID
 		}
 	}
-	var user UserMap
-	if kitsuEmail != "" {
-		if err := db.Where("kitsu_email = ?", kitsuEmail).First(&user).Error; err == nil {
-			return user.DiscordID
-		}
-	}
-	if kitsuName != "" {
-		if err := db.Where("kitsu_name = ?", kitsuName).First(&user).Error; err == nil {
-			return user.DiscordID
-		}
-	}
 	return ""
-}
-
-// ResolveProjectTaskTypeSupervisorDiscordIDs resolves Kitsu Department
-// Supervisors for one Production Task Type and maps linked people through the
-// existing User Linking records. It is read-only and does not select Checkers.
-func ResolveProjectTaskTypeSupervisorDiscordIDs(db *gorm.DB, baseURL, token, projectID, taskTypeID string) ([]string, error) {
-	if db == nil {
-		return nil, gorm.ErrInvalidDB
-	}
-	supervisors, err := kitsu.GetProjectTaskTypeSupervisorsWithCredentials(baseURL, token, projectID, taskTypeID)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]struct{}, len(supervisors))
-	for _, supervisor := range supervisors {
-		discordID := strings.TrimSpace(GetUserMapForProjectWithIdentity(db, projectID, supervisor.ID, supervisor.FullName, supervisor.Email))
-		if discordID != "" {
-			seen[discordID] = struct{}{}
-		}
-	}
-	result := make([]string, 0, len(seen))
-	for discordID := range seen {
-		result = append(result, discordID)
-	}
-	sort.Strings(result)
-	return result, nil
 }
 
 // GetProjectCheckerForTaskType resolves only the Production-scoped Reviewer
@@ -1483,30 +1451,6 @@ func GetCheckerForProjectByTaskTypeID(db *gorm.DB, kitsuProjectID, taskTypeID, t
 	return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName)
 }
 
-// ResolveReviewersForProjectWithSupervisors applies WFA Reviewer precedence:
-// Production override, linked Kitsu Department Supervisors, then legacy global
-// CheckerMap. A Supervisor read error is returned for safe logging while the
-// explicitly configured global fallback remains available.
-func ResolveReviewersForProjectWithSupervisors(db *gorm.DB, baseURL, token, kitsuProjectID, taskTypeID, taskTypeName string) ([]string, error) {
-	if db == nil {
-		return nil, gorm.ErrInvalidDB
-	}
-	if ids := GetProjectCheckerForTaskTypeID(db, kitsuProjectID, taskTypeID, taskTypeName); len(ids) > 0 {
-		return ids, nil
-	}
-	if strings.TrimSpace(baseURL) == "" || strings.TrimSpace(token) == "" {
-		return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName), errors.New("Kitsu Supervisor resolution requires a runtime endpoint and token")
-	}
-	supervisors, err := ResolveProjectTaskTypeSupervisorDiscordIDs(db, baseURL, token, kitsuProjectID, taskTypeID)
-	if err != nil {
-		return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName), err
-	}
-	if len(supervisors) > 0 {
-		return supervisors, nil
-	}
-	return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName), nil
-}
-
 func resolveProjectCheckerDiscordID(db *gorm.DB, row ProjectCheckerMap) string {
 	if strings.TrimSpace(row.OverrideDiscordID) != "" {
 		return strings.TrimSpace(row.OverrideDiscordID)
@@ -1542,6 +1486,7 @@ func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) error {
 	for _, table := range []interface{}{
 		&ProjectUserMap{},
 		&ProjectCheckerMap{},
+		&ProjectReviewerTarget{},
 		&ProjectSetting{},
 	} {
 		if !db.Migrator().HasTable(table) {

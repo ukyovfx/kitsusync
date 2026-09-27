@@ -437,7 +437,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
 			return
 		}
-		if handleCurrentProductionUserMutation(w, r, db) {
+		if handleCurrentProductionUserMutation(w, r, db, botToken) {
 			return
 		}
 		if handleCurrentIARoutingMutation(w, r, lang, db) {
@@ -584,7 +584,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		allWebhooks := model.ListAllProjectWebhooks(db)
 		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
 		if r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("danger_preview") == "" && r.URL.Query().Get("validated_channels") == "" {
-			renderIAProductionList(w, r, db, fallbackGuildID)
+			renderIAProductionList(w, r, db, fallbackGuildID, botToken)
 			return
 		}
 		dangerPreviewProjectID := ""

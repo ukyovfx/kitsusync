@@ -211,6 +211,62 @@ jobs:
             deployment-bundle/
           if-no-files-found: error
 
+  reviewer-browser-acceptance:
+    name: reviewer-browser-acceptance
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CGO_ENABLED: "1"
+      KITSUSYNC_RUN_REVIEWER_BROWSER: "1"
+      KITSUSYNC_REVIEWER_BROWSER_SHA: ${{ github.event.pull_request.head.sha }}
+
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install SQLite build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc libsqlite3-dev
+
+      - name: Install pinned Playwright Chromium dependency
+        env:
+          PLAYWRIGHT_DEPS: ${{ runner.temp }}/reviewer-browser-deps
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          npm install --prefix "$PLAYWRIGHT_DEPS" --no-save --no-package-lock --ignore-scripts playwright@1.55.1
+          "$PLAYWRIGHT_DEPS/node_modules/.bin/playwright" install --with-deps chromium
+          echo "NODE_PATH=$PLAYWRIGHT_DEPS/node_modules" >> "$GITHUB_ENV"
+
+      - name: Run isolated authenticated Reviewer browser acceptance
+        env:
+          KITSUSYNC_REVIEWER_BROWSER_OUTPUT: ${{ runner.temp }}/reviewer-browser-evidence
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
+        run: go test ./src/setup -run '^TestReviewerBrowserAcceptance$' -count=1 -timeout=240s -v
+
+      - name: Verify synthetic WFA delivery and exact mention allowlist
+        run: go test ./src/api/discord -run '^TestStatusChangeDeliverySerializesTheCanonicalCard$' -count=1 -timeout=120s
+
+      - name: Upload synthetic browser screenshots and result summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reviewer-browser-acceptance-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/reviewer-browser-evidence/
+          if-no-files-found: warn
+          retention-days: 5
+
   deployment-transaction:
     runs-on: ubuntu-latest
     timeout-minutes: 25
