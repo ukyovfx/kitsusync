@@ -29,7 +29,7 @@ const backgroundCanvasScript = `<script>
   let width=0,height=0,dpr=1,last=0,frame=0,time=0;
   const resize=()=>{
     dpr=Math.min(window.devicePixelRatio||1,1.5);
-    width=window.innerWidth;height=window.innerHeight;
+    width=document.documentElement.clientWidth;height=window.innerHeight;
     canvas.width=Math.round(width*dpr);canvas.height=Math.round(height*dpr);
     canvas.style.width=width+'px';canvas.style.height=height+'px';
     ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -48,15 +48,16 @@ const backgroundCanvasScript = `<script>
     if(!card)return;
     const rect=card.getBoundingClientRect();
     const centerY=rect.top+rect.height*.5;
-    const innerGap=18;
+    const innerGap=width<600?4:18;
+    const leftEdge=Math.max(0,rect.left-innerGap);
+    const rightEdge=Math.min(width,rect.right+innerGap);
+    const band=Math.min(sheetWidth,leftEdge,width-rightEdge);
+    if(band<3)return;
     const fields=[
-      {start:0,end:Math.max(0,rect.left-innerGap),direction:1},
-      {start:Math.min(width,rect.right+innerGap),end:width,direction:-1},
+      {start:leftEdge-band,end:leftEdge,direction:1},
+      {start:rightEdge,end:rightEdge+band,direction:-1},
     ];
     for(const field of fields){
-      const available=field.end-field.start;
-      const band=Math.min(sheetWidth,available);
-      if(band<3)continue;
       const start=field.direction===1?field.end-band:field.start;
       const columns=Math.max(2,Math.floor(band/spacingX));
       for(let col=0;col<=columns;col++){
@@ -65,18 +66,18 @@ const backgroundCanvasScript = `<script>
         const inward=field.direction===1?u:1-u;
         const taper=inward*inward*(3-2*inward);
         const halfHeight=mix(height*.475,centerMinWidth*.5,taper);
-        const depthPhase=(xBase*.012+seconds*flowSpeed);
+        const depthPhase=(inward*band*.012+seconds*flowSpeed);
         for(let row=0;row<meshRows;row++){
           const v=row/(meshRows-1);
           const baseY=centerY+(v-.5)*halfHeight*2;
           const gustDX=pointer.x-xBase,gustDY=pointer.y-baseY;
           const influence=Math.exp(-(gustDX*gustDX+gustDY*gustDY)/(2*cursorRadius*cursorRadius))*pointer.amount*.35;
-          const wavePhase=depthPhase+(v*6.2)+field.direction*.9;
+          const wavePhase=depthPhase+(v*6.2)+.9;
           const waveAmp=mix(25,6,taper)*(1+influence);
           const slowWave=Math.sin(wavePhase+Math.sin(seconds*.12+v*2)*.6)*waveAmp;
-          const flutter=Math.sin(xBase*.075+v*18+seconds*1.7)*1.7;
+          const flutter=Math.sin(inward*band*.075+v*18+seconds*1.7+field.direction*.16)*1.7;
           const skew=(v-.5)*Math.min(band*.52,height*oblique);
-          const x=Math.min(field.end,Math.max(field.start,xBase+field.direction*skew+Math.sin(wavePhase*.75)*5+field.direction*Math.sin(seconds*.18+v*4)*2));
+          const x=Math.min(field.end,Math.max(field.start,xBase+field.direction*(skew+Math.sin(wavePhase*.75)*5+Math.sin(seconds*.18+v*4)*2)));
           const y=baseY+slowWave+flutter;
           const dx=pointer.x-x,dy=pointer.y-y;
           const local=Math.exp(-(dx*dx+dy*dy)/(2*cursorRadius*cursorRadius))*pointer.amount*.35;
