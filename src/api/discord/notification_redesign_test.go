@@ -348,6 +348,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	oldCheckerResolver := CheckerResolver
 	oldReviewerResolver := ReviewerResolver
 	checkerIDs := []string{"202"}
+	reviewerTargets := []ReviewerTarget{{Kind: "user", ID: "123456789012345670"}}
 	reviewerResolverCalls := 0
 	var reviewerResolveErr error
 	checkResolverArgs := func(projectID, taskTypeID, taskTypeName string) {
@@ -359,10 +360,10 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
 		return checkerIDs
 	}
-	ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]string, error) {
+	ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, error) {
 		reviewerResolverCalls++
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
-		return checkerIDs, reviewerResolveErr
+		return reviewerTargets, reviewerResolveErr
 	}
 	KitsuPublicURLResolver = func() string { return "https://kitsu.example.com" }
 	GoogleDriveURLResolver = nil
@@ -380,9 +381,11 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("delivery method = %s, want POST", r.Method)
 		}
-		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+		var decoded Payload
+		if err := json.NewDecoder(r.Body).Decode(&decoded); err != nil {
 			t.Fatal(err)
 		}
+		sent = decoded
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
@@ -428,26 +431,54 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		t.Fatalf("status-change delivery put a mention in the assignee metadata: %q", embed.Description)
 	}
 
-	// WFA uses the ordered Reviewer resolver, while an empty result continues to
-	// fall back to the existing Task Type name-based config entry.
+	// WFA uses only the current Reviewer resolver result; legacy Checker and
+	// config recipients remain available for other notification paths.
 	conf.Mention.Checkers = []config.CheckerEntry{{TaskType: "Compositing", DiscordID: "303"}}
 	event.TaskStatus.TaskStatus = kitsu.TaskStatus{ID: "wfa", ShortName: "WFA"}
 	event.PreviousStatusName = "WIP"
 	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
-	if results["task-1"].MessageID != "message-1" || sent.Content != "<@202>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "202" {
-		t.Fatalf("WFA recipients changed with DB Checker: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345670>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "123456789012345670" {
+		t.Fatalf("WFA did not use the Reviewer recipient: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	}
+
+	reviewerTargets = []ReviewerTarget{
+		{Kind: "user", ID: "123456789012345670"},
+		{Kind: "user", ID: "123456789012345671"},
+		{Kind: "role", ID: "123456789012345672"},
+		{Kind: "role", ID: "123456789012345672"},
+		{Kind: "role", ID: "@everyone"},
+	}
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345670> <@123456789012345671> <@&123456789012345672>" {
+		t.Fatalf("automatic and override targets were not additively deduplicated: content=%q result=%+v", sent.Content, results["task-1"])
+	}
+	if len(sent.AllowedMentions.Users) != 2 || sent.AllowedMentions.Users[0] != "123456789012345670" || sent.AllowedMentions.Users[1] != "123456789012345671" || len(sent.AllowedMentions.Roles) != 1 || sent.AllowedMentions.Roles[0] != "123456789012345672" || len(sent.AllowedMentions.Parse) != 0 {
+		t.Fatalf("mixed explicit target allowlist was not exact: %+v", sent.AllowedMentions)
+	}
+
+	reviewerTargets = nil
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 || len(sent.AllowedMentions.Roles) != 0 {
+		t.Fatalf("empty Reviewer result fell through to legacy/config recipients: content=%q allowed=%+v", sent.Content, sent.AllowedMentions)
 	}
 
 	checkerIDs = nil
 	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
-	if results["task-1"].MessageID != "message-1" || sent.Content != "<@303>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "303" {
-		t.Fatalf("WFA config fallback changed with no DB Checker: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
+		t.Fatalf("zero Reviewer suppressed or broadened the WFA card: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 
 	reviewerResolveErr = errors.New("synthetic Supervisor read failure")
 	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
-	if results["task-1"].MessageID != "message-1" || sent.Content != "<@303>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "303" {
-		t.Fatalf("WFA config fallback changed after Supervisor read failure: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
+		t.Fatalf("WFA lookup failure broadened recipients: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
+	}
+	reviewerReader := ReviewerResolver
+	ReviewerResolver = nil
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	ReviewerResolver = reviewerReader
+	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
+		t.Fatalf("missing Reviewer resolver fell back to legacy Checkers: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 
 	reviewerCallsBeforeAssignment := reviewerResolverCalls

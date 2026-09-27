@@ -87,6 +87,9 @@ func TestMigrateApplicationSchemaAddsNullableCheckerTaskTypeIDs(t *testing.T) {
 	if err := migrateApplicationSchema(db); err != nil {
 		t.Fatalf("migrate legacy checker schema: %v", err)
 	}
+	if !db.Migrator().HasTable(&model.ProjectReviewerTarget{}) {
+		t.Fatal("additive Production Reviewer target table was not created")
+	}
 	var global model.CheckerMap
 	if err := db.Where("task_type = ?", "Animation").First(&global).Error; err != nil {
 		t.Fatal(err)
