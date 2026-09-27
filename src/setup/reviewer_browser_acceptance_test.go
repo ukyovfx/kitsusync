@@ -317,6 +317,8 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 	}
 	status, body := http.StatusOK, "[]"
 	switch {
+	case r.URL.Path == "/api/v10/users/@me":
+		body = `{"id":"11111111111111113","username":"Synthetic KitsuSync Bot"}`
 	case r.URL.Path == "/api/v10/users/@me/guilds":
 		body = `[{"id":"11111111111111111","name":"Synthetic Discord"},{"id":"11111111111111112","name":"Other Synthetic Discord"}]`
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/members"):
