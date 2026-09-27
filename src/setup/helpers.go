@@ -683,6 +683,13 @@ type DiscordGuildChannel struct {
 	Position int    `json:"position"`
 }
 
+type DiscordGuildRole struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Position    int    `json:"position"`
+	Mentionable bool   `json:"mentionable"`
+}
+
 type DiscordGuild struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -747,6 +754,46 @@ func ListGuildChannels(guildID, botToken string) ([]DiscordGuildChannel, error) 
 		return nil, fmt.Errorf("discord guild channel list response was invalid")
 	}
 	return channels, nil
+}
+
+func ListGuildRoles(guildID, botToken string) ([]DiscordGuildRole, error) {
+	guildID = strings.TrimSpace(guildID)
+	if !isDiscordSnowflake(guildID) {
+		return nil, errors.New("Discord guild ID is not a valid snowflake")
+	}
+	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/roles", discordAPI, guildID), nil, botToken)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, discordBotAPIError("Discord guild role list failed", status, body)
+	}
+	var roles []DiscordGuildRole
+	if err := json.Unmarshal(body, &roles); err != nil {
+		return nil, errors.New("Discord guild role list response was invalid")
+	}
+	return roles, nil
+}
+
+func mentionableReviewerRoles(guildID string, roles []DiscordGuildRole) []DiscordGuildRole {
+	filtered := make([]DiscordGuildRole, 0, len(roles))
+	for _, role := range roles {
+		role.ID = strings.TrimSpace(role.ID)
+		if role.ID == strings.TrimSpace(guildID) || !role.Mentionable || !isDiscordSnowflake(role.ID) {
+			continue
+		}
+		filtered = append(filtered, role)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Position != filtered[j].Position {
+			return filtered[i].Position > filtered[j].Position
+		}
+		if filtered[i].Name != filtered[j].Name {
+			return filtered[i].Name < filtered[j].Name
+		}
+		return filtered[i].ID < filtered[j].ID
+	})
+	return filtered
 }
 
 func ListGuildMembers(guildID, botToken string) ([]DiscordGuildMember, error) {

@@ -1092,6 +1092,7 @@ type MappingUserEntry struct {
 
 // MappingCheckerEntry is one saved checker mapping entry.
 type MappingCheckerEntry struct {
+	TaskTypeID    string `json:"task_type_id,omitempty"`
 	TaskType      string `json:"task_type"`
 	DiscordUserID string `json:"discord_user_id"`
 }
@@ -1168,6 +1169,7 @@ func MappingStateHandler(db *gorm.DB) http.HandlerFunc {
 		checkerMaps := make([]MappingCheckerEntry, 0, len(rawCheckers))
 		for _, c := range rawCheckers {
 			checkerMaps = append(checkerMaps, MappingCheckerEntry{
+				TaskTypeID:    c.TaskTypeID,
 				TaskType:      c.TaskType,
 				DiscordUserID: c.DiscordUserID,
 			})
@@ -1276,16 +1278,31 @@ func SaveCheckerMappingHandler(db *gorm.DB) http.HandlerFunc {
 			return
 		}
 
+		taskTypes := setupKitsuTaskTypes(db, proj.KitsuProjectID)
 		for _, m := range req.Mappings {
 			taskType := strings.TrimSpace(m.TaskType)
+			taskTypeID := strings.TrimSpace(m.TaskTypeID)
+			if taskTypeID != "" {
+				if currentName := taskTypeName(taskTypeID, taskTypes); currentName != "" {
+					taskType = currentName
+				} else {
+					taskTypeID = ""
+				}
+			} else {
+				taskTypeID = taskTypeIDForName(taskType, taskTypes)
+			}
 			if taskType == "" {
 				continue
 			}
 			discordID := strings.TrimSpace(m.DiscordUserID)
 			if discordID == "" {
-				model.DeleteProjectCheckerMapByTaskType(db, proj.ID, taskType)
+				if taskTypeID != "" {
+					model.DeleteProjectCheckerMapByTaskTypeID(db, proj.ID, taskTypeID)
+				} else {
+					model.DeleteProjectCheckerMapByTaskType(db, proj.ID, taskType)
+				}
 			} else {
-				model.UpsertProjectCheckerMap(db, proj.ID, taskType, discordID)
+				model.UpsertProjectCheckerMapWithTaskTypeID(db, proj.ID, taskTypeID, taskType, discordID)
 			}
 		}
 

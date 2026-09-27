@@ -97,6 +97,7 @@ type Template struct {
 	NotificationLanguage    string
 	CardContext             string // optional secondary context such as a test-notification marker
 	AllowedUserIDs          []string
+	AllowedRoleIDs          []string
 	Color                   int
 }
 
@@ -117,10 +118,18 @@ type DiscordMessage struct {
 // projectID はプロジェクトスコープ検索に使用; kitsuEmail はリネーム時のフォールバック検索に使用（空でも可）。
 var UserMapResolver func(projectID, kitsuName, kitsuEmail string) string
 
-// CheckerResolver はタスクタイプ名 → チェッカーの Discord ID 一覧を解決するフック。
+// CheckerResolver はタスクタイプ ID / 名前 → チェッカーの Discord ID 一覧を解決するフック。
 // nil の場合は conf.Mention.Checkers にフォールバックする。
 // projectID はプロジェクトスコープ検索に使用する。
-var CheckerResolver func(projectID, taskType string) []string
+var CheckerResolver func(projectID, taskTypeID, taskTypeName string) []string
+
+// ReviewerResolver supplies the fully validated WFA Reviewer recipient union.
+type ReviewerTarget struct {
+	Kind string
+	ID   string
+}
+
+var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, error)
 
 // GoogleDriveURLResolver はプロジェクト ID に対応するファイルストレージ URL を返すフック。
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
@@ -359,6 +368,60 @@ func uniqueDiscordIDs(ids []string) []string {
 		}
 	}
 	return result
+}
+
+func uniqueDiscordRoleIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if len(id) < 17 || len(id) > 20 || !isValidDiscordUserID(id) {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+		if len(result) >= maxNotificationRecipients {
+			break
+		}
+	}
+	return result
+}
+
+func uniqueReviewerTargets(targets []ReviewerTarget) []ReviewerTarget {
+	seen := make(map[string]struct{}, len(targets))
+	result := make([]ReviewerTarget, 0, len(targets))
+	for _, target := range targets {
+		id := strings.TrimSpace(target.ID)
+		if target.Kind != "user" && target.Kind != "role" || len(id) < 17 || len(id) > 20 || !isValidDiscordUserID(id) {
+			continue
+		}
+		key := target.Kind + ":" + id
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, ReviewerTarget{Kind: target.Kind, ID: id})
+		if len(result) >= maxNotificationRecipients {
+			break
+		}
+	}
+	return result
+}
+
+func reviewerTargetMentions(targets []ReviewerTarget) string {
+	mentions := make([]string, 0, len(targets))
+	for _, target := range targets {
+		switch target.Kind {
+		case "user":
+			mentions = append(mentions, "<@"+target.ID+">")
+		case "role":
+			mentions = append(mentions, "<@&"+target.ID+">")
+		}
+	}
+	return strings.Join(mentions, " ")
 }
 
 func mentionContent(ids []string) string {
@@ -800,16 +863,34 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			placeholders.AssigneesStr = "未割り当て"
 		}
 
-		// タスクタイプからチェッカーの Discord ID 一覧を検索（DB 優先、複数人対応）
+		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
+
+		// WFA status notifications use the Reviewer precedence chain. Assignment
+		// and other status notifications keep the existing Checker resolution.
 		var checkerIDs []string
-		if CheckerResolver != nil {
-			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.Name); len(dids) > 0 {
+		var reviewerTargets []ReviewerTarget
+		isWFAReviewer := !elem.IsAssignNotification && currentStatus == "WFA"
+		if isWFAReviewer {
+			if ReviewerResolver != nil {
+				rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
+				if resolveErr != nil {
+					slog.Warn("Reviewer lookup failed; WFA will be posted without targeted mentions",
+						"error_class", "reviewer_resolution_failed",
+						"taskType", elem.TaskType.Name,
+						"taskID", elem.Task.ID,
+					)
+				} else {
+					reviewerTargets = uniqueReviewerTargets(rawTargets)
+				}
+			}
+		} else if CheckerResolver != nil {
+			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name); len(dids) > 0 {
 				for _, did := range dids {
 					checkerIDs = append(checkerIDs, did)
 				}
 			}
 		}
-		if len(checkerIDs) == 0 {
+		if !isWFAReviewer && len(checkerIDs) == 0 && len(reviewerTargets) == 0 {
 			for _, c := range conf.Mention.Checkers {
 				if strings.EqualFold(c.TaskType, elem.TaskType.Name) {
 					checkerIDs = append(checkerIDs, c.DiscordID)
@@ -822,9 +903,22 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		// ArtistStatuses に含まれるステータスではアーティスト全員をメンションする。
 		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
 		// 複数に含まれるステータスでは全てを併記する。
-		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
-		recipientIDs := notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
-		if len(recipientIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
+		var recipientIDs []string
+		var recipientRoleIDs []string
+		if isWFAReviewer {
+			for _, target := range reviewerTargets {
+				if target.Kind == "user" {
+					recipientIDs = append(recipientIDs, target.ID)
+				} else if target.Kind == "role" {
+					recipientRoleIDs = append(recipientRoleIDs, target.ID)
+				}
+			}
+			recipientIDs = uniqueDiscordIDs(recipientIDs)
+			recipientRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
+		} else {
+			recipientIDs = notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
+		}
+		if !isWFAReviewer && len(recipientIDs) == 0 && len(recipientRoleIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
 			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
 				"taskType", elem.TaskType.Name,
 				"status", currentStatus,
@@ -833,10 +927,13 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		}
 		// 緊急ステータスは @here でチャンネル全員に通知
 		// @here and @everyone are never emitted by KitsuSync.
-		mentionContent := mentionContent(recipientIDs)
+		mentionText := mentionContent(recipientIDs)
+		if isWFAReviewer {
+			mentionText = reviewerTargetMentions(reviewerTargets)
+		}
 		statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
 
-		placeholders.MentionContent = mentionContent
+		placeholders.MentionContent = mentionText
 		placeholders.StatusMessage = statusMessage
 		placeholders.StatusEmoji = statusEmoji
 		// ストレージ URL はプロジェクト別 DB 優先、なければ conf.toml のグローバル値
@@ -891,6 +988,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 
 		placeholders.NotificationLanguage = notifLang
 		placeholders.AllowedUserIDs = uniqueDiscordIDs(recipientIDs)
+		placeholders.AllowedRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
 		placeholders.Color = int(intColor)
 		payload := RenderNotificationPayload(placeholders, tplPreset)
 

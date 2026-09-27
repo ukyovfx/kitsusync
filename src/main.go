@@ -776,6 +776,7 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.AuditLog{},
 		&model.ProjectUserMap{},
 		&model.ProjectCheckerMap{},
+		&model.ProjectReviewerTarget{},
 		&model.ProjectSetting{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
@@ -897,8 +898,22 @@ func main() {
 	discord.UserMapResolver = func(projectID, kitsuName, kitsuEmail string) string {
 		return model.GetUserMapForProject(db, projectID, kitsuName, kitsuEmail)
 	}
-	discord.CheckerResolver = func(projectID, taskType string) []string {
-		return model.GetCheckerForProject(db, projectID, taskType)
+	discord.CheckerResolver = func(projectID, taskTypeID, taskTypeName string) []string {
+		return model.GetCheckerForProjectByTaskTypeID(db, projectID, taskTypeID, taskTypeName)
+	}
+	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
+		hostname, _, _ := getKitsuCreds(db, conf)
+		connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
+		baseURL := ""
+		if connectionErr == nil {
+			baseURL = connection.ResolvedAPIBaseURL
+		}
+		targets, err := setup.ResolveProductionWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.StoredRuntimeDiscordBotToken(db), projectID, taskTypeID)
+		resolved := make([]discord.ReviewerTarget, 0, len(targets))
+		for _, target := range targets {
+			resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
+		}
+		return resolved, err
 	}
 	discord.GoogleDriveURLResolver = func(projectID string) string {
 		return model.GetProjectStorageURL(db, projectID)

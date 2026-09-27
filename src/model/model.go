@@ -990,6 +990,7 @@ type UserMap struct {
 
 type CheckerMap struct {
 	ID                uint   `gorm:"primaryKey"`
+	TaskTypeID        string `gorm:"index"`
 	TaskType          string `gorm:"index"`
 	KitsuName         string
 	KitsuEmail        string `gorm:"index"`
@@ -1159,6 +1160,26 @@ func ListCheckerMap(db *gorm.DB) []CheckerMap {
 func FindCheckersByTaskType(db *gorm.DB, taskType string) []string {
 	var rows []CheckerMap
 	db.Where("task_type = ?", taskType).Find(&rows)
+	return resolveCheckerMapDiscordIDs(db, rows)
+}
+
+// FindCheckersByTaskTypeID prefers exact stable Task Type ID rows and falls
+// back to the legacy display-name key only when no ID-backed rows exist.
+func FindCheckersByTaskTypeID(db *gorm.DB, taskTypeID, taskTypeName string) []string {
+	var rows []CheckerMap
+	taskTypeID = strings.TrimSpace(taskTypeID)
+	if taskTypeID != "" {
+		if err := db.Where("task_type_id = ?", taskTypeID).Find(&rows).Error; err != nil {
+			return nil
+		}
+		if len(rows) > 0 {
+			return resolveCheckerMapDiscordIDs(db, rows)
+		}
+	}
+	return FindCheckersByTaskType(db, taskTypeName)
+}
+
+func resolveCheckerMapDiscordIDs(db *gorm.DB, rows []CheckerMap) []string {
 	ids := make([]string, 0, len(rows))
 	seen := map[string]bool{}
 	for _, c := range rows {
@@ -1185,9 +1206,15 @@ func ResolveCheckerDiscordID(db *gorm.DB, row CheckerMap) string {
 }
 
 func AddCheckerMap(db *gorm.DB, taskType, discordID string) {
+	AddCheckerMapWithTaskTypeID(db, "", taskType, discordID)
+}
+
+func AddCheckerMapWithTaskTypeID(db *gorm.DB, taskTypeID, taskType, discordID string) {
 	var c CheckerMap
 	if err := db.Where("task_type = ? AND discord_id = ?", taskType, discordID).First(&c).Error; err != nil {
-		db.Create(&CheckerMap{TaskType: taskType, DiscordID: discordID})
+		db.Create(&CheckerMap{TaskTypeID: strings.TrimSpace(taskTypeID), TaskType: taskType, DiscordID: discordID})
+	} else if strings.TrimSpace(taskTypeID) != "" {
+		db.Model(&c).Update("task_type_id", strings.TrimSpace(taskTypeID))
 	}
 }
 
@@ -1200,6 +1227,10 @@ func AddCheckerMapByUser(db *gorm.DB, taskType, kitsuName, kitsuEmail string) {
 }
 
 func AddCheckerMapByUserWithOverride(db *gorm.DB, taskType, kitsuName, kitsuEmail, overrideDiscordID string) {
+	AddCheckerMapByUserWithOverrideAndTaskTypeID(db, "", taskType, kitsuName, kitsuEmail, overrideDiscordID)
+}
+
+func AddCheckerMapByUserWithOverrideAndTaskTypeID(db *gorm.DB, taskTypeID, taskType, kitsuName, kitsuEmail, overrideDiscordID string) {
 	if strings.TrimSpace(taskType) == "" || strings.TrimSpace(kitsuName) == "" {
 		return
 	}
@@ -1217,10 +1248,14 @@ func AddCheckerMapByUserWithOverride(db *gorm.DB, taskType, kitsuName, kitsuEmai
 		c.KitsuEmail = kitsuEmail
 		c.DiscordID = discordID
 		c.OverrideDiscordID = overrideDiscordID
+		if strings.TrimSpace(taskTypeID) != "" {
+			c.TaskTypeID = strings.TrimSpace(taskTypeID)
+		}
 		db.Save(&c)
 		return
 	}
 	db.Create(&CheckerMap{
+		TaskTypeID:        strings.TrimSpace(taskTypeID),
 		TaskType:          taskType,
 		KitsuName:         kitsuName,
 		KitsuEmail:        kitsuEmail,
@@ -1234,18 +1269,26 @@ func UpdateCheckerMap(db *gorm.DB, id uint, taskType, kitsuName, kitsuEmail stri
 }
 
 func UpdateCheckerMapWithOverride(db *gorm.DB, id uint, taskType, kitsuName, kitsuEmail, overrideDiscordID string) {
+	UpdateCheckerMapWithOverrideAndTaskTypeID(db, id, "", taskType, kitsuName, kitsuEmail, overrideDiscordID)
+}
+
+func UpdateCheckerMapWithOverrideAndTaskTypeID(db *gorm.DB, id uint, taskTypeID, taskType, kitsuName, kitsuEmail, overrideDiscordID string) {
 	if strings.TrimSpace(taskType) == "" || strings.TrimSpace(kitsuName) == "" {
 		return
 	}
 	discordID := FindDiscordIDByKitsuNameOrEmail(db, kitsuName, kitsuEmail)
 	overrideDiscordID = strings.TrimSpace(overrideDiscordID)
-	db.Model(&CheckerMap{}).Where("id = ?", id).Updates(map[string]interface{}{
+	updates := map[string]interface{}{
 		"task_type":           taskType,
 		"kitsu_name":          kitsuName,
 		"kitsu_email":         kitsuEmail,
 		"discord_id":          discordID,
 		"override_discord_id": overrideDiscordID,
-	})
+	}
+	if strings.TrimSpace(taskTypeID) != "" {
+		updates["task_type_id"] = strings.TrimSpace(taskTypeID)
+	}
+	db.Model(&CheckerMap{}).Where("id = ?", id).Updates(updates)
 }
 
 func DeleteCheckerEntry(db *gorm.DB, taskType, discordID string) {
@@ -1280,6 +1323,7 @@ type ProjectUserMap struct {
 type ProjectCheckerMap struct {
 	ID                uint   `gorm:"primaryKey"`
 	ProjectID         uint   `gorm:"uniqueIndex:idx_projcheckermap;not null"`
+	TaskTypeID        string `gorm:"index"`
 	TaskType          string `gorm:"uniqueIndex:idx_projcheckermap;not null"`
 	KitsuName         string
 	KitsuEmail        string
@@ -1314,10 +1358,46 @@ func GetUserMapForProject(db *gorm.DB, kitsuProjectID, kitsuName, kitsuEmail str
 	return FindDiscordIDByKitsuNameOrEmail(db, kitsuName, kitsuEmail)
 }
 
-// GetCheckerForProject resolves checker Discord IDs for a task type.
-// Checks the project-scoped mapping first, then falls back to the global CheckerMap.
-// Returns nil (not empty slice) when no match is found, so callers can distinguish "no project entry" from "empty list".
-func GetCheckerForProject(db *gorm.DB, kitsuProjectID, taskType string) []string {
+// GetUserMapForProjectWithIdentity resolves a Kitsu user to a Discord ID.
+// Global User Linking uses stable Kitsu identity first; legacy project-scoped
+// mappings remain a read-only fallback for older installations.
+func GetUserMapForProjectWithIdentity(db *gorm.DB, kitsuProjectID, kitsuPersonID, kitsuName, kitsuEmail string) string {
+	project := FindProjectByKitsuID(db, kitsuProjectID)
+	if kitsuPersonID != "" {
+		var user UserMap
+		if err := db.Where("kitsu_id = ?", kitsuPersonID).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
+	if kitsuEmail != "" {
+		var user UserMap
+		if err := db.Where("kitsu_email = ?", kitsuEmail).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
+	if kitsuName != "" {
+		var user UserMap
+		if err := db.Where("kitsu_name = ?", kitsuName).First(&user).Error; err == nil {
+			return user.DiscordID
+		}
+	}
+	if project != nil {
+		var row ProjectUserMap
+		if kitsuEmail != "" {
+			if err := db.Where("project_id = ? AND kitsu_email = ?", project.ID, kitsuEmail).First(&row).Error; err == nil {
+				return row.DiscordUserID
+			}
+		}
+		if err := db.Where("project_id = ? AND kitsu_name = ?", project.ID, kitsuName).First(&row).Error; err == nil {
+			return row.DiscordUserID
+		}
+	}
+	return ""
+}
+
+// GetProjectCheckerForTaskType resolves only the Production-scoped Reviewer
+// mapping for a Task Type. It returns nil when no usable Production override exists.
+func GetProjectCheckerForTaskType(db *gorm.DB, kitsuProjectID, taskType string) []string {
 	if p := FindProjectByKitsuID(db, kitsuProjectID); p != nil {
 		var rows []ProjectCheckerMap
 		db.Where("project_id = ? AND task_type = ?", p.ID, taskType).Find(&rows)
@@ -1337,7 +1417,38 @@ func GetCheckerForProject(db *gorm.DB, kitsuProjectID, taskType string) []string
 			}
 		}
 	}
+	return nil
+}
+
+// GetProjectCheckerForTaskTypeID prefers exact stable Task Type ID rows and
+// falls back to legacy name-only rows only when no exact ID row exists.
+func GetProjectCheckerForTaskTypeID(db *gorm.DB, kitsuProjectID, taskTypeID, taskTypeName string) []string {
+	if p := FindProjectByKitsuID(db, kitsuProjectID); p != nil {
+		taskTypeID = strings.TrimSpace(taskTypeID)
+		if taskTypeID != "" {
+			var rows []ProjectCheckerMap
+			if err := db.Where("project_id = ? AND task_type_id = ?", p.ID, taskTypeID).Find(&rows).Error; err == nil && len(rows) > 0 {
+				return resolveProjectCheckerDiscordIDs(db, rows)
+			}
+		}
+		return GetProjectCheckerForTaskType(db, kitsuProjectID, taskTypeName)
+	}
+	return nil
+}
+
+// GetCheckerForProject preserves the legacy Production-then-global resolution.
+func GetCheckerForProject(db *gorm.DB, kitsuProjectID, taskType string) []string {
+	if ids := GetProjectCheckerForTaskType(db, kitsuProjectID, taskType); len(ids) > 0 {
+		return ids
+	}
 	return FindCheckersByTaskType(db, taskType)
+}
+
+func GetCheckerForProjectByTaskTypeID(db *gorm.DB, kitsuProjectID, taskTypeID, taskTypeName string) []string {
+	if ids := GetProjectCheckerForTaskTypeID(db, kitsuProjectID, taskTypeID, taskTypeName); len(ids) > 0 {
+		return ids
+	}
+	return FindCheckersByTaskTypeID(db, taskTypeID, taskTypeName)
 }
 
 func resolveProjectCheckerDiscordID(db *gorm.DB, row ProjectCheckerMap) string {
@@ -1352,6 +1463,20 @@ func resolveProjectCheckerDiscordID(db *gorm.DB, row ProjectCheckerMap) string {
 	return strings.TrimSpace(row.DiscordUserID)
 }
 
+func resolveProjectCheckerDiscordIDs(db *gorm.DB, rows []ProjectCheckerMap) []string {
+	ids := make([]string, 0, len(rows))
+	seen := map[string]bool{}
+	for _, row := range rows {
+		discordID := resolveProjectCheckerDiscordID(db, row)
+		if discordID == "" || seen[discordID] {
+			continue
+		}
+		seen[discordID] = true
+		ids = append(ids, discordID)
+	}
+	return ids
+}
+
 // DeleteProjectScopedData removes all project-scoped mapping rows for the given Project row ID.
 // Call this before deleting the Project record itself.
 func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) error {
@@ -1361,6 +1486,7 @@ func DeleteProjectScopedData(db *gorm.DB, projectRowID uint) error {
 	for _, table := range []interface{}{
 		&ProjectUserMap{},
 		&ProjectCheckerMap{},
+		&ProjectReviewerTarget{},
 		&ProjectSetting{},
 	} {
 		if !db.Migrator().HasTable(table) {
@@ -1408,14 +1534,36 @@ func UpsertProjectUserMap(db *gorm.DB, projectRowID uint, kitsuName, kitsuEmail,
 
 // UpsertProjectCheckerMap creates or updates a project-scoped checker mapping.
 func UpsertProjectCheckerMap(db *gorm.DB, projectRowID uint, taskType, discordUserID string) {
+	UpsertProjectCheckerMapWithTaskTypeID(db, projectRowID, "", taskType, discordUserID)
+}
+
+// UpsertProjectCheckerMapWithTaskTypeID stores the stable ID when available
+// while retaining the Task Type name for display and legacy compatibility.
+func UpsertProjectCheckerMapWithTaskTypeID(db *gorm.DB, projectRowID uint, taskTypeID, taskType, discordUserID string) {
 	var row ProjectCheckerMap
-	err := db.Where("project_id = ? AND task_type = ?", projectRowID, taskType).First(&row).Error
+	taskTypeID = strings.TrimSpace(taskTypeID)
+	err := gorm.ErrRecordNotFound
+	if taskTypeID != "" {
+		err = db.Where("project_id = ? AND task_type_id = ?", projectRowID, taskTypeID).Order("id asc").First(&row).Error
+	}
+	if err != nil {
+		err = db.Where("project_id = ? AND task_type = ?", projectRowID, taskType).First(&row).Error
+	}
 	if err == nil {
-		db.Model(&row).Update("discord_user_id", discordUserID)
+		updates := map[string]interface{}{"discord_user_id": discordUserID}
+		if taskTypeID != "" {
+			updates["task_type_id"] = taskTypeID
+			var nameConflict ProjectCheckerMap
+			if db.Where("project_id = ? AND task_type = ? AND id <> ?", projectRowID, taskType, row.ID).First(&nameConflict).Error != nil {
+				updates["task_type"] = taskType
+			}
+		}
+		db.Model(&row).Updates(updates)
 		return
 	}
 	db.Create(&ProjectCheckerMap{
 		ProjectID:     projectRowID,
+		TaskTypeID:    strings.TrimSpace(taskTypeID),
 		TaskType:      taskType,
 		DiscordUserID: discordUserID,
 	})
@@ -1431,6 +1579,10 @@ func DeleteProjectCheckerMapByTaskType(db *gorm.DB, projectRowID uint, taskType 
 	db.Where("project_id = ? AND task_type = ?", projectRowID, taskType).Delete(&ProjectCheckerMap{})
 }
 
+func DeleteProjectCheckerMapByTaskTypeID(db *gorm.DB, projectRowID uint, taskTypeID string) {
+	db.Where("project_id = ? AND task_type_id = ?", projectRowID, strings.TrimSpace(taskTypeID)).Delete(&ProjectCheckerMap{})
+}
+
 func FindProjectCheckerMapByID(db *gorm.DB, id uint) *ProjectCheckerMap {
 	var row ProjectCheckerMap
 	if err := db.First(&row, id).Error; err != nil {
@@ -1440,19 +1592,39 @@ func FindProjectCheckerMapByID(db *gorm.DB, id uint) *ProjectCheckerMap {
 }
 
 func UpsertProjectCheckerMapWithUser(db *gorm.DB, projectRowID uint, taskType, kitsuName, kitsuEmail, discordUserID, overrideDiscordID string) {
+	UpsertProjectCheckerMapWithUserAndTaskTypeID(db, projectRowID, "", taskType, kitsuName, kitsuEmail, discordUserID, overrideDiscordID)
+}
+
+func UpsertProjectCheckerMapWithUserAndTaskTypeID(db *gorm.DB, projectRowID uint, taskTypeID, taskType, kitsuName, kitsuEmail, discordUserID, overrideDiscordID string) {
 	var row ProjectCheckerMap
-	err := db.Where("project_id = ? AND task_type = ?", projectRowID, taskType).First(&row).Error
+	taskTypeID = strings.TrimSpace(taskTypeID)
+	err := gorm.ErrRecordNotFound
+	if taskTypeID != "" {
+		err = db.Where("project_id = ? AND task_type_id = ?", projectRowID, taskTypeID).Order("id asc").First(&row).Error
+	}
+	if err != nil {
+		err = db.Where("project_id = ? AND task_type = ?", projectRowID, taskType).First(&row).Error
+	}
 	if err == nil {
-		db.Model(&row).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"kitsu_name":          kitsuName,
 			"kitsu_email":         kitsuEmail,
 			"discord_user_id":     discordUserID,
 			"override_discord_id": overrideDiscordID,
-		})
+		}
+		if taskTypeID != "" {
+			updates["task_type_id"] = taskTypeID
+			var nameConflict ProjectCheckerMap
+			if db.Where("project_id = ? AND task_type = ? AND id <> ?", projectRowID, taskType, row.ID).First(&nameConflict).Error != nil {
+				updates["task_type"] = taskType
+			}
+		}
+		db.Model(&row).Updates(updates)
 		return
 	}
 	db.Create(&ProjectCheckerMap{
 		ProjectID:         projectRowID,
+		TaskTypeID:        strings.TrimSpace(taskTypeID),
 		TaskType:          taskType,
 		KitsuName:         kitsuName,
 		KitsuEmail:        kitsuEmail,

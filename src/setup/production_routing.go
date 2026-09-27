@@ -33,6 +33,26 @@ func taskTypeName(taskTypeID string, taskTypes []kitsu.TaskType) string {
 	return ""
 }
 
+// taskTypeIDForName returns a stable ID only when the Production has one
+// unambiguous current Task Type with this display name.
+func taskTypeIDForName(name string, taskTypes []kitsu.TaskType) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	id := ""
+	for _, taskType := range taskTypes {
+		if strings.TrimSpace(taskType.Name) != name || strings.TrimSpace(taskType.ID) == "" {
+			continue
+		}
+		if id != "" && id != strings.TrimSpace(taskType.ID) {
+			return ""
+		}
+		id = strings.TrimSpace(taskType.ID)
+	}
+	return id
+}
+
 func valueAt(values []string, index int) string {
 	if index >= 0 && index < len(values) {
 		return values[index]
