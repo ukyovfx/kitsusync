@@ -71,7 +71,7 @@ const adminThemeCSS = `
   --status-radius:var(--radius-pill);
 }
 *{box-sizing:border-box}
-html{scrollbar-gutter:stable}
+html{scrollbar-gutter:stable;background:#070707}
 html,body{min-height:100%;overflow-x:hidden}
 body{
   margin:0;

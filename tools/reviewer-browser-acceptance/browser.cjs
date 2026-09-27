@@ -80,11 +80,18 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
         y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2),
       };
     }
-    return { visible, centered, width: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth, lang: document.documentElement.lang };
+    return {
+      visible, centered,
+      width: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      lang: document.documentElement.lang,
+      gutterBackground: getComputedStyle(document.documentElement).backgroundColor,
+    };
   });
   if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
   if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
   if (details.lang !== locale.lang) throw new Error(`${mode} page language mismatch for ${locale.lang}`);
+  if (details.gutterBackground !== 'rgb(7, 7, 7)') throw new Error(`${mode} scrollbar gutter is not using the dark page background at ${viewport.name}`);
   if (mode === 'login-fabric' && (!details.centered || details.centered.x > 8 || details.centered.y > 8)) {
     throw new Error(`login card lost centered composition at ${viewport.name}: ${JSON.stringify(details.centered)}`);
   }
