@@ -43,7 +43,7 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`width=document.documentElement.clientWidth`,
 		`const mobile=width<600`,
 		`const meshRows=mobile?13:params.meshRows`,
-		`centerY=mobile?rect.top-42:height*.5`,
+		`centerY=rect.top+rect.height*.5`,
 		`pointer.targetX-pointer.x)*.10`,
 		`Math.pow(.94,elapsed*60)`,
 		`const spacing=34`,

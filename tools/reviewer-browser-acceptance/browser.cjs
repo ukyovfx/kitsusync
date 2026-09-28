@@ -137,8 +137,8 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
   if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
     throw new Error(`login foreground surfaces are translucent at ${viewport.name}: ${JSON.stringify({ card: details.cardBackground, panel: details.panelBackground })}`);
   }
-  if (mode === 'login-fabric' && viewport.name !== 'mobile' && (details.canvasOrangeUnderCard < 1 || details.canvasOrangeUnderPanel < 1)) {
-    throw new Error(`desktop fabric no longer flows geometrically behind the Login card/form at ${viewport.name}: ${JSON.stringify({ card: details.canvasOrangeUnderCard, panel: details.canvasOrangeUnderPanel })}`);
+  if (mode === 'login-fabric' && (details.canvasOrangeUnderCard < 1 || details.canvasOrangeUnderPanel < 1)) {
+    throw new Error(`fabric no longer flows geometrically behind the Login card/form at ${viewport.name}: ${JSON.stringify({ card: details.canvasOrangeUnderCard, panel: details.canvasOrangeUnderPanel })}`);
   }
   if (mode === 'login-fabric' && viewport.name === 'mobile' && details.visible > 250) throw new Error(`mobile login ribbon is too dense for ${locale.lang}: ${details.visible} sampled pixels`);
   if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
