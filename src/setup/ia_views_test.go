@@ -46,7 +46,7 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	if !strings.Contains(body, `role="tablist"`) || !strings.Contains(body, `aria-selected="true"`) || !strings.Contains(body, `aria-labelledby="tab-overview"`) {
 		t.Fatal("selected Production overview tab is not accessible")
 	}
-	for _, tab := range []string{"overview", "notifications", "user-settings", "storage-settings", "activity", "troubleshooting", "advanced", "danger-zone"} {
+	for _, tab := range []string{"overview", "notifications", "reviewers", "settings"} {
 		r := httptest.NewRequest("GET", "/bot/admin/projects?project=synthetic-production&tab="+tab+"&lang=en", nil)
 		w := httptest.NewRecorder()
 		renderIAProductionList(w, r, db, "")
@@ -343,19 +343,19 @@ func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 func TestSelectedProductionTabsHaveSingleAccessiblePanel(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.Project{KitsuProjectID: "tab-semantics-p", Name: "Tab Semantics P"})
-	for _, tab := range []string{"", "notifications", "user-settings", "storage-settings", "activity", "troubleshooting", "advanced", "danger-zone", "invalid"} {
+	for _, tc := range []struct{ requested, selected string }{{"", "overview"}, {"notifications", "notifications"}, {"users", "reviewers"}, {"user-settings", "reviewers"}, {"storage-settings", "settings"}, {"activity", "overview"}, {"troubleshooting", "settings"}, {"advanced", "settings"}, {"danger-zone", "settings"}, {"invalid", "overview"}} {
 		path := "/bot/admin/projects?project=tab-semantics-p&lang=en"
-		if tab != "" {
-			path += "&tab=" + tab
+		if tc.requested != "" {
+			path += "&tab=" + tc.requested
 		}
 		w := httptest.NewRecorder()
 		renderIAProductionList(w, httptest.NewRequest("GET", path, nil), db, "")
 		body := w.Body.String()
 		if strings.Count(body, `role="tabpanel"`) != 1 || strings.Count(body, `role="tablist"`) < 1 {
-			t.Fatalf("tab %q did not render one tab panel", tab)
+			t.Fatalf("tab %q did not render one tab panel", tc.requested)
 		}
-		if tab == "invalid" && !strings.Contains(body, `id="panel-overview"`) {
-			t.Fatal("invalid tab did not fall back to Overview")
+		if !strings.Contains(body, `id="panel-`+tc.selected+`"`) {
+			t.Fatalf("tab %q did not select %q", tc.requested, tc.selected)
 		}
 	}
 }
@@ -604,10 +604,8 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Notification preview", "preview_task_type_id", "rendered notification"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("obsolete notification preview remains visible: %q", forbidden)
-		}
+	if !strings.Contains(body, "Notification preview") || !strings.Contains(body, "A preview is available after a notification route is configured.") {
+		t.Fatal("Notifications should explain why a preview is unavailable when no route exists")
 	}
 	if strings.Contains(body, `name="action" value="save"`) {
 		t.Fatal("normal Notifications UI exposes routing editor controls")
@@ -627,8 +625,8 @@ func TestDashboardProblemActionTargetsDirectDestination(t *testing.T) {
 		t.Fatalf("notification issue did not target notification settings: %q %q", notificationURL, notificationLabel)
 	}
 	userURL, userLabel := dashboardProblemAction(r, p, "en", "Reviewer participant is not mapped")
-	if !strings.Contains(userURL, "tab=users") || userLabel != "Review user settings" {
-		t.Fatalf("participant issue did not target user settings: %q %q", userURL, userLabel)
+	if !strings.Contains(userURL, "tab=reviewers") || userLabel != "Review reviewers" {
+		t.Fatalf("participant issue did not target Reviewers: %q %q", userURL, userLabel)
 	}
 }
 
@@ -1311,9 +1309,9 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
 	}
-	for _, forbidden := range []string{"Notification preview", "preview_task_type_id", "rendered notification"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("obsolete notification preview remains visible: %q", forbidden)
+	for _, expected := range []string{"Notification preview", "Task Type to preview", "Example task rendered with the current notification card renderer", "Please review this task."} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("read-only notification preview missing %q", expected)
 		}
 	}
 	if strings.Contains(body, `name="action" value="save_current_production_routing"`) || strings.Contains(body, "<select name=\"task_type_id\">") {
@@ -1338,7 +1336,7 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal("routing row still exposes the old always-visible action controls")
 	}
 	if strings.Contains(body, "変更者:") {
-		t.Fatalf("English notification preview leaked the Japanese author label: %s", body)
+		t.Fatalf("English notification UI leaked the Japanese author label: %s", body)
 	}
 }
 
@@ -1346,14 +1344,14 @@ func TestProductionTroubleshootingExposesProcessingDiagnostics(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "diagnostic-production", Name: "Diagnostic Production"}
 	db.Create(&p)
-	body := renderCurrentProductionTroubleshooting(db, p, "en")
-	for _, want := range []string{"Kitsu connection", "Participant retrieval", "User linking", "Recent notification processing"} {
+	body := renderCurrentProductionTroubleshooting(db, p, "en", false)
+	for _, want := range []string{"Diagnostics", "Kitsu connection", "Participant retrieval", "User linking", "Recent notification processing"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("troubleshooting diagnostics missing %q: %s", want, body)
 		}
 	}
 	db.Create(&model.NotificationRoutingDiagnosis{ProductionID: p.KitsuProjectID, Reason: "route missing", Detail: "A route needs review."})
-	body = renderCurrentProductionTroubleshooting(db, p, "en")
+	body = renderCurrentProductionTroubleshooting(db, p, "en", false)
 	if !strings.Contains(body, "A route needs review.") || !strings.Contains(body, "Current issue details") {
 		t.Fatalf("troubleshooting does not expose the current issue detail: %s", body)
 	}
@@ -1363,9 +1361,9 @@ func TestProductionDetailsUsesDetailsLabel(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "details-production", Name: "Details Production"}
 	db.Create(&p)
-	body := renderSelectedProductionPanel(db, httptest.NewRequest("GET", "/bot/admin/projects?project=details-production&tab=advanced&lang=en", nil), p, "en", "advanced", "Connected", "Ready", "Connected server", "Connected server")
-	if !strings.Contains(body, "Details") || strings.Contains(body, "Advanced settings") {
-		t.Fatalf("details panel did not use the current label: %s", body)
+	body := renderSelectedProductionPanel(db, httptest.NewRequest("GET", "/bot/admin/projects?project=details-production&tab=advanced&lang=en", nil), p, "en", "settings", "Connected", "Ready", "")
+	if !strings.Contains(body, "Technical details") || strings.Contains(body, "Advanced settings") || !strings.Contains(body, `id="technical-details"`) || !strings.Contains(body, ` open>`) {
+		t.Fatalf("legacy Details state did not map to expanded Technical details: %s", body)
 	}
 }
 

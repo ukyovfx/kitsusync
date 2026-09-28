@@ -72,13 +72,20 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Routing/resource state is shown only when it is real and current.
 - [ ] No duplicate or stale resource representation is visible.
 - [ ] Normal Current IA actions do not fall into a legacy renderer.
-- [ ] Overview has four aligned summary cards and a separate counted current-issues card.
-- [ ] Notifications shows a distinct routing section and read-only preview section with visible spacing.
-- [ ] Routing rows explicitly label Kitsu Task Type and Discord Channel.
-- [ ] Preview identifies Task Type, destination, Production notification language, mention behavior, and deterministic rendered message/embed; no send control exists.
+- [ ] Only Overview, Notifications, Reviewers, and Settings appear as primary Production sections; the identity header is compact and has no redundant “Selected Production” copy.
+- [ ] Overview uses a compact operational status list and Current issues section; recent activity shows at most five exact-Production audit records and is omitted when none exist.
+- [ ] Notifications read mode shows an explicit Kitsu Task Type / Discord Channel column structure and one Edit action; the existing explicit edit mode preserves add, remove, ordering, channel selection, Apply, and Cancel.
+- [ ] The read-only preview selector follows configured Task Type routes and identifies each destination, Production notification language, and WFA Reviewer mention policy; its clearly marked example uses the current Discord card renderer without real task/recipient data, webhook/channel IDs, or a send control.
 - [ ] Production Users reads the live Kitsu Production Team, shows linked/unlinked global User Linking state, distinguishes read failure from an empty team, and excludes bots.
-- [ ] Troubleshooting exposes real connection, routing, participant, linking, and recent-notification diagnostics.
-- [ ] Details is read-only and uses localized Production/Discord/category ID labels.
+- [ ] Reviewers keeps Automatic and additive User/Role Overrides unchanged; the collapsed eligibility disclosure is secondary and has no membership editing controls.
+- [ ] Settings contains Storage, Technical details, Diagnostics, and Danger Zone in that order, with ordinary dividers and no floating-card grid.
+- [ ] Storage preserves its existing form and feedback behavior; Save begins disabled and enables only after the link changes.
+- [ ] Technical details, Diagnostics, and Danger Zone start collapsed; their legacy direct links map to Settings and open the expected disclosure.
+- [ ] Technical IDs remain read-only and localized; no credentials or secrets appear.
+- [ ] Diagnostics is a compact vertical list; Danger Zone remains separated at the bottom and keeps both destructive confirmation safeguards.
+- [ ] Legacy `users` / `user-settings` routes map to Reviewers; Storage, Activity, Troubleshooting, Details, and Danger Zone routes map to their intended new section and focus/scroll to the destination.
+- [ ] Disclosure summaries are indented one level and contents another on desktop and mobile, including System Status processing diagnostics.
+- [ ] JP/EN and desktop/mobile have no clipped controls, horizontal overflow, mojibake, or console/runtime errors.
 
 ## User Linking — `/bot/admin/users`
 

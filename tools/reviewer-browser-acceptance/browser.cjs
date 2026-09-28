@@ -14,8 +14,8 @@ fs.mkdirSync(output, { recursive: true });
 const records = [];
 const errors = [];
 const locales = [
-  { lang: 'en', automatic: 'Automatic', overrides: 'Overrides', supervisor: 'Project Supervisor', comp: 'Compositing Supervisor' },
-  { lang: 'ja', automatic: '自動', overrides: 'Overrides', supervisor: 'Project Supervisor', comp: 'Compositing担当' },
+  { lang: 'en', automatic: 'Automatic', overrides: 'Overrides', supervisor: 'Project Supervisor', comp: 'Compositing Supervisor', tabs: ['Overview', 'Notifications', 'Reviewers', 'Settings'] },
+  { lang: 'ja', automatic: '自動', overrides: 'Overrides', supervisor: 'Project Supervisor', comp: 'Compositing担当', tabs: ['概要', '通知', 'レビュアー', '設定'] },
 ];
 const viewports = [
   { name: 'desktop', width: 1440, height: 1000 },
@@ -41,7 +41,11 @@ async function fixture(page, scenario) {
 }
 
 async function gotoUsers(page, locale, extra = '') {
-  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=users&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
+  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=reviewers&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
+}
+
+async function gotoProduction(page, locale, tab, extra = '') {
+  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${tab}&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
 function automaticGroup(page, locale) {
@@ -396,6 +400,142 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       throw new Error('normal login did not establish the HttpOnly KitsuSync session');
     }
     records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop', state: 'synthetic manager login', detail: 'normal form authenticated against the isolated Kitsu fixture and received a server-created HttpOnly session' });
+
+    // Production-detail IA acceptance: this stays in the same authenticated
+    // Chromium context and uses only the isolated fixture database/services.
+    for (const locale of locales) {
+      for (const viewport of viewports) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        await gotoProduction(page, locale, 'overview');
+        const tabLinks = page.locator('.production-tabs [role="tab"]');
+        const tabLabels = (await tabLinks.allTextContents()).map(text => text.trim());
+        if (tabLabels.length !== 4 || JSON.stringify(tabLabels) !== JSON.stringify(locale.tabs)) {
+          throw new Error(`Production primary navigation is not the four-section ${locale.lang} set: ${JSON.stringify(tabLabels)}`);
+        }
+        if (await page.locator('.production-identity').count() !== 1 || (await page.locator('.production-identity').innerText()).includes('Selected Production')) {
+          throw new Error(`Production identity header is redundant or missing in ${locale.lang}`);
+        }
+        if (await page.locator('.production-summary-card,.production-summary-grid').count()) throw new Error('Overview retained metric-card UI');
+        const overview = await page.locator('#panel-overview').innerText();
+        for (const expected of [locale.lang === 'ja' ? '状態' : 'Status', locale.lang === 'ja' ? '現在の問題' : 'Current issues', 'Storyboard']) {
+          if (!overview.includes(expected)) throw new Error(`Overview is missing real status/activity ${expected} in ${locale.lang}`);
+        }
+        if (overview.includes('Must not leak') || overview.includes('Current issues (0)')) throw new Error('Overview leaked cross-Production activity or invented a count');
+        await page.screenshot({ path: path.join(output, `production-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, one current-issues section, exact-Production recent activity');
+
+        await gotoProduction(page, locale, 'notifications');
+        const routingHeadings = (await page.locator('.production-routing-summary-head strong').allTextContents()).map(text => text.trim());
+        if (!routingHeadings.includes('Kitsu Task Type') || !routingHeadings.includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) {
+          throw new Error(`Notifications routing columns are missing or concatenated in ${locale.lang}: ${JSON.stringify(routingHeadings)}`);
+        }
+        if (!(await page.locator('.production-routing-summary-row').innerText()).includes('#compositing')) throw new Error(`real seeded destination is missing in ${locale.lang}`);
+        if (await page.locator('[data-current-routing-form]').count()) throw new Error('Notifications read mode exposed routing edit controls');
+        const editLink = page.getByRole('link', { name: locale.lang === 'ja' ? '編集' : 'Edit', exact: true });
+        if (await editLink.count() !== 1) throw new Error(`Notifications should show one edit entry point in ${locale.lang}`);
+        const preview = page.locator('#notification-preview');
+        if (await preview.count() !== 1 || await preview.locator('select').count() !== 1 || await preview.locator('form').count()) {
+          throw new Error(`Notifications preview is missing its read-only Task Type selector in ${locale.lang}`);
+        }
+        const previewText = await preview.innerText();
+        for (const expected of ['Compositing', '#compositing', locale.lang === 'ja' ? '日本語' : 'Japanese', locale.lang === 'ja' ? 'サンプルタスク' : 'Example task']) {
+          if (!previewText.includes(expected)) throw new Error(`Notifications preview is missing ${expected} in ${locale.lang}`);
+        }
+        if (!(await preview.locator('.discord-message-preview').isVisible()) || previewText.includes('channel-comp')) {
+          throw new Error(`Notifications preview did not render safely in ${locale.lang}`);
+        }
+        await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing read mode and notification preview', 'explicit routing columns; one Edit action; deterministic current-renderer example; read-only preview does not send');
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        if (await page.locator('[data-current-routing-form]').count() !== 1 || !(await page.locator('[data-current-routing-form]').innerText()).includes(locale.lang === 'ja' ? '変更を適用' : 'Apply changes')) {
+          throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}`);
+        }
+        if (await page.locator('[data-current-routing-form] select[name="task_type_id"]').count() === 0 || await page.locator('[data-current-routing-form] select[name="destination_webhook_id"]').count() === 0) {
+          throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
+        }
+        await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'routing edit mode', 'existing controls are visible; no form submitted');
+
+        await gotoProduction(page, locale, 'reviewers');
+        if (await page.locator('.production-reviewer-manager').count() !== 1 || await page.locator('#reviewer-eligibility[open]').count() !== 0) {
+          throw new Error(`Reviewer controls or default collapsed eligibility disclosure are invalid in ${locale.lang}`);
+        }
+        if (await page.locator('input[name="action"][value*="production_member"]').count()) throw new Error('Reviewer section exposed Production membership editing');
+        await page.locator('#reviewer-eligibility summary').click();
+        if (!(await page.locator('#reviewer-eligibility[open]').count())) throw new Error(`Reviewer eligibility did not expand in ${locale.lang}`);
+        const eligibilityText = await page.locator('#reviewer-eligibility').innerText();
+        for (const value of ['Project Supervisor', 'Discord not linked', 'User Linking']) {
+          if (!eligibilityText.includes(value)) throw new Error(`Reviewer eligibility detail is missing ${value}`);
+        }
+        await page.screenshot({ path: path.join(output, `production-reviewers-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=reviewers', locale.lang, viewport.name, 'reviewers and eligibility', 'Automatic and Overrides remain present; candidate details are collapsed until requested');
+
+        await gotoProduction(page, locale, 'settings');
+        const settings = await page.locator('#panel-settings').innerText();
+        const settingsPositions = ['Storage', locale.lang === 'ja' ? '技術情報' : 'Technical details', locale.lang === 'ja' ? '診断' : 'Diagnostics', 'Danger Zone'].map(label => settings.indexOf(label));
+        if (settingsPositions.some(position => position < 0) || settingsPositions.some((position, index) => index > 0 && position <= settingsPositions[index - 1])) {
+          throw new Error(`Settings sections are missing or out of order in ${locale.lang}: ${JSON.stringify(settingsPositions)}`);
+        }
+        if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
+        const saveButton = page.locator('.drive-storage-form [data-drive-save]');
+        const storageInput = page.locator('#storage-url');
+        const originalStorage = await storageInput.inputValue();
+        if (!(await saveButton.isDisabled())) throw new Error(`Storage Save should start disabled in ${locale.lang}`);
+        await storageInput.fill(`${originalStorage}/changed`);
+        if (await saveButton.isDisabled()) throw new Error(`Storage Save did not enable after an actual edit in ${locale.lang}`);
+        await storageInput.fill(originalStorage);
+        if (!(await saveButton.isDisabled())) throw new Error(`Storage Save did not disable when the original value was restored in ${locale.lang}`);
+
+        const technicalIndent = await page.locator('#technical-details').evaluate(node => ({
+          summary: parseFloat(getComputedStyle(node.querySelector('summary')).paddingInlineStart),
+          content: parseFloat(getComputedStyle(node.querySelector('.production-technical-details')).marginInlineStart),
+        }));
+        if (technicalIndent.summary < 12 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
+        await page.locator('#technical-details summary').click();
+        if (!(await page.locator('#technical-details[open]').count())) throw new Error(`Technical details did not expand in ${locale.lang}`);
+        await page.locator('#diagnostics summary').click();
+        if (!(await page.locator('#diagnostics[open]').count()) || await page.locator('#diagnostics details[open]').count()) throw new Error(`Diagnostics did not expand in a compact collapsed-details state in ${locale.lang}`);
+        await page.locator('#danger-zone summary').click();
+        if (!(await page.locator('#danger-zone[open]').count())) throw new Error(`Danger Zone did not expand in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'settings and disclosures', `section order preserved; Save is change-sensitive; technical indentation=${JSON.stringify(technicalIndent)}`);
+
+        const legacyCases = [
+          { query: 'storage-settings', panel: 'settings', target: '#storage', expanded: null },
+          { query: 'activity', panel: 'overview', target: '#recent-activity', expanded: null },
+          { query: 'troubleshooting', panel: 'settings', target: '#diagnostics', expanded: '#diagnostics' },
+          { query: 'advanced', panel: 'settings', target: '#technical-details', expanded: '#technical-details' },
+          { query: 'danger-zone', panel: 'settings', target: '#danger-zone', expanded: '#danger-zone' },
+          { query: 'users', panel: 'reviewers', target: '.production-reviewer-manager', expanded: null },
+          { query: 'user-settings', panel: 'reviewers', target: '.production-reviewer-manager', expanded: null },
+        ];
+        for (const legacy of legacyCases) {
+          await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${legacy.query}&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+          if (await page.locator(`#panel-${legacy.panel}`).count() !== 1 || await page.locator(legacy.target).count() !== 1) {
+            throw new Error(`legacy Production destination ${legacy.query} did not map to ${legacy.panel}/${legacy.target}`);
+          }
+          if (legacy.expanded && !(await page.locator(legacy.expanded).evaluate(node => node.open))) throw new Error(`legacy Production disclosure ${legacy.query} did not open`);
+          if (legacy.query !== 'users' && legacy.query !== 'user-settings') {
+            const isFocused = await page.evaluate(selector => {
+              const target = document.querySelector(selector);
+              return !!target && (document.activeElement === target || target.querySelector('summary') === document.activeElement);
+            }, legacy.target);
+            if (!isFocused) throw new Error(`legacy Production destination ${legacy.query} did not receive focus`);
+          }
+          await record(page, `/bot/admin/projects?tab=${legacy.query}`, locale.lang, viewport.name, 'legacy route mapped', `mapped to ${legacy.panel}; destination ${legacy.target}`);
+        }
+
+        await page.goto(`${base}/bot/admin/health?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        const systemIndent = await page.locator('.pipeline-health-diagnostic').first().evaluate(node => ({
+          summary: parseFloat(getComputedStyle(node.querySelector('summary')).paddingInlineStart),
+          parent: parseFloat(getComputedStyle(node).marginInlineStart),
+          content: parseFloat(getComputedStyle(node.querySelector('.pipeline-health-diagnostic-content')).marginInlineStart),
+        }));
+        if (systemIndent.parent < 12 || systemIndent.content < systemIndent.parent) throw new Error(`System Status disclosure indentation is not hierarchical: ${JSON.stringify(systemIndent)}`);
+        await record(page, '/bot/admin/health', locale.lang, viewport.name, 'diagnostic disclosure indent', JSON.stringify(systemIndent));
+      }
+    }
 
     await gotoUsers(page, locales[0]);
     if (!(await page.locator('.production-reviewer-manager').count())) throw new Error('Reviewer manager did not render');

@@ -158,10 +158,19 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := setRuntimeDiscordBotToken(db, reviewerBrowserBot); err != nil {
 		t.Fatal("store synthetic Discord token")
 	}
-	project := model.Project{KitsuProjectID: "reviewer-production", Name: "Synthetic Review Production", DiscordGuildID: reviewerBrowserGuild}
+	project := model.Project{KitsuProjectID: "reviewer-production", Name: "Synthetic Review Production", DiscordGuildID: reviewerBrowserGuild, StorageURL: "https://storage.synthetic.invalid"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.synthetic.invalid/webhook", "channel-comp"); err != nil {
+		t.Fatal("seed synthetic routing destination")
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal("seed synthetic notification route")
+	}
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now()})
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: "other-production", ProjectName: project.Name, EntityName: "Must not leak", Success: true, CreatedAt: time.Now()})
 	seedBrowserMonitoringCycles := func() {
 		cycleAt := time.Now().Truncate(time.Millisecond)
 		Stats.mu.Lock()
