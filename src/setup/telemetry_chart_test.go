@@ -103,8 +103,9 @@ func TestTelemetryLineGraphGeometryAndTimestampScale(t *testing.T) {
 	if geometry.Width != 496 || geometry.Height != 104 || geometry.PlotLeft != 44 || geometry.PlotRight != 452 || geometry.DataLeft != 48 || geometry.DataRight != 448 || geometry.PlotMiddle != 45 || geometry.PlotCenterX != 248 || geometry.PlotBottom != 82 {
 		t.Fatalf("unexpected canonical chart geometry: %#v", geometry)
 	}
-	items := []APIObservation{{At: time.Now().Add(-60 * time.Second), Duration: 1 * time.Millisecond, Success: true}, {At: time.Now(), Duration: 1 * time.Millisecond, Success: true}}
-	graph := apiObservationLineGraphWithScale(items, "en", telemetryWindow60Seconds, 10)
+	asOf := time.Now()
+	items := []APIObservation{{At: asOf.Add(-60 * time.Second), Duration: 1 * time.Millisecond, Success: true}, {At: asOf, Duration: 1 * time.Millisecond, Success: true}}
+	graph := apiObservationLineGraphAt(items, "en", asOf, observationYDomain{Lower: 0, Upper: 10})
 	if !strings.Contains(graph, `cx="`) || strings.Count(graph, `class="telemetry-point success"`) != 2 {
 		t.Fatalf("observations do not have timestamp-positioned points: %s", graph)
 	}

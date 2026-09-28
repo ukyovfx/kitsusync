@@ -951,9 +951,7 @@ func main() {
 				setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", "connection_unverified")
 				return false
 			}
-			validationStarted := time.Now()
 			validation := setup.ValidateKitsuBotToken(db, strings.TrimSuffix(connection.ResolvedAPIBaseURL, "/api"), token, true)
-			setup.Stats.RecordAPIObservation("kitsu", validationStarted, validation.Compatible(), validation.Classification)
 			slog.Debug("Kitsu Bot token runtime validation",
 				"classification", validation.Classification,
 				"stage", validation.Stage,
