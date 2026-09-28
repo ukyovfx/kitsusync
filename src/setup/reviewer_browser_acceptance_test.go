@@ -184,6 +184,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	}
 	appURL := "http://" + listener.Addr().String()
 	mux := http.NewServeMux()
+	mux.Handle("GET /favicon.ico", FaviconHandler())
 	login := LoginRateLimit(http.HandlerFunc(LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
 		return KitsuLoginAuthority{RuntimeHost: kitsuFixture.URL, Source: "explicit"}
 	}, nil, nil)))
