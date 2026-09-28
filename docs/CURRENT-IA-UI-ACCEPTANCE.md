@@ -10,10 +10,10 @@ This CI evidence validates application behavior with synthetic services only. It
 
 ## Login and app backgrounds
 
-- [ ] `/bot/login` retains a horizontally centered login card and shows the bilateral inward particle fabric outside its clear card area.
+- [ ] `/bot/login` retains a horizontally centered card. Desktop renders one full-width horizontal particle ribbon with a center taper and faded screen edges; phone widths show no login waves.
 - [ ] The login fabric has broad slow folds, fine flutter, a visible center taper, depth-aware size/brightness, and the dark burnt-orange → Kitsu-orange → amber palette; it has no vortex, rings, network lines, repulsion, bloom, or heavy glow.
 - [ ] With no pointer gust, mirrored samples at matching distances from the card have comparable particle density and brightness at desktop and mobile widths; organic fine flutter remains visible.
-- [ ] Pointer movement increases local login fabric wave/gust amplitude and smoothly recovers after leaving; it never pushes particles away.
+- [ ] On desktop, pointer movement increases local login fabric wave/gust amplitude and smoothly recovers after leaving; it never pushes particles away. Mobile keeps the wave canvas quiet.
 - [ ] Normal authenticated app pages use the quieter fixed dot grid with slow subtle brightness/size modulation and slight pointer activation only; dots do not strongly move or repel.
 - [ ] Login and app canvases are readable behind the UI and do not alter Current IA layout or content.
 - [ ] Both canvases stop continuous animation under `prefers-reduced-motion: reduce`.
@@ -84,8 +84,8 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Missing Kitsu or Discord Bot configuration shows one concise setup cause and one Connection settings action only; no server selector, mapping table, failure copy, or diagnostic disclosure appears.
 - [ ] A genuine Kitsu lookup failure is distinct from a successful zero-user result; neither state renders blocked Discord mapping controls.
 - [ ] A genuine Discord lookup failure is distinct from zero joined servers and from a selected server with zero selectable human members.
-- [ ] The Discord server selector appears only when joined guild data is meaningful; multiple joined servers wait for an explicit selection before mapping rows appear.
-- [ ] Ready state shows exactly four mapping columns: Kitsu user, Discord user, state, and action. Real display names are used and raw Discord IDs are not visible as identity text.
+- [ ] The Discord server selector appears only when joined guild data is meaningful; multiple joined servers wait for an explicit selection before mapping rows appear, with a compact prompt and no empty-state divider.
+- [ ] Ready state shows exactly four mapping columns: Kitsu user, Discord user, state, and action. Real display names are used and raw Discord IDs are not visible as identity text. The selected server context is kept in the selector; exactly one separator leads into the table.
 - [ ] Save starts disabled and becomes actionable only after the Discord selection changes; existing mappings show their linked state and Unlink action, and save/unlink persist across refresh.
 - [ ] Bot identities are excluded from normal human linking.
 - [ ] JP and EN have equivalent states, order, actions, and information density at desktop and mobile widths, with no mojibake or page overflow.
@@ -119,8 +119,8 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Graph x positions use observation timestamps; sparse observations do not stretch to fill the sample count.
 - [ ] Both graphs are lines, use independent zero-based stepped ceilings, exactly three readable Y ticks, timestamp-positioned observations, and fixed 60s/5m geometry.
 - [ ] Successful observations connect as green line segments; failed observations break the line without bottom-row X markers or latency values.
-- [ ] Each service plot uses x=54 through x=484 in the 496×104 viewBox, with midpoint x=269; Y-axis labels remain fully visible and the browser-measured right gap is at most 6px.
-- [ ] Browser measurement, not viewBox ratio alone, proves the rendered baseline/grid leaves at most 6px on each side of the SVG and the graph surface has no unnecessary side padding or Y-axis gutter.
+- [ ] Each service plot baseline uses x=44 through x=452 in the 496×104 viewBox; timestamped data uses x=48 through x=448 for equal 4px marker inset and a symmetric midpoint at x=248. Y-axis labels remain fully visible and browser-measured outer gaps remain balanced.
+- [ ] Browser measurement, not viewBox ratio alone, proves the rendered baseline/grid has symmetric left/right margins and the graph surface has no unnecessary side padding or oversized Y-axis gutter.
 - [ ] Computed System Status typography uses the compact operational hierarchy: 28px page title, 20px major titles, 16px card titles, 24px response values, 14px body/helper, 13px metadata, and 12px chart labels.
 - [ ] Exact chart labels are JP `60秒`, `30秒`, `今` and `5分`, `2分30秒`, `今`; EN `60s`, `30s`, `Now` and `5m`, `2m30s`, `Now`.
 - [ ] Both graphs show exactly three Y ticks at the same positions: maximum, midpoint, and 0, with an optional subtle midpoint guide.

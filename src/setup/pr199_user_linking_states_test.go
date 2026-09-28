@@ -131,8 +131,11 @@ func TestPR199UserLinkingMultipleGuildsWaitsForSelection(t *testing.T) {
 		"/api/v10/users/@me/guilds": {body: `[{"id":"123456789012345678","name":"Studio A"},{"id":"123456789012345679","name":"Studio B"}]`},
 	})
 	body := renderPR199UserLinking(t, db, "/bot/admin/users?lang=en")
-	if !strings.Contains(body, `id="global-discord-guild"`) || !strings.Contains(body, "Select a Discord server to load members and enable saving.") {
+	if !strings.Contains(body, `id="global-discord-guild"`) || !strings.Contains(body, "Select a Discord server first.") {
 		t.Fatal("multi-guild state did not render the selection boundary")
+	}
+	if strings.Contains(body, "notice-info") || strings.Contains(body, "load members and enable saving") || strings.Contains(body, "member list") {
+		t.Fatal("unselected state retained oversized explanatory content")
 	}
 	if strings.Contains(body, "<table") {
 		t.Fatal("multi-guild state rendered rows before a server was selected")
@@ -180,5 +183,25 @@ func TestPR199UserLinkingReadyTableExcludesBotsAndHasLanguageParity(t *testing.T
 	}
 	if strings.Count(en, `class="user-link-grid-row"`) != strings.Count(ja, `class="user-link-grid-row"`) {
 		t.Fatal("JP/EN ready table structure diverged")
+	}
+}
+
+func TestPR199UserLinkingSelectedGuildOmitsRedundantServerContext(t *testing.T) {
+	db := pr199UserLinkingDB(t, http.StatusOK, `[{"id":"person-1","full_name":"Person One","email":"one@example.test","active":true}]`)
+	const guildID = "123456789012345678"
+	installPR199DiscordReplies(t, map[string]pr199DiscordReply{
+		"/api/v10/users/@me/guilds":                  {body: `[{"id":"123456789012345678","name":"Studio"}]`},
+		"/api/v10/guilds/123456789012345678/members": {body: `[{"user":{"id":"123456789012345679","username":"human","global_name":"Human User"}}]`},
+	})
+	for _, lang := range []string{"en", "ja"} {
+		body := renderPR199UserLinking(t, db, "/bot/admin/users?lang="+lang+"&discord_guild_id="+guildID)
+		if !strings.Contains(body, `class="user-linking-directory"`) || !strings.Contains(body, `class="user-link-grid-row"`) {
+			t.Fatalf("selected state omitted the compact selector or mapping table in %s", lang)
+		}
+		for _, redundant := range []string{"Showing Discord server:", "表示中のDiscordサーバー:"} {
+			if strings.Contains(body, redundant) {
+				t.Fatalf("selected state repeats selector context in %s: %q", lang, redundant)
+			}
+		}
 	}
 }

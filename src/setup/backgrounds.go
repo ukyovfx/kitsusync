@@ -24,7 +24,7 @@ const backgroundCanvasScript = `<script>
   if(!ctx)return;
   const mode=canvas.dataset.background;
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-  const meshRows=26,spacingX=7,sheetWidth=180,centerMinWidth=36,cursorRadius=220,flowSpeed=.1,foldBrightness=1.2,oblique=Math.tan(20*Math.PI/180);
+  const cursorRadius=220,flowSpeed=.1;
   const pointer={x:-10000,y:-10000,target:0,amount:0};
   let width=0,height=0,dpr=1,last=0,frame=0,time=0;
   const resize=()=>{
@@ -48,46 +48,49 @@ const backgroundCanvasScript = `<script>
     if(!card)return;
     const rect=card.getBoundingClientRect();
     const centerY=rect.top+rect.height*.5;
-    const innerGap=width<600?4:18;
-    const leftEdge=Math.max(0,rect.left-innerGap);
-    const rightEdge=Math.min(width,rect.right+innerGap);
-    const band=Math.min(sheetWidth,leftEdge,width-rightEdge);
-    if(band<3)return;
-    const fields=[
-      {start:leftEdge-band,end:leftEdge,direction:1},
-      {start:rightEdge,end:rightEdge+band,direction:-1},
-    ];
-    for(const field of fields){
-      const start=field.direction===1?field.end-band:field.start;
-      const columns=Math.max(2,Math.floor(band/spacingX));
+    const mobile=width<600;
+    if(mobile)return;
+    const maxHalfHeight=Math.min(height*(mobile?.11:.14),mobile?64:92);
+    const columns=Math.max(80,Math.ceil(width/8));
+    const rows=mobile?13:17;
+    const ribbonLayers=3;
+    const smoothstep=(a,b,x)=>{const v=Math.max(0,Math.min(1,(x-a)/(b-a)));return v*v*(3-2*v)};
+    for(let layer=0;layer<ribbonLayers;layer++){
+      const layerDepth=(layer+1)/(ribbonLayers+1);
+      const layerOffset=(layer-1)*(mobile?4:6);
       for(let col=0;col<=columns;col++){
         const u=col/columns;
-        const xBase=start+u*band;
-        const inward=field.direction===1?u:1-u;
-        const taper=inward*inward*(3-2*inward);
-        const halfHeight=mix(height*.475,centerMinWidth*.5,taper);
-        const depthPhase=(inward*band*.012+seconds*flowSpeed);
-        for(let row=0;row<meshRows;row++){
-          const v=row/(meshRows-1);
-          const baseY=centerY+(v-.5)*halfHeight*2;
-          const gustDX=pointer.x-xBase,gustDY=pointer.y-baseY;
-          const influence=Math.exp(-(gustDX*gustDX+gustDY*gustDY)/(2*cursorRadius*cursorRadius))*pointer.amount*.35;
-          const wavePhase=depthPhase+(v*6.2)+.9;
-          const waveAmp=mix(25,6,taper)*(1+influence);
-          const slowWave=Math.sin(wavePhase+Math.sin(seconds*.12+v*2)*.6)*waveAmp;
-          const flutter=Math.sin(inward*band*.075+v*18+seconds*1.7+field.direction*.16)*1.7;
-          const skew=(v-.5)*Math.min(band*.52,height*oblique);
-          const x=Math.min(field.end,Math.max(field.start,xBase+field.direction*(skew+Math.sin(wavePhase*.75)*5+Math.sin(seconds*.18+v*4)*2)));
-          const y=baseY+slowWave+flutter;
-          const dx=pointer.x-x,dy=pointer.y-y;
-          const local=Math.exp(-(dx*dx+dy*dy)/(2*cursorRadius*cursorRadius))*pointer.amount*.35;
-          const depth=.5+.5*Math.sin(depthPhase+v*3.4);
-          const envelope=Math.min(1,Math.max(0,(halfHeight-Math.abs(y-centerY)+24)/32));
-          const fade=Math.min(1,Math.max(0,(1-inward)/.12));
-          const alpha=((.08+depth*.32)*foldBrightness+local*.11)*envelope*fade;
+        const xBase=u*width;
+        const edgeTaper=smoothstep(0,.08,u)*smoothstep(0,.08,1-u);
+        const centerNarrowing=1-.18*Math.exp(-Math.pow((u-.5)/.18,2));
+        const halfHeight=maxHalfHeight*edgeTaper*centerNarrowing;
+        if(halfHeight<1.5)continue;
+        const wavePhase=u*5.2+seconds*flowSpeed+layer*.71;
+        const xNoise=Math.sin(col*2.31+layer*1.77)*4;
+        const gustDX=pointer.x-xBase,gustDY=pointer.y-centerY;
+        const gust=Math.exp(-(gustDX*gustDX+gustDY*gustDY)/(2*cursorRadius*cursorRadius))*pointer.amount;
+        for(let row=0;row<rows;row++){
+          const q=row/(rows-1)*2-1;
+          const slowAmplitude=(mobile?11:21)*(0.72+layerDepth*.28)*(1+gust*.22);
+          const slowWave=Math.sin(wavePhase+Math.sin(seconds*.12+u*2+q)*.6)*slowAmplitude;
+          const mediumWave=Math.sin(wavePhase*2.35+q*3.8+layer*.93)*(mobile?6:11);
+          const flutter=Math.sin(u*width*.075+q*17+seconds*1.7+layer*.83)*1.5;
+          const twist=Math.sin(wavePhase+q*2.6+layer*.63)*8;
+          const x=Math.max(0,Math.min(width,xBase+q*twist+xNoise));
+          const unliftedY=centerY+q*halfHeight+slowWave+mediumWave+flutter+layerOffset;
+          const dx=pointer.x-x,dy=pointer.y-unliftedY;
+          const local=Math.exp(-(dx*dx+dy*dy)/(2*cursorRadius*cursorRadius))*pointer.amount;
+          const lift=local*(mobile?7:13);
+          const y=unliftedY-lift;
+          const depth=.5+.5*Math.sin(wavePhase+q*2.7+layer*1.3);
+          const insideCard=x>=rect.left-10&&x<=rect.right+10&&y>=rect.top-10&&y<=rect.bottom+10;
+          const cardAttenuation=insideCard?.78:1;
+          const organic=.025*Math.sin(col*12.989+row*78.233+layer*4.21);
+          const alpha=(.075+depth*.19+local*.09+organic)*edgeTaper*cardAttenuation;
           if(alpha<.025)continue;
-          const color=palette(mix(.06,.96,inward)*.78+depth*.22);
-          const size=.48+depth*.9+taper*.16;
+          const mirroredCenter=1-Math.abs(u-.5)*2;
+          const color=palette(.12+mirroredCenter*.62+depth*.2+organic);
+          const size=.42+depth*.76+layerDepth*.18+local*.24;
           ctx.fillStyle=rgba(color[0],color[1],color[2],alpha);
           ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fill();
         }

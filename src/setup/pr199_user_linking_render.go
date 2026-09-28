@@ -62,16 +62,16 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		return
 	}
 	if len(directory.Guilds) > 1 && strings.TrimSpace(directory.SelectedGuild.ID) == "" {
-		body := userLinkingPage(lang, `<section class="section-card glass">`+
+		body := userLinkingPage(lang, `<section class="section-card glass user-linking-server-select">`+
 			renderUserLinkingGuildSelector(lang, directory)+
-			`<div class="notice notice-info" role="status"><p>`+
-			esc(t(lang, "Discordサーバーを選択すると、メンバーを取得して保存できます。", "Select a Discord server to load members and enable saving."))+
-			`</p></div></section>`)
+			`<p class="user-linking-select-hint" role="status">`+
+			esc(t(lang, "Discordサーバーを選択してください。", "Select a Discord server first."))+
+			`</p></section>`)
 		fmt.Fprint(w, adminPage(lang, "", r, body))
 		return
 	}
 	if len(directory.Options) == 0 {
-		body := userLinkingPage(lang, `<section class="section-card glass">`+
+		body := userLinkingPage(lang, `<section class="section-card glass user-linking-directory">`+
 			renderUserLinkingGuildSelector(lang, directory)+
 			`<div class="empty-state user-linking-empty" role="status"><strong>`+
 			esc(t(lang, "選択できるDiscordユーザーがいません", "No selectable Discord users"))+
@@ -84,9 +84,7 @@ func renderGlobalUserLinking(w http.ResponseWriter, r *http.Request, db *gorm.DB
 
 	body := userLinkingPage(lang, `<section class="section-card glass user-linking-directory">`+
 		renderUserLinkingGuildSelector(lang, directory)+
-		`<p class="field-help" role="status">`+
-		esc(t(lang, "表示中のDiscordサーバー: "+directory.SelectedGuild.Name, "Showing Discord server: "+directory.SelectedGuild.Name))+
-		`</p></section>`+
+		`</section>`+
 		renderGlobalUserLinkingTable(db, lang, directory, people))
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }

@@ -770,6 +770,8 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .editorial-workbench .production-context #panel-notifications>.section-card>.section-card{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:16px 0;margin-top:0}
   .editorial-workbench .production-context #panel-notifications>.section-card>.section-card:first-child{border-top:0;padding-top:0}
   .editorial-workbench .user-linking-page>.section-card{border:0;border-bottom:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
+  .editorial-workbench .user-linking-page>.user-linking-server-select,.editorial-workbench .user-linking-page>.user-linking-directory{border-bottom:0}
+  .editorial-workbench .user-linking-select-hint{margin:10px 0 0;color:var(--muted-2);font-size:13px}
    .system-status-sections .api-observation-latency{display:flex;align-items:baseline;justify-content:space-between;gap:16px;min-width:0}
    .system-status-sections .api-observation-primary{display:flex;align-items:baseline;gap:9px;min-width:0}
    .system-status-sections .api-observation-primary strong{font-size:24px;line-height:1.15;font-variant-numeric:tabular-nums}
@@ -782,10 +784,10 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
    .system-status-sections .pipeline-health-rail{grid-area:rail;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-start;gap:8px;min-width:130px}
    .system-status-sections .pipeline-health-rail .status-badge{white-space:nowrap}
    .system-status-sections .pipeline-health-rail .pipeline-health-action{margin:0;max-width:180px;white-space:normal;text-align:right}
-   .system-status-sections .pipeline-health-diagnostic{margin-top:8px;width:max-content;max-width:100%;color:var(--muted-2);font-size:12px}
-   .system-status-sections .pipeline-health-diagnostic summary{cursor:pointer;list-style:disclosure-closed;line-height:1.4}
+   .system-status-sections .pipeline-health-diagnostic{margin:8px 0 0 10px;width:max-content;max-width:calc(100% - 10px);color:var(--muted-2);font-size:12px}
+   .system-status-sections .pipeline-health-diagnostic summary{cursor:pointer;list-style:disclosure-closed;line-height:1.4;padding-inline-start:2px}
    .system-status-sections .pipeline-health-diagnostic[open] summary{margin-bottom:6px}
-   .system-status-sections .pipeline-health-diagnostic-content{max-width:100%;overflow-x:auto}
+   .system-status-sections .pipeline-health-diagnostic-content{max-width:100%;margin-inline-start:12px;overflow-x:auto}
    .system-status-sections .pipeline-detail-list{display:grid;gap:4px;margin:0;color:var(--muted);font-size:12px}
    .system-status-sections .pipeline-detail-list>div{display:grid;grid-template-columns:minmax(110px,auto) minmax(0,1fr);gap:8px}
    .system-status-sections .pipeline-detail-list dt{color:var(--muted-2)}
