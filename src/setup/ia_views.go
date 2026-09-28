@@ -851,8 +851,9 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 		botToken = botTokens[0]
 	}
 	var guildMembers []DiscordGuildMember
+	var guildMembersErr error
 	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		guildMembers, _ = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
+		guildMembers, guildMembersErr = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
 	}
 	linkedUsers := productionTeamLinkedUsers(db, p.KitsuProjectID, team, globalUsers, guildMembers)
 	supervisorSummaries := productionSupervisorTaskTypeSummaries(team, taskTypes)
@@ -861,6 +862,8 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 	var members strings.Builder
 	if teamErr != nil {
 		members.WriteString(`<li class="empty-state" role="status"><strong>` + esc(userText("KitsuのProduction Teamを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></li>`)
+	} else if guildMembersErr != nil {
+		members.WriteString(`<li class="empty-state" role="status"><strong>` + esc(userText("Discordサーバーのメンバーを確認できません", "Could not verify Discord server membership")) + `</strong><span class="field-help">` + esc(userText("Reviewerの対象者を確認するには、Bot接続とメンバー閲覧権限を確認してください。", "Check the Bot connection and member access before reviewing eligibility.")) + `</span></li>`)
 	} else {
 		for _, member := range linkedUsers {
 			name := kitsuPersonDisplayName(member.Person)
@@ -893,7 +896,7 @@ func renderCurrentProductionUserSettings(db *gorm.DB, r *http.Request, p model.P
 		}
 	}
 
-	reviewerSection := renderProductionReviewerManager(db, r, p, lang, botToken, team, teamErr, globalUsers, taskTypes, guildMembers)
+	reviewerSection := renderProductionReviewerManager(db, r, p, lang, botToken, team, teamErr, globalUsers, taskTypes, guildMembers, guildMembersErr)
 	eligibility := `<details id="reviewer-eligibility" class="production-reviewer-eligibility advanced-details"><summary>` + esc(userText("レビュアーの対象者", "Reviewer eligibility")) + `</summary><ul class="production-users-simple-list production-eligibility-list">` + members.String() + `</ul></details>`
 	return `<section class="production-reviewer-page"><h2>` + esc(userText("レビュアー", "Reviewers")) + `</h2>` + reviewerSection + eligibility + `</section>`
 }
@@ -1111,7 +1114,7 @@ func currentProductionLinkedHumanDiscordIDs(team []kitsu.Person, globalUsers []m
 	return linked
 }
 
-func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, team []kitsu.Person, teamErr error, globalUsers []model.UserMap, taskTypes []kitsu.TaskType, guildMembers []DiscordGuildMember) string {
+func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, team []kitsu.Person, teamErr error, globalUsers []model.UserMap, taskTypes []kitsu.TaskType, guildMembers []DiscordGuildMember, guildMembersErr error) string {
 	label := func(ja, en string) string { return t(lang, ja, en) }
 	selectedID := strings.TrimSpace(r.URL.Query().Get("reviewer_task_type"))
 	selectedTaskType := kitsu.TaskType{}
@@ -1145,6 +1148,10 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		}
 	}
 	var overrides, automatic strings.Builder
+	membershipWarning := ""
+	if guildMembersErr != nil {
+		membershipWarning = `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを確認できません。自動ReviewerとUser Overrideの対象者は確認できません。Bot接続とメンバー閲覧権限を確認してください。", "Discord server membership could not be verified. Automatic eligibility and User Override candidates are unavailable. Check the Bot connection and member access.")) + `</p>`
+	}
 	if len(explicitRows) > 0 {
 		for _, target := range explicitRows {
 			name := label("Discordロール", "Discord Role")
@@ -1180,7 +1187,9 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		}
 	}
 	if selectedTaskType.ID != "" {
-		if teamErr != nil {
+		if guildMembersErr != nil {
+			automatic.WriteString(`<li class="field-help">` + esc(label("Discordメンバーの確認が必要です。", "Discord membership verification required.")) + `</li>`)
+		} else if teamErr != nil {
 			automatic.WriteString(`<li class="field-help">` + esc(label("Production Teamを読み込めません。", "Production Team unavailable.")) + `</li>`)
 		} else if strings.TrimSpace(selectedTaskType.DepartmentID) == "" {
 			automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
@@ -1228,7 +1237,9 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	addForm := `<p class="field-help">` + esc(label("Kitsu接続からTask Typeを選択してください。", "Load available Task Types from Kitsu.")) + `</p>`
 	if selectedTaskType.ID != "" {
 		addForm = ""
-		if teamErr != nil {
+		if guildMembersErr != nil {
+			addForm = `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを確認できないため、User Overrideを追加できません。", "User Overrides cannot be added until Discord server membership can be verified.")) + `</p>`
+		} else if teamErr != nil {
 			addForm = `<p class="field-help" role="status">` + esc(label("Kitsu Production Teamを取得できないため、Discordユーザーを選択できません。", "Discord users cannot be selected because the Kitsu Production Team could not be loaded.")) + `</p>`
 		} else {
 			disabled := ""
@@ -1255,7 +1266,7 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	if len(taskTypes) == 0 {
 		taskOptions.WriteString(`<option value="">` + esc(label("Task Typeを利用できません", "Task Types unavailable")) + `</option>`)
 	}
-	return `<section class="production-users-simple-section production-reviewer-manager"><form method="get" class="reviewer-task-type-select" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="reviewers"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>` + esc(label("Task Type", "Task Type")) + `<select name="reviewer_task_type">` + taskOptions.String() + `</select></label><button class="btn-ghost" type="submit">` + esc(label("表示", "View")) + `</button></form><div class="reviewer-group"><h4>` + esc(label("自動", "Automatic")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + automatic.String() + `</ul></div><div class="reviewer-group"><h4>` + esc(label("Overrides", "Overrides")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + overrides.String() + `</ul></div><div class="reviewer-target-add">` + addForm + `</div><div class="reviewer-target-reset">` + reset + `</div></section>`
+	return `<section class="production-users-simple-section production-reviewer-manager"><form method="get" class="reviewer-task-type-select" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="reviewers"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>` + esc(label("Task Type", "Task Type")) + `<select name="reviewer_task_type">` + taskOptions.String() + `</select></label><button class="btn-ghost" type="submit">` + esc(label("表示", "View")) + `</button></form>` + membershipWarning + `<div class="reviewer-group"><h4>` + esc(label("自動", "Automatic")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + automatic.String() + `</ul></div><div class="reviewer-group"><h4>` + esc(label("Overrides", "Overrides")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + overrides.String() + `</ul></div><div class="reviewer-target-add">` + addForm + `</div><div class="reviewer-target-reset">` + reset + `</div></section>`
 }
 
 func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request, db *gorm.DB, botTokens ...string) bool {

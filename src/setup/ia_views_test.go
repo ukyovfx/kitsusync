@@ -2133,6 +2133,43 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 	}
 }
 
+func TestReviewerManagerExplainsGuildMembershipLookupFailure(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "reviewer-guild-failure", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "linked-person", KitsuName: "Linked Person", DiscordID: "123456789012345679", DiscordDisplayName: "linked"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTasks, oldRoles, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Compositing"}}
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "linked-person", FullName: "Linked Person", Email: "linked@example.test", Active: true, Role: "supervisor", Departments: []string{"dept-comp"}}}, nil
+	}
+	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) {
+		return []DiscordGuildRole{{ID: "123456789012345680", Name: "Reviewers", Mentionable: true}}, nil
+	}
+	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
+		return nil, errors.New("synthetic member lookup failure")
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
+	})
+
+	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-guild-failure&tab=reviewers&lang=en", nil), project, "en", "bot-token")
+	for _, want := range []string{"Discord server membership could not be verified", "Automatic eligibility", "User Override candidates", "@Reviewers"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Guild-member lookup failure missing safe Reviewer state %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `name="target_kind" value="user"`) || strings.Contains(body, "Linked Person</strong><small>Discord: @linked</small>") {
+		t.Fatalf("unverified Guild membership was presented as eligible or selectable: %s", body)
+	}
+}
+
 func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *testing.T) {
 	db := newIAViewDB(t)
 	t.Setenv("KitsuJWTToken", "reviewer-test-token")
