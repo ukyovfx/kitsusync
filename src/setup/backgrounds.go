@@ -249,7 +249,7 @@ const backgroundCanvasScript = `<script>
       for(let x=18;x<width;x+=spacing){
         const dx=pointer.x-x,dy=pointer.y-y;
         const local=Math.exp(-(dx*dx+dy*dy)/(2*150*150))*pointer.amount;
-        const alpha=.032+local*.034;
+        const alpha=.04+local*.034;
         const radius=.85+local*.22;
         ctx.fillStyle=rgba(218,126,82,alpha);
         ctx.beginPath();ctx.arc(x,y,radius,0,Math.PI*2);ctx.fill();
