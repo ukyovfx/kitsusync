@@ -636,6 +636,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     for (const state of states) {
       await fixture(page, state.name);
       await gotoUsers(page, locales[0]);
+      if (state.name === 'empty-team' || state.name === 'team-failure') {
+        await page.locator('#reviewer-eligibility summary').click();
+      }
       const body = await page.locator('main').innerText();
       if (!body.includes(state.expected)) throw new Error(`${state.name} state is unclear; missing ${state.expected}`);
       if (state.name === 'team-failure' && await page.locator('form.reviewer-target-form input[name="target_kind"][value="user"]').count()) throw new Error('Team read failure left User Reviewer writes enabled');
