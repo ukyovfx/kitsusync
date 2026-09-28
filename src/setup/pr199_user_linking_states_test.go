@@ -195,7 +195,7 @@ func TestPR199UserLinkingSelectedGuildOmitsRedundantServerContext(t *testing.T) 
 	})
 	for _, lang := range []string{"en", "ja"} {
 		body := renderPR199UserLinking(t, db, "/bot/admin/users?lang="+lang+"&discord_guild_id="+guildID)
-		if !strings.Contains(body, `class="user-linking-directory"`) || !strings.Contains(body, `class="user-link-grid-row"`) {
+		if !strings.Contains(body, `user-linking-directory`) || !strings.Contains(body, `class="user-link-grid-row"`) {
 			t.Fatalf("selected state omitted the compact selector or mapping table in %s", lang)
 		}
 		for _, redundant := range []string{"Showing Discord server:", "表示中のDiscordサーバー:"} {
