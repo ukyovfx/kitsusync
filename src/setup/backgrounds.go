@@ -74,44 +74,32 @@ const backgroundCanvasScript = `<script>
     const cursorGust=mobile?.13:.35;
     const cursorGustAmp=1+gust*cursorGust*pointer.amount;
     const warpW=1.2;
-    const phaseOffset=isLeft?0:(mobile?.15:1.7);
+    const phaseOffset=isLeft?0:(mobile?.15:.35);
     const warpedX=mirroredX+(Math.sin(mirroredX*.00118+travelTime*.30+phaseOffset)*56+Math.cos(mirroredX*.00270-travelTime*.20+phaseOffset)*24)*warpW;
-    const env1=isLeft?Math.sin(warpedX*.00125-travelTime*.25):Math.cos(warpedX*.00135-travelTime*.22+1.9);
-    const env2=isLeft?Math.cos(warpedX*.00260+travelTime*.17):Math.sin(warpedX*.00280+travelTime*.15);
+    const env1=Math.sin(warpedX*.00125-travelTime*.25+phaseOffset);
+    const env2=Math.cos(warpedX*.00260+travelTime*.17+phaseOffset*.7);
     const waveHeightEnv=Math.max(.25,1+(env1*.48+env2*.25)*(mobile?.68:1.25));
     const macroTwist=mobile?.58:1.15;
-    const macroWaveY=mobile
-      ?(Math.sin(warpedX*.00070-travelTime*.15+phaseOffset)*28+Math.cos(warpedX*.00140+phaseOffset)*12)*macroTwist
-      :isLeft
-        ?(Math.sin(warpedX*.00070-travelTime*.15)*28+Math.cos(warpedX*.00140)*12)*macroTwist
-        :(Math.cos(warpedX*.00075+travelTime*.14+1.3)*26-Math.sin(warpedX*.00145)*12)*macroTwist;
-    const macroWaveZ=mobile
-      ?(Math.cos(warpedX*.00075-travelTime*.12+phaseOffset)*50+Math.sin(warpedX*.00150+phaseOffset)*22)*macroTwist
-      :isLeft
-        ?(Math.cos(warpedX*.00075-travelTime*.12)*50+Math.sin(warpedX*.00150)*22)*macroTwist
-        :(Math.sin(warpedX*.00080+travelTime*.13+1.6)*48-Math.cos(warpedX*.00155)*22)*macroTwist;
-    const phiM1=mobile?warpedX*.00205-travelTime*.65+phaseOffset:isLeft?warpedX*.00205-travelTime*.65:warpedX*.00225+travelTime*.62+2.4;
-    const phiM2=mobile?warpedX*.00415+travelTime*.38+.5+phaseOffset:isLeft?warpedX*.00415+travelTime*.38+.5:warpedX*.00440-travelTime*.34+1.3;
-    const stokes=mobile||isLeft
-      ?Math.sin(phiM1)+.36*Math.sin(2*phiM1-.36)-.12*Math.cos(3*phiM1)
-      :Math.cos(phiM1)+.35*Math.sin(2*phiM1-.34)-.12*Math.cos(3*phiM1);
-    const stokesSub=mobile||isLeft
-      ?(Math.cos(phiM2)+.22*Math.sin(2*phiM2))*.46
-      :(Math.sin(phiM2)+.22*Math.cos(2*phiM2))*.46;
+    const macroWaveY=(Math.sin(warpedX*.00070-travelTime*.15+phaseOffset)*28+Math.cos(warpedX*.00140+phaseOffset)*12)*macroTwist;
+    const macroWaveZ=(Math.cos(warpedX*.00075-travelTime*.12+phaseOffset)*50+Math.sin(warpedX*.00150+phaseOffset)*22)*macroTwist;
+    const phiM1=warpedX*.00205-travelTime*.65+phaseOffset;
+    const phiM2=warpedX*.00415+travelTime*.38+.5+phaseOffset;
+    const stokes=Math.sin(phiM1)+.36*Math.sin(2*phiM1-.36)-.12*Math.cos(3*phiM1);
+    const stokesSub=(Math.cos(phiM2)+.22*Math.sin(2*phiM2))*.46;
     const silhouetteScale=mobile?.62:1.15;
     const profileWave=(stokes*42+stokesSub*20)*waveHeightEnv*silhouetteScale;
     const fineFlutter=mobile?.62:1.7;
-    const microP1=warpedX*.024-travelTime*1.8+(isLeft?.4:(mobile?.55:2.2));
+    const microP1=warpedX*.024-travelTime*1.8+.4+phaseOffset;
     const microP2=warpedX*.048+travelTime*2.3;
     const microFlutterY=(Math.sin(microP1)*3.6+Math.cos(microP2)*1.6)*fineFlutter;
     const microFlutterZ=(Math.cos(microP1*1.2)*4.2+Math.sin(microP2*.8)*2)*fineFlutter;
     const elevation=(macroWaveY+profileWave+microFlutterY)*verticalFunnelEnvelope*cursorGustAmp;
     const spineY=cardCenterY+elevation+(isLeft?-4:3)*Math.pow(Math.max(0,1-u),1.25);
-    const phiD=mobile?warpedX*.00185-travelTime*.48+phaseOffset:isLeft?warpedX*.00185-travelTime*.48:warpedX*.00195+travelTime*.44+1.7;
-    const spineZ=(macroWaveZ+(mobile||isLeft?Math.sin(phiD)*70:Math.cos(phiD)*68)+(mobile||isLeft?Math.cos(warpedX*.0037+travelTime*.28+phaseOffset)*34:Math.sin(warpedX*.0039-travelTime*.26)*32)+microFlutterZ)*(.85+env1*.28)*verticalFunnelEnvelope*cursorGustAmp;
+    const phiD=warpedX*.00185-travelTime*.48+phaseOffset;
+    const spineZ=(macroWaveZ+Math.sin(phiD)*70+Math.cos(warpedX*.0037+travelTime*.28+phaseOffset)*34+microFlutterZ)*(.85+env1*.28)*verticalFunnelEnvelope*cursorGustAmp;
     const waveSlope=Math.cos(phiM1)*.60-Math.sin(phiM2)*.30;
     const rollTorsion=mobile?.56:1.25;
-    const dynamicTwist=(Math.sin(warpedX*.00175-travelTime*.50+(isLeft?.25:2.3))*.62+waveSlope*.34)*rollTorsion*verticalFunnelEnvelope;
+    const dynamicTwist=(Math.sin(warpedX*.00175-travelTime*.50+phaseOffset+.25)*.62+waveSlope*.34)*rollTorsion*verticalFunnelEnvelope;
     const obliqueAngle=20*Math.PI/180;
     const totalRoll=obliqueAngle+dynamicTwist;
     return {spineY,spineZ,totalRoll,effectiveWidth,travelTime,verticalFunnelEnvelope,centerConvergence,cursorGustAmp,outerTaperFactor,warpedX,env1,gust};
@@ -153,7 +141,7 @@ const backgroundCanvasScript = `<script>
           const drapeCamber=mobile?.48:.88;
           const catenaryZ=(1-v*v*.85)*(halfW*.32)*drapeCamber;
           const sCurveY=v*(1-v*v)*(halfW*.20)*drapeCamber;
-          const dynamicCatenaryZ=(catenaryZ*Math.sin(colX*.0026-profile.travelTime*.55)+sCurveY*Math.cos(colX*.0036+profile.travelTime*.62))*profile.verticalFunnelEnvelope*profile.cursorGustAmp;
+          const dynamicCatenaryZ=(catenaryZ*Math.sin(profile.warpedX*.0026-profile.travelTime*.55)+sCurveY*Math.cos(profile.warpedX*.0036+profile.travelTime*.62))*profile.verticalFunnelEnvelope*profile.cursorGustAmp;
           const edgeWeight=Math.pow(Math.abs(v),1.55);
           const edgeFlutterPhase=profile.warpedX*.0088-profile.travelTime*1.32+v*2.3;
           const edgeFlutterScale=mobile?.48:1.15;
