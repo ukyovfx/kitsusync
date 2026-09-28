@@ -12,6 +12,7 @@ This CI evidence validates application behavior with synthetic services only. It
 
 - [ ] `/bot/login` retains a horizontally centered login card and shows the bilateral inward particle fabric outside its clear card area.
 - [ ] The login fabric has broad slow folds, fine flutter, a visible center taper, depth-aware size/brightness, and the dark burnt-orange → Kitsu-orange → amber palette; it has no vortex, rings, network lines, repulsion, bloom, or heavy glow.
+- [ ] With no pointer gust, mirrored samples at matching distances from the card have comparable particle density and brightness at desktop and mobile widths; organic fine flutter remains visible.
 - [ ] Pointer movement increases local login fabric wave/gust amplitude and smoothly recovers after leaving; it never pushes particles away.
 - [ ] Normal authenticated app pages use the quieter fixed dot grid with slow subtle brightness/size modulation and slight pointer activation only; dots do not strongly move or repel.
 - [ ] Login and app canvases are readable behind the UI and do not alter Current IA layout or content.

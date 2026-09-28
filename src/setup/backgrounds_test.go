@@ -28,7 +28,10 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`pointer.target=1`,
 		`pointer.target=0`,
 		`sheetWidth=180`,
-		`Math.min(sheetWidth,available)`,
+		`width=document.documentElement.clientWidth`,
+		`const band=Math.min(sheetWidth,leftEdge,width-rightEdge)`,
+		`const depthPhase=(inward*band*.012+seconds*flowSpeed)`,
+		`const wavePhase=depthPhase+(v*6.2)+.9`,
 		`const spacing=34`,
 		`const local=Math.exp`,
 	} {
@@ -36,7 +39,7 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 			t.Errorf("background script missing expected behavior %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur"} {
+	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "xBase*.012", "xBase*.075", "field.direction*.9"} {
 		if strings.Contains(backgroundCanvasScript, forbidden) {
 			t.Errorf("background script contains forbidden effect %q", forbidden)
 		}

@@ -104,7 +104,7 @@ async function localCanvasAlpha(page, x, y, radius) {
     const canvas = document.querySelector('canvas[data-background]');
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return 0;
-    const dpr = canvas.width / innerWidth;
+    const dpr = canvas.width / canvas.getBoundingClientRect().width;
     const left = Math.max(0, Math.floor((x - radius) * dpr));
     const top = Math.max(0, Math.floor((y - radius) * dpr));
     const right = Math.min(canvas.width, Math.ceil((x + radius) * dpr));
@@ -114,6 +114,71 @@ async function localCanvasAlpha(page, x, y, radius) {
     for (let i = 3; i < pixels.length; i += 4) sum += pixels[i];
     return sum;
   }, { x, y, radius });
+}
+
+async function localCanvasBrightness(page, x, y, radius) {
+  return page.evaluate(({ x, y, radius }) => {
+    const canvas = document.querySelector('canvas[data-background="login-fabric"]');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return 0;
+    const scale = canvas.width / canvas.getBoundingClientRect().width;
+    const left = Math.max(0, Math.floor((x - radius) * scale));
+    const top = Math.max(0, Math.floor((y - radius) * scale));
+    const right = Math.min(canvas.width, Math.ceil((x + radius) * scale));
+    const bottom = Math.min(canvas.height, Math.ceil((y + radius) * scale));
+    const pixels = ctx.getImageData(left, top, right - left, bottom - top).data;
+    let sum = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      const luminance = pixels[i] * .2126 + pixels[i + 1] * .7152 + pixels[i + 2] * .0722;
+      sum += luminance * pixels[i + 3] / 255;
+    }
+    return sum;
+  }, { x, y, radius });
+}
+
+async function assertLoginFabricBalance(page, locale, viewport) {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.waitForTimeout(60);
+  const geometry = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[data-background="login-fabric"]');
+    const card = document.querySelector('.login-card');
+    if (!canvas || !card) return null;
+    const rect = card.getBoundingClientRect();
+    const width = document.documentElement.clientWidth;
+    const gap = width < 600 ? 4 : 18;
+    const leftEdge = Math.max(0, rect.left - gap);
+    const rightEdge = Math.min(width, rect.right + gap);
+    return {
+      band: Math.min(180, leftEdge, width - rightEdge),
+      centerY: rect.top + rect.height * .5,
+      leftEdge,
+      rightEdge,
+    };
+  });
+  if (!geometry || geometry.band < 3) throw new Error(`login fabric has no shared lateral band at ${viewport.name}`);
+  const radius = Math.max(14, Math.min(42, geometry.band * .2));
+  const ratios = [];
+  for (const inward of [.2, .5, .8]) {
+    const offset = geometry.band * (1 - inward);
+    const leftX = geometry.leftEdge - offset;
+    const rightX = geometry.rightEdge + offset;
+    const leftAlpha = await localCanvasAlpha(page, leftX, geometry.centerY, radius);
+    const rightAlpha = await localCanvasAlpha(page, rightX, geometry.centerY, radius);
+    const leftBrightness = await localCanvasBrightness(page, leftX, geometry.centerY, radius);
+    const rightBrightness = await localCanvasBrightness(page, rightX, geometry.centerY, radius);
+    const densityRatio = Math.min(leftAlpha, rightAlpha) / Math.max(1, leftAlpha, rightAlpha);
+    const brightnessRatio = Math.min(leftBrightness, rightBrightness) / Math.max(1, leftBrightness, rightBrightness);
+    ratios.push({ density: densityRatio, brightness: brightnessRatio });
+    if (densityRatio < .7 || brightnessRatio < .7) {
+      throw new Error(`login fabric is imbalanced at ${locale.lang}/${viewport.name}, inward=${inward}: left=${leftAlpha}/${leftBrightness}, right=${rightAlpha}/${rightBrightness}`);
+    }
+  }
+  records.push({
+    route: '/bot/login', locale: locale.lang, viewport: viewport.name,
+    state: 'mirrored fabric balance',
+    detail: `left/right density/brightness ratios=${ratios.map(value => `${value.density.toFixed(2)}/${value.brightness.toFixed(2)}`).join(',')}; shared band=${Math.round(geometry.band)}px`,
+  });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
 }
 
 (async () => {
@@ -149,6 +214,7 @@ async function localCanvasAlpha(page, x, y, radius) {
           records.push({ route: '/favicon.ico', locale: locale.lang, viewport: viewport.name, state: 'served', detail: `HTTP ${favicon.status}; ${favicon.type}; ${favicon.bytes} bytes` });
         }
         await assertBackgroundCanvas(page, 'login-fabric', locale, viewport, `login-background-${locale.lang}-${viewport.name}.png`);
+        await assertLoginFabricBalance(page, locale, viewport);
       }
     }
     await page.setViewportSize({ width: 1440, height: 900 });
