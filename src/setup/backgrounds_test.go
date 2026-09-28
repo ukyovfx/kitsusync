@@ -36,13 +36,12 @@ func TestLoginForegroundSurfacesAreOpaque(t *testing.T) {
 func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *testing.T) {
 	for _, want := range []string{
 		`matchMedia('(prefers-reduced-motion: reduce)')`,
-		`mode==='login-fabric'||!pointerSettled`,
-		`mode==='login-fabric'||Math.abs(pointer.amount-pointer.target)>=.002`,
-		`pointer.target=mode==='app-dots'&&reduced.matches?0:1`,
+		`(mode==='login-fabric'&&width>=600)||Math.abs(pointer.amount-pointer.target)>=.002`,
+		`pointer.target=(mode==='app-dots'&&reduced.matches)||(mode==='login-fabric'&&width<600)?0:1`,
 		`pointer.target=0`,
 		`width=document.documentElement.clientWidth`,
 		`const mobile=width<600`,
-		`const meshRows=mobile?13:params.meshRows`,
+		`if(mobile){canvas.style.display='none';canvas.dataset.profile='mobile-no-fabric';return;}`,
 		`centerY=rect.top+rect.height*.5`,
 		`pointer.targetX-pointer.x)*.10`,
 		`Math.pow(.94,elapsed*60)`,
@@ -60,6 +59,18 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "const fields=[", "field.direction", `const slow=Math.sin(x*.003+y*.004+seconds*.09)`, `local*Math.sin`, `local*Math.cos`, `ctx.translate(`} {
 		if strings.Contains(backgroundCanvasScript, forbidden) {
 			t.Errorf("background script contains forbidden effect %q", forbidden)
+		}
+	}
+}
+
+func TestMobileLoginBackgroundOmitsFabricAndAnimation(t *testing.T) {
+	for _, want := range []string{
+		`if(mobile){canvas.style.display='none';canvas.dataset.profile='mobile-no-fabric';return;}`,
+		`if(mode==='login-fabric'&&width<600){pointer.target=0;pointer.amount=0;drawLogin(time);return;}`,
+		`(mode==='login-fabric'&&width>=600)`,
+	} {
+		if !strings.Contains(backgroundCanvasScript, want) {
+			t.Errorf("mobile Login background is missing no-fabric behavior %q", want)
 		}
 	}
 }

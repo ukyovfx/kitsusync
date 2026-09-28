@@ -121,6 +121,7 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
       cardBackground, panelBackground,
       cardOpaque: isOpaqueRGB(cardBackground),
       panelOpaque: isOpaqueRGB(panelBackground),
+      canvasDisplay: canvas ? getComputedStyle(canvas).display : null,
       foregroundSamples: cardRect && panelRect ? [
         { name: 'card', x: Math.floor(cardRect.left + 8), y: Math.floor(cardRect.top + cardRect.height * .72) },
         { name: 'form panel', x: Math.floor(panelRect.left + 8), y: Math.floor(panelRect.top + panelRect.height * .5) },
@@ -133,14 +134,14 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
       gutterBackground: getComputedStyle(document.documentElement).backgroundColor,
     };
   });
-  if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}: ${JSON.stringify({ visible: details.visible, canvasSize: details.canvasSize, nonzeroAlpha: details.nonzeroAlpha, maxAlpha: details.maxAlpha, gridCenterAlpha: details.gridCenterAlpha })}`);
+  if (!(mode === 'login-fabric' && viewport.name === 'mobile') && details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}: ${JSON.stringify({ visible: details.visible, canvasSize: details.canvasSize, nonzeroAlpha: details.nonzeroAlpha, maxAlpha: details.maxAlpha, gridCenterAlpha: details.gridCenterAlpha })}`);
   if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
     throw new Error(`login foreground surfaces are translucent at ${viewport.name}: ${JSON.stringify({ card: details.cardBackground, panel: details.panelBackground })}`);
   }
-  if (mode === 'login-fabric' && (details.canvasOrangeUnderCard < 1 || details.canvasOrangeUnderPanel < 1)) {
+  if (mode === 'login-fabric' && viewport.name !== 'mobile' && (details.canvasOrangeUnderCard < 1 || details.canvasOrangeUnderPanel < 1)) {
     throw new Error(`fabric no longer flows geometrically behind the Login card/form at ${viewport.name}: ${JSON.stringify({ card: details.canvasOrangeUnderCard, panel: details.canvasOrangeUnderPanel })}`);
   }
-  if (mode === 'login-fabric' && viewport.name === 'mobile' && details.visible > 250) throw new Error(`mobile login ribbon is too dense for ${locale.lang}: ${details.visible} sampled pixels`);
+  if (mode === 'login-fabric' && viewport.name === 'mobile' && (details.nonzeroAlpha !== 0 || details.canvasDisplay !== 'none')) throw new Error(`mobile Login fabric is still visible for ${locale.lang}: ${JSON.stringify({ alpha: details.nonzeroAlpha, display: details.canvasDisplay })}`);
   if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
   if (details.lang !== locale.lang) throw new Error(`${mode} page language mismatch for ${locale.lang}`);
   if (details.gutterBackground !== 'rgb(7, 7, 7)') throw new Error(`${mode} scrollbar gutter is not using the dark page background at ${viewport.name}`);
@@ -223,17 +224,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       const rect = card?.getBoundingClientRect();
       return {
         count,
-        rows: Number(canvas?.dataset.meshRows),
-        spacing: Number(canvas?.dataset.meshSpacingX),
         profile: canvas?.dataset.profile,
+        display: canvas ? getComputedStyle(canvas).display : null,
         centered: rect ? { x: Math.abs(rect.left + rect.width / 2 - innerWidth / 2), y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2) } : null,
-        top: rect?.top,
         width: innerWidth,
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     });
-    if (mobileFrame.count < 3 || mobileFrame.count > 250) throw new Error(`mobile horizontal ribbon is missing or too dense at ${locale.lang}: ${mobileFrame.count} sampled pixels`);
-    if (mobileFrame.profile !== 'restrained-mobile' || mobileFrame.rows !== 13 || mobileFrame.spacing !== 15) throw new Error(`mobile ribbon did not use the restrained profile at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
+    if (mobileFrame.count !== 0 || mobileFrame.display !== 'none' || mobileFrame.profile !== 'mobile-no-fabric') throw new Error(`mobile Login waves were not hidden at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
     if (!mobileFrame.centered || mobileFrame.centered.x > 8 || mobileFrame.centered.y > 8 || mobileFrame.overflow) {
       throw new Error(`mobile login card or viewport layout is invalid at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
     }
@@ -242,18 +240,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const staticFrame = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
     await page.waitForTimeout(350);
     const reducedFrame = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
-    if (reducedFrame !== staticFrame) throw new Error(`mobile login ribbon animated under reduced motion at ${locale.lang}`);
+    if (reducedFrame !== staticFrame) throw new Error(`mobile Login background changed under reduced motion at ${locale.lang}`);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.mouse.move(0, 0);
     await page.waitForTimeout(200);
-    const pointer = { x: mobileFrame.width * .30, y: await fabricPeakY(page, mobileFrame.width * .30) };
-    if (pointer.y === null) throw new Error(`mobile ribbon has no measurable cloth under the pointer at ${locale.lang}`);
-    const before = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
-    await page.mouse.move(pointer.x, pointer.y);
-    await page.waitForTimeout(900);
-    const after = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
-    if (after <= before) throw new Error(`mobile pointer activation did not increase local ribbon activity at ${locale.lang} (${before} -> ${after})`);
-    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'restrained horizontal ribbon', detail: `${mobileFrame.count} sampled pixels; ${mobileFrame.rows} strands at ${mobileFrame.spacing}px; centered card; reduced-motion frame stable; pointer local alpha ${before} -> ${after}` });
+    await page.mouse.move(mobileFrame.width * .30, 420);
+    await page.waitForTimeout(100);
+    if (await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data.some((value, index) => index % 4 === 3 && value !== 0))) {
+      throw new Error(`mobile pointer interaction rendered Login waves for ${locale.lang}`);
+    }
+    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'no Login waves on phone widths', detail: 'fabric canvas hidden; centered card; no overflow; reduced-motion and pointer checks remained static' });
     return;
   }
   const geometry = await page.evaluate(() => {

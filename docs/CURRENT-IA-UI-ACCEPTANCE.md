@@ -10,7 +10,7 @@ This CI evidence validates application behavior with synthetic services only. It
 
 ## Login and app backgrounds
 
-- [ ] `/bot/login` retains a horizontally centered card. Desktop uses the prototype Gold Standard baseline (26 strands, 7px sampling, 180px sheet width, canonical 10-tier palette, 36,000-dot tier capacity) with separate side-specific waves and continuous `streamDist` flow. Phone widths retain a restrained horizontal ribbon with reduced thickness, amplitude, particle count, and brightness.
+- [ ] `/bot/login` retains a horizontally centered card. Desktop uses the prototype Gold Standard baseline (26 strands, 7px sampling, 180px sheet width, canonical 10-tier palette, 36,000-dot tier capacity) with separate side-specific waves and continuous `streamDist` flow. Phone widths hide the Login fabric canvas and show no waves.
 - [ ] The login fabric has broad slow folds, fine flutter, a visible center taper, depth-aware size/brightness, and the prototype's burnt-orange → Kitsu-orange → amber palette; it has no vortex, rings, network lines, repulsion, bloom, or heavy glow. Intentional left/right silhouette differences are preserved; no symmetric-density ratio is required.
 - [ ] Browser pixel sampling proves mid/bright orange tiers are materially present, and samples immediately outside both desktop card edges show the cloth reaches the card without a visible moat. The card's foreground layer naturally occludes the cloth beneath it.
 - [ ] Pointer gust uses projected 2D cloth proximity: a pointer at the cloth increases local wave/flutter/brightness, while the same X position far above or below the cloth does not trigger it. The gust smoothly recovers after leaving and never repels particles. On mobile, pointer activation remains subtle and does not disturb the centered card.
@@ -19,7 +19,7 @@ This CI evidence validates application behavior with synthetic services only. It
 - [ ] The authenticated grid has no global animation, waves, silk/fabric, drift, flowing noise/mist, recentering, repulsion, or particle translation. Pointer proximity changes only nearby dot brightness and size with smooth local falloff; reduced motion retains the static baseline and may disable pointer activation.
 - [ ] Login and app canvases remain behind the UI and do not alter Current IA layout or content. Login card and form panel are opaque while login cloth geometry continues underneath them without a particle moat.
 - [ ] Login fabric respects `prefers-reduced-motion: reduce`; the authenticated dot grid already has no global animation.
-- [ ] Browser acceptance covers JP and EN at 1440×900, 1920×1080, and 390×844, with no horizontal overflow, mojibake, or console errors.
+- [ ] Browser acceptance covers JP and EN at 1440×900, 1920×1080, and 390×844, with no horizontal overflow, mojibake, or console errors. The Login fabric is absent at 390×844; authenticated pages retain their static reactive dot grid at all three viewport sizes.
 
 Use the repo-supported authenticated preview/browser workflow. Browser-rendered output is the final acceptance evidence. Do not use Production 8090 or submit write-producing forms during this smoke check.
 
