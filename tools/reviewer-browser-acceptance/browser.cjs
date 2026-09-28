@@ -161,8 +161,8 @@ async function assertLoginFabricBalance(page, locale, viewport) {
     if (!mobileFrame.centered || mobileFrame.centered.x > 8 || mobileFrame.centered.y > 8 || mobileFrame.overflow) {
       throw new Error(`mobile login card or viewport layout is invalid at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
     }
-    const leftRibbon = await localCanvasAlpha(page, mobileFrame.width * .30, mobileFrame.top - 12, 20);
-    const rightRibbon = await localCanvasAlpha(page, mobileFrame.width * .70, mobileFrame.top - 12, 20);
+    const leftRibbon = await localCanvasAlpha(page, mobileFrame.width * .30, mobileFrame.top - 42, 20);
+    const rightRibbon = await localCanvasAlpha(page, mobileFrame.width * .70, mobileFrame.top - 42, 20);
     if (leftRibbon < 1 || rightRibbon < 1 || Math.min(leftRibbon, rightRibbon) / Math.max(leftRibbon, rightRibbon) < .30) {
       throw new Error(`mobile horizontal ribbon is not visibly balanced above the card at ${locale.lang}: ${leftRibbon}/${rightRibbon}`);
     }
@@ -173,7 +173,7 @@ async function assertLoginFabricBalance(page, locale, viewport) {
     await page.mouse.move(0, 0);
     await page.waitForTimeout(200);
     const card = await page.locator('.login-card').boundingBox();
-    const pointer = { x: 7, y: card.y - 12 };
+    const pointer = { x: mobileFrame.width * .30, y: card.y - 42 };
     const before = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
     await page.mouse.move(pointer.x, pointer.y);
     await page.waitForTimeout(300);
@@ -194,6 +194,8 @@ async function assertLoginFabricBalance(page, locale, viewport) {
       canvasWidth: canvas.getBoundingClientRect().width,
       centerY,
       cardCenterX: rect.left + rect.width * .5,
+      cardLeft: rect.left,
+      cardRight: rect.right,
     };
   });
   if (!geometry || Math.abs(geometry.canvasWidth - geometry.width) > 1 || Math.abs(geometry.cardCenterX - geometry.width / 2) > 8) {
@@ -201,9 +203,9 @@ async function assertLoginFabricBalance(page, locale, viewport) {
   }
   const radius = Math.max(14, Math.min(36, geometry.width * .025));
   const ratios = [];
-  for (const fraction of [.18, .30, .40]) {
-    const leftX = geometry.width * fraction;
-    const rightX = geometry.width * (1 - fraction);
+  for (const fraction of [.45, .65, .75]) {
+    const leftX = geometry.cardLeft * fraction;
+    const rightX = geometry.width - (geometry.width - geometry.cardRight) * fraction;
     const leftAlpha = await localCanvasAlpha(page, leftX, geometry.centerY, radius);
     const rightAlpha = await localCanvasAlpha(page, rightX, geometry.centerY, radius);
     const leftBrightness = await localCanvasBrightness(page, leftX, geometry.centerY, radius);
