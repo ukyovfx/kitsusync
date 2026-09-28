@@ -140,6 +140,16 @@ async function localCanvasAlpha(page, x, y, radius) {
       for (const viewport of backgroundViewports) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
         await page.goto(`${base}/bot/login?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (locale === locales[0] && viewport === backgroundViewports[0]) {
+          const favicon = await page.evaluate(async () => {
+            const response = await fetch('/favicon.ico', { cache: 'no-store' });
+            return { status: response.status, type: response.headers.get('content-type'), bytes: (await response.arrayBuffer()).byteLength };
+          });
+          if (favicon.status !== 200 || favicon.type !== 'image/x-icon' || favicon.bytes === 0) {
+            throw new Error(`favicon response is invalid: ${JSON.stringify(favicon)}`);
+          }
+          records.push({ route: '/favicon.ico', locale: locale.lang, viewport: viewport.name, state: 'served', detail: `HTTP ${favicon.status}; ${favicon.type}; ${favicon.bytes} bytes` });
+        }
         await assertBackgroundCanvas(page, 'login-fabric', locale, viewport, `login-background-${locale.lang}-${viewport.name}.png`);
       }
     }
