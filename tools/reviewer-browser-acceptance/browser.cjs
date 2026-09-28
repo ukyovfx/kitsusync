@@ -561,8 +561,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     if (await eligibility.evaluate(node => node.open)) throw new Error('Reviewer eligibility should start collapsed');
     await eligibility.locator('summary').click();
     if (!(await eligibility.evaluate(node => node.open))) throw new Error('Reviewer eligibility disclosure did not open');
+    const productionIdentity = await page.locator('.production-identity').innerText();
+    if (!productionIdentity.includes('Synthetic Review Production')) throw new Error('Production identity header is missing the selected Production name');
     const teamText = await eligibility.innerText();
-    for (const expected of ['Global Admin', 'Guild Nick Supervisor', 'Global Name Fallback', '@username-fallback', 'Synthetic Review Production']) {
+    for (const expected of ['Global Admin', 'Guild Nick Supervisor', 'Global Name Fallback', '@username-fallback']) {
       if (!teamText.includes(expected)) throw new Error(`Production Team view is missing ${expected}`);
     }
     for (const stale of ['Automatic inactive while overridden', 'Add Production member', 'Remove Production member', 'Reviewer / Checker task types', 'Production Manager fallback', 'global CheckerMap']) {
