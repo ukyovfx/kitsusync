@@ -1133,13 +1133,9 @@ func main() {
 	c.AddFunc("@every 20s", func() {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		kitsuToken := setup.StoredRuntimeKitsuToken(db)
-		if connection, err := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); err == nil {
-			setup.ObserveKitsuRuntimeConnection(connection, kitsuToken)
-		} else {
-			setup.Stats.RecordAPIObservation("kitsu", time.Now(), false, "connection_unverified")
-		}
+		apiOverride := model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)
 		discordToken, _, _ := getDiscordSettings(db, conf)
-		setup.ObserveDiscordRuntime(discordToken)
+		setup.ObserveRuntimeAPIMonitoring(hostname, apiOverride, kitsuToken, discordToken)
 	})
 	c.AddFunc("@every "+conf.PollInterval().String(), func() {
 		if !runtime.ready() && !refreshRuntime() {

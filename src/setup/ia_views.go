@@ -327,18 +327,59 @@ func replaceSystemStatusRefreshScript(body string) string {
 }
 
 func systemStatusRefreshScriptCanonicalRaw() string {
-	return `<script data-system-status-refresh>(function(){var interval=5000,busy=false,select=document.querySelector("[data-system-status-window]"),root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!select||!root)return;function text(ja,en){return document.documentElement.lang==="ja"?ja:en}function windowMS(){return select.value==="5m"?300000:60000}function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":[date.getHours(),date.getMinutes(),date.getSeconds()].map(function(n){return String(n).padStart(2,"0")}).join(":")}function tick(value){return Math.max(0,Math.round(value))+"ms"}function scale(items){var max=1,ceilings=[10,25,50,100,250,500,1000,2000];items.forEach(function(item){var value=Number(item.duration_ms);if(item.success&&isFinite(value)&&value>=0)max=Math.max(max,value)});for(var i=0;i<ceilings.length;i++)if(max<=ceilings[i])return ceilings[i];return Math.ceil(max/100)*100}function label(item){return (localTime(item.at)+" "+(item.success?Number(item.duration_ms)+" ms "+text("正常","Healthy"):text("リクエスト失敗","Request failed"))).trim()}function graph(items){if(!items.length)return "";var left=48,right=448,top=8,bottom=82,window=windowMS(),start=Date.now()-window,upper=scale(items),points=[],marks=[];items.forEach(function(item){var at=Date.parse(item.at);if(!isFinite(at))return;var x=left+Math.max(0,Math.min(1,(at-start)/window))*(right-left);if(!item.success){points.push(null);return}var value=Number(item.duration_ms);if(!isFinite(value)||value<0){points.push(null);return}var y=bottom-(bottom-top)*Math.min(1,value/upper);points.push({x:x,y:y,item:item});marks.push("<circle class=\"telemetry-point success\" cx=\""+x.toFixed(1)+"\" cy=\""+y.toFixed(1)+"\" r=\"3\" data-telemetry-at=\""+item.at+"\" data-telemetry-duration=\""+value+"\" tabindex=\"0\" role=\"img\" aria-label=\""+label(item)+"\"><title>"+label(item)+"</title></circle>")});var segments=[],segment=[];points.forEach(function(point){if(!point){if(segment.length>1)segments.push(segment);segment=[];return}segment.push(point)});if(segment.length>1)segments.push(segment);var paths=segments.map(function(points){return "<path class=\"telemetry-line success\" d=\"M"+points.map(function(p){return p.x.toFixed(1)+","+p.y.toFixed(1)}).join(" L")+"\"></path>"}).join("");var mid=upper/2,labels=select.value==="5m"?[text("5分","5m"),text("2分30秒","2m30s"),text("今","Now")]:[text("60秒","60s"),text("30秒","30s"),text("今","Now")];return "<svg class=\"api-sparkline\" viewBox=\"0 0 496 104\" role=\"img\" aria-label=\""+items.length+" observations\"><line class=\"chart-guide\" x1=\"44\" y1=\"45\" x2=\"452\" y2=\"45\"></line><line class=\"chart-baseline\" x1=\"44\" y1=\"82\" x2=\"452\" y2=\"82\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"40\" y=\"12\">"+tick(upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"40\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"40\" y=\"84\">0ms</text>"+paths+marks.join("")+"<text class=\"chart-time-label\" text-anchor=\"start\" x=\"44\" y=\"100\">"+labels[0]+"</text><text class=\"chart-time-label\" text-anchor=\"middle\" x=\"248\" y=\"100\">"+labels[1]+"</text><text class=\"chart-time-label\" text-anchor=\"end\" x=\"452\" y=\"100\">"+labels[2]+"</text></svg>"}function updateCard(service,items){var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details)return;if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>";return}var last=items[items.length-1],statusValue=last.success?Number(last.duration_ms)+" ms":text("リクエスト失敗","Request failed");status.className="status-pill "+(last.success?"ok":"bad");status.textContent=last.success?text("正常","Healthy"):text("要確認","Needs review");details.innerHTML="<div class=\"api-observation-latency\"><div class=\"api-observation-primary\"><span class=\"api-observation-label\">"+text(""," ")+"</span><strong data-telemetry-value>"+statusValue+"</strong></div><span class=\"api-observation-meta\" data-telemetry-meta>"+text("最終更新","Last updated")+" "+localTime(last.at)+"</span></div>"+graph(items)}function refresh(){if(busy)return;busy=true;fetch("/bot/api/setup/observability?window="+encodeURIComponent(select.value),{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok)throw new Error("snapshot failed");return response.json()}).then(function(payload){var data=payload.observations||{};updateCard("kitsu",data.kitsu||[]);updateCard("discord",data.discord||[]);if(live)live.textContent=text("自動更新","Auto-refresh")}).catch(function(){if(live)live.textContent=text("更新失敗","Refresh unavailable")}).finally(function(){busy=false})}select.addEventListener("change",refresh);window.setInterval(refresh,interval);refresh()})();</script>`
+	return `<script data-system-status-refresh>(function(){
+var interval=5000,busy=false,root=document.querySelector(".system-status-sections"),live=document.querySelector("[data-system-live-label]");if(!root)return;
+function text(ja,en){return document.documentElement.lang==="ja"?ja:en}
+function localTime(value){var date=new Date(value);return isNaN(date.getTime())?"":[date.getHours(),date.getMinutes(),date.getSeconds()].map(function(n){return String(n).padStart(2,"0")}).join(":")}
+function tick(value){return Math.max(0,Math.round(value))+"ms"}
+function scale(items){var max=1,ceilings=[10,25,50,100,250,500,1000,2000];items.forEach(function(item){var value=Number(item.duration_ms);if(item.success&&isFinite(value)&&value>=0)max=Math.max(max,value)});for(var i=0;i<ceilings.length;i++)if(max<=ceilings[i])return ceilings[i];return Math.ceil(max/100)*100}
+function label(item){return (localTime(item.at)+" "+(item.success?Number(item.duration_ms)+" ms "+text("正常","Healthy"):text("リクエスト失敗","Request failed"))).trim()}
+function graph(items,asOf){
+ var left=48,right=448,top=8,bottom=82,window=60000,start=asOf-window,upper=scale(items),all=[],visible=[],marks=[],runs=[],run=[],previous=null,previousAt=0;
+ items.forEach(function(item){var at=Date.parse(item.at);if(isFinite(at)&&at<=asOf)all.push({item:item,at:at})});
+ all.sort(function(a,b){return a.at-b.at});
+ all.forEach(function(entry){if(entry.at<start)previous=entry;else visible.push(entry)});
+ function yFor(entry){var value=Number(entry.item.duration_ms);return bottom-(bottom-top)*Math.min(1,value/upper)}
+ if(previous&&visible.length&&previous.item.success&&visible[0].item.success&&visible[0].at-previous.at<=30000){
+  var first=visible[0],previousY=yFor(previous),firstY=yFor(first),ratio=(start-previous.at)/(first.at-previous.at);
+  run.push({x:left,y:previousY+(firstY-previousY)*ratio,at:start})
+ }
+ visible.forEach(function(entry){
+  var item=entry.item;
+  if(!item.success||!isFinite(Number(item.duration_ms))||Number(item.duration_ms)<0){
+   if(run.length>1)runs.push(run);run=[];previousAt=entry.at;return
+  }
+  if(previousAt&&entry.at-previousAt>30000){if(run.length>1)runs.push(run);run=[]}
+  var x=left+Math.max(0,Math.min(1,(entry.at-start)/window))*(right-left),y=yFor(entry),point={x:x,y:y,at:entry.at};
+  run.push(point);
+  marks.push("<circle class=\"telemetry-point success\" cx=\""+x.toFixed(1)+"\" cy=\""+y.toFixed(1)+"\" r=\"3\" data-telemetry-at=\""+item.at+"\" data-telemetry-duration=\""+Number(item.duration_ms)+"\" tabindex=\"0\" role=\"img\" aria-label=\""+label(item)+"\"><title>"+label(item)+"</title></circle>");
+  previousAt=entry.at
+ });
+ if(run.length>1)runs.push(run);
+ var paths=runs.map(function(points){return "<path class=\"telemetry-line success\" d=\"M"+points.map(function(p){return p.x.toFixed(1)+","+p.y.toFixed(1)}).join(" L")+"\"></path>"}).join(""),mid=upper/2,labels=[text("60秒","60s"),text("30秒","30s"),text("今","Now")];
+ return "<svg class=\"api-sparkline\" viewBox=\"0 0 496 104\" role=\"img\" aria-label=\""+visible.length+" observations\"><line class=\"chart-guide\" x1=\"44\" y1=\"45\" x2=\"452\" y2=\"45\"></line><line class=\"chart-baseline\" x1=\"44\" y1=\"82\" x2=\"452\" y2=\"82\"></line><text class=\"chart-tick\" text-anchor=\"end\" x=\"40\" y=\"12\">"+tick(upper)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"40\" y=\"48\">"+tick(mid)+"</text><text class=\"chart-tick\" text-anchor=\"end\" x=\"40\" y=\"84\">0ms</text>"+paths+marks.join("")+"<text class=\"chart-time-label\" text-anchor=\"start\" x=\"44\" y=\"100\">"+labels[0]+"</text><text class=\"chart-time-label\" text-anchor=\"middle\" x=\"248\" y=\"100\">"+labels[1]+"</text><text class=\"chart-time-label\" text-anchor=\"end\" x=\"452\" y=\"100\">"+labels[2]+"</text></svg>"
+}
+function updateCard(service,items,asOf){
+ var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details)return;
+ if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>"+graph([],asOf);return}
+ var last=items[items.length-1],stale=asOf-Date.parse(last.at)>45000,value=last.success?Number(last.duration_ms)+" ms":text("リクエスト失敗","Request failed");
+ status.className="status-pill "+(stale?"warning":last.success?"ok":"bad");
+ status.textContent=stale?text("古いデータ","Stale"):last.success?text("正常","Healthy"):text("要確認","Needs review");
+ details.innerHTML="<div class=\"api-observation-latency\"><div class=\"api-observation-primary\"><strong data-telemetry-value>"+value+"</strong></div><span class=\"api-observation-meta\" data-telemetry-meta>"+text("最終更新","Last updated")+" "+localTime(last.at)+"</span></div>"+graph(items,asOf)
+}
+function refresh(){
+ if(busy)return;busy=true;
+ fetch("/bot/api/setup/observability?window=60s",{headers:{"X-Requested-With":"system-status-refresh"},cache:"no-store"}).then(function(response){if(!response.ok)throw new Error("snapshot failed");return response.json()}).then(function(payload){
+  var data=payload.observations||{},asOf=Date.parse(payload.generated_at);if(!isFinite(asOf))asOf=Date.now();
+  updateCard("kitsu",data.kitsu||[],asOf);updateCard("discord",data.discord||[],asOf);if(live)live.textContent=text("自動更新","Auto-refresh")
+ }).catch(function(){if(live)live.textContent=text("更新失敗","Refresh unavailable")}).finally(function(){busy=false})
+}
+window.setInterval(refresh,interval);refresh()
+})();</script>`
 }
 
 func systemStatusRefreshScriptCanonical() string {
-	script := systemStatusRefreshScriptCanonicalRaw()
-	if start := strings.Index(script, `if(!item.success){`); start >= 0 {
-		if end := strings.Index(script[start:], `var value=Number(item.duration_ms);`); end >= 0 {
-			script = script[:start] + `if(!item.success){points.push(null);return}` + script[start+end:]
-		}
-	}
-	script = strings.ReplaceAll(script, `<div class=\"api-observation-primary\"><span class=\"api-observation-label\">"+text(""," ")+"</span><strong data-telemetry-value>`, `<div class=\"api-observation-primary\"><strong data-telemetry-value>`)
-	return script
+	return systemStatusRefreshScriptCanonicalRaw()
 }
 
 func applyDashboardMetricSemantics(body string, attentionCount, failureCount int, readinessClass string) string {
@@ -1545,7 +1586,7 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
 	readinessView := readinessViewFor(lang, r, readiness)
 	stats := Stats.Snapshot()
-	windowName := telemetryWindowName(strings.TrimSpace(r.URL.Query().Get("window")))
+	windowName := telemetryWindow60Seconds
 	issues := recentSystemIssues(lang, db)
 	eventAction, eventActionLabel := "", ""
 	if stats.LastPollErr != "" && readiness.PrerequisitesReady {
@@ -1584,9 +1625,11 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 }
 
 func renderRuntimeObservabilitySummary(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness, windowName, body string) string {
-	body = renderRuntimeObservabilitySummaryRaw(lang, stats, windowName, body)
+	asOf := time.Now()
+	windowName = telemetryWindow60Seconds
+	body = renderRuntimeObservabilitySummaryRawAt(lang, stats, windowName, body, asOf)
 	body = stripSystemStatusRedundantCopy(body)
-	body = addTelemetryViewerLocalTimes(body, stats, windowName)
+	body = addTelemetryViewerLocalTimesAt(body, stats, windowName, asOf)
 	body = replaceElementTextByID(body, "system-observability-title", t(lang, "API応答状態", "API response status"))
 	body = replaceElementTextByID(body, "pipeline-health-title", t(lang, "KitsuSync処理状態", "KitsuSync operational status"))
 	return `<div class="section-stack system-status-sections">` + body + `</div>`
@@ -1647,8 +1690,12 @@ func replaceElementTextByID(body, id, text string) string {
 }
 
 func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName string) (result string) {
+	return addTelemetryViewerLocalTimesAt(body, stats, windowName, time.Now())
+}
+
+func addTelemetryViewerLocalTimesAt(body string, stats RuntimeSnapshot, windowName string, asOf time.Time) (result string) {
 	for _, service := range []string{"kitsu", "discord"} {
-		items := filterAPIObservations(stats.APIObservations[service], time.Now(), telemetryWindowDuration(windowName))
+		items := filterAPIObservations(stats.APIObservations[service], asOf, time.Minute)
 		if len(items) == 0 {
 			continue
 		}
@@ -1660,14 +1707,12 @@ func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName
 }
 
 func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, windowName, body string) string {
-	sharedMax := sharedAPIObservationScale(stats, windowName)
-	windowLabel := t(lang, "直近60秒", "Last 60 seconds")
-	if windowName == telemetryWindow5Minutes {
-		_ = windowLabel
-		windowLabel = t(lang, "直近5分", "Last 5 minutes")
-	}
-	windowControl := `<label class="telemetry-window-control"><span>` + esc(t(lang, "表示範囲", "Time window")) + `</span><select id="system-status-window" data-system-status-window><option value="60s"` + selectedAttr(windowName == telemetryWindow60Seconds) + `>` + esc(t(lang, "直近60秒", "Last 60 seconds")) + `</option><option value="5m"` + selectedAttr(windowName == telemetryWindow5Minutes) + `>` + esc(t(lang, "直近5分", "Last 5 minutes")) + `</option></select></label>`
-	return `<section class="section-card glass system-observability" aria-labelledby="system-observability-title"><div class="page-heading"><div><h2 id="system-observability-title">` + esc(t(lang, "外部APIの健全性", "External API health")) + `</h2><p class="hint">` + esc(t(lang, "実測できた応答時間を時間順に表示します。", "Shows real response times in chronological order.")) + `</p></div><div class="telemetry-window-actions">` + windowControl + `<span class="system-live-indicator" role="status"><i aria-hidden="true"></i><span data-system-live-label>` + esc(t(lang, "自動更新", "Auto-refresh")) + `</span></span></div></div><div class="system-observability-grid"><article class="api-observation-card" data-telemetry-card="kitsu"><div class="api-observation-summary"><h3>Kitsu API</h3><span class="status-pill ` + apiObservationStatusClass(stats, "kitsu") + `" role="status" data-telemetry-status>` + esc(apiObservationStatus(lang, stats, "kitsu")) + `</span></div><div class="api-observation-details" data-telemetry-details="kitsu">` + apiObservationDetails(lang, stats, "kitsu", windowName, sharedMax) + `</div></article><article class="api-observation-card" data-telemetry-card="discord"><div class="api-observation-summary"><h3>Discord API</h3><span class="status-pill ` + apiObservationStatusClass(stats, "discord") + `" role="status" data-telemetry-status>` + esc(apiObservationStatus(lang, stats, "discord")) + `</span></div><div class="api-observation-details" data-telemetry-details="discord">` + apiObservationDetails(lang, stats, "discord", windowName, sharedMax) + `</div></article></div></section>` + body
+	return renderRuntimeObservabilitySummaryRawAt(lang, stats, windowName, body, time.Now())
+}
+
+func renderRuntimeObservabilitySummaryRawAt(lang string, stats RuntimeSnapshot, windowName, body string, asOf time.Time) string {
+	windowName = telemetryWindow60Seconds
+	return `<section class="section-card glass system-observability" aria-labelledby="system-observability-title"><div class="page-heading"><div><h2 id="system-observability-title">` + esc(t(lang, "外部APIの健全性", "External API health")) + `</h2><p class="hint">` + esc(t(lang, "実測できた応答時間を時間順に表示します。", "Shows real response times in chronological order.")) + `</p></div><div class="telemetry-window-actions"><span class="system-live-indicator" role="status"><i aria-hidden="true"></i><span data-system-live-label>` + esc(t(lang, "自動更新", "Auto-refresh")) + `</span></span></div></div><div class="system-observability-grid"><article class="api-observation-card" data-telemetry-card="kitsu"><div class="api-observation-summary"><h3>Kitsu API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "kitsu", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "kitsu", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="kitsu">` + apiObservationDetailsAt(lang, stats, "kitsu", windowName, asOf) + `</div></article><article class="api-observation-card" data-telemetry-card="discord"><div class="api-observation-summary"><h3>Discord API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "discord", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "discord", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="discord">` + apiObservationDetailsAt(lang, stats, "discord", windowName, asOf) + `</div></article></div></section>` + body
 }
 
 func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) string {
@@ -1687,10 +1732,15 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + details + `</div><div class="pipeline-health-rail"><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + action + `</div></article>`
 }
 
-func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string, sharedMax ...float64) string {
-	items := filterAPIObservations(stats.APIObservations[service], time.Now(), telemetryWindowDuration(windowName))
+func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string) string {
+	return apiObservationDetailsAt(lang, stats, service, windowName, time.Now())
+}
+
+func apiObservationDetailsAt(lang string, stats RuntimeSnapshot, service, windowName string, asOf time.Time) string {
+	windowName = telemetryWindow60Seconds
+	items := filterAPIObservations(stats.APIObservations[service], asOf, time.Minute)
 	if len(items) == 0 {
-		return `<div class="api-observation-not-checked">` + esc(t(lang, "未確認", "Not checked")) + `</div>`
+		return `<div class="api-observation-not-checked">` + esc(t(lang, "未確認", "Not checked")) + `</div>` + apiObservationLineGraphAt(nil, lang, asOf, observationYDomain{Lower: 0, Upper: 10})
 	}
 	last := items[len(items)-1]
 	value := t(lang, "リクエスト失敗", "Request failed")
@@ -1699,7 +1749,7 @@ func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowNa
 	}
 	normalMeta := fmt.Sprintf("%s %s", t(lang, "最終更新", "Last updated"), last.At.Local().Format("15:04:05"))
 	scale := stableObservationScale(service, windowName, items)
-	return `<div class="api-observation-latency"><div class="api-observation-primary"><strong data-telemetry-value>` + esc(value) + `</strong></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationLineGraphWithScale(items, lang, windowName, scale)
+	return `<div class="api-observation-latency"><div class="api-observation-primary"><strong data-telemetry-value>` + esc(value) + `</strong></div><span class="api-observation-meta" data-telemetry-meta>` + esc(normalMeta) + `</span></div>` + apiObservationLineGraphAt(items, lang, asOf, observationYDomain{Lower: 0, Upper: scale})
 }
 
 func systemStatusProjectAction(lang string, r *http.Request, db *gorm.DB) string {
@@ -1724,31 +1774,58 @@ func apiObservationLineGraphWithScale(items []APIObservation, lang, windowName s
 }
 
 func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName string, domain observationYDomain) string {
-	if len(items) == 0 {
-		return ""
-	}
+	return apiObservationLineGraphAt(items, lang, time.Now(), domain)
+}
+
+func apiObservationLineGraphAt(items []APIObservation, lang string, asOf time.Time, domain observationYDomain) string {
 	geometry := telemetryChartGeometry()
 	if domain.Upper <= domain.Lower {
 		domain = observationYDomain{Lower: 0, Upper: 10}
 	}
 	dataWidth := geometry.DataRight - geometry.DataLeft
-	window := telemetryWindowDuration(windowName)
-	start := time.Now().Add(-window)
-	type chartPoint struct{ x, y float64 }
+	window := time.Minute
+	start := asOf.Add(-window)
+	type chartPoint struct {
+		x, y float64
+		at   time.Time
+	}
 	var successful []chartPoint
 	var points strings.Builder
+	inWindowCount := 0
 	for _, item := range items {
-		x := geometry.DataLeft + math.Max(0, math.Min(1, item.At.Sub(start).Seconds()/window.Seconds()))*dataWidth
-		if !item.Success {
-			successful = append(successful, chartPoint{x: math.NaN(), y: math.NaN()}) // keep the line discontinuous at failed observations
+		if item.At.After(asOf) {
 			continue
 		}
-		label := telemetryObservationLabel(lang, item)
+		x := geometry.DataLeft + math.Max(0, math.Min(1, item.At.Sub(start).Seconds()/window.Seconds()))*dataWidth
+		if !item.Success {
+			if !item.At.Before(start) {
+				inWindowCount++
+				successful = append(successful, chartPoint{x: math.NaN(), y: math.NaN(), at: item.At}) // failed observations break the line without a plotted value
+			}
+			continue
+		}
 		value := math.Max(0, float64(item.Duration.Milliseconds()))
 		y := geometry.PlotBottom - (geometry.PlotBottom-geometry.PlotTop)*math.Min(1, value/domain.Upper)
+		if item.At.Before(start) {
+			// Keep only the immediately preceding sample for an entering segment.
+			successful = append(successful, chartPoint{x: math.NaN(), y: y, at: item.At})
+			continue
+		}
+		inWindowCount++
+		label := telemetryObservationLabel(lang, item)
 		xText, yText := fmt.Sprintf("%.1f", x), fmt.Sprintf("%.1f", y)
-		points.WriteString(`<circle class="telemetry-point success" cx="` + xText + `" cy="` + yText + `" r="3" data-telemetry-at="` + esc(item.At.UTC().Format(time.RFC3339)) + `" data-telemetry-duration="` + strconv.FormatInt(item.Duration.Milliseconds(), 10) + `" data-telemetry-success="true" tabindex="0" role="img" aria-label="` + esc(label) + `"><title>` + esc(label) + `</title></circle>`)
-		successful = append(successful, chartPoint{x: x, y: y})
+		points.WriteString(`<circle class="telemetry-point success" cx="` + xText + `" cy="` + yText + `" r="3" data-telemetry-at="` + esc(item.At.UTC().Format(time.RFC3339Nano)) + `" data-telemetry-duration="` + strconv.FormatInt(item.Duration.Milliseconds(), 10) + `" data-telemetry-success="true" tabindex="0" role="img" aria-label="` + esc(label) + `"><title>` + esc(label) + `</title></circle>`)
+		successful = append(successful, chartPoint{x: x, y: y, at: item.At})
+	}
+	// A preceding success may continue into the visible window only when the
+	// adjacent measurements are close enough to represent one monitoring run.
+	for index := 0; index+1 < len(successful); index++ {
+		previous, first := successful[index], successful[index+1]
+		if math.IsNaN(previous.x) && !math.IsNaN(previous.y) && previous.at.Before(start) && !math.IsNaN(first.x) && !first.at.Before(start) && first.at.Sub(previous.at) <= telemetryLineGapAfter {
+			fraction := start.Sub(previous.at).Seconds() / first.at.Sub(previous.at).Seconds()
+			boundaryY := previous.y + (first.y-previous.y)*fraction
+			successful[index] = chartPoint{x: float64(geometry.DataLeft), y: boundaryY, at: start}
+		}
 	}
 	// Each successful run is a separate path; failed samples never acquire a latency value.
 	var line strings.Builder
@@ -1766,24 +1843,26 @@ func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName 
 		}
 		run = nil
 	}
+	var previousAt time.Time
 	for _, point := range successful {
 		if math.IsNaN(point.x) {
 			flush()
+			previousAt = point.at
 			continue
 		}
+		if !previousAt.IsZero() && point.at.Sub(previousAt) > telemetryLineGapAfter {
+			flush()
+		}
 		run = append(run, point)
+		previousAt = point.at
 	}
 	flush()
 	labels := []string{"60s", "30s", "Now"}
-	if windowName == telemetryWindow5Minutes {
-		labels = []string{"5m", "2m30s", "Now"}
-	} else if lang == "ja" {
+	if lang == "ja" {
 		labels = []string{"60秒", "30秒", "今"}
-	} else {
-		labels[2] = "Now"
 	}
 	middle := domain.Upper / 2
-	svg := `<svg class="api-sparkline" viewBox="0 0 496 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", len(items))) + `"><line class="chart-guide" x1="44" y1="45" x2="452" y2="45"></line><line class="chart-baseline" x1="44" y1="82" x2="452" y2="82"></line><text class="chart-tick" text-anchor="end" x="40" y="12">` + esc(formatLatencyTick(domain.Upper)) + `</text><text class="chart-tick" text-anchor="end" x="40" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="40" y="84">0ms</text>` + line.String() + points.String() + `<text class="chart-time-label" text-anchor="start" x="44" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="248" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="452" y="100">` + esc(labels[2]) + `</text></svg>`
+	svg := `<svg class="api-sparkline" viewBox="0 0 496 104" role="img" aria-label="` + esc(fmt.Sprintf("%d observations", inWindowCount)) + `"><line class="chart-guide" x1="44" y1="45" x2="452" y2="45"></line><line class="chart-baseline" x1="44" y1="82" x2="452" y2="82"></line><text class="chart-tick" text-anchor="end" x="40" y="12">` + esc(formatLatencyTick(domain.Upper)) + `</text><text class="chart-tick" text-anchor="end" x="40" y="48">` + esc(formatLatencyTick(middle)) + `</text><text class="chart-tick" text-anchor="end" x="40" y="84">0ms</text>` + line.String() + points.String() + `<text class="chart-time-label" text-anchor="start" x="44" y="100">` + esc(labels[0]) + `</text><text class="chart-time-label" text-anchor="middle" x="248" y="100">` + esc(labels[1]) + `</text><text class="chart-time-label" text-anchor="end" x="452" y="100">` + esc(labels[2]) + `</text></svg>`
 	return svg
 }
 
@@ -1950,20 +2029,6 @@ func observationScaleForItems(items []APIObservation) float64 {
 	return roundedObservationScale(maxValue)
 }
 
-func sharedAPIObservationScale(stats RuntimeSnapshot, windowName string) float64 {
-	maxValue := 1.0
-	now := time.Now()
-	window := telemetryWindowDuration(windowName)
-	for _, service := range []string{"kitsu", "discord"} {
-		for _, item := range filterAPIObservations(stats.APIObservations[service], now, window) {
-			if value := float64(item.Duration.Milliseconds()); value > maxValue {
-				maxValue = value
-			}
-		}
-	}
-	return roundedObservationScale(maxValue)
-}
-
 func roundedObservationScale(maxValue float64) float64 {
 	for _, ceiling := range []float64{10, 25, 50, 100, 250, 500, 1000, 2000} {
 		if maxValue <= ceiling {
@@ -2045,9 +2110,16 @@ func stableObservationScale(service, windowName string, items []APIObservation) 
 }
 
 func apiObservationStatusClass(stats RuntimeSnapshot, service string) string {
+	return apiObservationStatusClassAt(stats, service, time.Now())
+}
+
+func apiObservationStatusClassAt(stats RuntimeSnapshot, service string, asOf time.Time) string {
 	items := stats.APIObservations[service]
 	if len(items) == 0 {
 		return "neutral"
+	}
+	if apiObservationIsStale(items, asOf) {
+		return "warning"
 	}
 	if items[len(items)-1].Success {
 		return "ok"
@@ -2056,14 +2128,25 @@ func apiObservationStatusClass(stats RuntimeSnapshot, service string) string {
 }
 
 func apiObservationStatus(lang string, stats RuntimeSnapshot, service string) string {
+	return apiObservationStatusAt(lang, stats, service, time.Now())
+}
+
+func apiObservationStatusAt(lang string, stats RuntimeSnapshot, service string, asOf time.Time) string {
 	items := stats.APIObservations[service]
 	if len(items) == 0 {
 		return t(lang, "未確認", "Not checked")
+	}
+	if apiObservationIsStale(items, asOf) {
+		return t(lang, "古いデータ", "Stale")
 	}
 	if items[len(items)-1].Success {
 		return t(lang, "正常", "Healthy")
 	}
 	return t(lang, "要確認", "Needs review")
+}
+
+func apiObservationIsStale(items []APIObservation, asOf time.Time) bool {
+	return len(items) > 0 && asOf.Sub(items[len(items)-1].At) > telemetryStaleAfter
 }
 
 func latestAPIObservationFailed(stats RuntimeSnapshot, service string) bool {

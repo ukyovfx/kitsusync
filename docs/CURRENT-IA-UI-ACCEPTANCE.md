@@ -119,18 +119,18 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Kitsu and Discord API cards have equal peer widths/heights and equal graph plot regions.
 - [ ] Graph outer containers and plotting regions have equal widths and heights.
 - [ ] Graph x positions use observation timestamps; sparse observations do not stretch to fill the sample count.
-- [ ] Both graphs are lines, use independent zero-based stepped ceilings, exactly three readable Y ticks, timestamp-positioned observations, and fixed 60s/5m geometry.
+- [ ] Both graphs are lines over the same fixed rolling 60-second domain, use independent zero-based stepped ceilings, exactly three readable Y ticks, and identical X-axis/plot geometry.
 - [ ] Successful observations connect as green line segments; failed observations break the line without bottom-row X markers or latency values.
 - [ ] Each service plot baseline uses x=44 through x=452 in the 496×104 viewBox; timestamped data uses x=48 through x=448 for equal 4px marker inset and a symmetric midpoint at x=248. Y-axis labels remain fully visible and browser-measured outer gaps remain balanced.
 - [ ] Browser measurement, not viewBox ratio alone, proves the rendered baseline/grid has symmetric left/right margins and the graph surface has no unnecessary side padding or oversized Y-axis gutter.
 - [ ] Computed System Status typography uses the compact operational hierarchy: 28px page title, 20px major titles, 16px card titles, 24px response values, 14px body/helper, 13px metadata, and 12px chart labels.
-- [ ] Exact chart labels are JP `60秒`, `30秒`, `今` and `5分`, `2分30秒`, `今`; EN `60s`, `30s`, `Now` and `5m`, `2m30s`, `Now`.
+- [ ] Exact fixed-domain chart labels are JP `60秒`, `30秒`, `今`; EN `60s`, `30s`, `Now`.
 - [ ] Both graphs show exactly three Y ticks at the same positions: maximum, midpoint, and 0, with an optional subtle midpoint guide.
-- [ ] Both graphs use matching x-label positions for the selected range and current time.
+- [ ] Both graphs use matching X-label positions for the fixed rolling 60-second domain and shared current time.
 - [ ] Kitsu and Discord each use independent zero-based Y scales so low Kitsu latency remains visibly readable; exact current values remain the cross-service comparison.
 - [ ] The current response-time value is visually primary and readable above the graph.
-- [ ] The 60s / 5m selector changes the visible window without full-page reload or URL navigation.
-- [ ] API graphs use chronological lines, green for success, red for failure, and explain response time in ms.
+- [ ] The graph has no time-window selector and keeps a rolling 60-second X domain in initial render and refresh.
+- [ ] API graphs use chronological green success lines; failed samples and long gaps break the line without red failure marks or fabricated latency.
 - [ ] Kitsu and Discord receive real read-only observations; unavailable data is not fabricated.
 - [ ] The auto-refresh indicator remains visible while snapshot updates occur without overlapping requests.
 - [ ] A transient refresh failure is visibly recoverable on the next refresh without a full-page reload.
@@ -150,8 +150,11 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Every successful line point has a native tooltip and keyboard-reachable accessible name containing only its local timestamp, measured duration, and localized success status.
 - [ ] Failed observations break the graph line and never fabricate a duration or add X marks along the graph baseline; the main API response state says `Request failed` / the Japanese equivalent when the latest observation failed.
 - [ ] API snapshot timestamps are UTC RFC3339 and displayed in the viewer's IANA timezone; changing language does not change the timezone, and Audit Log times show the timezone context.
-- [ ] Chart labels use the documented JP/EN values for `60s` and `5m` in both initial render and refresh.
+- [ ] Chart labels use the fixed-domain JP/EN values for `60s`, `30s`, and `Now` in both initial render and refresh.
 - [ ] The browser confirms the line graph remains timestamp-positioned, full-width, zero-based, independently scaled, orthogonal, and auto-refreshed without a page reload.
+- [ ] Kitsu and Discord probes share one monitoring-cycle timestamp and are started concurrently.
+- [ ] A sample gap longer than 30 seconds breaks the line; failed observations never receive latency values; observations older than 45 seconds are labeled stale.
+- [ ] The immediately preceding pre-window sample continues the line at the left boundary only when the adjacent interval is within 30 seconds, without rendering an out-of-window point.
 - [ ] No telemetry tooltip, HTML attribute, log, or API response exposes credentials, authorization headers, response bodies, URLs containing secrets, or internal IDs.
 
 ## Current Production detail integration checks

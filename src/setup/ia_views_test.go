@@ -1785,8 +1785,11 @@ func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	if !strings.Contains(body, `function scale(items)`) || !strings.Contains(body, `upper=scale(items)`) {
 		t.Fatal("system status refresh does not apply independent zero-based Y scales")
 	}
-	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `2m30s`) {
+	if !strings.Contains(body, `class=\"chart-time-label\"`) || !strings.Contains(body, `30s`) || !strings.Contains(body, `payload.generated_at`) {
 		t.Fatal("system status refresh is missing canonical time-axis labels")
+	}
+	if strings.Contains(body, `data-system-status-window`) || !strings.Contains(body, `window=60s`) || !strings.Contains(body, `>45000`) || !strings.Contains(body, `>30000`) {
+		t.Fatal("system status must keep the fixed rolling timeline and stale/gap policy")
 	}
 	if !strings.Contains(body, `chart-tick`) || !strings.Contains(body, `chart-guide`) {
 		t.Fatal("system status refresh is missing readable shared chart ticks or guide")

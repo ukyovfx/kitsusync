@@ -858,13 +858,16 @@ func checkKitsuStatus(kitsuHost string) (info KitsuStatusInfo) {
 
 func checkDiscordStatus(botToken, guildID string) (info DiscordStatusInfo) {
 	started := time.Now()
-	defer func() {
-		classification := "success"
-		if info.Error != nil {
-			classification = "error"
-		}
-		Stats.RecordAPIObservation("discord", started, info.BotValid, classification)
-	}()
+	info = checkDiscordStatusReadOnly(botToken, guildID)
+	classification := "success"
+	if info.Error != nil {
+		classification = "error"
+	}
+	Stats.RecordAPIObservation("discord", started, info.BotValid, classification)
+	return info
+}
+
+func checkDiscordStatusReadOnly(botToken, guildID string) (info DiscordStatusInfo) {
 	if botToken == "" {
 		errStr := "DISCORD_BOT_TOKEN not configured"
 		return DiscordStatusInfo{Error: &errStr}

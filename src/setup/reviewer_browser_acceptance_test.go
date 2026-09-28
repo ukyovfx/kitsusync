@@ -162,10 +162,14 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
+	Stats.mu.Lock()
+	Stats.apiObservations = make(map[string][]APIObservation)
+	Stats.mu.Unlock()
+	cycleAt := time.Now().Truncate(time.Millisecond)
 	for _, service := range []string{"kitsu", "discord"} {
-		Stats.RecordAPIObservation(service, time.Now().Add(-25*time.Millisecond), true, "success")
-		time.Sleep(20 * time.Millisecond)
-		Stats.RecordAPIObservation(service, time.Now().Add(-35*time.Millisecond), true, "success")
+		Stats.RecordAPIObservationAt(service, cycleAt.Add(-65*time.Second), 25*time.Millisecond, true, "success")
+		Stats.RecordAPIObservationAt(service, cycleAt.Add(-45*time.Second), 35*time.Millisecond, true, "success")
+		Stats.RecordAPIObservationAt(service, cycleAt.Add(-25*time.Second), 30*time.Millisecond, true, "success")
 	}
 	for _, user := range reviewerBrowserUserMaps() {
 		if err := db.Create(&user).Error; err != nil {
