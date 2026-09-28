@@ -152,12 +152,18 @@ async function assertLoginFabricBalance(page, locale, viewport) {
         count,
         frame: canvas?.toDataURL(),
         centered: rect ? { x: Math.abs(rect.left + rect.width / 2 - innerWidth / 2), y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2) } : null,
+        top: rect?.top,
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     });
     if (mobileFrame.count < 3 || mobileFrame.count > 250) throw new Error(`mobile horizontal ribbon is missing or too dense at ${locale.lang}: ${mobileFrame.count} sampled pixels`);
     if (!mobileFrame.centered || mobileFrame.centered.x > 8 || mobileFrame.centered.y > 8 || mobileFrame.overflow) {
       throw new Error(`mobile login card or viewport layout is invalid at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
+    }
+    const leftRibbon = await localCanvasAlpha(page, innerWidth * .30, mobileFrame.top - 12, 20);
+    const rightRibbon = await localCanvasAlpha(page, innerWidth * .70, mobileFrame.top - 12, 20);
+    if (leftRibbon < 1 || rightRibbon < 1 || Math.min(leftRibbon, rightRibbon) / Math.max(leftRibbon, rightRibbon) < .30) {
+      throw new Error(`mobile horizontal ribbon is not visibly balanced above the card at ${locale.lang}: ${leftRibbon}/${rightRibbon}`);
     }
     await page.waitForTimeout(350);
     const reducedFrame = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
@@ -172,7 +178,7 @@ async function assertLoginFabricBalance(page, locale, viewport) {
     await page.waitForTimeout(300);
     const after = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
     if (after <= before) throw new Error(`mobile pointer activation did not increase local ribbon activity at ${locale.lang} (${before} -> ${after})`);
-    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'restrained horizontal ribbon', detail: `${mobileFrame.count} sampled visible canvas pixels; centered card; reduced-motion frame stable; pointer local alpha ${before} -> ${after}` });
+    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'restrained horizontal ribbon', detail: `${mobileFrame.count} sampled pixels; balanced ribbon above card ${leftRibbon}/${rightRibbon}; centered card; reduced-motion frame stable; pointer local alpha ${before} -> ${after}` });
     return;
   }
   const geometry = await page.evaluate(() => {
