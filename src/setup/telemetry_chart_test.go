@@ -38,6 +38,48 @@ func TestTelemetryLineGraphUsesTimestampPositionsAndBreaksAcrossFailures(t *test
 	}
 }
 
+func TestTelemetryLineGraphBreaksAcrossMissingMonitoringCycles(t *testing.T) {
+	now := time.Now()
+	items := []APIObservation{
+		{At: now.Add(-55 * time.Second), Duration: 20 * time.Millisecond, Success: true},
+		{At: now.Add(-10 * time.Second), Duration: 30 * time.Millisecond, Success: true},
+	}
+	graph := apiObservationLineGraphWithScale(items, "en", telemetryWindow60Seconds, 50)
+	if strings.Contains(graph, `class="telemetry-line success"`) {
+		t.Fatalf("line bridged a missing monitoring interval: %s", graph)
+	}
+}
+
+func TestTelemetryLineGraphContinuesAtLeftBoundaryFromPrecedingSample(t *testing.T) {
+	now := time.Now()
+	items := []APIObservation{
+		{At: now.Add(-65 * time.Second), Duration: 10 * time.Millisecond, Success: true},
+		{At: now.Add(-55 * time.Second), Duration: 20 * time.Millisecond, Success: true},
+		{At: now.Add(-35 * time.Second), Duration: 30 * time.Millisecond, Success: true},
+	}
+	graph := apiObservationLineGraphWithScale(items, "en", telemetryWindow60Seconds, 50)
+	if !strings.Contains(graph, `d="M48.0,`) {
+		t.Fatalf("continuous data should enter at the rolling-window left boundary: %s", graph)
+	}
+	if strings.Count(graph, `class="telemetry-point success"`) != 2 {
+		t.Fatalf("preceding sample should continue the line without appearing as an out-of-window point: %s", graph)
+	}
+}
+
+func TestAPIObservationStaleStateUsesMonitoringCycleAge(t *testing.T) {
+	asOf := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	if apiObservationIsStale([]APIObservation{{At: asOf.Add(-44 * time.Second)}}, asOf) {
+		t.Fatal("observation inside stale threshold was marked stale")
+	}
+	if !apiObservationIsStale([]APIObservation{{At: asOf.Add(-46 * time.Second)}}, asOf) {
+		t.Fatal("observation older than stale threshold was not marked stale")
+	}
+	stats := RuntimeSnapshot{APIObservations: map[string][]APIObservation{"kitsu": {{At: asOf.Add(-46 * time.Second), Success: true}}}}
+	if got := apiObservationStatusAt("en", stats, "kitsu", asOf); got != "Stale" || apiObservationStatusClassAt(stats, "kitsu", asOf) != "warning" {
+		t.Fatalf("stale observation status = %q / %q", got, apiObservationStatusClassAt(stats, "kitsu", asOf))
+	}
+}
+
 func TestTelemetryLineGraphsUseIndependentZeroBasedScales(t *testing.T) {
 	now := time.Now()
 	kitsuItems := []APIObservation{{At: now, Duration: 8 * time.Millisecond, Success: true}}
@@ -61,8 +103,9 @@ func TestTelemetryLineGraphGeometryAndTimestampScale(t *testing.T) {
 	if geometry.Width != 496 || geometry.Height != 104 || geometry.PlotLeft != 44 || geometry.PlotRight != 452 || geometry.DataLeft != 48 || geometry.DataRight != 448 || geometry.PlotMiddle != 45 || geometry.PlotCenterX != 248 || geometry.PlotBottom != 82 {
 		t.Fatalf("unexpected canonical chart geometry: %#v", geometry)
 	}
-	items := []APIObservation{{At: time.Now().Add(-60 * time.Second), Duration: 1 * time.Millisecond, Success: true}, {At: time.Now(), Duration: 1 * time.Millisecond, Success: true}}
-	graph := apiObservationLineGraphWithScale(items, "en", telemetryWindow60Seconds, 10)
+	asOf := time.Now()
+	items := []APIObservation{{At: asOf.Add(-60 * time.Second), Duration: 1 * time.Millisecond, Success: true}, {At: asOf, Duration: 1 * time.Millisecond, Success: true}}
+	graph := apiObservationLineGraphAt(items, "en", asOf, observationYDomain{Lower: 0, Upper: 10})
 	if !strings.Contains(graph, `cx="`) || strings.Count(graph, `class="telemetry-point success"`) != 2 {
 		t.Fatalf("observations do not have timestamp-positioned points: %s", graph)
 	}
@@ -71,10 +114,29 @@ func TestTelemetryLineGraphGeometryAndTimestampScale(t *testing.T) {
 	}
 }
 
+func TestTelemetryLineGraphsUseOneFixedRollingDomainAndIdenticalXGeometry(t *testing.T) {
+	asOf := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	times := []time.Time{asOf.Add(-time.Minute), asOf.Add(-30 * time.Second), asOf}
+	kitsuItems := []APIObservation{{At: times[0], Duration: 8 * time.Millisecond, Success: true}, {At: times[1], Duration: 9 * time.Millisecond, Success: true}, {At: times[2], Duration: 7 * time.Millisecond, Success: true}}
+	discordItems := []APIObservation{{At: times[0], Duration: 200 * time.Millisecond, Success: true}, {At: times[1], Duration: 250 * time.Millisecond, Success: true}, {At: times[2], Duration: 180 * time.Millisecond, Success: true}}
+	kitsu := apiObservationLineGraphAt(kitsuItems, "en", asOf, observationYDomain{Lower: 0, Upper: 10})
+	discord := apiObservationLineGraphAt(discordItems, "en", asOf, observationYDomain{Lower: 0, Upper: 250})
+	for _, x := range []string{`cx="48.0"`, `cx="248.0"`, `cx="448.0"`} {
+		if !strings.Contains(kitsu, x) || !strings.Contains(discord, x) {
+			t.Fatalf("both services must share fixed 60-second X positions at %s: kitsu=%s discord=%s", x, kitsu, discord)
+		}
+	}
+	empty := apiObservationLineGraphAt(nil, "ja", asOf, observationYDomain{Lower: 0, Upper: 10})
+	if !strings.Contains(empty, `>60秒</text>`) || !strings.Contains(empty, `>30秒</text>`) || !strings.Contains(empty, `>今</text>`) || strings.Contains(empty, `telemetry-line success`) {
+		t.Fatalf("empty state must retain the same fixed timeline without inventing data: %s", empty)
+	}
+}
+
 func TestTelemetryLineGraphTooltipsAreKeyboardReachableAndFailureSafe(t *testing.T) {
+	now := time.Now()
 	graph := apiObservationLineGraphWithScale([]APIObservation{
-		{At: time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC), Duration: 42 * time.Millisecond, Success: true},
-		{At: time.Date(2026, 8, 10, 12, 35, 1, 0, time.UTC), Duration: 900 * time.Millisecond, Success: false},
+		{At: now.Add(-5 * time.Second), Duration: 42 * time.Millisecond, Success: true},
+		{At: now.Add(-time.Second), Duration: 900 * time.Millisecond, Success: false},
 	}, "en", telemetryWindow60Seconds, 250)
 	if strings.Count(graph, `tabindex="0"`) != 1 || strings.Count(graph, `<title>`) != 1 {
 		t.Fatalf("successful points need keyboard/native tooltips, while failures must remain visually quiet: %s", graph)
@@ -89,7 +151,7 @@ func TestTelemetryLineGraphTooltipsAreKeyboardReachableAndFailureSafe(t *testing
 
 func TestSystemStatusRefreshUsesCanonicalLineGraphContract(t *testing.T) {
 	updated := replaceSystemStatusRefreshScript(`<script data-system-status-refresh></script>`)
-	for _, fragment := range []string{`viewBox=\"0 0 496 104\"`, `telemetry-line`, `Date.parse(item.at)`, `points.push(null)`, `item.success&&isFinite(value)`, `Request failed`, `60s`, `2m30s`, `Now`, `x1=\"44\"`, `x2=\"452\"`, `var left=48,right=448`} {
+	for _, fragment := range []string{`viewBox=\"0 0 496 104\"`, `telemetry-line`, `Date.parse(item.at)`, `entry.at-previousAt>30000`, `Request failed`, `60s`, `30s`, `Now`, `payload.generated_at`, `window=60s`, `x1=\"44\"`, `x2=\"452\"`, `var left=48,right=448`} {
 		if !strings.Contains(updated, fragment) {
 			t.Fatalf("refresh graph is missing canonical contract %q", fragment)
 		}
@@ -106,15 +168,15 @@ func TestSystemStatusRefreshUsesCanonicalLineGraphContract(t *testing.T) {
 
 func TestSystemStatusInitialAndRefreshGraphsShareLocalizedWindowLabels(t *testing.T) {
 	now := time.Now()
-	items := []APIObservation{{At: now.Add(-2 * time.Minute), Duration: 25 * time.Millisecond, Success: true}, {At: now.Add(-time.Minute), Duration: 20 * time.Millisecond, Success: true}}
-	initial := apiObservationLineGraphWithScale(items, "ja", telemetryWindow5Minutes, 50)
+	items := []APIObservation{{At: now.Add(-20 * time.Second), Duration: 25 * time.Millisecond, Success: true}, {At: now.Add(-time.Second), Duration: 20 * time.Millisecond, Success: true}}
+	initial := apiObservationLineGraphWithScale(items, "ja", "5m", 50)
 	refresh := systemStatusRefreshScriptCanonical()
-	for _, label := range []string{"5分", "2分30秒", "今", "telemetry-line", "chart-time-label"} {
+	for _, label := range []string{"60秒", "30秒", "今", "telemetry-line", "chart-time-label"} {
 		if !strings.Contains(initial+refresh, label) {
 			t.Fatalf("initial/AJAX line graph contract is missing %q", label)
 		}
 	}
-	for _, label := range []string{"5m", "2m30s", "Now"} {
+	for _, label := range []string{"60s", "30s", "Now"} {
 		if !strings.Contains(refresh, label) {
 			t.Fatalf("AJAX graph is missing English time label %q", label)
 		}

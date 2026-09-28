@@ -540,26 +540,24 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           plots: [...document.querySelectorAll('.api-sparkline')].map(svg => ({
             baselineLeft: Number(svg.querySelector('.chart-baseline')?.getAttribute('x1')),
             baselineRight: Number(svg.querySelector('.chart-baseline')?.getAttribute('x2')),
-            labels: [...svg.querySelectorAll('.chart-time-label')].map(node => Number(node.getAttribute('x'))),
+            labels: [...svg.querySelectorAll('.chart-time-label')].map(node => [Number(node.getAttribute('x')), node.textContent.trim()]),
             points: [...svg.querySelectorAll('.telemetry-point.success')].map(node => Number(node.getAttribute('cx'))),
+            paths: [...svg.querySelectorAll('.telemetry-line')].map(node => node.getAttribute('d')),
           })),
+          selector: document.querySelector('[data-system-status-window]') !== null,
+          generatedAt: document.querySelector('[data-system-status-refresh]')?.textContent.includes('payload.generated_at') || false,
         }));
-        if (graphContract.lines !== 2 || graphContract.bars || graphContract.failureMarks || graphContract.oldDetails || graphContract.redundantResponseLabels || graphContract.plots.length !== 2 || graphContract.plots.some(plot => plot.baselineLeft !== 44 || plot.baselineRight !== 452 || plot.labels[0] !== 44 || plot.labels[1] !== 248 || plot.labels[2] !== 452 || plot.points.some(x => x < 48 || x > 448))) {
+        const expectedLabels = locale.lang === 'ja' ? ['60秒', '30秒', '今'] : ['60s', '30s', 'Now'];
+        const expectedX = [44, 248, 452];
+        if (graphContract.lines !== 2 || graphContract.bars || graphContract.failureMarks || graphContract.oldDetails || graphContract.redundantResponseLabels || graphContract.selector || !graphContract.generatedAt || graphContract.plots.length !== 2 || graphContract.plots.some(plot => plot.baselineLeft !== 44 || plot.baselineRight !== 452 || plot.labels.some((label, index) => label[0] !== expectedX[index] || label[1] !== expectedLabels[index]) || plot.points.some(x => x < 48 || x > 448) || plot.paths.length !== 1 || !plot.paths[0].startsWith('M48.0,')) || JSON.stringify(graphContract.plots[0].points) !== JSON.stringify(graphContract.plots[1].points) || JSON.stringify(graphContract.plots[0].labels) !== JSON.stringify(graphContract.plots[1].labels)) {
           throw new Error(`System Status retained obsolete graph/detail UI in ${locale.lang}: ${JSON.stringify(graphContract)}`);
         }
         await page.screenshot({ path: path.join(output, `system-status-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/health', locale.lang, viewport.name, 'ready', `Current IA System Status loaded; ${graphContract.lines} line paths`);
 
-        await page.locator('[data-system-status-window]').selectOption('5m');
-        const windowLabels = locale.lang === 'ja' ? ['5分', '2分30秒', '今'] : ['5m', '2m30s', 'Now'];
-        await page.waitForFunction(expected => {
-          const labels = [...document.querySelectorAll('.api-sparkline .chart-time-label')].map(node => node.textContent.trim());
-          return expected.every(label => labels.includes(label));
-        }, windowLabels, { timeout: 5000 });
-        const fiveMinuteLines = await page.locator('.api-sparkline .telemetry-line').count();
-        if (fiveMinuteLines !== 2) throw new Error(`5m System Status graph did not retain both line paths in ${locale.lang}`);
-        await page.screenshot({ path: path.join(output, `system-status-${locale.lang}-${viewport.name}-5m.png`), fullPage: true });
-        await record(page, '/bot/admin/health', locale.lang, viewport.name, '5m', 'localized 5-minute selector refreshed both timestamp-based line graphs');
+        await page.waitForFunction(() => [...document.querySelectorAll('.api-sparkline .telemetry-line')].length === 2, null, { timeout: 5000 });
+        await page.screenshot({ path: path.join(output, `system-status-${locale.lang}-${viewport.name}-60s.png`), fullPage: true });
+        await record(page, '/bot/admin/health', locale.lang, viewport.name, '60s', 'both charts share the fixed rolling window, cycle timestamps, and X coordinates');
       }
     }
 

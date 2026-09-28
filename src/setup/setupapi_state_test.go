@@ -103,6 +103,15 @@ func TestTestDiscordHandler_DoesNotMutateRuntimeOrSettings(t *testing.T) {
 }
 
 func TestCheckDiscordStatusValidatesBotWithoutGuild(t *testing.T) {
+	previousObservations := Stats.Snapshot().APIObservations
+	Stats.mu.Lock()
+	Stats.apiObservations = make(map[string][]APIObservation)
+	Stats.mu.Unlock()
+	t.Cleanup(func() {
+		Stats.mu.Lock()
+		Stats.apiObservations = previousObservations
+		Stats.mu.Unlock()
+	})
 	installDiscordAPIStub(t, "unused-guild")
 
 	info := checkDiscordStatus("configured-token", "")
@@ -114,6 +123,9 @@ func TestCheckDiscordStatusValidatesBotWithoutGuild(t *testing.T) {
 	}
 	if info.Error != nil {
 		t.Fatalf("unexpected bot identity error: %v", *info.Error)
+	}
+	if len(Stats.Snapshot().APIObservations["discord"]) != 0 {
+		t.Fatal("a page-triggered Discord status read must not add an unpaired monitoring sample")
 	}
 }
 

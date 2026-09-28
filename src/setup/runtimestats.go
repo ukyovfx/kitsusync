@@ -50,24 +50,34 @@ var Stats = &RuntimeStats{
 
 // RecordAPIObservation adds one bounded, secret-safe observation for a service.
 func (s *RuntimeStats) RecordAPIObservation(service string, started time.Time, success bool, classification string) {
+	finished := time.Now()
+	s.RecordAPIObservationAt(service, finished, finished.Sub(started), success, classification)
+}
+
+// RecordAPIObservationAt stores a probe duration at the shared monitoring-cycle timestamp.
+func (s *RuntimeStats) RecordAPIObservationAt(service string, sampledAt time.Time, duration time.Duration, success bool, classification string) {
+	s.RecordAPIObservationBatch(map[string]APIObservation{
+		service: {At: sampledAt, Duration: duration, Success: success, Classification: classification},
+	})
+}
+
+// RecordAPIObservationBatch appends one complete monitoring cycle atomically.
+func (s *RuntimeStats) RecordAPIObservationBatch(observations map[string]APIObservation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if service == "" {
-		return
-	}
 	if s.apiObservations == nil {
 		s.apiObservations = make(map[string][]APIObservation)
 	}
-	items := s.apiObservations[service]
-	finished := time.Now()
-	items = append(items, APIObservation{
-		At: finished, Duration: finished.Sub(started),
-		Success: success, Classification: classification,
-	})
-	if len(items) > maxAPIObservations {
-		items = items[len(items)-maxAPIObservations:]
+	for service, observation := range observations {
+		if service == "" {
+			continue
+		}
+		items := append(s.apiObservations[service], observation)
+		if len(items) > maxAPIObservations {
+			items = items[len(items)-maxAPIObservations:]
+		}
+		s.apiObservations[service] = items
 	}
-	s.apiObservations[service] = items
 }
 
 // RecordPoll updates polling stats after one cycle completes successfully.

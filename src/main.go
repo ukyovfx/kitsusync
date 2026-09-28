@@ -951,9 +951,7 @@ func main() {
 				setup.RecordKitsuRuntimeAuthMode(db, "bot_token_failed", "connection_unverified")
 				return false
 			}
-			validationStarted := time.Now()
 			validation := setup.ValidateKitsuBotToken(db, strings.TrimSuffix(connection.ResolvedAPIBaseURL, "/api"), token, true)
-			setup.Stats.RecordAPIObservation("kitsu", validationStarted, validation.Compatible(), validation.Classification)
 			slog.Debug("Kitsu Bot token runtime validation",
 				"classification", validation.Classification,
 				"stage", validation.Stage,
@@ -1133,13 +1131,9 @@ func main() {
 	c.AddFunc("@every 20s", func() {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		kitsuToken := setup.StoredRuntimeKitsuToken(db)
-		if connection, err := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); err == nil {
-			setup.ObserveKitsuRuntimeConnection(connection, kitsuToken)
-		} else {
-			setup.Stats.RecordAPIObservation("kitsu", time.Now(), false, "connection_unverified")
-		}
+		apiOverride := model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)
 		discordToken, _, _ := getDiscordSettings(db, conf)
-		setup.ObserveDiscordRuntime(discordToken)
+		setup.ObserveRuntimeAPIMonitoring(hostname, apiOverride, kitsuToken, discordToken)
 	})
 	c.AddFunc("@every "+conf.PollInterval().String(), func() {
 		if !runtime.ready() && !refreshRuntime() {

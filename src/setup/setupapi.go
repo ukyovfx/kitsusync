@@ -818,14 +818,6 @@ func TestDiscordHandler(db *gorm.DB) http.HandlerFunc {
 // --- Internal helpers ---
 
 func checkKitsuStatus(kitsuHost string) (info KitsuStatusInfo) {
-	started := time.Now()
-	defer func() {
-		classification := "success"
-		if info.Error != nil {
-			classification = "error"
-		}
-		Stats.RecordAPIObservation("kitsu", started, info.Authenticated, classification)
-	}()
 	if kitsuHost == "" {
 		errStr := "KITSU_HOSTNAME not configured"
 		return KitsuStatusInfo{Error: &errStr}
@@ -857,14 +849,10 @@ func checkKitsuStatus(kitsuHost string) (info KitsuStatusInfo) {
 }
 
 func checkDiscordStatus(botToken, guildID string) (info DiscordStatusInfo) {
-	started := time.Now()
-	defer func() {
-		classification := "success"
-		if info.Error != nil {
-			classification = "error"
-		}
-		Stats.RecordAPIObservation("discord", started, info.BotValid, classification)
-	}()
+	return checkDiscordStatusReadOnly(botToken, guildID)
+}
+
+func checkDiscordStatusReadOnly(botToken, guildID string) (info DiscordStatusInfo) {
 	if botToken == "" {
 		errStr := "DISCORD_BOT_TOKEN not configured"
 		return DiscordStatusInfo{Error: &errStr}

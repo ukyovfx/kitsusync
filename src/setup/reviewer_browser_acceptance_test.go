@@ -162,11 +162,19 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
-	for _, service := range []string{"kitsu", "discord"} {
-		Stats.RecordAPIObservation(service, time.Now().Add(-25*time.Millisecond), true, "success")
-		time.Sleep(20 * time.Millisecond)
-		Stats.RecordAPIObservation(service, time.Now().Add(-35*time.Millisecond), true, "success")
+	seedBrowserMonitoringCycles := func() {
+		cycleAt := time.Now().Truncate(time.Millisecond)
+		Stats.mu.Lock()
+		Stats.apiObservations = make(map[string][]APIObservation)
+		Stats.mu.Unlock()
+		for _, age := range []time.Duration{65 * time.Second, 45 * time.Second, 25 * time.Second} {
+			Stats.RecordAPIObservationBatch(map[string]APIObservation{
+				"kitsu":   {At: cycleAt.Add(-age), Duration: 25 * time.Millisecond, Success: true, Classification: "success"},
+				"discord": {At: cycleAt.Add(-age), Duration: 35 * time.Millisecond, Success: true, Classification: "success"},
+			})
+		}
 	}
+	seedBrowserMonitoringCycles()
 	for _, user := range reviewerBrowserUserMaps() {
 		if err := db.Create(&user).Error; err != nil {
 			t.Fatal("seed disposable global User Linking")
@@ -193,7 +201,14 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/bot/admin", RequireSession(AdminIndexWithRuntime(db, ready)))
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
-	mux.HandleFunc("/bot/admin/health", RequireSession(HealthHandler(db)))
+	health := HealthHandler(db)
+	mux.HandleFunc("/bot/admin/health", RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The browser suite visits several pages before System Status; reseed
+		// nearby shared monitoring cycles at route time so chart assertions
+		// measure graph behavior rather than seed age.
+		seedBrowserMonitoringCycles()
+		health.ServeHTTP(w, r)
+	})))
 	mux.HandleFunc("/bot/api/setup/observability", RequireSession(TelemetrySnapshotHandler()))
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
