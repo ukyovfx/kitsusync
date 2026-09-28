@@ -28,8 +28,10 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`pointer.target=1`,
 		`pointer.target=0`,
 		`width=document.documentElement.clientWidth`,
-		`const ribbonLayers=3`,
-		`if(mobile)return`,
+		`const maxHalfHeight=Math.min(height*(mobile?.04:.14),mobile?30:92)`,
+		`const columns=mobile?Math.max(24,Math.ceil(width/12)):Math.max(80,Math.ceil(width/8))`,
+		`const ribbonLayers=mobile?2:3`,
+		`const alpha=(.075+depth*.19+local*.09+organic)*edgeTaper*cardAttenuation*(mobile?.58:1)`,
 		`const xBase=u*width`,
 		`const halfHeight=maxHalfHeight*edgeTaper*centerNarrowing`,
 		`const wavePhase=u*5.2+seconds*flowSpeed+layer*.71`,
@@ -53,9 +55,9 @@ func TestLoginFabricUsesTheWholeViewportAsAHorizontallyTaperedRibbon(t *testing.
 		`const xBase=u*width`,
 		`const edgeTaper=smoothstep(0,.08,u)*smoothstep(0,.08,1-u)`,
 		`const centerNarrowing=1-.18*Math.exp(-Math.pow((u-.5)/.18,2))`,
-		`const ribbonLayers=3`,
+		`const ribbonLayers=mobile?2:3`,
 		`const slowWave=Math.sin(wavePhase+Math.sin(seconds*.12+u*2+q)*.6)*slowAmplitude`,
-		`const flutter=Math.sin(u*width*.075+q*17+seconds*1.7+layer*.83)*1.5`,
+		`const flutter=Math.sin(u*width*(mobile?.055:.075)+q*17+seconds*1.7+layer*.83)*(mobile?1:1.5)`,
 	} {
 		if !strings.Contains(backgroundCanvasScript, want) {
 			t.Errorf("horizontal login ribbon is missing %q", want)

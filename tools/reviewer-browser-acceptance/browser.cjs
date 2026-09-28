@@ -88,8 +88,8 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
       gutterBackground: getComputedStyle(document.documentElement).backgroundColor,
     };
   });
-  if (mode === 'login-fabric' && viewport.name === 'mobile' && details.visible > 0) throw new Error(`login waves must be hidden on mobile for ${locale.lang}`);
-  if (!(mode === 'login-fabric' && viewport.name === 'mobile') && details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
+  if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
+  if (mode === 'login-fabric' && viewport.name === 'mobile' && details.visible > 250) throw new Error(`mobile login ribbon is too dense for ${locale.lang}: ${details.visible} sampled pixels`);
   if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
   if (details.lang !== locale.lang) throw new Error(`${mode} page language mismatch for ${locale.lang}`);
   if (details.gutterBackground !== 'rgb(7, 7, 7)') throw new Error(`${mode} scrollbar gutter is not using the dark page background at ${viewport.name}`);
@@ -141,16 +141,38 @@ async function assertLoginFabricBalance(page, locale, viewport) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.waitForTimeout(60);
   if (viewport.name === 'mobile') {
-    const visible = await page.evaluate(() => {
+    const mobileFrame = await page.evaluate(() => {
       const canvas = document.querySelector('canvas[data-background="login-fabric"]');
       const pixels = canvas?.getContext('2d')?.getImageData(0, 0, canvas.width, canvas.height).data;
+      const card = document.querySelector('.login-card');
       let count = 0;
       if (pixels) for (let i = 3; i < pixels.length; i += 4 * 16) if (pixels[i] > 8) count++;
-      return count;
+      const rect = card?.getBoundingClientRect();
+      return {
+        count,
+        frame: canvas?.toDataURL(),
+        centered: rect ? { x: Math.abs(rect.left + rect.width / 2 - innerWidth / 2), y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2) } : null,
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      };
     });
-    if (visible !== 0) throw new Error(`login waves are visible on mobile at ${locale.lang}`);
-    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'mobile waves hidden', detail: 'login canvas remains quiet on mobile' });
+    if (mobileFrame.count < 3 || mobileFrame.count > 250) throw new Error(`mobile horizontal ribbon is missing or too dense at ${locale.lang}: ${mobileFrame.count} sampled pixels`);
+    if (!mobileFrame.centered || mobileFrame.centered.x > 8 || mobileFrame.centered.y > 8 || mobileFrame.overflow) {
+      throw new Error(`mobile login card or viewport layout is invalid at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
+    }
+    await page.waitForTimeout(350);
+    const reducedFrame = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
+    if (reducedFrame !== mobileFrame.frame) throw new Error(`mobile login ribbon animated under reduced motion at ${locale.lang}`);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(200);
+    const card = await page.locator('.login-card').boundingBox();
+    const pointer = { x: 7, y: card.y + card.height * .5 };
+    const before = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
+    await page.mouse.move(pointer.x, pointer.y);
+    await page.waitForTimeout(300);
+    const after = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
+    if (after <= before) throw new Error(`mobile pointer activation did not increase local ribbon activity at ${locale.lang} (${before} -> ${after})`);
+    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'restrained horizontal ribbon', detail: `${mobileFrame.count} sampled visible canvas pixels; centered card; reduced-motion frame stable; pointer local alpha ${before} -> ${after}` });
     return;
   }
   const geometry = await page.evaluate(() => {

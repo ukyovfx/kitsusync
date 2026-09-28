@@ -49,15 +49,14 @@ const backgroundCanvasScript = `<script>
     const rect=card.getBoundingClientRect();
     const centerY=rect.top+rect.height*.5;
     const mobile=width<600;
-    if(mobile)return;
-    const maxHalfHeight=Math.min(height*(mobile?.11:.14),mobile?64:92);
-    const columns=Math.max(80,Math.ceil(width/8));
-    const rows=mobile?13:17;
-    const ribbonLayers=3;
+    const maxHalfHeight=Math.min(height*(mobile?.04:.14),mobile?30:92);
+    const columns=mobile?Math.max(24,Math.ceil(width/12)):Math.max(80,Math.ceil(width/8));
+    const rows=mobile?8:17;
+    const ribbonLayers=mobile?2:3;
     const smoothstep=(a,b,x)=>{const v=Math.max(0,Math.min(1,(x-a)/(b-a)));return v*v*(3-2*v)};
     for(let layer=0;layer<ribbonLayers;layer++){
       const layerDepth=(layer+1)/(ribbonLayers+1);
-      const layerOffset=(layer-1)*(mobile?4:6);
+      const layerOffset=(layer-(ribbonLayers-1)*.5)*(mobile?2:6);
       for(let col=0;col<=columns;col++){
         const u=col/columns;
         const xBase=u*width;
@@ -71,26 +70,26 @@ const backgroundCanvasScript = `<script>
         const gust=Math.exp(-(gustDX*gustDX+gustDY*gustDY)/(2*cursorRadius*cursorRadius))*pointer.amount;
         for(let row=0;row<rows;row++){
           const q=row/(rows-1)*2-1;
-          const slowAmplitude=(mobile?11:21)*(0.72+layerDepth*.28)*(1+gust*.22);
+          const slowAmplitude=(mobile?5:21)*(0.72+layerDepth*.28)*(1+gust*.22);
           const slowWave=Math.sin(wavePhase+Math.sin(seconds*.12+u*2+q)*.6)*slowAmplitude;
-          const mediumWave=Math.sin(wavePhase*2.35+q*3.8+layer*.93)*(mobile?6:11);
-          const flutter=Math.sin(u*width*.075+q*17+seconds*1.7+layer*.83)*1.5;
-          const twist=Math.sin(wavePhase+q*2.6+layer*.63)*8;
+          const mediumWave=Math.sin(wavePhase*2.35+q*3.8+layer*.93)*(mobile?2.5:11);
+          const flutter=Math.sin(u*width*(mobile?.055:.075)+q*17+seconds*1.7+layer*.83)*(mobile?1:1.5);
+          const twist=Math.sin(wavePhase+q*2.6+layer*.63)*(mobile?3.5:8);
           const x=Math.max(0,Math.min(width,xBase+q*twist+xNoise));
           const unliftedY=centerY+q*halfHeight+slowWave+mediumWave+flutter+layerOffset;
           const dx=pointer.x-x,dy=pointer.y-unliftedY;
           const local=Math.exp(-(dx*dx+dy*dy)/(2*cursorRadius*cursorRadius))*pointer.amount;
-          const lift=local*(mobile?7:13);
+          const lift=local*(mobile?3.5:13);
           const y=unliftedY-lift;
           const depth=.5+.5*Math.sin(wavePhase+q*2.7+layer*1.3);
           const insideCard=x>=rect.left-10&&x<=rect.right+10&&y>=rect.top-10&&y<=rect.bottom+10;
           const cardAttenuation=insideCard?.78:1;
           const organic=.025*Math.sin(col*12.989+row*78.233+layer*4.21);
-          const alpha=(.075+depth*.19+local*.09+organic)*edgeTaper*cardAttenuation;
-          if(alpha<.025)continue;
+          const alpha=(.075+depth*.19+local*.09+organic)*edgeTaper*cardAttenuation*(mobile?.58:1);
+          if(alpha<(mobile?.012:.025))continue;
           const mirroredCenter=1-Math.abs(u-.5)*2;
           const color=palette(.12+mirroredCenter*.62+depth*.2+organic);
-          const size=.42+depth*.76+layerDepth*.18+local*.24;
+          const size=(.42+depth*.76+layerDepth*.18+local*.24)*(mobile?.76:1);
           ctx.fillStyle=rgba(color[0],color[1],color[2],alpha);
           ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fill();
         }

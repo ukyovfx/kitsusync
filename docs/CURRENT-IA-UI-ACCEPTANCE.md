@@ -10,10 +10,10 @@ This CI evidence validates application behavior with synthetic services only. It
 
 ## Login and app backgrounds
 
-- [ ] `/bot/login` retains a horizontally centered card. Desktop renders one full-width horizontal particle ribbon with a center taper and faded screen edges; phone widths show no login waves.
+- [ ] `/bot/login` retains a horizontally centered card. Desktop renders one full-width horizontal particle ribbon with a center taper and faded screen edges; phone widths retain a restrained horizontal ribbon with reduced thickness, amplitude, particle count, and brightness.
 - [ ] The login fabric has broad slow folds, fine flutter, a visible center taper, depth-aware size/brightness, and the dark burnt-orange → Kitsu-orange → amber palette; it has no vortex, rings, network lines, repulsion, bloom, or heavy glow.
 - [ ] With no pointer gust, mirrored samples at matching distances from the card have comparable particle density and brightness at desktop and mobile widths; organic fine flutter remains visible.
-- [ ] On desktop, pointer movement increases local login fabric wave/gust amplitude and smoothly recovers after leaving; it never pushes particles away. Mobile keeps the wave canvas quiet.
+- [ ] Pointer movement increases local login fabric wave/gust amplitude and smoothly recovers after leaving; it never pushes particles away. On mobile, pointer activation remains subtle and does not disturb the centered card.
 - [ ] Normal authenticated app pages use the quieter fixed dot grid with slow subtle brightness/size modulation and slight pointer activation only; dots do not strongly move or repel.
 - [ ] Login and app canvases are readable behind the UI and do not alter Current IA layout or content.
 - [ ] Both canvases stop continuous animation under `prefers-reduced-motion: reduce`.
