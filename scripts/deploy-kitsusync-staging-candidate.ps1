@@ -51,7 +51,7 @@ function Read-Provenance([string]$Path) {
 }
 
 function Assert-CandidateProvenance($Values, [bool]$BundleProvenance) {
-    if ($Values.artifact_kind -ne 'candidate' -or $Values.source_commit -ne $CommitSha -or
+    if ($Values.artifact_kind -notin @('candidate', 'nonrelease') -or $Values.source_commit -ne $CommitSha -or
         $Values.source_id -ne $CommitSha -or $Values.release_commit -or $Values.release_tag) {
         throw 'Artifact provenance does not identify the exact non-release candidate SHA.'
     }
@@ -158,7 +158,7 @@ function Get-RemoteHelperContract {
 }
 
 function Assert-RoutineStagingHelperContract([int]$Status, [string]$Output) {
-    $expected = 'STAGING_HELPER_CONTRACT=staging-v7 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    $expected = 'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
     if ($Status -ne 0 -or $Output -notmatch [regex]::Escape($expected)) {
         throw "STAGING_BOOTSTRAP_REQUIRED expected='$expected' observed_status=$Status observed_output='$Output'"
     }
