@@ -765,7 +765,7 @@ func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T)
 	troubleshootingWriter := httptest.NewRecorder()
 	renderIAProductionList(troubleshootingWriter, troubleshootingRequest, db, "")
 	troubleshootingBody := troubleshootingWriter.Body.String()
-	for _, want := range []string{"Current issues", "Diagnostic details"} {
+	for _, want := range []string{"Diagnostics", "Current issues", "Kitsu connection"} {
 		if !strings.Contains(troubleshootingBody, want) {
 			t.Fatalf("troubleshooting missing %q", want)
 		}

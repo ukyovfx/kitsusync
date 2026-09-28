@@ -556,7 +556,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       'Departmentless Supervisor', 'Wrong Department Supervisor', 'Production Manager', 'Global Admin',
       'Demoted Supervisor', 'Project Manager Override', 'Position Only', 'Inactive Supervisor', 'Kitsu Bot', 'Unlinked Supervisor',
     ]);
-    const teamText = await page.locator('main').innerText();
+    const eligibility = page.locator('#reviewer-eligibility');
+    if (!(await eligibility.count())) throw new Error('Reviewer eligibility disclosure is missing');
+    if (await eligibility.evaluate(node => node.open)) throw new Error('Reviewer eligibility should start collapsed');
+    await eligibility.locator('summary').click();
+    if (!(await eligibility.evaluate(node => node.open))) throw new Error('Reviewer eligibility disclosure did not open');
+    const teamText = await eligibility.innerText();
     for (const expected of ['Global Admin', 'Guild Nick Supervisor', 'Global Name Fallback', '@username-fallback', 'Synthetic Review Production']) {
       if (!teamText.includes(expected)) throw new Error(`Production Team view is missing ${expected}`);
     }

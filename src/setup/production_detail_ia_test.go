@@ -62,7 +62,7 @@ func TestProductionDetailUsesFourSectionsAndMapsLegacyTabs(t *testing.T) {
 			t.Fatalf("default Production detail retained obsolete primary UI %q", forbidden)
 		}
 	}
-	if strings.Contains(defaultBody, "production-summary-grid") || !strings.Contains(defaultBody, `class="status-list"`) {
+	if strings.Contains(defaultBody, "production-summary-grid") || !strings.Contains(defaultBody, `class="status-list production-status-list"`) {
 		t.Fatal("Overview should use a compact status list, not a metric-card grid")
 	}
 	if !strings.Contains(defaultBody, `id="recent-activity"`) || !strings.Contains(defaultBody, "Storyboard") || strings.Contains(defaultBody, "Must not leak") {
