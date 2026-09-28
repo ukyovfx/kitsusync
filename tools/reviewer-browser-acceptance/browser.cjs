@@ -205,6 +205,14 @@ async function assertLoginFabricBalance(page, locale, viewport) {
       for (const viewport of backgroundViewports) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
         await page.goto(`${base}/bot/login?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (locale === locales[0] && viewport === backgroundViewports[0]) {
+          const iconHref = await page.locator('link[rel="icon"]').getAttribute('href');
+          if (iconHref !== '/favicon.ico') throw new Error(`page icon link is unexpected: ${iconHref}`);
+          const response = await page.request.get(`${base}${iconHref}`);
+          const favicon = { status: response.status(), type: response.headers()['content-type'], bytes: (await response.body()).byteLength };
+          if (favicon.status !== 200 || favicon.type !== 'image/x-icon' || favicon.bytes === 0) throw new Error(`favicon response is invalid: ${JSON.stringify(favicon)}`);
+          records.push({ route: '/favicon.ico', locale: locale.lang, viewport: viewport.name, state: 'served', detail: `HTTP ${favicon.status}; ${favicon.type}; ${favicon.bytes} bytes` });
+        }
         await assertBackgroundCanvas(page, 'login-fabric', locale, viewport, `login-background-${locale.lang}-${viewport.name}.png`);
         await assertLoginFabricBalance(page, locale, viewport);
       }
