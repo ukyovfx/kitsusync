@@ -10,10 +10,11 @@ This CI evidence validates application behavior with synthetic services only. It
 
 ## Login and app backgrounds
 
-- [ ] `/bot/login` retains a horizontally centered card. Desktop renders one full-width horizontal particle ribbon with a center taper and faded screen edges; phone widths retain a restrained horizontal ribbon with reduced thickness, amplitude, particle count, and brightness.
-- [ ] The login fabric has broad slow folds, fine flutter, a visible center taper, depth-aware size/brightness, and the dark burnt-orange → Kitsu-orange → amber palette; it has no vortex, rings, network lines, repulsion, bloom, or heavy glow.
-- [ ] With no pointer gust, mirrored samples at matching distances from the card have comparable particle density and brightness at desktop and mobile widths; organic fine flutter remains visible.
-- [ ] Pointer movement increases local login fabric wave/gust amplitude and smoothly recovers after leaving; it never pushes particles away. On mobile, pointer activation remains subtle and does not disturb the centered card.
+- [ ] `/bot/login` retains a horizontally centered card. Desktop uses the prototype Gold Standard baseline (26 strands, 7px sampling, 180px sheet width, canonical 10-tier palette, 36,000-dot tier capacity) with separate side-specific waves and continuous `streamDist` flow. Phone widths retain a restrained horizontal ribbon with reduced thickness, amplitude, particle count, and brightness.
+- [ ] The login fabric has broad slow folds, fine flutter, a visible center taper, depth-aware size/brightness, and the prototype's burnt-orange → Kitsu-orange → amber palette; it has no vortex, rings, network lines, repulsion, bloom, or heavy glow. Intentional left/right silhouette differences are preserved; no symmetric-density ratio is required.
+- [ ] Browser pixel sampling proves mid/bright orange tiers are materially present, and samples immediately outside both desktop card edges show the cloth reaches the card without a visible moat. The card's foreground layer naturally occludes the cloth beneath it.
+- [ ] Pointer gust uses projected 2D cloth proximity: a pointer at the cloth increases local wave/flutter/brightness, while the same X position far above or below the cloth does not trigger it. The gust smoothly recovers after leaving and never repels particles. On mobile, pointer activation remains subtle and does not disturb the centered card.
+- [ ] Across separated desktop frames, longitudinal stream distance and particle distribution advance; changing wave phase alone does not satisfy this check. Reduced motion holds a stable composed baseline.
 - [ ] Normal authenticated app pages use the quieter fixed dot grid with slow subtle brightness/size modulation and slight pointer activation only; dots do not strongly move or repel.
 - [ ] Login and app canvases are readable behind the UI and do not alter Current IA layout or content.
 - [ ] Both canvases stop continuous animation under `prefers-reduced-motion: reduce`.

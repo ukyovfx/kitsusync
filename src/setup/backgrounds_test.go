@@ -29,10 +29,9 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`pointer.target=0`,
 		`width=document.documentElement.clientWidth`,
 		`const mobile=width<600`,
-		`const rowCount=mobile?13:20`,
-		`cardCenterY=mobile?rect.top-42:height*.5`,
-		`const spacingX=mobile?15:Math.max(8,width>1700?10:9)`,
-		`const cursorGustAmp=1+gust*cursorGust*pointer.amount`,
+		`const meshRows=mobile?13:params.meshRows`,
+		`centerY=mobile?rect.top-42:height*.5`,
+		`pointer.targetX-pointer.x)*.10`,
 		`const spacing=34`,
 		`const local=Math.exp`,
 	} {
@@ -40,7 +39,7 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 			t.Errorf("background script missing expected behavior %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "sheetWidth=180", "const fields=[", "field.direction"} {
+	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "const fields=[", "field.direction"} {
 		if strings.Contains(backgroundCanvasScript, forbidden) {
 			t.Errorf("background script contains forbidden effect %q", forbidden)
 		}
@@ -49,40 +48,48 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 
 func TestLoginFabricPortsLayeredSilkSurfaceModel(t *testing.T) {
 	for _, want := range []string{
-		`const evaluateSideClothProfile=(side,colX,seconds,u)=>{`,
-		`const clothBuckets=Array.from({length:10},()=>({coords:new Float32Array(maxDotsPerTier*3),count:0}))`,
-		`const travelTime=seconds*.36`,
-		`const mirroredX=isLeft?centerX-colX:colX-centerX`,
-		`const phiM1=warpedX*.00205-travelTime*.65+phaseOffset`,
-		`const phaseOffset=isLeft?-.035:.035`,
-		`const effectiveWidth=sheetWidth*widthFunnelRatio*outerTaperFactor`,
-		`const profileWave=(stokes*42+stokesSub*20)*waveHeightEnv*silhouetteScale`,
-		`const totalRoll=obliqueAngle+dynamicTwist`,
-		`const collectSurfaceVertices=(seconds)=>{`,
-		`const catenaryZ=(1-v*v*.85)*(halfW*.32)*drapeCamber`,
-		`const fineDepthZ=(Math.sin(depthWavePhase)*22+Math.cos(depthWavePhase*1.8+.5)*10)*fineDepthScale*profile.verticalFunnelEnvelope`,
-		`const worldZ=profile.spineZ+deltaZ`,
-		`const scale=focalLength/(focalLength+worldZ)`,
-		`const cardDissolve=quintic(cardNorm)`,
-		`const mobile=width<600`,
-		`const rowCount=mobile?13:20`,
-		`const spacingX=mobile?15:Math.max(8,width>1700?10:9)`,
-		`const cursorGustAmp=1+gust*cursorGust*pointer.amount`,
-		`const gustScale=1+profile.gust*pointer.amount*(mobile?.18:.35)`,
+		`const desktopBaseline={meshRows:26,meshSpacingX:7.0,sheetWidth:180,centerMinWidth:36`,
+		`convergenceStrength:1.00,outerTaper:.95,obliqueAngleDeg:20.0,dotSize:.85,depthContrast:5.00,backgroundSparsity:0.00,foldBrightness:1.20`,
+		`microFlutter:1.70,flowSpeed:.30,silhouetteAmp:1.15,heightEnvelope:1.25,intervalWarp:1.20,rollTorsion:1.25,macroTwist:1.15,fineDepthWave:1.20,edgeFlutter:1.15,drapeCamber:.88`,
+		`cursorGust:.35,cursorRadius:220,cursorRecovery:.06`,
+		`const tierColors=[`,
+		`rgba(18,10,8,.08)`, `rgba(46,16,6,.18)`, `rgba(82,26,8,.34)`, `rgba(118,38,10,.50)`,
+		`rgba(156,52,14,.68)`, `rgba(196,68,18,.82)`, `rgba(228,84,21,.92)`, `rgba(248,102,26,.97)`,
+		`rgba(255,126,34,1)`, `rgba(255,150,48,1)`,
+		`const maxDotsPerTier=36000`,
+		`const evaluateSideClothProfile=(side,colX,seconds,u,pointerGust)=>{`,
+		`const flowDir=isLeft?1:-1`,
+		`const travelTime=seconds*.36*flowDir`,
+		`const streamDist=seconds*52*params.flowSpeed`,
+		`const staggerX=row%2===0?0:.5*spacingX`,
+		`xWarp=(Math.sin(colX*.00118+travelTime*.30)*56+Math.cos(colX*.00270-travelTime*.20)*24)*params.intervalWarp`,
+		`xWarp=(Math.cos(colX*.00128+travelTime*.26+1.7)*52+Math.sin(colX*.00290-travelTime*.16)*26)*params.intervalWarp`,
+		`phiM1=warpedX*.00205-travelTime*.65`,
+		`phiM1=warpedX*.00225+travelTime*.62+2.4`,
+		`const pointerDistance=Math.sqrt((dx/params.cursorRadius)**2+(dy/verticalRadius)**2)`,
+		`const pointerGust=smoothstep(1,0,pointerDistance)*pointer.amount`,
+		`const verticalRadius=mobile?clamp(base.effectiveWidth*.48,24,58):clamp(base.effectiveWidth*.55,70,120)`,
+		`canvas.dataset.meshRows=String(meshRows)`,
+		`canvas.dataset.meshSpacingX=String(spacingX)`,
+		`canvas.dataset.streamDistance=String(streamDist)`,
+		`const fineDepthZ=(Math.sin(depthWavePhase)*22+Math.cos(depthWavePhase*1.8+.5)*10)*params.fineDepthWave*profile.verticalFunnelEnvelope`,
+		`const sizeMultiplier=.65+Math.pow(prominence,2.6)*(params.depthContrast*.52)`,
 	} {
 		if !strings.Contains(backgroundCanvasScript, want) {
 			t.Errorf("horizontal login ribbon is missing %q", want)
 		}
 	}
 	for _, forbidden := range []string{
-		`const flowDir=isLeft?1:-1`,
-		`const columns=mobile?Math.max(28,Math.ceil(width/11)):Math.max(80,Math.ceil(width/8))`,
-		`const wavePhase=u*5.2+seconds*flowSpeed+layer*.71`,
-		`const ribbonLayers=mobile?2:3`,
-		`leftEdge-band`, `rightEdge+band`, `const fields=[`, `const band=Math.min`,
+		`const rowCount=mobile?13:20`,
+		`const spacingX=mobile?15:Math.max(8,width>1700?10:9)`,
+		`const maxDotsPerTier=12000`,
+		`const clothColors=[`,
+		`cardDissolve`,
+		`projectedX>=rect.left`,
+		`Math.abs(colX-pointer.x)`,
 	} {
 		if strings.Contains(backgroundCanvasScript, forbidden) {
-			t.Errorf("login fabric still uses the superseded flat-ribbon renderer (%q)", forbidden)
+			t.Errorf("login fabric still uses a simplified renderer or card moat (%q)", forbidden)
 		}
 	}
 }
