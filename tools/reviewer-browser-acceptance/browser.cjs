@@ -153,6 +153,7 @@ async function assertLoginFabricBalance(page, locale, viewport) {
         frame: canvas?.toDataURL(),
         centered: rect ? { x: Math.abs(rect.left + rect.width / 2 - innerWidth / 2), y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2) } : null,
         top: rect?.top,
+        width: innerWidth,
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     });
@@ -160,8 +161,8 @@ async function assertLoginFabricBalance(page, locale, viewport) {
     if (!mobileFrame.centered || mobileFrame.centered.x > 8 || mobileFrame.centered.y > 8 || mobileFrame.overflow) {
       throw new Error(`mobile login card or viewport layout is invalid at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
     }
-    const leftRibbon = await localCanvasAlpha(page, innerWidth * .30, mobileFrame.top - 12, 20);
-    const rightRibbon = await localCanvasAlpha(page, innerWidth * .70, mobileFrame.top - 12, 20);
+    const leftRibbon = await localCanvasAlpha(page, mobileFrame.width * .30, mobileFrame.top - 12, 20);
+    const rightRibbon = await localCanvasAlpha(page, mobileFrame.width * .70, mobileFrame.top - 12, 20);
     if (leftRibbon < 1 || rightRibbon < 1 || Math.min(leftRibbon, rightRibbon) / Math.max(leftRibbon, rightRibbon) < .30) {
       throw new Error(`mobile horizontal ribbon is not visibly balanced above the card at ${locale.lang}: ${leftRibbon}/${rightRibbon}`);
     }
