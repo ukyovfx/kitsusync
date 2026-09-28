@@ -66,11 +66,25 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
   const details = await page.evaluate(() => {
     const canvas = document.querySelector('canvas[data-background]');
     const card = document.querySelector('.login-card');
+    const formPanel = card?.querySelector('.section-card');
     const ctx = canvas?.getContext('2d');
     let visible = 0;
+    let nonzeroAlpha = 0;
+    let maxAlpha = 0;
+    let gridCenterAlpha = 0;
     if (ctx) {
       const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      for (let i = 3; i < pixels.length; i += 4 * 16) if (pixels[i] > 8) visible++;
+      const stride = canvas.dataset.background === 'app-dots' ? 4 : 4 * 16;
+      const minVisibleAlpha = canvas.dataset.background === 'app-dots' ? 2 : 8;
+      for (let i = 3; i < pixels.length; i += 4) {
+        if (pixels[i] > 0) nonzeroAlpha++;
+        if (pixels[i] > maxAlpha) maxAlpha = pixels[i];
+        if (i % stride === 3 && pixels[i] > minVisibleAlpha) visible++;
+      }
+      if (canvas.dataset.background === 'app-dots') {
+        const dpr = canvas.width / canvas.getBoundingClientRect().width;
+        gridCenterAlpha = ctx.getImageData(Math.floor(18 * dpr), Math.floor(18 * dpr), 1, 1).data[3];
+      }
     }
     let centered = null;
     if (card) {
@@ -80,23 +94,84 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
         y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2),
       };
     }
+    const cardBackground = card ? getComputedStyle(card).backgroundColor : '';
+    const panelBackground = formPanel ? getComputedStyle(formPanel).backgroundColor : '';
+    const cardRect = card?.getBoundingClientRect();
+    const panelRect = formPanel?.getBoundingClientRect();
+    const isOpaqueRGB = color => /^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/.test(color);
+    const orangePixelsUnder = element => {
+      if (!canvas || !ctx || !element || getComputedStyle(canvas).display === 'none') return 0;
+      const r = element.getBoundingClientRect();
+      const canvasRect = canvas.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || canvasRect.width <= 0 || canvasRect.height <= 0) return 0;
+      const scale = canvas.width / canvasRect.width;
+      const left = Math.max(0, Math.floor(r.left * scale));
+      const top = Math.max(0, Math.floor(r.top * scale));
+      const right = Math.min(canvas.width, Math.ceil(r.right * scale));
+      const bottom = Math.min(canvas.height, Math.ceil(r.bottom * scale));
+      const data = ctx.getImageData(left, top, right - left, bottom - top).data;
+      let count = 0;
+      for (let i = 0; i < data.length; i += 4 * 8) {
+        if (data[i + 3] > 70 && data[i] > 100 && data[i + 1] > 14 && data[i + 1] < 150 && data[i + 2] < 100) count++;
+      }
+      return count;
+    };
     return {
       visible, centered,
+      canvasSize: canvas ? [canvas.width, canvas.height] : null,
+      nonzeroAlpha, maxAlpha, gridCenterAlpha,
+      cardBackground, panelBackground,
+      cardOpaque: isOpaqueRGB(cardBackground),
+      panelOpaque: isOpaqueRGB(panelBackground),
+      canvasDisplay: canvas ? getComputedStyle(canvas).display : null,
+      foregroundSamples: cardRect && panelRect ? [
+        { name: 'card', x: Math.floor(cardRect.left + 8), y: Math.floor(cardRect.top + cardRect.height * .72) },
+        { name: 'form panel', x: Math.floor(panelRect.left + 8), y: Math.floor(panelRect.top + panelRect.height * .5) },
+      ] : [],
+      canvasOrangeUnderCard: orangePixelsUnder(card),
+      canvasOrangeUnderPanel: orangePixelsUnder(formPanel),
       width: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
       lang: document.documentElement.lang,
       gutterBackground: getComputedStyle(document.documentElement).backgroundColor,
     };
   });
-  if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
-  if (mode === 'login-fabric' && viewport.name === 'mobile' && details.visible > 250) throw new Error(`mobile login ribbon is too dense for ${locale.lang}: ${details.visible} sampled pixels`);
+  if (!(mode === 'login-fabric' && viewport.name === 'mobile') && details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}: ${JSON.stringify({ visible: details.visible, canvasSize: details.canvasSize, nonzeroAlpha: details.nonzeroAlpha, maxAlpha: details.maxAlpha, gridCenterAlpha: details.gridCenterAlpha })}`);
+  if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
+    throw new Error(`login foreground surfaces are translucent at ${viewport.name}: ${JSON.stringify({ card: details.cardBackground, panel: details.panelBackground })}`);
+  }
+  if (mode === 'login-fabric' && viewport.name !== 'mobile' && (details.canvasOrangeUnderCard < 1 || details.canvasOrangeUnderPanel < 1)) {
+    throw new Error(`fabric no longer flows geometrically behind the Login card/form at ${viewport.name}: ${JSON.stringify({ card: details.canvasOrangeUnderCard, panel: details.canvasOrangeUnderPanel })}`);
+  }
+  if (mode === 'login-fabric' && viewport.name === 'mobile' && (details.nonzeroAlpha !== 0 || details.canvasDisplay !== 'none')) throw new Error(`mobile Login fabric is still visible for ${locale.lang}: ${JSON.stringify({ alpha: details.nonzeroAlpha, display: details.canvasDisplay })}`);
   if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
   if (details.lang !== locale.lang) throw new Error(`${mode} page language mismatch for ${locale.lang}`);
   if (details.gutterBackground !== 'rgb(7, 7, 7)') throw new Error(`${mode} scrollbar gutter is not using the dark page background at ${viewport.name}`);
   if (mode === 'login-fabric' && (!details.centered || details.centered.x > 8 || details.centered.y > 8)) {
     throw new Error(`login card lost centered composition at ${viewport.name}: ${JSON.stringify(details.centered)}`);
   }
-  await page.screenshot({ path: path.join(output, screenshotName), fullPage: false });
+  const screenshot = await page.screenshot({ path: path.join(output, screenshotName), fullPage: false });
+  if (mode === 'login-fabric') {
+    const samples = await page.evaluate(async ({ image, points }) => {
+      const decoded = new Image();
+      decoded.src = `data:image/png;base64,${image}`;
+      await decoded.decode();
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = decoded.width;
+      sampleCanvas.height = decoded.height;
+      const sampleContext = sampleCanvas.getContext('2d');
+      sampleContext.drawImage(decoded, 0, 0);
+      return points.map(point => ({
+        name: point.name,
+        rgba: [...sampleContext.getImageData(point.x, point.y, 1, 1).data],
+      }));
+    }, { image: screenshot.toString('base64'), points: details.foregroundSamples });
+    for (const sample of samples) {
+      if (!sample.rgba || sample.rgba[0] > 70 || sample.rgba[1] > 70 || sample.rgba[2] > 70) {
+        throw new Error(`Login ${sample.name} screenshot pixel is not an opaque dark foreground sample at ${viewport.name}: ${JSON.stringify(sample)}`);
+      }
+    }
+  }
   await record(page, mode === 'login-fabric' ? '/bot/login' : '/bot/admin', locale.lang, viewport.name, 'background rendered', `${mode}; visible canvas pixels=${details.visible}; centered card=${JSON.stringify(details.centered)}`);
 }
 
@@ -117,29 +192,30 @@ async function localCanvasAlpha(page, x, y, radius) {
   }, { x, y, radius });
 }
 
-async function localCanvasBrightness(page, x, y, radius) {
-  return page.evaluate(({ x, y, radius }) => {
+async function fabricPeakY(page, x) {
+  return page.evaluate(x => {
     const canvas = document.querySelector('canvas[data-background="login-fabric"]');
     const ctx = canvas?.getContext('2d');
-    if (!canvas || !ctx) return 0;
+    if (!canvas || !ctx) return null;
     const scale = canvas.width / canvas.getBoundingClientRect().width;
-    const left = Math.max(0, Math.floor((x - radius) * scale));
-    const top = Math.max(0, Math.floor((y - radius) * scale));
-    const right = Math.min(canvas.width, Math.ceil((x + radius) * scale));
-    const bottom = Math.min(canvas.height, Math.ceil((y + radius) * scale));
-    const pixels = ctx.getImageData(left, top, right - left, bottom - top).data;
-    let sum = 0;
-    for (let i = 0; i < pixels.length; i += 4) {
-      const luminance = pixels[i] * .2126 + pixels[i + 1] * .7152 + pixels[i + 2] * .0722;
-      sum += luminance * pixels[i + 3] / 255;
+    const center = Math.max(0, Math.min(canvas.width - 1, Math.floor(x * scale)));
+    const half = Math.floor(18 * scale);
+    const left = Math.max(0, center - half);
+    const right = Math.min(canvas.width, center + half);
+    const data = ctx.getImageData(left, 0, right - left, canvas.height).data;
+    let bestY = 0, best = 0;
+    for (let y = 0; y < canvas.height; y++) {
+      let row = 0;
+      for (let px = 0; px < right - left; px++) row += data[(y * (right - left) + px) * 4 + 3];
+      if (row > best) { best = row; bestY = y; }
     }
-    return sum;
-  }, { x, y, radius });
+    return best > 0 ? bestY / scale : null;
+  }, x);
 }
 
-async function assertLoginFabricBalance(page, locale, viewport) {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.waitForTimeout(60);
+async function assertLoginFabricGoldStandard(page, locale, viewport) {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.waitForTimeout(100);
   if (viewport.name === 'mobile') {
     const mobileFrame = await page.evaluate(() => {
       const canvas = document.querySelector('canvas[data-background="login-fabric"]');
@@ -150,36 +226,32 @@ async function assertLoginFabricBalance(page, locale, viewport) {
       const rect = card?.getBoundingClientRect();
       return {
         count,
-        frame: canvas?.toDataURL(),
+        profile: canvas?.dataset.profile,
+        display: canvas ? getComputedStyle(canvas).display : null,
         centered: rect ? { x: Math.abs(rect.left + rect.width / 2 - innerWidth / 2), y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2) } : null,
-        top: rect?.top,
         width: innerWidth,
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       };
     });
-    if (mobileFrame.count < 3 || mobileFrame.count > 250) throw new Error(`mobile horizontal ribbon is missing or too dense at ${locale.lang}: ${mobileFrame.count} sampled pixels`);
+    if (mobileFrame.count !== 0 || mobileFrame.display !== 'none' || mobileFrame.profile !== 'mobile-no-fabric') throw new Error(`mobile Login waves were not hidden at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
     if (!mobileFrame.centered || mobileFrame.centered.x > 8 || mobileFrame.centered.y > 8 || mobileFrame.overflow) {
       throw new Error(`mobile login card or viewport layout is invalid at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
     }
-    const leftRibbon = await localCanvasAlpha(page, mobileFrame.width * .30, mobileFrame.top - 12, 20);
-    const rightRibbon = await localCanvasAlpha(page, mobileFrame.width * .70, mobileFrame.top - 12, 20);
-    if (leftRibbon < 1 || rightRibbon < 1 || Math.min(leftRibbon, rightRibbon) / Math.max(leftRibbon, rightRibbon) < .30) {
-      throw new Error(`mobile horizontal ribbon is not visibly balanced above the card at ${locale.lang}: ${leftRibbon}/${rightRibbon}`);
-    }
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.waitForTimeout(100);
+    const staticFrame = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
     await page.waitForTimeout(350);
     const reducedFrame = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
-    if (reducedFrame !== mobileFrame.frame) throw new Error(`mobile login ribbon animated under reduced motion at ${locale.lang}`);
+    if (reducedFrame !== staticFrame) throw new Error(`mobile Login background changed under reduced motion at ${locale.lang}`);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.mouse.move(0, 0);
     await page.waitForTimeout(200);
-    const card = await page.locator('.login-card').boundingBox();
-    const pointer = { x: 7, y: card.y - 12 };
-    const before = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
-    await page.mouse.move(pointer.x, pointer.y);
-    await page.waitForTimeout(300);
-    const after = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
-    if (after <= before) throw new Error(`mobile pointer activation did not increase local ribbon activity at ${locale.lang} (${before} -> ${after})`);
-    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'restrained horizontal ribbon', detail: `${mobileFrame.count} sampled pixels; balanced ribbon above card ${leftRibbon}/${rightRibbon}; centered card; reduced-motion frame stable; pointer local alpha ${before} -> ${after}` });
+    await page.mouse.move(mobileFrame.width * .30, 420);
+    await page.waitForTimeout(100);
+    if (await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data.some((value, index) => index % 4 === 3 && value !== 0))) {
+      throw new Error(`mobile pointer interaction rendered Login waves for ${locale.lang}`);
+    }
+    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'no Login waves on phone widths', detail: 'fabric canvas hidden; centered card; no overflow; reduced-motion and pointer checks remained static' });
     return;
   }
   const geometry = await page.evaluate(() => {
@@ -194,31 +266,48 @@ async function assertLoginFabricBalance(page, locale, viewport) {
       canvasWidth: canvas.getBoundingClientRect().width,
       centerY,
       cardCenterX: rect.left + rect.width * .5,
+      cardLeft: rect.left,
+      cardRight: rect.right,
+      rows: Number(canvas.dataset.meshRows),
+      spacing: Number(canvas.dataset.meshSpacingX),
+      profile: canvas.dataset.profile,
+      tiers: canvas.dataset.tierCounts.split(',').map(Number),
+      streamDistance: Number(canvas.dataset.streamDistance),
     };
   });
   if (!geometry || Math.abs(geometry.canvasWidth - geometry.width) > 1 || Math.abs(geometry.cardCenterX - geometry.width / 2) > 8) {
     throw new Error(`login ribbon or card is not aligned to the viewport at ${viewport.name}: ${JSON.stringify(geometry)}`);
   }
-  const radius = Math.max(14, Math.min(36, geometry.width * .025));
-  const ratios = [];
-  for (const fraction of [.18, .30, .40]) {
-    const leftX = geometry.width * fraction;
-    const rightX = geometry.width * (1 - fraction);
-    const leftAlpha = await localCanvasAlpha(page, leftX, geometry.centerY, radius);
-    const rightAlpha = await localCanvasAlpha(page, rightX, geometry.centerY, radius);
-    const leftBrightness = await localCanvasBrightness(page, leftX, geometry.centerY, radius);
-    const rightBrightness = await localCanvasBrightness(page, rightX, geometry.centerY, radius);
-    const densityRatio = Math.min(leftAlpha, rightAlpha) / Math.max(1, leftAlpha, rightAlpha);
-    const brightnessRatio = Math.min(leftBrightness, rightBrightness) / Math.max(1, leftBrightness, rightBrightness);
-    ratios.push({ density: densityRatio, brightness: brightnessRatio });
-    if (densityRatio < .58 || brightnessRatio < .58) {
-      throw new Error(`login ribbon is imbalanced at ${locale.lang}/${viewport.name}, x=${fraction}/${1 - fraction}: left=${leftAlpha}/${leftBrightness}, right=${rightAlpha}/${rightBrightness}`);
-    }
+  if (geometry.profile !== 'gold-standard-desktop' || geometry.rows !== 26 || geometry.spacing !== 7) {
+    throw new Error(`desktop fabric departed from the Gold Standard density at ${viewport.name}: ${JSON.stringify(geometry)}`);
   }
+  const visual = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[data-background="login-fabric"]');
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let visible = 0, orange = 0, luminance = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] > 8) visible++;
+      if (data[i + 3] > 70 && data[i] > 100 && data[i + 1] > 14 && data[i + 1] < 150) orange++;
+      luminance += (data[i] * .2126 + data[i + 1] * .7152 + data[i + 2] * .0722) * data[i + 3] / 255;
+    }
+    return { visible, orange, luminance };
+  });
+  const tierTotal = geometry.tiers.reduce((sum, count) => sum + count, 0);
+  const midBrightTiers = geometry.tiers.slice(4).reduce((sum, count) => sum + count, 0);
+  if (tierTotal < 500 || midBrightTiers < 50 || visual.orange < 30 || visual.luminance < 10000) {
+    throw new Error(`desktop fabric density/brightness fell below the prototype class at ${viewport.name}: ${JSON.stringify({ tierTotal, midBrightTiers, visual })}`);
+  }
+  const leftReach = await localCanvasAlpha(page, geometry.cardLeft - 14, geometry.centerY, 48);
+  const rightReach = await localCanvasAlpha(page, geometry.cardRight + 14, geometry.centerY, 48);
+  if (leftReach < 20 || rightReach < 20) throw new Error(`fabric does not reach the card edges at ${viewport.name}: ${leftReach}/${rightReach}`);
+  const firstStream = geometry.streamDistance;
+  await page.waitForTimeout(650);
+  const laterStream = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => Number(canvas.dataset.streamDistance));
+  if (laterStream - firstStream < 5) throw new Error(`longitudinal stream did not move at ${viewport.name}: ${firstStream} -> ${laterStream}`);
   records.push({
     route: '/bot/login', locale: locale.lang, viewport: viewport.name,
-    state: 'horizontal ribbon balance',
-    detail: `mirrored viewport density/brightness ratios=${ratios.map(value => `${value.density.toFixed(2)}/${value.brightness.toFixed(2)}`).join(',')}; full-width canvas=${geometry.canvasWidth}px`,
+    state: 'prototype Gold Standard fabric',
+    detail: `26 strands at 7px; ${tierTotal} particles, ${midBrightTiers} mid/bright-tier particles, ${visual.orange} sampled orange pixels; card-edge activity ${leftReach}/${rightReach}; stream distance ${firstStream.toFixed(1)} -> ${laterStream.toFixed(1)}`,
   });
   await page.emulateMedia({ reducedMotion: 'no-preference' });
 }
@@ -256,7 +345,7 @@ async function assertLoginFabricBalance(page, locale, viewport) {
           records.push({ route: '/favicon.ico', locale: locale.lang, viewport: viewport.name, state: 'served', detail: `HTTP ${favicon.status}; ${favicon.type}; ${favicon.bytes} bytes` });
         }
         await assertBackgroundCanvas(page, 'login-fabric', locale, viewport, `login-background-${locale.lang}-${viewport.name}.png`);
-        await assertLoginFabricBalance(page, locale, viewport);
+        await assertLoginFabricGoldStandard(page, locale, viewport);
       }
     }
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -264,13 +353,20 @@ async function assertLoginFabricBalance(page, locale, viewport) {
     const loginCard = await page.locator('.login-card').boundingBox();
     const loginPointer = { x: Math.max(5, loginCard.x - 58), y: loginCard.y + loginCard.height * .5 };
     await page.mouse.move(0, 0);
-    await page.waitForTimeout(300);
-    const loginBefore = await localCanvasAlpha(page, loginPointer.x, loginPointer.y, 48);
-    await page.mouse.move(loginPointer.x, loginPointer.y);
-    await page.waitForTimeout(450);
-    const loginAfter = await localCanvasAlpha(page, loginPointer.x, loginPointer.y, 48);
-    if (loginAfter <= loginBefore) throw new Error(`login pointer did not increase local fabric activity (${loginBefore} -> ${loginAfter})`);
-    records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop-1440', state: 'pointer gust', detail: `local canvas alpha increased from ${loginBefore} to ${loginAfter}; no repelling motion` });
+    await page.waitForTimeout(1000);
+    const clothY = await fabricPeakY(page, loginPointer.x);
+    if (clothY === null) throw new Error('login fabric has no measurable cloth near the card edge');
+    const farY = clothY > 450 ? 8 : 892;
+    await page.mouse.move(loginPointer.x, farY);
+    await page.waitForTimeout(1300);
+    const falseTrigger = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => Number(canvas.dataset.maxPointerGust));
+    if (falseTrigger > .01) throw new Error(`same-X pointer far from the cloth triggered a gust (${falseTrigger})`);
+    await page.mouse.move(loginPointer.x, clothY);
+    await page.waitForTimeout(1300);
+    const trueTrigger = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => Number(canvas.dataset.maxPointerGust));
+    const localAfter = await localCanvasAlpha(page, loginPointer.x, clothY, 42);
+    if (trueTrigger < .10 || localAfter < 1) throw new Error(`pointer near cloth did not produce a local gust (${falseTrigger} -> ${trueTrigger}; rendered activity ${localAfter})`);
+    records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop-1440', state: '2D local pointer gust', detail: `same-X far pointer max gust=${falseTrigger}; pointer at cloth peak y=${clothY} max gust=${trueTrigger}; local rendered activity=${localAfter}; no repulsion` });
 
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.waitForTimeout(100);
@@ -469,15 +565,32 @@ async function assertLoginFabricBalance(page, locale, viewport) {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
+    await page.mouse.move(-50, -50);
+    await page.waitForTimeout(100);
+    const dashboardGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
+    await page.waitForTimeout(500);
+    if (await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL()) !== dashboardGrid) {
+      throw new Error('authenticated dot grid changed without pointer interaction');
+    }
+    for (const route of ['/bot/admin/projects?lang=en', '/bot/admin/users?lang=en', '/bot/admin/health?lang=en']) {
+      await page.goto(`${base}${route}`, { waitUntil: 'networkidle' });
+      const routeGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
+      if (routeGrid !== dashboardGrid) throw new Error(`authenticated dot positions/background changed with content route ${route}`);
+    }
+    await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
     const appPointer = { x: 420, y: 380 };
     await page.mouse.move(0, 0);
     await page.waitForTimeout(250);
     const appBefore = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
+    const farPoint = { x: 1200, y: 820 };
+    const farBefore = await localCanvasAlpha(page, farPoint.x, farPoint.y, 24);
     await page.mouse.move(appPointer.x, appPointer.y);
     await page.waitForTimeout(400);
     const appAfter = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
+    const farAfter = await localCanvasAlpha(page, farPoint.x, farPoint.y, 24);
     if (appAfter <= appBefore) throw new Error(`app pointer did not subtly activate local dots (${appBefore} -> ${appAfter})`);
-    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local dot alpha increased from ${appBefore} to ${appAfter}; dot positions remain fixed` });
+    if (farAfter !== farBefore) throw new Error(`app pointer activation changed distant dots (${farBefore} -> ${farAfter})`);
+    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local dot alpha increased from ${appBefore} to ${appAfter}; distant dot alpha stayed ${farAfter}; dot positions remain fixed` });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.waitForTimeout(100);
     const reducedApp = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
