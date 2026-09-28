@@ -123,11 +123,6 @@ async function localCanvasAlpha(page, x, y, radius) {
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    const faviconResponses = [];
-    page.on('response', response => {
-      const url = new URL(response.url());
-      if (url.origin === new URL(base).origin && url.pathname === '/favicon.ico') faviconResponses.push(response);
-    });
     const interceptedExternal = [];
     await page.route('**/*', route => {
       const url = new URL(route.request().url());
@@ -146,8 +141,9 @@ async function localCanvasAlpha(page, x, y, radius) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
         await page.goto(`${base}/bot/login?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (locale === locales[0] && viewport === backgroundViewports[0]) {
-          const response = faviconResponses[0];
-          if (!response) throw new Error('browser did not request /favicon.ico from the page icon link');
+          const iconHref = await page.locator('link[rel="icon"]').getAttribute('href');
+          if (iconHref !== '/favicon.ico') throw new Error(`page icon link is unexpected: ${iconHref}`);
+          const response = await page.request.get(`${base}${iconHref}`);
           const favicon = { status: response.status(), type: response.headers()['content-type'], bytes: (await response.body()).byteLength };
           if (favicon.status !== 200 || favicon.type !== 'image/x-icon' || favicon.bytes === 0) throw new Error(`favicon response is invalid: ${JSON.stringify(favicon)}`);
           records.push({ route: '/favicon.ico', locale: locale.lang, viewport: viewport.name, state: 'served', detail: `HTTP ${favicon.status}; ${favicon.type}; ${favicon.bytes} bytes` });
