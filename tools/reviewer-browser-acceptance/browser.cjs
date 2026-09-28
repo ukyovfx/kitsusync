@@ -100,9 +100,11 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     const panelRect = formPanel?.getBoundingClientRect();
     const isOpaqueRGB = color => /^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/.test(color);
     const orangePixelsUnder = element => {
-      if (!canvas || !ctx || !element) return 0;
+      if (!canvas || !ctx || !element || getComputedStyle(canvas).display === 'none') return 0;
       const r = element.getBoundingClientRect();
-      const scale = canvas.width / canvas.getBoundingClientRect().width;
+      const canvasRect = canvas.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0 || canvasRect.width <= 0 || canvasRect.height <= 0) return 0;
+      const scale = canvas.width / canvasRect.width;
       const left = Math.max(0, Math.floor(r.left * scale));
       const top = Math.max(0, Math.floor(r.top * scale));
       const right = Math.min(canvas.width, Math.ceil(r.right * scale));
