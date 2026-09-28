@@ -50,8 +50,8 @@ const backgroundCanvasScript = `<script>
     const mobile=width<600;
     const centerY=mobile?rect.top-12:rect.top+rect.height*.5;
     const maxHalfHeight=Math.min(height*(mobile?.05:.14),mobile?38:92);
-    const columns=mobile?Math.max(24,Math.ceil(width/12)):Math.max(80,Math.ceil(width/8));
-    const rows=mobile?8:17;
+    const columns=mobile?Math.max(28,Math.ceil(width/11)):Math.max(80,Math.ceil(width/8));
+    const rows=mobile?10:17;
     const ribbonLayers=mobile?2:3;
     const smoothstep=(a,b,x)=>{const v=Math.max(0,Math.min(1,(x-a)/(b-a)));return v*v*(3-2*v)};
     for(let layer=0;layer<ribbonLayers;layer++){
@@ -85,11 +85,11 @@ const backgroundCanvasScript = `<script>
           const insideCard=x>=rect.left-10&&x<=rect.right+10&&y>=rect.top-10&&y<=rect.bottom+10;
           const cardAttenuation=insideCard?.78:1;
           const organic=.025*Math.sin(col*12.989+row*78.233+layer*4.21);
-          const alpha=(.075+depth*.19+local*.09+organic)*edgeTaper*cardAttenuation*(mobile?.58:1);
+          const alpha=(.075+depth*.19+local*.09+organic)*edgeTaper*cardAttenuation*(mobile?.72:1);
           if(alpha<(mobile?.012:.025))continue;
           const mirroredCenter=1-Math.abs(u-.5)*2;
           const color=palette(.12+mirroredCenter*.62+depth*.2+organic);
-          const size=(.42+depth*.76+layerDepth*.18+local*.24)*(mobile?.76:1);
+          const size=(.42+depth*.76+layerDepth*.18+local*.24)*(mobile?.82:1);
           ctx.fillStyle=rgba(color[0],color[1],color[2],alpha);
           ctx.beginPath();ctx.arc(x,y,size,0,Math.PI*2);ctx.fill();
         }

@@ -172,7 +172,7 @@ async function assertLoginFabricBalance(page, locale, viewport) {
     await page.mouse.move(0, 0);
     await page.waitForTimeout(200);
     const card = await page.locator('.login-card').boundingBox();
-    const pointer = { x: 7, y: card.y + card.height * .5 };
+    const pointer = { x: 7, y: card.y - 12 };
     const before = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
     await page.mouse.move(pointer.x, pointer.y);
     await page.waitForTimeout(300);
