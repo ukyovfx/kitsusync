@@ -69,10 +69,21 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     const formPanel = card?.querySelector('.section-card');
     const ctx = canvas?.getContext('2d');
     let visible = 0;
+    let nonzeroAlpha = 0;
+    let maxAlpha = 0;
+    let gridCenterAlpha = 0;
     if (ctx) {
       const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       const stride = canvas.dataset.background === 'app-dots' ? 4 : 4 * 16;
-      for (let i = 3; i < pixels.length; i += stride) if (pixels[i] > 8) visible++;
+      for (let i = 3; i < pixels.length; i += 4) {
+        if (pixels[i] > 0) nonzeroAlpha++;
+        if (pixels[i] > maxAlpha) maxAlpha = pixels[i];
+        if (i % stride === 3 && pixels[i] > 8) visible++;
+      }
+      if (canvas.dataset.background === 'app-dots') {
+        const dpr = canvas.width / canvas.getBoundingClientRect().width;
+        gridCenterAlpha = ctx.getImageData(Math.floor(18 * dpr), Math.floor(18 * dpr), 1, 1).data[3];
+      }
     }
     let centered = null;
     if (card) {
@@ -104,6 +115,8 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     };
     return {
       visible, centered,
+      canvasSize: canvas ? [canvas.width, canvas.height] : null,
+      nonzeroAlpha, maxAlpha, gridCenterAlpha,
       cardBackground, panelBackground,
       cardOpaque: isOpaqueRGB(cardBackground),
       panelOpaque: isOpaqueRGB(panelBackground),
@@ -119,7 +132,7 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
       gutterBackground: getComputedStyle(document.documentElement).backgroundColor,
     };
   });
-  if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
+  if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}: ${JSON.stringify({ visible: details.visible, canvasSize: details.canvasSize, nonzeroAlpha: details.nonzeroAlpha, maxAlpha: details.maxAlpha, gridCenterAlpha: details.gridCenterAlpha })}`);
   if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
     throw new Error(`login foreground surfaces are translucent at ${viewport.name}: ${JSON.stringify({ card: details.cardBackground, panel: details.panelBackground })}`);
   }
