@@ -49,8 +49,8 @@ func TestProductionDetailUsesFourSectionsAndMapsLegacyTabs(t *testing.T) {
 	}
 
 	defaultBody := render("")
-	if strings.Count(defaultBody, `role="tab"`) != 4 {
-		t.Fatalf("expected four primary Production sections, got %d", strings.Count(defaultBody, `role="tab"`))
+	if strings.Count(defaultBody, `role="tab" aria-selected=`) != 4 {
+		t.Fatalf("expected four primary Production sections, got %d", strings.Count(defaultBody, `role="tab" aria-selected=`))
 	}
 	for _, marker := range []string{`id="tab-overview"`, `id="tab-notifications"`, `id="tab-reviewers"`, `id="tab-settings"`, "Overview", "Notifications", "Reviewers", "Settings"} {
 		if !strings.Contains(defaultBody, marker) {
@@ -196,7 +196,7 @@ func TestProductionOverviewOmitsActivityWhenNoScopedRecordsExist(t *testing.T) {
 
 func TestProductionOverviewDoesNotCallUnconfiguredRoutingHealthy(t *testing.T) {
 	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "overview-unconfigured-production", Name: "Overview Unconfigured"}
+	project := model.Project{KitsuProjectID: "overview-unconfigured-production", Name: "Overview Unconfigured", DiscordGuildID: "synthetic-guild"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestProductionTabsHaveEquivalentJapaneseLabels(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIASelectedProduction(w, httptest.NewRequest("GET", "/bot/admin/projects?project=jp-tabs-production&lang=ja", nil), db, project, "")
 	body := w.Body.String()
-	if strings.Count(body, `role="tab"`) != 4 {
+	if strings.Count(body, `role="tab" aria-selected=`) != 4 {
 		t.Fatalf("Japanese Production detail should have four primary sections")
 	}
 	for _, label := range []string{"概要", "通知", "レビュアー", "設定"} {

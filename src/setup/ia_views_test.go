@@ -765,7 +765,7 @@ func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T)
 	troubleshootingWriter := httptest.NewRecorder()
 	renderIAProductionList(troubleshootingWriter, troubleshootingRequest, db, "")
 	troubleshootingBody := troubleshootingWriter.Body.String()
-	for _, want := range []string{"Current problem", "Diagnostic details"} {
+	for _, want := range []string{"Current issues", "Diagnostic details"} {
 		if !strings.Contains(troubleshootingBody, want) {
 			t.Fatalf("troubleshooting missing %q", want)
 		}
@@ -794,7 +794,7 @@ func TestSelectedProductionOverviewUsesCanonicalConnectionStatuses(t *testing.T)
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=canonical-status-p&lang=ja", nil), db, "")
 	body := w.Body.String()
-	for _, want := range []string{"接続済", "要確認", "プロダクション状態", "Discord接続状態", "通知ルーティング状態"} {
+	for _, want := range []string{"接続済", "更新が必要", "プロダクション接続", "Discordリソース", "通知ルーティング"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("overview missing canonical status content %q", want)
 		}
@@ -814,8 +814,8 @@ func TestSelectedProductionOverviewUsesCompactSummaryAndSeparatesIssues(t *testi
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=compact-overview-p&lang=en", nil), db, "")
 	body := w.Body.String()
-	if strings.Count(body, "production-summary-card") < 4 || !strings.Contains(body, "production-current-issues") {
-		t.Fatalf("overview does not use the compact summary structure: %q", body)
+	if strings.Count(body, `class="status-row"`) != 3 || strings.Contains(body, "production-summary-card") || !strings.Contains(body, "production-current-issues") {
+		t.Fatalf("overview should use a compact three-row status list and separate issues: %q", body)
 	}
 	if strings.Contains(body, "Notification destinations are active.") {
 		t.Fatal("overview exposes redundant notification explanation text")
@@ -1273,8 +1273,12 @@ func TestReadOnlyProductionUsesDedicatedUnconnectedView(t *testing.T) {
 			t.Fatalf("unconnected Production view missing %q: %s", expected, body)
 		}
 	}
-	for _, forbidden := range []string{"production-tabs", "Danger Zone", "Notification state", "User settings", "Task Type"} {
-		if strings.Contains(body, forbidden) {
+	content := body
+	if styleEnd := strings.Index(content, "</style>"); styleEnd >= 0 {
+		content = content[styleEnd+len("</style>"):]
+	}
+	for _, forbidden := range []string{`role="tablist"`, "Danger Zone", "Notification state", "User settings", "Task Type"} {
+		if strings.Contains(content, forbidden) {
 			t.Fatalf("unconnected Production view exposed connected-only content %q", forbidden)
 		}
 	}
@@ -1308,7 +1312,7 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 
 func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production"}
+	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production", Language: "en"}
 	db.Create(&p)
 	if err := model.CreateProjectWebhook(db, p.KitsuProjectID, "compositing", "", "https://example.invalid/1", "channel-1"); err != nil {
 		t.Fatal(err)
@@ -1946,7 +1950,7 @@ func TestCurrentProductionUsersSimpleFlowUsesAssignedBeforeRoles(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Production Team", "Reviewer", "Automatic"} {
+	for _, want := range []string{"Reviewer eligibility", "Reviewers", "Automatic"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
@@ -1996,7 +2000,7 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 
 	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en")
-	for _, want := range []string{"Production Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Discord not linked", "/bot/admin/users", "Production members are synchronized from Kitsu"} {
+	for _, want := range []string{"Reviewer eligibility", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Discord not linked", "/bot/admin/users"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
 		}
@@ -2181,7 +2185,7 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 			t.Fatalf("Production Users UI missing %q: %s", want, body)
 		}
 	}
-	teamStart := strings.Index(body, `<ul class="production-users-simple-list">`)
+	teamStart := strings.Index(body, `<ul class="production-users-simple-list production-eligibility-list">`)
 	if teamStart < 0 {
 		t.Fatalf("Production Team member list is missing: %s", body)
 	}

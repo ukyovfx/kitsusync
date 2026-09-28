@@ -466,7 +466,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.locator('#reviewer-eligibility summary').click();
         if (!(await page.locator('#reviewer-eligibility[open]').count())) throw new Error(`Reviewer eligibility did not expand in ${locale.lang}`);
         const eligibilityText = await page.locator('#reviewer-eligibility').innerText();
-        for (const value of ['Project Supervisor', 'Discord not linked', 'User Linking']) {
+        const eligibilityExpected = locale.lang === 'ja'
+          ? ['Project Supervisor', 'Discord未リンク', 'User Linkingで設定']
+          : ['Project Supervisor', 'Discord not linked', 'User Linking'];
+        for (const value of eligibilityExpected) {
           if (!eligibilityText.includes(value)) throw new Error(`Reviewer eligibility detail is missing ${value}`);
         }
         await page.screenshot({ path: path.join(output, `production-reviewers-${locale.lang}-${viewport.name}.png`), fullPage: true });
