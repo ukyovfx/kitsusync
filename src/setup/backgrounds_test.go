@@ -23,7 +23,8 @@ func TestBackgroundCanvasIsMountedOnlyOnLoginAndAdminSurfaces(t *testing.T) {
 
 func TestLoginForegroundSurfacesAreOpaque(t *testing.T) {
 	for _, want := range []string{
-		`.login-card{margin:0!important;background-color:#111214}`,
+		`.login-card{margin:0!important}`,
+		`body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:#111214}`,
 		`.login-card .section-card{background-color:#151619}`,
 	} {
 		if !strings.Contains(adminThemeCSS, want) {
