@@ -49,7 +49,7 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`const spacing=34`,
 		`const local=Math.exp`,
 		`const alpha=.04+local*.034`,
-		`const radius=.85+local*.22`,
+		`const radius=.92+local*.18`,
 		`rgba(218,126,82,alpha)`,
 		`if(mode==='app-dots'&&!reduced.matches&&!frame&&!document.hidden)`,
 	} {
