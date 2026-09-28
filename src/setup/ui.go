@@ -322,7 +322,8 @@ button,input,select{font:inherit}
 .lang-option.active{color:#120804;font-weight:700}
 .page-card{border-radius:var(--radius-xl);padding:var(--page-padding-standard);}
 .login-page{min-height:calc(100vh - 100px);display:flex;align-items:center;justify-content:center;padding:24px 0}
-.login-card{margin:0!important}
+.login-card{margin:0!important;background-color:#111214}
+.login-card .section-card{background-color:#151619}
 .page-heading{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px;}
 .page-heading p{margin:8px 0 0;color:var(--muted);line-height:1.6;}
 .toast{border-radius:14px;padding:10px 12px;margin-bottom:12px;background:rgba(142,207,139,.1);border:1px solid rgba(142,207,139,.22);color:#d8f0d6;}

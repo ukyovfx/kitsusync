@@ -2,7 +2,7 @@
 
 ## Reusable authenticated browser gate
 
-The existing CI workflow runs a dedicated `reviewer-browser-acceptance` job for pull requests to `master`, checking out the exact PR head. It launches the normal KitsuSync login and admin handlers against a temporary SQLite database, a loopback-only synthetic Kitsu service, and an intercepted synthetic Discord API. Chromium logs in through `/bot/login`; there is no test authentication bypass and no real Kitsu/Discord credential or outbound service call. The same isolated browser gate also checks the login fabric and authenticated-app ambient background at 1440×900, 1920×1080, and 390×844, including both languages, pointer activation, and reduced motion.
+The existing CI workflow runs a dedicated `reviewer-browser-acceptance` job for pull requests to `master`, checking out the exact PR head. It launches the normal KitsuSync login and admin handlers against a temporary SQLite database, a loopback-only synthetic Kitsu service, and an intercepted synthetic Discord API. Chromium logs in through `/bot/login`; there is no test authentication bypass and no real Kitsu/Discord credential or outbound service call. The same isolated browser gate also checks the login fabric and authenticated-app static dot grid at 1440×900, 1920×1080, and 390×844, including both languages, pointer activation, and reduced motion.
 
 The job records Japanese and English Production Users/Reviewer, User Linking, and System Status screens at 1440×1000 and 390×844. It checks the live-team Reviewer eligibility and display-name cases, additive User/Role overrides and filtering, empty/error states, layout overflow, mojibake, and browser console errors. It saves synthetic screenshots and a non-secret state summary as a short-retention Actions artifact. A companion synthetic WFA delivery test verifies recipient union/deduplication, exact allowed mentions, zero-Reviewer card delivery, and fail-closed lookup behavior.
 
@@ -15,9 +15,10 @@ This CI evidence validates application behavior with synthetic services only. It
 - [ ] Browser pixel sampling proves mid/bright orange tiers are materially present, and samples immediately outside both desktop card edges show the cloth reaches the card without a visible moat. The card's foreground layer naturally occludes the cloth beneath it.
 - [ ] Pointer gust uses projected 2D cloth proximity: a pointer at the cloth increases local wave/flutter/brightness, while the same X position far above or below the cloth does not trigger it. The gust smoothly recovers after leaving and never repels particles. On mobile, pointer activation remains subtle and does not disturb the centered card.
 - [ ] Across separated desktop frames, longitudinal stream distance and particle distribution advance; changing wave phase alone does not satisfy this check. Reduced motion holds a stable composed baseline.
-- [ ] Normal authenticated app pages use the quieter fixed dot grid with slow subtle brightness/size modulation and slight pointer activation only; dots do not strongly move or repel.
-- [ ] Login and app canvases are readable behind the UI and do not alter Current IA layout or content.
-- [ ] Both canvases stop continuous animation under `prefers-reduced-motion: reduce`.
+- [ ] Normal authenticated app pages use a static, viewport-level regular dot grid, with fixed positions and low-contrast warm-orange color. It does not depend on content-card bounds and remains pixel-stable over time and consistent across Dashboard, Production list, User Linking, and System Status.
+- [ ] The authenticated grid has no global animation, waves, silk/fabric, drift, flowing noise/mist, recentering, repulsion, or particle translation. Pointer proximity changes only nearby dot brightness and size with smooth local falloff; reduced motion retains the static baseline and may disable pointer activation.
+- [ ] Login and app canvases remain behind the UI and do not alter Current IA layout or content. Login card and form panel are opaque while login cloth geometry continues underneath them without a particle moat.
+- [ ] Login fabric respects `prefers-reduced-motion: reduce`; the authenticated dot grid already has no global animation.
 - [ ] Browser acceptance covers JP and EN at 1440×900, 1920×1080, and 390×844, with no horizontal overflow, mojibake, or console errors.
 
 Use the repo-supported authenticated preview/browser workflow. Browser-rendered output is the final acceptance evidence. Do not use Production 8090 or submit write-producing forms during this smoke check.

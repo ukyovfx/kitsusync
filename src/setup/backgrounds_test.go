@@ -21,29 +21,63 @@ func TestBackgroundCanvasIsMountedOnlyOnLoginAndAdminSurfaces(t *testing.T) {
 	}
 }
 
+func TestLoginForegroundSurfacesAreOpaque(t *testing.T) {
+	for _, want := range []string{
+		`.login-card{margin:0!important;background-color:#111214}`,
+		`.login-card .section-card{background-color:#151619}`,
+	} {
+		if !strings.Contains(adminThemeCSS, want) {
+			t.Errorf("login foreground is missing its opaque surface rule %q", want)
+		}
+	}
+}
+
 func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *testing.T) {
 	for _, want := range []string{
 		`matchMedia('(prefers-reduced-motion: reduce)')`,
-		`if(!reduced.matches)frame=requestAnimationFrame(tick)`,
-		`pointer.target=1`,
+		`mode==='login-fabric'||!pointerSettled`,
+		`mode==='login-fabric'||Math.abs(pointer.amount-pointer.target)>=.002`,
+		`pointer.target=mode==='app-dots'&&reduced.matches?0:1`,
 		`pointer.target=0`,
 		`width=document.documentElement.clientWidth`,
 		`const mobile=width<600`,
 		`const meshRows=mobile?13:params.meshRows`,
 		`centerY=mobile?rect.top-42:height*.5`,
 		`pointer.targetX-pointer.x)*.10`,
-		`if(mode==='app-dots'){pointer.x=event.clientX;pointer.y=event.clientY;}`,
 		`Math.pow(.94,elapsed*60)`,
 		`const spacing=34`,
 		`const local=Math.exp`,
+		`const alpha=.032+local*.034`,
+		`const radius=.85+local*.22`,
+		`rgba(218,126,82,alpha)`,
+		`if(mode==='app-dots'&&!reduced.matches&&!frame&&!document.hidden)`,
 	} {
 		if !strings.Contains(backgroundCanvasScript, want) {
 			t.Errorf("background script missing expected behavior %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "const fields=[", "field.direction"} {
+	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "const fields=[", "field.direction", `const slow=Math.sin(x*.003+y*.004+seconds*.09)`, `local*Math.sin`, `local*Math.cos`, `ctx.translate(`} {
 		if strings.Contains(backgroundCanvasScript, forbidden) {
 			t.Errorf("background script contains forbidden effect %q", forbidden)
+		}
+	}
+}
+
+func TestAuthenticatedDotGridIsStaticAndViewportAnchored(t *testing.T) {
+	start := strings.Index(backgroundCanvasScript, `const drawDots=()=>{`)
+	end := strings.Index(backgroundCanvasScript[start:], `const draw=seconds=>`)
+	if start < 0 || end < 0 {
+		t.Fatal("authenticated dot-grid renderer is missing")
+	}
+	dots := backgroundCanvasScript[start : start+end]
+	for _, want := range []string{`const spacing=34`, `for(let y=18;y<height;y+=spacing)`, `for(let x=18;x<width;x+=spacing)`, `ctx.arc(x,y,radius,0,Math.PI*2)`} {
+		if !strings.Contains(dots, want) {
+			t.Errorf("authenticated dot grid is missing fixed viewport geometry %q", want)
+		}
+	}
+	for _, forbidden := range []string{"seconds", "Math.sin", "Math.cos", "translate", "centerX", "centerY"} {
+		if strings.Contains(dots, forbidden) {
+			t.Errorf("authenticated dot-grid positions or appearance depend on global motion/card geometry (%q)", forbidden)
 		}
 	}
 }

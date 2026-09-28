@@ -66,6 +66,7 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
   const details = await page.evaluate(() => {
     const canvas = document.querySelector('canvas[data-background]');
     const card = document.querySelector('.login-card');
+    const formPanel = card?.querySelector('.section-card');
     const ctx = canvas?.getContext('2d');
     let visible = 0;
     if (ctx) {
@@ -80,8 +81,37 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
         y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2),
       };
     }
+    const cardBackground = card ? getComputedStyle(card).backgroundColor : '';
+    const panelBackground = formPanel ? getComputedStyle(formPanel).backgroundColor : '';
+    const cardRect = card?.getBoundingClientRect();
+    const panelRect = formPanel?.getBoundingClientRect();
+    const isOpaqueRGB = color => /^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/.test(color);
+    const orangePixelsUnder = element => {
+      if (!canvas || !ctx || !element) return 0;
+      const r = element.getBoundingClientRect();
+      const scale = canvas.width / canvas.getBoundingClientRect().width;
+      const left = Math.max(0, Math.floor(r.left * scale));
+      const top = Math.max(0, Math.floor(r.top * scale));
+      const right = Math.min(canvas.width, Math.ceil(r.right * scale));
+      const bottom = Math.min(canvas.height, Math.ceil(r.bottom * scale));
+      const data = ctx.getImageData(left, top, right - left, bottom - top).data;
+      let count = 0;
+      for (let i = 0; i < data.length; i += 4 * 8) {
+        if (data[i + 3] > 70 && data[i] > 100 && data[i + 1] > 14 && data[i + 1] < 150 && data[i + 2] < 100) count++;
+      }
+      return count;
+    };
     return {
       visible, centered,
+      cardBackground, panelBackground,
+      cardOpaque: isOpaqueRGB(cardBackground),
+      panelOpaque: isOpaqueRGB(panelBackground),
+      foregroundSamples: cardRect && panelRect ? [
+        { name: 'card', x: Math.floor(cardRect.left + 8), y: Math.floor(cardRect.top + cardRect.height * .72) },
+        { name: 'form panel', x: Math.floor(panelRect.left + 8), y: Math.floor(panelRect.top + panelRect.height * .5) },
+      ] : [],
+      canvasOrangeUnderCard: orangePixelsUnder(card),
+      canvasOrangeUnderPanel: orangePixelsUnder(formPanel),
       width: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
       lang: document.documentElement.lang,
@@ -89,6 +119,12 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     };
   });
   if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
+  if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
+    throw new Error(`login foreground surfaces are translucent at ${viewport.name}: ${JSON.stringify({ card: details.cardBackground, panel: details.panelBackground })}`);
+  }
+  if (mode === 'login-fabric' && viewport.name !== 'mobile' && (details.canvasOrangeUnderCard < 1 || details.canvasOrangeUnderPanel < 1)) {
+    throw new Error(`desktop fabric no longer flows geometrically behind the Login card/form at ${viewport.name}: ${JSON.stringify({ card: details.canvasOrangeUnderCard, panel: details.canvasOrangeUnderPanel })}`);
+  }
   if (mode === 'login-fabric' && viewport.name === 'mobile' && details.visible > 250) throw new Error(`mobile login ribbon is too dense for ${locale.lang}: ${details.visible} sampled pixels`);
   if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
   if (details.lang !== locale.lang) throw new Error(`${mode} page language mismatch for ${locale.lang}`);
@@ -96,7 +132,28 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
   if (mode === 'login-fabric' && (!details.centered || details.centered.x > 8 || details.centered.y > 8)) {
     throw new Error(`login card lost centered composition at ${viewport.name}: ${JSON.stringify(details.centered)}`);
   }
-  await page.screenshot({ path: path.join(output, screenshotName), fullPage: false });
+  const screenshot = await page.screenshot({ path: path.join(output, screenshotName), fullPage: false });
+  if (mode === 'login-fabric') {
+    const samples = await page.evaluate(async ({ image, points }) => {
+      const decoded = new Image();
+      decoded.src = `data:image/png;base64,${image}`;
+      await decoded.decode();
+      const sampleCanvas = document.createElement('canvas');
+      sampleCanvas.width = decoded.width;
+      sampleCanvas.height = decoded.height;
+      const sampleContext = sampleCanvas.getContext('2d');
+      sampleContext.drawImage(decoded, 0, 0);
+      return points.map(point => ({
+        name: point.name,
+        rgba: [...sampleContext.getImageData(point.x, point.y, 1, 1).data],
+      }));
+    }, { image: screenshot.toString('base64'), points: details.foregroundSamples });
+    for (const sample of samples) {
+      if (!sample.rgba || sample.rgba[0] > 70 || sample.rgba[1] > 70 || sample.rgba[2] > 70) {
+        throw new Error(`Login ${sample.name} screenshot pixel is not an opaque dark foreground sample at ${viewport.name}: ${JSON.stringify(sample)}`);
+      }
+    }
+  }
   await record(page, mode === 'login-fabric' ? '/bot/login' : '/bot/admin', locale.lang, viewport.name, 'background rendered', `${mode}; visible canvas pixels=${details.visible}; centered card=${JSON.stringify(details.centered)}`);
 }
 
@@ -495,15 +552,32 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
+    await page.mouse.move(-50, -50);
+    await page.waitForTimeout(100);
+    const dashboardGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
+    await page.waitForTimeout(500);
+    if (await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL()) !== dashboardGrid) {
+      throw new Error('authenticated dot grid changed without pointer interaction');
+    }
+    for (const route of ['/bot/admin/projects?lang=en', '/bot/admin/users?lang=en', '/bot/admin/health?lang=en']) {
+      await page.goto(`${base}${route}`, { waitUntil: 'networkidle' });
+      const routeGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
+      if (routeGrid !== dashboardGrid) throw new Error(`authenticated dot positions/background changed with content route ${route}`);
+    }
+    await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
     const appPointer = { x: 420, y: 380 };
     await page.mouse.move(0, 0);
     await page.waitForTimeout(250);
     const appBefore = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
+    const farPoint = { x: 1200, y: 820 };
+    const farBefore = await localCanvasAlpha(page, farPoint.x, farPoint.y, 24);
     await page.mouse.move(appPointer.x, appPointer.y);
     await page.waitForTimeout(400);
     const appAfter = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
+    const farAfter = await localCanvasAlpha(page, farPoint.x, farPoint.y, 24);
     if (appAfter <= appBefore) throw new Error(`app pointer did not subtly activate local dots (${appBefore} -> ${appAfter})`);
-    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local dot alpha increased from ${appBefore} to ${appAfter}; dot positions remain fixed` });
+    if (farAfter !== farBefore) throw new Error(`app pointer activation changed distant dots (${farBefore} -> ${farAfter})`);
+    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local dot alpha increased from ${appBefore} to ${appAfter}; distant dot alpha stayed ${farAfter}; dot positions remain fixed` });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.waitForTimeout(100);
     const reducedApp = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());

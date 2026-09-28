@@ -242,17 +242,16 @@ const backgroundCanvasScript = `<script>
     }
     ctx.globalAlpha=1;
   };
-  const drawDots=seconds=>{
+  const drawDots=()=>{
     ctx.clearRect(0,0,width,height);
     const spacing=34;
     for(let y=18;y<height;y+=spacing){
       for(let x=18;x<width;x+=spacing){
         const dx=pointer.x-x,dy=pointer.y-y;
         const local=Math.exp(-(dx*dx+dy*dy)/(2*150*150))*pointer.amount;
-        const slow=Math.sin(x*.003+y*.004+seconds*.09)*.5+.5;
-        const alpha=.032+slow*.018+local*.034;
-        const radius=.85+slow*.12+local*.22;
-        ctx.fillStyle=rgba(203+slow*31,112+slow*48,68+slow*34,alpha);
+        const alpha=.032+local*.034;
+        const radius=.85+local*.22;
+        ctx.fillStyle=rgba(218,126,82,alpha);
         ctx.beginPath();ctx.arc(x,y,radius,0,Math.PI*2);ctx.fill();
       }
     }
@@ -273,19 +272,27 @@ const backgroundCanvasScript = `<script>
       pointer.amount+=(pointer.target-pointer.amount)*(1-Math.pow(.94,elapsed*60));
     }
     draw(time);
-    if(!reduced.matches)frame=requestAnimationFrame(tick);
+    const pointerSettled=mode==='app-dots'&&Math.abs(pointer.amount-pointer.target)<.002&&Math.abs(pointer.targetX-pointer.x)<.5&&Math.abs(pointer.targetY-pointer.y)<.5;
+    if(!reduced.matches&&(mode==='login-fabric'||!pointerSettled))frame=requestAnimationFrame(tick);
   };
   const start=()=>{
     if(frame)cancelAnimationFrame(frame);
-    frame=0;last=0;draw(time);
-    if(!reduced.matches&&!document.hidden)frame=requestAnimationFrame(tick);
+    frame=0;last=0;
+    if(mode==='app-dots'&&reduced.matches){pointer.target=0;pointer.amount=0;}
+    draw(time);
+    if(!reduced.matches&&!document.hidden&&(mode==='login-fabric'||Math.abs(pointer.amount-pointer.target)>=.002))frame=requestAnimationFrame(tick);
   };
   pointer.targetX=-10000;pointer.targetY=-10000;
   window.addEventListener('pointermove',event=>{
-    pointer.targetX=event.clientX;pointer.targetY=event.clientY;pointer.target=1;
+    pointer.targetX=event.clientX;pointer.targetY=event.clientY;
+    pointer.target=mode==='app-dots'&&reduced.matches?0:1;
     if(mode==='app-dots'){pointer.x=event.clientX;pointer.y=event.clientY;}
+    if(mode==='app-dots'&&!reduced.matches&&!frame&&!document.hidden){last=performance.now();frame=requestAnimationFrame(tick);}
   },{passive:true});
-  window.addEventListener('pointerleave',()=>{pointer.target=0;},{passive:true});
+  window.addEventListener('pointerleave',()=>{
+    pointer.target=0;
+    if(mode==='app-dots'&&!reduced.matches&&!frame&&!document.hidden){last=performance.now();frame=requestAnimationFrame(tick);}
+  },{passive:true});
   document.addEventListener('visibilitychange',start);
   window.addEventListener('resize',resize,{passive:true});
   reduced.addEventListener?.('change',start);
