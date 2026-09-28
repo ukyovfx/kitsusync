@@ -264,10 +264,14 @@ const backgroundCanvasScript = `<script>
     if(now-last<33){frame=requestAnimationFrame(tick);return;}
     const elapsed=Math.min(.06,(now-last)/1000||0);
     last=now;time+=elapsed;
-    pointer.x+=(pointer.targetX-pointer.x)*.10;
-    pointer.y+=(pointer.targetY-pointer.y)*.10;
-    const recovery=params?params.cursorRecovery:desktopBaseline.cursorRecovery;
-    pointer.amount+=(pointer.target-pointer.amount)*(1-Math.pow(1-recovery,elapsed*20));
+    if(mode==='login-fabric'){
+      pointer.x+=(pointer.targetX-pointer.x)*.10;
+      pointer.y+=(pointer.targetY-pointer.y)*.10;
+      const recovery=params?params.cursorRecovery:desktopBaseline.cursorRecovery;
+      pointer.amount+=(pointer.target-pointer.amount)*(1-Math.pow(1-recovery,elapsed*20));
+    }else{
+      pointer.amount+=(pointer.target-pointer.amount)*(1-Math.pow(.94,elapsed*60));
+    }
     draw(time);
     if(!reduced.matches)frame=requestAnimationFrame(tick);
   };
@@ -277,7 +281,10 @@ const backgroundCanvasScript = `<script>
     if(!reduced.matches&&!document.hidden)frame=requestAnimationFrame(tick);
   };
   pointer.targetX=-10000;pointer.targetY=-10000;
-  window.addEventListener('pointermove',event=>{pointer.targetX=event.clientX;pointer.targetY=event.clientY;pointer.target=1;},{passive:true});
+  window.addEventListener('pointermove',event=>{
+    pointer.targetX=event.clientX;pointer.targetY=event.clientY;pointer.target=1;
+    if(mode==='app-dots'){pointer.x=event.clientX;pointer.y=event.clientY;}
+  },{passive:true});
   window.addEventListener('pointerleave',()=>{pointer.target=0;},{passive:true});
   document.addEventListener('visibilitychange',start);
   window.addEventListener('resize',resize,{passive:true});
