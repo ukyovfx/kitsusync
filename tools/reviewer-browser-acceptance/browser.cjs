@@ -71,7 +71,8 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     let visible = 0;
     if (ctx) {
       const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-      for (let i = 3; i < pixels.length; i += 4 * 16) if (pixels[i] > 8) visible++;
+      const stride = canvas.dataset.background === 'app-dots' ? 4 : 4 * 16;
+      for (let i = 3; i < pixels.length; i += stride) if (pixels[i] > 8) visible++;
     }
     let centered = null;
     if (card) {
