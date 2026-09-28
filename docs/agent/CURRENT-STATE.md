@@ -35,7 +35,7 @@ Verified against GitHub `master` at `5c01e30ff222f332656a5a563e76a4741b0ad9b1` o
 ## Current work
 
 - PR #220 is closed as superseded and must not be revived or reused.
-- The GitHub open-PR list was checked on 2026-09-28 and contained no open PRs.
+- Before this documentation PR was opened, the GitHub open-PR list checked on 2026-09-28 contained no open PRs.
 - No next product implementation task is currently assigned here. Select future work from an explicit project priority rather than inferring one from this state note.
 
 ## Repository guidance
