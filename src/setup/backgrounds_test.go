@@ -51,10 +51,10 @@ func TestLoginFabricPortsLayeredSilkSurfaceModel(t *testing.T) {
 	for _, want := range []string{
 		`const evaluateSideClothProfile=(side,colX,seconds,u)=>{`,
 		`const clothBuckets=Array.from({length:10},()=>({coords:new Float32Array(maxDotsPerTier*3),count:0}))`,
-		`const travelTime=seconds*.36*flowDir`,
+		`const travelTime=seconds*.36`,
 		`const mirroredX=isLeft?centerX-colX:colX-centerX`,
 		`const phiM1=warpedX*.00205-travelTime*.65+phaseOffset`,
-		`const phaseOffset=isLeft?0:(mobile?.15:.35)`,
+		`const phaseOffset=isLeft?-.035:.035`,
 		`const effectiveWidth=sheetWidth*widthFunnelRatio*outerTaperFactor`,
 		`const profileWave=(stokes*42+stokesSub*20)*waveHeightEnv*silhouetteScale`,
 		`const totalRoll=obliqueAngle+dynamicTwist`,
@@ -75,6 +75,7 @@ func TestLoginFabricPortsLayeredSilkSurfaceModel(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{
+		`const flowDir=isLeft?1:-1`,
 		`const columns=mobile?Math.max(28,Math.ceil(width/11)):Math.max(80,Math.ceil(width/8))`,
 		`const wavePhase=u*5.2+seconds*flowSpeed+layer*.71`,
 		`const ribbonLayers=mobile?2:3`,

@@ -54,8 +54,10 @@ const backgroundCanvasScript = `<script>
   };
   const evaluateSideClothProfile=(side,colX,seconds,u)=>{
     const isLeft=side==='left';
-    const flowDir=isLeft?1:-1;
-    const travelTime=seconds*.36*flowDir;
+    // Both halves use the same mirrored inward-flow coordinate. A separate
+    // time direction per screen side makes equivalent card-relative samples
+    // drift apart as the viewport gets wider.
+    const travelTime=seconds*.36;
     const centerX=cardCenterX||width*.5;
     const mirroredX=isLeft?centerX-colX:colX-centerX;
     const outerDist=isLeft?colX:width-colX;
@@ -74,7 +76,9 @@ const backgroundCanvasScript = `<script>
     const cursorGust=mobile?.13:.35;
     const cursorGustAmp=1+gust*cursorGust*pointer.amount;
     const warpW=1.2;
-    const phaseOffset=isLeft?0:(mobile?.15:.35);
+    // Keep a small phase difference for organic cloth variation without
+    // biasing the overall density or brightness toward either side.
+    const phaseOffset=isLeft?-.035:.035;
     const warpedX=mirroredX+(Math.sin(mirroredX*.00118+travelTime*.30+phaseOffset)*56+Math.cos(mirroredX*.00270-travelTime*.20+phaseOffset)*24)*warpW;
     const env1=Math.sin(warpedX*.00125-travelTime*.25+phaseOffset);
     const env2=Math.cos(warpedX*.00260+travelTime*.17+phaseOffset*.7);
