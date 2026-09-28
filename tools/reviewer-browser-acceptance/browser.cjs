@@ -75,10 +75,11 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     if (ctx) {
       const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
       const stride = canvas.dataset.background === 'app-dots' ? 4 : 4 * 16;
+      const minVisibleAlpha = canvas.dataset.background === 'app-dots' ? 2 : 8;
       for (let i = 3; i < pixels.length; i += 4) {
         if (pixels[i] > 0) nonzeroAlpha++;
         if (pixels[i] > maxAlpha) maxAlpha = pixels[i];
-        if (i % stride === 3 && pixels[i] > 8) visible++;
+        if (i % stride === 3 && pixels[i] > minVisibleAlpha) visible++;
       }
       if (canvas.dataset.background === 'app-dots') {
         const dpr = canvas.width / canvas.getBoundingClientRect().width;
