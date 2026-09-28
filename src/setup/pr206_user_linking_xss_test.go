@@ -63,7 +63,7 @@ func TestPR206UserLinkingRejectsNonSnowflakeGuildQueryWithoutReflection(t *testi
 	if strings.Contains(body, "<script>queryXSS</script>") {
 		t.Fatal("invalid guild query was reflected into the rendered page")
 	}
-	if !strings.Contains(body, "Select a Discord server to load members and enable saving.") {
+	if !strings.Contains(body, "Select a Discord server first.") {
 		t.Fatal("invalid guild query was not canonicalized to the unselected state")
 	}
 }

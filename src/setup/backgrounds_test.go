@@ -27,11 +27,17 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`if(!reduced.matches)frame=requestAnimationFrame(tick)`,
 		`pointer.target=1`,
 		`pointer.target=0`,
-		`sheetWidth=180`,
 		`width=document.documentElement.clientWidth`,
-		`const band=Math.min(sheetWidth,leftEdge,width-rightEdge)`,
-		`const depthPhase=(inward*band*.012+seconds*flowSpeed)`,
-		`const wavePhase=depthPhase+(v*6.2)+.9`,
+		`const centerY=mobile?rect.top-12:rect.top+rect.height*.5`,
+		`const maxHalfHeight=Math.min(height*(mobile?.05:.14),mobile?38:92)`,
+		`const columns=mobile?Math.max(28,Math.ceil(width/11)):Math.max(80,Math.ceil(width/8))`,
+		`const rows=mobile?10:17`,
+		`const ribbonLayers=mobile?2:3`,
+		`const alpha=(.075+depth*.19+local*.09+organic)*edgeTaper*cardAttenuation*(mobile?.72:1)`,
+		`const xBase=u*width`,
+		`const halfHeight=maxHalfHeight*edgeTaper*centerNarrowing`,
+		`const wavePhase=u*5.2+seconds*flowSpeed+layer*.71`,
+		`const cardAttenuation=insideCard?.78:1`,
 		`const spacing=34`,
 		`const local=Math.exp`,
 	} {
@@ -39,9 +45,29 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 			t.Errorf("background script missing expected behavior %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "xBase*.012", "xBase*.075", "field.direction*.9"} {
+	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "sheetWidth=180", "const fields=[", "field.direction"} {
 		if strings.Contains(backgroundCanvasScript, forbidden) {
 			t.Errorf("background script contains forbidden effect %q", forbidden)
+		}
+	}
+}
+
+func TestLoginFabricUsesTheWholeViewportAsAHorizontallyTaperedRibbon(t *testing.T) {
+	for _, want := range []string{
+		`const xBase=u*width`,
+		`const edgeTaper=smoothstep(0,.08,u)*smoothstep(0,.08,1-u)`,
+		`const centerNarrowing=1-.18*Math.exp(-Math.pow((u-.5)/.18,2))`,
+		`const ribbonLayers=mobile?2:3`,
+		`const slowWave=Math.sin(wavePhase+Math.sin(seconds*.12+u*2+q)*.6)*slowAmplitude`,
+		`const flutter=Math.sin(u*width*(mobile?.055:.075)+q*17+seconds*1.7+layer*.83)*(mobile?1:1.5)`,
+	} {
+		if !strings.Contains(backgroundCanvasScript, want) {
+			t.Errorf("horizontal login ribbon is missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"leftEdge-band", "rightEdge+band", "const fields=[", "const band=Math.min"} {
+		if strings.Contains(backgroundCanvasScript, forbidden) {
+			t.Errorf("login fabric still renders as two side curtains (%q)", forbidden)
 		}
 	}
 }

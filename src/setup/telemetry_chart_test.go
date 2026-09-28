@@ -31,7 +31,7 @@ func TestTelemetryLineGraphUsesTimestampPositionsAndBreaksAcrossFailures(t *test
 	if strings.Count(graph, `class="chart-tick"`) != 3 {
 		t.Fatalf("graph has %d Y ticks, want 3", strings.Count(graph, `class="chart-tick"`))
 	}
-	for _, fragment := range []string{`>50ms</text>`, `>25ms</text>`, `>0ms</text>`, `x1="54"`, `x2="484"`, `x="269"`, `60s`, `30s`, `Now`} {
+	for _, fragment := range []string{`>50ms</text>`, `>25ms</text>`, `>0ms</text>`, `x1="44"`, `x2="452"`, `x="248"`, `60s`, `30s`, `Now`} {
 		if !strings.Contains(graph, fragment) {
 			t.Fatalf("graph is missing canonical line geometry/label %q: %s", fragment, graph)
 		}
@@ -58,13 +58,16 @@ func TestTelemetryLineGraphsUseIndependentZeroBasedScales(t *testing.T) {
 
 func TestTelemetryLineGraphGeometryAndTimestampScale(t *testing.T) {
 	geometry := telemetryChartGeometry()
-	if geometry.Width != 496 || geometry.Height != 104 || geometry.PlotLeft != 54 || geometry.PlotRight != 484 || geometry.PlotMiddle != 45 || geometry.PlotBottom != 82 {
+	if geometry.Width != 496 || geometry.Height != 104 || geometry.PlotLeft != 44 || geometry.PlotRight != 452 || geometry.DataLeft != 48 || geometry.DataRight != 448 || geometry.PlotMiddle != 45 || geometry.PlotCenterX != 248 || geometry.PlotBottom != 82 {
 		t.Fatalf("unexpected canonical chart geometry: %#v", geometry)
 	}
-	items := []APIObservation{{At: time.Now().Add(-55 * time.Second), Duration: 1 * time.Millisecond, Success: true}, {At: time.Now().Add(-5 * time.Second), Duration: 1 * time.Millisecond, Success: true}}
+	items := []APIObservation{{At: time.Now().Add(-60 * time.Second), Duration: 1 * time.Millisecond, Success: true}, {At: time.Now(), Duration: 1 * time.Millisecond, Success: true}}
 	graph := apiObservationLineGraphWithScale(items, "en", telemetryWindow60Seconds, 10)
 	if !strings.Contains(graph, `cx="`) || strings.Count(graph, `class="telemetry-point success"`) != 2 {
 		t.Fatalf("observations do not have timestamp-positioned points: %s", graph)
+	}
+	if !strings.Contains(graph, `cx="48.0"`) || !strings.Contains(graph, `cx="448.0"`) {
+		t.Fatalf("timestamp endpoints need equal internal padding so markers stay visible: %s", graph)
 	}
 }
 
@@ -86,7 +89,7 @@ func TestTelemetryLineGraphTooltipsAreKeyboardReachableAndFailureSafe(t *testing
 
 func TestSystemStatusRefreshUsesCanonicalLineGraphContract(t *testing.T) {
 	updated := replaceSystemStatusRefreshScript(`<script data-system-status-refresh></script>`)
-	for _, fragment := range []string{`viewBox=\"0 0 496 104\"`, `telemetry-line`, `Date.parse(item.at)`, `points.push(null)`, `item.success&&isFinite(value)`, `Request failed`, `60s`, `2m30s`, `Now`, `x1=\"54\"`, `x2=\"484\"`} {
+	for _, fragment := range []string{`viewBox=\"0 0 496 104\"`, `telemetry-line`, `Date.parse(item.at)`, `points.push(null)`, `item.success&&isFinite(value)`, `Request failed`, `60s`, `2m30s`, `Now`, `x1=\"44\"`, `x2=\"452\"`, `var left=48,right=448`} {
 		if !strings.Contains(updated, fragment) {
 			t.Fatalf("refresh graph is missing canonical contract %q", fragment)
 		}

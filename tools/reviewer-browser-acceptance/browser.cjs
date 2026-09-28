@@ -89,6 +89,7 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     };
   });
   if (details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}`);
+  if (mode === 'login-fabric' && viewport.name === 'mobile' && details.visible > 250) throw new Error(`mobile login ribbon is too dense for ${locale.lang}: ${details.visible} sampled pixels`);
   if (details.width > details.clientWidth) throw new Error(`${mode} canvas caused horizontal overflow at ${viewport.name}`);
   if (details.lang !== locale.lang) throw new Error(`${mode} page language mismatch for ${locale.lang}`);
   if (details.gutterBackground !== 'rgb(7, 7, 7)') throw new Error(`${mode} scrollbar gutter is not using the dark page background at ${viewport.name}`);
@@ -139,29 +140,70 @@ async function localCanvasBrightness(page, x, y, radius) {
 async function assertLoginFabricBalance(page, locale, viewport) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.waitForTimeout(60);
+  if (viewport.name === 'mobile') {
+    const mobileFrame = await page.evaluate(() => {
+      const canvas = document.querySelector('canvas[data-background="login-fabric"]');
+      const pixels = canvas?.getContext('2d')?.getImageData(0, 0, canvas.width, canvas.height).data;
+      const card = document.querySelector('.login-card');
+      let count = 0;
+      if (pixels) for (let i = 3; i < pixels.length; i += 4 * 16) if (pixels[i] > 8) count++;
+      const rect = card?.getBoundingClientRect();
+      return {
+        count,
+        frame: canvas?.toDataURL(),
+        centered: rect ? { x: Math.abs(rect.left + rect.width / 2 - innerWidth / 2), y: Math.abs(rect.top + rect.height / 2 - innerHeight / 2) } : null,
+        top: rect?.top,
+        width: innerWidth,
+        overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      };
+    });
+    if (mobileFrame.count < 3 || mobileFrame.count > 250) throw new Error(`mobile horizontal ribbon is missing or too dense at ${locale.lang}: ${mobileFrame.count} sampled pixels`);
+    if (!mobileFrame.centered || mobileFrame.centered.x > 8 || mobileFrame.centered.y > 8 || mobileFrame.overflow) {
+      throw new Error(`mobile login card or viewport layout is invalid at ${locale.lang}: ${JSON.stringify(mobileFrame)}`);
+    }
+    const leftRibbon = await localCanvasAlpha(page, mobileFrame.width * .30, mobileFrame.top - 12, 20);
+    const rightRibbon = await localCanvasAlpha(page, mobileFrame.width * .70, mobileFrame.top - 12, 20);
+    if (leftRibbon < 1 || rightRibbon < 1 || Math.min(leftRibbon, rightRibbon) / Math.max(leftRibbon, rightRibbon) < .30) {
+      throw new Error(`mobile horizontal ribbon is not visibly balanced above the card at ${locale.lang}: ${leftRibbon}/${rightRibbon}`);
+    }
+    await page.waitForTimeout(350);
+    const reducedFrame = await page.locator('canvas[data-background="login-fabric"]').evaluate(canvas => canvas.toDataURL());
+    if (reducedFrame !== mobileFrame.frame) throw new Error(`mobile login ribbon animated under reduced motion at ${locale.lang}`);
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.mouse.move(0, 0);
+    await page.waitForTimeout(200);
+    const card = await page.locator('.login-card').boundingBox();
+    const pointer = { x: 7, y: card.y - 12 };
+    const before = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
+    await page.mouse.move(pointer.x, pointer.y);
+    await page.waitForTimeout(300);
+    const after = await localCanvasAlpha(page, pointer.x, pointer.y, 25);
+    if (after <= before) throw new Error(`mobile pointer activation did not increase local ribbon activity at ${locale.lang} (${before} -> ${after})`);
+    records.push({ route: '/bot/login', locale: locale.lang, viewport: viewport.name, state: 'restrained horizontal ribbon', detail: `${mobileFrame.count} sampled pixels; balanced ribbon above card ${leftRibbon}/${rightRibbon}; centered card; reduced-motion frame stable; pointer local alpha ${before} -> ${after}` });
+    return;
+  }
   const geometry = await page.evaluate(() => {
     const canvas = document.querySelector('canvas[data-background="login-fabric"]');
     const card = document.querySelector('.login-card');
     if (!canvas || !card) return null;
     const rect = card.getBoundingClientRect();
     const width = document.documentElement.clientWidth;
-    const gap = width < 600 ? 4 : 18;
-    const leftEdge = Math.max(0, rect.left - gap);
-    const rightEdge = Math.min(width, rect.right + gap);
+    const centerY = rect.top + rect.height * .5;
     return {
-      band: Math.min(180, leftEdge, width - rightEdge),
-      centerY: rect.top + rect.height * .5,
-      leftEdge,
-      rightEdge,
+      width,
+      canvasWidth: canvas.getBoundingClientRect().width,
+      centerY,
+      cardCenterX: rect.left + rect.width * .5,
     };
   });
-  if (!geometry || geometry.band < 3) throw new Error(`login fabric has no shared lateral band at ${viewport.name}`);
-  const radius = Math.max(14, Math.min(42, geometry.band * .2));
+  if (!geometry || Math.abs(geometry.canvasWidth - geometry.width) > 1 || Math.abs(geometry.cardCenterX - geometry.width / 2) > 8) {
+    throw new Error(`login ribbon or card is not aligned to the viewport at ${viewport.name}: ${JSON.stringify(geometry)}`);
+  }
+  const radius = Math.max(14, Math.min(36, geometry.width * .025));
   const ratios = [];
-  for (const inward of [.2, .5, .8]) {
-    const offset = geometry.band * (1 - inward);
-    const leftX = geometry.leftEdge - offset;
-    const rightX = geometry.rightEdge + offset;
+  for (const fraction of [.18, .30, .40]) {
+    const leftX = geometry.width * fraction;
+    const rightX = geometry.width * (1 - fraction);
     const leftAlpha = await localCanvasAlpha(page, leftX, geometry.centerY, radius);
     const rightAlpha = await localCanvasAlpha(page, rightX, geometry.centerY, radius);
     const leftBrightness = await localCanvasBrightness(page, leftX, geometry.centerY, radius);
@@ -169,14 +211,14 @@ async function assertLoginFabricBalance(page, locale, viewport) {
     const densityRatio = Math.min(leftAlpha, rightAlpha) / Math.max(1, leftAlpha, rightAlpha);
     const brightnessRatio = Math.min(leftBrightness, rightBrightness) / Math.max(1, leftBrightness, rightBrightness);
     ratios.push({ density: densityRatio, brightness: brightnessRatio });
-    if (densityRatio < .7 || brightnessRatio < .7) {
-      throw new Error(`login fabric is imbalanced at ${locale.lang}/${viewport.name}, inward=${inward}: left=${leftAlpha}/${leftBrightness}, right=${rightAlpha}/${rightBrightness}`);
+    if (densityRatio < .58 || brightnessRatio < .58) {
+      throw new Error(`login ribbon is imbalanced at ${locale.lang}/${viewport.name}, x=${fraction}/${1 - fraction}: left=${leftAlpha}/${leftBrightness}, right=${rightAlpha}/${rightBrightness}`);
     }
   }
   records.push({
     route: '/bot/login', locale: locale.lang, viewport: viewport.name,
-    state: 'mirrored fabric balance',
-    detail: `left/right density/brightness ratios=${ratios.map(value => `${value.density.toFixed(2)}/${value.brightness.toFixed(2)}`).join(',')}; shared band=${Math.round(geometry.band)}px`,
+    state: 'horizontal ribbon balance',
+    detail: `mirrored viewport density/brightness ratios=${ratios.map(value => `${value.density.toFixed(2)}/${value.brightness.toFixed(2)}`).join(',')}; full-width canvas=${geometry.canvasWidth}px`,
   });
   await page.emulateMedia({ reducedMotion: 'no-preference' });
 }
@@ -378,11 +420,16 @@ async function assertLoginFabricBalance(page, locale, viewport) {
         await page.goto(`${base}/bot/admin/users?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('#global-discord-guild').count())) throw new Error(`User Linking server selector missing in ${locale.lang}`);
         if (await page.locator('.user-linking-table').count()) throw new Error(`User Linking table appeared before explicit server selection in ${locale.lang}`);
+        if ((await page.locator('.user-linking-select-hint').innerText()).trim() !== (locale.lang === 'ja' ? 'Discordサーバーを選択してください。' : 'Select a Discord server first.')) throw new Error(`User Linking selection prompt is not concise in ${locale.lang}`);
+        if (await page.locator('.user-linking-server-select').evaluate(node => getComputedStyle(node).borderBottomWidth !== '0px')) throw new Error(`unselected User Linking has a bottom divider in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-unselected.png`), fullPage: true });
         await record(page, '/bot/admin/users', locale.lang, viewport.name, 'server unselected', 'compact server selector rendered without an unselected-state mapping table');
 
         await page.goto(`${base}/bot/admin/users?lang=${locale.lang}&discord_guild_id=${guildID}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('.user-linking-table').count())) throw new Error(`User Linking table missing in ${locale.lang}`);
+        const selectedContext = await page.locator('.user-linking-directory').innerText();
+        if (/Showing Discord server|表示中のDiscordサーバー/.test(selectedContext)) throw new Error(`User Linking repeats the selected server context in ${locale.lang}`);
+        if (await page.locator('.user-linking-directory').evaluate(node => getComputedStyle(node).borderBottomWidth !== '0px')) throw new Error(`selected User Linking selector adds a duplicate divider in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-selected.png`), fullPage: true });
         await record(page, '/bot/admin/users', locale.lang, viewport.name, 'ready', 'four-column User Linking table rendered');
 
@@ -394,8 +441,14 @@ async function assertLoginFabricBalance(page, locale, viewport) {
           failureMarks: document.querySelectorAll('.telemetry-failure').length,
           oldDetails: document.querySelectorAll('.pipeline-health-details,[data-open-pipeline-details]').length,
           redundantResponseLabels: [...document.querySelectorAll('.api-observation-label')].filter(node => /Current response time|現在の応答時間/.test(node.textContent || '')).length,
+          plots: [...document.querySelectorAll('.api-sparkline')].map(svg => ({
+            baselineLeft: Number(svg.querySelector('.chart-baseline')?.getAttribute('x1')),
+            baselineRight: Number(svg.querySelector('.chart-baseline')?.getAttribute('x2')),
+            labels: [...svg.querySelectorAll('.chart-time-label')].map(node => Number(node.getAttribute('x'))),
+            points: [...svg.querySelectorAll('.telemetry-point.success')].map(node => Number(node.getAttribute('cx'))),
+          })),
         }));
-        if (graphContract.lines !== 2 || graphContract.bars || graphContract.failureMarks || graphContract.oldDetails || graphContract.redundantResponseLabels) {
+        if (graphContract.lines !== 2 || graphContract.bars || graphContract.failureMarks || graphContract.oldDetails || graphContract.redundantResponseLabels || graphContract.plots.length !== 2 || graphContract.plots.some(plot => plot.baselineLeft !== 44 || plot.baselineRight !== 452 || plot.labels[0] !== 44 || plot.labels[1] !== 248 || plot.labels[2] !== 452 || plot.points.some(x => x < 48 || x > 448))) {
           throw new Error(`System Status retained obsolete graph/detail UI in ${locale.lang}: ${JSON.stringify(graphContract)}`);
         }
         await page.screenshot({ path: path.join(output, `system-status-${locale.lang}-${viewport.name}.png`), fullPage: true });
