@@ -81,7 +81,7 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Settings contains Storage, Technical details, Diagnostics, and Danger Zone in that order, with ordinary dividers and no floating-card grid.
 - [ ] Storage preserves its existing form and feedback behavior; Save begins disabled and enables only after the link changes.
 - [ ] Technical details, Diagnostics, and Danger Zone start collapsed; their legacy direct links map to Settings and open the expected disclosure.
-- [ ] Technical IDs remain read-only and localized; no credentials or secrets appear.
+- [ ] Technical IDs remain read-only and localized, with working per-ID copy controls; no credentials or secrets appear.
 - [ ] Diagnostics is a compact vertical list; Danger Zone remains separated at the bottom and keeps both destructive confirmation safeguards.
 - [ ] Legacy `users` / `user-settings` routes map to Reviewers; Storage, Activity, Troubleshooting, Details, and Danger Zone routes map to their intended new section and focus/scroll to the destination.
 - [ ] Disclosure summaries are indented one level and contents another on desktop and mobile, including System Status processing diagnostics.

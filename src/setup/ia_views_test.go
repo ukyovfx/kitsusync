@@ -744,8 +744,22 @@ func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T)
 	advancedRequest := httptest.NewRequest("GET", "/bot/admin/projects?project=selected-advanced-p&tab=advanced&lang=en", nil)
 	advancedWriter := httptest.NewRecorder()
 	renderIAProductionList(advancedWriter, advancedRequest, db, "")
-	if !strings.Contains(advancedWriter.Body.String(), "synthetic-guild") {
+	advancedBody := advancedWriter.Body.String()
+	if !strings.Contains(advancedBody, "synthetic-guild") {
 		t.Fatal("Advanced settings did not expose the technical identifier")
+	}
+	for _, want := range []string{
+		`data-copy-value="selected-advanced-p"`,
+		`data-copy-value="synthetic-guild"`,
+		`data-copy-value="synthetic-category"`,
+		`aria-label="Copy Production ID"`,
+		`aria-label="Copy Discord server ID"`,
+		`aria-label="Copy Category ID"`,
+		`navigator.clipboard.writeText(value)`,
+	} {
+		if !strings.Contains(advancedBody, want) {
+			t.Fatalf("Technical details copy action missing %q", want)
+		}
 	}
 	troubleshootingRequest := httptest.NewRequest("GET", "/bot/admin/projects?project=selected-advanced-p&tab=troubleshooting&lang=en", nil)
 	troubleshootingWriter := httptest.NewRecorder()

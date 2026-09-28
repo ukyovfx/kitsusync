@@ -809,7 +809,19 @@ func renderCurrentProductionDetails(p model.Project, lang string, expanded bool)
 	if expanded {
 		open = ` open`
 	}
-	return `<details id="technical-details" class="production-settings-section production-settings-disclosure advanced-details"` + open + `><summary>` + esc(t(lang, "技術情報", "Technical details")) + `</summary><dl class="detail-list production-technical-details">` + validation + `<dt>` + esc(t(lang, "プロダクションID", "Production ID")) + `</dt><dd><code>` + esc(p.KitsuProjectID) + `</code></dd><dt>` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</dt><dd><code>` + esc(p.DiscordGuildID) + `</code></dd><dt>` + esc(t(lang, "カテゴリID", "Category ID")) + `</dt><dd><code>` + esc(p.DiscordCategoryID) + `</code></dd></dl></details>`
+	var rows strings.Builder
+	rows.WriteString(validation)
+	for _, row := range []struct{ label, value string }{
+		{t(lang, "プロダクションID", "Production ID"), p.KitsuProjectID},
+		{t(lang, "DiscordサーバーID", "Discord server ID"), p.DiscordGuildID},
+		{t(lang, "カテゴリID", "Category ID"), p.DiscordCategoryID},
+	} {
+		copyLabel := t(lang, row.label+"をコピー", "Copy "+row.label)
+		copiedLabel := t(lang, "コピーしました", "Copied")
+		failedLabel := t(lang, "コピーできませんでした", "Copy unavailable")
+		rows.WriteString(`<dt>` + esc(row.label) + `</dt><dd class="production-technical-id"><code>` + esc(row.value) + `</code><button type="button" class="btn-ghost production-copy-id" data-copy-value="` + esc(row.value) + `" data-copy-label="` + esc(copyLabel) + `" data-copied-label="` + esc(copiedLabel) + `" data-copy-failed-label="` + esc(failedLabel) + `" aria-label="` + esc(copyLabel) + `">` + esc(t(lang, "コピー", "Copy")) + `</button></dd>`)
+	}
+	return `<details id="technical-details" class="production-settings-section production-settings-disclosure advanced-details"` + open + `><summary>` + esc(t(lang, "技術情報", "Technical details")) + `</summary><dl class="detail-list production-technical-details">` + rows.String() + `</dl><script>(function(){var buttons=document.querySelectorAll('.production-copy-id');buttons.forEach(function(button){button.addEventListener('click',async function(){var value=button.getAttribute('data-copy-value')||'';var copied=false;try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(value);copied=true}else{var field=document.createElement('textarea');field.value=value;field.setAttribute('readonly','');field.style.position='fixed';field.style.opacity='0';document.body.appendChild(field);field.select();try{copied=document.execCommand('copy')}finally{field.remove()}}}catch(_){}var label=copied?button.getAttribute('data-copied-label'):button.getAttribute('data-copy-failed-label');button.textContent=label;button.setAttribute('aria-label',label)})})})();</script></details>`
 }
 
 var reviewerProductionTeamReader = func(db *gorm.DB, projectID string) ([]kitsu.Person, error) {

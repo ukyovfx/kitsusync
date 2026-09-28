@@ -320,6 +320,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: false });
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -494,6 +495,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (technicalIndent.summary < 12 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
         await page.locator('#technical-details summary').click();
         if (!(await page.locator('#technical-details[open]').count())) throw new Error(`Technical details did not expand in ${locale.lang}`);
+        const copyButtons = page.locator('#technical-details .production-copy-id');
+        if (await copyButtons.count() !== 3) throw new Error(`Technical identifiers need three copy controls in ${locale.lang}`);
+        const productionCopy = copyButtons.nth(0);
+        const copyLabel = locale.lang === 'ja' ? 'コピーしました' : 'Copied';
+        await productionCopy.click();
+        const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+        if (clipboardText !== 'reviewer-production' || (await productionCopy.innerText()) !== copyLabel) {
+          throw new Error(`Production ID copy action failed in ${locale.lang}: button=${await productionCopy.innerText()}`);
+        }
         await page.locator('#diagnostics summary').click();
         if (!(await page.locator('#diagnostics[open]').count()) || await page.locator('#diagnostics details[open]').count()) throw new Error(`Diagnostics did not expand in a compact collapsed-details state in ${locale.lang}`);
         await page.locator('#danger-zone summary').click();
