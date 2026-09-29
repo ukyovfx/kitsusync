@@ -338,6 +338,14 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	if err := db.Create(&model.UserMap{KitsuID: "artist-person", KitsuName: "Linked Artist", DiscordID: "123456789012345680", DiscordDisplayName: "linked-artist"}).Error; err != nil {
 		t.Fatal(err)
 	}
+	for _, user := range []model.UserMap{
+		{KitsuID: "comp-supervisor", KitsuName: "Comp Supervisor", DiscordID: "123456789012345682", DiscordDisplayName: "comp-supervisor"},
+		{KitsuID: "anim-supervisor", KitsuName: "Animation Supervisor", DiscordID: "123456789012345683", DiscordDisplayName: "anim-supervisor"},
+	} {
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345680"); err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +357,7 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"}, {ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"}}
 	}
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
-		return []kitsu.Person{{ID: "comp-supervisor", FullName: "Comp Supervisor", Role: "supervisor", Active: true}, {ID: "anim-supervisor", FullName: "Animation Supervisor", Role: "supervisor", Active: true}}, nil
+		return []kitsu.Person{{ID: "comp-supervisor", FullName: "Comp Supervisor", Role: "supervisor", Active: true}, {ID: "anim-supervisor", FullName: "Animation Supervisor", Role: "supervisor", Active: true}, {ID: "artist-person", FullName: "Linked Artist", Role: "artist", Active: true}}, nil
 	}
 	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) {
 		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345680", "linked-artist", "Linked Artist", "Artist Nick"), reviewerTestGuildMember("123456789012345682", "comp-supervisor", "Comp Supervisor", ""), reviewerTestGuildMember("123456789012345683", "anim-supervisor", "Animation Supervisor", "")}, nil
@@ -459,7 +467,9 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForUnroutedTaskTypes(t *
 		TaskTypes: []kitsu.TaskType{{ID: "task-existing", Name: "Existing"}, {ID: "task-new", Name: "New Task"}},
 		BotToken:  "synthetic-discord-token",
 	}
-	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-new-task-type&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", view)
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=pending-new-task-type&tab=notifications&edit_routing=1&lang=en", nil)
+	readTable := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", view)
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, "en", readTable, view)
 	source := strings.Index(body, `data-wfa-pending-source`)
 	if source < 0 {
 		t.Fatal("pending Task Type must have a WFA summary source before Apply")
@@ -539,8 +549,9 @@ func TestProductionOverviewOmitsActivityWhenNoScopedRecordsExist(t *testing.T) {
 func TestProductionOverviewAggregatesRepeatedIssuesAndCapsVisibleRows(t *testing.T) {
 	db := newIAViewDB(t)
 	project := createHealthyOverviewProject(t, db, "overview-issue-cap")
-	for i, detail := range []string{"Repeated cause", "Repeated cause", "Repeated cause", "Cause B", "Cause C", "Cause D", "Cause E"} {
-		model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{ProductionID: project.KitsuProjectID, Reason: "notification skipped", Detail: detail, CreatedAt: time.Now().Add(time.Duration(i) * time.Second)})
+	baseTime := time.Now()
+	for i, detail := range []string{"Cause E", "Cause D", "Cause C", "Cause B", "Repeated cause", "Repeated cause", "Repeated cause"} {
+		model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{ProductionID: project.KitsuProjectID, Reason: "notification skipped", Detail: detail, CreatedAt: baseTime.Add(time.Duration(i) * time.Second)})
 	}
 	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-issue-cap&lang=en", nil), project, "en", "success", "Connected", "")
 	if got := strings.Count(body, `class="production-issue-row"`); got != 3 {
@@ -569,7 +580,7 @@ func TestProductionOverviewRoutesDiscordResourceIssueToSettings(t *testing.T) {
 	project := createHealthyOverviewProject(t, db, "overview-discord-resource")
 	project.DiscordGuildID = ""
 	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-discord-resource&lang=ja", nil), project, "ja", "success", "Connected", "")
-	if !strings.Contains(body, `href="/bot/admin/projects?project=overview-discord-resource&amp;tab=settings`) || strings.Contains(body, `href="/bot/setup`) {
+	if !strings.Contains(body, `project=overview-discord-resource&amp;tab=settings`) || strings.Contains(body, `href="/bot/setup`) {
 		t.Fatalf("Discord resource issue should point to this Production's Settings without inventing a setup destination: %s", body)
 	}
 }

@@ -180,6 +180,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	}
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now()})
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: "other-production", ProjectName: project.Name, EntityName: "Must not leak", Success: true, CreatedAt: time.Now()})
+	model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{ProductionID: project.KitsuProjectID, Reason: "synthetic route check", Detail: "Synthetic route needs review", CreatedAt: time.Now()})
 	seedBrowserMonitoringCycles := func() {
 		cycleAt := time.Now().Truncate(time.Millisecond)
 		Stats.mu.Lock()
@@ -217,6 +218,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	appURL := "http://" + listener.Addr().String()
 	mux := http.NewServeMux()
 	mux.Handle("GET /favicon.ico", FaviconHandler())
+	mux.Handle("GET /kitsusync.svg", KitsuSyncIconHandler())
 	login := LoginRateLimit(http.HandlerFunc(LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
 		return KitsuLoginAuthority{RuntimeHost: kitsuFixture.URL, Source: "explicit"}
 	}, nil, nil)))

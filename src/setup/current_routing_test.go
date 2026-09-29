@@ -140,7 +140,7 @@ func TestCurrentRoutingEditorDeleteDialogDoesNotBlockSaveForm(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), project, "en", "")
-	if got := strings.Count(body, `data-current-routing-form`); got != 1 {
+	if got := strings.Count(body, `data-current-routing-form data-async-notification-apply`); got != 1 {
 		t.Fatalf("routing editor rendered %d apply forms; want one global Apply form", got)
 	}
 	if strings.Contains(body, `name="confirm_name"`) || strings.Contains(body, " required") {

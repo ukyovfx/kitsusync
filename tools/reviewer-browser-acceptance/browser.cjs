@@ -374,10 +374,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (locale === locales[0] && viewport === backgroundViewports[0]) {
           const iconHref = await page.locator('link[rel="icon"]').getAttribute('href');
           if (iconHref !== '/favicon.ico') throw new Error(`page icon link is unexpected: ${iconHref}`);
+          const iconLinks = await page.locator('link[rel="icon"]').evaluateAll(nodes => nodes.map(node => ({ href: node.getAttribute('href'), type: node.getAttribute('type') })));
+          if (!iconLinks.some(icon => icon.href === '/kitsusync.svg' && icon.type === 'image/svg+xml')) throw new Error('page does not reference the supplied KitsuSync SVG icon');
           const response = await page.request.get(`${base}${iconHref}`);
           const favicon = { status: response.status(), type: response.headers()['content-type'], bytes: (await response.body()).byteLength };
           if (favicon.status !== 200 || favicon.type !== 'image/x-icon' || favicon.bytes === 0) throw new Error(`favicon response is invalid: ${JSON.stringify(favicon)}`);
           records.push({ route: '/favicon.ico', locale: locale.lang, viewport: viewport.name, state: 'served', detail: `HTTP ${favicon.status}; ${favicon.type}; ${favicon.bytes} bytes` });
+          const svgIcon = await page.request.get(`${base}/kitsusync.svg`);
+          if (svgIcon.status() !== 200 || svgIcon.headers()['content-type'] !== 'image/svg+xml' || !(await svgIcon.text()).includes('fill: #fc8742')) throw new Error('supplied KitsuSync SVG icon did not serve correctly');
         }
         await assertBackgroundCanvas(page, 'login-fabric', locale, viewport, `login-background-${locale.lang}-${viewport.name}.png`);
         await assertLoginFabricGoldStandard(page, locale, viewport);
