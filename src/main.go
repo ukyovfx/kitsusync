@@ -978,6 +978,7 @@ func main() {
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
 	mux.Handle("GET /favicon.ico", setup.FaviconHandler())
+	mux.Handle("GET /kitsusync.svg", setup.KitsuSyncIconHandler())
 	mux.HandleFunc("/health", healthHandler(runtime, func(ctx context.Context) error {
 		sqlDB, err := db.DB()
 		if err != nil {
