@@ -416,6 +416,24 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('.production-identity').count() !== 1 || (await page.locator('.production-identity').innerText()).includes('Selected Production')) {
           throw new Error(`Production identity header is redundant or missing in ${locale.lang}`);
         }
+        const tabTreatment = await page.locator('.production-tabs [role="tab"].active').evaluate(node => {
+          const tab = getComputedStyle(node);
+          const underline = getComputedStyle(node, '::after');
+          const nav = getComputedStyle(node.closest('.production-tabs'));
+          return {
+            tabBackground: tab.backgroundColor,
+            tabRadius: tab.borderRadius,
+            tabShadow: tab.boxShadow,
+            underlineContent: underline.content,
+            underlineHeight: underline.height,
+            underlineBottom: underline.bottom,
+            navBorderStyle: nav.borderBottomStyle,
+          };
+        });
+        if (tabTreatment.tabBackground !== 'rgba(0, 0, 0, 0)' || tabTreatment.tabRadius !== '0px' || tabTreatment.tabShadow !== 'none' ||
+            tabTreatment.underlineContent !== '""' || tabTreatment.underlineHeight !== '2px' || tabTreatment.underlineBottom !== '-7px' || tabTreatment.navBorderStyle !== 'solid') {
+          throw new Error(`Production tabs are not plain labels on a shared hairline/underline in ${locale.lang}: ${JSON.stringify(tabTreatment)}`);
+        }
         if (await page.locator('.production-summary-card,.production-summary-grid').count()) throw new Error('Overview retained metric-card UI');
         const overview = await page.locator('#panel-overview').innerText();
         for (const expected of [locale.lang === 'ja' ? '状態' : 'Status', locale.lang === 'ja' ? '現在の問題' : 'Current issues', 'Storyboard']) {

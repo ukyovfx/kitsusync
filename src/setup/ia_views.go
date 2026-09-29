@@ -594,6 +594,27 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 	if p.ValidationOnly {
 		headerClass, headerLabel = "warning", label
 	}
+	header := renderProductionContext(p, lang, r, tab, headerClass, headerLabel)
+	// Storage feedback belongs to the selected-Production page, rather than the
+	// Storage panel, so it is announced before the Production context and tabs.
+	// The panel itself remains the single renderer for the Storage form.
+	feedback := ""
+	if tab == "settings" && r.URL.Query().Get("tab") == "storage-settings" && !p.ValidationOnly && !p.ReadOnlyPreview {
+		feedback = renderStorageSettingsFeedback(r, lang)
+	}
+	body := feedback + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, botTokens...) + `</section></div>`
+	if legacySection != "" {
+		fallback := ""
+		if requestedTab == "activity" {
+			fallback = "panel-overview"
+		}
+		body += `<script>(function(){var target=document.getElementById('` + esc(legacySection) + `')||document.getElementById('` + esc(fallback) + `');if(!target)return;target.scrollIntoView({block:'start'});var summary=target.querySelector('summary');if(summary)summary.focus({preventScroll:true});else target.focus({preventScroll:true});})();</script>`
+	}
+	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
+	fmt.Fprint(w, adminPage(lang, "", r, body))
+}
+
+func renderProductionContext(p model.Project, lang string, r *http.Request, tab, headerClass, headerLabel string) string {
 	tabs := []struct{ id, key, label string }{{"overview", "ia.overview", ""}, {"notifications", "ia.notifications", ""}, {"team", "", "Team"}, {"settings", "", "Settings"}}
 	var tabLinks strings.Builder
 	for _, item := range tabs {
@@ -615,24 +636,7 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 		}
 		tabLinks.WriteString(`<a id="tab-` + esc(item.id) + `" role="tab" aria-selected="` + selectedAttr + `" aria-controls="panel-` + esc(item.id) + `" class="section-link` + map[bool]string{true: " active", false: ""}[selected] + `" href="` + esc(link) + `" tabindex="` + map[bool]string{true: "0", false: "-1"}[selected] + `">` + esc(label) + `</a>`)
 	}
-	header := `<div class="production-context"><div class="production-identity"><div><div class="eyebrow">` + esc(t(lang, "プロダクション", "Production")) + `</div><h1>` + esc(p.Name) + `</h1></div><span class="status-pill ` + esc(headerClass) + `" role="status">` + esc(headerLabel) + `</span></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "プロダクションのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
-	// Storage feedback belongs to the selected-Production page, rather than the
-	// Storage panel, so it is announced before the Production context and tabs.
-	// The panel itself remains the single renderer for the Storage form.
-	feedback := ""
-	if tab == "settings" && r.URL.Query().Get("tab") == "storage-settings" && !p.ValidationOnly && !p.ReadOnlyPreview {
-		feedback = renderStorageSettingsFeedback(r, lang)
-	}
-	body := feedback + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, botTokens...) + `</section></div>`
-	if legacySection != "" {
-		fallback := ""
-		if requestedTab == "activity" {
-			fallback = "panel-overview"
-		}
-		body += `<script>(function(){var target=document.getElementById('` + esc(legacySection) + `')||document.getElementById('` + esc(fallback) + `');if(!target)return;target.scrollIntoView({block:'start'});var summary=target.querySelector('summary');if(summary)summary.focus({preventScroll:true});else target.focus({preventScroll:true});})();</script>`
-	}
-	body += `<script>(function(){var list=document.querySelector('[role="tablist"]');if(!list)return;var tabs=Array.prototype.slice.call(list.querySelectorAll('[role="tab"]'));list.addEventListener('keydown',function(e){var i=tabs.indexOf(document.activeElement);if(i<0)return;var n=i;if(e.key==='ArrowRight')n=(i+1)%tabs.length;if(e.key==='ArrowLeft')n=(i-1+tabs.length)%tabs.length;if(e.key==='Home')n=0;if(e.key==='End')n=tabs.length-1;if(n!==i){e.preventDefault();tabs[n].focus();tabs[n].click()}})})();</script>`
-	fmt.Fprint(w, adminPage(lang, "", r, body))
+	return `<div class="production-context"><div class="production-identity"><div><div class="eyebrow">` + esc(t(lang, "プロダクション", "Production")) + `</div><h1>` + esc(p.Name) + `</h1></div><span class="status-pill ` + esc(headerClass) + `" role="status">` + esc(headerLabel) + `</span></div><nav class="section-nav production-tabs" role="tablist" aria-label="` + esc(t(lang, "プロダクションのセクション", "Production sections")) + `">` + tabLinks.String() + `</nav>`
 }
 
 func renderStorageSettingsFeedback(r *http.Request, lang string) string {

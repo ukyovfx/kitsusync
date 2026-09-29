@@ -61,8 +61,8 @@ Each item is mapped to its owning task/check:
 - [x] Retain focused semantic guard assertions for four-tab order, legacy routes, real routing/WFA placement, read-only Team, Settings order, and scoped activity. Existing tests already prove the contract, so no redundant test was added.
 - [x] Run the focused baseline tests and confirm PASS before any UI changes: the Windows attempt was blocked by CGO-disabled SQLite; exact-head Linux/CGO CI #691 passed `go test ./src/...`, including these named tests.
   `go test ./src/setup -run 'TestProductionDetailUsesFourSectionsAndMapsLegacyTabs|TestProductionTabsHaveEquivalentJapaneseLabels|TestProductionNotificationsHasWFARecipientsAndNoPreview|TestProductionTeamUsesGuildDisplayNameAndFallsBackToUserLinking|TestProductionDiagnosticsAuditCountsAreProductionScoped' -count=1`
-- [ ] Run `git diff --check -- docs/CURRENT-IA-UI-ACCEPTANCE.md src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go tools/reviewer-browser-acceptance/browser.cjs`.
-- [ ] Commit this acceptance-contract boundary as `test: define Production detail baseline acceptance`.
+- [x] Run `git diff --check -- docs/CURRENT-IA-UI-ACCEPTANCE.md src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go tools/reviewer-browser-acceptance/browser.cjs`.
+- [x] Commit this acceptance-contract boundary as `test: define Production detail baseline acceptance` (`ad010b72`).
 
 ## Task 2: Production identity header + Kitsu hairline tabs
 

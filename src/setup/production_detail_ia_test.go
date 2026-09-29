@@ -315,3 +315,28 @@ func TestProductionTabsHaveEquivalentJapaneseLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestProductionHeaderAndKitsuTabs(t *testing.T) {
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=header-production&tab=overview&lang=en", nil)
+	project := model.Project{KitsuProjectID: "header-production", Name: "Header Production"}
+	body := adminPage("en", "", request, renderProductionContext(project, "en", request, "overview", "success", "Connected"))
+
+	for _, expected := range []string{`class="production-identity"`, `class="eyebrow">Production</div>`, `<h1>Header Production</h1>`, `role="status">Connected</span>`, `class="section-nav production-tabs"`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("Production identity header is missing %q", expected)
+		}
+	}
+	if got := strings.Count(body, `role="tab" aria-selected=`); got != 4 {
+		t.Fatalf("Production detail should render four primary tabs, got %d", got)
+	}
+	for _, label := range []string{"Overview", "Notifications", "Team", "Settings"} {
+		if !strings.Contains(body, ">"+label+"</a>") {
+			t.Errorf("Production tabs are missing %q", label)
+		}
+	}
+	for _, expected := range []string{`.production-context .production-tabs .section-link{`, `background:transparent`, `border-radius:0`, `.production-context .production-tabs .section-link.active::after{`, `bottom:-7px;height:2px;background:var(--accent-2)`} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("Kitsu tab treatment is missing %q", expected)
+		}
+	}
+}
