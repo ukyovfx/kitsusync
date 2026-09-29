@@ -306,6 +306,9 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 }
 
 func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.production-context #panel-notifications>.production-notifications{min-width:0}`) {
+		t.Fatal("Production Notifications grid item must shrink around its horizontally scrollable routing editor")
+	}
 	for _, rule := range []string{
 		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section`,
 		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section:first-of-type`,

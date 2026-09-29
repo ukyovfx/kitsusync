@@ -28,8 +28,14 @@ const backgroundViewports = [
 ];
 
 async function record(page, route, locale, viewport, state, detail) {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-  if (overflow) throw new Error(`${route} overflows at ${viewport}`);
+  const widths = await page.evaluate(() => ({
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+    viewport: document.documentElement.clientWidth,
+  }));
+  if (widths.document > widths.viewport || widths.body > widths.viewport) {
+    throw new Error(`${route} overflows at ${viewport}: document=${widths.document}, body=${widths.body}, viewport=${widths.viewport}`);
+  }
   const body = await page.locator('body').innerText();
   if (body.includes('\uFFFD') || body.includes('Ã') || body.includes('ï¿½')) throw new Error(`${route} contains mojibake at ${locale}`);
   records.push({ route, locale, viewport, state, detail });
@@ -481,8 +487,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('[data-current-routing-form] select[name="task_type_id"]').count() === 0 || await page.locator('[data-current-routing-form] select[name="destination_webhook_id"]').count() === 0) {
           throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
         }
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'routing edit mode', 'existing controls are visible; form was not submitted');
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'routing edit mode', 'existing controls are visible; no form submitted');
 
         await gotoProduction(page, locale, 'team');
         const teamTab = page.locator('#panel-team');
