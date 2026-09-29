@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Gemini prototype owns Production Detail structure and interaction order; `docs/CURRENT-IA-UI-SPEC.md` owns KitsuSync screen semantics.
+- Verified structure reference: `C:\AI-Workspace\artifacts\kitsusync-ui-reference\production-detail-final\kitsusync_production_detail_prototype.html` exists. Use that exact file for structure/interaction only; do not substitute another prototype or adopt its styling.
 - Existing KitsuSync visual styling, colors, typography, tokens, authenticated dot-grid, and controls remain authoritative.
 - Four tabs only: Overview, Notifications, Team, Settings; preserve all legacy route mappings.
 - Automatic WFA recipients remain Kitsu-derived, read-only, and never enter the writable Apply payload.
@@ -25,8 +26,9 @@
 
 - Long JP labels and narrow mobile width: verify no clipped actions/overflow in the owning UI/browser task.
 - Multiple pending route edits with WFA changes on several Task Types: verify all deltas survive row selection and one Apply.
-- Stale route/target revision or concurrent SQLite writer: verify HTTP 409/transaction conflict makes no partial write and preserves browser pending state.
-- Discord reorder request fails after DB commit, including uncertain remote completion: verify DB compensation and prior-order compensation attempt, with explicit recovery error if that attempt fails.
+- Stale route/target revision or concurrent SQLite writer: verify the asynchronous Apply receives HTTP 409/transaction conflict without full-page navigation, makes no partial write, and preserves pending browser edits.
+- Route removal with a reviewer delta for that same Task Type: client omits the delta; server rejects a crafted conflicting request; existing additional targets are removed atomically with the route.
+- Discord reorder request fails after DB commit, including uncertain remote completion: verify both DB snapshot restore and prior-order Discord compensation are attempted and independently report explicit recovery diagnostics if either fails; neither failure returns success.
 - Team link selection becomes stale or the same Person is already linked elsewhere: verify shared global validation rejects safely with no project-scoped mapping.
 - Empty/failed live Team and no mentionable Discord roles: verify distinct localized fail-closed states.
 
@@ -45,7 +47,7 @@
 
 - [ ] Add failing focused tests for four-tab labels, preserved legacy destinations, empty Current Issues omission, issue cap/aggregation/“other N” copy, correct same-window CTA routes, ordinary unlinked Artist exclusion, exact-Production activity newest-first/max-five/no-age-cutoff, and empty activity omission.
 - [ ] Run `go test ./src/setup -run 'TestProductionDetail|TestProductionOverview|TestLegacyActivity' -count=1` and confirm the new assertions fail for current behavior.
-- [ ] Make the minimal Overview renderer changes in `src/setup/ia_views.go`; retain current data sources and avoid adding reads or persistence.
+- [ ] Make the minimal Overview renderer changes in `src/setup/ia_views.go`; do not add persistence or unnecessary external reads. If identifying a real WFA-blocking missing link requires it, reuse the existing read-only Team/WFA resolver; an ordinary unlinked Artist is not an issue.
 - [ ] Run the focused command again and confirm PASS.
 - [ ] Update only the Production Detail clauses in the two Current IA docs to describe the accepted four-tab structure and Overview contract.
 - [ ] Run `git diff --check` for the touched scope.
@@ -79,9 +81,9 @@
 
 **Interfaces:** Define the browser Apply request from the spec: `project_id`, `expected_revision`, complete ordered `routes`, and per-Task-Type add/remove User/Role ID deltas. Expose exactly one Apply POST and one Cancel action.
 
-- [ ] Add failing renderer/contract tests for selectable rows, selected-row styling hook, linked WFA panel, compact User/Role add modal, pending route add/channel change/removal/Undo, disabled WFA editing for a pending-removed row, minimum-one-route behavior, and one global Apply/Cancel with no per-row persistence forms.
+- [ ] Add failing renderer/contract tests for selectable rows, selected-row styling hook, linked WFA panel, compact User/Role add modal, pending route add/channel change/removal/Undo, disabled WFA editing for a pending-removed row, minimum-one-route behavior, client omission of reviewer deltas for pending-removed routes, asynchronous Apply (no full-page form submit), HTTP 409 retaining pending state without reload/navigation, and one global Apply/Cancel with no per-row persistence forms.
 - [ ] Run `go test ./src/setup -run 'TestProductionNotifications|TestCurrentIARouting|TestReviewerManager' -count=1` and confirm the pending-state assertions fail.
-- [ ] Implement client-side pending state in the existing rendered page script; row changes update the selected WFA panel without discarding pending deltas. Cancel clears only browser state. Ensure automatic recipient markup is never serialized as editable data.
+- [ ] Implement client-side pending state in the existing rendered page script; row changes update the selected WFA panel without discarding pending deltas. Submit Apply with JavaScript `fetch` or equivalent so an HTTP 409 can show an inline stale-edit message while retaining pending state and without reload/navigation. Cancel clears only browser state. Ensure automatic recipient markup is never serialized as editable data and omit `reviewer_changes` for pending-removed Task Types.
 - [ ] Run the focused command and confirm PASS.
 - [ ] Run `git diff --check` for touched files.
 - [ ] Commit as `feat(ui): stage production notification edits`.
@@ -97,11 +99,11 @@
 
 **Interfaces:** Add typed Apply request/delta types and a deterministic revision helper over canonical ordered routes plus sorted additional targets. Handler validates current Kitsu/Discord identities; model transaction atomically replaces route state and applies target deltas/removals.
 
-- [ ] Add failing model/handler tests for route add/change/remove snapshot semantics; one-request User/Role delta application; route removal deleting only same-Task-Type additional targets; automatic recipients never writable; invalid Task Type/destination/User/Role rejection; stale revision 409 with no writes; transaction failure with no partial DB state; and one-route minimum.
+- [ ] Add failing model/handler tests for route add/change/remove snapshot semantics; one-request User/Role delta application; route removal deleting only same-Task-Type additional targets in the same transaction; reject the whole request when `reviewer_changes` targets a Task Type omitted from submitted `routes`; automatic recipients never writable; invalid Task Type/destination/User/Role rejection; stale revision 409 with no writes; transaction failure with no partial DB state; and one-route minimum.
 - [ ] Run `go test ./src/setup ./src/model -run 'Test.*(ProductionNotificationApply|NotificationRevision|RoutingSnapshot|ReviewerDelta)' -count=1` and confirm failures occur at the intended checks.
 - [ ] Implement validation and `expected_revision` comparison inside the transaction before writes; return conflict without mutation on stale state. Preserve current webhook ownership, Kitsu membership, Guild membership, mentionable-role, and fail-closed validation.
 - [ ] Implement DB snapshot/restore helpers so the config/routes/targets share one transaction; do not add schema or store automatic Supervisor data.
-- [ ] Add deterministic tests with Discord function seams for successful external order sync, sync failure followed by DB restore and prior-order compensation, and compensation failure producing explicit non-success recovery diagnostics.
+- [ ] Add deterministic tests with Discord function seams for successful external order sync; order failure followed by transactional DB snapshot restore and prior-order compensation; DB restore failure; and Discord prior-order compensation failure. Verify both compensation actions are attempted, each failure is identified in recovery diagnostics, and no failure path returns success.
 - [ ] Run the focused tests and confirm PASS.
 - [ ] Run `git diff --check`.
 - [ ] Commit as `feat(notifications): apply production routing and reviewer edits atomically`.
@@ -139,7 +141,7 @@
 - [ ] Run `go test ./src/setup -run 'TestProductionSettings|TestProductionDetailUsesFourSections' -count=1` and confirm failure for any missing final structure contract.
 - [ ] Make only necessary scoped markup/CSS changes; preserve current KitsuSync styles and ensure controls/disclosures remain usable at 390px.
 - [ ] Run focused Go tests and browser script syntax/fixture tests; confirm PASS.
-- [ ] Run repository Chromium/Playwright acceptance for JP and EN at desktop 1440×1000 and mobile 390×844: four hairline tabs; Overview issue/activity rules; Notifications read/edit selection and unsaved Apply/Cancel behavior; Team compact live data and link modal; Settings order/disclosures; no overflow, mojibake, or console/runtime errors; authenticated dot-grid unchanged.
+- [ ] Run repository Chromium/Playwright acceptance for JP and EN at desktop 1440×1000 and mobile 390×844: four hairline tabs; Overview issue/activity rules; Notifications read/edit selection, unsaved Apply/Cancel behavior, and a simulated stale Apply response that retains all pending edits without page navigation; Team compact live data and link modal; Settings order/disclosures; no overflow, mojibake, or console/runtime errors; authenticated dot-grid unchanged.
 - [ ] Repair only in-scope browser defects, rerun the owning focused check, and repeat browser acceptance until PASS.
 - [ ] Update the canonical IA spec and acceptance checklist to remove superseded Production Detail interactions while retaining semantic/API safety requirements.
 - [ ] Run `git diff --check`.
