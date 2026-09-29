@@ -178,6 +178,9 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 	if !strings.Contains(script, `form.parentElement.querySelector('[data-wfa-add-modal]')`) {
 		t.Fatal("Apply editor script must find the add-recipient dialog outside the Apply form")
 	}
+	if !strings.Contains(script, `var select=kind==='role'?modal.querySelector('[data-wfa-role-id]'):modal.querySelector('[data-wfa-user-id]')`) {
+		t.Fatal("pending recipient labels must be resolved from options in the sibling add-recipient dialog")
+	}
 }
 
 func TestLegacyRoutingSaveActionCannotBypassUnifiedApply(t *testing.T) {
