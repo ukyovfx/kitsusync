@@ -79,6 +79,8 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Exactly four primary sections appear: Overview, Notifications, Team, Settings (JP: 概要, 通知, チーム, 設定); there is no primary Reviewers tab.
 - [ ] Production identity is compact; no redundant “Selected Production” copy appears.
 - [ ] Overview contains compact operational status, real notification routing, current issues, and only real exact-Production recent audit activity; empty activity is omitted.
+- [ ] Overview omits Current Issues when clear (no success/empty issue row), aggregates identical causes, shows at most three issue rows plus `他 N 件` / `N other issues`, and uses same-window real links to Notifications, Team, or Settings according to the issue; an ordinary unlinked Artist is not an issue.
+- [ ] Recent Activity is exact-Production, newest-first, at most five rows with no arbitrary age cutoff; successful notification sends and routine task updates are excluded, while relevant configuration/operational changes and delivery failures remain.
 - [ ] Notifications routing read mode shows `Kitsu Task Type → Discord Channel` and one Edit action; explicit edit mode retains the existing add/remove, ordering, channel selection, Apply, and Cancel behavior.
 - [ ] Notifications contains the WFA recipients section, a Task Type selector, Automatic recipients, and Additional recipients in JP/EN. Existing User/Role add, remove, and reset operations remain available there.
 - [ ] No Notification Preview feature remains: no synthetic/example task or message, preview-only Task Type selector, preview markup, or preview copy.

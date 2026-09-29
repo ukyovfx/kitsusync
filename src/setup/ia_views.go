@@ -743,46 +743,78 @@ func renderCurrentProductionOverview(db *gorm.DB, r *http.Request, p model.Proje
 		statusSummaryRow(t(lang, "Discordリソース", "Discord resources"), discordClass, discordState, "", "") +
 		statusSummaryRow(t(lang, "通知ルーティング", "Notification routing"), statusClass, statusLabel, statusHint, "")
 	statusSection := `<section class="production-settings-section production-overview-status"><h2>` + esc(t(lang, "状態", "Status")) + `</h2><dl class="status-list production-status-list">` + statusRows + `</dl></section>`
-	diagnoses := model.ListNotificationRoutingDiagnoses(db, p.KitsuProjectID, 10)
-	issues := make([]string, 0, len(diagnoses)+2)
+	issues := make([]productionOverviewIssue, 0, 4)
+	issueIndex := map[string]int{}
+	addIssue := func(cause, tab string) {
+		cause = strings.TrimSpace(cause)
+		if cause == "" {
+			return
+		}
+		if index, ok := issueIndex[cause]; ok {
+			issues[index].count++
+			return
+		}
+		issueIndex[cause] = len(issues)
+		issues = append(issues, productionOverviewIssue{cause: cause, count: 1, tab: tab})
+	}
+	diagnoses := model.ListNotificationRoutingDiagnoses(db, p.KitsuProjectID, 100)
 	for _, diagnosis := range diagnoses {
 		detail := strings.TrimSpace(diagnosis.Detail)
 		if detail == "" {
 			detail = strings.TrimSpace(diagnosis.Reason)
 		}
-		if detail != "" {
-			issues = append(issues, detail)
-		}
+		addIssue(detail, "notifications")
 	}
 	if len(issues) == 0 && statusClass != "ok" && statusClass != "success" {
-		if strings.TrimSpace(statusHint) != "" {
-			issues = append(issues, strings.TrimSpace(statusHint))
-		} else if strings.TrimSpace(statusLabel) != "" {
-			issues = append(issues, strings.TrimSpace(statusLabel))
+		cause := strings.TrimSpace(statusHint)
+		if cause == "" {
+			cause = strings.TrimSpace(statusLabel)
 		}
+		addIssue(cause, "notifications")
 	}
 	discordMissing := !p.ValidationOnly && strings.TrimSpace(p.DiscordGuildID) == ""
 	if discordMissing {
-		issues = append(issues, t(lang, "Discordリソースが接続されていません。", "Discord resources are not connected."))
+		addIssue(t(lang, "Discordリソースが接続されていません。", "Discord resources are not connected."), "settings")
 	}
-	var issueContent strings.Builder
-	if len(issues) == 0 {
-		issueContent.WriteString(`<p class="production-issue-state" role="status"><span class="status-badge status-badge-success">` + esc(t(lang, "問題なし", "No current issues")) + `</span></p>`)
-	} else {
+	issuesSection := ""
+	if len(issues) > 0 {
+		var issueContent strings.Builder
+		visible := len(issues)
+		if visible > 3 {
+			visible = 3
+		}
 		issueContent.WriteString(`<ul class="production-issue-list">`)
-		for _, issue := range issues {
-			issueContent.WriteString(`<li>` + esc(issue) + `</li>`)
+		for _, issue := range issues[:visible] {
+			cause := issue.cause
+			if issue.count > 1 {
+				cause += t(lang, fmt.Sprintf("（%d件）", issue.count), fmt.Sprintf(" (%d occurrences)", issue.count))
+			}
+			issueContent.WriteString(`<li class="production-issue-row"><span>` + esc(cause) + `</span><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab="+url.QueryEscape(issue.tab), r)) + `">` + esc(overviewIssueActionLabel(lang, issue.tab)) + `</a></li>`)
+		}
+		if remaining := len(issues) - visible; remaining > 0 {
+			issueContent.WriteString(`<li class="production-issue-more">` + esc(t(lang, fmt.Sprintf("他 %d 件", remaining), fmt.Sprintf("%d other issues", remaining))) + `</li>`)
 		}
 		issueContent.WriteString(`</ul>`)
-		if discordMissing {
-			setupURL := withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID), r)
-			issueContent.WriteString(`<a class="btn-ghost" href="` + esc(setupURL) + `">` + esc(t(lang, "Discord接続を設定", "Configure Discord connection")) + `</a>`)
-		} else if len(diagnoses) > 0 || statusClass != "ok" && statusClass != "success" {
-			issueContent.WriteString(`<a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定を確認", "Review notification settings")) + `</a>`)
-		}
+		issuesSection = `<section class="production-settings-section production-current-issues"><h2>` + esc(t(lang, "現在の問題", "Current issues")) + `</h2>` + issueContent.String() + `</section>`
 	}
-	issuesSection := `<section class="production-settings-section production-current-issues"><h2>` + esc(t(lang, "現在の問題", "Current issues")) + `</h2>` + issueContent.String() + `</section>`
 	return `<div class="section-stack production-overview">` + statusSection + issuesSection + renderSelectedProductionActivity(db, p, lang, r) + `</div>`
+}
+
+type productionOverviewIssue struct {
+	cause string
+	count int
+	tab   string
+}
+
+func overviewIssueActionLabel(lang, tab string) string {
+	switch tab {
+	case "team":
+		return t(lang, "チームを確認", "Review Team")
+	case "settings":
+		return t(lang, "設定を確認", "Review Settings")
+	default:
+		return t(lang, "通知を確認", "Review Notifications")
+	}
 }
 
 func renderCurrentProductionSettings(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
@@ -1404,7 +1436,7 @@ func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string,
 	var rows strings.Builder
 	var logs []model.AuditLog
 	if db != nil && strings.TrimSpace(p.KitsuProjectID) != "" {
-		db.Where("project_id = ?", strings.TrimSpace(p.KitsuProjectID)).Order("created_at desc").Limit(5).Find(&logs)
+		db.Where("project_id = ?", strings.TrimSpace(p.KitsuProjectID)).Where("(task_id = '' OR task_id IS NULL OR success = ?)", false).Order("created_at desc").Limit(5).Find(&logs)
 	}
 	if len(logs) == 0 {
 		return ""

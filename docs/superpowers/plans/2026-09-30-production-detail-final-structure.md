@@ -45,7 +45,7 @@
 
 **Interfaces:** Preserve `renderIASelectedProduction`, `selectedProductionTab`, and `legacyProductionSection`; lock test expectations before changing renderers.
 
-- [ ] Add failing focused tests for four-tab labels, preserved legacy destinations, empty Current Issues omission, issue cap/aggregation/“other N” copy, correct same-window CTA routes, ordinary unlinked Artist exclusion, exact-Production activity newest-first/max-five/no-age-cutoff, and empty activity omission.
+- [ ] Add failing focused tests for four-tab labels, preserved legacy destinations, empty Current Issues omission, issue cap/aggregation/“other N” copy in JP/EN, correct same-window CTA routes, ordinary unlinked Artist exclusion, exact-Production activity newest-first/max-five/no-age-cutoff, exclusion of successful notification sends/routine Task events, delivery-failure inclusion, and empty activity omission.
 - [ ] Run `go test ./src/setup -run 'TestProductionDetail|TestProductionOverview|TestLegacyActivity' -count=1` and confirm the new assertions fail for current behavior.
 - [ ] Make the minimal Overview renderer changes in `src/setup/ia_views.go`; do not add persistence or unnecessary external reads. If identifying a real WFA-blocking missing link requires it, reuse the existing read-only Team/WFA resolver; an ordinary unlinked Artist is not an issue.
 - [ ] Run the focused command again and confirm PASS.

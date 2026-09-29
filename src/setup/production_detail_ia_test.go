@@ -2,6 +2,7 @@ package setup
 
 import (
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -333,17 +334,112 @@ func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
 
 func TestProductionOverviewOmitsActivityWhenNoScopedRecordsExist(t *testing.T) {
 	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "overview-empty-production", Name: "Overview Empty"}
-	db.Create(&project)
+	project := createHealthyOverviewProject(t, db, "overview-empty-production")
 	w := httptest.NewRecorder()
 	renderIASelectedProduction(w, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-empty-production&lang=en", nil), db, project, "")
 	body := w.Body.String()
 	if strings.Contains(body, `id="recent-activity"`) || strings.Contains(body, "participants") || strings.Contains(body, "参加者") {
 		t.Fatal("Overview fabricated an empty activity area or participant metric")
 	}
-	if strings.Count(body, "Current issues") != 1 || strings.Contains(body, "Current issues (0)") {
-		t.Fatal("Overview duplicated the empty issue state or invented a count")
+	if strings.Contains(body, `class="production-current-issues"`) || strings.Contains(body, "No current issues") {
+		t.Fatal("healthy Overview should omit Current Issues instead of rendering an empty success state")
 	}
+}
+
+func TestProductionOverviewAggregatesRepeatedIssuesAndCapsVisibleRows(t *testing.T) {
+	db := newIAViewDB(t)
+	project := createHealthyOverviewProject(t, db, "overview-issue-cap")
+	for i, detail := range []string{"Repeated cause", "Repeated cause", "Repeated cause", "Cause B", "Cause C", "Cause D", "Cause E"} {
+		model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{ProductionID: project.KitsuProjectID, Reason: "notification skipped", Detail: detail, CreatedAt: time.Now().Add(time.Duration(i) * time.Second)})
+	}
+	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-issue-cap&lang=en", nil), project, "en", "success", "Connected", "")
+	if got := strings.Count(body, `class="production-issue-row"`); got != 3 {
+		t.Fatalf("Current Issues should render at most three aggregated rows, got %d: %s", got, body)
+	}
+	if !strings.Contains(body, "Repeated cause") || !strings.Contains(body, "3 occurrences") {
+		t.Fatalf("repeated issue cause was not aggregated: %s", body)
+	}
+	if !strings.Contains(body, "2 other issues") || strings.Contains(body, "Cause D") || strings.Contains(body, "Cause E") {
+		t.Fatalf("Current Issues did not summarize overflow with localized other-count copy: %s", body)
+	}
+	if !strings.Contains(body, `href="/bot/admin/projects?project=overview-issue-cap&amp;tab=notifications`) {
+		t.Fatalf("routing issue CTA should stay in-window and point to Notifications: %s", body)
+	}
+	if strings.Contains(body, `target="_blank"`) {
+		t.Fatal("Overview issue actions must stay in the current window")
+	}
+	ja := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-issue-cap&lang=ja", nil), project, "ja", "success", "Connected", "")
+	if !strings.Contains(ja, "他 2 件") {
+		t.Fatalf("Japanese overflow summary is missing equivalent copy: %s", ja)
+	}
+}
+
+func TestProductionOverviewRoutesDiscordResourceIssueToSettings(t *testing.T) {
+	db := newIAViewDB(t)
+	project := createHealthyOverviewProject(t, db, "overview-discord-resource")
+	project.DiscordGuildID = ""
+	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-discord-resource&lang=ja", nil), project, "ja", "success", "Connected", "")
+	if !strings.Contains(body, `href="/bot/admin/projects?project=overview-discord-resource&amp;tab=settings`) || strings.Contains(body, `href="/bot/setup`) {
+		t.Fatalf("Discord resource issue should point to this Production's Settings without inventing a setup destination: %s", body)
+	}
+}
+
+func TestProductionOverviewDoesNotClassifyUnlinkedArtistAsIssue(t *testing.T) {
+	db := newIAViewDB(t)
+	project := createHealthyOverviewProject(t, db, "overview-unlinked-artist")
+	oldTeam, oldTaskTypes := reviewerProductionTeamReader, reviewerTaskTypesForProduction
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "ordinary-artist", FullName: "Ordinary Artist", Role: "artist"}}, nil
+	}
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType { return nil }
+	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldTeam, oldTaskTypes })
+	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-unlinked-artist&lang=en", nil), project, "en", "success", "Connected", "")
+	if strings.Contains(body, "Ordinary Artist") || strings.Contains(body, "User Linking") || strings.Contains(body, "ユーザー紐づけ") || strings.Contains(body, `class="production-current-issues"`) {
+		t.Fatalf("ordinary unlinked Artist became an Overview issue: %s", body)
+	}
+}
+
+func TestProductionOverviewShowsOnlyFiveNewestExactProductionActivities(t *testing.T) {
+	db := newIAViewDB(t)
+	project := createHealthyOverviewProject(t, db, "overview-five-activity")
+	for i := 0; i < 7; i++ {
+		model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: fmt.Sprintf("Activity %d", i), Success: true, CreatedAt: time.Now().Add(-time.Duration(i) * 24 * time.Hour)})
+	}
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: "another-production", ProjectName: project.Name, EntityName: "Other Production Activity", Success: true, CreatedAt: time.Now()})
+	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-five-activity&lang=en", nil), project, "en", "success", "Connected", "")
+	if got := strings.Count(body, `class="activity-row"`); got != 5 {
+		t.Fatalf("Recent Activity rows = %d, want 5", got)
+	}
+	if strings.Index(body, "Activity 0") > strings.Index(body, "Activity 4") || strings.Contains(body, "Activity 5") || strings.Contains(body, "Activity 6") || strings.Contains(body, "Other Production Activity") {
+		t.Fatalf("Recent Activity order/scope/limit is incorrect: %s", body)
+	}
+}
+
+func TestProductionOverviewExcludesSuccessfulNotificationAndShowsFailure(t *testing.T) {
+	db := newIAViewDB(t)
+	project := createHealthyOverviewProject(t, db, "overview-activity-filter")
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, TaskID: "successful-task", EntityName: "Successful notification task", DiscordMsgID: "message-id", Success: true, CreatedAt: time.Now()})
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, TaskID: "failed-task", EntityName: "Failed notification task", ErrorMessage: "delivery unavailable", Success: false, CreatedAt: time.Now().Add(-time.Second)})
+	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-activity-filter&lang=en", nil), project, "en", "success", "Connected", "")
+	if strings.Contains(body, "Successful notification task") || strings.Count(body, `class="activity-row"`) != 1 || !strings.Contains(body, "Failed notification task") {
+		t.Fatalf("Recent Activity should omit successful notification records and keep real failures: %s", body)
+	}
+}
+
+func createHealthyOverviewProject(t *testing.T, db *gorm.DB, id string) model.Project {
+	t.Helper()
+	project := model.Project{KitsuProjectID: id, Name: "Healthy Overview", DiscordGuildID: "synthetic-guild"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, id, "channel", "concept", "synthetic-webhook-secret", "synthetic-channel"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, id)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: id, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: id, TaskTypeID: "concept", TaskTypeName: "Concept", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	return project
 }
 
 func TestProductionOverviewDoesNotCallUnconfiguredRoutingHealthy(t *testing.T) {
