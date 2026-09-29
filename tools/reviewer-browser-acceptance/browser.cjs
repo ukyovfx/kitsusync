@@ -77,18 +77,19 @@ async function gotoProduction(page, locale, tab, extra = '') {
   await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${tab}&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
-function automaticGroup(page, locale) {
-  const heading = page.getByRole('heading', { name: locale.automatic, exact: true });
-  return page.locator('.reviewer-group').filter({ has: heading });
+async function automaticGroup(page, locale) {
+	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-automatic]');
+	return page.locator('.production-wfa-summary > div').first();
 }
 
-function overridesGroup(page, locale) {
-  const heading = page.getByRole('heading', { name: locale.overrides, exact: true });
-  return page.locator('.reviewer-group').filter({ has: heading });
+async function overridesGroup(page, locale) {
+	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-additional]');
+	return page.locator('.production-wfa-summary > div').nth(1);
 }
 
 async function assertAutomatic(page, locale, expected, forbidden = []) {
-  const text = await automaticGroup(page, locale).innerText();
+	const group = await automaticGroup(page, locale);
+	const text = await group.innerText();
   for (const value of expected) if (!text.includes(value)) throw new Error(`Automatic is missing ${value}`);
   for (const value of forbidden) if (text.includes(value)) throw new Error(`Automatic includes ineligible person ${value}`);
 }
@@ -480,28 +481,29 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, one current-issues section, exact-Production recent activity');
 
         await gotoProduction(page, locale, 'notifications');
-        const routingHeadings = (await page.locator('.production-routing-summary-head strong').allTextContents()).map(text => text.trim());
-        if (!routingHeadings.includes('Kitsu Task Type') || !routingHeadings.includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) {
+        const routingHeadings = (await page.locator('.production-notification-table thead th').allTextContents()).map(text => text.trim());
+        if (JSON.stringify(routingHeadings) !== JSON.stringify(['Kitsu Task Type', locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel', locale.lang === 'ja' ? 'WFA通知先' : 'WFA recipients'])) {
           throw new Error(`Notifications routing columns are missing or concatenated in ${locale.lang}: ${JSON.stringify(routingHeadings)}`);
         }
-        if (!(await page.locator('.production-routing-summary-row').innerText()).includes('#compositing')) throw new Error(`real seeded destination is missing in ${locale.lang}`);
+        const compReadRow = page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]');
+        if (!(await compReadRow.innerText()).includes('#compositing')) throw new Error(`real seeded destination is missing in ${locale.lang}`);
         if (await page.locator('[data-current-routing-form]').count()) throw new Error('Notifications read mode exposed routing edit controls');
         const editLink = page.getByRole('link', { name: locale.lang === 'ja' ? '編集' : 'Edit', exact: true });
         if (await editLink.count() !== 1) throw new Error(`Notifications should show one edit entry point in ${locale.lang}`);
         if (await page.locator('#notification-preview,.discord-message-preview,[data-notification-preview-select]').count()) throw new Error(`Removed Notification Preview returned in ${locale.lang}`);
-        if (await page.locator('.production-wfa-recipients').count() !== 1) throw new Error(`WFA recipients are missing from Notifications in ${locale.lang}`);
-        if (!(await page.locator('#wfa-recipients').innerText()).includes(locale.automatic) || !(await page.locator('#wfa-recipients').innerText()).includes(locale.overrides)) {
+        if (await page.locator('.production-wfa-recipients').count()) throw new Error(`Notifications view retained the former standalone Reviewer section in ${locale.lang}`);
+        if (!(await compReadRow.innerText()).includes(locale.automatic) || !(await compReadRow.innerText()).includes(locale.overrides)) {
           throw new Error(`Notifications is missing Automatic or Additional recipients in ${locale.lang}`);
         }
         const notificationSections = await page.locator('.production-notifications > .production-settings-section').evaluateAll(sections => sections.map(section => {
           const style = getComputedStyle(section);
           return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
         }));
-        if (notificationSections.length !== 2 || notificationSections[0].borderTopStyle !== 'none' || notificationSections[1].borderTopStyle !== 'solid' || notificationSections.some(section => section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
-          throw new Error(`Routing and WFA are not distinct flat sections in ${locale.lang}: ${JSON.stringify(notificationSections)}`);
+        if (notificationSections.length !== 1 || notificationSections[0].borderTopStyle !== 'none' || notificationSections[0].radius !== '0px' || notificationSections[0].background !== 'rgba(0, 0, 0, 0)' || notificationSections[0].shadow !== 'none') {
+          throw new Error(`Notifications table is not a compact flat section in ${locale.lang}: ${JSON.stringify(notificationSections)}`);
         }
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'real routing state and existing Automatic/additional-recipient controls; no synthetic Notification Preview');
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Discord Channel → Automatic/Additional summary table; no synthetic Notification Preview');
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
         if (await page.locator('[data-current-routing-form]').count() !== 1 || !(await page.locator('[data-current-routing-form]').innerText()).includes(locale.lang === 'ja' ? '変更を適用' : 'Apply changes')) {
@@ -510,8 +512,82 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('[data-current-routing-form] select[name="task_type_id"]').count() === 0 || await page.locator('[data-current-routing-form] select[name="destination_webhook_id"]').count() === 0) {
           throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
         }
-        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'routing edit mode', 'existing controls are visible; form was not submitted');
+        const editForm = page.locator('[data-current-routing-form]');
+        const automaticPanel = editForm.locator('[data-wfa-automatic]');
+        if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
+        await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
+        if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes('Animation Supervisor')) {
+          throw new Error(`selecting a route did not select its matching Automatic WFA summary in ${locale.lang}`);
+        }
+        await editForm.locator('[data-select-task]').filter({ hasText: 'Compositing' }).click();
+        await assertAutomatic(page, locale, ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor']);
+
+        await editForm.locator('[data-wfa-add-target]').click();
+        const addModal = page.locator('[data-wfa-add-modal]');
+        const candidateUsers = addModal.locator('[data-wfa-user-id]');
+        for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
+          if (await candidateUsers.locator(`option[value="${blocked}"]`).count()) throw new Error(`ineligible User Override ${blocked} is selectable`);
+        }
+        if (!(await candidateUsers.locator('option[value="22222222222222234"]').count())) throw new Error('linked Team Guild member is unavailable as an override');
+        const candidateRoles = addModal.locator('[data-wfa-role-id]');
+        if (!(await candidateRoles.locator('option[value="33333333333333331"]').count())) throw new Error('mentionable Guild Role is not selectable');
+        for (const blocked of [guildID, '33333333333333332']) {
+          if (await candidateRoles.locator(`option[value="${blocked}"]`).count()) throw new Error(`@everyone/non-mentionable Role ${blocked} is selectable`);
+        }
+        await addModal.locator('[data-wfa-user-id]').selectOption('22222222222222225');
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('[data-wfa-role-id]').selectOption('33333333333333331');
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        const additionalPanel = editForm.locator('[data-wfa-additional]');
+        const additionalText = await additionalPanel.innerText();
+        if (!additionalText.includes('Guild Nick Override') || !additionalText.includes('Artist Global') || !additionalText.includes('@Reviewers')) throw new Error(`Additional User/Role overrides were not presented together in ${locale.lang}`);
+        if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 3) throw new Error('User and Role pending removals were not available');
+
+        await editForm.locator('[data-routing-add]').click();
+        const newTypeSelect = editForm.locator('[data-routing-new-row] select[name="task_type_id"]');
+        await newTypeSelect.selectOption('task-unassigned');
+        const pendingRow = editForm.locator('[data-routing-row][data-task-type="task-unassigned"]');
+        if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? '該当するSupervisorはいません' : 'No matching Supervisor')) {
+          throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
+        }
+        await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('[data-wfa-user-id]').selectOption('22222222222222234');
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        await pendingRow.locator('.routing-row-menu summary').click();
+        await pendingRow.locator('[data-routing-remove]').click();
+        if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
+
+        let submittedApply = null;
+        await page.route('**/bot/admin/projects?apply_notifications=1', async route => {
+          submittedApply = route.request().postDataJSON();
+          await route.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"stale_edit"}' });
+        });
+        const urlBeforeApply = page.url();
+        await editForm.locator('[data-apply-submit]').click();
+        if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-unassigned')) {
+          throw new Error('Apply sent a reviewer delta for a route pending removal');
+        }
+        if (page.url() !== urlBeforeApply || !(await editForm.locator('[data-apply-message]').innerText()).includes(locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved')) {
+          throw new Error(`HTTP 409 navigated away or failed to preserve the pending editor in ${locale.lang}`);
+        }
+        await pendingRow.locator('[data-routing-undo]').click();
+        await pendingRow.locator('[data-select-task]').click();
+        if (!(await additionalPanel.innerText()).includes('Guild Nick Override')) throw new Error('HTTP 409 discarded the pending Additional User delta');
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.unroute('**/bot/admin/projects?apply_notifications=1');
+        await editForm.locator('[data-pending-cancel]').click();
+        if (await page.locator('.production-notification-table tbody tr[data-task-type-id="task-unassigned"]').count()) throw new Error('Cancel persisted the pending route addition');
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'pending routing/WFA edit and stale Apply', 'select/add/remove/undo and additional User/Role edits stayed local; 409 retained pending state; Cancel discarded it');
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const refreshForm = page.locator('[data-current-routing-form]');
+        await refreshForm.locator('[data-routing-add]').click();
+        await refreshForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
+        await page.reload({ waitUntil: 'networkidle' });
+        if (page.url().includes('edit_routing=1') && await page.locator('[data-current-routing-form] [data-routing-row][data-task-type="task-unassigned"]').count()) {
+          throw new Error('Refresh persisted a browser-only pending route addition');
+        }
 
         await gotoProduction(page, locale, 'team');
         const teamTab = page.locator('#panel-team');
@@ -530,6 +606,18 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }));
         if (!teamRows.length || teamRows[0].display !== 'grid' || teamRows[0].borderTopStyle !== 'none' || teamRows.slice(1).some(row => row.borderTopStyle !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
           throw new Error(`Production Team is not a compact divider list in ${locale.lang}: ${JSON.stringify(teamRows)}`);
+        }
+        const teamLinkButton = page.locator('[data-open-team-link]').first();
+        if (!(await teamLinkButton.count())) throw new Error(`Team has no verified in-place global User Linking action in ${locale.lang}`);
+        const teamLinkModal = page.locator('[data-team-link-modal]');
+        const teamUrlBeforeLink = page.url();
+        await teamLinkButton.click();
+        if (!(await teamLinkModal.isVisible()) || !(await teamLinkModal.locator('select[name="discord_user_id"] option:not([value=""])').count())) {
+          throw new Error(`Team global User Linking modal did not open with verified Guild choices in ${locale.lang}`);
+        }
+        await teamLinkModal.locator('[data-team-link-cancel]').click();
+        if (await teamLinkModal.isVisible() || page.url() !== teamUrlBeforeLink) {
+          throw new Error(`Cancel did not close the Team User Linking modal without navigation in ${locale.lang}`);
         }
         await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'live Production Team', 'Kitsu Team, effective role, derived Supervisor scope, and global User Linking state; no local membership editor');
@@ -618,7 +706,6 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
 
     await gotoWFARecipients(page, locales[0]);
-    if (!(await page.locator('.production-wfa-recipients').count())) throw new Error('WFA recipients did not render in Notifications');
     if (await page.locator('#tab-reviewers').count() || await page.locator('.production-tabs [role="tab"]').filter({ hasText: /^Reviewers$/ }).count()) throw new Error('Reviewers remains a primary Production tab');
     await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor'], [
       'Departmentless Supervisor', 'Wrong Department Supervisor', 'Production Manager', 'Global Admin',
@@ -634,85 +721,34 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     for (const stale of ['Automatic inactive while overridden', 'Add Production member', 'Remove Production member', 'Reviewer / Checker task types', 'Production Manager fallback', 'global CheckerMap']) {
       if (teamText.includes(stale)) throw new Error(`stale/manual Reviewer copy remains: ${stale}`);
     }
-    await gotoWFARecipients(page, locales[0]);
-    const userForms = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="user"]') });
-    const userSelect = userForms.locator('select[name="target_id"]');
-    for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
-      if (await userSelect.locator(`option[value="${blocked}"]`).count()) throw new Error(`ineligible user ${blocked} is selectable`);
-    }
-    if (!(await userSelect.locator('option[value="22222222222222234"]').count())) throw new Error('linked Team Guild member is unavailable as an override');
-    const roleForms = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="role"]') });
-    const roleSelect = roleForms.locator('select[name="target_id"]');
-    if (!(await roleSelect.locator('option[value="33333333333333331"]').count())) throw new Error('mentionable Guild Role is not selectable');
-    for (const blocked of [guildID, '33333333333333332']) {
-      if (await roleSelect.locator(`option[value="${blocked}"]`).count()) throw new Error(`@everyone/non-mentionable Role ${blocked} is selectable`);
-    }
-    await page.screenshot({ path: path.join(output, 'wfa-recipients-en-desktop-automatic.png'), fullPage: true });
-    await record(page, '/bot/admin/projects?tab=notifications', 'en', 'desktop', 'automatic and candidate filtering', 'matching project_role Supervisor shown by guild nickname; ineligible roles and members excluded');
 
-    // The live Task Type Department, not assignment or Position, selects the automatic Supervisor.
-    await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-animation');
-    await page.locator('form.reviewer-task-type-select').getByRole('button', { name: 'View', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['Wrong Department Supervisor', 'Animation Supervisor'], ['Project Supervisor']);
-    await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-unassigned');
-    await page.locator('form.reviewer-task-type-select').getByRole('button', { name: 'View', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['No matching Supervisor']);
-    records.push({ route: '/bot/admin/projects?tab=notifications', locale: 'en', viewport: 'desktop', state: 'Task Type Department changes', detail: 'Animation and Department-less Task Types produce the expected fail-closed Automatic list' });
-
-    // Additive controls are real same-origin POST forms protected by normal session/CSRF middleware.
-    await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-comp');
-    await page.locator('form.reviewer-task-type-select').getByRole('button', { name: 'View', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    const userForm = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="user"]') });
-    await userForm.locator('select[name="target_id"]').selectOption('22222222222222234');
-    await userForm.getByRole('button', { name: 'Add user', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor']);
-    const roleForm = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="role"]') });
-    await roleForm.locator('select[name="target_id"]').selectOption('33333333333333331');
-    await roleForm.getByRole('button', { name: 'Add role', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    const overrideText = await overridesGroup(page, locales[0]).innerText();
-    for (const value of ['Guild Nick Override', '@Reviewers']) if (!overrideText.includes(value)) throw new Error(`additive override missing ${value}`);
-    const names = await overridesGroup(page, locales[0]).locator('.reviewer-target-row').allInnerTexts();
-    if (names.length !== 2) throw new Error(`expected two explicit targets, got ${names.length}`);
-    await page.screenshot({ path: path.join(output, 'reviewer-en-desktop-additive.png'), fullPage: true });
-    await record(page, '/bot/admin/projects?tab=notifications', 'en', 'desktop', 'Automatic plus User and Role Overrides', 'both override kinds appear as additional targets while Automatic remains visible');
-
-    // Removing one explicit target does not change the automatic reviewer or the other override.
-    await overridesGroup(page, locales[0]).locator('.reviewer-target-row').filter({ hasText: 'Guild Nick Override' }).getByRole('button', { name: 'Remove', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor']);
-    const afterRemove = await overridesGroup(page, locales[0]).innerText();
-    if (afterRemove.includes('Guild Nick Override') || !afterRemove.includes('@Reviewers')) throw new Error('override removal changed the wrong target');
-
-    // Empty/error states use isolated fixtures and remain visibly distinct.
     const states = [
-      { name: 'empty-team', expected: 'The Kitsu Production Team is empty' },
-      { name: 'team-failure', expected: 'Production Team unavailable' },
-      { name: 'no-matching', expected: 'No matching Supervisor' },
-      { name: 'no-linked', expected: 'No matching Supervisor' },
-      { name: 'no-roles', expected: 'No mentionable Discord roles are available' },
-      { name: 'discord-failure', expected: 'Discord' },
-      { name: 'stale-membership', expected: 'No matching Supervisor' },
+      { name: 'empty-team', expected: 'The Kitsu Production Team is empty', team: true },
+      { name: 'team-failure', expected: 'Could not load the Kitsu Production Team', team: true },
+      { name: 'no-matching', expected: 'No matching Supervisor.' },
+      { name: 'no-linked', expected: 'No matching Supervisor.' },
+      { name: 'discord-failure', expected: 'Discord membership could not be verified.' },
+      { name: 'stale-membership', expected: 'No matching Supervisor.' },
     ];
     for (const state of states) {
       await fixture(page, state.name);
-      const isTeamState = state.name === 'empty-team' || state.name === 'team-failure';
-      if (isTeamState) await gotoProduction(page, locales[0], 'team');
-      else await gotoWFARecipients(page, locales[0]);
-      const body = await page.locator('main').innerText();
-      const expected = state.name === 'team-failure' ? 'Could not load the Kitsu Production Team' : state.expected;
-      if (!body.includes(expected)) throw new Error(`${state.name} state is unclear; missing ${expected}`);
-      if (state.name === 'team-failure' && await page.locator('form.reviewer-target-form input[name="target_kind"][value="user"]').count()) throw new Error('Team read failure left User Reviewer writes enabled');
-      if (state.name === 'no-linked' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('unlinked Supervisor appeared as a User Override candidate');
-      if (state.name === 'discord-failure' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('Guild lookup failure left a User Override candidate selectable');
-      if (state.name === 'stale-membership' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('stale Team membership remained selectable after live Team changed');
-      if (state.name === 'no-roles' && await page.locator('form.reviewer-target-form input[name="target_kind"][value="role"]').count()) throw new Error('no-roles state left a Role Override form enabled');
-      await record(page, isTeamState ? '/bot/admin/projects?tab=team' : '/bot/admin/projects?tab=notifications', 'en', 'desktop', state.name, `visible fail-closed state: ${expected}`);
+      if (state.team) {
+        await gotoProduction(page, locales[0], 'team');
+        if (!(await page.locator('main').innerText()).includes(state.expected)) throw new Error(`${state.name} Team state is unclear`);
+      } else {
+        await gotoWFARecipients(page, locales[0]);
+        const text = await page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]').innerText();
+        if (!text.includes(state.expected)) throw new Error(`${state.name} Automatic state is unclear: ${text}`);
+      }
+      await record(page, state.team ? '/bot/admin/projects?tab=team' : '/bot/admin/projects?tab=notifications', 'en', 'desktop', state.name, `visible fail-closed state: ${state.expected}`);
     }
+    await fixture(page, 'no-roles');
+    await gotoWFARecipients(page, locales[0], '&edit_routing=1');
+    await page.locator('[data-wfa-add-target]').click();
+    const emptyRoleModal = page.locator('[data-wfa-add-modal]');
+    if (!(await emptyRoleModal.innerText()).includes('No mentionable Discord roles are available')) throw new Error('No-role empty state is not explained in the Add recipient dialog');
+    if (await emptyRoleModal.locator('[data-wfa-role-id] option[value="33333333333333331"]').count()) throw new Error('no-roles scenario left a Role target available');
+    await emptyRoleModal.locator('[data-wfa-add-cancel]').click();
     await fixture(page, 'ready');
 
     // JP/EN and desktop/mobile acceptance for Production Users, User Linking, and System Status.
@@ -736,7 +772,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
 
         await gotoWFARecipients(page, locale);
-        if (!(await page.locator('.production-wfa-recipients').count())) throw new Error(`WFA recipients missing in Notifications for ${locale.lang}`);
+        if (!(await page.locator('.production-notification-table').count())) throw new Error(`Notifications table missing in ${locale.lang}`);
         await assertAutomatic(page, locale, [locale.supervisor, locale.comp, 'Global Name Supervisor', 'Username Supervisor']);
         if (await page.locator('#tab-reviewers').count()) throw new Error(`Reviewers is still a primary tab in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `wfa-recipients-${locale.lang}-${viewport.name}.png`), fullPage: true });

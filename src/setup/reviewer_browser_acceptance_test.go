@@ -165,8 +165,17 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.synthetic.invalid/webhook", "channel-comp"); err != nil {
 		t.Fatal("seed synthetic routing destination")
 	}
-	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "animation", "animation", "https://discord.synthetic.invalid/webhook", "channel-animation"); err != nil {
+		t.Fatal("seed second synthetic routing destination")
+	}
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	if len(webhooks) != 2 {
+		t.Fatal("expected two synthetic routing destinations")
+	}
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID},
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", DestinationWebhookID: webhooks[1].ID},
+	}); err != nil {
 		t.Fatal("seed synthetic notification route")
 	}
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now()})
@@ -188,6 +197,12 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		if err := db.Create(&user).Error; err != nil {
 			t.Fatal("seed disposable global User Linking")
 		}
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "22222222222222234"); err != nil {
+		t.Fatal("seed synthetic additional WFA user")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-animation", "Animation", model.ReviewerTargetRole, "33333333333333331"); err != nil {
+		t.Fatal("seed synthetic additional WFA role")
 	}
 
 	unexpectedDiscord := make(chan string, 16)
