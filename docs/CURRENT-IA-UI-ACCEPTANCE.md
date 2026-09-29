@@ -52,7 +52,8 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Kitsu host/token and Discord token fields retain their labels and secret handling.
 - [ ] Normal edit mode shows the resolved Kitsu host as a quiet read-only value, says it was detected/configured automatically, and offers compact `Change manually` / `Use automatic endpoint` controls without a page reload.
 - [ ] Manual endpoint mode preserves existing validation and persistence behavior and does not submit a display placeholder as the host.
-- [ ] External Kitsu URL is the only normal Advanced setting; its Check link control stays compact beside the field and wraps cleanly on mobile.
+- [ ] External Kitsu URL is the only normal Advanced setting, with a separate Save action disabled until the value changes; Check link stays compact beside the field, opens the saved URL without persisting edits, and wraps cleanly on mobile.
+- [ ] Saving restores the URL after reload; clearing and saving falls back to the normal Kitsu URL; a failed save keeps the typed value and shows an inline error.
 - [ ] Internal Kitsu URL and API Base URL appear only in one expert disclosure after manual endpoint mode, except that a saved API Base URL keeps the disclosure visible/open for editing; saved values are never cleared implicitly.
 - [ ] Saved-secret guidance is supporting text, not a health badge.
 - [ ] Each save action is adjacent to its own service form.

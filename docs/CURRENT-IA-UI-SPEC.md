@@ -67,7 +67,7 @@ Edit view keeps the same two-card structure and independent badges:
 - fixed secret-mask note: saved secrets are never rendered; a fixed-length bullet mask is used for a configured secret
 - one save action per service
 
-Advanced settings show External Kitsu URL as the normal optional setting and keep the compact Check link action beside it. Internal Kitsu URL and API Base URL are specialist network overrides: the single expert disclosure is hidden until manual endpoint mode, except that a saved API Base URL makes it visible and open so the saved value remains editable. Internal Kitsu URL is only visible while manual endpoint mode and the disclosure are open. Existing saved settings are preserved.
+Advanced settings show External Kitsu URL as the normal optional setting with a separate explicit Save action. Save is disabled until the value changes; it persists only the External Kitsu URL, and clearing then saving restores the normal Kitsu URL fallback. Check link opens the currently saved effective URL and never saves the edited value. Failed saves retain the typed value and show an inline error; there is no save-on-blur or automatic save while typing. Internal Kitsu URL and API Base URL are specialist network overrides: the single expert disclosure is hidden until manual endpoint mode, except that a saved API Base URL makes it visible and open so the saved value remains editable. Internal Kitsu URL is only visible while manual endpoint mode and the disclosure are open. Existing saved settings are preserved.
 
 Bot identity metadata may remain available to diagnostics, but is not a normal card row.
 
