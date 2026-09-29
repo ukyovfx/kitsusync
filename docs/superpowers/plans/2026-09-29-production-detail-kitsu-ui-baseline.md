@@ -47,7 +47,7 @@ Go server-rendered HTML, embedded/shared CSS in `src/setup/ui.go`, Go `httptest`
 Each item is mapped to its owning task/check:
 
 - Long Japanese and English tab, section, and action labels at mobile width — Task 6 browser acceptance.
-- Several Team members with long Department and Supervisor-scope text — Task 4 fixture/regression test and Task 6 mobile browser check.
+- Team with several members and long Department/Supervisor text — Task 4 fixture/regression test and Task 6 mobile browser check.
 - Successfully empty Team versus failed Team read — Task 4 Go/browser regression checks.
 - Notifications read state and explicit edit state — Task 3 Go/browser regression checks.
 - Legacy deep links focusing or opening Storage, Diagnostics, Technical details, and Danger Zone — Task 5 existing alias tests plus Task 6 browser route checks.
@@ -101,7 +101,7 @@ Each item is mapped to its owning task/check:
   `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$' -count=1`
 - [ ] Make the smallest Team markup/style change to compact aligned table/list rows. Keep unknown metadata omitted, retain current-human/read-only rules, and do not infer assignments or add membership mutation.
 - [ ] Run focused Team tests and confirm PASS:  
-  `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$|TestReviewerBrowserAcceptance' -count=1`
+  `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$|TestCurrentProductionUsersDistinguishKitsuEmptyAndReadFailure|TestReviewerBrowserAcceptance' -count=1`
 - [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go`.
 - [ ] Commit as `ui: compact Production Team rows`.
 
