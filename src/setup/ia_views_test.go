@@ -604,8 +604,13 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
 	}
-	if !strings.Contains(body, "Notification preview") || !strings.Contains(body, "A preview is available after a notification route is configured.") {
-		t.Fatal("Notifications should explain why a preview is unavailable when no route exists")
+	if strings.Contains(body, "Notification preview") || strings.Contains(body, "Example task") || strings.Contains(body, "discord-message-preview") {
+		t.Fatal("Notifications retained the removed synthetic preview")
+	}
+	for _, want := range []string{"WFA recipients", "Automatic recipients", "Additional recipients"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Notifications missing WFA recipient section %q", want)
+		}
 	}
 	if strings.Contains(body, `name="action" value="save"`) {
 		t.Fatal("normal Notifications UI exposes routing editor controls")
@@ -625,8 +630,8 @@ func TestDashboardProblemActionTargetsDirectDestination(t *testing.T) {
 		t.Fatalf("notification issue did not target notification settings: %q %q", notificationURL, notificationLabel)
 	}
 	userURL, userLabel := dashboardProblemAction(r, p, "en", "Reviewer participant is not mapped")
-	if !strings.Contains(userURL, "tab=reviewers") || userLabel != "Review reviewers" {
-		t.Fatalf("participant issue did not target Reviewers: %q %q", userURL, userLabel)
+	if !strings.Contains(userURL, "tab=notifications#wfa-recipients") || userLabel != "Review WFA recipients" {
+		t.Fatalf("participant issue did not target WFA recipient settings: %q %q", userURL, userLabel)
 	}
 }
 
@@ -1291,7 +1296,7 @@ func TestReadOnlyProductionUsesDedicatedUnconnectedView(t *testing.T) {
 	}
 }
 
-func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
+func TestProductionTeamShowsLinkedDiscordDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production"}
 	db.Create(&p)
@@ -1301,7 +1306,7 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 		return []kitsu.Person{{ID: "synthetic-participant", FullName: "Synthetic Participant"}}, nil
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
 	if !strings.Contains(body, "Synthetic Discord Name") {
 		t.Fatal("Production User Settings did not show the linked Discord display name")
 	}
@@ -1327,9 +1332,14 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
 	}
-	for _, expected := range []string{"Notification preview", "Task Type to preview", "Example task rendered with the current notification card renderer", "Please review this task."} {
+	for _, expected := range []string{"WFA recipients", "Automatic recipients", "Additional recipients", "Task Type"} {
 		if !strings.Contains(body, expected) {
-			t.Fatalf("read-only notification preview missing %q", expected)
+			t.Fatalf("Notifications missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"Notification preview", "Task Type to preview", "Example task rendered", "Please review this task."} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("removed notification preview content remains: %q", forbidden)
 		}
 	}
 	if strings.Contains(body, `name="action" value="save_current_production_routing"`) || strings.Contains(body, "<select name=\"task_type_id\">") {
@@ -1446,7 +1456,7 @@ func TestProductionUserSettingsEmptyStatesHaveNoDecorativeBullets(t *testing.T) 
 	oldReader := reviewerProductionTeamReader
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, nil }
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
 	if strings.Contains(body, "empty-state-mark") || strings.Contains(body, "aria-hidden=\"true\"") || strings.Contains(body, "•") {
 		t.Fatal("Production User Settings empty state contains a decorative bullet")
 	}
@@ -1928,7 +1938,7 @@ func TestCurrentProductionUsersScaleWithoutSearchOrDetails(t *testing.T) {
 	oldReader := reviewerProductionTeamReader
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en", nil), p, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en", nil), p, "en")
 	if strings.Contains(body, "User-49") || strings.Contains(body, "User-00") {
 		t.Fatalf("legacy ProjectUserMap rows were rendered as current Kitsu membership: %s", body)
 	}
@@ -1949,8 +1959,8 @@ func TestCurrentProductionUsersSimpleFlowUsesAssignedBeforeRoles(t *testing.T) {
 		return []kitsu.TaskType{{ID: "task-animation", Name: "Animation"}}
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Reviewer eligibility", "Reviewers", "Automatic"} {
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
+	for _, want := range []string{"Team", "Kitsu role", "Production Team"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
@@ -1999,8 +2009,8 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en")
-	for _, want := range []string{"Reviewer eligibility", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Discord not linked", "/bot/admin/users"} {
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en")
+	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Not linked", "/bot/admin/users", "Kitsu role"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
 		}
@@ -2024,7 +2034,7 @@ func TestCurrentProductionUsersDistinguishKitsuEmptyAndReadFailure(t *testing.T)
 	oldReader := reviewerProductionTeamReader
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 	render := func() string {
-		return renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=team-state-production&tab=users&lang=en", nil), project, "en")
+		return renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=team-state-production&tab=users&lang=en", nil), project, "en")
 	}
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
 	empty := render()
@@ -2058,8 +2068,8 @@ func TestProductionTeamViewUsesFreshKitsuMembershipOnEveryRender(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=live-team-production&tab=users&lang=en", nil)
-	first := renderCurrentProductionUserSettings(db, request, project, "en")
-	second := renderCurrentProductionUserSettings(db, request, project, "en")
+	first := renderCurrentProductionTeam(db, request, project, "en")
+	second := renderCurrentProductionTeam(db, request, project, "en")
 	if !strings.Contains(first, "Former Team Member") || strings.Contains(second, "Former Team Member") || reads != 2 {
 		t.Fatalf("Production Team did not reflect the next live read: reads=%d first=%s second=%s", reads, first, second)
 	}
@@ -2111,11 +2121,11 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 	})
 
 	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole string }{
-		{"ja", "自動", "Overrides", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
-		{"en", "Automatic", "Overrides", "None", "Add user", "Discord user", "Add role"},
+		{"ja", "自動通知先", "追加通知先", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
+		{"en", "Automatic recipients", "Additional recipients", "None", "Add user", "Discord user", "Add role"},
 	} {
 		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
-		body := renderCurrentProductionUserSettings(db, request, project, tc.lang, "bot-token")
+		body := renderCurrentProductionWFARecipients(db, request, project, tc.lang, "bot-token")
 		for _, want := range []string{tc.wantAutomatic, "Compositing", "Comp", "@Discord Artist", tc.wantUserLabel, tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s Reviewer UI missing %q", tc.lang, want)
@@ -2159,7 +2169,7 @@ func TestReviewerManagerExplainsGuildMembershipLookupFailure(t *testing.T) {
 		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
 	})
 
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-guild-failure&tab=reviewers&lang=en", nil), project, "en", "bot-token")
+	body := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-guild-failure&tab=reviewers&lang=en", nil), project, "en", "bot-token")
 	for _, want := range []string{"Discord server membership could not be verified", "Automatic eligibility", "User Override candidates", "@Reviewers"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Guild-member lookup failure missing safe Reviewer state %q: %s", want, body)
@@ -2216,34 +2226,33 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 		reviewerGuildMembersForGuild = oldGuildMembers
 	})
 
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
-	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo-guild", "Supervisor", "Comp: Compositing, Roto", "Automatic", "Overrides", "None", "Linked"} {
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=team&lang=en", nil), project, "en")
+	for _, want := range []string{"Ukyo Matsuo", "@ukyo", "Supervisor", "Comp", "Comp: Compositing, Roto", "Supervisor scope is derived from Departments", "does not indicate actual task assignments", "Linked"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("Production Users UI missing %q: %s", want, body)
+			t.Fatalf("Production Team UI missing %q: %s", want, body)
 		}
 	}
-	teamStart := strings.Index(body, `<ul class="production-users-simple-list production-eligibility-list">`)
-	if teamStart < 0 {
-		t.Fatalf("Production Team member list is missing: %s", body)
+	if strings.Contains(body, "Comp Artist</strong>") && strings.Contains(body, "Comp Artist") && strings.Contains(body, "Supervision scope") {
+		start := strings.Index(body, `>Comp Artist</strong>`)
+		end := strings.Index(body[start:], `</li>`)
+		if start >= 0 && end >= 0 && strings.Contains(body[start:start+end], "Comp: Compositing, Roto") {
+			t.Fatal("normal Department membership was mislabeled as a Supervisor scope")
+		}
 	}
-	teamEnd := strings.Index(body[teamStart:], `</ul>`)
-	if teamEnd < 0 {
-		t.Fatalf("Production Team member list is missing: %s", body)
+	if !strings.Contains(body, "Unknown Supervisor") || taskReads != 1 || teamReads != 1 || strings.Contains(body, "reviewer-target-form") {
+		t.Fatalf("Production Team summary guessed missing metadata, repeated reads, or exposed writes: taskReads=%d teamReads=%d team=%s", taskReads, teamReads, body)
 	}
-	teamHTML := body[teamStart : teamStart+teamEnd]
-	if !strings.Contains(teamHTML, "Unknown Supervisor") || strings.Contains(teamHTML, `Unknown Supervisor</strong><small>Discord not linked</small><small class="production-user-role">Supervisor</small><small class="production-user-supervision">`) || taskReads != 1 || teamReads != 1 {
-		t.Fatalf("Production Users summary guessed unrelated metadata or repeated reads: taskReads=%d teamReads=%d team=%s", taskReads, teamReads, teamHTML)
-	}
-	for _, stale := range []string{"Explicit targets replace automatic Supervisors", "Linked Discord users in the Kitsu Production Team", "Department:"} {
-		if strings.Contains(body, stale) {
-			t.Fatalf("verbose Reviewer explanation %q remains in the UI", stale)
+	wfa := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=notifications&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
+	for _, want := range []string{"Automatic recipients", "Additional recipients", "Comp Supervisor", "Ukyo Matsuo", "None"} {
+		if !strings.Contains(wfa, want) {
+			t.Fatalf("Notifications WFA recipient state missing %q: %s", want, wfa)
 		}
 	}
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345679"); err != nil {
 		t.Fatal(err)
 	}
-	overridden := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
-	for _, want := range []string{"Ukyo Matsuo", "Overrides", "Comp Supervisor"} {
+	overridden := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=notifications&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
+	for _, want := range []string{"Ukyo Matsuo", "Additional recipients", "Comp Supervisor"} {
 		if !strings.Contains(overridden, want) {
 			t.Fatalf("automatic Reviewer/override state missing %q: %s", want, overridden)
 		}
@@ -2342,6 +2351,8 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	}
 	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=user&target_id=123456789012345679"); w.Code != http.StatusSeeOther {
 		t.Fatalf("user add status=%d body=%s", w.Code, w.Body.String())
+	} else if location := w.Header().Get("Location"); !strings.Contains(location, "tab=notifications") || !strings.Contains(location, "#wfa-recipients") {
+		t.Fatalf("Reviewer mutation did not return to Notifications WFA recipients: %q", location)
 	}
 	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=role&target_id=123456789012345680"); w.Code != http.StatusSeeOther {
 		t.Fatalf("role add status=%d body=%s", w.Code, w.Body.String())
@@ -2407,7 +2418,7 @@ func TestCurrentProductionUsersHideEmptyCheckerAssignmentList(t *testing.T) {
 	p := model.Project{KitsuProjectID: "empty-checker-production", Name: "Empty Checker Production"}
 	db.Create(&p)
 	model.UpsertProjectUserMap(db, p.ID, "Linked Human", "human@example.com", "discord-human")
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=empty-checker-production&tab=users&lang=en", nil), p, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=empty-checker-production&tab=users&lang=en", nil), p, "en")
 	if strings.Contains(body, `<h4>Assigned</h4>`) || strings.Contains(body, "No Reviewer / Checker assignments yet.") {
 		t.Fatalf("empty Reviewer / Checker assignment list was rendered: %s", body)
 	}

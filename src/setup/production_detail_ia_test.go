@@ -14,8 +14,9 @@ func TestSelectedProductionTabNormalizesLegacyDestinations(t *testing.T) {
 		{"", "overview"},
 		{"overview", "overview"},
 		{"notifications", "notifications"},
-		{"users", "reviewers"},
-		{"user-settings", "reviewers"},
+		{"users", "team"},
+		{"user-settings", "team"},
+		{"reviewers", "notifications"},
 		{"storage-settings", "settings"},
 		{"activity", "overview"},
 		{"troubleshooting", "settings"},
@@ -52,7 +53,7 @@ func TestProductionDetailUsesFourSectionsAndMapsLegacyTabs(t *testing.T) {
 	if strings.Count(defaultBody, `role="tab" aria-selected=`) != 4 {
 		t.Fatalf("expected four primary Production sections, got %d", strings.Count(defaultBody, `role="tab" aria-selected=`))
 	}
-	for _, marker := range []string{`id="tab-overview"`, `id="tab-notifications"`, `id="tab-reviewers"`, `id="tab-settings"`, "Overview", "Notifications", "Reviewers", "Settings"} {
+	for _, marker := range []string{`id="tab-overview"`, `id="tab-notifications"`, `id="tab-team"`, `id="tab-settings"`, "Overview", "Notifications", "Team", "Settings"} {
 		if !strings.Contains(defaultBody, marker) {
 			t.Fatalf("default Production detail missing %q", marker)
 		}
@@ -76,8 +77,11 @@ func TestProductionDetailUsesFourSectionsAndMapsLegacyTabs(t *testing.T) {
 		legacy, tab, section string
 		expand               bool
 	}{
-		{"users", "reviewers", "reviewer-manager", false},
-		{"user-settings", "reviewers", "reviewer-manager", false},
+		{"team", "team", "production-team", false},
+		{"notifications", "notifications", "wfa-recipients", false},
+		{"users", "team", "production-team", false},
+		{"user-settings", "team", "production-team", false},
+		{"reviewers", "notifications", "wfa-recipients", false},
 		{"storage-settings", "settings", `id="storage"`, false},
 		{"activity", "overview", `id="recent-activity"`, false},
 		{"troubleshooting", "settings", `id="diagnostics"`, true},
@@ -90,6 +94,9 @@ func TestProductionDetailUsesFourSectionsAndMapsLegacyTabs(t *testing.T) {
 		}
 		if !strings.Contains(body, tc.section) {
 			t.Errorf("legacy tab %q did not focus its destination %q", tc.legacy, tc.section)
+		}
+		if tc.tab == "team" && strings.Contains(body, `class="production-reviewer-manager"`) {
+			t.Errorf("Team route %q included WFA recipient controls", tc.legacy)
 		}
 		if tc.legacy == "activity" && !strings.Contains(body, "panel-overview") {
 			t.Error("legacy Activity should fall back to Overview when the activity section is omitted")
@@ -106,6 +113,9 @@ func TestProductionDetailUsesFourSectionsAndMapsLegacyTabs(t *testing.T) {
 				t.Errorf("legacy tab %q did not open its destination", tc.legacy)
 			}
 		}
+	}
+	if body := render("notifications"); strings.Contains(body, `id="tab-reviewers"`) || !strings.Contains(body, `id="wfa-recipients"`) {
+		t.Fatal("Notifications did not own WFA recipients without reintroducing a Reviewers tab")
 	}
 }
 
@@ -153,7 +163,7 @@ func TestProductionSettingsGroupsExistingSectionsWithoutChangingForms(t *testing
 	}
 }
 
-func TestProductionNotificationsPreviewUsesCurrentRendererWithoutSending(t *testing.T) {
+func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "preview-production", Name: "Preview Production", Language: "en"}
 	if err := db.Create(&p).Error; err != nil {
@@ -169,13 +179,18 @@ func TestProductionNotificationsPreviewUsesCurrentRendererWithoutSending(t *test
 	}
 	r := httptest.NewRequest("GET", "/bot/admin/projects?project=preview-production&tab=notifications&lang=en", nil)
 	body := renderSelectedProductionNotifications(db, r, p, "en", "success", "Healthy", "")
-	for _, expected := range []string{"Notification preview", "Compositing", "#compositing", "English", "Automatic Reviewers and explicit User/Role overrides", "Example task", "WFA", "Please review"} {
+	for _, expected := range []string{"Notification routing", "WFA recipients", "Automatic recipients", "Additional recipients", "Compositing", "#compositing"} {
 		if !strings.Contains(body, expected) {
-			t.Errorf("notification preview missing %q", expected)
+			t.Errorf("Notifications missing %q", expected)
 		}
 	}
-	if strings.Contains(body, webhookSecret) || strings.Contains(body, "channel-comp") || strings.Contains(body, `<form`) || strings.Contains(body, `name="action"`) {
-		t.Fatal("read-only notification preview exposed a secret, internal channel ID, or write action")
+	for _, forbidden := range []string{"Notification preview", "Example task", "Please review this task.", `id="notification-preview"`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("Notifications retained removed preview content %q", forbidden)
+		}
+	}
+	if strings.Contains(body, webhookSecret) || strings.Contains(body, "channel-comp") {
+		t.Fatal("Notifications exposed a webhook secret or internal channel ID")
 	}
 }
 
@@ -249,7 +264,7 @@ func TestProductionTabsHaveEquivalentJapaneseLabels(t *testing.T) {
 	if strings.Count(body, `role="tab" aria-selected=`) != 4 {
 		t.Fatalf("Japanese Production detail should have four primary sections")
 	}
-	for _, label := range []string{"概要", "通知", "レビュアー", "設定"} {
+	for _, label := range []string{"概要", "通知", "チーム", "設定"} {
 		if !strings.Contains(body, ">"+label+"</a>") {
 			t.Errorf("Japanese Production navigation missing %q", label)
 		}
