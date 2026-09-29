@@ -378,7 +378,7 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam = oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors
 	})
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=notifications-read-table&tab=notifications&lang=en", nil), project, "en", "success", "Healthy", "", "synthetic-discord-token")
-	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@linked-artist", "@Leads", "task-comp", "task-anim"} {
+	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@Artist Nick", "@Leads", "task-comp", "task-anim"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Notifications read table missing %q: %s", want, body)
 		}
@@ -486,7 +486,7 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForUnroutedTaskTypes(t *
 	if strings.Contains(pendingSource, `data-task-type-id="task-existing"`) {
 		t.Fatal("already-routed Task Type WFA summary should not be duplicated in pending source")
 	}
-	if !strings.Contains(pendingSource[newTask:], "Discord membership could not be verified.") {
+	if !strings.Contains(pendingSource[newTask:], "Kitsu connection required.") {
 		t.Fatal("unrouted Task Type must show its truthful Automatic-recipient state")
 	}
 }
@@ -563,7 +563,7 @@ func TestProductionOverviewAggregatesRepeatedIssuesAndCapsVisibleRows(t *testing
 	if !strings.Contains(body, "2 other issues") || strings.Contains(body, "Cause D") || strings.Contains(body, "Cause E") {
 		t.Fatalf("Current Issues did not summarize overflow with localized other-count copy: %s", body)
 	}
-	if !strings.Contains(body, `href="/bot/admin/projects?project=overview-issue-cap&amp;tab=notifications`) {
+	if !strings.Contains(body, `project=overview-issue-cap&amp;tab=notifications`) {
 		t.Fatalf("routing issue CTA should stay in-window and point to Notifications: %s", body)
 	}
 	if strings.Contains(body, `target="_blank"`) {

@@ -372,7 +372,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
         await page.goto(`${base}/bot/login?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (locale === locales[0] && viewport === backgroundViewports[0]) {
-          const iconHref = await page.locator('link[rel="icon"]').getAttribute('href');
+          const iconHref = await page.locator('link[rel="icon"]').first().getAttribute('href');
           if (iconHref !== '/favicon.ico') throw new Error(`page icon link is unexpected: ${iconHref}`);
           const iconLinks = await page.locator('link[rel="icon"]').evaluateAll(nodes => nodes.map(node => ({ href: node.getAttribute('href'), type: node.getAttribute('type') })));
           if (!iconLinks.some(icon => icon.href === '/kitsusync.svg' && icon.type === 'image/svg+xml')) throw new Error('page does not reference the supplied KitsuSync SVG icon');
