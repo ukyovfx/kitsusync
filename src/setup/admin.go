@@ -2953,6 +2953,10 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 	if db != nil {
 		apiBaseURL = strings.TrimSpace(model.GetSetting(db, KitsuAPIBaseURLSettingKey))
 	}
+	externalURLSaveDisabled := ""
+	if externalURLDraft == externalURLInitialValue {
+		externalURLSaveDisabled = " disabled"
+	}
 	externalURLField := `<form method="POST" class="connection-save-form connection-external-url-field connection-external-url-form" id="external-kitsu-url-form"><input type="hidden" name="action" value="save_external_kitsu_url"><div class="connection-form-field"><label for="kitsu-external-url">` + esc(t(lang, "外部Kitsu URL（任意）", "External Kitsu URL (optional)")) + `</label><div class="connection-external-url-controls"><input id="kitsu-external-url" type="url" name="kitsu_external_url" form="external-kitsu-url-form" value="` + esc(externalURLDraft) + `" data-initial-value="` + esc(externalURLInitialValue) + `" aria-describedby="external-kitsu-url-help` + func() string {
 		if externalURLSaveError != "" {
 			return ` external-kitsu-url-error`
@@ -2963,7 +2967,7 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 			return ""
 		}
 		return `<p id="external-kitsu-url-error" class="field-help" style="color:var(--danger)" role="alert">` + esc(externalURLSaveError) + `</p>`
-	}() + `</div><div class="button-row connections-actions"><button id="save-external-kitsu-url" type="submit" class="btn" disabled>` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
+	}() + `</div><div class="button-row connections-actions"><button id="save-external-kitsu-url" type="submit" class="btn"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
 	expertOpen := ""
 	if apiBaseURL != "" {
 		expertOpen = " open"

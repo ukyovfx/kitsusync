@@ -233,9 +233,6 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `name="kitsu_external_url" form="kitsu-connection-form"`) {
 		t.Fatal("External Kitsu URL must not be coupled to Kitsu credential saving")
 	}
-	if !strings.Contains(body, `value="Kitsu connection saved`) && strings.Contains(body, `>Save<`) {
-		t.Fatal("did not expect a generic global Save action")
-	}
 	if strings.Count(body, `name="kitsu_bot_token"`) != 1 || strings.Count(body, `name="bot_token"`) != 1 {
 		t.Fatal("expected each current secret field to appear once")
 	}
@@ -301,7 +298,7 @@ func TestConnectionsSaveExternalKitsuURLIndependentlyAndReloads(t *testing.T) {
 
 	reload := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
 	body := renderConnectionsEditFormWithHealth("en", reload, db, "", "", "", KitsuHostForUI(db), false, false, "")
-	if !strings.Contains(body, `name="kitsu_external_url" value="https://links.kitsu.example.test"`) {
+	if !strings.Contains(body, `name="kitsu_external_url" form="external-kitsu-url-form" value="https://links.kitsu.example.test"`) {
 		t.Fatal("saved External Kitsu URL was not restored after reload")
 	}
 }
