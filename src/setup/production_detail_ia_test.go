@@ -306,6 +306,9 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 }
 
 func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.production-context #panel-notifications{grid-template-columns:minmax(0,1fr)}`) {
+		t.Fatal("Production Notifications grid track must stay within the panel width")
+	}
 	if !strings.Contains(adminThemeCSS, `.production-context #panel-notifications>.production-notifications{min-width:0}`) {
 		t.Fatal("Production Notifications grid item must shrink around its horizontally scrollable routing editor")
 	}
