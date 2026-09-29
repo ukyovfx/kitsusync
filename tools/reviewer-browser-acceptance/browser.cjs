@@ -28,13 +28,36 @@ const backgroundViewports = [
 ];
 
 async function record(page, route, locale, viewport, state, detail) {
-  const widths = await page.evaluate(() => ({
-    document: document.documentElement.scrollWidth,
-    body: document.body.scrollWidth,
-    viewport: document.documentElement.clientWidth,
-  }));
-  if (widths.document > widths.viewport || widths.body > widths.viewport) {
-    throw new Error(`${route} overflows at ${viewport}: document=${widths.document}, body=${widths.body}, viewport=${widths.viewport}`);
+  const layout = await page.evaluate(() => {
+    const viewport = document.documentElement.clientWidth;
+    const panel = document.querySelector('#panel-notifications');
+    const notifications = document.querySelector('.production-notifications');
+    const offenders = [...document.body.querySelectorAll('*')].map(element => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        tag: element.tagName,
+        id: element.id,
+        className: typeof element.className === 'string' ? element.className.slice(0, 100) : '',
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width),
+        minWidth: style.minWidth,
+        gridColumns: style.gridTemplateColumns,
+        overflowX: style.overflowX,
+      };
+    }).filter(element => element.right > viewport + 2 || element.left < -2).slice(0, 12);
+    return {
+      document: document.documentElement.scrollWidth,
+      body: document.body.scrollWidth,
+      viewport,
+      notificationsGrid: panel ? getComputedStyle(panel).gridTemplateColumns : '',
+      notificationsMinWidth: notifications ? getComputedStyle(notifications).minWidth : '',
+      offenders,
+    };
+  });
+  if (layout.document > layout.viewport || layout.body > layout.viewport) {
+    throw new Error(`${route} overflows at ${viewport}: ${JSON.stringify(layout)}`);
   }
   const body = await page.locator('body').innerText();
   if (body.includes('\uFFFD') || body.includes('Ã') || body.includes('ï¿½')) throw new Error(`${route} contains mojibake at ${locale}`);
