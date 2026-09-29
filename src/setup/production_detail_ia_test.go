@@ -312,6 +312,9 @@ func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
 	if !strings.Contains(adminThemeCSS, `.production-context #panel-notifications>.production-notifications{min-width:0}`) {
 		t.Fatal("Production Notifications grid item must shrink around its horizontally scrollable routing editor")
 	}
+	if !strings.Contains(adminThemeCSS, `.production-routing-editor{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;gap:16px}`) {
+		t.Fatal("Production routing editor must constrain its grid track so the table can scroll without widening the page")
+	}
 	for _, rule := range []string{
 		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section`,
 		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section:first-of-type`,
