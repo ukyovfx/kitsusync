@@ -520,7 +520,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const automaticPanel = editForm.locator('[data-wfa-automatic]');
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
-        if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes('Animation Supervisor')) {
+        if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes('Wrong Department Global')) {
           throw new Error(`selecting a route did not select its matching Automatic WFA summary in ${locale.lang}`);
         }
         await editForm.locator('[data-select-task]').filter({ hasText: 'Compositing' }).click();
