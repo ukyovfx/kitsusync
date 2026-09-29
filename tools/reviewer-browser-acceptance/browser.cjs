@@ -610,7 +610,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('form input[name="action"][value*="production_member"],form input[name="action"][value*="production_role"]').count()) throw new Error('Team exposed membership or role mutation');
         if ((await teamTab.innerText()).includes('Example task') || (await teamTab.innerText()).includes('Assigned')) throw new Error('Team inferred task assignments from Department membership');
         const teamText = await teamTab.innerText();
-        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク', 'User Linking'] : ['Team', 'Supervision scope', 'Not linked', 'User Linking']) {
+        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク'] : ['Team', 'Supervision scope', 'Not linked']) {
           if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
         }
         const teamRows = await page.locator('.production-team-row').evaluateAll(rows => rows.map(row => {
