@@ -306,6 +306,103 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	}
 }
 
+func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t *testing.T) {
+	db := newIAViewDB(t)
+	t.Setenv("KitsuJWTToken", "synthetic-kitsu-token")
+	t.Setenv("KITSU_API_BASE_URL", "https://kitsu.example.test/api")
+	project := model.Project{KitsuProjectID: "notifications-read-table", Name: "Notifications Read Table", DiscordGuildID: "123456789012345678", DiscordCategoryID: "123456789012345679"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []struct{ taskID, taskName, channel string }{{"task-comp", "Compositing", "comp"}, {"task-anim", "Animation", "anim"}} {
+		if err := model.CreateProjectWebhook(db, project.KitsuProjectID, route.channel, route.taskName, "synthetic-webhook-secret", "channel-"+route.channel); err != nil {
+			t.Fatal(err)
+		}
+		webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[len(model.ListProjectWebhooks(db, project.KitsuProjectID))-1]
+		if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, append(model.ListProductionNotificationRoutes(db, project.KitsuProjectID), model.ProductionNotificationRoute{ProductionID: project.KitsuProjectID, TaskTypeID: route.taskID, TaskTypeName: route.taskName, DestinationWebhookID: webhook.ID})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "artist-person", KitsuName: "Linked Artist", DiscordID: "123456789012345680", DiscordDisplayName: "linked-artist"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345680"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-anim", "Animation", model.ReviewerTargetRole, "123456789012345681"); err != nil {
+		t.Fatal(err)
+	}
+	oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors := reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"}, {ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"}}
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "comp-supervisor", FullName: "Comp Supervisor", Role: "supervisor", Active: true}, {ID: "anim-supervisor", FullName: "Animation Supervisor", Role: "supervisor", Active: true}}, nil
+	}
+	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) {
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345680", "linked-artist", "Linked Artist", "Artist Nick"), reviewerTestGuildMember("123456789012345682", "comp-supervisor", "Comp Supervisor", ""), reviewerTestGuildMember("123456789012345683", "anim-supervisor", "Animation Supervisor", "")}, nil
+	}
+	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) {
+		return []DiscordGuildRole{{ID: "123456789012345681", Name: "Leads", Mentionable: true}}, nil
+	}
+	reviewerDepartmentSupervisorsForTeam = func(_, _, departmentID string, _ []kitsu.Person) ([]kitsu.Person, error) {
+		if departmentID == "dept-comp" {
+			return []kitsu.Person{{ID: "comp-supervisor", FullName: "Comp Supervisor"}}, nil
+		}
+		if departmentID == "dept-anim" {
+			return []kitsu.Person{{ID: "anim-supervisor", FullName: "Animation Supervisor"}}, nil
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam = oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors
+	})
+	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=notifications-read-table&tab=notifications&lang=en", nil), project, "en", "success", "Healthy", "", "synthetic-discord-token")
+	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@linked-artist", "@Leads", "task-comp", "task-anim"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Notifications read table missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `name="reviewer_task_type"`) || strings.Contains(body, `class="reviewer-target-form"`) || strings.Contains(body, `action="add_production_reviewer_target"`) {
+		t.Fatalf("Notifications read mode exposed a standalone WFA editor: %s", body)
+	}
+}
+
+func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *testing.T) {
+	for _, tc := range []struct{ lang, empty, teamFailure string }{
+		{"en", "No notification routing is configured.", "Production Team unavailable."},
+		{"ja", "通知ルーティングはまだ設定されていません。", "Production Teamを読み込めません。"},
+	} {
+		db := newIAViewDB(t)
+		project := model.Project{KitsuProjectID: "notification-state-" + tc.lang, Name: "Notification State", DiscordGuildID: "123456789012345678"}
+		if err := db.Create(&project).Error; err != nil {
+			t.Fatal(err)
+		}
+		empty := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project="+project.KitsuProjectID+"&tab=notifications&lang="+tc.lang, nil), project, tc.lang, "ok", "Healthy", "")
+		if !strings.Contains(empty, tc.empty) {
+			t.Errorf("%s empty route state missing %q: %s", tc.lang, tc.empty, empty)
+		}
+		if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "synthetic-webhook", "channel-comp"); err != nil {
+			t.Fatal(err)
+		}
+		webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+		if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+			t.Fatal(err)
+		}
+		oldTeam, oldMembers, oldRoles := reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild
+		reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, errors.New("synthetic team read failure") }
+		reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) { return nil, nil }
+		reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) {
+			return nil, errors.New("synthetic roles read failure")
+		}
+		body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project="+project.KitsuProjectID+"&tab=notifications&lang="+tc.lang, nil), project, tc.lang, "ok", "Healthy", "", "synthetic-discord-token")
+		reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild = oldTeam, oldMembers, oldRoles
+		if !strings.Contains(body, tc.teamFailure) {
+			t.Errorf("%s Team read failure state missing %q: %s", tc.lang, tc.teamFailure, body)
+		}
+	}
+}
+
 func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
 	if !strings.Contains(adminThemeCSS, `.production-context .production-tabs{overflow-y:hidden}`) {
 		t.Fatal("Production tabs must not show a vertical scrollbar alongside the horizontally scrollable tab row")
