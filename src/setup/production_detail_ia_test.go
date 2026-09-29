@@ -306,6 +306,9 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 }
 
 func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.production-context .production-tabs{overflow-y:hidden}`) {
+		t.Fatal("Production tabs must not show a vertical scrollbar alongside the horizontally scrollable tab row")
+	}
 	if !strings.Contains(adminThemeCSS, `.production-context #panel-notifications{grid-template-columns:minmax(0,1fr)}`) {
 		t.Fatal("Production Notifications grid track must stay within the panel width")
 	}
