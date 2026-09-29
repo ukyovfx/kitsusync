@@ -1962,7 +1962,7 @@ func TestCurrentProductionTeamRendersSimpleReadOnlyFlow(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=team&lang=en", nil), p, "en")
-	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Production Team"} {
+	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Department", "Supervision scope"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
