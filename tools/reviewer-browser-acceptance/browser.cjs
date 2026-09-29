@@ -495,6 +495,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク', 'User Linking'] : ['Team', 'Supervision scope', 'Not linked', 'User Linking']) {
           if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
         }
+        const teamRows = await page.locator('.production-team-row').evaluateAll(rows => rows.map(row => {
+          const style = getComputedStyle(row);
+          return { display: style.display, borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+        }));
+        if (!teamRows.length || teamRows[0].display !== 'grid' || teamRows[0].borderTopStyle !== 'none' || teamRows.slice(1).some(row => row.borderTopStyle !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
+          throw new Error(`Production Team is not a compact divider list in ${locale.lang}: ${JSON.stringify(teamRows)}`);
+        }
         await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'live Production Team', 'Kitsu Team, effective role, derived Supervisor scope, and global User Linking state; no local membership editor');
 

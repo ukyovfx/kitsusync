@@ -89,18 +89,18 @@ Each item is mapped to its owning task/check:
 - [x] Run the new hierarchy test and confirm PASS. The SQLite-backed render tests were attempted but cannot execute on this Windows runner (`CGO_ENABLED=0`); rerun in exact-head Linux CI:
   `go test ./src/setup -run 'TestProduction(OverviewAndNotificationsSectionHierarchy|NotificationsHasWFARecipientsAndNoPreview|OverviewOmitsActivityWhenNoScopedRecordsExist|OverviewDoesNotCallUnconfiguredRoutingHealthy|DiagnosticsAuditCountsAreProductionScoped)$' -count=1`
 - [x] Run `node --check tools/reviewer-browser-acceptance/browser.cjs` and `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go tools/reviewer-browser-acceptance/browser.cjs`.
-- [ ] Commit as `ui: structure Production overview and notifications`.
+- [x] Commit as `ui: structure Production overview and notifications` (`c2660e5a`).
 
 ## Task 4: Team compact Kitsu-style table/list
 
 **Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and `src/setup/reviewer-browser-acceptance_test.go` only if fixture coverage needs extension.
 
-- [ ] Add `TestProductionTeamCompactRows` using multiple members, long Department names, and long Supervisor scope text. Assert readable repeated rows and no per-person large-card structure.
-- [ ] Include both a successful empty Team response and a failed Team read in the owning regression/browser checks; assert they remain distinct.
-- [ ] Run the focused test before the change and confirm it fails for the intended presentation mismatch:  
+- [x] Add `TestProductionTeamCompactRows` using multiple members, long Department names, and long Supervisor scope text. Assert readable repeated rows and no per-person large-card structure. Add a separate non-SQLite style contract check.
+- [x] Include both a successful empty Team response and a failed Team read in the owning regression test; assert they remain distinct.
+- [x] Attempt the focused test before the change. The local runner could not reach the visual assertion because its SQLite test setup requires unavailable CGO (`CGO_ENABLED=0`); exact-head Linux CI is required to observe the regression:
   `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$' -count=1`
-- [ ] Make the smallest Team markup/style change to compact aligned table/list rows. Keep unknown metadata omitted, retain current-human/read-only rules, and do not infer assignments or add membership mutation.
-- [ ] Run focused Team tests and confirm PASS:  
+- [x] Make the smallest Team style change to compact aligned divider rows. Keep unknown metadata omitted, retain current-human/read-only rules, and do not infer assignments or add membership mutation.
+- [x] Run the non-SQLite row-style check and confirm PASS. The Team renderer regression was attempted but is blocked locally by SQLite requiring CGO; exact-head Linux CI must run it:
   `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$|TestCurrentProductionUsersDistinguishKitsuEmptyAndReadFailure|TestReviewerBrowserAcceptance' -count=1`
 - [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go`.
 - [ ] Commit as `ui: compact Production Team rows`.

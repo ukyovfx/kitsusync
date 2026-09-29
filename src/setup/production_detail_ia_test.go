@@ -51,6 +51,61 @@ func TestProductionTeamUsesGuildDisplayNameAndFallsBackToUserLinking(t *testing.
 	}
 }
 
+func TestProductionTeamCompactRows(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "compact-team-production", Name: "Compact Team"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	longDepartment := "Long Department Name for Composite Visual Effects"
+	longScope := longDepartment + ": Comp, Paint, Roto"
+	oldTeam, oldTaskTypes := reviewerProductionTeamReader, reviewerTaskTypesForProduction
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{
+			{ID: "supervisor-one", FullName: "Supervisor One", Role: "supervisor", Active: true, Departments: []string{"department-long"}},
+			{ID: "supervisor-two", FullName: "Supervisor Two", Role: "supervisor", Active: true, Departments: []string{"department-long"}},
+		}, nil
+	}
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+		return []kitsu.TaskType{
+			{ID: "task-comp", Name: "Comp", DepartmentID: "department-long", DepartmentName: longDepartment},
+			{ID: "task-roto", Name: "Roto", DepartmentID: "department-long", DepartmentName: longDepartment},
+			{ID: "task-paint", Name: "Paint", DepartmentID: "department-long", DepartmentName: longDepartment},
+		}
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldTeam, oldTaskTypes })
+
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=compact-team-production&tab=team&lang=en", nil)
+	body := renderCurrentProductionTeam(db, request, project, "en")
+	if strings.Count(body, `class="production-team-row"`) != 2 || !strings.Contains(body, longDepartment) || !strings.Contains(body, longScope) {
+		t.Fatalf("Team did not render comparative member rows with Department and derived Supervisor scope: %s", body)
+	}
+	if strings.Contains(body, `class="section-card`) || strings.Contains(body, `class="glass`) {
+		t.Fatal("Production Team regressed to per-person cards")
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, nil }
+	if empty := renderCurrentProductionTeam(db, request, project, "en"); !strings.Contains(empty, "The Kitsu Production Team is empty") {
+		t.Fatal("successful empty Team read was not rendered as empty")
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, errors.New("synthetic read failure") }
+	if failed := renderCurrentProductionTeam(db, request, project, "en"); !strings.Contains(failed, "Could not load the Kitsu Production Team") {
+		t.Fatal("failed Team read was not rendered distinctly from empty")
+	}
+}
+
+func TestProductionTeamCompactRowStyles(t *testing.T) {
+	for _, expected := range []string{
+		`.production-team-list{display:grid;gap:0;`,
+		`.production-team-row{display:grid;`,
+		`border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none`,
+		`.production-team-row:first-child{border-top:0;padding-top:0}`,
+	} {
+		if !strings.Contains(adminThemeCSS, expected) {
+			t.Errorf("Production Team is missing compact row style %q", expected)
+		}
+	}
+}
+
 func TestSelectedProductionTabNormalizesLegacyDestinations(t *testing.T) {
 	for _, tc := range []struct{ legacy, want string }{
 		{"", "overview"},
