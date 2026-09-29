@@ -72,6 +72,10 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 
 ## Production detail — `/bot/admin/projects?project=<id>`
 
+- [ ] The Production eyebrow, name, and semantic connection badge form one compact identity header; the four primary tabs are plain labels on a shared hairline with an active underline.
+- [ ] Overview and Notifications use compact sections/dividers rather than summary-card grids; Routing and WFA recipients remain distinct.
+- [ ] Team uses compact comparative rows/table patterns, and Settings presents vertical sections with intentional disclosures.
+- [ ] At JP/EN desktop and mobile widths, labels and controls remain readable without clipping; page-level horizontal overflow, mojibake, and browser console/runtime errors are absent.
 - [ ] Exactly four primary sections appear: Overview, Notifications, Team, Settings (JP: 概要, 通知, チーム, 設定); there is no primary Reviewers tab.
 - [ ] Production identity is compact; no redundant “Selected Production” copy appears.
 - [ ] Overview contains compact operational status, real notification routing, current issues, and only real exact-Production recent audit activity; empty activity is omitted.

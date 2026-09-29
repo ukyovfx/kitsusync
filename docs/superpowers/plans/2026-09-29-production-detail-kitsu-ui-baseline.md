@@ -56,10 +56,10 @@ Each item is mapped to its owning task/check:
 
 **Files:** `docs/CURRENT-IA-UI-ACCEPTANCE.md`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and only if coverage is missing `src/setup/reviewer_browser_acceptance_test.go` / `tools/reviewer-browser-acceptance/browser.cjs`.
 
-- [ ] Read the existing Production-detail acceptance section and tests; identify only missing visual checks. Keep the semantic requirements unchanged.
-- [ ] Add a concise acceptance checklist for the baseline: compact entity header; exactly four label tabs on a shared hairline/underline; sections over summary-card grids; compact Team rows; vertical Settings; JP/EN desktop/mobile; no overflow, mojibake, or console errors.
-- [ ] Add or retain focused semantic guard assertions for four-tab order, legacy routes, real routing/WFA placement, read-only Team, Settings order, and scoped activity. Do not add redundant tests when existing coverage already proves the contract.
-- [ ] Run the focused baseline tests and confirm PASS before any UI changes:  
+- [x] Read the existing Production-detail acceptance section and tests; identify only missing visual checks. Keep the semantic requirements unchanged.
+- [x] Add a concise acceptance checklist for the baseline: compact entity header; exactly four label tabs on a shared hairline/underline; sections over summary-card grids; compact Team rows; vertical Settings; JP/EN desktop/mobile; no overflow, mojibake, or console errors.
+- [x] Retain focused semantic guard assertions for four-tab order, legacy routes, real routing/WFA placement, read-only Team, Settings order, and scoped activity. Existing tests already prove the contract, so no redundant test was added.
+- [x] Run the focused baseline tests and confirm PASS before any UI changes: the Windows attempt was blocked by CGO-disabled SQLite; exact-head Linux/CGO CI #691 passed `go test ./src/...`, including these named tests.
   `go test ./src/setup -run 'TestProductionDetailUsesFourSectionsAndMapsLegacyTabs|TestProductionTabsHaveEquivalentJapaneseLabels|TestProductionNotificationsHasWFARecipientsAndNoPreview|TestProductionTeamUsesGuildDisplayNameAndFallsBackToUserLinking|TestProductionDiagnosticsAuditCountsAreProductionScoped' -count=1`
 - [ ] Run `git diff --check -- docs/CURRENT-IA-UI-ACCEPTANCE.md src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go tools/reviewer-browser-acceptance/browser.cjs`.
 - [ ] Commit this acceptance-contract boundary as `test: define Production detail baseline acceptance`.
