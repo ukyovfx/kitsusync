@@ -173,6 +173,29 @@ func TestCurrentRoutingEditorKeepsAddDialogOutsideApplyForm(t *testing.T) {
 	}
 }
 
+func TestCurrentRoutingEditorNewRouteTemplateCanBeRemoved(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-editor-new-route", Name: "Routing Editor New Route"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), project, "en", "")
+	templateStart := strings.Index(body, `<tr data-routing-new-row hidden>`)
+	if templateStart < 0 {
+		t.Fatal("new route template is missing")
+	}
+	templateEnd := strings.Index(body[templateStart:], `</tr>`)
+	if templateEnd < 0 {
+		t.Fatal("new route template row is incomplete")
+	}
+	template := body[templateStart : templateStart+templateEnd]
+	for _, control := range []string{`class="routing-row-menu"`, `data-routing-remove`, `data-routing-undo`} {
+		if !strings.Contains(template, control) {
+			t.Fatalf("new route template is missing removable-route control %s", control)
+		}
+	}
+}
+
 func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 	script := currentRoutingEditorScript()
 	if !strings.Contains(script, `form.parentElement.querySelector('[data-wfa-add-modal]')`) {
