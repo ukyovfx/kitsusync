@@ -20,7 +20,7 @@ The visual reference is `cgwire/kitsu` at commit `52eb3029a4835f45c9dde06154e859
 - `src/styles/shared.scss` — compact data tables and row separators.
 - `src/components/widgets/RouteTabs.vue` and `RouteSectionTabs.vue` — label-based route tabs.
 - `src/components/widgets/ListPageHeader.vue` — shared tab hairline and active underline.
-- `src/components/widgets/ProductionTeamList.vue` — compact team table.
+- `src/components/lists/ProductionTeamList.vue` — compact team table.
 - `src/components/pages/ProductionSettings.vue` — settings navigation.
 - `src/components/widgets/Card.vue` — justified bounded surfaces.
 - `src/components/widgets/ButtonSimple.vue` and `TextField.vue` — action and form patterns.
@@ -58,7 +58,7 @@ Keep exceptions limited to:
 - System Status telemetry charts
 - concepts specific to Kitsu and Discord integration
 
-Orange communicates brand, active selection, and primary action. Green, yellow, and red retain semantic meaning for healthy, warning, and error states. Do not recolor semantic states as brand decoration.
+Orange communicates brand, active selection, and primary action. Semantic status vocabulary and meaning for KitsuSync are owned by `CURRENT-IA-UI-SPEC.md`, not by this reusable visual baseline. Do not recolor semantic states as brand decoration.
 
 ## 4. Typography
 
@@ -86,13 +86,13 @@ Use color by role:
 - supporting text: quieter neutral with sufficient contrast
 - borders/dividers: low-contrast hairlines
 - orange: KitsuSync identity, active tab/selection, and meaningful primary action
-- green/yellow/red: healthy/warning/error only
+- semantic state colors follow the screen-specific vocabulary and meaning in `CURRENT-IA-UI-SPEC.md`
 
-Do not use color alone to convey status. Pair it with a concise text label or accessible equivalent. Keep decorative saturation and glow low.
+The current KitsuSync status mapping defined by `CURRENT-IA-UI-SPEC.md` is: Connected / healthy = green; Disconnected / not configured / needs review = yellow/warning where currently defined; Error / hard failure = red. Orange is never a substitute for semantic status. Do not reinterpret a normal Disconnected state as red. Pair status color with concise text or an accessible equivalent; do not use color alone. Keep decorative saturation and glow low.
 
 ## 6. Spacing and density
 
-Use the shared spacing scale already present in KitsuSync as the first choice (4, 8, 12, 16, 24, 32, 48 px). Apply it consistently rather than tuning each page independently.
+Reuse existing KitsuSync spacing tokens and values where they exist. Prefer the established compact Kitsu/KitsuSync spacing rhythm. Introduce or normalize shared tokens only as an explicit implementation decision; do not invent one-off page spacing.
 
 Prefer compact, data-oriented spacing:
 
@@ -174,12 +174,7 @@ Use orange sparingly for the primary action or active state. Do not style every 
 
 Badges are compact labels, not large panels. Use semantic colors consistently:
 
-- green for healthy/connected
-- yellow for attention/warning
-- red for failure/disconnected only when the product meaning calls for an error
-- neutral for informational or unknown state
-
-Do not make brand orange stand in for health. Keep status near the entity or row it describes, and do not add actions to healthy rows without a real reason.
+The screen-specific status vocabulary and meaning in `CURRENT-IA-UI-SPEC.md` are authoritative; this baseline defines visual treatment only. Its current mapping is Connected / healthy = green; Disconnected / not configured / needs review = yellow/warning where currently defined; Error / hard failure = red. Orange is never a substitute for semantic status, and normal Disconnected state must not be shown as red. Pair the status with concise text or an accessible equivalent. Keep status near the entity or row it describes, and do not add actions to healthy rows without a real reason.
 
 ## 15. Settings and disclosures
 
