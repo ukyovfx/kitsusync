@@ -195,10 +195,19 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="kitsu_hostname"`) {
 		t.Fatal("expected a named Kitsu hostname field")
 	}
-	for _, want := range []string{`name="kitsu_external_url"`, "External Kitsu URL (optional)", "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting.", "Check link"} {
+	for _, want := range []string{`name="kitsu_external_url"`, `id="external-kitsu-url-form"`, `name="action" value="save_external_kitsu_url"`, "External Kitsu URL (optional)", "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting.", "Check link", "Save"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("external Kitsu URL field missing %q", want)
 		}
+	}
+	if !strings.Contains(body, `id="save-external-kitsu-url" type="submit" class="btn" disabled`) {
+		t.Fatal("external URL Save must start disabled until the field changes")
+	}
+	if !strings.Contains(body, `data-initial-value="https://external.kitsu.example.test"`) {
+		t.Fatal("external URL field must retain its saved value as the change baseline")
+	}
+	if !strings.Contains(body, "externalURLSaveButton.disabled=externalURL.value===externalURL.getAttribute('data-initial-value')") {
+		t.Fatal("external URL Save must enable only after the value changes")
 	}
 	if !strings.Contains(body, "When empty, the Kitsu URL is used.") {
 		t.Fatal("missing external URL fallback copy")
@@ -212,17 +221,17 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `name="bot_token"`) {
 		t.Fatal("expected the Discord Bot token field")
 	}
-	if got := strings.Count(body, `class="connection-save-form"`); got != 2 {
-		t.Fatalf("expected two independent connection forms, got %d", got)
+	if got := strings.Count(body, `class="connection-save-form`); got != 3 {
+		t.Fatalf("expected three independent save forms, got %d", got)
 	}
 	if !strings.Contains(body, `id="kitsu-connection-form"`) || !strings.Contains(body, `form="kitsu-connection-form"`) {
-		t.Fatal("advanced Kitsu fields must remain associated with the Kitsu save form")
+		t.Fatal("specialist Kitsu fields must remain associated with the Kitsu save form")
 	}
 	if !strings.Contains(body, `name="action" value="save_kitsu"`) || !strings.Contains(body, `name="action" value="save_discord"`) {
 		t.Fatal("expected explicit independent save actions")
 	}
-	if !strings.Contains(body, `value="Kitsu connection saved`) && strings.Contains(body, `>Save<`) {
-		t.Fatal("did not expect a generic global Save action")
+	if strings.Contains(body, `name="kitsu_external_url" form="kitsu-connection-form"`) {
+		t.Fatal("External Kitsu URL must not be coupled to Kitsu credential saving")
 	}
 	if strings.Count(body, `name="kitsu_bot_token"`) != 1 || strings.Count(body, `name="bot_token"`) != 1 {
 		t.Fatal("expected each current secret field to appear once")
@@ -230,8 +239,8 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if strings.Contains(body, `name="kitsu_bot_token" value=`) || strings.Contains(body, `name="bot_token" value=`) {
 		t.Fatal("did not expect stored secrets in rendered fields")
 	}
-	if strings.Count(body, `class="connection-save-form"`) != 2 {
-		t.Fatal("expected exactly two save-form boundaries")
+	if strings.Count(body, `class="connection-save-form`) != 3 {
+		t.Fatal("expected exactly three independent save-form boundaries")
 	}
 	if strings.Contains(body, "Kitsu Runtime") || strings.Contains(body, "Runtime email") || strings.Contains(body, "Runtime password") || strings.Contains(body, "Legacy fallback") {
 		t.Fatal("did not expect internal Runtime terminology in the edit form")
@@ -259,6 +268,117 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	}
 	if strings.Contains(body, `class="connection-state-row"`) || strings.Contains(body, `>Token<`) || strings.Contains(body, `>Connection<`) {
 		t.Fatal("edit form should not duplicate token and connection state rows")
+	}
+}
+
+func TestConnectionsSaveExternalKitsuURLIndependentlyAndReloads(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, KitsuDisplayURLSettingKey, "https://normal.kitsu.example.test")
+	model.SetSetting(db, "kitsu.hostname", "http://internal-kitsu:8080")
+	model.SetSecretSetting(db, RuntimeKitsuTokenSettingKey, "existing-token-marker")
+
+	form := url.Values{"action": {"save_external_kitsu_url"}, "kitsu_external_url": {"https://links.kitsu.example.test/"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?edit=1&lang=en", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
+	rr := httptest.NewRecorder()
+	BotHandler(db, nil)(rr, req)
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "external_kitsu_url_saved") {
+		t.Fatalf("expected External Kitsu URL save redirect, got %d %q", rr.Code, rr.Header().Get("Location"))
+	}
+	if got := ExternalKitsuURL(db); got != "https://links.kitsu.example.test" {
+		t.Fatalf("saved external URL = %q", got)
+	}
+	if got := model.GetSetting(db, "kitsu.hostname"); got != "http://internal-kitsu:8080" {
+		t.Fatalf("external URL save changed runtime Kitsu host: %q", got)
+	}
+	if got := model.GetSetting(db, RuntimeKitsuTokenSettingKey); got != "existing-token-marker" {
+		t.Fatalf("external URL save changed Kitsu token: %q", got)
+	}
+
+	reload := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
+	body := renderConnectionsEditFormWithHealth("en", reload, db, "", "", "", KitsuHostForUI(db), false, false, "")
+	if !strings.Contains(body, `name="kitsu_external_url" form="external-kitsu-url-form" value="https://links.kitsu.example.test"`) {
+		t.Fatal("saved External Kitsu URL was not restored after reload")
+	}
+}
+
+func TestConnectionsExternalKitsuCheckLinkDoesNotSave(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, KitsuDisplayURLSettingKey, "https://normal.kitsu.example.test")
+	model.SetSetting(db, PublicKitsuURLSettingKey, "https://legacy-links.example.test")
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
+	body := renderConnectionsEditFormWithHealth("en", req, db, "", "", "", "", false, false, "")
+	if !strings.Contains(body, `href="https://legacy-links.example.test" target="_blank" rel="noopener noreferrer">Check link</a>`) {
+		t.Fatal("Check link should validate the currently saved effective URL")
+	}
+	if strings.Contains(body, `name="kitsu_external_url" form="kitsu-connection-form"`) {
+		t.Fatal("Check link field must not be submitted with the Kitsu connection form")
+	}
+	if got := ExternalKitsuURL(db); got != "https://legacy-links.example.test" {
+		t.Fatalf("rendering Check link changed saved External Kitsu URL: %q", got)
+	}
+}
+
+func TestConnectionsClearExternalKitsuURLRestoresNormalURLFallback(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, KitsuDisplayURLSettingKey, "https://normal.kitsu.example.test")
+	model.SetSetting(db, ExternalKitsuURLSettingKey, "https://links.kitsu.example.test")
+	model.SetSetting(db, PublicKitsuURLSettingKey, "https://old-links.kitsu.example.test")
+	form := url.Values{"action": {"save_external_kitsu_url"}, "kitsu_external_url": {""}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?edit=1&lang=en", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
+	rr := httptest.NewRecorder()
+	BotHandler(db, nil)(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected clear to save, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if ExternalKitsuURL(db) != "" {
+		t.Fatalf("external URL was not cleared: %q", ExternalKitsuURL(db))
+	}
+	if got := PublicKitsuURL(db); got != "https://normal.kitsu.example.test" {
+		t.Fatalf("clearing external URL fallback = %q", got)
+	}
+}
+
+func TestConnectionsExternalKitsuSaveFailureKeepsDraftAndShowsInlineError(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	if err := db.Exec(`CREATE TRIGGER fail_external_kitsu_url BEFORE INSERT ON settings WHEN NEW.key = 'kitsu.external_url' BEGIN SELECT RAISE(FAIL, 'injected'); END`).Error; err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+	draft := "https://typed-links.example.test/"
+	form := url.Values{"action": {"save_external_kitsu_url"}, "kitsu_external_url": {draft}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?edit=1&lang=en", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
+	rr := httptest.NewRecorder()
+	BotHandler(db, nil)(rr, req)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected persistence failure, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), `value="https://typed-links.example.test/"`) || !strings.Contains(rr.Body.String(), `id="external-kitsu-url-error"`) || !strings.Contains(rr.Body.String(), "could not be saved") {
+		t.Fatal("failed save must preserve the typed value and show an inline error")
+	}
+	if strings.Contains(rr.Body.String(), `id="save-external-kitsu-url" type="submit" class="btn" disabled`) {
+		t.Fatal("failed save should leave the changed draft available for retry")
+	}
+	if ExternalKitsuURL(db) != "" {
+		t.Fatalf("failed save persisted the URL: %q", ExternalKitsuURL(db))
+	}
+}
+
+func TestConnectionsExternalKitsuSaveValidationErrorPreservesDraftInJapanese(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	draft := "not a valid URL"
+	form := url.Values{"action": {"save_external_kitsu_url"}, "kitsu_external_url": {draft}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?edit=1&lang=ja", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
+	rr := httptest.NewRecorder()
+	BotHandler(db, nil)(rr, req)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), `value="not a valid URL"`) || !strings.Contains(rr.Body.String(), "外部Kitsu URLを確認してください") {
+		t.Fatalf("expected Japanese inline validation error with draft preserved, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

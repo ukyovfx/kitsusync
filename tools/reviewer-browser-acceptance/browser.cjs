@@ -14,8 +14,8 @@ fs.mkdirSync(output, { recursive: true });
 const records = [];
 const errors = [];
 const locales = [
-  { lang: 'en', automatic: 'Automatic', overrides: 'Overrides', supervisor: 'Project Supervisor', comp: 'Compositing Supervisor' },
-  { lang: 'ja', automatic: '自動', overrides: 'Overrides', supervisor: 'Project Supervisor', comp: 'Compositing担当' },
+  { lang: 'en', automatic: 'Automatic recipients', overrides: 'Additional recipients', supervisor: 'Project Supervisor', comp: 'Compositing Supervisor', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
+  { lang: 'ja', automatic: '自動通知先', overrides: '追加通知先', supervisor: 'Project Supervisor', comp: 'Compositing担当', tabs: ['概要', '通知', 'チーム', '設定'] },
 ];
 const viewports = [
   { name: 'desktop', width: 1440, height: 1000 },
@@ -28,8 +28,37 @@ const backgroundViewports = [
 ];
 
 async function record(page, route, locale, viewport, state, detail) {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-  if (overflow) throw new Error(`${route} overflows at ${viewport}`);
+  const layout = await page.evaluate(() => {
+    const viewport = document.documentElement.clientWidth;
+    const panel = document.querySelector('#panel-notifications');
+    const notifications = document.querySelector('.production-notifications');
+    const offenders = [...document.body.querySelectorAll('*')].map(element => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        tag: element.tagName,
+        id: element.id,
+        className: typeof element.className === 'string' ? element.className.slice(0, 100) : '',
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        width: Math.round(rect.width),
+        minWidth: style.minWidth,
+        gridColumns: style.gridTemplateColumns,
+        overflowX: style.overflowX,
+      };
+    }).filter(element => element.right > viewport + 2 || element.left < -2).slice(0, 12);
+    return {
+      document: document.documentElement.scrollWidth,
+      body: document.body.scrollWidth,
+      viewport,
+      notificationsGrid: panel ? getComputedStyle(panel).gridTemplateColumns : '',
+      notificationsMinWidth: notifications ? getComputedStyle(notifications).minWidth : '',
+      offenders,
+    };
+  });
+  if (layout.document > layout.viewport || layout.body > layout.viewport) {
+    throw new Error(`${route} overflows at ${viewport}: ${JSON.stringify(layout)}`);
+  }
   const body = await page.locator('body').innerText();
   if (body.includes('\uFFFD') || body.includes('Ã') || body.includes('ï¿½')) throw new Error(`${route} contains mojibake at ${locale}`);
   records.push({ route, locale, viewport, state, detail });
@@ -40,8 +69,12 @@ async function fixture(page, scenario) {
   if (response.status() !== 204) throw new Error(`synthetic fixture rejected state ${scenario}`);
 }
 
-async function gotoUsers(page, locale, extra = '') {
-  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=users&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
+async function gotoWFARecipients(page, locale, extra = '') {
+  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=notifications&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
+}
+
+async function gotoProduction(page, locale, tab, extra = '') {
+  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${tab}&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
 function automaticGroup(page, locale) {
@@ -316,6 +349,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
   const browser = await chromium.launch({ headless: true, args: ['--disable-dev-shm-usage'] });
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: false });
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -379,7 +413,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
 
     // Enter through the ordinary protected route and complete the ordinary login form.
-    await gotoUsers(page, locales[0]);
+    await gotoWFARecipients(page, locales[0]);
     if (!page.url().includes('/bot/login')) throw new Error('protected Production Users route did not redirect to login');
     const unauthenticatedWrite = await page.request.post(`${base}/bot/admin/projects`, {
       form: { action: 'add_production_reviewer_target', project_id: 'reviewer-production', task_type_id: 'task-comp', target_kind: 'user', target_id: '22222222222222234' },
@@ -397,19 +431,210 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
     records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop', state: 'synthetic manager login', detail: 'normal form authenticated against the isolated Kitsu fixture and received a server-created HttpOnly session' });
 
-    await gotoUsers(page, locales[0]);
-    if (!(await page.locator('.production-reviewer-manager').count())) throw new Error('Reviewer manager did not render');
+    // Production-detail IA acceptance: this stays in the same authenticated
+    // Chromium context and uses only the isolated fixture database/services.
+    for (const locale of locales) {
+      for (const viewport of viewports) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        await gotoProduction(page, locale, 'overview');
+        const tabLinks = page.locator('.production-tabs [role="tab"]');
+        const tabLabels = (await tabLinks.allTextContents()).map(text => text.trim());
+        if (tabLabels.length !== 4 || JSON.stringify(tabLabels) !== JSON.stringify(locale.tabs)) {
+          throw new Error(`Production primary navigation is not the four-section ${locale.lang} set: ${JSON.stringify(tabLabels)}`);
+        }
+        if (await page.locator('.production-identity').count() !== 1 || (await page.locator('.production-identity').innerText()).includes('Selected Production')) {
+          throw new Error(`Production identity header is redundant or missing in ${locale.lang}`);
+        }
+        const tabTreatment = await page.locator('.production-tabs [role="tab"].active').evaluate(node => {
+          const tab = getComputedStyle(node);
+          const underline = getComputedStyle(node, '::after');
+          const nav = getComputedStyle(node.closest('.production-tabs'));
+          return {
+            tabBackground: tab.backgroundColor,
+            tabRadius: tab.borderRadius,
+            tabShadow: tab.boxShadow,
+            underlineContent: underline.content,
+            underlineHeight: underline.height,
+            underlineBottom: underline.bottom,
+            navBorderStyle: nav.borderBottomStyle,
+          };
+        });
+        if (tabTreatment.tabBackground !== 'rgba(0, 0, 0, 0)' || tabTreatment.tabRadius !== '0px' || tabTreatment.tabShadow !== 'none' ||
+            tabTreatment.underlineContent !== '""' || tabTreatment.underlineHeight !== '2px' || tabTreatment.underlineBottom !== '-7px' || tabTreatment.navBorderStyle !== 'solid') {
+          throw new Error(`Production tabs are not plain labels on a shared hairline/underline in ${locale.lang}: ${JSON.stringify(tabTreatment)}`);
+        }
+        if (await page.locator('.production-summary-card,.production-summary-grid').count()) throw new Error('Overview retained metric-card UI');
+        const overview = await page.locator('#panel-overview').innerText();
+        for (const expected of [locale.lang === 'ja' ? '状態' : 'Status', locale.lang === 'ja' ? '現在の問題' : 'Current issues', 'Storyboard']) {
+          if (!overview.includes(expected)) throw new Error(`Overview is missing real status/activity ${expected} in ${locale.lang}`);
+        }
+        if (overview.includes('Must not leak') || overview.includes('Current issues (0)')) throw new Error('Overview leaked cross-Production activity or invented a count');
+        const overviewSections = await page.locator('.production-overview > .production-settings-section').evaluateAll(sections => sections.map(section => {
+          const style = getComputedStyle(section);
+          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+        }));
+        if (overviewSections.length < 2 || overviewSections[0].borderTopStyle !== 'none' || overviewSections.slice(1).some(section => section.borderTopStyle !== 'solid' || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
+          throw new Error(`Overview sections are not a compact divider hierarchy in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        }
+        await page.screenshot({ path: path.join(output, `production-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, one current-issues section, exact-Production recent activity');
+
+        await gotoProduction(page, locale, 'notifications');
+        const routingHeadings = (await page.locator('.production-routing-summary-head strong').allTextContents()).map(text => text.trim());
+        if (!routingHeadings.includes('Kitsu Task Type') || !routingHeadings.includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) {
+          throw new Error(`Notifications routing columns are missing or concatenated in ${locale.lang}: ${JSON.stringify(routingHeadings)}`);
+        }
+        if (!(await page.locator('.production-routing-summary-row').innerText()).includes('#compositing')) throw new Error(`real seeded destination is missing in ${locale.lang}`);
+        if (await page.locator('[data-current-routing-form]').count()) throw new Error('Notifications read mode exposed routing edit controls');
+        const editLink = page.getByRole('link', { name: locale.lang === 'ja' ? '編集' : 'Edit', exact: true });
+        if (await editLink.count() !== 1) throw new Error(`Notifications should show one edit entry point in ${locale.lang}`);
+        if (await page.locator('#notification-preview,.discord-message-preview,[data-notification-preview-select]').count()) throw new Error(`Removed Notification Preview returned in ${locale.lang}`);
+        if (await page.locator('.production-wfa-recipients').count() !== 1) throw new Error(`WFA recipients are missing from Notifications in ${locale.lang}`);
+        if (!(await page.locator('#wfa-recipients').innerText()).includes(locale.automatic) || !(await page.locator('#wfa-recipients').innerText()).includes(locale.overrides)) {
+          throw new Error(`Notifications is missing Automatic or Additional recipients in ${locale.lang}`);
+        }
+        const notificationSections = await page.locator('.production-notifications > .production-settings-section').evaluateAll(sections => sections.map(section => {
+          const style = getComputedStyle(section);
+          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+        }));
+        if (notificationSections.length !== 2 || notificationSections[0].borderTopStyle !== 'none' || notificationSections[1].borderTopStyle !== 'solid' || notificationSections.some(section => section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
+          throw new Error(`Routing and WFA are not distinct flat sections in ${locale.lang}: ${JSON.stringify(notificationSections)}`);
+        }
+        await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'real routing state and existing Automatic/additional-recipient controls; no synthetic Notification Preview');
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        if (await page.locator('[data-current-routing-form]').count() !== 1 || !(await page.locator('[data-current-routing-form]').innerText()).includes(locale.lang === 'ja' ? '変更を適用' : 'Apply changes')) {
+          throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}`);
+        }
+        if (await page.locator('[data-current-routing-form] select[name="task_type_id"]').count() === 0 || await page.locator('[data-current-routing-form] select[name="destination_webhook_id"]').count() === 0) {
+          throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
+        }
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'routing edit mode', 'existing controls are visible; form was not submitted');
+        await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
+
+        await gotoProduction(page, locale, 'team');
+        const teamTab = page.locator('#panel-team');
+        if (await page.locator('.production-team-page').count() !== 1 || await page.locator('.production-wfa-recipients').count()) {
+          throw new Error(`Team is not a separate read-only view in ${locale.lang}`);
+        }
+        if (await page.locator('form input[name="action"][value*="production_member"],form input[name="action"][value*="production_role"]').count()) throw new Error('Team exposed membership or role mutation');
+        if ((await teamTab.innerText()).includes('Example task') || (await teamTab.innerText()).includes('Assigned')) throw new Error('Team inferred task assignments from Department membership');
+        const teamText = await teamTab.innerText();
+        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク', 'User Linking'] : ['Team', 'Supervision scope', 'Not linked', 'User Linking']) {
+          if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
+        }
+        const teamRows = await page.locator('.production-team-row').evaluateAll(rows => rows.map(row => {
+          const style = getComputedStyle(row);
+          return { display: style.display, borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+        }));
+        if (!teamRows.length || teamRows[0].display !== 'grid' || teamRows[0].borderTopStyle !== 'none' || teamRows.slice(1).some(row => row.borderTopStyle !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
+          throw new Error(`Production Team is not a compact divider list in ${locale.lang}: ${JSON.stringify(teamRows)}`);
+        }
+        await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'live Production Team', 'Kitsu Team, effective role, derived Supervisor scope, and global User Linking state; no local membership editor');
+
+        await gotoProduction(page, locale, 'settings');
+        const settings = await page.locator('#panel-settings').innerText();
+        const settingsPositions = ['Storage', locale.lang === 'ja' ? '技術情報' : 'Technical details', locale.lang === 'ja' ? '診断' : 'Diagnostics', 'Danger Zone'].map(label => settings.indexOf(label));
+        if (settingsPositions.some(position => position < 0) || settingsPositions.some((position, index) => index > 0 && position <= settingsPositions[index - 1])) {
+          throw new Error(`Settings sections are missing or out of order in ${locale.lang}: ${JSON.stringify(settingsPositions)}`);
+        }
+        const settingsLayout = await page.locator('.production-settings-list').evaluate(node => {
+          const style = getComputedStyle(node);
+          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: node.querySelectorAll(':scope > .production-settings-section').length };
+        });
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4) {
+          throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
+        }
+        if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
+        const saveButton = page.locator('.drive-storage-form [data-drive-save]');
+        const storageInput = page.locator('#storage-url');
+        const originalStorage = await storageInput.inputValue();
+        if (!(await saveButton.isDisabled())) throw new Error(`Storage Save should start disabled in ${locale.lang}`);
+        await storageInput.fill(`${originalStorage}/changed`);
+        if (await saveButton.isDisabled()) throw new Error(`Storage Save did not enable after an actual edit in ${locale.lang}`);
+        await storageInput.fill(originalStorage);
+        if (!(await saveButton.isDisabled())) throw new Error(`Storage Save did not disable when the original value was restored in ${locale.lang}`);
+
+        const technicalIndent = await page.locator('#technical-details').evaluate(node => ({
+          summary: parseFloat(getComputedStyle(node.querySelector('summary')).paddingInlineStart),
+          content: parseFloat(getComputedStyle(node.querySelector('.production-technical-details')).marginInlineStart),
+        }));
+        if (technicalIndent.summary < 12 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
+        await page.locator('#technical-details summary').click();
+        if (!(await page.locator('#technical-details[open]').count())) throw new Error(`Technical details did not expand in ${locale.lang}`);
+        const copyButtons = page.locator('#technical-details .production-copy-id');
+        if (await copyButtons.count() !== 3) throw new Error(`Technical identifiers need three copy controls in ${locale.lang}`);
+        const productionCopy = copyButtons.nth(0);
+        const copyLabel = locale.lang === 'ja' ? 'コピーしました' : 'Copied';
+        await productionCopy.click();
+        const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+        if (clipboardText !== 'reviewer-production' || (await productionCopy.innerText()) !== copyLabel) {
+          throw new Error(`Production ID copy action failed in ${locale.lang}: button=${await productionCopy.innerText()}`);
+        }
+        await page.locator('#diagnostics summary').click();
+        if (!(await page.locator('#diagnostics[open]').count()) || await page.locator('#diagnostics details[open]').count()) throw new Error(`Diagnostics did not expand in a compact collapsed-details state in ${locale.lang}`);
+        await page.locator('#danger-zone summary').click();
+        if (!(await page.locator('#danger-zone[open]').count())) throw new Error(`Danger Zone did not expand in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'settings and disclosures', `section order preserved; Save is change-sensitive; technical indentation=${JSON.stringify(technicalIndent)}`);
+
+        const legacyCases = [
+          { query: 'storage-settings', panel: 'settings', target: '#storage', expanded: null },
+          { query: 'activity', panel: 'overview', target: '#recent-activity', expanded: null },
+          { query: 'troubleshooting', panel: 'settings', target: '#diagnostics', expanded: '#diagnostics' },
+          { query: 'advanced', panel: 'settings', target: '#technical-details', expanded: '#technical-details' },
+          { query: 'danger-zone', panel: 'settings', target: '#danger-zone', expanded: '#danger-zone' },
+          { query: 'users', panel: 'team', target: '#production-team', expanded: null },
+          { query: 'user-settings', panel: 'team', target: '#production-team', expanded: null },
+          { query: 'reviewers', panel: 'notifications', target: '#wfa-recipients', expanded: null },
+        ];
+        for (const legacy of legacyCases) {
+          await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${legacy.query}&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+          if (await page.locator(`#panel-${legacy.panel}`).count() !== 1 || await page.locator(legacy.target).count() !== 1) {
+            throw new Error(`legacy Production destination ${legacy.query} did not map to ${legacy.panel}/${legacy.target}`);
+          }
+          if (legacy.expanded && !(await page.locator(legacy.expanded).evaluate(node => node.open))) throw new Error(`legacy Production disclosure ${legacy.query} did not open`);
+          if (legacy.query !== 'users' && legacy.query !== 'user-settings') {
+            const isFocused = await page.evaluate(selector => {
+              const target = document.querySelector(selector);
+              return !!target && (document.activeElement === target || target.querySelector('summary') === document.activeElement);
+            }, legacy.target);
+            if (!isFocused) throw new Error(`legacy Production destination ${legacy.query} did not receive focus`);
+          }
+          await record(page, `/bot/admin/projects?tab=${legacy.query}`, locale.lang, viewport.name, 'legacy route mapped', `mapped to ${legacy.panel}; destination ${legacy.target}`);
+        }
+
+        await page.goto(`${base}/bot/admin/health?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        const systemIndent = await page.locator('.pipeline-health-diagnostic').first().evaluate(node => ({
+          summary: parseFloat(getComputedStyle(node.querySelector('summary')).paddingInlineStart),
+          parent: parseFloat(getComputedStyle(node).marginInlineStart),
+          content: parseFloat(getComputedStyle(node.querySelector('.pipeline-health-diagnostic-content')).marginInlineStart),
+        }));
+        if (systemIndent.parent < 12 || systemIndent.content < systemIndent.parent) throw new Error(`System Status disclosure indentation is not hierarchical: ${JSON.stringify(systemIndent)}`);
+        await record(page, '/bot/admin/health', locale.lang, viewport.name, 'diagnostic disclosure indent', JSON.stringify(systemIndent));
+      }
+    }
+
+    await gotoWFARecipients(page, locales[0]);
+    if (!(await page.locator('.production-wfa-recipients').count())) throw new Error('WFA recipients did not render in Notifications');
+    if (await page.locator('#tab-reviewers').count() || await page.locator('.production-tabs [role="tab"]').filter({ hasText: /^Reviewers$/ }).count()) throw new Error('Reviewers remains a primary Production tab');
     await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor'], [
       'Departmentless Supervisor', 'Wrong Department Supervisor', 'Production Manager', 'Global Admin',
       'Demoted Supervisor', 'Project Manager Override', 'Position Only', 'Inactive Supervisor', 'Kitsu Bot', 'Unlinked Supervisor',
     ]);
-    const teamText = await page.locator('main').innerText();
-    for (const expected of ['Global Admin', 'Guild Nick Supervisor', 'Global Name Fallback', '@username-fallback', 'Synthetic Review Production']) {
+    const productionIdentity = await page.locator('.production-identity').innerText();
+    if (!productionIdentity.includes('Synthetic Review Production')) throw new Error('Production identity header is missing the selected Production name');
+    await gotoProduction(page, locales[0], 'team');
+    const teamText = await page.locator('#production-team').innerText();
+    for (const expected of ['Global Admin', 'Guild Nick Supervisor', 'Global Name Fallback', '@username-fallback']) {
       if (!teamText.includes(expected)) throw new Error(`Production Team view is missing ${expected}`);
     }
     for (const stale of ['Automatic inactive while overridden', 'Add Production member', 'Remove Production member', 'Reviewer / Checker task types', 'Production Manager fallback', 'global CheckerMap']) {
       if (teamText.includes(stale)) throw new Error(`stale/manual Reviewer copy remains: ${stale}`);
     }
+    await gotoWFARecipients(page, locales[0]);
     const userForms = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="user"]') });
     const userSelect = userForms.locator('select[name="target_id"]');
     for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
@@ -422,8 +647,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     for (const blocked of [guildID, '33333333333333332']) {
       if (await roleSelect.locator(`option[value="${blocked}"]`).count()) throw new Error(`@everyone/non-mentionable Role ${blocked} is selectable`);
     }
-    await page.screenshot({ path: path.join(output, 'reviewer-en-desktop-automatic.png'), fullPage: true });
-    await record(page, '/bot/admin/projects?tab=users', 'en', 'desktop', 'automatic and candidate filtering', 'matching project_role Supervisor shown by guild nickname; ineligible roles and members excluded');
+    await page.screenshot({ path: path.join(output, 'wfa-recipients-en-desktop-automatic.png'), fullPage: true });
+    await record(page, '/bot/admin/projects?tab=notifications', 'en', 'desktop', 'automatic and candidate filtering', 'matching project_role Supervisor shown by guild nickname; ineligible roles and members excluded');
 
     // The live Task Type Department, not assignment or Position, selects the automatic Supervisor.
     await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-animation');
@@ -434,7 +659,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await page.locator('form.reviewer-task-type-select').getByRole('button', { name: 'View', exact: true }).click();
     await page.waitForLoadState('networkidle');
     await assertAutomatic(page, locales[0], ['No matching Supervisor']);
-    records.push({ route: '/bot/admin/projects?tab=users', locale: 'en', viewport: 'desktop', state: 'Task Type Department changes', detail: 'Animation and Department-less Task Types produce the expected fail-closed Automatic list' });
+    records.push({ route: '/bot/admin/projects?tab=notifications', locale: 'en', viewport: 'desktop', state: 'Task Type Department changes', detail: 'Animation and Department-less Task Types produce the expected fail-closed Automatic list' });
 
     // Additive controls are real same-origin POST forms protected by normal session/CSRF middleware.
     await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-comp');
@@ -454,7 +679,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const names = await overridesGroup(page, locales[0]).locator('.reviewer-target-row').allInnerTexts();
     if (names.length !== 2) throw new Error(`expected two explicit targets, got ${names.length}`);
     await page.screenshot({ path: path.join(output, 'reviewer-en-desktop-additive.png'), fullPage: true });
-    await record(page, '/bot/admin/projects?tab=users', 'en', 'desktop', 'Automatic plus User and Role Overrides', 'both override kinds appear as additional targets while Automatic remains visible');
+    await record(page, '/bot/admin/projects?tab=notifications', 'en', 'desktop', 'Automatic plus User and Role Overrides', 'both override kinds appear as additional targets while Automatic remains visible');
 
     // Removing one explicit target does not change the automatic reviewer or the other override.
     await overridesGroup(page, locales[0]).locator('.reviewer-target-row').filter({ hasText: 'Guild Nick Override' }).getByRole('button', { name: 'Remove', exact: true }).click();
@@ -475,15 +700,18 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     ];
     for (const state of states) {
       await fixture(page, state.name);
-      await gotoUsers(page, locales[0]);
+      const isTeamState = state.name === 'empty-team' || state.name === 'team-failure';
+      if (isTeamState) await gotoProduction(page, locales[0], 'team');
+      else await gotoWFARecipients(page, locales[0]);
       const body = await page.locator('main').innerText();
-      if (!body.includes(state.expected)) throw new Error(`${state.name} state is unclear; missing ${state.expected}`);
+      const expected = state.name === 'team-failure' ? 'Could not load the Kitsu Production Team' : state.expected;
+      if (!body.includes(expected)) throw new Error(`${state.name} state is unclear; missing ${expected}`);
       if (state.name === 'team-failure' && await page.locator('form.reviewer-target-form input[name="target_kind"][value="user"]').count()) throw new Error('Team read failure left User Reviewer writes enabled');
       if (state.name === 'no-linked' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('unlinked Supervisor appeared as a User Override candidate');
       if (state.name === 'discord-failure' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('Guild lookup failure left a User Override candidate selectable');
       if (state.name === 'stale-membership' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('stale Team membership remained selectable after live Team changed');
       if (state.name === 'no-roles' && await page.locator('form.reviewer-target-form input[name="target_kind"][value="role"]').count()) throw new Error('no-roles state left a Role Override form enabled');
-      await record(page, '/bot/admin/projects?tab=users', 'en', 'desktop', state.name, `visible fail-closed state: ${state.expected}`);
+      await record(page, isTeamState ? '/bot/admin/projects?tab=team' : '/bot/admin/projects?tab=notifications', 'en', 'desktop', state.name, `visible fail-closed state: ${expected}`);
     }
     await fixture(page, 'ready');
 
@@ -507,11 +735,18 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         }
 
-        await gotoUsers(page, locale);
-        if (!(await page.locator('.production-reviewer-manager').count())) throw new Error(`Reviewer UI missing in ${locale.lang}`);
+        await gotoWFARecipients(page, locale);
+        if (!(await page.locator('.production-wfa-recipients').count())) throw new Error(`WFA recipients missing in Notifications for ${locale.lang}`);
         await assertAutomatic(page, locale, [locale.supervisor, locale.comp, 'Global Name Supervisor', 'Username Supervisor']);
-        await page.screenshot({ path: path.join(output, `reviewer-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=users', locale.lang, viewport.name, 'ready', 'Production Team and additive Reviewer controls rendered without overflow or mojibake');
+        if (await page.locator('#tab-reviewers').count()) throw new Error(`Reviewers is still a primary tab in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `wfa-recipients-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'ready', 'WFA Automatic and additional recipients rendered without overflow or mojibake');
+
+        await gotoProduction(page, locale, 'team');
+        if (!(await page.locator('#production-team').count())) throw new Error(`Production Team view missing in ${locale.lang}`);
+        if (await page.locator('form input[name="action"][value*="production_member"],form input[name="action"][value*="production_role"]').count()) throw new Error(`Team mutation controls appeared in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'ready', 'read-only live Team view and derived Supervisor scope rendered without overflow or mojibake');
 
         await page.goto(`${base}/bot/admin/users?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('#global-discord-guild').count())) throw new Error(`User Linking server selector missing in ${locale.lang}`);

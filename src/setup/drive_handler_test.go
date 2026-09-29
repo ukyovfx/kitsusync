@@ -118,7 +118,7 @@ func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang="+tc.lang+"&"+tc.query, nil)
-			body := renderStorageSettingsFeedback(r, tc.lang) + renderSelectedProductionPanel(db, r, project, tc.lang, "storage-settings", "success", "Connected", "", "")
+			body := renderStorageSettingsFeedback(r, tc.lang) + renderSelectedProductionPanel(db, r, project, tc.lang, "settings", "success", "Connected", "")
 			if !strings.Contains(body, tc.want) {
 				t.Fatalf("feedback %q missing from %s", tc.want, body)
 			}
@@ -126,12 +126,12 @@ func TestDriveStoragePanelShowsLocalizedSaveFeedback(t *testing.T) {
 	}
 	for _, lang := range []string{"ja", "en"} {
 		r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang="+lang+"&drive_saved=1", nil)
-		body := renderStorageSettingsFeedback(r, lang) + renderSelectedProductionPanel(db, r, project, lang, "storage-settings", "success", "Connected", "", "")
+		body := renderStorageSettingsFeedback(r, lang) + renderSelectedProductionPanel(db, r, project, lang, "settings", "success", "Connected", "")
 		if !strings.Contains(body, `class="notice notice-success"`) {
 			t.Fatalf("success feedback for %s does not use the canonical success banner: %s", lang, body)
 		}
 	}
-	body := renderSelectedProductionPanel(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang=ja", nil), project, "ja", "storage-settings", "success", "Connected", "", "")
+	body := renderSelectedProductionPanel(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=storage-settings&lang=ja", nil), project, "ja", "settings", "success", "Connected", "")
 	if !strings.Contains(body, "保存中...") || !strings.Contains(body, "drive-storage-form") {
 		t.Fatal("Drive save form is missing localized saving feedback behavior")
 	}

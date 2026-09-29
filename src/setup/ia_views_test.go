@@ -46,7 +46,7 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	if !strings.Contains(body, `role="tablist"`) || !strings.Contains(body, `aria-selected="true"`) || !strings.Contains(body, `aria-labelledby="tab-overview"`) {
 		t.Fatal("selected Production overview tab is not accessible")
 	}
-	for _, tab := range []string{"overview", "notifications", "user-settings", "storage-settings", "activity", "troubleshooting", "advanced", "danger-zone"} {
+	for _, tab := range []string{"overview", "notifications", "team", "settings"} {
 		r := httptest.NewRequest("GET", "/bot/admin/projects?project=synthetic-production&tab="+tab+"&lang=en", nil)
 		w := httptest.NewRecorder()
 		renderIAProductionList(w, r, db, "")
@@ -343,19 +343,19 @@ func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 func TestSelectedProductionTabsHaveSingleAccessiblePanel(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.Project{KitsuProjectID: "tab-semantics-p", Name: "Tab Semantics P"})
-	for _, tab := range []string{"", "notifications", "user-settings", "storage-settings", "activity", "troubleshooting", "advanced", "danger-zone", "invalid"} {
+	for _, tc := range []struct{ requested, selected string }{{"", "overview"}, {"notifications", "notifications"}, {"team", "team"}, {"users", "team"}, {"user-settings", "team"}, {"reviewers", "notifications"}, {"storage-settings", "settings"}, {"activity", "overview"}, {"troubleshooting", "settings"}, {"advanced", "settings"}, {"danger-zone", "settings"}, {"invalid", "overview"}} {
 		path := "/bot/admin/projects?project=tab-semantics-p&lang=en"
-		if tab != "" {
-			path += "&tab=" + tab
+		if tc.requested != "" {
+			path += "&tab=" + tc.requested
 		}
 		w := httptest.NewRecorder()
 		renderIAProductionList(w, httptest.NewRequest("GET", path, nil), db, "")
 		body := w.Body.String()
 		if strings.Count(body, `role="tabpanel"`) != 1 || strings.Count(body, `role="tablist"`) < 1 {
-			t.Fatalf("tab %q did not render one tab panel", tab)
+			t.Fatalf("tab %q did not render one tab panel", tc.requested)
 		}
-		if tab == "invalid" && !strings.Contains(body, `id="panel-overview"`) {
-			t.Fatal("invalid tab did not fall back to Overview")
+		if !strings.Contains(body, `id="panel-`+tc.selected+`"`) {
+			t.Fatalf("tab %q did not select %q", tc.requested, tc.selected)
 		}
 	}
 }
@@ -604,9 +604,12 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Notification preview", "preview_task_type_id", "rendered notification"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("obsolete notification preview remains visible: %q", forbidden)
+	if strings.Contains(body, "Notification preview") || strings.Contains(body, "Example task") || strings.Contains(body, "discord-message-preview") {
+		t.Fatal("Notifications retained the removed synthetic preview")
+	}
+	for _, want := range []string{"WFA recipients", "Automatic recipients", "Additional recipients"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Notifications missing WFA recipient section %q", want)
 		}
 	}
 	if strings.Contains(body, `name="action" value="save"`) {
@@ -627,8 +630,8 @@ func TestDashboardProblemActionTargetsDirectDestination(t *testing.T) {
 		t.Fatalf("notification issue did not target notification settings: %q %q", notificationURL, notificationLabel)
 	}
 	userURL, userLabel := dashboardProblemAction(r, p, "en", "Reviewer participant is not mapped")
-	if !strings.Contains(userURL, "tab=users") || userLabel != "Review user settings" {
-		t.Fatalf("participant issue did not target user settings: %q %q", userURL, userLabel)
+	if !strings.Contains(userURL, "tab=notifications#wfa-recipients") || userLabel != "Review WFA recipients" {
+		t.Fatalf("participant issue did not target WFA recipient settings: %q %q", userURL, userLabel)
 	}
 }
 
@@ -746,14 +749,28 @@ func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T)
 	advancedRequest := httptest.NewRequest("GET", "/bot/admin/projects?project=selected-advanced-p&tab=advanced&lang=en", nil)
 	advancedWriter := httptest.NewRecorder()
 	renderIAProductionList(advancedWriter, advancedRequest, db, "")
-	if !strings.Contains(advancedWriter.Body.String(), "synthetic-guild") {
+	advancedBody := advancedWriter.Body.String()
+	if !strings.Contains(advancedBody, "synthetic-guild") {
 		t.Fatal("Advanced settings did not expose the technical identifier")
+	}
+	for _, want := range []string{
+		`data-copy-value="selected-advanced-p"`,
+		`data-copy-value="synthetic-guild"`,
+		`data-copy-value="synthetic-category"`,
+		`aria-label="Copy Production ID"`,
+		`aria-label="Copy Discord server ID"`,
+		`aria-label="Copy Category ID"`,
+		`navigator.clipboard.writeText(value)`,
+	} {
+		if !strings.Contains(advancedBody, want) {
+			t.Fatalf("Technical details copy action missing %q", want)
+		}
 	}
 	troubleshootingRequest := httptest.NewRequest("GET", "/bot/admin/projects?project=selected-advanced-p&tab=troubleshooting&lang=en", nil)
 	troubleshootingWriter := httptest.NewRecorder()
 	renderIAProductionList(troubleshootingWriter, troubleshootingRequest, db, "")
 	troubleshootingBody := troubleshootingWriter.Body.String()
-	for _, want := range []string{"Current problem", "Diagnostic details"} {
+	for _, want := range []string{"Diagnostics", "Current issues", "Kitsu connection"} {
 		if !strings.Contains(troubleshootingBody, want) {
 			t.Fatalf("troubleshooting missing %q", want)
 		}
@@ -782,7 +799,7 @@ func TestSelectedProductionOverviewUsesCanonicalConnectionStatuses(t *testing.T)
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=canonical-status-p&lang=ja", nil), db, "")
 	body := w.Body.String()
-	for _, want := range []string{"接続済", "要確認", "プロダクション状態", "Discord接続状態", "通知ルーティング状態"} {
+	for _, want := range []string{"接続済", "更新が必要", "プロダクション接続", "Discordリソース", "通知ルーティング"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("overview missing canonical status content %q", want)
 		}
@@ -802,8 +819,8 @@ func TestSelectedProductionOverviewUsesCompactSummaryAndSeparatesIssues(t *testi
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=compact-overview-p&lang=en", nil), db, "")
 	body := w.Body.String()
-	if strings.Count(body, "production-summary-card") < 4 || !strings.Contains(body, "production-current-issues") {
-		t.Fatalf("overview does not use the compact summary structure: %q", body)
+	if strings.Count(body, `class="status-row"`) != 3 || strings.Contains(body, "production-summary-card") || !strings.Contains(body, "production-current-issues") {
+		t.Fatalf("overview should use a compact three-row status list and separate issues: %q", body)
 	}
 	if strings.Contains(body, "Notification destinations are active.") {
 		t.Fatal("overview exposes redundant notification explanation text")
@@ -1261,8 +1278,12 @@ func TestReadOnlyProductionUsesDedicatedUnconnectedView(t *testing.T) {
 			t.Fatalf("unconnected Production view missing %q: %s", expected, body)
 		}
 	}
-	for _, forbidden := range []string{"production-tabs", "Danger Zone", "Notification state", "User settings", "Task Type"} {
-		if strings.Contains(body, forbidden) {
+	content := body
+	if styleEnd := strings.Index(content, "</style>"); styleEnd >= 0 {
+		content = content[styleEnd+len("</style>"):]
+	}
+	for _, forbidden := range []string{`role="tablist"`, "Danger Zone", "Notification state", "User settings", "Task Type"} {
+		if strings.Contains(content, forbidden) {
 			t.Fatalf("unconnected Production view exposed connected-only content %q", forbidden)
 		}
 	}
@@ -1275,7 +1296,7 @@ func TestReadOnlyProductionUsesDedicatedUnconnectedView(t *testing.T) {
 	}
 }
 
-func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
+func TestProductionTeamShowsLinkedDiscordDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production"}
 	db.Create(&p)
@@ -1285,7 +1306,7 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 		return []kitsu.Person{{ID: "synthetic-participant", FullName: "Synthetic Participant"}}, nil
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
 	if !strings.Contains(body, "Synthetic Discord Name") {
 		t.Fatal("Production User Settings did not show the linked Discord display name")
 	}
@@ -1296,7 +1317,7 @@ func TestProductionUserSettingsShowsParticipantDisplayName(t *testing.T) {
 
 func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production"}
+	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production", Language: "en"}
 	db.Create(&p)
 	if err := model.CreateProjectWebhook(db, p.KitsuProjectID, "compositing", "", "https://example.invalid/1", "channel-1"); err != nil {
 		t.Fatal(err)
@@ -1311,9 +1332,14 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
 	}
-	for _, forbidden := range []string{"Notification preview", "preview_task_type_id", "rendered notification"} {
+	for _, expected := range []string{"WFA recipients", "Automatic recipients", "Additional recipients", "Task Type"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("Notifications missing %q", expected)
+		}
+	}
+	for _, forbidden := range []string{"Notification preview", "Task Type to preview", "Example task rendered", "Please review this task."} {
 		if strings.Contains(body, forbidden) {
-			t.Fatalf("obsolete notification preview remains visible: %q", forbidden)
+			t.Fatalf("removed notification preview content remains: %q", forbidden)
 		}
 	}
 	if strings.Contains(body, `name="action" value="save_current_production_routing"`) || strings.Contains(body, "<select name=\"task_type_id\">") {
@@ -1338,7 +1364,7 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal("routing row still exposes the old always-visible action controls")
 	}
 	if strings.Contains(body, "変更者:") {
-		t.Fatalf("English notification preview leaked the Japanese author label: %s", body)
+		t.Fatalf("English notification UI leaked the Japanese author label: %s", body)
 	}
 }
 
@@ -1346,14 +1372,14 @@ func TestProductionTroubleshootingExposesProcessingDiagnostics(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "diagnostic-production", Name: "Diagnostic Production"}
 	db.Create(&p)
-	body := renderCurrentProductionTroubleshooting(db, p, "en")
-	for _, want := range []string{"Kitsu connection", "Participant retrieval", "User linking", "Recent notification processing"} {
+	body := renderCurrentProductionTroubleshooting(db, p, "en", false)
+	for _, want := range []string{"Diagnostics", "Kitsu connection", "Participant retrieval", "User linking", "Recent notification processing"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("troubleshooting diagnostics missing %q: %s", want, body)
 		}
 	}
 	db.Create(&model.NotificationRoutingDiagnosis{ProductionID: p.KitsuProjectID, Reason: "route missing", Detail: "A route needs review."})
-	body = renderCurrentProductionTroubleshooting(db, p, "en")
+	body = renderCurrentProductionTroubleshooting(db, p, "en", false)
 	if !strings.Contains(body, "A route needs review.") || !strings.Contains(body, "Current issue details") {
 		t.Fatalf("troubleshooting does not expose the current issue detail: %s", body)
 	}
@@ -1363,9 +1389,9 @@ func TestProductionDetailsUsesDetailsLabel(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "details-production", Name: "Details Production"}
 	db.Create(&p)
-	body := renderSelectedProductionPanel(db, httptest.NewRequest("GET", "/bot/admin/projects?project=details-production&tab=advanced&lang=en", nil), p, "en", "advanced", "Connected", "Ready", "Connected server", "Connected server")
-	if !strings.Contains(body, "Details") || strings.Contains(body, "Advanced settings") {
-		t.Fatalf("details panel did not use the current label: %s", body)
+	body := renderSelectedProductionPanel(db, httptest.NewRequest("GET", "/bot/admin/projects?project=details-production&tab=advanced&lang=en", nil), p, "en", "settings", "Connected", "Ready", "")
+	if !strings.Contains(body, "Technical details") || strings.Contains(body, "Advanced settings") || !strings.Contains(body, `id="technical-details"`) || !strings.Contains(body, ` open>`) {
+		t.Fatalf("legacy Details state did not map to expanded Technical details: %s", body)
 	}
 }
 
@@ -1430,7 +1456,7 @@ func TestProductionUserSettingsEmptyStatesHaveNoDecorativeBullets(t *testing.T) 
 	oldReader := reviewerProductionTeamReader
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, nil }
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?tab=users&lang=ja", nil), p, "ja")
 	if strings.Contains(body, "empty-state-mark") || strings.Contains(body, "aria-hidden=\"true\"") || strings.Contains(body, "•") {
 		t.Fatal("Production User Settings empty state contains a decorative bullet")
 	}
@@ -1861,10 +1887,35 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 	db := newIAViewDB(t)
 	preview := model.Project{KitsuProjectID: "live-preview", Name: "Live Preview", ReadOnlyPreview: true}
 	connected := model.Project{KitsuProjectID: "connected-local", Name: "Connected Local"}
-	db.Create(&connected)
+	if err := db.Create(&connected).Error; err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/data/projects/":
+			_, _ = w.Write([]byte(`[{"id":"live-preview","name":"Live Preview"}]`))
+		case "/api/data/projects/live-preview/task-types":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("KitsuJWTToken", "")
+	t.Setenv("KITSU_API_BASE_URL", "")
+	t.Setenv("KITSU_HOSTNAME", "")
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "dashboard-count-test-token"); err != nil {
+		t.Fatal(err)
+	}
 	projects := []model.Project{preview, connected}
-	if got := connectedProductionCount(projects); got != 1 {
-		t.Fatalf("connected Production count = %d, want 1", got)
+	counts := productionConnectionCounts(projects)
+	if counts != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
+		t.Fatalf("Production counts = %+v, want total=2 connected=1 disconnected=1", counts)
 	}
 	if class, label := productionConnectionStatus(preview, "en"); class != "warning" || label != "Disconnected" {
 		t.Fatalf("live-only Production status = %q/%q, want warning/Disconnected", class, label)
@@ -1873,16 +1924,97 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 		t.Fatalf("local Production status = %q/%q, want ok/Connected", class, label)
 	}
 	w := httptest.NewRecorder()
+	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
+	dashboardBody := w.Body.String()
+	if !strings.Contains(dashboardBody, `metric-value">2</div>`) || !strings.Contains(dashboardBody, "Connected <strong>1</strong>") || !strings.Contains(dashboardBody, "Disconnected <strong>1</strong>") {
+		t.Fatalf("Dashboard did not render the live + connected Production counts: %s", dashboardBody)
+	}
+	if !strings.Contains(dashboardBody, `metric-label">Needs attention</div><div class="metric-value">1</div>`) {
+		t.Fatal("disconnected live Production incorrectly increased Needs attention")
+	}
+	w = httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?lang=en", nil), db, "")
 	body := w.Body.String()
+	if !strings.Contains(body, "Live Preview") || !strings.Contains(body, "Connected Local") {
+		t.Fatal("Production list did not retain both the live-only and connected Kitsu Productions")
+	}
 	if !strings.Contains(body, `class="status-pill ok">Connected</span>`) {
 		t.Fatal("Production list does not render the connected semantic state")
 	}
 	if strings.Contains(body, `min-width:170px`) {
 		t.Fatal("Production status layout still reserves the old fixed-width column")
 	}
-	if got := replaceDashboardConnectedCount(`<div class="metric-value">2</div>`, 2, connectedProductionCount(projects)); got != `<div class="metric-value">1</div>` {
-		t.Fatalf("Dashboard connected count rendering = %q, want 1", got)
+	if got := dashboardProductionMetric("en", counts); !strings.Contains(got, "Production") || !strings.Contains(got, "metric-value\">2</div>") || !strings.Contains(got, "Connected <strong>1</strong>") || !strings.Contains(got, "Disconnected <strong>1</strong>") {
+		t.Fatalf("Dashboard Production summary does not expose total/connected/disconnected: %s", got)
+	}
+	if got := productionListConnectionSummary("en", counts); !strings.Contains(got, "Connected <strong>1</strong>") || !strings.Contains(got, "Disconnected <strong>1</strong>") {
+		t.Fatalf("Production list summary does not expose both states: %s", got)
+	}
+	if !strings.Contains(body, "Connected <strong>1</strong>") || !strings.Contains(body, "Disconnected <strong>1</strong>") {
+		t.Fatal("Production list summary does not reflect the shared live + local Production state")
+	}
+	management := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, projects, 0, SharedBotRuntimeReadiness{}, nil)
+	start := strings.Index(management, `href="/bot/admin/projects?lang=en"`)
+	if start < 0 {
+		t.Fatal("Dashboard Management menu is missing the Production card")
+	}
+	end := strings.Index(management[start:], `</a>`)
+	productionCard := management[start : start+end]
+	if !strings.Contains(productionCard, "Connected 1") || !strings.Contains(productionCard, "Disconnected 1") || strings.Contains(productionCard, "Needs review 1") {
+		t.Fatalf("Dashboard Management Production summary has incompatible state semantics: %s", productionCard)
+	}
+	if class, _, _ := iaStatus(db, preview, "en"); class == "bad" {
+		t.Fatal("disconnected Production must not count as Needs attention")
+	}
+}
+
+func TestProductionConnectionCountsTwoVisibleOneConnectedOneDisconnected(t *testing.T) {
+	projects := []model.Project{
+		{KitsuProjectID: "connected", Name: "Connected"},
+		{KitsuProjectID: "live", Name: "Live", ReadOnlyPreview: true},
+	}
+	if got := productionConnectionCounts(projects); got != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
+		t.Fatalf("two visible Production counts = %+v, want total=2 connected=1 disconnected=1", got)
+	}
+}
+
+func TestProductionConnectionCountsExcludeValidationOnlyFromNormalSummary(t *testing.T) {
+	projects := []model.Project{
+		{KitsuProjectID: "connected", Name: "Connected"},
+		{KitsuProjectID: "live", Name: "Live", ReadOnlyPreview: true},
+		{KitsuProjectID: "validation", Name: "Validation", ValidationOnly: true},
+	}
+	if got := productionConnectionCounts(projects); got != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
+		t.Fatalf("ValidationOnly record leaked into normal Production counts: %+v", got)
+	}
+}
+
+func TestProductionConnectionCountsAllConnectedAndNoDisconnected(t *testing.T) {
+	projects := []model.Project{{KitsuProjectID: "one"}, {KitsuProjectID: "two"}}
+	if got := productionConnectionCounts(projects); got != (productionCounts{Total: 2, Connected: 2}) {
+		t.Fatalf("all-connected Production counts = %+v", got)
+	}
+	if got := productionConnectionCounts(nil); got != (productionCounts{}) {
+		t.Fatalf("empty Production counts = %+v", got)
+	}
+}
+
+func TestProductionConnectionSummaryLabelsAreLocalized(t *testing.T) {
+	counts := productionCounts{Total: 2, Connected: 1, Disconnected: 1}
+	for _, tc := range []struct{ lang, total, connected, disconnected string }{
+		{"en", "Production", "Connected 1", "Disconnected 1"},
+		{"ja", "プロダクション", "接続済み 1", "未接続 1"},
+	} {
+		dashboard := dashboardProductionMetric(tc.lang, counts)
+		list := productionListConnectionSummary(tc.lang, counts)
+		for _, rendered := range []string{dashboard, list} {
+			if !strings.Contains(rendered, strings.Split(tc.connected, " ")[0]+" <strong>1</strong>") || !strings.Contains(rendered, strings.Split(tc.disconnected, " ")[0]+" <strong>1</strong>") {
+				t.Fatalf("%s summary labels are incomplete: %s", tc.lang, rendered)
+			}
+		}
+		if !strings.Contains(dashboard, tc.total) {
+			t.Fatalf("%s Dashboard is missing total Production label: %s", tc.lang, dashboard)
+		}
 	}
 }
 
@@ -1912,7 +2044,7 @@ func TestCurrentProductionUsersScaleWithoutSearchOrDetails(t *testing.T) {
 	oldReader := reviewerProductionTeamReader
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en", nil), p, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=scale-production&tab=users&lang=en", nil), p, "en")
 	if strings.Contains(body, "User-49") || strings.Contains(body, "User-00") {
 		t.Fatalf("legacy ProjectUserMap rows were rendered as current Kitsu membership: %s", body)
 	}
@@ -1921,20 +2053,22 @@ func TestCurrentProductionUsersScaleWithoutSearchOrDetails(t *testing.T) {
 	}
 }
 
-func TestCurrentProductionUsersSimpleFlowUsesAssignedBeforeRoles(t *testing.T) {
+func TestCurrentProductionTeamRendersSimpleReadOnlyFlow(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "simple-flow-production", Name: "Simple Flow Production"}
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
 	oldReader := reviewerProductionTeamReader
-	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "team-person", FullName: "Linked Human", Role: "artist"}}, nil
+	}
 	oldTasks := reviewerTaskTypesForProduction
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-animation", Name: "Animation"}}
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Production Team", "Reviewer", "Automatic"} {
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=team&lang=en", nil), p, "en")
+	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Department", "Supervision scope"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
@@ -1983,8 +2117,8 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en")
-	for _, want := range []string{"Production Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Discord not linked", "/bot/admin/users", "Production members are synchronized from Kitsu"} {
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en")
+	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Not linked", "/bot/admin/users", "Kitsu role"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
 		}
@@ -2008,7 +2142,7 @@ func TestCurrentProductionUsersDistinguishKitsuEmptyAndReadFailure(t *testing.T)
 	oldReader := reviewerProductionTeamReader
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 	render := func() string {
-		return renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=team-state-production&tab=users&lang=en", nil), project, "en")
+		return renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=team-state-production&tab=users&lang=en", nil), project, "en")
 	}
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
 	empty := render()
@@ -2042,8 +2176,8 @@ func TestProductionTeamViewUsesFreshKitsuMembershipOnEveryRender(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=live-team-production&tab=users&lang=en", nil)
-	first := renderCurrentProductionUserSettings(db, request, project, "en")
-	second := renderCurrentProductionUserSettings(db, request, project, "en")
+	first := renderCurrentProductionTeam(db, request, project, "en")
+	second := renderCurrentProductionTeam(db, request, project, "en")
 	if !strings.Contains(first, "Former Team Member") || strings.Contains(second, "Former Team Member") || reads != 2 {
 		t.Fatalf("Production Team did not reflect the next live read: reads=%d first=%s second=%s", reads, first, second)
 	}
@@ -2095,11 +2229,11 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 	})
 
 	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole string }{
-		{"ja", "自動", "Overrides", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
-		{"en", "Automatic", "Overrides", "None", "Add user", "Discord user", "Add role"},
+		{"ja", "自動通知先", "追加通知先", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
+		{"en", "Automatic recipients", "Additional recipients", "None", "Add user", "Discord user", "Add role"},
 	} {
 		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
-		body := renderCurrentProductionUserSettings(db, request, project, tc.lang, "bot-token")
+		body := renderCurrentProductionWFARecipients(db, request, project, tc.lang, "bot-token")
 		for _, want := range []string{tc.wantAutomatic, "Compositing", "Comp", "@Discord Artist", tc.wantUserLabel, tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s Reviewer UI missing %q", tc.lang, want)
@@ -2114,6 +2248,43 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 		if strings.Contains(body, "save_production_checker") {
 			t.Fatalf("%s Reviewer UI still exposes the single-target legacy form", tc.lang)
 		}
+	}
+}
+
+func TestReviewerManagerExplainsGuildMembershipLookupFailure(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "reviewer-guild-failure", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "linked-person", KitsuName: "Linked Person", DiscordID: "123456789012345679", DiscordDisplayName: "linked"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTasks, oldRoles, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Compositing"}}
+	}
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "linked-person", FullName: "Linked Person", Email: "linked@example.test", Active: true, Role: "supervisor", Departments: []string{"dept-comp"}}}, nil
+	}
+	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) {
+		return []DiscordGuildRole{{ID: "123456789012345680", Name: "Reviewers", Mentionable: true}}, nil
+	}
+	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
+		return nil, errors.New("synthetic member lookup failure")
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
+	})
+
+	body := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-guild-failure&tab=reviewers&lang=en", nil), project, "en", "bot-token")
+	for _, want := range []string{"Discord server membership could not be verified", "Automatic eligibility", "User Override candidates", "@Reviewers"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Guild-member lookup failure missing safe Reviewer state %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `name="target_kind" value="user"`) || strings.Contains(body, "Linked Person</strong><small>Discord: @linked</small>") {
+		t.Fatalf("unverified Guild membership was presented as eligible or selectable: %s", body)
 	}
 }
 
@@ -2163,34 +2334,33 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 		reviewerGuildMembersForGuild = oldGuildMembers
 	})
 
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
-	for _, want := range []string{"Ukyo Matsuo", "Discord: @ukyo-guild", "Supervisor", "Comp: Compositing, Roto", "Automatic", "Overrides", "None", "Linked"} {
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=team&lang=en", nil), project, "en")
+	for _, want := range []string{"Ukyo Matsuo", "@ukyo", "Supervisor", "Comp", "Comp: Compositing, Roto", "Supervisor scope is derived from Departments", "does not indicate actual task assignments", "Linked"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("Production Users UI missing %q: %s", want, body)
+			t.Fatalf("Production Team UI missing %q: %s", want, body)
 		}
 	}
-	teamStart := strings.Index(body, `<ul class="production-users-simple-list">`)
-	if teamStart < 0 {
-		t.Fatalf("Production Team member list is missing: %s", body)
+	if strings.Contains(body, "Comp Artist</strong>") && strings.Contains(body, "Comp Artist") && strings.Contains(body, "Supervision scope") {
+		start := strings.Index(body, `>Comp Artist</strong>`)
+		end := strings.Index(body[start:], `</li>`)
+		if start >= 0 && end >= 0 && strings.Contains(body[start:start+end], "Comp: Compositing, Roto") {
+			t.Fatal("normal Department membership was mislabeled as a Supervisor scope")
+		}
 	}
-	teamEnd := strings.Index(body[teamStart:], `</ul>`)
-	if teamEnd < 0 {
-		t.Fatalf("Production Team member list is missing: %s", body)
+	if !strings.Contains(body, "Unknown Supervisor") || taskReads != 1 || teamReads != 1 || strings.Contains(body, "reviewer-target-form") {
+		t.Fatalf("Production Team summary guessed missing metadata, repeated reads, or exposed writes: taskReads=%d teamReads=%d team=%s", taskReads, teamReads, body)
 	}
-	teamHTML := body[teamStart : teamStart+teamEnd]
-	if !strings.Contains(teamHTML, "Unknown Supervisor") || strings.Contains(teamHTML, `Unknown Supervisor</strong><small>Discord not linked</small><small class="production-user-role">Supervisor</small><small class="production-user-supervision">`) || taskReads != 1 || teamReads != 1 {
-		t.Fatalf("Production Users summary guessed unrelated metadata or repeated reads: taskReads=%d teamReads=%d team=%s", taskReads, teamReads, teamHTML)
-	}
-	for _, stale := range []string{"Explicit targets replace automatic Supervisors", "Linked Discord users in the Kitsu Production Team", "Department:"} {
-		if strings.Contains(body, stale) {
-			t.Fatalf("verbose Reviewer explanation %q remains in the UI", stale)
+	wfa := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=notifications&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
+	for _, want := range []string{"Automatic recipients", "Additional recipients", "Comp Supervisor", "Ukyo Matsuo", "None"} {
+		if !strings.Contains(wfa, want) {
+			t.Fatalf("Notifications WFA recipient state missing %q: %s", want, wfa)
 		}
 	}
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345679"); err != nil {
 		t.Fatal(err)
 	}
-	overridden := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=users&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
-	for _, want := range []string{"Ukyo Matsuo", "Overrides", "Comp Supervisor"} {
+	overridden := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=notifications&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
+	for _, want := range []string{"Ukyo Matsuo", "Additional recipients", "Comp Supervisor"} {
 		if !strings.Contains(overridden, want) {
 			t.Fatalf("automatic Reviewer/override state missing %q: %s", want, overridden)
 		}
@@ -2289,6 +2459,8 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	}
 	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=user&target_id=123456789012345679"); w.Code != http.StatusSeeOther {
 		t.Fatalf("user add status=%d body=%s", w.Code, w.Body.String())
+	} else if location := w.Header().Get("Location"); !strings.Contains(location, "tab=notifications") || !strings.Contains(location, "#wfa-recipients") {
+		t.Fatalf("Reviewer mutation did not return to Notifications WFA recipients: %q", location)
 	}
 	if w := post("action=add_production_reviewer_target&task_type_id=task-comp&target_kind=role&target_id=123456789012345680"); w.Code != http.StatusSeeOther {
 		t.Fatalf("role add status=%d body=%s", w.Code, w.Body.String())
@@ -2354,7 +2526,7 @@ func TestCurrentProductionUsersHideEmptyCheckerAssignmentList(t *testing.T) {
 	p := model.Project{KitsuProjectID: "empty-checker-production", Name: "Empty Checker Production"}
 	db.Create(&p)
 	model.UpsertProjectUserMap(db, p.ID, "Linked Human", "human@example.com", "discord-human")
-	body := renderCurrentProductionUserSettings(db, httptest.NewRequest("GET", "/bot/admin/projects?project=empty-checker-production&tab=users&lang=en", nil), p, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=empty-checker-production&tab=users&lang=en", nil), p, "en")
 	if strings.Contains(body, `<h4>Assigned</h4>`) || strings.Contains(body, "No Reviewer / Checker assignments yet.") {
 		t.Fatalf("empty Reviewer / Checker assignment list was rendered: %s", body)
 	}

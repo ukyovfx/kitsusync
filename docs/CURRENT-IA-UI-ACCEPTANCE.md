@@ -4,7 +4,7 @@
 
 The existing CI workflow runs a dedicated `reviewer-browser-acceptance` job for pull requests to `master`, checking out the exact PR head. It launches the normal KitsuSync login and admin handlers against a temporary SQLite database, a loopback-only synthetic Kitsu service, and an intercepted synthetic Discord API. Chromium logs in through `/bot/login`; there is no test authentication bypass and no real Kitsu/Discord credential or outbound service call. The same isolated browser gate also checks the login fabric and authenticated-app static dot grid at 1440×900, 1920×1080, and 390×844, including both languages, pointer activation, and reduced motion.
 
-The job records Japanese and English Production Users/Reviewer, User Linking, and System Status screens at 1440×1000 and 390×844. It checks the live-team Reviewer eligibility and display-name cases, additive User/Role overrides and filtering, empty/error states, layout overflow, mojibake, and browser console errors. It saves synthetic screenshots and a non-secret state summary as a short-retention Actions artifact. A companion synthetic WFA delivery test verifies recipient union/deduplication, exact allowed mentions, zero-Reviewer card delivery, and fail-closed lookup behavior.
+The job records Japanese and English Production Overview, Notifications (routing and WFA recipients), Team, Settings, User Linking, and System Status screens at 1440×1000 and 390×844. It checks live-team Reviewer eligibility and display-name cases, additive User/Role overrides and filtering, empty/error states, layout overflow, mojibake, and browser console errors. It saves synthetic screenshots and a non-secret state summary as a short-retention Actions artifact. A companion synthetic WFA delivery test verifies recipient union/deduplication, exact allowed mentions, zero-Reviewer card delivery, and fail-closed lookup behavior.
 
 This CI evidence validates application behavior with synthetic services only. It does not establish deployed runtime identity, production credential validity, live Kitsu data, or real Discord delivery; those remain separate staging/runtime evidence.
 
@@ -26,6 +26,8 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 ## Dashboard — `/bot/admin`
 
 - [ ] Heading, summary, action-required section, New Production Connection CTA, and Management menu appear in that order.
+- [ ] Production summary shows the total visible live/local Production count and separate Connected / Disconnected counts; a disconnected live Kitsu Production is not counted as Needs attention, and ValidationOnly records are excluded from normal totals.
+- [ ] The Management Production card shows separate Connected and Disconnected counts, not a disconnected count under Needs attention.
 - [ ] The Management Connections card shows explicit `Kitsu` and `Discord` status groups.
 - [ ] Kitsu and Discord badges are independently derived and semantically correct.
 - [ ] Kitsu and Discord status groups stay contained inside the Connections card; the Production count remains in the Production card.
@@ -52,7 +54,8 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Kitsu host/token and Discord token fields retain their labels and secret handling.
 - [ ] Normal edit mode shows the resolved Kitsu host as a quiet read-only value, says it was detected/configured automatically, and offers compact `Change manually` / `Use automatic endpoint` controls without a page reload.
 - [ ] Manual endpoint mode preserves existing validation and persistence behavior and does not submit a display placeholder as the host.
-- [ ] External Kitsu URL is the only normal Advanced setting; its Check link control stays compact beside the field and wraps cleanly on mobile.
+- [ ] External Kitsu URL is the only normal Advanced setting, with a separate Save action disabled until the value changes; Check link stays compact beside the field, opens the saved URL without persisting edits, and wraps cleanly on mobile.
+- [ ] Saving restores the URL after reload; clearing and saving falls back to the normal Kitsu URL; a failed save keeps the typed value and shows an inline error.
 - [ ] Internal Kitsu URL and API Base URL appear only in one expert disclosure after manual endpoint mode, except that a saved API Base URL keeps the disclosure visible/open for editing; saved values are never cleared implicitly.
 - [ ] Saved-secret guidance is supporting text, not a health badge.
 - [ ] Each save action is adjacent to its own service form.
@@ -60,6 +63,7 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 
 ## Production list — `/bot/admin/projects`
 
+- [ ] Summary shows Connected and Disconnected totals using the same connection-state definition as Dashboard; visible live Kitsu Productions remain listed even before they are connected.
 - [ ] Each visible Kitsu Production has a compact content-sized status badge.
 - [ ] Connected is green; Disconnected is yellow/warning.
 - [ ] A visible Kitsu Production without a KitsuSync connection is Disconnected and is excluded from the connected count.
@@ -68,18 +72,23 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 
 ## Production detail — `/bot/admin/projects?project=<id>`
 
-- [ ] Detail status agrees with the Production list and Dashboard count.
-- [ ] Routing/resource state is shown only when it is real and current.
-- [ ] No duplicate or stale resource representation is visible.
-- [ ] Normal Current IA actions do not fall into a legacy renderer.
-- [ ] Overview has four aligned summary cards and a separate counted current-issues card.
-- [ ] Notifications shows a distinct routing section and read-only preview section with visible spacing.
-- [ ] Routing rows explicitly label Kitsu Task Type and Discord Channel.
-- [ ] Preview identifies Task Type, destination, Production notification language, mention behavior, and deterministic rendered message/embed; no send control exists.
-- [ ] Production Users reads the live Kitsu Production Team, shows linked/unlinked global User Linking state, distinguishes read failure from an empty team, and excludes bots.
-- [ ] Troubleshooting exposes real connection, routing, participant, linking, and recent-notification diagnostics.
-- [ ] Details is read-only and uses localized Production/Discord/category ID labels.
-
+- [ ] The Production eyebrow, name, and semantic connection badge form one compact identity header; the four primary tabs are plain labels on a shared hairline with an active underline.
+- [ ] Overview and Notifications use compact sections/dividers rather than summary-card grids; Routing and WFA recipients remain distinct.
+- [ ] Team uses compact comparative rows/table patterns, and Settings presents vertical sections with intentional disclosures.
+- [ ] At JP/EN desktop and mobile widths, labels and controls remain readable without clipping; page-level horizontal overflow, mojibake, and browser console/runtime errors are absent.
+- [ ] Exactly four primary sections appear: Overview, Notifications, Team, Settings (JP: 概要, 通知, チーム, 設定); there is no primary Reviewers tab.
+- [ ] Production identity is compact; no redundant “Selected Production” copy appears.
+- [ ] Overview contains compact operational status, real notification routing, current issues, and only real exact-Production recent audit activity; empty activity is omitted.
+- [ ] Notifications routing read mode shows `Kitsu Task Type → Discord Channel` and one Edit action; explicit edit mode retains the existing add/remove, ordering, channel selection, Apply, and Cancel behavior.
+- [ ] Notifications contains the WFA recipients section, a Task Type selector, Automatic recipients, and Additional recipients in JP/EN. Existing User/Role add, remove, and reset operations remain available there.
+- [ ] No Notification Preview feature remains: no synthetic/example task or message, preview-only Task Type selector, preview markup, or preview copy.
+- [ ] Team is a read-only live Kitsu Production Team view. It shows human members, effective Kitsu roles including supported non-Artist/Supervisor roles, resolvable Departments, global Discord User Linking state, and an action to global User Linking for unlinked people.
+- [ ] Supervisor scope is derived only by matching the Supervisor's Kitsu Department IDs to current Production Task Type Department IDs. Missing metadata is omitted safely. Normal members' Departments are not presented as Task assignments; no task-assignment data is fetched.
+- [ ] Team has no add/remove member, role-edit, Department-edit, or local membership mutation controls. A Kitsu read failure is distinct from an empty Team; bots are excluded.
+- [ ] Existing WFA automatic Supervisor, additive User/Role overrides, candidate validation, mutation handlers, delivery semantics, routing, and mention safety are unchanged; only their UI location/labels move under Notifications.
+- [ ] Settings contains Storage, Technical details, Diagnostics, and Danger Zone in that order. Existing forms, values, copy controls, destructive confirmation safeguards, and collapsed-by-default disclosures remain intact.
+- [ ] Legacy `users` / `user-settings` routes map to Team. Legacy `tab=reviewers` maps to Notifications focused on WFA recipients. Reviewer mutation redirects return to Notifications and WFA recipients. Storage, Activity, Troubleshooting, Details, and Danger Zone routes map to the intended section and focus/expand the destination.
+- [ ] JP/EN desktop and mobile show all four sections without overflow, mojibake, clipped controls, or console/runtime errors.
 ## User Linking — `/bot/admin/users`
 
 - [ ] The page describes and renders human Kitsu-to-Discord linking.
@@ -92,16 +101,18 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 - [ ] Bot identities are excluded from normal human linking.
 - [ ] JP and EN have equivalent states, order, actions, and information density at desktop and mobile widths, with no mojibake or page overflow.
 
-## Production Users Kitsu Team checks
+## Production detail checks
 
-- [ ] Normal Users view shows the live Kitsu Production Team before the Reviewer controls; no manual add/remove membership workflow appears.
-- [ ] Each Team row compactly shows name, Discord link state, and effective Kitsu Production role (`project_role` overrides except global admin); Supervisor Department/Task Type display is derived only by matching Person Department IDs to Task Type Department IDs, and missing metadata is omitted safely.
+- [ ] Production detail has exactly Overview, Notifications, Team, Settings (JP: 概要, 通知, チーム, 設定); Reviewers is not a primary tab.
+- [ ] Notifications contains real routing configuration and WFA recipient controls. No synthetic Notification Preview or preview-only selector appears.
+- [ ] Team shows the live Kitsu Production Team as a read-only view; no manual add/remove membership workflow appears.
+- [ ] Each Team row compactly shows name, Discord link state, effective Kitsu Production role (`project_role` overrides except global admin), and Departments only when resolvable; Supervisor scope is derived only by matching Person Department IDs to Task Type Department IDs, and missing metadata is omitted safely.
 - [ ] Each current Team member resolves through global User Linking by stable Kitsu Person ID first; a clear User Linking action appears for unlinked people.
 - [ ] Reviewer User candidates include only globally linked human users in the current Kitsu Production Team who are current members of the linked Discord Guild; unlinked Team members, linked non-Team users, and Guild non-members are not selectable.
 - [ ] Page reads do not create/update `ProjectUserMap`; existing legacy rows remain intact but legacy Reviewer rows do not become WFA recipients.
 - [ ] A successful empty Team and a failed Kitsu Team read have distinct visible states, and a failed read disables User Reviewer selection.
 - [ ] Team membership is fetched afresh on each page render; removing a person from Kitsu removes them from the next rendered Team without local cleanup.
-- [ ] Reviewer uses a stable Kitsu Task Type ID and stays concise: Task Type selector, automatic Reviewer name/reason, and an `Overrides` list or `None`; Automatic remains visible when Overrides exist and no “inactive while overridden” text appears.
+- [ ] WFA recipient controls use a stable Kitsu Task Type ID and stay concise: Task Type selector, Automatic recipients, and Additional recipients; Automatic remains visible when overrides exist and no “inactive while overridden” text appears.
 - [ ] Reviewer is presented and delivered as a targeted Discord WFA recipient, not a Kitsu permission Role.
 - [ ] Automatic Reviewer eligibility requires current active human Production Team membership, effective Production role `supervisor` (global admin cannot be overridden), matching Department membership, global User Linking, and current linked-Guild membership; Position does not qualify.
 - [ ] Explicit User overrides are revalidated at delivery against live Team membership, global User Linking, and live Guild membership; explicit Role overrides are revalidated against the linked Guild and current mentionability.
