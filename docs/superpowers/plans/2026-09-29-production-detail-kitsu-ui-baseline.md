@@ -1,134 +1,165 @@
-# Production Detail Kitsu UI Baseline Adoption Plan
+# Production Detail Kitsu UI Baseline Adoption Implementation Plan
 
-**Scope:** PR #229 Production detail visual adoption only  
-**Planning basis:** PR head `4c307aa6f5ddafa712c4afd0ec9443ab4856e3c6`  
-**Reusable visual authority:** `docs/superpowers/specs/2026-09-29-kitsu-ui-baseline-design.md`  
-**Screen semantics authority:** `docs/CURRENT-IA-UI-SPEC.md`
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans to implement this plan task-by-task.
+> Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## Goal and guardrails
+## Goal
 
-Apply the approved Kitsu-derived visual baseline to the Production detail screen only. Keep all screen content, source-of-truth rules, routes, authorization, persistence, mutations, and notification behavior as currently specified and implemented.
+Apply the approved reusable KitsuSync UI baseline to the Production detail screen in PR #229 only. Keep screen semantics, routes, data sources, auth, persistence, mutations, WFA delivery, and all non-target pages unchanged.
 
-Do not alter Login or authenticated background rendering, Dashboard, Production list, shared connection semantics, backend behavior, database schema, WFA delivery, or Production deployment/release behavior. Do not add arbitrary visual tokens. Reuse existing style values where available; any shared-token normalization requires a separate explicit decision.
+## Architecture
 
-The baseline governs reusable presentation. `CURRENT-IA-UI-SPEC.md` remains authoritative for screen semantics, content, routes, state meanings, and behavior. Do not migrate that spec during this work. Page-specific deviations from the baseline require a concrete Production-detail need and must not change semantics.
+- Reusable visual rules come from the approved Kitsu UI baseline.
+- `docs/CURRENT-IA-UI-SPEC.md` remains authoritative for screen semantics, content, state vocabulary/meaning, routes, and behavior.
+- The Production detail renderer and scoped styles are the implementation surface; existing handlers and data contracts remain intact.
+- Focused Go and Playwright/Chromium acceptance protect behavior and visual structure. Actual authenticated Staging rendering is the final deployed visual check.
+- Adoption is incremental and scoped to Production detail; no shared-shell or whole-app restyle.
 
-## Existing contracts to protect
+## Tech Stack
 
-Before implementation, keep these behaviors visible in the test plan:
+Go server-rendered HTML, embedded/shared CSS in `src/setup/ui.go`, Go `httptest` and setup package tests, repository-supported Playwright/Chromium acceptance in `tools/reviewer-browser-acceptance/browser.cjs`, GitHub Actions CI/Security, and the established isolated Staging routine deployment path.
 
-- Four primary tabs only: Overview, Notifications, Team, Settings.
-- Legacy tab aliases and focus/open behavior remain compatible.
-- Production identity and audit activity remain scoped to the exact Production ID.
-- Overview omits empty activity and does not invent metrics or readiness.
-- Notifications uses real `Kitsu Task Type → Discord Channel` routing; Edit/Apply/Cancel and ordering remain intact.
-- WFA Automatic and Additional recipients stay under Notifications; no Notification Preview returns.
-- Team remains a live, read-only Kitsu Team view. Effective role, resolvable Department, Supervisor scope, and global Discord linking follow the current IA contract. Do not infer task assignments or add membership mutation.
-- Settings preserves Storage save behavior, identifier copy actions, diagnostics, and Danger Zone confirmations.
-- External Kitsu URL Save/Check-link/reload/fallback semantics remain unchanged.
-- Existing JP/EN meaning and state parity remains intact.
+## Spec
 
-## Regression-first implementation tasks
+- Approved reusable design: `docs/superpowers/specs/2026-09-29-kitsu-ui-baseline-design.md`
+- Screen semantics and behavior: `docs/CURRENT-IA-UI-SPEC.md`
+- Browser checklist: `docs/CURRENT-IA-UI-ACCEPTANCE.md`
+- Target: Production detail only, at PR #229 head `16aa38af765e90c18f743a9702aa084eea88c208` when this plan was prepared.
 
-### 1. Lock visual acceptance expectations and baseline behavior tests
+## Global Constraints
 
-Start by extending focused tests before changing markup or CSS. Run the relevant tests once to establish the current result, then add assertions that fail only for the requested baseline mismatch.
+- Visual adoption only; no backend semantic redesign, schema/API changes, or notification recipient/delivery changes.
+- Keep exactly four tabs: Overview, Notifications, Team, Settings. Preserve all legacy route aliases and focus/open behavior.
+- Preserve exact-Production audit scoping, live Kitsu Team semantics, role/Department/Supervisor derivation, read-only membership, and global User Linking.
+- Preserve WFA routing, Automatic and Additional recipients, all User/Role override mutations, mention safety, and delivery behavior.
+- Preserve External Kitsu URL Save, Check-link no-save, reload, failed-save, and clear/fallback behavior.
+- Dashboard and Production list remain unchanged.
+- Login fabric and authenticated static dot-grid remain unchanged.
+- Reuse existing KitsuSync visual values where present. Do not invent one-off tokens or normalize shared tokens in this change.
+- Orange is limited to brand/active/primary emphasis. Status vocabulary and semantic colors remain owned by `CURRENT-IA-UI-SPEC.md`.
+- Production deployment and release are out of scope. Staging means isolated 8091 only.
+- Do not use RDC, Computer Use, or GUI automation.
 
-- In `production_detail_ia_test.go` and `ia_views_test.go`, verify four visible primary tabs and order, correct panel/section structure, no primary Reviewers tab, and no Notification Preview.
-- Retain and extend legacy alias/focus tests rather than replacing them.
-- Add narrowly scoped structural assertions for the intended section hierarchy: Overview and Notifications use compact sections; Team has one repeated-row/table-list structure rather than a per-person card collection; Settings sections retain their order.
-- Do not encode status meanings in this reusable baseline test. Existing IA semantics remain the authority.
-- In `reviewer-browser-acceptance_test.go` and `tools/reviewer-browser-acceptance/browser.cjs`, add browser assertions for the visible visual contract. Prefer relationships and computed styles over brittle exact pixel snapshots.
-- Ensure assertions cover the semantic DOM/content and are useful if class names change; avoid tests that merely duplicate the same assertion in Go and JavaScript.
+## Review Focus
 
-Expected test additions should verify the requested visual result without asserting new backend behavior. Keep tests for save, copy, disclosures, routing, WFA targets, role/team data, and exact-Production audit scoping as behavioral regression guards.
+Each item is mapped to its owning task/check:
 
-### 2. Refine the Production header and tabs
+- Long Japanese and English tab, section, and action labels at mobile width — Task 6 browser acceptance.
+- Several Team members with long Department and Supervisor-scope text — Task 4 fixture/regression test and Task 6 mobile browser check.
+- Successfully empty Team versus failed Team read — Task 4 Go/browser regression checks.
+- Notifications read state and explicit edit state — Task 3 Go/browser regression checks.
+- Legacy deep links focusing or opening Storage, Diagnostics, Technical details, and Danger Zone — Task 5 existing alias tests plus Task 6 browser route checks.
 
-In `ia_views.go`, render a compact Production eyebrow, name, and existing connection badge in a single identity header. Keep badge text/state tied to the existing canonical status.
+## Task 1: Production-detail visual acceptance contract
 
-Render exactly Overview / Notifications / Team / Settings as plain label links on one shared hairline. The active tab uses an underline on that line; remove pill, filled, or individually bordered tab treatment. Preserve route query parameters, selected-tab semantics, JP/EN labels, and legacy tab mappings.
+**Files:** `docs/CURRENT-IA-UI-ACCEPTANCE.md`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and only if coverage is missing `src/setup/reviewer_browser_acceptance_test.go` / `tools/reviewer-browser-acceptance/browser.cjs`.
 
-In `ui.go`, adjust only Production-detail selectors. Reuse existing color, spacing, border, and typography values; do not affect shared navigation or other pages.
+- [ ] Read the existing Production-detail acceptance section and tests; identify only missing visual checks. Keep the semantic requirements unchanged.
+- [ ] Add a concise acceptance checklist for the baseline: compact entity header; exactly four label tabs on a shared hairline/underline; sections over summary-card grids; compact Team rows; vertical Settings; JP/EN desktop/mobile; no overflow, mojibake, or console errors.
+- [ ] Add or retain focused semantic guard assertions for four-tab order, legacy routes, real routing/WFA placement, read-only Team, Settings order, and scoped activity. Do not add redundant tests when existing coverage already proves the contract.
+- [ ] Run the focused baseline tests and confirm PASS before any UI changes:  
+  `go test ./src/setup -run 'TestProductionDetailUsesFourSectionsAndMapsLegacyTabs|TestProductionTabsHaveEquivalentJapaneseLabels|TestProductionNotificationsHasWFARecipientsAndNoPreview|TestProductionTeamUsesGuildDisplayNameAndFallsBackToUserLinking|TestProductionDiagnosticsAuditCountsAreProductionScoped' -count=1`
+- [ ] Run `git diff --check -- docs/CURRENT-IA-UI-ACCEPTANCE.md src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go tools/reviewer-browser-acceptance/browser.cjs`.
+- [ ] Commit this acceptance-contract boundary as `test: define Production detail baseline acceptance`.
 
-### 3. Reshape Overview and Notifications into compact sections
+## Task 2: Production identity header + Kitsu hairline tabs
 
-Overview:
-- Replace the summary-card/grid composition with compact operator-console sections and meaningful dividers.
-- Keep truthful current connection/resource status and issues.
-- Render recent activity only when exact-Production audit records exist.
-- Preserve empty-state omission and exact Production scoping.
+**Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`.
 
-Notifications:
-- Present Routing and WFA recipients as distinct structured sections.
-- Make the read-only routing relationship immediately legible as Kitsu Task Type → Discord Channel.
-- Keep the single explicit Edit entry point and the existing edit form's add/remove, ordering, channel selection, Apply, and Cancel behavior.
-- Keep WFA Task Type, Automatic, and Additional recipients controls and their existing mutation/delivery semantics.
-- Keep Notification Preview absent.
+- [ ] Add a focused regression test named `TestProductionHeaderAndKitsuTabs` for the compact Production eyebrow/name/status grouping and four plain-label tabs with shared hairline and active underline.
+- [ ] Run the focused test before changing markup/styles and confirm it fails for the intended visual mismatch only:  
+  `go test ./src/setup -run '^TestProductionHeaderAndKitsuTabs$' -count=1`
+- [ ] Make the minimal scoped markup/CSS change. Reuse existing status data, colors, and style values; do not change routes, status meaning, page shell, or other pages.
+- [ ] Run the focused test and the existing tab/alias tests; confirm PASS:  
+  `go test ./src/setup -run 'TestProduction(HeaderAndKitsuTabs|DetailUsesFourSectionsAndMapsLegacyTabs|TabsHaveEquivalentJapaneseLabels)$' -count=1`
+- [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go`.
+- [ ] Commit as `ui: apply Kitsu identity header and tab treatment`.
 
-Use sections and separators by default. Do not add metric tiles, nested card stacks, new destination links, or new explanatory copy that duplicates the IA.
+## Task 3: Overview + Notifications section hierarchy
 
-### 4. Convert Team to a compact Kitsu-style table/list
+**Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and `tools/reviewer-browser-acceptance/browser.cjs` only if a rendered check is missing.
 
-Present repeated Team members in a compact read-only table/list pattern. Keep identity first, followed by effective Kitsu role, resolvable Department, truthfully derived Supervisor scope, and Discord linking state/action.
+- [ ] Add focused regression coverage named `TestProductionOverviewAndNotificationsSectionHierarchy`. Assert compact Overview sections and distinct Routing/WFA sections without changing their content contract.
+- [ ] Run it before implementation and confirm the expected hierarchy assertion fails:  
+  `go test ./src/setup -run '^TestProductionOverviewAndNotificationsSectionHierarchy$' -count=1`
+- [ ] Replace only the Production detail summary-card grouping with compact sections/dividers. Keep current issue/activity truth and exact Production scoping.
+- [ ] Structure Routing as Kitsu Task Type → Discord Channel and WFA recipients as a separate section. Preserve read/edit states and all existing Edit/Apply/Cancel and recipient operations.
+- [ ] Run focused regression tests and confirm PASS:  
+  `go test ./src/setup -run 'TestProduction(OverviewAndNotificationsSectionHierarchy|NotificationsHasWFARecipientsAndNoPreview|OverviewOmitsActivityWhenNoScopedRecordsExist|OverviewDoesNotCallUnconfiguredRoutingHealthy|DiagnosticsAuditCountsAreProductionScoped)$' -count=1`
+- [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go tools/reviewer-browser-acceptance/browser.cjs`.
+- [ ] Commit as `ui: structure Production overview and notifications`.
 
-- Use a table where the fields compare consistently; use a labeled stacked row layout at narrow widths when needed.
-- Keep row separators and actions aligned.
-- Continue omitting unknown metadata instead of guessing.
-- Preserve the live Kitsu Team source, current-human filtering, role resolution, Department-to-Task-Type scope derivation, and global User Linking contract.
-- Do not infer Artist task assignment or add team/role/Department mutation controls.
+## Task 4: Team compact Kitsu-style table/list
 
-### 5. Organize Settings as vertical settings sections
+**Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and `src/setup/reviewer-browser-acceptance_test.go` only if fixture coverage needs extension.
 
-Use a single aligned vertical structure for Storage, Technical details, Diagnostics, and Danger Zone, in that order.
+- [ ] Add `TestProductionTeamCompactRows` using multiple members, long Department names, and long Supervisor scope text. Assert readable repeated rows and no per-person large-card structure.
+- [ ] Include both a successful empty Team response and a failed Team read in the owning regression/browser checks; assert they remain distinct.
+- [ ] Run the focused test before the change and confirm it fails for the intended presentation mismatch:  
+  `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$' -count=1`
+- [ ] Make the smallest Team markup/style change to compact aligned table/list rows. Keep unknown metadata omitted, retain current-human/read-only rules, and do not infer assignments or add membership mutation.
+- [ ] Run focused Team tests and confirm PASS:  
+  `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$|TestReviewerBrowserAcceptance' -count=1`
+- [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go`.
+- [ ] Commit as `ui: compact Production Team rows`.
 
-Preserve existing disclosure defaults and targets, field values, explicit save semantics, copy feedback, diagnostic behavior, and destructive confirmation safeguards. Keep essential status and actions visible; disclosures remain for secondary detail. Avoid turning each section into a dashboard card.
+## Task 5: Settings vertical section/disclosure treatment
 
-### 6. Mobile, accessibility, and browser visual acceptance
+**Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and `tools/reviewer-browser-acceptance/browser.cjs` only if a browser check is missing.
 
-After focused tests pass, inspect the rendered candidate and refine only Production-detail deviations. Use the repository-supported Chromium/Playwright acceptance path; do not use GUI automation outside that path.
+- [ ] Add `TestProductionSettingsVerticalSections` for Storage, Technical details, Diagnostics, and Danger Zone order and one-column section hierarchy.
+- [ ] Extend or retain regression checks that legacy deep links focus/open Storage, Diagnostics, Technical details, and Danger Zone.
+- [ ] Run the focused tests before the style change and confirm the intended visual assertion fails:  
+  `go test ./src/setup -run 'TestProduction(SettingsVerticalSections|SettingsGroupsExistingSectionsWithoutChangingForms)$|TestSelectedProductionTabNormalizesLegacyDestinations|TestLegacyActivityDeepLinkFallsBackToOverviewWithoutRecords' -count=1`
+- [ ] Make the smallest scoped markup/style adjustment. Preserve disclosure defaults, saves, copy actions, diagnostic behavior, and Danger Zone confirmation safeguards.
+- [ ] Run focused tests and confirm PASS:  
+  `go test ./src/setup -run 'TestProduction(SettingsVerticalSections|SettingsGroupsExistingSectionsWithoutChangingForms)$|TestSelectedProductionTabNormalizesLegacyDestinations|TestLegacyActivityDeepLinkFallsBackToOverviewWithoutRecords|TestReviewerBrowserAcceptance' -count=1`
+- [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go tools/reviewer-browser-acceptance/browser.cjs`.
+- [ ] Commit as `ui: align Production settings sections`.
 
-Run and capture JP desktop, EN desktop, JP mobile, and EN mobile. At minimum verify:
+## Task 6: JP/EN desktop/mobile browser acceptance and repairs
 
-- exactly four tabs in the required order; plain labels, shared hairline, active underline
-- compact Production eyebrow/name and existing semantic connection badge
-- Overview sections/dividers, truthful status/issues, and real exact-Production activity only
-- Routing and WFA-recipient hierarchy; edit mode retains existing controls; no Preview
-- compact Team rows, correct information hierarchy, no membership controls or inferred task assignments
-- vertical Settings order and preserved disclosure/save/copy/destructive interactions
-- JP/EN content and state parity
-- no page-level horizontal overflow, clipped text, overlap, mojibake, or console/runtime errors
-- keyboard-visible focus, semantic tab selection, usable touch targets, and reduced-motion compatibility
-- unchanged Login fabric and authenticated static dot-grid appearance when navigating to/from Production detail
+**Files:** `tools/reviewer-browser-acceptance/browser.cjs`, `src/setup/reviewer-browser-acceptance_test.go`, plus only the Production detail files owning a confirmed visual defect.
 
-Use browser screenshots as the visual acceptance evidence. Do not accept the UI based only on DOM tests or CI screenshots if the approved Staging browser review is part of the candidate gate.
+- [ ] Run synthetic browser acceptance through the existing repository Chromium/Playwright path:  
+  `go test ./src/setup -run '^TestReviewerBrowserAcceptance$' -count=1`
+- [ ] Cover JP desktop, EN desktop, JP mobile, and EN mobile. Verify tab hairline/underline, long localized labels, compact Team rows with long Department/Supervisor values, empty versus failed Team states, Notifications read/edit states, Settings vertical hierarchy, and legacy deep links opening/focusing each Settings subsection.
+- [ ] Verify no page overflow, clipped controls/text, mojibake, console/runtime errors, or visual regressions to Login/app backgrounds, Dashboard, or Production list.
+- [ ] Repair each confirmed in-scope visual failure minimally, rerun its owning focused Go/browser test, and recheck the affected viewport/locale. Do not alter semantics to satisfy a visual assertion.
+- [ ] For real authenticated Staging review, do **not** retry the previously failed managed headed-browser process launch (`CreateProcessWithLogonW error 1909`). Use the already-established interactive Chrome + loopback tunnel/CDP path when human authentication is required.
+- [ ] Never inspect or print credentials, cookies, tokens, or session values. Do not use RDC, Computer Use, or GUI automation. Browser-rendered output remains the final visual source of truth.
+- [ ] Run `git diff --check` after browser-driven repairs and before committing.
+- [ ] Commit any bounded repair as `ui: refine Production detail browser acceptance`; if no repair is needed, do not create an empty commit.
 
-### 7. Final validation and isolated Staging review
+## Task 7: Final full validation + exact-head isolated Staging verification
 
-Only after browser visual acceptance passes, run once:
+**Files:** no planned new files. If a failure requires source/test edits, return to the owning Task 2–6 regression loop and then repeat the applicable gates.
 
-- `go test ./src/... -count=1 -timeout=120s`
-- `go vet ./src/...`
-- `docker compose config -q`
-- `git diff --check`
-
-Then push the exact PR head and require exact-head CI and Security Audit PASS. Deploy that exact candidate only to isolated Staging through the established supported path. Confirm the candidate SHA and Staging health/readiness, then repeat the JP/EN desktop/mobile Production-detail browser checks on that exact Staging SHA.
-
-Production deployment and release are out of scope. Stop with PR #229 unmerged; keep its Draft/review state under the separate review decision.
+- [ ] After synthetic visual acceptance is green, run the full local gate once:  
+  `go test ./src/... -count=1 -timeout=120s`  
+  `go vet ./src/...`  
+  `docker compose config -q`  
+  `git diff --check`
+- [ ] Push the exact PR #229 head. Wait for exact-head CI and Security Audit to report PASS; verify both correspond to the same head SHA.
+- [ ] Deploy only that exact SHA to isolated Staging 8091 using the established candidate path:  
+  `pwsh -NoProfile -File scripts/deploy-kitsusync-staging-candidate.ps1 -CommitSha <exact-full-sha>`
+- [ ] Verify Staging runtime/source SHA, image identity, `/health`, `/ready`, and loopback-only 8091 binding. Confirm Production 8090 is unchanged using read-only evidence.
+- [ ] Run authenticated real-Staging Production-detail acceptance in JP/EN desktop/mobile through the established interactive Chrome + loopback tunnel/CDP path. Do not use the failed managed headed-browser launch or inspect/print any credential/session values.
+- [ ] If Staging exposes a mismatch, repair only the owning task's files, repeat focused tests and browser acceptance, then rerun full validation, exact-head CI/Security, and exact-SHA Staging deployment.
+- [ ] Stop with PR #229 unmerged. Production deployment and release remain out of scope.
 
 ## Expected implementation files
 
-- `src/setup/ia_views.go` — Production detail structure and presentation markup.
-- `src/setup/ui.go` — scoped Production detail styles using existing tokens/values.
-- `src/setup/production_detail_ia_test.go` — focused rendered structure and route compatibility assertions.
-- `src/setup/ia_views_test.go` — focused IA content/state regression assertions where they belong.
-- `src/setup/reviewer-browser-acceptance_test.go` — browser test harness assertions only if needed.
-- `tools/reviewer-browser-acceptance/browser.cjs` — rendered visual contract checks and JP/EN viewport acceptance.
-- `docs/CURRENT-IA-UI-ACCEPTANCE.md` — update only if a visual acceptance criterion is missing; preserve its existing semantic requirements.
-- `docs/CURRENT-IA-UI-SPEC.md` — no planned change; it remains the semantic authority.
-
-Avoid changing a listed file if the existing coverage already proves the relevant condition. Do not change backend handlers, schemas, routing, delivery, credentials, or deployment configuration.
+- `src/setup/ia_views.go` — Production detail markup only.
+- `src/setup/ui.go` — scoped Production detail styles only.
+- `src/setup/production_detail_ia_test.go` and `src/setup/ia_views_test.go` — focused render/route/content regressions.
+- `src/setup/reviewer-browser-acceptance_test.go` and `tools/reviewer-browser-acceptance/browser.cjs` — synthetic and rendered browser checks as needed.
+- `docs/CURRENT-IA-UI-ACCEPTANCE.md` — only if Task 1 finds a missing visual acceptance criterion.
+- `docs/CURRENT-IA-UI-SPEC.md` — unchanged; semantic authority.
+- This plan file is the only file changed while preparing the plan.
 
 ## Completion gate
 
-The plan is complete when implementation changes only the Production detail visual presentation and directly related acceptance coverage, all protected behaviors remain covered, browser acceptance passes in JP/EN desktop/mobile, final tests and exact-head CI/Security pass, and the exact candidate is verified on isolated Staging. No Production deployment or release occurs.
+All seven tasks are checked, all named focused and full gates pass, the exact candidate passes CI and Security Audit and is verified on isolated Staging, and browser-rendered Production detail passes JP/EN desktop/mobile acceptance. PR #229 remains unmerged; no Production deployment or release occurs.
