@@ -40,8 +40,8 @@ async function fixture(page, scenario) {
   if (response.status() !== 204) throw new Error(`synthetic fixture rejected state ${scenario}`);
 }
 
-async function gotoUsers(page, locale, extra = '') {
-  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=reviewers&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
+async function gotoWFARecipients(page, locale, extra = '') {
+  await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=notifications&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
 async function gotoProduction(page, locale, tab, extra = '') {
@@ -384,7 +384,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
 
     // Enter through the ordinary protected route and complete the ordinary login form.
-    await gotoUsers(page, locales[0]);
+    await gotoWFARecipients(page, locales[0]);
     if (!page.url().includes('/bot/login')) throw new Error('protected Production Users route did not redirect to login');
     const unauthenticatedWrite = await page.request.post(`${base}/bot/admin/projects`, {
       form: { action: 'add_production_reviewer_target', project_id: 'reviewer-production', task_type_id: 'task-comp', target_kind: 'user', target_id: '22222222222222234' },
@@ -454,7 +454,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await gotoProduction(page, locale, 'team');
         const teamTab = page.locator('#panel-team');
-        if (await page.locator('.production-team-page').count() !== 1 || await page.locator('.production-reviewer-manager').count()) {
+        if (await page.locator('.production-team-page').count() !== 1 || await page.locator('.production-wfa-recipients').count()) {
           throw new Error(`Team is not a separate read-only view in ${locale.lang}`);
         }
         if (await page.locator('form input[name="action"][value*="production_member"],form input[name="action"][value*="production_role"]').count()) throw new Error('Team exposed membership or role mutation');
@@ -542,8 +542,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       }
     }
 
-    await gotoUsers(page, locales[0]);
-    if (!(await page.locator('.production-reviewer-manager').count())) throw new Error('Reviewer manager did not render');
+    await gotoWFARecipients(page, locales[0]);
+    if (!(await page.locator('.production-wfa-recipients').count())) throw new Error('WFA recipients did not render in Notifications');
     if (await page.locator('#tab-reviewers').count() || await page.locator('.production-tabs [role="tab"]').filter({ hasText: /^Reviewers$/ }).count()) throw new Error('Reviewers remains a primary Production tab');
     await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor'], [
       'Departmentless Supervisor', 'Wrong Department Supervisor', 'Production Manager', 'Global Admin',
@@ -559,7 +559,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     for (const stale of ['Automatic inactive while overridden', 'Add Production member', 'Remove Production member', 'Reviewer / Checker task types', 'Production Manager fallback', 'global CheckerMap']) {
       if (teamText.includes(stale)) throw new Error(`stale/manual Reviewer copy remains: ${stale}`);
     }
-    await gotoUsers(page, locales[0]);
+    await gotoWFARecipients(page, locales[0]);
     const userForms = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="user"]') });
     const userSelect = userForms.locator('select[name="target_id"]');
     for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
@@ -627,7 +627,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       await fixture(page, state.name);
       const isTeamState = state.name === 'empty-team' || state.name === 'team-failure';
       if (isTeamState) await gotoProduction(page, locales[0], 'team');
-      else await gotoUsers(page, locales[0]);
+      else await gotoWFARecipients(page, locales[0]);
       const body = await page.locator('main').innerText();
       const expected = state.name === 'team-failure' ? 'Could not load the Kitsu Production Team' : state.expected;
       if (!body.includes(expected)) throw new Error(`${state.name} state is unclear; missing ${expected}`);
@@ -660,8 +660,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         }
 
-        await gotoUsers(page, locale);
-        if (!(await page.locator('.production-reviewer-manager').count())) throw new Error(`Reviewer UI missing in ${locale.lang}`);
+        await gotoWFARecipients(page, locale);
+        if (!(await page.locator('.production-wfa-recipients').count())) throw new Error(`WFA recipients missing in Notifications for ${locale.lang}`);
         await assertAutomatic(page, locale, [locale.supervisor, locale.comp, 'Global Name Supervisor', 'Username Supervisor']);
         if (await page.locator('#tab-reviewers').count()) throw new Error(`Reviewers is still a primary tab in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `wfa-recipients-${locale.lang}-${viewport.name}.png`), fullPage: true });

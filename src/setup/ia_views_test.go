@@ -46,7 +46,7 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	if !strings.Contains(body, `role="tablist"`) || !strings.Contains(body, `aria-selected="true"`) || !strings.Contains(body, `aria-labelledby="tab-overview"`) {
 		t.Fatal("selected Production overview tab is not accessible")
 	}
-	for _, tab := range []string{"overview", "notifications", "reviewers", "settings"} {
+	for _, tab := range []string{"overview", "notifications", "team", "settings"} {
 		r := httptest.NewRequest("GET", "/bot/admin/projects?project=synthetic-production&tab="+tab+"&lang=en", nil)
 		w := httptest.NewRecorder()
 		renderIAProductionList(w, r, db, "")
@@ -343,7 +343,7 @@ func TestNormalViewsKeepTechnicalDetailsCollapsed(t *testing.T) {
 func TestSelectedProductionTabsHaveSingleAccessiblePanel(t *testing.T) {
 	db := newIAViewDB(t)
 	db.Create(&model.Project{KitsuProjectID: "tab-semantics-p", Name: "Tab Semantics P"})
-	for _, tc := range []struct{ requested, selected string }{{"", "overview"}, {"notifications", "notifications"}, {"users", "reviewers"}, {"user-settings", "reviewers"}, {"storage-settings", "settings"}, {"activity", "overview"}, {"troubleshooting", "settings"}, {"advanced", "settings"}, {"danger-zone", "settings"}, {"invalid", "overview"}} {
+	for _, tc := range []struct{ requested, selected string }{{"", "overview"}, {"notifications", "notifications"}, {"team", "team"}, {"users", "team"}, {"user-settings", "team"}, {"reviewers", "notifications"}, {"storage-settings", "settings"}, {"activity", "overview"}, {"troubleshooting", "settings"}, {"advanced", "settings"}, {"danger-zone", "settings"}, {"invalid", "overview"}} {
 		path := "/bot/admin/projects?project=tab-semantics-p&lang=en"
 		if tc.requested != "" {
 			path += "&tab=" + tc.requested
@@ -1947,20 +1947,22 @@ func TestCurrentProductionUsersScaleWithoutSearchOrDetails(t *testing.T) {
 	}
 }
 
-func TestCurrentProductionUsersSimpleFlowUsesAssignedBeforeRoles(t *testing.T) {
+func TestCurrentProductionTeamRendersSimpleReadOnlyFlow(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "simple-flow-production", Name: "Simple Flow Production"}
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuName: "Linked Human", KitsuEmail: "human@example.com", DiscordID: "discord-human", DiscordDisplayName: "Discord Human"})
 	oldReader := reviewerProductionTeamReader
-	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return []kitsu.Person{}, nil }
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "team-person", FullName: "Linked Human", Role: "artist"}}, nil
+	}
 	oldTasks := reviewerTaskTypesForProduction
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-animation", Name: "Animation"}}
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
-	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=users&lang=en", nil), p, "en")
-	for _, want := range []string{"Team", "Kitsu role", "Production Team"} {
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=team&lang=en", nil), p, "en")
+	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Production Team"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
