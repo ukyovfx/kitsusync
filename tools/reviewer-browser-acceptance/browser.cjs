@@ -574,12 +574,19 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-unassigned')) {
           throw new Error('Apply sent a reviewer delta for a route pending removal');
         }
-        if (page.url() !== urlBeforeApply || !(await editForm.locator('[data-apply-message]').innerText()).includes(locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved')) {
-          throw new Error(`HTTP 409 navigated away or failed to preserve the pending editor in ${locale.lang}`);
+        const staleMessage = locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved';
+        await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent.includes(expected), {
+          selector: '[data-apply-message]',
+          expected: staleMessage,
+        }, { timeout: 5000 });
+        if (page.url() !== urlBeforeApply) throw new Error(`HTTP 409 navigated away from the pending editor in ${locale.lang}`);
+        await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+        const preservedTargets = await additionalPanel.innerText();
+        for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers']) {
+          if (!preservedTargets.includes(expected)) throw new Error(`HTTP 409 discarded pending User/Role target ${expected} in ${locale.lang}`);
         }
         await pendingRow.locator('[data-routing-undo]').click();
         await pendingRow.locator('[data-select-task]').click();
-        if (!(await additionalPanel.innerText()).includes('Guild Nick Override')) throw new Error('HTTP 409 discarded the pending Additional User delta');
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.unroute('**/bot/admin/projects?apply_notifications=1');
         await editForm.locator('[data-pending-cancel]').click();
