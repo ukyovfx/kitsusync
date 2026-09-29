@@ -1950,8 +1950,8 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 	if got := productionListConnectionSummary("en", counts); !strings.Contains(got, "Connected <strong>1</strong>") || !strings.Contains(got, "Disconnected <strong>1</strong>") {
 		t.Fatalf("Production list summary does not expose both states: %s", got)
 	}
-	if !strings.Contains(body, "Connected <strong>1</strong>") || !strings.Contains(body, "Disconnected <strong>0</strong>") {
-		t.Fatal("Production list summary does not reflect the available local Production state")
+	if !strings.Contains(body, "Connected <strong>1</strong>") || !strings.Contains(body, "Disconnected <strong>1</strong>") {
+		t.Fatal("Production list summary does not reflect the shared live + local Production state")
 	}
 	management := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, projects, 0, SharedBotRuntimeReadiness{}, nil)
 	start := strings.Index(management, `href="/bot/admin/projects?lang=en"`)

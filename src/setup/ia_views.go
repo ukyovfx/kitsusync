@@ -3158,7 +3158,7 @@ func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, proje
 	auditFirst, auditSecond, auditClass, auditSecondClass := dashboardAuditSummaryCanonical(lang, db)
 	cards := []card{
 		{tr(lang, "connections.title"), "/bot/admin/bot", t(lang, "KitsuとDiscordの接続状態を確認します。", "Kitsu and Discord connection health."), "", "", "", ""},
-		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みと未接続のProductionを確認します。", "Review connected and disconnected Productions."), strconv.Itoa(productionCounts.Connected), strconv.Itoa(productionCounts.Disconnected), "ok", "ok"},
+		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みと未接続のProductionを確認します。", "Review connected and disconnected Productions."), "", "", "", ""},
 		{tr(lang, "ia.user_mapping"), "/bot/admin/users", t(lang, "人間のKitsuユーザーとDiscordユーザーの紐づけを管理します。", "Human Kitsu-to-Discord links."), t(lang, "設定済", "Configured"), "", "ok", ""},
 		{tr(lang, "ia.system_status"), "/bot/admin/health", t(lang, "実測されたシステム健全性を確認します。", "Review measured system health."), systemLabel, "", systemClass, ""},
 		{tr(lang, "ia.audit_log"), "/bot/admin/audit", t(lang, "操作履歴と通知イベントを確認します。", "Action history and notification events."), t(lang, "記録なし", "No records"), "", "muted", ""},
