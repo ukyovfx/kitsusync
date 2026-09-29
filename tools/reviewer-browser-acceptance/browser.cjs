@@ -14,9 +14,11 @@ fs.mkdirSync(output, { recursive: true });
 const records = [];
 const errors = [];
 const locales = [
-  { lang: 'en', automatic: 'Automatic recipients', overrides: 'Additional recipients', supervisor: 'Project Supervisor', comp: 'Compositing Supervisor', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
-  { lang: 'ja', automatic: '自動通知先', overrides: '追加通知先', supervisor: 'Project Supervisor', comp: 'Compositing担当', tabs: ['概要', '通知', 'チーム', '設定'] },
+  { lang: 'en', automatic: 'Automatic recipients', overrides: 'Additional recipients', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
+  { lang: 'ja', automatic: '自動通知先', overrides: '追加通知先', tabs: ['概要', '通知', 'チーム', '設定'] },
 ];
+const compositingAutomatic = ['@Guild Nick Supervisor', '@Global Name Fallback', '@username-fallback'];
+const animationAutomatic = ['@Wrong Department Global'];
 const viewports = [
   { name: 'desktop', width: 1440, height: 1000 },
   { name: 'mobile', width: 390, height: 844 },
@@ -520,11 +522,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const automaticPanel = editForm.locator('[data-wfa-automatic]');
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
-        if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes('Wrong Department Global')) {
+        if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes(animationAutomatic[0])) {
           throw new Error(`selecting a route did not select its matching Automatic WFA summary in ${locale.lang}`);
         }
         await editForm.locator('[data-select-task]').filter({ hasText: 'Compositing' }).click();
-        await assertAutomatic(page, locale, ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor']);
+        await assertAutomatic(page, locale, compositingAutomatic);
 
         await editForm.locator('[data-wfa-add-target]').click();
         const addModal = page.locator('[data-wfa-add-modal]');
@@ -711,9 +713,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
     await gotoWFARecipients(page, locales[0]);
     if (await page.locator('#tab-reviewers').count() || await page.locator('.production-tabs [role="tab"]').filter({ hasText: /^Reviewers$/ }).count()) throw new Error('Reviewers remains a primary Production tab');
-    await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor'], [
-      'Departmentless Supervisor', 'Wrong Department Supervisor', 'Production Manager', 'Global Admin',
-      'Demoted Supervisor', 'Project Manager Override', 'Position Only', 'Inactive Supervisor', 'Kitsu Bot', 'Unlinked Supervisor',
+    await assertAutomatic(page, locales[0], compositingAutomatic, [
+      '@Departmentless Global', '@Wrong Department Global', '@Manager Global', '@Admin Global',
+      '@Demoted Global', '@Project Manager Global', '@position-only', '@inactive', '@kitsu-bot',
     ]);
     const productionIdentity = await page.locator('.production-identity').innerText();
     if (!productionIdentity.includes('Synthetic Review Production')) throw new Error('Production identity header is missing the selected Production name');
@@ -777,7 +779,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await gotoWFARecipients(page, locale);
         if (!(await page.locator('.production-notification-table').count())) throw new Error(`Notifications table missing in ${locale.lang}`);
-        await assertAutomatic(page, locale, [locale.supervisor, locale.comp, 'Global Name Supervisor', 'Username Supervisor']);
+        await assertAutomatic(page, locale, compositingAutomatic);
         if (await page.locator('#tab-reviewers').count()) throw new Error(`Reviewers is still a primary tab in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `wfa-recipients-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'ready', 'WFA Automatic and additional recipients rendered without overflow or mojibake');
