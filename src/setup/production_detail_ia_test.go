@@ -106,6 +106,17 @@ func TestProductionTeamCompactRowStyles(t *testing.T) {
 	}
 }
 
+func TestProductionSettingsVerticalSections(t *testing.T) {
+	for _, expected := range []string{
+		`.editorial-workbench .production-context #panel-settings>.production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
+		`.production-settings-section{min-width:0;padding:18px 0;border-top:1px solid var(--line)}`,
+	} {
+		if !strings.Contains(adminThemeCSS, expected) {
+			t.Errorf("Production Settings is missing its vertical section treatment %q", expected)
+		}
+	}
+}
+
 func TestSelectedProductionTabNormalizesLegacyDestinations(t *testing.T) {
 	for _, tc := range []struct{ legacy, want string }{
 		{"", "overview"},

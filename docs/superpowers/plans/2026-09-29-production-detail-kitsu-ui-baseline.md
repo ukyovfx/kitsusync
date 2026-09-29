@@ -103,18 +103,18 @@ Each item is mapped to its owning task/check:
 - [x] Run the non-SQLite row-style check and confirm PASS. The Team renderer regression was attempted but is blocked locally by SQLite requiring CGO; exact-head Linux CI must run it:
   `go test ./src/setup -run 'TestProductionTeam(CompactRows|UsesGuildDisplayNameAndFallsBackToUserLinking)$|TestCurrentProductionUsersDistinguishKitsuEmptyAndReadFailure|TestReviewerBrowserAcceptance' -count=1`
 - [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go src/setup/reviewer_browser_acceptance_test.go`.
-- [ ] Commit as `ui: compact Production Team rows`.
+- [x] Commit as `ui: compact Production Team rows` (`ff111d6b`).
 
 ## Task 5: Settings vertical section/disclosure treatment
 
 **Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and `tools/reviewer-browser-acceptance/browser.cjs` only if a browser check is missing.
 
-- [ ] Add `TestProductionSettingsVerticalSections` for Storage, Technical details, Diagnostics, and Danger Zone order and one-column section hierarchy.
-- [ ] Extend or retain regression checks that legacy deep links focus/open Storage, Diagnostics, Technical details, and Danger Zone.
-- [ ] Run the focused tests before the style change and confirm the intended visual assertion fails:  
+- [x] Add `TestProductionSettingsVerticalSections` for the one-column hierarchy. Existing `TestProductionSettingsGroupsExistingSectionsWithoutChangingForms` covers section order, forms, and collapsed disclosure defaults.
+- [x] Retain regression checks that legacy deep links focus/open Storage, Diagnostics, Technical details, and Danger Zone.
+- [x] Run the focused CSS test before the style change and confirm the intended assertion fails:
   `go test ./src/setup -run 'TestProduction(SettingsVerticalSections|SettingsGroupsExistingSectionsWithoutChangingForms)$|TestSelectedProductionTabNormalizesLegacyDestinations|TestLegacyActivityDeepLinkFallsBackToOverviewWithoutRecords' -count=1`
-- [ ] Make the smallest scoped markup/style adjustment. Preserve disclosure defaults, saves, copy actions, diagnostic behavior, and Danger Zone confirmation safeguards.
-- [ ] Run focused tests and confirm PASS:  
+- [x] Make the smallest scoped style adjustment. Preserve disclosure defaults, saves, copy actions, diagnostic behavior, and Danger Zone confirmation safeguards.
+- [x] Run the focused vertical CSS test and confirm PASS. SQLite-backed Settings/deep-link tests were attempted but are locally blocked by `CGO_ENABLED=0`; exact-head Linux CI must run them:
   `go test ./src/setup -run 'TestProduction(SettingsVerticalSections|SettingsGroupsExistingSectionsWithoutChangingForms)$|TestSelectedProductionTabNormalizesLegacyDestinations|TestLegacyActivityDeepLinkFallsBackToOverviewWithoutRecords|TestReviewerBrowserAcceptance' -count=1`
 - [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go tools/reviewer-browser-acceptance/browser.cjs`.
 - [ ] Commit as `ui: align Production settings sections`.

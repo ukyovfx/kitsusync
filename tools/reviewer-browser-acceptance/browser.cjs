@@ -511,6 +511,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (settingsPositions.some(position => position < 0) || settingsPositions.some((position, index) => index > 0 && position <= settingsPositions[index - 1])) {
           throw new Error(`Settings sections are missing or out of order in ${locale.lang}: ${JSON.stringify(settingsPositions)}`);
         }
+        const settingsLayout = await page.locator('.production-settings-list').evaluate(node => {
+          const style = getComputedStyle(node);
+          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: node.querySelectorAll(':scope > .production-settings-section').length };
+        });
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4) {
+          throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
+        }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
         const saveButton = page.locator('.drive-storage-form [data-drive-save]');
         const storageInput = page.locator('#storage-url');

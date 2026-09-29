@@ -765,6 +765,9 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:16px 0;margin:0}
   .editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section:first-child,
   .editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section:first-of-type{border-top:0;padding-top:0}
+  .editorial-workbench .production-context #panel-settings>.production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;min-width:0}
+  .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;padding:16px 0;margin:0}
+  .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section:first-child{border-top:0;padding-top:0}
   .editorial-workbench .user-linking-page>.section-card{border:0;border-bottom:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
   .editorial-workbench .user-linking-page>.user-linking-server-select,.editorial-workbench .user-linking-page>.user-linking-directory{border-bottom:0}
   .editorial-workbench .user-linking-select-hint{margin:10px 0 0;color:var(--muted-2);font-size:13px}
