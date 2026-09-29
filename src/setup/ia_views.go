@@ -889,13 +889,20 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 		botToken = botTokens[0]
 	}
 	var guildMembers []DiscordGuildMember
+	var teamGuildErr error
+	guildReadOK := false
 	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		guildMembers, _ = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
+		guildMembers, teamGuildErr = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
+		guildReadOK = teamGuildErr == nil
 	}
 	guildMemberNames := make(map[string]string, len(guildMembers))
+	guildMemberIDs := make(map[string]bool, len(guildMembers))
 	for _, member := range guildMembers {
 		if id := strings.TrimSpace(member.User.ID); isDiscordSnowflake(id) {
-			guildMemberNames[id] = discordGuildMemberDisplayName(member)
+			if !member.User.Bot {
+				guildMemberIDs[id] = true
+				guildMemberNames[id] = discordGuildMemberDisplayName(member)
+			}
 		}
 	}
 	supervisorSummaries := productionSupervisorTaskTypeSummaries(team, taskTypes)
@@ -903,6 +910,15 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 
 	userText := func(ja, en string) string { return t(lang, ja, en) }
 	var members strings.Builder
+	var linkOptions strings.Builder
+	for _, member := range guildMembers {
+		id := strings.TrimSpace(member.User.ID)
+		name := discordGuildMemberDisplayName(member)
+		if member.User.Bot || !isDiscordSnowflake(id) || name == "" {
+			continue
+		}
+		linkOptions.WriteString(`<option value="` + esc(id) + `">` + esc(name) + `</option>`)
+	}
 	if teamErr != nil {
 		members.WriteString(`<li class="empty-state" role="status"><strong>` + esc(userText("KitsuのProduction Teamを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></li>`)
 	} else {
@@ -927,16 +943,32 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 					scope = summary
 				}
 			}
-			discordCell := `<span class="status-pill warning">` + esc(userText("未リンク", "Not linked")) + `</span><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(userText("User Linkingで設定", "Set up in User Linking")) + `</a>`
+			linkButton := ""
+			if person.Active && !person.Archived {
+				linkButton = `<button type="button" class="btn-ghost" data-open-team-link data-person-id="` + esc(person.ID) + `" data-person-name="` + esc(kitsuPersonDisplayName(person)) + `" data-person-email="` + esc(person.Email) + `">` + esc(userText("Discordをリンク", "Link Discord")) + `</button>`
+			}
+			discordCell := `<span class="status-pill warning">` + esc(userText("未リンク", "Not linked")) + `</span>`
+			if guildReadOK {
+				discordCell += linkButton
+			} else {
+				discordCell += `<span class="field-help">` + esc(userText("Discord所属を確認できません", "Guild membership could not be verified")) + `</span>`
+			}
 			if user := globalUserForKitsuPerson(globalUsers, person); user != nil && isDiscordSnowflake(user.DiscordID) {
-				discordName := guildMemberNames[strings.TrimSpace(user.DiscordID)]
-				if discordName == "" {
-					discordName = discordReviewerDisplayName(user.DiscordDisplayName)
+				if !guildReadOK || !guildMemberIDs[strings.TrimSpace(user.DiscordID)] {
+					discordCell = `<span class="status-pill warning">` + esc(userText("Discord所属を再確認", "Discord membership needs review")) + `</span>`
+					if guildReadOK {
+						discordCell += linkButton
+					}
+				} else {
+					discordName := guildMemberNames[strings.TrimSpace(user.DiscordID)]
+					if discordName == "" {
+						discordName = discordReviewerDisplayName(user.DiscordDisplayName)
+					}
+					if discordName == "" {
+						discordName = userText("リンク済み", "Linked")
+					}
+					discordCell = `<span class="status-pill success">` + esc(userText("リンク済み", "Linked")) + `</span><small class="production-team-discord-name">` + esc(discordName) + `</small>`
 				}
-				if discordName == "" {
-					discordName = userText("リンク済み", "Linked")
-				}
-				discordCell = `<span class="status-pill success">` + esc(userText("リンク済み", "Linked")) + `</span><small class="production-team-discord-name">` + esc(discordName) + `</small>`
 			}
 			members.WriteString(`<li class="production-team-row"><div class="production-team-cell"><strong>` + esc(kitsuPersonDisplayName(person)) + `</strong><small>` + esc(userText("Kitsuロール", "Kitsu role")) + `: ` + esc(role) + `</small></div><div class="production-team-cell"><small class="production-team-label">` + esc(userText("Department", "Department")) + `</small><span>` + esc(departments) + `</span></div><div class="production-team-cell"><small class="production-team-label">` + esc(userText("Supervisor範囲", "Supervision scope")) + `</small><span>` + esc(scope) + `</span></div><div class="production-team-cell production-team-discord"><small class="production-team-label">Discord</small>` + discordCell + `</div></li>`)
 		}
@@ -944,7 +976,11 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			members.WriteString(`<li class="empty-state" role="status"><strong>` + esc(userText("KitsuのProduction Teamは空です", "The Kitsu Production Team is empty")) + `</strong></li>`)
 		}
 	}
-	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p><ul class="production-team-list">` + members.String() + `</ul></section>`
+	modal := ""
+	if guildReadOK && linkOptions.Len() > 0 {
+		modal = `<dialog data-team-link-modal><form method="post" action="` + esc(withLang("/bot/admin/users", r)) + `"><h3>` + esc(userText("Discordユーザーをリンク", "Link Discord user")) + `</h3><p data-team-link-person-label></p><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="team_link_project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="kitsu_id" data-team-link-person-id><input type="hidden" name="kitsu_name" data-team-link-person-name><input type="hidden" name="kitsu_email" data-team-link-person-email><input type="hidden" name="discord_guild_id" value="` + esc(p.DiscordGuildID) + `"><label>` + esc(userText("Discordユーザー", "Discord user")) + `<select name="discord_user_id" required><option value="">` + esc(userText("選択", "Select")) + `</option>` + linkOptions.String() + `</select></label><div class="button-row"><button type="button" class="btn-ghost" data-team-link-cancel>` + esc(userText("キャンセル", "Cancel")) + `</button><button type="submit" class="btn">` + esc(userText("保存", "Save")) + `</button></div></form></dialog><script>(function(){var dialog=document.querySelector('[data-team-link-modal]');if(!dialog)return;document.querySelectorAll('[data-open-team-link]').forEach(function(button){button.addEventListener('click',function(){dialog.querySelector('[data-team-link-person-id]').value=button.dataset.personId||'';dialog.querySelector('[data-team-link-person-name]').value=button.dataset.personName||'';dialog.querySelector('[data-team-link-person-email]').value=button.dataset.personEmail||'';dialog.querySelector('[data-team-link-person-label]').textContent=button.dataset.personName||'';dialog.showModal()})});dialog.querySelector('[data-team-link-cancel]')?.addEventListener('click',function(){dialog.close()})})();</script>`
+	}
+	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p><ul class="production-team-list">` + members.String() + `</ul>` + modal + `</section>`
 }
 
 func productionDepartmentNames(taskTypes []kitsu.TaskType) map[string]string {
@@ -1425,56 +1461,80 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 	case "blocked":
 		statusLabel = t(lang, "利用不可", "Unavailable")
 	}
+	editing := r != nil && r.URL.Query().Get("edit_routing") == "1"
+	data := loadProductionNotificationReviewerView(db, p, len(model.ListProductionNotificationRoutes(db, p.KitsuProjectID)) > 0 || editing, botTokens...)
+	readTable := renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 	var routing string
-	if r != nil && r.URL.Query().Get("edit_routing") == "1" {
-		routing = renderCurrentIARoutingEditorSetupStyle(db, r, p, lang)
+	if editing {
+		routing = renderCurrentIARoutingEditorSetupStyleWithData(db, r, p, lang, readTable, data)
 	} else {
-		routing = renderProductionNotificationsReadTable(db, r, p, lang, class, statusLabel, botTokens...)
+		routing = readTable
 	}
 	return `<div class="production-notifications"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2>` + routing + `</div>`
 }
 
+type productionNotificationReviewerView struct {
+	TaskTypes  []kitsu.TaskType
+	Team       []kitsu.Person
+	TeamErr    error
+	Users      []model.UserMap
+	BotToken   string
+	GuildUsers []DiscordGuildMember
+	GuildErr   error
+	Roles      []DiscordGuildRole
+	RolesReady bool
+	KitsuBase  string
+	KitsuToken string
+	KitsuReady bool
+}
+
+func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includeAutomatic bool, botTokens ...string) productionNotificationReviewerView {
+	view := productionNotificationReviewerView{
+		TaskTypes: reviewerTaskTypesForProduction(db, p.KitsuProjectID),
+		Users:     filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)),
+	}
+	if len(botTokens) > 0 {
+		view.BotToken = strings.TrimSpace(botTokens[0])
+	}
+	if stored := storedRuntimeDiscordBotToken(db); stored != "" {
+		view.BotToken = stored
+	}
+	if includeAutomatic {
+		view.Team, view.TeamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
+		if view.BotToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
+			view.GuildUsers, view.GuildErr = reviewerGuildMembersForGuild(p.DiscordGuildID, view.BotToken)
+			if view.GuildErr == nil {
+				if roles, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, view.BotToken); err == nil {
+					view.Roles = mentionableReviewerRoles(p.DiscordGuildID, roles)
+					view.RolesReady = true
+				}
+			}
+		}
+		view.KitsuBase, view.KitsuToken, view.KitsuReady = runtimeKitsuDataSource(db)
+	}
+	return view
+}
+
 func renderProductionNotificationsReadTable(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, botTokens ...string) string {
+	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
+	data := loadProductionNotificationReviewerView(db, p, len(routes) > 0, botTokens...)
+	return renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
+}
+
+func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, data productionNotificationReviewerView) string {
 	label := func(ja, en string) string { return t(lang, ja, en) }
 	channelLabel := label("Discordチャンネル", "Discord Channel")
 	editURL := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
 	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
-	taskTypes := reviewerTaskTypesForProduction(db, p.KitsuProjectID)
+	taskTypes := data.TaskTypes
 	taskTypesByID := make(map[string]kitsu.TaskType, len(taskTypes))
 	for _, taskType := range taskTypes {
 		taskTypesByID[strings.TrimSpace(taskType.ID)] = taskType
 	}
-	var team []kitsu.Person
-	var teamErr error
-	if len(routes) > 0 {
-		team, teamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
-	}
-	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
-	botToken := ""
-	if len(botTokens) > 0 {
-		botToken = botTokens[0]
-	}
-	var guildMembers []DiscordGuildMember
-	var guildErr error
-	if len(routes) > 0 && botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		guildMembers, guildErr = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
-	}
-	linked := currentProductionLinkedHumanDiscordIDs(team, globalUsers, guildMembers)
-	var roles []DiscordGuildRole
-	rolesReady := false
-	if len(routes) > 0 && botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		if listed, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, botToken); err == nil {
-			roles = mentionableReviewerRoles(p.DiscordGuildID, listed)
-			rolesReady = true
-		}
-	}
-	roleNames := make(map[string]string, len(roles))
-	for _, role := range roles {
+	linked := currentProductionLinkedHumanDiscordIDs(data.Team, data.Users, data.GuildUsers)
+	roleNames := make(map[string]string, len(data.Roles))
+	for _, role := range data.Roles {
 		roleNames[role.ID] = "@" + role.Name
-	}
-	baseURL, token, kitsuReady := "", "", false
-	if len(routes) > 0 {
-		baseURL, token, kitsuReady = runtimeKitsuDataSource(db)
 	}
 	var rows strings.Builder
 	for _, route := range routes {
@@ -1484,41 +1544,7 @@ func renderProductionNotificationsReadTable(db *gorm.DB, r *http.Request, p mode
 		}
 		taskTypeID := strings.TrimSpace(route.TaskTypeID)
 		taskType := taskTypesByID[taskTypeID]
-		automatic := label("Kitsu Task Type情報が必要です。", "Kitsu Task Type data unavailable.")
-		switch {
-		case guildErr != nil || botToken == "":
-			automatic = label("Discordメンバーを確認できません。", "Discord membership could not be verified.")
-		case teamErr != nil:
-			automatic = label("Production Teamを読み込めません。", "Production Team unavailable.")
-		case !kitsuReady:
-			automatic = label("Kitsu接続が必要です。", "Kitsu connection required.")
-		case taskType.ID == "":
-			automatic = label("Task Type情報を読み込めません。", "Task Type data unavailable.")
-		case strings.TrimSpace(taskType.DepartmentID) == "":
-			automatic = label("該当するSupervisorはいません。", "No matching Supervisor.")
-		default:
-			supervisors, err := reviewerDepartmentSupervisorsForTeam(baseURL, token, taskType.DepartmentID, team)
-			if err != nil {
-				automatic = label("Supervisor情報を読み込めません。", "Supervisor data unavailable.")
-			} else {
-				var names []string
-				for _, person := range supervisors {
-					user := globalUserForKitsuPerson(globalUsers, person)
-					if user == nil {
-						continue
-					}
-					if name := linked[strings.TrimSpace(user.DiscordID)]; name != "" {
-						names = append(names, name)
-					}
-				}
-				sort.Strings(names)
-				if len(names) == 0 {
-					automatic = label("該当するSupervisorはいません。", "No matching Supervisor.")
-				} else {
-					automatic = strings.Join(names, ", ")
-				}
-			}
-		}
+		automatic := productionAutomaticReviewerLabel(taskType, data, lang)
 		var additional []string
 		targets, _, _ := model.ListProjectReviewerTargetsForTaskType(db, p.ID, taskTypeID)
 		for _, target := range targets {
@@ -1528,7 +1554,7 @@ func renderProductionNotificationsReadTable(db *gorm.DB, r *http.Request, p mode
 					additional = append(additional, name)
 				}
 			case model.ReviewerTargetRole:
-				if rolesReady && roleNames[target.DiscordID] != "" {
+				if data.RolesReady && roleNames[target.DiscordID] != "" {
 					additional = append(additional, roleNames[target.DiscordID])
 				}
 			}
@@ -1542,7 +1568,63 @@ func renderProductionNotificationsReadTable(db *gorm.DB, r *http.Request, p mode
 	if len(routes) == 0 {
 		rows.WriteString(`<tr><td colspan="3" class="field-help">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</td></tr>`)
 	}
-	return `<section class="production-settings-section production-notification-table-section"><div class="page-heading"><div><h3>` + esc(label("通知ルーティング", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div><div class="table-wrap production-notification-table"><table><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
+	usedTaskTypes := make(map[string]bool, len(routes))
+	for _, route := range routes {
+		usedTaskTypes[strings.TrimSpace(route.TaskTypeID)] = true
+	}
+	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, usedTaskTypes, data, lang)
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading"><div><h3>` + esc(label("通知ルーティング", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div><div class="table-wrap production-notification-table"><table><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+}
+
+func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNotificationReviewerView, lang string) string {
+	label := func(ja, en string) string { return t(lang, ja, en) }
+	switch {
+	case data.GuildErr != nil || data.BotToken == "":
+		return label("Discordメンバーを確認できません。", "Discord membership could not be verified.")
+	case data.TeamErr != nil:
+		return label("Production Teamを読み込めません。", "Production Team unavailable.")
+	case !data.KitsuReady:
+		return label("Kitsu接続が必要です。", "Kitsu connection required.")
+	case strings.TrimSpace(taskType.ID) == "":
+		return label("Task Type情報を読み込めません。", "Task Type data unavailable.")
+	case strings.TrimSpace(taskType.DepartmentID) == "":
+		return label("該当するSupervisorはいません。", "No matching Supervisor.")
+	}
+	people, err := reviewerDepartmentSupervisorsForTeam(data.KitsuBase, data.KitsuToken, taskType.DepartmentID, data.Team)
+	if err != nil {
+		return label("Supervisor情報を読み込めません。", "Supervisor data unavailable.")
+	}
+	linked := currentProductionLinkedHumanDiscordIDs(data.Team, data.Users, data.GuildUsers)
+	seen := map[string]bool{}
+	var names []string
+	for _, person := range people {
+		user := globalUserForKitsuPerson(data.Users, person)
+		if user == nil {
+			continue
+		}
+		name := linked[strings.TrimSpace(user.DiscordID)]
+		if name != "" && !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return label("該当するSupervisorはいません。", "No matching Supervisor.")
+	}
+	return strings.Join(names, ", ")
+}
+
+func renderPendingAutomaticReviewerSource(taskTypes []kitsu.TaskType, routed map[string]bool, data productionNotificationReviewerView, lang string) string {
+	var pending strings.Builder
+	for _, taskType := range taskTypes {
+		id := strings.TrimSpace(taskType.ID)
+		if id == "" || routed[id] {
+			continue
+		}
+		pending.WriteString(`<div data-task-type-id="` + esc(id) + `"><div class="production-wfa-summary"><div><strong>` + esc(t(lang, "自動通知先", "Automatic recipients")) + `</strong><span>` + esc(productionAutomaticReviewerLabel(taskType, data, lang)) + `</span></div></div></div>`)
+	}
+	return pending.String()
 }
 
 func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string, r *http.Request) string {

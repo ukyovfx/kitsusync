@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestProductionTeamUsesGuildDisplayNameAndFallsBackToUserLinking(t *testing.T) {
+func TestProductionTeamUsesGuildDisplayNameAndFailsClosedWhenGuildReadFails(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "team-display-production", Name: "Team Display", DiscordGuildID: "11111111111111111"}
 	if err := db.Create(&project).Error; err != nil {
@@ -47,8 +47,8 @@ func TestProductionTeamUsesGuildDisplayNameAndFallsBackToUserLinking(t *testing.
 
 	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) { return nil, errors.New("synthetic read failure") }
 	body = renderCurrentProductionTeam(db, request, project, "en", "synthetic-token")
-	if !strings.Contains(body, "@Stored Discord Name") {
-		t.Fatalf("Team did not fall back to the saved User Linking display name: %s", body)
+	if !strings.Contains(body, "Discord membership needs review") || strings.Contains(body, "@Stored Discord Name") {
+		t.Fatalf("Team treated an unverified Discord membership as linked: %s", body)
 	}
 }
 
@@ -103,6 +103,18 @@ func TestProductionTeamCompactRowStyles(t *testing.T) {
 	} {
 		if !strings.Contains(adminThemeCSS, expected) {
 			t.Errorf("Production Team is missing compact row style %q", expected)
+		}
+	}
+}
+
+func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *testing.T) {
+	for _, rule := range []string{
+		`.production-wfa-edit-panel{display:grid;gap:12px;min-width:0;`,
+		`.production-wfa-edit-panel dialog,.production-team-page dialog{width:min(460px,calc(100vw - 24px));max-width:calc(100vw - 24px);`,
+		`.production-wfa-edit-panel dialog select,.production-team-page dialog select{width:100%;min-width:0}`,
+	} {
+		if !strings.Contains(adminThemeCSS, rule) {
+			t.Errorf("Production detail modal/layout is missing constrained style %q", rule)
 		}
 	}
 }
@@ -400,6 +412,87 @@ func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *t
 		if !strings.Contains(body, tc.teamFailure) {
 			t.Errorf("%s Team read failure state missing %q: %s", tc.lang, tc.teamFailure, body)
 		}
+	}
+}
+
+func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "pending-apply-production", Name: "Pending Apply"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "synthetic-webhook", "channel-comp"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "")
+	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message"} {
+		if !strings.Contains(body, required) {
+			t.Errorf("unified pending Apply editor missing %q", required)
+		}
+	}
+	if strings.Count(body, `data-async-notification-apply`) != 1 || strings.Contains(body, `action="save_current_production_routing"`) {
+		t.Fatalf("Notifications edit must expose one async Apply and no independent route save: %s", body)
+	}
+	if strings.Contains(body, `method="post"`) && !strings.Contains(body, `event.preventDefault()`) {
+		t.Fatal("Apply form must not submit as a full-page request")
+	}
+}
+
+func TestProductionRoutingEditorProvidesAutomaticSummaryForUnroutedTaskTypes(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "pending-new-task-type", Name: "Pending New Task Type"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "existing", "Existing", "synthetic-webhook", "channel-existing"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-existing", TaskTypeName: "Existing", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	view := productionNotificationReviewerView{
+		TaskTypes: []kitsu.TaskType{{ID: "task-existing", Name: "Existing"}, {ID: "task-new", Name: "New Task"}},
+		BotToken:  "synthetic-discord-token",
+	}
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-new-task-type&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", view)
+	source := strings.Index(body, `data-wfa-pending-source`)
+	if source < 0 {
+		t.Fatal("pending Task Type must have a WFA summary source before Apply")
+	}
+	end := strings.Index(body[source:], `</div><p class="field-help routing-destructive-note">`)
+	if end < 0 {
+		t.Fatal("pending WFA source boundary is missing")
+	}
+	pendingSource := body[source : source+end]
+	newTask := strings.Index(pendingSource, `data-task-type-id="task-new"`)
+	if newTask < 0 {
+		t.Fatal("unrouted Task Type must have an Automatic summary available")
+	}
+	if strings.Contains(pendingSource, `data-task-type-id="task-existing"`) {
+		t.Fatal("already-routed Task Type WFA summary should not be duplicated in pending source")
+	}
+	if !strings.Contains(pendingSource[newTask:], "Discord membership could not be verified.") {
+		t.Fatal("unrouted Task Type must show its truthful Automatic-recipient state")
+	}
+}
+
+func TestPendingAutomaticReviewerSourceOmitsRoutedTaskTypes(t *testing.T) {
+	source := renderPendingAutomaticReviewerSource(
+		[]kitsu.TaskType{{ID: "task-routed", Name: "Routed"}, {ID: "task-pending", Name: "Pending"}},
+		map[string]bool{"task-routed": true},
+		productionNotificationReviewerView{BotToken: "synthetic-discord-token"},
+		"en",
+	)
+	if strings.Contains(source, `data-task-type-id="task-routed"`) {
+		t.Fatal("routed Task Type summary must not be duplicated in pending source")
+	}
+	if !strings.Contains(source, `data-task-type-id="task-pending"`) || !strings.Contains(source, "Kitsu connection required.") {
+		t.Fatalf("pending Task Type must expose its truthful Automatic summary: %s", source)
 	}
 }
 

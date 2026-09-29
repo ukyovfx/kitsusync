@@ -139,15 +139,82 @@ func TestCurrentRoutingEditorDeleteDialogDoesNotBlockSaveForm(t *testing.T) {
 	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-1", TaskTypeName: "Task 1", DestinationWebhookID: webhook.ID}}); err != nil {
 		t.Fatal(err)
 	}
-	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), project, "en")
-	if got := strings.Count(body, "<form"); got != 1 {
-		t.Fatalf("routing editor rendered %d forms; want only the save form", got)
+	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), project, "en", "")
+	if got := strings.Count(body, `data-current-routing-form`); got != 1 {
+		t.Fatalf("routing editor rendered %d apply forms; want one global Apply form", got)
 	}
 	if strings.Contains(body, `name="confirm_name"`) || strings.Contains(body, " required") {
 		t.Fatal("delete confirmation controls can participate in save-form validation")
 	}
 	if !strings.Contains(body, `data-routing-delete-form`) {
 		t.Fatal("delete dialog staging container is missing")
+	}
+	formEnd := strings.Index(body, "</form>")
+	deleteDialog := strings.Index(body, `class="routing-delete-dialog"`)
+	if formEnd < 0 || deleteDialog < formEnd {
+		t.Fatal("destructive delete dialog must stay outside the Apply form")
+	}
+}
+
+func TestCurrentRoutingEditorKeepsAddDialogOutsideApplyForm(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-editor-dialog", Name: "Routing Editor Dialog"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), project, "en", "")
+	formEnd := strings.Index(body, "</form>")
+	dialogStart := strings.Index(body, "<dialog data-wfa-add-modal>")
+	if formEnd < 0 || dialogStart < 0 || dialogStart < formEnd {
+		t.Fatal("recipient dialog must be outside the Apply form to avoid invalid nested forms")
+	}
+	if strings.Contains(body[dialogStart:], `<form method="dialog">`) {
+		t.Fatal("recipient dialog must not introduce a nested form")
+	}
+}
+
+func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
+	script := currentRoutingEditorScript()
+	if !strings.Contains(script, `form.parentElement.querySelector('[data-wfa-add-modal]')`) {
+		t.Fatal("Apply editor script must find the add-recipient dialog outside the Apply form")
+	}
+}
+
+func TestLegacyRoutingSaveActionCannotBypassUnifiedApply(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "legacy-routing-save", Name: "Legacy Routing Save"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader("action=save_current_production_routing&project_id=legacy-routing-save&task_type_id=task-a&destination_webhook_id=1"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if !handleCurrentIARoutingMutation(recorder, request, "en", db) {
+		t.Fatal("legacy save action was not handled")
+	}
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("legacy route save returned %d; want conflict", recorder.Code)
+	}
+	if len(model.ListProductionNotificationRoutes(db, project.KitsuProjectID)) != 0 {
+		t.Fatal("legacy route save bypassed the combined Apply path")
+	}
+}
+
+func TestCurrentRoutingChannelDeleteCannotRemoveLastNotificationRoute(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-delete-last", Name: "Routing Delete Last"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "only", "", "https://example.invalid/only", "channel-only"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-only", TaskTypeName: "Only", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if canDeleteWebhookWithoutRemovingLastRoute(db, project, webhook.ID) {
+		t.Fatal("last notification route can be removed by deleting its Discord channel")
 	}
 }
 
@@ -191,8 +258,12 @@ func TestCurrentRoutingChannelDeleteRemovesOnlyVerifiedRouteAndWebhook(t *testin
 	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "owned", "", "https://example.invalid/owned", "channel-1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "remaining", "", "https://example.invalid/remaining", "channel-2"); err != nil {
+		t.Fatal(err)
+	}
 	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-1", TaskTypeName: "Task 1", DestinationWebhookID: webhook.ID}}); err != nil {
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-1", TaskTypeName: "Task 1", DestinationWebhookID: webhook.ID}, {ProductionID: project.KitsuProjectID, TaskTypeID: "task-2", TaskTypeName: "Task 2", DestinationWebhookID: webhooks[1].ID}}); err != nil {
 		t.Fatal(err)
 	}
 	oldCheck, oldList, oldDelete := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel
@@ -218,7 +289,7 @@ func TestCurrentRoutingChannelDeleteRemovesOnlyVerifiedRouteAndWebhook(t *testin
 	if model.FindProjectWebhookByID(db, webhook.ID) != nil {
 		t.Fatal("verified channel delete left local webhook state")
 	}
-	if routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID); len(routes) != 0 {
-		t.Fatalf("verified channel delete left local routes: %#v", routes)
+	if routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID); len(routes) != 1 || routes[0].TaskTypeID != "task-2" {
+		t.Fatalf("verified channel delete did not preserve the remaining route: %#v", routes)
 	}
 }

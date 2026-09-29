@@ -1346,11 +1346,11 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal("default notification routing should be read-only")
 	}
 	editBody := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&edit_routing=1&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	if !strings.Contains(editBody, `name="action" value="save_current_production_routing"`) {
-		t.Fatal("explicit routing edit mode did not expose the save action")
+	if !strings.Contains(editBody, `data-async-notification-apply`) || !strings.Contains(editBody, `data-wfa-detail-panel`) {
+		t.Fatal("explicit routing edit mode did not expose one staged Apply flow with linked WFA panel")
 	}
 	body = editBody
-	for _, expected := range []string{"Apply changes", "Cancel", "Add Task Type", "data-routing-row", "data-routing-new-row"} {
+	for _, expected := range []string{"Apply", "Cancel", "Add Task Type", "data-routing-row", "data-routing-new-row"} {
 		if !strings.Contains(editBody, expected) {
 			t.Fatalf("staged routing editor missing %q", expected)
 		}

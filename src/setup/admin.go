@@ -440,7 +440,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		if handleCurrentProductionUserMutation(w, r, db, botToken) {
 			return
 		}
-		if handleCurrentIARoutingMutation(w, r, lang, db) {
+		if handleCurrentIARoutingMutation(w, r, lang, db, botToken) {
 			return
 		}
 		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
@@ -2346,6 +2346,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			id := parseUint(r.FormValue("user_id"))
 			action := r.FormValue("action")
 			saved := false
+			redirectURL := withLang("/bot/admin/users?msg=error", r)
 			if action == "remove_global_link" && id > 0 {
 				if user := model.FindUserMapByID(db, id); user != nil {
 					model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, "")
@@ -2354,31 +2355,25 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					saved = true
 				}
 			} else if action == "save_global_link" {
-				selectedID := strings.TrimSpace(r.FormValue("discord_user_id"))
-				directory, err := loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), r.FormValue("discord_guild_id"))
-				if err == nil && directory.SelectedGuild.ID != "" && selectedID != "" {
-					for _, option := range directory.Options {
-						if option.ID != selectedID {
-							continue
-						}
-						if id > 0 {
-							if user := model.FindUserMapByID(db, id); user != nil {
-								model.UpsertUserMapWithIdentity(db, r.FormValue("kitsu_id"), user.KitsuName, user.KitsuEmail, directory.SelectedGuild.ID, option.ID, option.Name)
-								saved = true
-							}
-						} else {
-							model.UpsertUserMapWithIdentity(db, r.FormValue("kitsu_id"), r.FormValue("kitsu_name"), r.FormValue("kitsu_email"), directory.SelectedGuild.ID, option.ID, option.Name)
-							saved = true
-						}
-						break
-					}
-				}
+				saved, redirectURL = saveGlobalUserLink(db, r)
 			}
 			msg := "error"
 			if saved {
 				msg = "saved"
 			}
-			http.Redirect(w, r, withLang("/bot/admin/users?msg="+msg, r), http.StatusSeeOther)
+			if action == "remove_global_link" {
+				redirectURL = withLang("/bot/admin/users?msg="+msg, r)
+			} else if action == "save_global_link" && !saved && redirectURL != "" {
+				separator := "?"
+				if strings.Contains(redirectURL, "?") {
+					separator = "&"
+				}
+				redirectURL += separator + "msg=error"
+			}
+			if redirectURL == "" {
+				redirectURL = withLang("/bot/admin/users?msg=error", r)
+			}
+			http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("project") == "" {
