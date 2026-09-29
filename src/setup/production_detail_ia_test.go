@@ -1,13 +1,55 @@
 package setup
 
 import (
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"app/src/api/kitsu"
 	"app/src/model"
+	"gorm.io/gorm"
 )
+
+func TestProductionTeamUsesGuildDisplayNameAndFallsBackToUserLinking(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "team-display-production", Name: "Team Display", DiscordGuildID: "11111111111111111"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserMap{KitsuID: "person-team-display", KitsuName: "Linked Person", DiscordID: "22222222222222222", DiscordDisplayName: "Stored Discord Name"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTeam, oldMembers := reviewerProductionTeamReader, reviewerGuildMembersForGuild
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
+		return []kitsu.Person{{ID: "person-team-display", FullName: "Linked Person", Role: "artist"}}, nil
+	}
+	reviewerGuildMembersForGuild = func(guildID, botToken string) ([]DiscordGuildMember, error) {
+		if guildID != project.DiscordGuildID || botToken != "synthetic-token" {
+			t.Fatalf("Guild member request used guild/token %q/%q", guildID, botToken)
+		}
+		var member DiscordGuildMember
+		member.User.ID = "22222222222222222"
+		member.User.GlobalName = "Global Name"
+		member.User.Username = "username"
+		member.Nick = "Guild Nick"
+		return []DiscordGuildMember{member}, nil
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTeam, oldMembers })
+
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=team-display-production&tab=team&lang=en", nil)
+	body := renderCurrentProductionTeam(db, request, project, "en", "synthetic-token")
+	if !strings.Contains(body, "@Guild Nick") || strings.Contains(body, "@Stored Discord Name") {
+		t.Fatalf("Team did not prefer the live Production Guild nickname: %s", body)
+	}
+
+	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) { return nil, errors.New("synthetic read failure") }
+	body = renderCurrentProductionTeam(db, request, project, "en", "synthetic-token")
+	if !strings.Contains(body, "@Stored Discord Name") {
+		t.Fatalf("Team did not fall back to the saved User Linking display name: %s", body)
+	}
+}
 
 func TestSelectedProductionTabNormalizesLegacyDestinations(t *testing.T) {
 	for _, tc := range []struct{ legacy, want string }{

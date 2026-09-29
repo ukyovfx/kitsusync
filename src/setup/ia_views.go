@@ -705,7 +705,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		}
 		return renderSelectedProductionNotifications(db, r, p, lang, class, label, hint, botTokens...)
 	case "team":
-		return renderCurrentProductionTeam(db, r, p, lang)
+		return renderCurrentProductionTeam(db, r, p, lang, botTokens...)
 	case "settings":
 		return renderCurrentProductionSettings(db, r, p, lang)
 	default:
@@ -835,7 +835,7 @@ var reviewerProductionTeamReader = func(db *gorm.DB, projectID string) ([]kitsu.
 	return kitsu.GetProjectTeamWithCredentialsAndError(baseURL, token, projectID)
 }
 
-func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, lang string, botTokens ...string) string {
 	var team []kitsu.Person
 	var teamErr error
 	if p.ValidationOnly || p.ReadOnlyPreview {
@@ -847,6 +847,20 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 	}
 	taskTypes := reviewerTaskTypesForProduction(db, p.KitsuProjectID)
 	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
+	botToken := ""
+	if len(botTokens) > 0 {
+		botToken = botTokens[0]
+	}
+	var guildMembers []DiscordGuildMember
+	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
+		guildMembers, _ = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
+	}
+	guildMemberNames := make(map[string]string, len(guildMembers))
+	for _, member := range guildMembers {
+		if id := strings.TrimSpace(member.User.ID); isDiscordSnowflake(id) {
+			guildMemberNames[id] = discordGuildMemberDisplayName(member)
+		}
+	}
 	supervisorSummaries := productionSupervisorTaskTypeSummaries(team, taskTypes)
 	departmentNames := productionDepartmentNames(taskTypes)
 
@@ -878,7 +892,10 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			}
 			discordCell := `<span class="status-pill warning">` + esc(userText("未リンク", "Not linked")) + `</span><a class="btn-ghost" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(userText("User Linkingで設定", "Set up in User Linking")) + `</a>`
 			if user := globalUserForKitsuPerson(globalUsers, person); user != nil && isDiscordSnowflake(user.DiscordID) {
-				discordName := discordReviewerDisplayName(user.DiscordDisplayName)
+				discordName := guildMemberNames[strings.TrimSpace(user.DiscordID)]
+				if discordName == "" {
+					discordName = discordReviewerDisplayName(user.DiscordDisplayName)
+				}
 				if discordName == "" {
 					discordName = userText("リンク済み", "Linked")
 				}
