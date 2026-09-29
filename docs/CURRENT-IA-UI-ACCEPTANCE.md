@@ -26,6 +26,8 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 ## Dashboard — `/bot/admin`
 
 - [ ] Heading, summary, action-required section, New Production Connection CTA, and Management menu appear in that order.
+- [ ] Production summary shows the total visible live/local Production count and separate Connected / Disconnected counts; a disconnected live Kitsu Production is not counted as Needs attention, and ValidationOnly records are excluded from normal totals.
+- [ ] The Management Production card shows separate Connected and Disconnected counts, not a disconnected count under Needs attention.
 - [ ] The Management Connections card shows explicit `Kitsu` and `Discord` status groups.
 - [ ] Kitsu and Discord badges are independently derived and semantically correct.
 - [ ] Kitsu and Discord status groups stay contained inside the Connections card; the Production count remains in the Production card.
@@ -61,6 +63,7 @@ Use the repo-supported authenticated preview/browser workflow. Browser-rendered 
 
 ## Production list — `/bot/admin/projects`
 
+- [ ] Summary shows Connected and Disconnected totals using the same connection-state definition as Dashboard; visible live Kitsu Productions remain listed even before they are connected.
 - [ ] Each visible Kitsu Production has a compact content-sized status badge.
 - [ ] Connected is green; Disconnected is yellow/warning.
 - [ ] A visible Kitsu Production without a KitsuSync connection is Disconnected and is excluded from the connected count.

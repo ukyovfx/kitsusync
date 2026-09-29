@@ -215,6 +215,7 @@ func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 func renderIADashboardWithRuntime(w http.ResponseWriter, r *http.Request, db *gorm.DB, runtimeHealthy func() bool) {
 	lang := currentLang(r)
 	projects := availableProjects(db)
+	productionCounts := productionConnectionCounts(projects)
 	var attentionRows, activityRows strings.Builder
 	attentionCount := 0
 	for _, p := range projects {
@@ -298,12 +299,11 @@ func renderIADashboardWithRuntime(w http.ResponseWriter, r *http.Request, db *go
 	}
 	body := `<div class="section-stack dashboard-page">` +
 		`<section class="dashboard-intro"><div><h1>` + esc(tr(lang, "ia.dashboard")) + `</h1><p class="hint">` + esc(t(lang, "KitsuSyncの接続状態と、対応が必要な項目を確認できます。", "Review KitsuSync connection state and items that need attention.")) + `</p></div><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin", r)) + `">` + esc(t(lang, "状態を更新", "Refresh status")) + `</a></div></section>` +
-		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `"><div class="metric-card"><div class="metric-label">` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</div><div class="metric-value">` + fmt.Sprint(len(projects)) + `</div><p class="field-help">` + esc(t(lang, "現在確認できるProduction", "Productions currently visible")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "通知状態", "Notification status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
+		`<section class="dashboard-summary-grid" aria-label="` + esc(t(lang, "概要", "Summary")) + `">` + dashboardProductionMetric(lang, productionCounts) + `<div class="metric-card"><div class="metric-label">` + esc(t(lang, "対応が必要", "Needs attention")) + `</div><div class="metric-value">` + fmt.Sprint(attentionCount) + `</div><p class="field-help">` + esc(t(lang, "安全に通知できる状態か確認が必要です。", "Review before notifications can be safely delivered.")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "直近24時間の通知失敗", "Notification failures, last 24 hours")) + `</div><div class="metric-value">` + fmt.Sprint(failureCount) + `</div><p class="field-help">` + esc(t(lang, "記録された失敗イベント", "Recorded failure events")) + `</p></div><div class="metric-card"><div class="metric-label">` + esc(t(lang, "通知状態", "Notification status")) + `</div><div class="metric-value"><span class="status-pill ` + readinessClass + `">` + esc(readinessLabel) + `</span></div><p class="field-help" role="status">` + esc(readinessHint) + `</p></div></section>` +
 		`<section class="section-card glass dashboard-queue" aria-labelledby="dashboard-attention"><div class="page-heading"><div><h2 id="dashboard-attention">` + esc(t(lang, "対応が必要なプロダクション", "Productions needing attention")) + `</h2><p class="hint">` + esc(t(lang, "通知が安全に利用できない理由と、次の操作を示します。", "Each row explains why notifications are unavailable and what to do next.")) + `</p></div><span class="status-pill ` + map[bool]string{true: "bad", false: "ok"}[attentionCount > 0] + `">` + fmt.Sprint(attentionCount) + `</span></div><ul class="list-tight">` + attentionRows.String() + `</ul></section>` +
 		dashboardAction +
 		dashboardMenu +
 		`<div class="dashboard-lower-grid"><section class="section-card glass" aria-labelledby="dashboard-activity"><h2 id="dashboard-activity">` + esc(tr(lang, "ia.activity")) + `</h2><div class="activity-columns" aria-hidden="true"><span>` + esc(t(lang, "日時", "Date and time")) + `</span><span>` + esc(t(lang, "操作", "Action")) + `</span><span>` + esc(t(lang, "Production", "Production")) + `</span><span>` + esc(t(lang, "結果", "Result")) + `</span></div><ul class="activity-list" role="log">` + activityRows.String() + `</ul></section><div class="dashboard-side-stack"><section class="section-card glass" aria-labelledby="dashboard-system"><h2 id="dashboard-system">` + esc(t(lang, "通知システム", "Notification system")) + `</h2><div class="dashboard-status-list">` + dashboardStatusRow(t(lang, "Kitsu接続", "Kitsu connection"), kitsuConnectionStatus.Class, kitsuConnectionStatus.Label) + dashboardStatusRow(t(lang, "Discord Bot", "Discord Bot"), discordConnectionStatus.Class, discordConnectionStatus.Label) + dashboardStatusRow(t(lang, "通知状態", "Notification status"), readinessView.NotificationClass, readinessView.Notification) + `</div><p class="field-help" role="status">` + esc(statusExplanation) + `</p>` + statusAction + `</section><section class="section-card glass dashboard-quick" aria-labelledby="dashboard-quick"><h2 id="dashboard-quick">` + esc(t(lang, "クイック操作", "Quick actions")) + `</h2><div class="button-row">` + ifNonEmpty(quickActions, quickActions) + `</div></section></div></div>`
-	body = replaceDashboardConnectedCount(body, len(projects), connectedProductionCount(projects))
 	body = removeDashboardSubtitle(body)
 	body = applyDashboardMetricSemantics(body, attentionCount, failureCount, readinessClass)
 	body = strings.ReplaceAll(body, `class="section-card glass dashboard-quick"`, `class="section-card glass dashboard-quick hidden"`)
@@ -507,7 +507,8 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 		}
 	}
 	var rows strings.Builder
-	for _, p := range availableProjects(db) {
+	projects := availableProjects(db)
+	for _, p := range projects {
 		class, label := productionConnectionStatus(p, lang)
 		_, _, hint := iaStatus(db, p, lang)
 		rows.WriteString(fmt.Sprintf(`<article class="section-card glass production-list-item"><div><h2>%s</h2><p class="field-help">%s</p></div><div class="production-list-state"><span class="status-pill %s">%s</span><span class="field-help">%s</span></div><a class="btn" href="%s">%s</a></article>`, esc(p.Name), esc(t(lang, "現在の状態", "Current state")), class, esc(label), esc(hint), esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(t(lang, "プロダクションを開く", "Open Production"))))
@@ -515,7 +516,7 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 	if rows.Len() == 0 {
 		rows.WriteString(emptyState("-", t(lang, "プロダクションがありません", "No Productions"), t(lang, "新しいプロダクションを接続してください。", "Connect a new Production.")))
 	}
-	body := `<div class="section-stack"><p class="production-list-intro">` + esc(t(lang, "設定はProductionを選択した後に表示します", "Settings appear after you select a Production")) + `</p><div class="production-list" aria-label="` + esc(t(lang, "プロダクション一覧", "Production list")) + `">` + rows.String() + `</div></div>`
+	body := `<div class="section-stack"><p class="production-list-intro">` + esc(t(lang, "設定はProductionを選択した後に表示します", "Settings appear after you select a Production")) + `</p>` + productionListConnectionSummary(lang, productionConnectionCounts(projects)) + `<div class="production-list" aria-label="` + esc(t(lang, "プロダクション一覧", "Production list")) + `">` + rows.String() + `</div></div>`
 	body = strings.Replace(body, rows.String(), simplifyProductionListRows(rows.String()), 1)
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.production_list"), r, body))
 }
@@ -3151,28 +3152,27 @@ func renderWizardComplete(lang string, r *http.Request, db *gorm.DB, target inte
 
 func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, projects []model.Project, attentionCount int, readiness SharedBotRuntimeReadiness, runtimeHealthy func() bool) string {
 	type card struct{ label, path, description, first, second, firstClass, secondClass string }
+	productionCounts := productionConnectionCounts(projects)
 	systemLabel, systemClass, _ := overallRuntimeStatus(lang, readiness, Stats.Snapshot())
 	systemClass = canonicalDashboardBadgeClass(systemClass)
 	auditFirst, auditSecond, auditClass, auditSecondClass := dashboardAuditSummaryCanonical(lang, db)
 	cards := []card{
 		{tr(lang, "connections.title"), "/bot/admin/bot", t(lang, "KitsuとDiscordの接続状態を確認します。", "Kitsu and Discord connection health."), "", "", "", ""},
-		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みプロダクションの状態と設定を確認します。", "Connected Production state and settings."), strconv.Itoa(connectedProductionCount(projects)), strconv.Itoa(attentionCount), "ok", map[bool]string{true: "warning", false: "ok"}[attentionCount > 0]},
+		{tr(lang, "ia.production_list"), "/bot/admin/projects", t(lang, "接続済みと未接続のProductionを確認します。", "Review connected and disconnected Productions."), strconv.Itoa(productionCounts.Connected), strconv.Itoa(productionCounts.Disconnected), "ok", "ok"},
 		{tr(lang, "ia.user_mapping"), "/bot/admin/users", t(lang, "人間のKitsuユーザーとDiscordユーザーの紐づけを管理します。", "Human Kitsu-to-Discord links."), t(lang, "設定済", "Configured"), "", "ok", ""},
 		{tr(lang, "ia.system_status"), "/bot/admin/health", t(lang, "実測されたシステム健全性を確認します。", "Review measured system health."), systemLabel, "", systemClass, ""},
 		{tr(lang, "ia.audit_log"), "/bot/admin/audit", t(lang, "操作履歴と通知イベントを確認します。", "Action history and notification events."), t(lang, "記録なし", "No records"), "", "muted", ""},
 	}
 	cards[4].first, cards[4].second, cards[4].firstClass, cards[4].secondClass = auditFirst, auditSecond, auditClass, auditSecondClass
 	kitsuStatus, discordStatus := canonicalConnectionStatuses(lang, db, readiness, runtimeHealthy)
-	productionAttention := ""
-	if attentionCount > 0 {
-		productionAttention = fmt.Sprintf("%s %d", t(lang, "要確認", "Needs review"), attentionCount)
-	}
 	cards[0].first = kitsuStatus.Label
 	cards[0].second = discordStatus.Label
 	cards[0].firstClass = kitsuStatus.Class
 	cards[0].secondClass = discordStatus.Class
 	cards[1].first = fmt.Sprintf("%s %d", t(lang, "接続済", "Connected"), connectedProductionCount(projects))
-	cards[1].second = productionAttention
+	cards[1].first = fmt.Sprintf("%s %d", t(lang, "接続済み", "Connected"), productionCounts.Connected)
+	cards[1].second = fmt.Sprintf("%s %d", t(lang, "未接続", "Disconnected"), productionCounts.Disconnected)
+	cards[1].secondClass = map[bool]string{true: "warning", false: "ok"}[productionCounts.Disconnected > 0]
 	var body strings.Builder
 	body.WriteString(`<section class="dashboard-cta"><div><h2>` + esc(tr(lang, "ia.new_connection")) + `</h2></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しい接続を開始", "Open setup")) + `</a></section><section class="dashboard-menu"><h2>` + esc(t(lang, "管理メニュー", "Management")) + `</h2><div class="dashboard-menu-grid">`)
 	for _, item := range cards {
@@ -3191,14 +3191,38 @@ func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, proje
 	return body.String()
 }
 
-func connectedProductionCount(projects []model.Project) int {
-	count := 0
+type productionCounts struct {
+	Total        int
+	Connected    int
+	Disconnected int
+}
+
+func productionConnectionCounts(projects []model.Project) productionCounts {
+	var counts productionCounts
 	for _, project := range projects {
-		if !project.ReadOnlyPreview && !project.ValidationOnly {
-			count++
+		if project.ValidationOnly {
+			continue
+		}
+		counts.Total++
+		if project.ReadOnlyPreview {
+			counts.Disconnected++
+		} else {
+			counts.Connected++
 		}
 	}
-	return count
+	return counts
+}
+
+func dashboardProductionMetric(lang string, counts productionCounts) string {
+	return `<div class="metric-card"><div class="metric-label">` + esc(t(lang, "プロダクション", "Production")) + `</div><div class="metric-value">` + strconv.Itoa(counts.Total) + `</div><div class="production-count-breakdown"><span>` + esc(t(lang, "接続済み", "Connected")) + ` <strong>` + strconv.Itoa(counts.Connected) + `</strong></span><span>` + esc(t(lang, "未接続", "Disconnected")) + ` <strong>` + strconv.Itoa(counts.Disconnected) + `</strong></span></div></div>`
+}
+
+func productionListConnectionSummary(lang string, counts productionCounts) string {
+	return `<div class="production-list-summary" aria-label="` + esc(t(lang, "プロダクション接続の概要", "Production connection summary")) + `"><span>` + esc(t(lang, "接続済み", "Connected")) + ` <strong>` + strconv.Itoa(counts.Connected) + `</strong></span><span>` + esc(t(lang, "未接続", "Disconnected")) + ` <strong>` + strconv.Itoa(counts.Disconnected) + `</strong></span></div>`
+}
+
+func connectedProductionCount(projects []model.Project) int {
+	return productionConnectionCounts(projects).Connected
 }
 
 func productionConnectionStatus(project model.Project, lang string) (string, string) {
@@ -3210,10 +3234,6 @@ func productionConnectionStatus(project model.Project, lang string) (string, str
 
 func renderDisconnectedProductionCard(lang string, r *http.Request, project model.Project) string {
 	return `<article class="section-card glass production-list-item"><div><h2>` + esc(project.Name) + `</h2></div><span class="status-pill warning">` + esc(t(lang, "未接続", "Disconnected")) + `</span><a class="btn" href="` + esc(withLang("/bot/setup?project="+url.QueryEscape(project.KitsuProjectID), r)) + `">` + esc(t(lang, "接続設定", "Configure connection")) + `</a></article>`
-}
-
-func replaceDashboardConnectedCount(body string, before, after int) string {
-	return strings.Replace(body, `<div class="metric-value">`+strconv.Itoa(before)+`</div>`, `<div class="metric-value">`+strconv.Itoa(after)+`</div>`, 1)
 }
 
 func renderIAConnectedProductionDeleteResultRefined(lang string, r *http.Request, project model.Project, result connectedProductionChannelDeleteExecution) string {

@@ -38,11 +38,11 @@ The management menu uses one shared equal-width responsive grid. At desktop widt
 
 `Kitsu [status]` and `Discord [status]`
 
-The two statuses are independent and vertically stacked as equal label/badge rows. Production count, routing, notification readiness, and User Linking do not change either connection status. The Production list card may show connected Production count; it does not replace the two service groups. Both service groups remain contained inside the Connections card at desktop widths.
+The two statuses are independent and vertically stacked as equal label/badge rows. Production count, routing, notification readiness, and User Linking do not change either connection status. The Dashboard Production summary shows the total visible Production count plus separate Connected and Disconnected counts; its Management Production card repeats the Connected and Disconnected counts. The Production list summary uses the same connection-state definition and shows Connected and Disconnected counts; it does not replace the two service groups. Both service groups remain contained inside the Connections card at desktop widths. ValidationOnly records are excluded from normal Production totals.
 
 ## Production list and detail
 
-Each Production row presents the human-readable Production name, a compact content-sized status badge, and its action. `Connected` / `接続済` is positive green. `Disconnected` / `未接続` is warning yellow, not neutral gray. A visible Kitsu Production without a KitsuSync connection is disconnected and is not included in the connected count.
+Each Production row presents the human-readable Production name, a compact content-sized status badge, and its action. `Connected` / `接続済` is positive green. `Disconnected` / `未接続` is warning yellow, not neutral gray. A visible Kitsu Production without a KitsuSync connection is included in the total and disconnected count, but not in the connected count or Needs attention count. Dashboard and Production list derive these counts from the same live-plus-local Production set and connection-state definition; ValidationOnly records are excluded from normal summary counts.
 
 The detail view uses the same connection-state definition as the list and Dashboard count. It may show routing/resource information only when that state exists; it must not invent or duplicate stale resources.
 

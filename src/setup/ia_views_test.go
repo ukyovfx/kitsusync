@@ -1887,10 +1887,35 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 	db := newIAViewDB(t)
 	preview := model.Project{KitsuProjectID: "live-preview", Name: "Live Preview", ReadOnlyPreview: true}
 	connected := model.Project{KitsuProjectID: "connected-local", Name: "Connected Local"}
-	db.Create(&connected)
+	if err := db.Create(&connected).Error; err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/data/projects/":
+			_, _ = w.Write([]byte(`[{"id":"live-preview","name":"Live Preview"}]`))
+		case "/api/data/projects/live-preview/task-types":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	t.Setenv("KitsuJWTToken", "")
+	t.Setenv("KITSU_API_BASE_URL", "")
+	t.Setenv("KITSU_HOSTNAME", "")
+	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
+	if err := setRuntimeKitsuToken(db, "dashboard-count-test-token"); err != nil {
+		t.Fatal(err)
+	}
 	projects := []model.Project{preview, connected}
-	if got := connectedProductionCount(projects); got != 1 {
-		t.Fatalf("connected Production count = %d, want 1", got)
+	counts := productionConnectionCounts(projects)
+	if counts != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
+		t.Fatalf("Production counts = %+v, want total=2 connected=1 disconnected=1", counts)
 	}
 	if class, label := productionConnectionStatus(preview, "en"); class != "warning" || label != "Disconnected" {
 		t.Fatalf("live-only Production status = %q/%q, want warning/Disconnected", class, label)
@@ -1899,16 +1924,97 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 		t.Fatalf("local Production status = %q/%q, want ok/Connected", class, label)
 	}
 	w := httptest.NewRecorder()
+	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
+	dashboardBody := w.Body.String()
+	if !strings.Contains(dashboardBody, `metric-value">2</div>`) || !strings.Contains(dashboardBody, "Connected <strong>1</strong>") || !strings.Contains(dashboardBody, "Disconnected <strong>1</strong>") {
+		t.Fatalf("Dashboard did not render the live + connected Production counts: %s", dashboardBody)
+	}
+	if !strings.Contains(dashboardBody, `metric-label">Needs attention</div><div class="metric-value">1</div>`) {
+		t.Fatal("disconnected live Production incorrectly increased Needs attention")
+	}
+	w = httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?lang=en", nil), db, "")
 	body := w.Body.String()
+	if !strings.Contains(body, "Live Preview") || !strings.Contains(body, "Connected Local") {
+		t.Fatal("Production list did not retain both the live-only and connected Kitsu Productions")
+	}
 	if !strings.Contains(body, `class="status-pill ok">Connected</span>`) {
 		t.Fatal("Production list does not render the connected semantic state")
 	}
 	if strings.Contains(body, `min-width:170px`) {
 		t.Fatal("Production status layout still reserves the old fixed-width column")
 	}
-	if got := replaceDashboardConnectedCount(`<div class="metric-value">2</div>`, 2, connectedProductionCount(projects)); got != `<div class="metric-value">1</div>` {
-		t.Fatalf("Dashboard connected count rendering = %q, want 1", got)
+	if got := dashboardProductionMetric("en", counts); !strings.Contains(got, "Production") || !strings.Contains(got, "metric-value\">2</div>") || !strings.Contains(got, "Connected <strong>1</strong>") || !strings.Contains(got, "Disconnected <strong>1</strong>") {
+		t.Fatalf("Dashboard Production summary does not expose total/connected/disconnected: %s", got)
+	}
+	if got := productionListConnectionSummary("en", counts); !strings.Contains(got, "Connected <strong>1</strong>") || !strings.Contains(got, "Disconnected <strong>1</strong>") {
+		t.Fatalf("Production list summary does not expose both states: %s", got)
+	}
+	if !strings.Contains(body, "Connected <strong>1</strong>") || !strings.Contains(body, "Disconnected <strong>0</strong>") {
+		t.Fatal("Production list summary does not reflect the available local Production state")
+	}
+	management := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, projects, 0, SharedBotRuntimeReadiness{}, nil)
+	start := strings.Index(management, `href="/bot/admin/projects?lang=en"`)
+	if start < 0 {
+		t.Fatal("Dashboard Management menu is missing the Production card")
+	}
+	end := strings.Index(management[start:], `</a>`)
+	productionCard := management[start : start+end]
+	if !strings.Contains(productionCard, "Connected 1") || !strings.Contains(productionCard, "Disconnected 1") || strings.Contains(productionCard, "Needs review 1") {
+		t.Fatalf("Dashboard Management Production summary has incompatible state semantics: %s", productionCard)
+	}
+	if class, _, _ := iaStatus(db, preview, "en"); class == "bad" {
+		t.Fatal("disconnected Production must not count as Needs attention")
+	}
+}
+
+func TestProductionConnectionCountsTwoVisibleOneConnectedOneDisconnected(t *testing.T) {
+	projects := []model.Project{
+		{KitsuProjectID: "connected", Name: "Connected"},
+		{KitsuProjectID: "live", Name: "Live", ReadOnlyPreview: true},
+	}
+	if got := productionConnectionCounts(projects); got != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
+		t.Fatalf("two visible Production counts = %+v, want total=2 connected=1 disconnected=1", got)
+	}
+}
+
+func TestProductionConnectionCountsExcludeValidationOnlyFromNormalSummary(t *testing.T) {
+	projects := []model.Project{
+		{KitsuProjectID: "connected", Name: "Connected"},
+		{KitsuProjectID: "live", Name: "Live", ReadOnlyPreview: true},
+		{KitsuProjectID: "validation", Name: "Validation", ValidationOnly: true},
+	}
+	if got := productionConnectionCounts(projects); got != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
+		t.Fatalf("ValidationOnly record leaked into normal Production counts: %+v", got)
+	}
+}
+
+func TestProductionConnectionCountsAllConnectedAndNoDisconnected(t *testing.T) {
+	projects := []model.Project{{KitsuProjectID: "one"}, {KitsuProjectID: "two"}}
+	if got := productionConnectionCounts(projects); got != (productionCounts{Total: 2, Connected: 2}) {
+		t.Fatalf("all-connected Production counts = %+v", got)
+	}
+	if got := productionConnectionCounts(nil); got != (productionCounts{}) {
+		t.Fatalf("empty Production counts = %+v", got)
+	}
+}
+
+func TestProductionConnectionSummaryLabelsAreLocalized(t *testing.T) {
+	counts := productionCounts{Total: 2, Connected: 1, Disconnected: 1}
+	for _, tc := range []struct{ lang, total, connected, disconnected string }{
+		{"en", "Production", "Connected 1", "Disconnected 1"},
+		{"ja", "プロダクション", "接続済み 1", "未接続 1"},
+	} {
+		dashboard := dashboardProductionMetric(tc.lang, counts)
+		list := productionListConnectionSummary(tc.lang, counts)
+		for _, rendered := range []string{dashboard, list} {
+			if !strings.Contains(rendered, strings.Split(tc.connected, " ")[0]+" <strong>1</strong>") || !strings.Contains(rendered, strings.Split(tc.disconnected, " ")[0]+" <strong>1</strong>") {
+				t.Fatalf("%s summary labels are incomplete: %s", tc.lang, rendered)
+			}
+		}
+		if !strings.Contains(dashboard, tc.total) {
+			t.Fatalf("%s Dashboard is missing total Production label: %s", tc.lang, dashboard)
+		}
 	}
 }
 
