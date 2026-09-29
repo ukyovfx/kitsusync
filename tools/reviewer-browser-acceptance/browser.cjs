@@ -440,6 +440,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           if (!overview.includes(expected)) throw new Error(`Overview is missing real status/activity ${expected} in ${locale.lang}`);
         }
         if (overview.includes('Must not leak') || overview.includes('Current issues (0)')) throw new Error('Overview leaked cross-Production activity or invented a count');
+        const overviewSections = await page.locator('.production-overview > .production-settings-section').evaluateAll(sections => sections.map(section => {
+          const style = getComputedStyle(section);
+          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+        }));
+        if (overviewSections.length < 2 || overviewSections[0].borderTopStyle !== 'none' || overviewSections.slice(1).some(section => section.borderTopStyle !== 'solid' || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
+          throw new Error(`Overview sections are not a compact divider hierarchy in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        }
         await page.screenshot({ path: path.join(output, `production-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, one current-issues section, exact-Production recent activity');
 
@@ -456,6 +463,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('.production-wfa-recipients').count() !== 1) throw new Error(`WFA recipients are missing from Notifications in ${locale.lang}`);
         if (!(await page.locator('#wfa-recipients').innerText()).includes(locale.automatic) || !(await page.locator('#wfa-recipients').innerText()).includes(locale.overrides)) {
           throw new Error(`Notifications is missing Automatic or Additional recipients in ${locale.lang}`);
+        }
+        const notificationSections = await page.locator('.production-notifications > .production-settings-section').evaluateAll(sections => sections.map(section => {
+          const style = getComputedStyle(section);
+          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+        }));
+        if (notificationSections.length !== 2 || notificationSections[0].borderTopStyle !== 'none' || notificationSections[1].borderTopStyle !== 'solid' || notificationSections.some(section => section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
+          throw new Error(`Routing and WFA are not distinct flat sections in ${locale.lang}: ${JSON.stringify(notificationSections)}`);
         }
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'real routing state and existing Automatic/additional-recipient controls; no synthetic Notification Preview');

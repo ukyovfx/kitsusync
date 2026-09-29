@@ -239,6 +239,20 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	}
 }
 
+func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
+	for _, rule := range []string{
+		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section`,
+		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section:first-of-type`,
+	} {
+		if !strings.Contains(adminThemeCSS, rule) {
+			t.Errorf("Production Notifications is missing scoped flat-section style %q", rule)
+		}
+	}
+	if strings.Contains(adminThemeCSS, `.production-context #panel-notifications>.section-card>.section-card`) {
+		t.Fatal("Notifications still targets an obsolete card DOM hierarchy")
+	}
+}
+
 func TestProductionOverviewOmitsActivityWhenNoScopedRecordsExist(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "overview-empty-production", Name: "Overview Empty"}

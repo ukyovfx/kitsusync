@@ -68,27 +68,27 @@ Each item is mapped to its owning task/check:
 
 **Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`.
 
-- [ ] Add a focused regression test named `TestProductionHeaderAndKitsuTabs` for the compact Production eyebrow/name/status grouping and four plain-label tabs with shared hairline and active underline.
-- [ ] Run the focused test before changing markup/styles and confirm it fails for the intended visual mismatch only:  
+- [x] Add a focused regression test named `TestProductionHeaderAndKitsuTabs` for the compact Production eyebrow/name/status grouping and four plain-label tabs with shared hairline and active underline.
+- [x] Run the focused test before changing markup/styles and confirm it fails for the intended visual mismatch only:
   `go test ./src/setup -run '^TestProductionHeaderAndKitsuTabs$' -count=1`
-- [ ] Make the minimal scoped markup/CSS change. Reuse existing status data, colors, and style values; do not change routes, status meaning, page shell, or other pages.
-- [ ] Run the focused test and the existing tab/alias tests; confirm PASS:  
+- [x] Make the minimal scoped markup/CSS change. Reuse existing status data, colors, and style values; do not change routes, status meaning, page shell, or other pages.
+- [x] Run the focused pure render test and confirm PASS. The existing SQLite-backed tab/alias tests were attempted but cannot execute on this Windows runner (`CGO_ENABLED=0`); Linux CI remains the authoritative gate:
   `go test ./src/setup -run 'TestProduction(HeaderAndKitsuTabs|DetailUsesFourSectionsAndMapsLegacyTabs|TabsHaveEquivalentJapaneseLabels)$' -count=1`
-- [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go`.
-- [ ] Commit as `ui: apply Kitsu identity header and tab treatment`.
+- [x] Run `node --check tools/reviewer-browser-acceptance/browser.cjs` and `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go tools/reviewer-browser-acceptance/browser.cjs`.
+- [x] Commit as `ui: apply Kitsu identity header and tab treatment` (`d335e4cf`).
 
 ## Task 3: Overview + Notifications section hierarchy
 
 **Files:** `src/setup/ia_views.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/ia_views_test.go`, and `tools/reviewer-browser-acceptance/browser.cjs` only if a rendered check is missing.
 
-- [ ] Add focused regression coverage named `TestProductionOverviewAndNotificationsSectionHierarchy`. Assert compact Overview sections and distinct Routing/WFA sections without changing their content contract.
-- [ ] Run it before implementation and confirm the expected hierarchy assertion fails:  
+- [x] Add focused regression coverage named `TestProductionOverviewAndNotificationsSectionHierarchy` for the current-DOM-scoped divider rules; existing render tests continue to assert Overview content and distinct Routing/WFA content without changing that contract.
+- [x] Run it before implementation and confirm the expected hierarchy assertion fails:
   `go test ./src/setup -run '^TestProductionOverviewAndNotificationsSectionHierarchy$' -count=1`
-- [ ] Replace only the Production detail summary-card grouping with compact sections/dividers. Keep current issue/activity truth and exact Production scoping.
-- [ ] Structure Routing as Kitsu Task Type → Discord Channel and WFA recipients as a separate section. Preserve read/edit states and all existing Edit/Apply/Cancel and recipient operations.
-- [ ] Run focused regression tests and confirm PASS:  
+- [x] Correct only the stale Production detail Notifications CSS selectors to target its actual section DOM; Overview and Notifications remain flat divider sections. Keep current issue/activity truth and exact Production scoping.
+- [x] Keep Routing as Kitsu Task Type → Discord Channel and WFA recipients as a separate section. Preserve read/edit states and all existing Edit/Apply/Cancel and recipient operations.
+- [x] Run the new hierarchy test and confirm PASS. The SQLite-backed render tests were attempted but cannot execute on this Windows runner (`CGO_ENABLED=0`); rerun in exact-head Linux CI:
   `go test ./src/setup -run 'TestProduction(OverviewAndNotificationsSectionHierarchy|NotificationsHasWFARecipientsAndNoPreview|OverviewOmitsActivityWhenNoScopedRecordsExist|OverviewDoesNotCallUnconfiguredRoutingHealthy|DiagnosticsAuditCountsAreProductionScoped)$' -count=1`
-- [ ] Run `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go tools/reviewer-browser-acceptance/browser.cjs`.
+- [x] Run `node --check tools/reviewer-browser-acceptance/browser.cjs` and `git diff --check -- src/setup/ia_views.go src/setup/ui.go src/setup/production_detail_ia_test.go src/setup/ia_views_test.go tools/reviewer-browser-acceptance/browser.cjs`.
 - [ ] Commit as `ui: structure Production overview and notifications`.
 
 ## Task 4: Team compact Kitsu-style table/list
