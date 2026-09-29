@@ -117,6 +117,9 @@ func TestProductionDetailUsesFourSectionsAndMapsLegacyTabs(t *testing.T) {
 	if body := render("notifications"); strings.Contains(body, `id="tab-reviewers"`) || !strings.Contains(body, `id="wfa-recipients"`) {
 		t.Fatal("Notifications did not own WFA recipients without reintroducing a Reviewers tab")
 	}
+	if body := render("reviewers"); !strings.Contains(body, `id="wfa-recipients" tabindex="-1"`) {
+		t.Fatal("legacy Reviewer destination is not keyboard-focusable under Notifications")
+	}
 }
 
 func TestProductionSettingsGroupsExistingSectionsWithoutChangingForms(t *testing.T) {

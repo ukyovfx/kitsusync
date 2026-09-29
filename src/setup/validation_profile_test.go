@@ -25,7 +25,7 @@ func TestValidationOnlyProjectRendersReadOnlyRealData(t *testing.T) {
 	if class != "warning" || label != "Validation only" || !strings.Contains(hint, "No Discord server") {
 		t.Fatalf("unexpected validation-only status: %q %q %q", class, label, hint)
 	}
-	for _, tab := range []string{"notifications", "danger-zone"} {
+	for _, tab := range []string{"notifications", "team", "danger-zone"} {
 		r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=real-production-id&tab="+tab+"&lang=en", nil)
 		w := httptest.NewRecorder()
 		renderIAProductionList(w, r, db, "")
@@ -34,10 +34,10 @@ func TestValidationOnlyProjectRendersReadOnlyRealData(t *testing.T) {
 			t.Fatalf("validation-only %s panel is not read-only", tab)
 		}
 	}
-	r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=real-production-id&tab=users&lang=en", nil)
+	r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=real-production-id&tab=team&lang=en", nil)
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, r, db, "")
-	if body := w.Body.String(); !strings.Contains(body, "Real Person") || !strings.Contains(body, "Discord not linked") {
+	if body := w.Body.String(); !strings.Contains(body, "Real Person") || !strings.Contains(body, "Not linked") {
 		t.Fatal("validation-only participants were not rendered")
 	}
 }
