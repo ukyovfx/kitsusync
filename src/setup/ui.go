@@ -822,8 +822,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-wfa-edit-panel [data-wfa-target-list] li{min-height:38px;padding:6px 0}
   .production-wfa-edit-panel .production-wfa-add-target{min-height:32px;padding:4px 9px;font-size:.82rem}
   .production-routing-editor-footer{margin-top:2px;padding-top:12px}
-  .editorial-workbench .production-context #panel-overview>.production-overview>.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}
-  .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}
+  .editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}
+  .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}
   .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-disclosure-row{margin:0;padding:0;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}
   .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-disclosure-row.danger-zone{border-color:rgba(255,106,80,.2);background:rgba(255,106,80,.025)}
   .editorial-workbench .production-context #panel-settings>.production-settings-list{gap:10px}

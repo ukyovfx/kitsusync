@@ -334,10 +334,13 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	}
 	r := httptest.NewRequest("GET", "/bot/admin/projects?project=preview-production&tab=notifications&lang=en", nil)
 	body := renderSelectedProductionNotifications(db, r, p, "en", "success", "Healthy", "")
-	for _, expected := range []string{"Notification routing", "WFA recipients", "Automatic", "Additional", "Compositing", "#compositing"} {
+	for _, expected := range []string{"WFA recipients", "Automatic", "Additional", "Compositing", "#compositing"} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("Notifications missing %q", expected)
 		}
+	}
+	if strings.Contains(body, "Notification routing") {
+		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
 	}
 	for _, forbidden := range []string{"Notification preview", "Example task", "Please review this task.", `id="notification-preview"`} {
 		if strings.Contains(body, forbidden) {
@@ -614,7 +617,7 @@ func TestProductionOverviewPreservesEmptyCurrentIssuesAndActivitySections(t *tes
 	if !strings.Contains(body, `production-current-issues"`) || !strings.Contains(body, "No current issues.") {
 		t.Fatal("healthy Overview must retain Current Issues with a compact empty state")
 	}
-	for _, marker := range []string{`class="production-detail-surface production-overview-status"`, `class="production-detail-state-row production-issue-empty"`, `class="production-detail-surface production-current-issues"`, `class="production-detail-surface production-activity-section"`, `class="production-detail-state-row production-activity-empty"`} {
+	for _, marker := range []string{`production-detail-surface production-overview-status`, `production-issue-empty`, `production-detail-surface production-current-issues`, `production-detail-surface production-activity-section`, `production-activity-empty`} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("sparse Overview must keep structured content inside visual blocks: missing %q", marker)
 		}
@@ -627,11 +630,13 @@ func TestProductionOverviewPreservesEmptyCurrentIssuesAndActivitySections(t *tes
 func TestProductionDetailTabsShareContainedVisualGrammar(t *testing.T) {
 	for _, rule := range []string{
 		`.production-detail-surface{min-width:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}`,
+		`.editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);`,
 		`.production-detail-section-title{margin:0 0 10px;font-size:1rem;line-height:1.35;`,
 		`.production-detail-state-row{min-height:42px;padding:10px 12px;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:rgba(255,255,255,.02);`,
 		`.production-notification-table thead th{padding:12px 12px;background:rgba(255,255,255,.045);`,
 		`.production-settings-disclosure-row>summary{min-height:52px;padding:0 14px;`,
 		`.production-settings-list{display:grid;gap:10px}`,
+		`.editorial-workbench .production-context #panel-settings>.production-settings-list{gap:10px}`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
 			t.Errorf("Production detail visual grammar is missing %q", rule)
@@ -642,7 +647,7 @@ func TestProductionDetailTabsShareContainedVisualGrammar(t *testing.T) {
 	project := createHealthyOverviewProject(t, db, "detail-visual-grammar")
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=detail-visual-grammar&tab=settings&lang=en", nil)
 	settings := renderCurrentProductionSettings(db, request, project, "en")
-	for _, marker := range []string{`class="production-detail-surface production-settings-section"`, `production-settings-disclosure-row`} {
+	for _, marker := range []string{`production-settings-section production-detail-surface`, `production-settings-disclosure-row`} {
 		if !strings.Contains(settings, marker) {
 			t.Errorf("Settings must use contained blocks and substantial disclosure rows: missing %q", marker)
 		}

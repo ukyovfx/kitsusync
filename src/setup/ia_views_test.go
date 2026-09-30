@@ -599,10 +599,13 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Notification routing", "Kitsu Task Type", "Discord Channel", "Edit"} {
+	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "Edit"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
+	}
+	if strings.Contains(body, "Notification routing") {
+		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
 	}
 	if strings.Contains(body, "Notification preview") || strings.Contains(body, "Example task") || strings.Contains(body, "discord-message-preview") {
 		t.Fatal("Notifications retained the removed synthetic preview")
@@ -1335,10 +1338,13 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	for _, expected := range []string{"Notification routing", "Kitsu Task Type", "Discord Channel", "Edit"} {
+	for _, expected := range []string{"Kitsu Task Type", "Discord Channel", "Edit"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
+	}
+	if strings.Contains(body, "Notification routing") {
+		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
 	}
 	for _, expected := range []string{"WFA recipients", "Automatic", "Additional", "Task Type"} {
 		if !strings.Contains(body, expected) {
@@ -2034,7 +2040,7 @@ func TestCurrentNotificationRoutingIsReadOnlyUntilExplicitEdit(t *testing.T) {
 	if strings.Contains(body, `name="action" value="save"`) {
 		t.Fatal("default routing view exposed an edit form")
 	}
-	if !strings.Contains(body, "Notification routing") || !strings.Contains(body, "Edit") {
+	if !strings.Contains(body, "Kitsu Task Type") || !strings.Contains(body, "Edit") || strings.Contains(body, "Notification routing") {
 		t.Fatal("read-only routing summary missing")
 	}
 }
