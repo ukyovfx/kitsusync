@@ -776,9 +776,8 @@ func renderCurrentProductionOverview(db *gorm.DB, r *http.Request, p model.Proje
 	if discordMissing {
 		addIssue(t(lang, "Discordリソースが接続されていません。", "Discord resources are not connected."), "settings")
 	}
-	issuesSection := ""
+	var issueContent strings.Builder
 	if len(issues) > 0 {
-		var issueContent strings.Builder
 		visible := len(issues)
 		if visible > 3 {
 			visible = 3
@@ -795,8 +794,10 @@ func renderCurrentProductionOverview(db *gorm.DB, r *http.Request, p model.Proje
 			issueContent.WriteString(`<li class="production-issue-more">` + esc(t(lang, fmt.Sprintf("他 %d 件", remaining), fmt.Sprintf("%d other issues", remaining))) + `</li>`)
 		}
 		issueContent.WriteString(`</ul>`)
-		issuesSection = `<section class="production-settings-section production-current-issues"><h2>` + esc(t(lang, "現在の問題", "Current issues")) + `</h2>` + issueContent.String() + `</section>`
+	} else {
+		issueContent.WriteString(`<p class="field-help production-issue-empty" role="status">` + esc(t(lang, "現在の問題はありません。", "No current issues.")) + `</p>`)
 	}
+	issuesSection := `<section class="production-settings-section production-current-issues"><h2>` + esc(t(lang, "現在の問題", "Current issues")) + `</h2>` + issueContent.String() + `</section>`
 	return `<div class="section-stack production-overview">` + statusSection + issuesSection + renderSelectedProductionActivity(db, p, lang, r) + `</div>`
 }
 
@@ -992,7 +993,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 	if guildReadOK && linkOptions.Len() > 0 {
 		modal = `<dialog data-team-link-modal><form method="post" action="` + esc(withLang("/bot/admin/users", r)) + `"><h3>` + esc(userText("Discordユーザーをリンク", "Link Discord user")) + `</h3><p data-team-link-person-label></p><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="team_link_project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="kitsu_id" data-team-link-person-id><input type="hidden" name="kitsu_name" data-team-link-person-name><input type="hidden" name="kitsu_email" data-team-link-person-email><input type="hidden" name="discord_guild_id" value="` + esc(p.DiscordGuildID) + `"><label>` + esc(userText("Discordユーザー", "Discord user")) + `<select name="discord_user_id" required><option value="">` + esc(userText("選択", "Select")) + `</option>` + linkOptions.String() + `</select></label><div class="button-row"><button type="button" class="btn-ghost" data-team-link-cancel>` + esc(userText("キャンセル", "Cancel")) + `</button><button type="submit" class="btn">` + esc(userText("保存", "Save")) + `</button></div></form></dialog><script>(function(){var dialog=document.querySelector('[data-team-link-modal]');if(!dialog)return;document.querySelectorAll('[data-open-team-link]').forEach(function(button){button.addEventListener('click',function(){dialog.querySelector('[data-team-link-person-id]').value=button.dataset.personId||'';dialog.querySelector('[data-team-link-person-name]').value=button.dataset.personName||'';dialog.querySelector('[data-team-link-person-email]').value=button.dataset.personEmail||'';dialog.querySelector('[data-team-link-person-label]').textContent=button.dataset.personName||'';dialog.showModal()})});dialog.querySelector('[data-team-link-cancel]')?.addEventListener('click',function(){dialog.close()})})();</script>`
 	}
-	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p><div class="table-wrap production-team-table-wrap"><table class="production-team-table"><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態 / 操作", "Status / action")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>` + modal + `</section>`
+	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p><div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態 / 操作", "Status / action")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>` + modal + `</section>`
 }
 
 func productionDepartmentNames(taskTypes []kitsu.TaskType) map[string]string {
@@ -1575,7 +1576,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		if len(additional) > 0 {
 			additionalText = strings.Join(additional, ", ")
 		}
-		rows.WriteString(`<tr data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td>` + esc(channel) + `</td><td><div class="production-wfa-summary"><div><strong>` + esc(label("自動通知先", "Automatic recipients")) + `</strong><span>` + esc(automatic) + `</span></div><div><strong>` + esc(label("追加通知先", "Additional recipients")) + `</strong><span>` + esc(additionalText) + `</span></div></div></td></tr>`)
+		rows.WriteString(`<tr data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td>` + esc(channel) + `</td><td><div class="production-wfa-summary"><div><span class="production-wfa-kind">` + esc(label("自動通知先", "Automatic recipients")) + `</span><span class="production-wfa-value">` + esc(automatic) + `</span></div><div><span class="production-wfa-kind">` + esc(label("追加通知先", "Additional recipients")) + `</span><span class="production-wfa-value">` + esc(additionalText) + `</span></div></div></td></tr>`)
 	}
 	if len(routes) == 0 {
 		rows.WriteString(`<tr><td colspan="3" class="field-help">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</td></tr>`)
@@ -1585,7 +1586,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		usedTaskTypes[strings.TrimSpace(route.TaskTypeID)] = true
 	}
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, usedTaskTypes, data, lang)
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading"><div><h3>` + esc(label("通知ルーティング", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div><div class="table-wrap production-notification-table"><table><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading"><div><h3>` + esc(label("通知ルーティング", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div><div class="table-wrap production-notification-table"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
 }
 
 func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNotificationReviewerView, lang string) string {
@@ -1646,7 +1647,7 @@ func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string,
 		db.Where("project_id = ?", strings.TrimSpace(p.KitsuProjectID)).Where("(task_id = '' OR task_id IS NULL OR success = ?)", false).Order("created_at desc").Limit(5).Find(&logs)
 	}
 	if len(logs) == 0 {
-		return ""
+		return `<section id="recent-activity" tabindex="-1" class="production-settings-section"><h2>` + esc(t(lang, "最近のアクティビティ", "Recent activity")) + `</h2><p class="field-help production-activity-empty" role="status">` + esc(t(lang, "最近のアクティビティはありません。", "No recent activity.")) + `</p></section>`
 	}
 	for _, log := range logs {
 		result := t(lang, "成功", "Success")

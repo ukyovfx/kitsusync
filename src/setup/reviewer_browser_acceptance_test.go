@@ -116,6 +116,8 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(persons)
 		case "/api/data/projects/reviewer-production/team":
 			switch scenario.Load().(string) {
+			case "sparse-production":
+				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"}})
 			case "team-failure":
 				http.Error(w, "synthetic team failure", http.StatusForbidden)
 			case "empty-team":
@@ -240,6 +242,22 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
 		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "discord-failure", "stale-membership":
+			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "sparse-production":
+			webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+			if len(webhooks) == 0 || model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID}}) != nil {
+				http.Error(w, "could not configure sparse Production fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("project_id = ?", project.KitsuProjectID).Delete(&model.AuditLog{}).Error; err != nil {
+				http.Error(w, "could not clear sparse activity fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("production_id = ?", project.KitsuProjectID).Delete(&model.NotificationRoutingDiagnosis{}).Error; err != nil {
+				http.Error(w, "could not clear sparse issue fixture", http.StatusInternalServerError)
+				return
+			}
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		default:

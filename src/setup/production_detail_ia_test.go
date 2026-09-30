@@ -86,6 +86,9 @@ func TestProductionTeamCompactRows(t *testing.T) {
 			t.Errorf("Team is missing the Gemini-derived table/navigation structure %q: %s", marker, body)
 		}
 	}
+	if !strings.Contains(body, `<colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status">`) {
+		t.Fatal("Team table is missing its stable five-column width contract")
+	}
 	if strings.Contains(body, `class="section-card`) || strings.Contains(body, `class="glass`) {
 		t.Fatal("Production Team regressed to per-person cards")
 	}
@@ -102,6 +105,10 @@ func TestProductionTeamCompactRows(t *testing.T) {
 func TestProductionTeamCompactRowStyles(t *testing.T) {
 	for _, expected := range []string{
 		`.production-team-table{width:100%;table-layout:fixed;`,
+		`.production-team-col-member{width:24%}`,
+		`.production-team-col-status{width:20%}`,
+		`.production-notification-col-task{width:26%}`,
+		`.production-wfa-kind{display:inline-flex;align-items:center;`,
 		`.production-team-row>th,.production-team-row>td{`,
 		`.production-team-row:first-child>th,.production-team-row:first-child>td{border-top:0}`,
 		`.production-team-table thead{position:absolute;`,
@@ -127,7 +134,8 @@ func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *te
 func TestProductionSettingsVerticalSections(t *testing.T) {
 	for _, expected := range []string{
 		`.editorial-workbench .production-context #panel-settings>.production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
-		`.production-settings-section{min-width:0;padding:18px 0;border-top:1px solid var(--line)}`,
+		`.production-settings-section{min-width:0;padding:20px 0;border-top:1px solid var(--line)}`,
+		`.production-settings-disclosure>summary{cursor:pointer;list-style:disclosure-closed;min-height:44px;`,
 	} {
 		if !strings.Contains(adminThemeCSS, expected) {
 			t.Errorf("Production Settings is missing its vertical section treatment %q", expected)
@@ -524,6 +532,11 @@ func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
 	if !strings.Contains(adminThemeCSS, `.production-routing-editor{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;gap:16px}`) {
 		t.Fatal("Production routing editor must constrain its grid track so the table can scroll without widening the page")
 	}
+	for _, rule := range []string{`.production-notification-table table{width:100%;min-width:760px;table-layout:fixed}`, `.production-notification-col-wfa{width:50%}`, `.production-wfa-summary>div{display:grid;grid-template-columns:minmax(132px,auto) minmax(0,1fr);`} {
+		if !strings.Contains(adminThemeCSS, rule) {
+			t.Errorf("Production Notifications is missing sparse-table geometry rule %q", rule)
+		}
+	}
 	for _, rule := range []string{
 		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section`,
 		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section:first-of-type`,
@@ -537,17 +550,39 @@ func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
 	}
 }
 
-func TestProductionOverviewOmitsActivityWhenNoScopedRecordsExist(t *testing.T) {
+func TestProductionOverviewPreservesEmptyCurrentIssuesAndActivitySections(t *testing.T) {
 	db := newIAViewDB(t)
 	project := createHealthyOverviewProject(t, db, "overview-empty-production")
 	w := httptest.NewRecorder()
 	renderIASelectedProduction(w, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-empty-production&lang=en", nil), db, project, "")
 	body := w.Body.String()
-	if strings.Contains(body, `id="recent-activity"`) || strings.Contains(body, "participants") || strings.Contains(body, "参加者") {
-		t.Fatal("Overview fabricated an empty activity area or participant metric")
+	if !strings.Contains(body, `id="recent-activity"`) || !strings.Contains(body, "No recent activity") || strings.Contains(body, "participants") || strings.Contains(body, "参加者") {
+		t.Fatal("Overview must retain a compact empty Recent Activity section without inventing a participant metric")
 	}
-	if strings.Contains(body, `class="production-current-issues"`) || strings.Contains(body, "No current issues") {
-		t.Fatal("healthy Overview should omit Current Issues instead of rendering an empty success state")
+	if !strings.Contains(body, `class="production-current-issues"`) || !strings.Contains(body, "No current issues") {
+		t.Fatal("healthy Overview must retain Current Issues with a compact empty state")
+	}
+	if strings.Index(body, `class="production-overview-status"`) > strings.Index(body, `class="production-current-issues"`) || strings.Index(body, `class="production-current-issues"`) > strings.Index(body, `id="recent-activity"`) {
+		t.Fatal("Overview status, Current Issues, and Recent Activity sections must remain in canonical order")
+	}
+}
+
+func TestProductionSparseDetailRetainsStableSectionAndTableStructure(t *testing.T) {
+	db := newIAViewDB(t)
+	project := createHealthyOverviewProject(t, db, "sparse-detail-production")
+	for _, lang := range []string{"en", "ja"} {
+		body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=sparse-detail-production&lang="+lang, nil), project, lang, "success", "Connected", "")
+		for _, marker := range []string{`class="production-overview-status"`, `class="production-current-issues"`, `id="recent-activity"`} {
+			if !strings.Contains(body, marker) {
+				t.Errorf("%s sparse Overview is missing required block %s", lang, marker)
+			}
+		}
+		if !strings.Contains(body, "No current issues") && lang == "en" || !strings.Contains(body, "問題はありません") && lang == "ja" {
+			t.Errorf("%s sparse Overview is missing its compact Current Issues empty state", lang)
+		}
+		if !strings.Contains(body, "No recent activity") && lang == "en" || !strings.Contains(body, "最近のアクティビティはありません") && lang == "ja" {
+			t.Errorf("%s sparse Overview is missing its compact Recent Activity empty state", lang)
+		}
 	}
 }
 
@@ -600,7 +635,7 @@ func TestProductionOverviewDoesNotClassifyUnlinkedArtistAsIssue(t *testing.T) {
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType { return nil }
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldTeam, oldTaskTypes })
 	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-unlinked-artist&lang=en", nil), project, "en", "success", "Connected", "")
-	if strings.Contains(body, "Ordinary Artist") || strings.Contains(body, "User Linking") || strings.Contains(body, "ユーザー紐づけ") || strings.Contains(body, `class="production-current-issues"`) {
+	if strings.Contains(body, "Ordinary Artist") || strings.Contains(body, "User Linking") || strings.Contains(body, "ユーザー紐づけ") || !strings.Contains(body, `class="production-current-issues"`) || !strings.Contains(body, "No current issues") {
 		t.Fatalf("ordinary unlinked Artist became an Overview issue: %s", body)
 	}
 }
@@ -688,8 +723,8 @@ func TestLegacyActivityDeepLinkFallsBackToOverviewWithoutRecords(t *testing.T) {
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=empty-activity-project&tab=activity&lang=en", nil)
 	renderIASelectedProduction(w, request, db, project, "")
 	body := w.Body.String()
-	if strings.Contains(body, `id="recent-activity"`) || !strings.Contains(body, `id="panel-overview"`) || !strings.Contains(body, `getElementById('recent-activity')||document.getElementById('panel-overview')`) {
-		t.Fatal("empty Activity link should omit the section and focus Overview instead")
+	if !strings.Contains(body, `id="recent-activity"`) || !strings.Contains(body, `id="panel-overview"`) || !strings.Contains(body, `getElementById('recent-activity')||document.getElementById('panel-overview')`) {
+		t.Fatal("Activity deep link should focus the retained empty Recent Activity section")
 	}
 }
 

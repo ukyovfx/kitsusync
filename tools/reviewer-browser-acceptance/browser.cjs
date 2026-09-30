@@ -506,11 +506,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const style = getComputedStyle(section);
           return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
         }));
-        if (overviewSections.length < 2 || overviewSections[0].borderTopStyle !== 'none' || overviewSections.slice(1).some(section => section.borderTopStyle !== 'solid' || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
+        if (overviewSections.length !== 3 || overviewSections[0].borderTopStyle !== 'none' || overviewSections.slice(1).some(section => section.borderTopStyle !== 'solid' || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
           throw new Error(`Overview sections are not a compact divider hierarchy in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
         }
         await page.screenshot({ path: path.join(output, `production-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, one current-issues section, exact-Production recent activity');
+        await page.screenshot({ path: path.join(output, `production-rich-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, Current Issues and exact-Production Recent Activity sections remain visible');
 
         await gotoProduction(page, locale, 'notifications');
         const routingHeadings = (await page.locator('.production-notification-table thead th').allTextContents()).map(text => text.trim());
@@ -527,6 +528,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await compReadRow.innerText()).includes(locale.automatic) || !(await compReadRow.innerText()).includes(locale.overrides)) {
           throw new Error(`Notifications is missing Automatic or Additional recipients in ${locale.lang}`);
         }
+        const notificationColumnWidths = await page.locator('.production-notification-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
+        if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
+        if (await compReadRow.locator('.production-wfa-kind').count() !== 2 || await compReadRow.locator('.production-wfa-value').count() !== 2) throw new Error(`WFA Automatic/Additional summaries are not distinct sub-rows in ${locale.lang}`);
         const notificationSections = await page.locator('.production-notifications > .production-settings-section').evaluateAll(sections => sections.map(section => {
           const style = getComputedStyle(section);
           return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
@@ -535,6 +539,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Notifications table is not a compact flat section in ${locale.lang}: ${JSON.stringify(notificationSections)}`);
         }
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `production-rich-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Discord Channel → Automatic/Additional summary table; no synthetic Notification Preview');
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
@@ -692,6 +697,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!teamRows.length || teamRows.some(row => row.display !== expectedTeamDisplay) || teamRows[0].firstCellBorderTopStyle !== 'none' || teamRows.slice(1).some(row => (viewport.name === 'mobile' ? row.borderTopStyle : row.firstCellBorderTopStyle) !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
           throw new Error(`Production Team is not a compact responsive table in ${locale.lang}: ${JSON.stringify(teamRows)}`);
         }
+        const teamColumnWidths = await page.locator('.production-team-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
+        if (teamColumnWidths.length !== 5 || teamColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Team lost stable five-column geometry in ${locale.lang}: ${JSON.stringify(teamColumnWidths)}`);
         const teamLinkButton = page.locator('[data-open-team-link]').first();
         if (!(await teamLinkButton.count())) throw new Error(`Team has no verified in-place global User Linking action in ${locale.lang}`);
         const teamLinkModal = page.locator('[data-team-link-modal]');
@@ -705,6 +712,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Cancel did not close the Team User Linking modal without navigation in ${locale.lang}`);
         }
         await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `production-rich-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'live Production Team', 'Kitsu Team, effective role, derived Supervisor scope, and global User Linking state; no local membership editor');
 
         await gotoProduction(page, locale, 'settings');
@@ -715,9 +723,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const settingsLayout = await page.locator('.production-settings-list').evaluate(node => {
           const style = getComputedStyle(node);
-          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: node.querySelectorAll(':scope > .production-settings-section').length };
+          const sections = [...node.querySelectorAll(':scope > .production-settings-section')];
+          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length, paddings: sections.map(section => parseFloat(getComputedStyle(section).paddingTop)), summaryHeights: [...node.querySelectorAll('details > summary')].map(summary => summary.getBoundingClientRect().height) };
         });
-        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4) {
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.paddings.some(value => value < 20) || settingsLayout.summaryHeights.some(value => value < 44)) {
           throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
@@ -751,6 +760,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.locator('#danger-zone summary').click();
         if (!(await page.locator('#danger-zone[open]').count())) throw new Error(`Danger Zone did not expand in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `production-rich-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'settings and disclosures', `section order preserved; Save is change-sensitive; technical indentation=${JSON.stringify(technicalIndent)}`);
 
         const legacyCases = [
@@ -954,6 +964,37 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
     records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'reduced motion', detail: 'canvas frame remained stable with reduced motion enabled' });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+    await fixture(page, 'sparse-production');
+    for (const locale of locales) {
+      for (const viewport of viewports) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        await gotoProduction(page, locale, 'overview');
+        const overviewText = await page.locator('#panel-overview').innerText();
+        const sectionCount = await page.locator('.production-overview > .production-settings-section').count();
+        const emptyIssues = locale.lang === 'ja' ? '現在の問題はありません' : 'No current issues';
+        const emptyActivity = locale.lang === 'ja' ? '最近のアクティビティはありません' : 'No recent activity';
+        if (sectionCount !== 3 || !overviewText.includes(emptyIssues) || !overviewText.includes(emptyActivity)) throw new Error(`Sparse Overview collapsed its three-section skeleton in ${locale.lang}: ${overviewText}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'sparse Production', 'Status / Current Issues / Recent Activity remain visible with concise empty states');
+
+        await gotoProduction(page, locale, 'notifications');
+        const routeRows = page.locator('.production-notification-table tbody tr[data-task-type-id]');
+        if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await routeRows.first().locator('.production-wfa-kind').count() !== 2) throw new Error(`Sparse Notifications lost the one-route table/WFA summary structure in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the complete three-column table and separate Automatic/Additional rows');
+
+        await gotoProduction(page, locale, 'team');
+        if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 5 || await page.locator('.production-team-table col').count() !== 5) throw new Error(`Sparse Team lost its single row/five-column table structure in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'sparse Production', 'one member retains a stable five-column Team table');
+
+        await gotoProduction(page, locale, 'settings');
+        if (await page.locator('.production-settings-list > .production-settings-section').count() !== 4 || await page.locator('.production-settings-list details > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 44))) throw new Error(`Sparse Settings lost its vertical section/disclosure rhythm in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'sparse Production', 'four vertical Settings sections and readable disclosure rows remain visible');
+      }
+    }
 
     if (errors.length) throw new Error(`browser console/runtime or external-origin errors (${errors.length}): ${errors.slice(0, 12).join(' | ')}`);
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };
