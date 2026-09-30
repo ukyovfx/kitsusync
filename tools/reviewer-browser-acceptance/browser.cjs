@@ -707,13 +707,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const option = node.querySelector('[role="option"]');
           const optionStyle = getComputedStyle(option);
           const list = node.getBoundingClientRect();
-          const combo = node.parentElement.querySelector('[role="combobox"]').getBoundingClientRect();
+          const combo = document.querySelector(`[aria-controls="${node.id}"]`).getBoundingClientRect();
           return { background: style.backgroundColor, position: style.position, top: list.top, bottom: list.bottom, left: list.left, width: list.width,
-            comboBottom: combo.bottom, comboLeft: combo.left, comboWidth: combo.width, viewportHeight: innerHeight,
+            comboTop: combo.top, comboBottom: combo.bottom, comboLeft: combo.left, comboWidth: combo.width, viewportHeight: innerHeight,
             color: style.color, optionBackground: optionStyle.backgroundColor, optionColor: optionStyle.color,
             disabled: [...node.querySelectorAll('[aria-disabled="true"]')].map(item => ({ color: getComputedStyle(item).color, background: getComputedStyle(item).backgroundColor, cursor: getComputedStyle(item).cursor })) };
         });
-        if (listboxTheme.background !== 'rgb(13, 13, 15)' || listboxTheme.position !== 'fixed' || listboxTheme.top < 0 || listboxTheme.bottom > listboxTheme.viewportHeight + 1 || Math.abs(listboxTheme.left - listboxTheme.comboLeft) > 1 || Math.abs(listboxTheme.width - listboxTheme.comboWidth) > 1 || listboxTheme.color === 'rgba(0, 0, 0, 0)' || listboxTheme.optionBackground === 'rgb(255, 255, 255)') throw new Error(`Add recipient open option list is clipped, translucent, or not aligned to its control in ${locale.lang}: ${JSON.stringify(listboxTheme)}`);
+        const belowCombo = Math.abs(listboxTheme.top - (listboxTheme.comboBottom + 4)) <= 1;
+        const aboveCombo = listboxTheme.bottom <= listboxTheme.comboTop - 3;
+        if (listboxTheme.background !== 'rgb(13, 13, 15)' || listboxTheme.position !== 'fixed' || listboxTheme.top < 0 || listboxTheme.bottom > listboxTheme.viewportHeight + 1 || Math.abs(listboxTheme.left - listboxTheme.comboLeft) > 1 || Math.abs(listboxTheme.width - listboxTheme.comboWidth) > 1 || (!belowCombo && !aboveCombo) || listboxTheme.color === 'rgba(0, 0, 0, 0)' || listboxTheme.optionBackground === 'rgb(255, 255, 255)') throw new Error(`Add recipient open option list is clipped, translucent, or not aligned to its control in ${locale.lang}: ${JSON.stringify(listboxTheme)}`);
         if (listboxTheme.disabled.some(option => option.color === 'rgba(0, 0, 0, 0)' || option.background === 'rgb(255, 255, 255)' || option.cursor !== 'not-allowed')) throw new Error(`Disabled recipient choices are not readable or clearly disabled in ${locale.lang}: ${JSON.stringify(listboxTheme.disabled)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-listbox-open-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await userListbox.locator('[data-wfa-option-value="22222222222222225"]').click();

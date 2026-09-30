@@ -218,7 +218,7 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 }
 
 func TestCurrentRecipientListboxEscapesDialogClippingWithOpaqueSurface(t *testing.T) {
-	if !strings.Contains(adminThemeCSS, `.production-context .recipient-listbox{position:fixed;`) || !strings.Contains(adminThemeCSS, `background:var(--bg2);`) {
+	if !strings.Contains(adminThemeCSS, `.recipient-listbox{position:fixed;`) || !strings.Contains(adminThemeCSS, `background:var(--bg2);`) {
 		t.Fatal("recipient listbox must use a viewport overlay with an opaque dark surface")
 	}
 	if !strings.Contains(currentRecipientComboboxScript(), `innerHeight-menu.height-8`) || !strings.Contains(currentRecipientComboboxScript(), `list.style.width=width+'px'`) {

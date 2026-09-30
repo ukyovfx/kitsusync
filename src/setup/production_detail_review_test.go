@@ -59,8 +59,9 @@ func TestProductionReviewControlsUseSharedSpacingAndControlTokens(t *testing.T) 
 		`.editorial-workbench .production-context .production-settings-disclosure-row[open]>.detail-list`,
 		`.production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;`,
 		`.production-context .production-storage-field input{box-sizing:border-box;width:100%;max-width:none;`,
-		`.production-context .recipient-listbox{position:absolute;z-index:1110;`,
-		`.production-context .routing-row-menu-panel{position:fixed;z-index:1100;right:auto;max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible`,
+		`.recipient-listbox{position:fixed;z-index:1110;`,
+		`.production-context .production-routing-editor .wizard-plan-table{overflow:visible}`,
+		`.production-context .routing-row-menu-panel{position:absolute;z-index:1100;right:0;top:calc(100% + 6px);max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible`,
 		`.production-context .production-unconfigured-state{display:grid;gap:var(--space-3,12px);padding:var(--space-3,12px) 0 0;border:0;border-top:1px solid var(--divider-color);background:transparent}`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
