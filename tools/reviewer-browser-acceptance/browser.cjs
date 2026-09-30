@@ -674,6 +674,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
         }
         await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.waitFor({ state: 'visible' });
+        await page.screenshot({ path: path.join(output, `production-notifications-pending-route-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await addModal.locator('[data-wfa-user-id]').selectOption('22222222222222234');
         await addModal.locator('[data-wfa-add-confirm]').click();
         await pendingRow.locator('.routing-row-menu summary').click();
