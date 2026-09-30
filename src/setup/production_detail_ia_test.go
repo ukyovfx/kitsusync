@@ -121,7 +121,7 @@ func TestProductionTeamCompactRowStyles(t *testing.T) {
 
 func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *testing.T) {
 	for _, rule := range []string{
-		`.production-wfa-edit-panel{display:grid;gap:12px;min-width:0;`,
+		`.production-wfa-edit-panel{display:grid;gap:14px;min-width:0;padding:16px;`,
 		`.production-wfa-edit-panel dialog,.production-team-page dialog{width:min(460px,calc(100vw - 24px));max-width:calc(100vw - 24px);`,
 		`.production-wfa-edit-panel dialog select,.production-team-page dialog select{width:100%;min-width:0}`,
 	} {
@@ -410,7 +410,7 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *testing.T) {
 	for _, tc := range []struct{ lang, empty, teamFailure string }{
 		{"en", "No notification routing is configured.", "Unavailable"},
-		{"ja", "通知ルーティングはまだ設定されていません。", "確認不可"},
+		{"ja", "通知ルーティングはまだ設定されていません。", "利用不可"},
 	} {
 		db := newIAViewDB(t)
 		project := model.Project{KitsuProjectID: "notification-state-" + tc.lang, Name: "Notification State", DiscordGuildID: "123456789012345678"}

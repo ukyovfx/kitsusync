@@ -86,12 +86,12 @@ async function gotoProduction(page, locale, tab, extra = '') {
 
 async function automaticGroup(page, locale) {
 	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-automatic]');
-	return page.locator('.production-wfa-summary [data-wfa-group="automatic"]');
+	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-group="automatic"]');
 }
 
 async function overridesGroup(page, locale) {
 	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-additional]');
-	return page.locator('.production-wfa-summary [data-wfa-group="additional"]');
+	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-group="additional"]');
 }
 
 async function assertAutomatic(page, locale, expected, forbidden = []) {

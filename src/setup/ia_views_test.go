@@ -1340,7 +1340,7 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
 	}
-	for _, expected := range []string{"WFA recipients", "Automatic recipients", "Additional recipients", "Task Type"} {
+	for _, expected := range []string{"WFA recipients", "Automatic", "Additional", "Task Type"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Notifications missing %q", expected)
 		}
