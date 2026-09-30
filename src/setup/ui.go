@@ -879,7 +879,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .production-context .production-notification-table tbody th,.editorial-workbench .production-context .production-notification-table tbody td{padding:14px 10px;border-bottom:1px solid var(--divider-color)}
   .editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;min-width:0}
   .editorial-workbench .production-context .production-settings-disclosure-row{min-width:0;padding:0;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none;overflow:visible}
-  .editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 10px;color:var(--text);font-size:.92rem;font-weight:650;display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none}
+  .editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 var(--space-3,12px);color:var(--text);font-size:.92rem;font-weight:650;display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none}
   .editorial-workbench .production-context .production-settings-disclosure-row>summary::-webkit-details-marker{display:none}
   .editorial-workbench .production-context .production-settings-disclosure-row>summary::before{content:"›";display:inline-block;width:10px;color:var(--muted-2);font-size:1.2rem;line-height:1}
   .editorial-workbench .production-context .production-settings-disclosure-row[open]>summary::before{transform:rotate(90deg)}
