@@ -674,7 +674,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (clipboardText !== 'reviewer-production' || (await productionCopy.innerText()) !== copyLabel) {
           throw new Error(`Production ID copy action failed in ${locale.lang}: button=${await productionCopy.innerText()}`);
         }
-        await page.locator('#diagnostics summary').click();
+        await page.locator('#diagnostics > summary').click();
         if (!(await page.locator('#diagnostics[open]').count()) || await page.locator('#diagnostics details[open]').count()) throw new Error(`Diagnostics did not expand in a compact collapsed-details state in ${locale.lang}`);
         await page.locator('#danger-zone summary').click();
         if (!(await page.locator('#danger-zone[open]').count())) throw new Error(`Danger Zone did not expand in ${locale.lang}`);
