@@ -660,8 +660,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await recipientUserSelect.press('Space');
         await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
-        await recipientUserSelect.selectOption('');
-        await addModal.locator('[data-wfa-add-cancel]').click();
+        if (await addModal.isVisible()) await addModal.locator('[data-wfa-add-cancel]').click();
         const additionalPanel = editForm.locator('[data-wfa-additional]');
         const additionalText = await additionalPanel.innerText();
         if (!additionalText.includes('Guild Nick Override') || !additionalText.includes('Artist Global') || !additionalText.includes('@Reviewers')) throw new Error(`Additional User/Role overrides were not presented together in ${locale.lang}`);
