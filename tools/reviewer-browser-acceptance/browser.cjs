@@ -724,7 +724,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const settingsLayout = await page.locator('.production-settings-list').evaluate(node => {
           const style = getComputedStyle(node);
           const sections = [...node.querySelectorAll(':scope > .production-settings-section')];
-          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length, paddings: sections.map(section => parseFloat(getComputedStyle(section).paddingTop)), summaryHeights: [...node.querySelectorAll('details > summary')].map(summary => summary.getBoundingClientRect().height) };
+          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length, paddings: sections.map(section => parseFloat(getComputedStyle(section).paddingTop)), summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure > summary')].map(summary => summary.getBoundingClientRect().height) };
         });
         if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.paddings.slice(1).some(value => value < 20) || settingsLayout.summaryHeights.some(value => value < 44)) {
           throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
@@ -990,7 +990,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'sparse Production', 'one member retains a stable five-column Team table');
 
         await gotoProduction(page, locale, 'settings');
-        if (await page.locator('.production-settings-list > .production-settings-section').count() !== 4 || await page.locator('.production-settings-list details > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 44))) throw new Error(`Sparse Settings lost its vertical section/disclosure rhythm in ${locale.lang}`);
+        if (await page.locator('.production-settings-list > .production-settings-section').count() !== 4 || await page.locator('.production-settings-list > .production-settings-disclosure > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 44))) throw new Error(`Sparse Settings lost its vertical section/disclosure rhythm in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-sparse-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'sparse Production', 'four vertical Settings sections and readable disclosure rows remain visible');
       }
