@@ -737,6 +737,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         expectedStaleApply.console409Consumed = expectedStaleApply.console409Messages.length === 1;
         expectedStaleApply.active = false;
+        await pendingRow.locator('.routing-row-menu summary').click();
         await pendingRow.locator('[data-routing-undo]').click();
         await pendingRow.locator('[data-select-task]').click();
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
