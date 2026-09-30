@@ -338,7 +338,11 @@ func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request
 		}
 	}
 	html = strings.Replace(html, `<div data-apply-message role="status" aria-live="polite"></div><div class="button-row production-routing-editor-actions">`, `<div data-apply-message role="status" aria-live="polite"></div><div class="button-row production-routing-editor-footer">`, 1)
-	return html + currentRecipientComboboxScript()
+	return html + currentRecipientComboboxScript() + currentRoutingMenuPositionScript()
+}
+
+func currentRoutingMenuPositionScript() string {
+	return `<script>(function(){function place(details){var summary=details.querySelector('summary'),panel=details.querySelector('.routing-row-menu-panel');if(!details.open||!summary||!panel)return;var anchor=summary.getBoundingClientRect(),menu=panel.getBoundingClientRect(),gap=6,pad=8,left=Math.max(pad,Math.min(anchor.right-menu.width,innerWidth-menu.width-pad)),top=anchor.bottom+gap;if(top+menu.height>innerHeight-pad)top=anchor.top-menu.height-gap;top=Math.max(pad,Math.min(top,innerHeight-menu.height-pad));panel.style.left=left+'px';panel.style.top=top+'px'}document.addEventListener('toggle',function(event){var details=event.target;if(details instanceof HTMLDetailsElement&&details.matches('.routing-row-menu')){if(details.open)requestAnimationFrame(function(){place(details)});else{var panel=details.querySelector('.routing-row-menu-panel');if(panel){panel.style.left='';panel.style.top=''}}}},true);window.addEventListener('resize',function(){document.querySelectorAll('.routing-row-menu[open]').forEach(place)});window.addEventListener('scroll',function(){document.querySelectorAll('.routing-row-menu[open]').forEach(function(details){details.open=false})},true)})();</script>`
 }
 
 func renderCurrentIARoutingSummaryWithStatus(db *gorm.DB, r *http.Request, p model.Project, lang, class, label string) string {

@@ -217,6 +217,15 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 	}
 }
 
+func TestCurrentRoutingMenuUsesViewportAnchorScript(t *testing.T) {
+	script := currentRoutingMenuPositionScript()
+	for _, behavior := range []string{`getBoundingClientRect()`, `innerWidth-menu.width-pad`, `innerHeight-menu.height-pad`, `requestAnimationFrame(function(){place(details)})`, `window.addEventListener('scroll'`} {
+		if !strings.Contains(script, behavior) {
+			t.Errorf("route action menu positioning is missing viewport behavior %q", behavior)
+		}
+	}
+}
+
 func TestLegacyRoutingSaveActionCannotBypassUnifiedApply(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "legacy-routing-save", Name: "Legacy Routing Save"}
