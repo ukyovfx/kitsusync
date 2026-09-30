@@ -559,10 +559,10 @@ func TestProductionOverviewPreservesEmptyCurrentIssuesAndActivitySections(t *tes
 	if !strings.Contains(body, `id="recent-activity"`) || !strings.Contains(body, "No recent activity") || strings.Contains(body, "participants") || strings.Contains(body, "参加者") {
 		t.Fatal("Overview must retain a compact empty Recent Activity section without inventing a participant metric")
 	}
-	if !strings.Contains(body, `class="production-current-issues"`) || !strings.Contains(body, "No current issues") {
+	if !strings.Contains(body, `production-current-issues"`) || !strings.Contains(body, "No current issues.") {
 		t.Fatal("healthy Overview must retain Current Issues with a compact empty state")
 	}
-	if strings.Index(body, `class="production-overview-status"`) > strings.Index(body, `class="production-current-issues"`) || strings.Index(body, `class="production-current-issues"`) > strings.Index(body, `id="recent-activity"`) {
+	if strings.Index(body, `production-overview-status"`) > strings.Index(body, `production-current-issues"`) || strings.Index(body, `production-current-issues"`) > strings.Index(body, `id="recent-activity"`) {
 		t.Fatal("Overview status, Current Issues, and Recent Activity sections must remain in canonical order")
 	}
 }
@@ -572,7 +572,7 @@ func TestProductionSparseDetailRetainsStableSectionAndTableStructure(t *testing.
 	project := createHealthyOverviewProject(t, db, "sparse-detail-production")
 	for _, lang := range []string{"en", "ja"} {
 		body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=sparse-detail-production&lang="+lang, nil), project, lang, "success", "Connected", "")
-		for _, marker := range []string{`class="production-overview-status"`, `class="production-current-issues"`, `id="recent-activity"`} {
+		for _, marker := range []string{`production-overview-status"`, `production-current-issues"`, `id="recent-activity"`} {
 			if !strings.Contains(body, marker) {
 				t.Errorf("%s sparse Overview is missing required block %s", lang, marker)
 			}
@@ -635,7 +635,7 @@ func TestProductionOverviewDoesNotClassifyUnlinkedArtistAsIssue(t *testing.T) {
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType { return nil }
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldTeam, oldTaskTypes })
 	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-unlinked-artist&lang=en", nil), project, "en", "success", "Connected", "")
-	if strings.Contains(body, "Ordinary Artist") || strings.Contains(body, "User Linking") || strings.Contains(body, "ユーザー紐づけ") || !strings.Contains(body, `class="production-current-issues"`) || !strings.Contains(body, "No current issues") {
+	if strings.Contains(body, "Ordinary Artist") || strings.Contains(body, "User Linking") || strings.Contains(body, "ユーザー紐づけ") || !strings.Contains(body, `production-current-issues"`) || !strings.Contains(body, "No current issues.") {
 		t.Fatalf("ordinary unlinked Artist became an Overview issue: %s", body)
 	}
 }
@@ -713,7 +713,7 @@ func TestProductionDiagnosticsAuditCountsAreProductionScoped(t *testing.T) {
 	}
 }
 
-func TestLegacyActivityDeepLinkFallsBackToOverviewWithoutRecords(t *testing.T) {
+func TestLegacyActivityDeepLinkFocusesEmptyRecentActivity(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "empty-activity-project", Name: "Empty Activity"}
 	if err := db.Create(&project).Error; err != nil {
