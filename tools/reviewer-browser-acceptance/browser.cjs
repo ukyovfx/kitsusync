@@ -448,9 +448,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop-1440', state: 'reduced motion', detail: 'canvas frame remained stable with reduced motion enabled' });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
 
-    // Enter through the ordinary protected route and complete the ordinary login form.
-    await gotoWFARecipients(page, locales[0]);
-    if (!page.url().includes('/bot/login')) throw new Error('protected Production Users route did not redirect to login');
+    // Enter the sensitive Connections edit route as the ordinary login target.
+    // The normal login flow grants its existing short recent-auth window; this
+    // lets the visual reference capture render without bypassing the guard.
+    await page.goto(`${base}/bot/admin/bot?edit=1&lang=en`, { waitUntil: 'networkidle' });
+    if (!page.url().includes('/bot/login')) throw new Error('protected Connections edit route did not redirect to login');
     const unauthenticatedWrite = await page.request.post(`${base}/bot/admin/projects`, {
       form: { action: 'add_production_reviewer_target', project_id: 'reviewer-production', task_type_id: 'task-comp', target_kind: 'user', target_id: '22222222222222234' },
       maxRedirects: 0,
@@ -461,7 +463,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await page.locator('#login-email').fill(username);
     await page.locator('#login-password').fill(password);
     await page.getByRole('button', { name: 'Login', exact: true }).click();
-    await page.waitForURL(url => url.pathname === '/bot/admin/projects', { timeout: 10000 });
+    await page.waitForURL(url => url.pathname === '/bot/admin/bot' && url.searchParams.get('edit') === '1', { timeout: 10000 });
     if (await context.cookies(base).then(cookies => !cookies.some(cookie => cookie.name === 'kitsu_admin_session' && cookie.httpOnly))) {
       throw new Error('normal login did not establish the HttpOnly KitsuSync session');
     }
@@ -511,15 +513,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
             const rowStyle = getComputedStyle(row);
             return { borderStyle: rowStyle.borderTopStyle, borderWidth: rowStyle.borderTopWidth, radius: rowStyle.borderRadius, background: rowStyle.backgroundColor, height: row.getBoundingClientRect().height };
           });
-          return { borderStyle: style.borderTopStyle, borderWidth: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow, padding: style.padding, emptyRows,
+          return { borderStyle: style.borderTopStyle, borderWidth: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow, paddingTop: style.paddingTop, paddingBottom: style.paddingBottom, emptyRows,
             issueRows: section.querySelectorAll('.production-issue-row').length, activityRows: section.querySelectorAll('.activity-row').length };
         }));
-        if (overviewSections.length !== 3 || overviewSections.some(section => section.borderStyle !== 'solid' || section.borderWidth !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)' || section.shadow !== 'none' || parseFloat(section.padding) < 12)) {
-          throw new Error(`Overview sections are not contained structured blocks in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        if (overviewSections.length !== 3 || overviewSections.some((section, index) => section.borderStyle !== (index === 0 ? 'none' : 'solid') || (index > 0 && section.borderWidth !== '1px') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none' || parseFloat(index === 0 ? section.paddingBottom : section.paddingTop) < 18)) {
+          throw new Error(`Overview sections do not follow shared hairline sections in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
         }
-        if (overviewSections[1].issueRows === 0 && (overviewSections[1].emptyRows.length !== 1 || overviewSections[1].emptyRows[0].borderStyle !== 'solid' || overviewSections[1].emptyRows[0].radius === '0px' || overviewSections[1].emptyRows[0].height < 38) ||
-            overviewSections[2].activityRows === 0 && (overviewSections[2].emptyRows.length !== 1 || overviewSections[2].emptyRows[0].borderStyle !== 'solid' || overviewSections[2].emptyRows[0].radius === '0px' || overviewSections[2].emptyRows[0].height < 38)) {
-          throw new Error(`Sparse Current Issues/Recent Activity are not contained inside compact rows in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        if (overviewSections[1].issueRows === 0 && (overviewSections[1].emptyRows.length !== 1 || overviewSections[1].emptyRows[0].borderStyle !== 'none' || overviewSections[1].emptyRows[0].radius !== '0px' || overviewSections[1].emptyRows[0].height < 38 || overviewSections[1].emptyRows[0].background === 'rgba(0, 0, 0, 0)') ||
+            overviewSections[2].activityRows === 0 && (overviewSections[2].emptyRows.length !== 1 || overviewSections[2].emptyRows[0].borderStyle !== 'none' || overviewSections[2].emptyRows[0].radius !== '0px' || overviewSections[2].emptyRows[0].height < 38 || overviewSections[2].emptyRows[0].background === 'rgba(0, 0, 0, 0)')) {
+          throw new Error(`Sparse Current Issues/Recent Activity are not inside subdued rows in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
         }
         await page.screenshot({ path: path.join(output, `production-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
@@ -564,8 +566,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const firstRow = getComputedStyle(node.querySelector('tbody tr[data-task-type-id] th'));
           return { border: style.borderTopStyle, borderWidth: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor, headerBackground: header.backgroundColor, headerPadding: header.paddingBlock, rowPadding: firstRow.paddingBlock };
         });
-        if (notificationTable.border !== 'solid' || notificationTable.borderWidth !== '1px' || notificationTable.radius !== '12px' || notificationTable.background === 'rgba(0, 0, 0, 0)' || notificationTable.headerBackground === 'rgba(0, 0, 0, 0)' || parseFloat(notificationTable.rowPadding) < 12) {
-          throw new Error(`Notifications table lacks the shared contained table treatment in ${locale.lang}: ${JSON.stringify(notificationTable)}`);
+        if (notificationTable.border !== 'none' || notificationTable.borderWidth !== '0px' || notificationTable.radius !== '0px' || notificationTable.background !== 'rgba(0, 0, 0, 0)' || notificationTable.headerBackground !== 'rgba(0, 0, 0, 0)' || parseFloat(notificationTable.rowPadding) < 12) {
+          throw new Error(`Notifications table does not match the open Team table grammar in ${locale.lang}: ${JSON.stringify(notificationTable)}`);
+        }
+        if (viewport.name === 'mobile') {
+          const routeTableOverflow = await page.locator('.production-notification-table').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, tableClient: node.querySelector('table').clientWidth, tableScroll: node.querySelector('table').scrollWidth }));
+          if (routeTableOverflow.scroll > routeTableOverflow.client + 1 || routeTableOverflow.tableScroll > routeTableOverflow.tableClient + 1) throw new Error(`Notifications read table has an internal horizontal scroller on mobile in ${locale.lang}: ${JSON.stringify(routeTableOverflow)}`);
         }
         const recipientChips = await compReadRow.locator('.production-wfa-target-chip,.production-wfa-state-chip,.production-wfa-more-chip').count();
         if (!recipientChips) throw new Error(`Notifications WFA recipients are not rendered as compact chips in ${locale.lang}`);
@@ -584,6 +590,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const selectedRoute = editForm.locator('[data-routing-row].selected');
         if (await selectedRoute.count() !== 1 || await selectedRoute.locator('[data-select-task][aria-pressed="true"]').count() !== 1 || await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count()) {
           throw new Error(`Notifications editor does not present one obvious selected route outside nested cards in ${locale.lang}`);
+        }
+        if (viewport.name === 'mobile') {
+          const routingTableOverflow = await editForm.locator('.wizard-plan-table').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, tableClient: node.querySelector('table').clientWidth, tableScroll: node.querySelector('table').scrollWidth }));
+          if (routingTableOverflow.scroll > routingTableOverflow.client + 1 || routingTableOverflow.tableScroll > routingTableOverflow.tableClient + 1) throw new Error(`Notifications editor has an internal horizontal route-table scroller on mobile in ${locale.lang}: ${JSON.stringify(routingTableOverflow)}`);
         }
         const selectedRouteStyle = await selectedRoute.evaluate(node => {
           const task = node.querySelector('.routing-select-task');
@@ -615,6 +625,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await editForm.locator('[data-wfa-add-target]').click();
         const addModal = page.locator('[data-wfa-add-modal]');
+        const addModalTheme = await addModal.evaluate(node => { const style = getComputedStyle(node); const select = getComputedStyle(node.querySelector('select')); return { colorScheme: style.colorScheme, background: style.backgroundColor, selectScheme: select.colorScheme, selectBackground: select.backgroundColor }; });
+        if (addModalTheme.colorScheme !== 'dark' || addModalTheme.selectScheme !== 'dark' || addModalTheme.background === 'rgb(255, 255, 255)' || addModalTheme.selectBackground === 'rgb(255, 255, 255)') throw new Error(`Add recipient dialog leaked a native light surface in ${locale.lang}: ${JSON.stringify(addModalTheme)}`);
         const candidateUsers = addModal.locator('[data-wfa-user-id]');
         for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
           if (await candidateUsers.locator(`option[value="${blocked}"]`).count()) throw new Error(`ineligible User Override ${blocked} is selectable`);
@@ -779,10 +791,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const style = getComputedStyle(node);
           const sections = [...node.querySelectorAll(':scope > .production-settings-section')];
           return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length,
-            surfaces: sections.map(section => { const computed = getComputedStyle(section); return { border: computed.borderTopStyle, width: computed.borderTopWidth, radius: computed.borderRadius, background: computed.backgroundColor, padding: computed.padding }; }),
+            surfaces: sections.map(section => { const computed = getComputedStyle(section); return { border: computed.borderTopStyle, width: computed.borderTopWidth, radius: computed.borderRadius, background: computed.backgroundColor, paddingTop: computed.paddingTop, paddingBottom: computed.paddingBottom }; }),
             summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => summary.getBoundingClientRect().height) };
         });
-        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '10px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some(section => section.border !== 'solid' || section.width !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)') || parseFloat(settingsLayout.surfaces[0]?.padding) < 12 || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 50)) {
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || parseFloat(index === 0 ? section.paddingBottom : section.paddingTop) < 18) || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 44)) {
           throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
@@ -1079,7 +1091,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           return { border: block.borderTopStyle, width: block.borderTopWidth, radius: block.borderRadius, background: block.backgroundColor,
             emptyBorder: row?.borderTopStyle || '', emptyRadius: row?.borderRadius || '', emptyHeight: empty?.getBoundingClientRect().height || 0 };
         }));
-        if (sparseOverviewBlocks.some(block => block.border !== 'solid' || block.width !== '1px' || block.radius !== '12px' || block.background === 'rgba(0, 0, 0, 0)') || sparseOverviewBlocks.slice(1).some(block => block.emptyBorder !== 'solid' || block.emptyRadius === '0px' || block.emptyHeight < 38)) throw new Error(`Sparse Overview is not visually complete inside consistent blocks in ${locale.lang}: ${JSON.stringify(sparseOverviewBlocks)}`);
+        if (sparseOverviewBlocks.some((block, index) => block.border !== (index === 0 ? 'none' : 'solid') || block.radius !== '0px' || block.background !== 'rgba(0, 0, 0, 0)') || sparseOverviewBlocks.slice(1).some(block => block.emptyBorder !== 'none' || block.emptyRadius !== '0px' || block.emptyHeight < 38)) throw new Error(`Sparse Overview does not follow the open-section grammar in ${locale.lang}: ${JSON.stringify(sparseOverviewBlocks)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'sparse Production', 'Status / Current Issues / Recent Activity remain visible with concise empty states');
 
@@ -1087,7 +1099,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const routeRows = page.locator('.production-notification-table tbody tr[data-task-type-id]');
         if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await routeRows.first().locator('.production-wfa-summary-line').count() !== 1 || await routeRows.first().locator('[data-wfa-group]').count() !== 2) throw new Error(`Sparse Notifications lost the one-route table/WFA summary structure in ${locale.lang}`);
         const sparseTableStyle = await page.locator('.production-notification-table').evaluate(node => { const style = getComputedStyle(node); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; });
-        if (sparseTableStyle.border !== 'solid' || sparseTableStyle.width !== '1px' || sparseTableStyle.radius !== '12px' || sparseTableStyle.background === 'rgba(0, 0, 0, 0)') throw new Error(`Sparse Notifications table is visually weak in ${locale.lang}: ${JSON.stringify(sparseTableStyle)}`);
+        if (sparseTableStyle.border !== 'none' || sparseTableStyle.width !== '0px' || sparseTableStyle.radius !== '0px' || sparseTableStyle.background !== 'rgba(0, 0, 0, 0)') throw new Error(`Sparse Notifications table does not follow open table styling in ${locale.lang}: ${JSON.stringify(sparseTableStyle)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact single-row Automatic/Additional summary');
 
@@ -1098,7 +1110,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await gotoProduction(page, locale, 'settings');
         const sparseSettings = await page.locator('.production-settings-list > .production-settings-section').evaluateAll(sections => sections.map(section => { const style = getComputedStyle(section); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; }));
-        if (sparseSettings.length !== 4 || sparseSettings.some(section => section.border !== 'solid' || section.width !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)') || await page.locator('.production-settings-list > .production-settings-disclosure-row > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 50))) throw new Error(`Sparse Settings lost its vertical section/disclosure rhythm in ${locale.lang}: ${JSON.stringify(sparseSettings)}`);
+        if (sparseSettings.length !== 4 || sparseSettings.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)') || await page.locator('.production-settings-list > .production-settings-disclosure-row > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 44))) throw new Error(`Sparse Settings lost the shared vertical section/disclosure rhythm in ${locale.lang}: ${JSON.stringify(sparseSettings)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'sparse Production', 'four vertical Settings sections and readable disclosure rows remain visible');
       }

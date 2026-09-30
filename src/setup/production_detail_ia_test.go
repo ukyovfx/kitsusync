@@ -127,8 +127,11 @@ func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *te
 		`.production-routing-editor .routing-select-task{display:inline-flex;align-items:center;max-width:100%;min-height:34px;padding:5px 8px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text);font:inherit;text-align:start;cursor:pointer;appearance:none}`,
 		`.production-routing-editor [data-routing-row].selected{background:rgba(255,255,255,.045);box-shadow:inset 3px 0 0 var(--accent-2)}`,
 		`.production-routing-editor .routing-select-task[aria-pressed="true"]{text-decoration:underline;`,
-		`.production-wfa-edit-panel dialog,.production-team-page dialog{width:min(460px,calc(100vw - 24px));max-width:calc(100vw - 24px);`,
+		`.editorial-workbench .production-context dialog,.editorial-workbench .production-team-page dialog{color-scheme:dark;`,
 		`.production-wfa-edit-panel dialog select,.production-team-page dialog select{width:100%;min-width:0}`,
+		`.editorial-workbench .production-context dialog select,.editorial-workbench .production-team-page dialog select{color-scheme:dark;`,
+		`.editorial-workbench .production-context .production-routing-editor .wizard-plan-table [data-routing-row]{display:grid;`,
+		`.editorial-workbench .production-context .production-notification-row>td[data-label]::before{`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
 			t.Errorf("Production detail modal/layout is missing constrained style %q", rule)
@@ -138,10 +141,10 @@ func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *te
 
 func TestProductionSettingsVerticalSections(t *testing.T) {
 	for _, expected := range []string{
-		`.editorial-workbench .production-context #panel-settings>.production-settings-list{gap:10px}`,
-		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}`,
-		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-disclosure-row{margin:0;padding:0;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}`,
-		`.production-settings-disclosure-row>summary{min-height:52px;padding:0 14px;`,
+		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
+		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{border:0;border-top:1px solid var(--divider-color);`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row{min-width:0;padding:0;border:0;border-top:1px solid var(--divider-color);`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:48px;`,
 	} {
 		if !strings.Contains(adminThemeCSS, expected) {
 			t.Errorf("Production Settings is missing its vertical section treatment %q", expected)
@@ -628,16 +631,18 @@ func TestProductionOverviewPreservesEmptyCurrentIssuesAndActivitySections(t *tes
 	}
 }
 
-func TestProductionDetailTabsShareContainedVisualGrammar(t *testing.T) {
+func TestProductionDetailTabsShareOpenCurrentIAGrammar(t *testing.T) {
 	for _, rule := range []string{
-		`.production-detail-surface{min-width:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}`,
-		`.editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);`,
+		`.editorial-workbench .production-context .production-detail-surface{min-width:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}`,
+		`.editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section,`,
+		`#panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:20px 0;border:0;border-top:1px solid var(--divider-color);`,
 		`.production-detail-section-title{margin:0 0 10px;font-size:1rem;line-height:1.35;`,
-		`.production-detail-state-row{min-height:42px;padding:10px 12px;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:rgba(255,255,255,.02);`,
-		`.production-notification-table thead th{padding:12px 12px;background:rgba(255,255,255,.045);`,
-		`.production-settings-disclosure-row>summary{min-height:52px;padding:0 14px;`,
-		`.production-settings-list{display:grid;gap:10px}`,
-		`.editorial-workbench .production-context #panel-settings>.production-settings-list{gap:10px}`,
+		`.editorial-workbench .production-context .production-detail-state-row{min-height:42px;padding:10px 12px;border:0;border-left:2px solid var(--line);border-radius:0;background:var(--surface-subtle);`,
+		`.editorial-workbench .production-context .production-notification-table thead th{padding:0 10px 10px;background:transparent;`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:48px;padding:0 8px;`,
+		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
+		`.editorial-workbench .production-context .production-team-table-wrap{padding:0;border:0;border-radius:0;background:transparent}`,
+		`.editorial-workbench .production-context .production-wfa-edit-panel{padding:14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-subtle)}`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
 			t.Errorf("Production detail visual grammar is missing %q", rule)
@@ -650,13 +655,13 @@ func TestProductionDetailTabsShareContainedVisualGrammar(t *testing.T) {
 	settings := renderCurrentProductionSettings(db, request, project, "en")
 	for _, marker := range []string{`production-settings-section production-detail-surface`, `production-settings-disclosure-row`} {
 		if !strings.Contains(settings, marker) {
-			t.Errorf("Settings must use contained blocks and substantial disclosure rows: missing %q", marker)
+			t.Errorf("Settings must retain semantic sections and disclosure rows: missing %q", marker)
 		}
 	}
 
 	routes := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
-	if !strings.Contains(routes, `production-notification-table production-detail-surface`) || strings.Contains(routes, `<div class="production-notifications"><h2>Notifications</h2>`) {
-		t.Fatal("Notifications read mode must use the shared contained table and avoid a duplicate tab heading")
+	if !strings.Contains(routes, `production-notification-table production-detail-surface`) || !strings.Contains(routes, `data-label="Discord Channel"`) || !strings.Contains(routes, `data-label="WFA recipients"`) || strings.Contains(routes, `<div class="production-notifications"><h2>Notifications</h2>`) {
+		t.Fatal("Notifications read mode must keep the shared responsive table semantics without a duplicate tab heading")
 	}
 }
 
