@@ -49,7 +49,7 @@ func TestProductionStorageSaveSharesDesktopFieldRow(t *testing.T) {
 
 func TestProductionReviewControlsUseSharedSpacingAndControlTokens(t *testing.T) {
 	for _, rule := range []string{
-		`.production-context .production-notification-heading{display:flex;align-items:center;justify-content:flex-end;`,
+		`.production-context .production-notification-heading{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;justify-content:flex-end;`,
 		`.production-context .production-notification-heading .status-pill,.production-context .production-notification-heading .btn-ghost{box-sizing:border-box;height:var(--control-height-dense,38px);`,
 		`.production-context .production-routing-editor [data-current-routing-form]{display:grid;gap:var(--space-section,24px);`,
 		`.production-context .production-routing-editor .production-routing-editor-footer{margin:0;padding-top:var(--space-3,12px)`,

@@ -889,7 +889,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .production-context .production-wfa-edit-panel{padding:14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-subtle)}
   .editorial-workbench .production-context dialog,.editorial-workbench .production-team-page dialog{color-scheme:dark;border-color:var(--border-default);border-radius:var(--radius-md);background:var(--surface-overlay);color:var(--text)}
   .editorial-workbench .production-context dialog select,.editorial-workbench .production-team-page dialog select{color-scheme:dark;background:var(--surface-control);color:var(--text);border-color:var(--border-default)}
-  .production-context .production-notification-heading{display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2,8px);min-height:var(--control-height-dense,38px)}
+  .production-context .production-notification-heading{display:flex;flex-direction:row;flex-wrap:nowrap;align-items:center;justify-content:flex-end;gap:var(--space-2,8px);min-height:var(--control-height-dense,38px)}
   .production-context .production-notification-heading .status-pill,.production-context .production-notification-heading .btn-ghost{box-sizing:border-box;height:var(--control-height-dense,38px);min-height:var(--control-height-dense,38px);padding-block:0;display:inline-flex;align-items:center;justify-content:center}
   .production-context .production-routing-editor{gap:var(--space-section,24px)}
   .production-context .production-routing-editor [data-current-routing-form]{display:grid;gap:var(--space-section,24px);min-width:0}
