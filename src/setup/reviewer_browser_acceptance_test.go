@@ -210,7 +210,12 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 
 	unexpectedDiscord := make(chan string, 16)
 	oldTransport := http.DefaultTransport
-	http.DefaultTransport = reviewerBrowserDiscordTransport{scenario: &scenario, unexpected: unexpectedDiscord}
+	http.DefaultTransport = reviewerBrowserDiscordTransport{
+		scenario:      &scenario,
+		unexpected:    unexpectedDiscord,
+		kitsuHost:     strings.TrimPrefix(kitsuFixture.URL, "http://"),
+		baseTransport: oldTransport,
+	}
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -365,11 +370,16 @@ func reviewerBrowserUserMaps() []model.UserMap {
 }
 
 type reviewerBrowserDiscordTransport struct {
-	scenario   *atomic.Value
-	unexpected chan<- string
+	scenario      *atomic.Value
+	unexpected    chan<- string
+	kitsuHost     string
+	baseTransport http.RoundTripper
 }
 
 func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && r.URL.Path == "/api/" && r.URL.RawQuery == "" {
+		return d.baseTransport.RoundTrip(r)
+	}
 	if r.URL.Host != "discord.com" || r.Header.Get("Authorization") != "Bot "+reviewerBrowserBot {
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
