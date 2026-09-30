@@ -691,14 +691,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const teamRows = await page.locator('.production-team-row').evaluateAll(rows => rows.map(row => {
           const style = getComputedStyle(row);
           const firstCell = row.querySelector('th,td');
-          return { display: style.display, borderTopStyle: style.borderTopStyle, firstCellBorderTopStyle: firstCell && getComputedStyle(firstCell).borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+          return { display: style.display, cells: row.children.length, borderTopStyle: style.borderTopStyle, firstCellBorderTopStyle: firstCell && getComputedStyle(firstCell).borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
         }));
         const expectedTeamDisplay = viewport.name === 'mobile' ? 'grid' : 'table-row';
         if (!teamRows.length || teamRows.some(row => row.display !== expectedTeamDisplay) || teamRows[0].firstCellBorderTopStyle !== 'none' || teamRows.slice(1).some(row => (viewport.name === 'mobile' ? row.borderTopStyle : row.firstCellBorderTopStyle) !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
           throw new Error(`Production Team is not a compact responsive table in ${locale.lang}: ${JSON.stringify(teamRows)}`);
         }
         const teamColumnWidths = await page.locator('.production-team-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
-        if (teamColumnWidths.length !== 5 || teamColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Team lost stable five-column geometry in ${locale.lang}: ${JSON.stringify(teamColumnWidths)}`);
+        if (teamColumnWidths.length !== 5 || (viewport.name === 'desktop' && teamColumnWidths.some(width => parseFloat(width) <= 0)) || (viewport.name === 'mobile' && teamRows.some(row => row.cells !== 5))) throw new Error(`Team lost stable five-column structure in ${locale.lang}/${viewport.name}: ${JSON.stringify({ teamColumnWidths, teamRows })}`);
         const teamLinkButton = page.locator('[data-open-team-link]').first();
         if (!(await teamLinkButton.count())) throw new Error(`Team has no verified in-place global User Linking action in ${locale.lang}`);
         const teamLinkModal = page.locator('[data-team-link-modal]');
