@@ -217,6 +217,15 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 	}
 }
 
+func TestCurrentRecipientListboxEscapesDialogClippingWithOpaqueSurface(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.production-context .recipient-listbox{position:fixed;`) || !strings.Contains(adminThemeCSS, `background:var(--bg2);`) {
+		t.Fatal("recipient listbox must use a viewport overlay with an opaque dark surface")
+	}
+	if !strings.Contains(currentRecipientComboboxScript(), `innerHeight-menu.height-8`) || !strings.Contains(currentRecipientComboboxScript(), `list.style.width=width+'px'`) {
+		t.Fatal("recipient listbox must stay aligned to its combobox and inside the viewport")
+	}
+}
+
 func TestCurrentRoutingMenuRemainsRowAnchoredWithoutScrollContainer(t *testing.T) {
 	for _, rule := range []string{
 		`.routing-row-menu{position:relative;display:inline-block}`,

@@ -925,7 +925,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .recipient-picker{position:relative;display:grid;min-width:0}
   .production-context .recipient-combobox{box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:var(--control-height-dense,38px);padding:0 12px;border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--surface-control);color:var(--text);text-align:left;cursor:pointer}
   .production-context .recipient-combobox-indicator{flex:0 0 auto;color:var(--muted-2)}
-  .production-context .recipient-listbox{position:absolute;z-index:1110;top:calc(100% + 4px);left:0;right:0;display:grid;max-height:min(220px,40vh);overflow-y:auto;padding:4px;border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--surface-overlay);color:var(--text);box-shadow:0 12px 28px rgba(0,0,0,.42)}
+  .production-context .recipient-listbox{position:fixed;z-index:1110;display:grid;width:min(100%,420px);max-height:min(220px,40vh);overflow-y:auto;padding:4px;border:1px solid var(--border-default);border-radius:var(--radius-sm);background:var(--bg2);color:var(--text);box-shadow:0 12px 28px rgba(0,0,0,.42)}
   .production-context .recipient-listbox[hidden]{display:none}
   .production-context .recipient-listbox>[role="option"]{display:block;width:100%;min-height:36px;padding:8px 10px;border:0;border-radius:4px;background:transparent;color:var(--text);text-align:left;font:inherit;cursor:pointer}
   .production-context .recipient-listbox>[role="option"]:hover,.production-context .recipient-listbox>[role="option"]:focus-visible{background:var(--interaction-hover);outline:none}
