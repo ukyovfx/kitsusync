@@ -918,6 +918,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context dialog select option:disabled{color:var(--muted);background:var(--surface-subtle)}
   .production-context dialog .button-row{align-items:center;gap:var(--space-2,8px);margin-top:var(--space-3,12px)}
   .production-context dialog[data-wfa-add-modal] .button-row{display:flex;flex-direction:row;flex-wrap:nowrap;justify-content:flex-end}
+  .production-context dialog[data-wfa-add-modal]{overflow:visible}
   .production-context dialog [data-wfa-add-cancel]{background:var(--surface-control);border-color:var(--border-default);color:var(--text)}
   .production-context dialog [data-wfa-add-confirm]{margin-inline-start:auto}
   .production-context dialog :focus-visible{outline:2px solid var(--interaction-focus);outline-offset:2px}

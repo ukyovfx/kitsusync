@@ -218,8 +218,14 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 }
 
 func TestCurrentRecipientListboxEscapesDialogClippingWithOpaqueSurface(t *testing.T) {
+	if strings.Contains(currentRecipientComboboxScript(), `document.body.appendChild(list`) {
+		t.Fatal("recipient listbox must not be portaled outside the native dialog top layer")
+	}
 	if !strings.Contains(adminThemeCSS, `.recipient-listbox{position:fixed;`) || !strings.Contains(adminThemeCSS, `background:var(--bg2);`) {
 		t.Fatal("recipient listbox must use a viewport overlay with an opaque dark surface")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-context dialog[data-wfa-add-modal]{overflow:visible}`) {
+		t.Fatal("recipient listbox must remain visible outside the modal content box")
 	}
 	if !strings.Contains(currentRecipientComboboxScript(), `innerHeight-menu.height-8`) || !strings.Contains(currentRecipientComboboxScript(), `list.style.width=width+'px'`) {
 		t.Fatal("recipient listbox must stay aligned to its combobox and inside the viewport")

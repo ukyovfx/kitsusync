@@ -702,6 +702,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await recipientUserCombo.click();
         if (!(await userListbox.isVisible()) || await recipientUserCombo.getAttribute('aria-expanded') !== 'true') throw new Error('Add recipient user listbox did not open from the accessible combobox');
+        if (!(await userListbox.evaluate(node => !!node.closest('dialog[data-wfa-add-modal]')))) throw new Error('Add recipient listbox must remain in the native dialog top layer');
         const listboxTheme = await userListbox.evaluate(node => {
           const style = getComputedStyle(node);
           const option = node.querySelector('[role="option"]');
