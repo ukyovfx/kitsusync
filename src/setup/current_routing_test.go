@@ -219,7 +219,7 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 
 func TestCurrentRoutingMenuUsesViewportAnchorScript(t *testing.T) {
 	script := currentRoutingMenuPositionScript()
-	for _, behavior := range []string{`getBoundingClientRect()`, `innerWidth-menu.width-pad`, `innerHeight-menu.height-pad`, `requestAnimationFrame(function(){place(details)})`, `window.addEventListener('scroll'`} {
+	for _, behavior := range []string{`getBoundingClientRect()`, `innerWidth-menu.width-pad`, `innerHeight-menu.height-pad`, `document.addEventListener('click'`, `setTimeout(function(){place(details)},0)`, `window.addEventListener('scroll'`} {
 		if !strings.Contains(script, behavior) {
 			t.Errorf("route action menu positioning is missing viewport behavior %q", behavior)
 		}
