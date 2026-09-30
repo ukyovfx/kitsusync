@@ -639,7 +639,7 @@ func TestProductionDetailTabsShareOpenCurrentIAGrammar(t *testing.T) {
 		`.production-detail-section-title{margin:0 0 10px;font-size:1rem;line-height:1.35;`,
 		`.editorial-workbench .production-context .production-detail-state-row{min-height:42px;padding:10px 12px;border:0;border-left:2px solid var(--line);border-radius:0;background:var(--surface-subtle);`,
 		`.editorial-workbench .production-context .production-notification-table thead th{padding:0 10px 10px;background:transparent;`,
-		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:48px;padding:0 8px;`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:48px;padding:0 12px;`,
 		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
 		`.editorial-workbench .production-context .production-team-table-wrap{padding:0;border:0;border-radius:0;background:transparent}`,
 		`.editorial-workbench .production-context .production-wfa-edit-panel{padding:14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-subtle)}`,
