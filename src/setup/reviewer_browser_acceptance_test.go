@@ -110,7 +110,11 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, `{"access_token":"synthetic-manager-session-token","user":{"role":"manager"}}`)
 		case "/api/data/projects/":
-			_, _ = io.WriteString(w, `[{"id":"reviewer-production","name":"Synthetic Review Production"}]`)
+			projects := []kitsu.Project{{ID: "reviewer-production", Name: "Synthetic Review Production"}}
+			if scenario.Load().(string) == "unconnected-production" {
+				projects = append(projects, kitsu.Project{ID: "reviewer-unconnected", Name: "Synthetic Unconnected Production"})
+			}
+			_ = json.NewEncoder(w).Encode(projects)
 		case "/api/data/persons/":
 			persons := reviewerBrowserPeople()
 			_ = json.NewEncoder(w).Encode(persons)
@@ -133,6 +137,8 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			}
 		case "/api/data/projects/reviewer-production/task-types":
 			_, _ = io.WriteString(w, `[{"id":"task-comp","name":"Compositing","department_id":"dept-comp","department_name":"Compositing","active":true},{"id":"task-animation","name":"Animation","department_id":"dept-animation","department_name":"Animation","active":true},{"id":"task-unassigned","name":"Unassigned","active":true}]`)
+		case "/api/data/projects/reviewer-unconnected/task-types":
+			_, _ = io.WriteString(w, `[{"id":"task-live","name":"Live Task Type","active":true}]`)
 		default:
 			if strings.HasPrefix(r.URL.Path, "/api/data/persons/") {
 				personID := strings.TrimPrefix(r.URL.Path, "/api/data/persons/")
@@ -248,7 +254,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "discord-failure", "stale-membership":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "discord-failure", "stale-membership", "unconnected-production":
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "sparse-production":

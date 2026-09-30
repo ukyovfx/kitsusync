@@ -73,7 +73,7 @@ func ProductionNotificationRevision(db *gorm.DB, projectID uint, productionID st
 
 // ApplyProductionNotificationState atomically replaces route state, applies
 // additive User/Role deltas, and removes targets belonging to deleted routes.
-func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID, productionName, expectedRevision string, routes []ProductionNotificationRoute, changes []ProductionReviewerDelta) (string, error) {
+func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID, productionName, expectedRevision string, routes []ProductionNotificationRoute, changes []ProductionReviewerDelta, createdWebhooks ...*ProjectWebhook) (string, error) {
 	if db == nil || projectID == 0 || strings.TrimSpace(productionID) == "" || strings.TrimSpace(expectedRevision) == "" {
 		return "", gorm.ErrInvalidData
 	}
@@ -83,17 +83,47 @@ func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID,
 		if got := productionNotificationRevision(tx, projectID, productionID); got != expectedRevision {
 			return ErrProductionNotificationRevisionConflict
 		}
+		webhooksByTask := make(map[string]*ProjectWebhook, len(createdWebhooks))
+		for _, webhook := range createdWebhooks {
+			if webhook == nil || strings.TrimSpace(webhook.KitsuProjectID) != productionID || strings.TrimSpace(webhook.TaskType) == "" || strings.TrimSpace(webhook.ChannelName) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" || strings.TrimSpace(webhook.WebhookURL) == "" {
+				return gorm.ErrInvalidData
+			}
+			taskTypeID := strings.TrimSpace(webhook.TaskType)
+			if _, exists := webhooksByTask[taskTypeID]; exists {
+				return gorm.ErrInvalidData
+			}
+			webhook.ID = 0
+			webhook.KitsuProjectID = productionID
+			webhooksByTask[taskTypeID] = webhook
+		}
 		live := make(map[string]struct{}, len(routes))
 		for i := range routes {
 			id := strings.TrimSpace(routes[i].TaskTypeID)
-			if id == "" || routes[i].DestinationWebhookID == 0 {
+			if id == "" {
 				return gorm.ErrInvalidData
+			}
+			if routes[i].DestinationWebhookID == 0 {
+				webhook := webhooksByTask[id]
+				if webhook == nil {
+					return gorm.ErrInvalidData
+				}
+				if err := tx.Create(webhook).Error; err != nil {
+					return err
+				}
+				routes[i].DestinationWebhookID = webhook.ID
+				delete(webhooksByTask, id)
 			}
 			if _, ok := live[id]; ok {
 				return gorm.ErrInvalidData
 			}
 			live[id] = struct{}{}
 			routes[i].ProductionID = productionID
+		}
+		if len(webhooksByTask) != 0 {
+			return gorm.ErrInvalidData
+		}
+		if issues := ValidateProductionNotificationConfig(tx, productionID, routes); len(issues) != 0 {
+			return gorm.ErrInvalidData
 		}
 		for _, delta := range changes {
 			if _, ok := live[strings.TrimSpace(delta.TaskTypeID)]; !ok {
@@ -191,7 +221,7 @@ func SnapshotProductionNotificationState(db *gorm.DB, projectID uint, production
 	return config, routes, targets, nil
 }
 
-func RestoreProductionNotificationState(db *gorm.DB, projectID uint, productionID, expectedCurrentRevision string, config *ProductionNotificationConfig, routes []ProductionNotificationRoute, targets []ProjectReviewerTarget) error {
+func RestoreProductionNotificationState(db *gorm.DB, projectID uint, productionID, expectedCurrentRevision string, config *ProductionNotificationConfig, routes []ProductionNotificationRoute, targets []ProjectReviewerTarget, cleanupWebhookIDs ...uint) error {
 	if db == nil {
 		return gorm.ErrInvalidDB
 	}
@@ -207,6 +237,14 @@ func RestoreProductionNotificationState(db *gorm.DB, projectID uint, productionI
 		}
 		if err := tx.Where("production_id = ?", productionID).Delete(&ProductionNotificationConfig{}).Error; err != nil {
 			return err
+		}
+		for _, id := range cleanupWebhookIDs {
+			if id == 0 {
+				continue
+			}
+			if err := tx.Where("id = ? AND kitsu_project_id = ?", id, strings.TrimSpace(productionID)).Delete(&ProjectWebhook{}).Error; err != nil {
+				return err
+			}
 		}
 		if config != nil {
 			copy := *config

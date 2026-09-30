@@ -562,6 +562,28 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForUnroutedTaskTypes(t *
 	}
 }
 
+func TestProductionRoutingEditorStagesNewChannelChoiceUntilApply(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "stage-channel-choice", Name: "Stage Channel Choice"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	view := productionNotificationReviewerView{TaskTypes: []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}}
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=stage-channel-choice&tab=notifications&edit_routing=1&lang=en", nil)
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, "en", "", view)
+	for _, marker := range []string{`value="__create__"`, `data-default-channel-name="compositing"`, `data-new-channel-name`, `data-new-channel-field`, `data-apply-endpoint="/bot/admin/projects?apply_notifications=1"`} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("routing editor is missing staged channel creation control %q", marker)
+		}
+	}
+	script := currentRoutingEditorScript()
+	for _, marker := range []string{"window.confirm(form.dataset.removeConfirm", "route.create_channel_name=", "route.destination_webhook_id=", "credentials:'same-origin'"} {
+		if !strings.Contains(script, marker) {
+			t.Errorf("routing editor script is missing pending/safe Apply behavior %q", marker)
+		}
+	}
+}
+
 func TestPendingAutomaticReviewerSourceOmitsRoutedTaskTypes(t *testing.T) {
 	source := renderPendingAutomaticReviewerSource(
 		[]kitsu.TaskType{{ID: "task-routed", Name: "Routed"}, {ID: "task-pending", Name: "Pending"}},

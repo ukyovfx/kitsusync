@@ -71,6 +71,39 @@ func TestApplyProductionNotificationStateDeletesRemovedRouteTargetsAtomically(t 
 	}
 }
 
+func TestApplyProductionNotificationStateCreatesWebhookAndRouteAtomically(t *testing.T) {
+	db := newRoutingTestDB(t)
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+		t.Fatal(err)
+	}
+	project := Project{KitsuProjectID: "apply-new-channel", Name: "New Channel"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	revision := ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
+	created := &ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "compositing", TaskType: "task-comp", WebhookURL: "https://discord.invalid/webhook/secret", DiscordChannelID: "123456789012345678"}
+	if _, err := ApplyProductionNotificationState(db, project.ID, project.KitsuProjectID, project.Name, revision, []ProductionNotificationRoute{{TaskTypeID: "task-comp", DestinationWebhookID: 0}}, nil, created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID == 0 {
+		t.Fatal("Apply must return the persisted managed webhook identity")
+	}
+	routes := ListProductionNotificationRoutes(db, project.KitsuProjectID)
+	if len(routes) != 1 || routes[0].DestinationWebhookID != created.ID {
+		t.Fatalf("route did not use the atomically created webhook: %#v, webhook=%#v", routes, created)
+	}
+	if got := len(ListProjectWebhooks(db, project.KitsuProjectID)); got != 1 {
+		t.Fatalf("expected exactly one managed webhook row, got %d", got)
+	}
+	newRevision := ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
+	if err := RestoreProductionNotificationState(db, project.ID, project.KitsuProjectID, newRevision, nil, nil, nil, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(ListProductionNotificationRoutes(db, project.KitsuProjectID)) != 0 || len(ListProjectWebhooks(db, project.KitsuProjectID)) != 0 {
+		t.Fatal("transactional compensation must remove the new route and managed webhook row")
+	}
+}
+
 func TestApplyProductionNotificationStateCommitsRoutesAndUserRoleDeltasTogether(t *testing.T) {
 	db := newRoutingTestDB(t)
 	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {

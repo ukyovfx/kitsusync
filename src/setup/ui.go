@@ -886,6 +886,31 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .production-context .production-wfa-edit-panel{padding:14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-subtle)}
   .editorial-workbench .production-context dialog,.editorial-workbench .production-team-page dialog{color-scheme:dark;border-color:var(--border-default);border-radius:var(--radius-md);background:var(--surface-overlay);color:var(--text)}
   .editorial-workbench .production-context dialog select,.editorial-workbench .production-team-page dialog select{color-scheme:dark;background:var(--surface-control);color:var(--text);border-color:var(--border-default)}
+  .production-context .production-notification-heading .status-pill,.production-context .production-routing-editor>.page-heading .status-pill,.production-context .production-notification-heading .btn-ghost{min-height:var(--control-height-dense,38px);display:inline-flex;align-items:center;justify-content:center}
+  .production-context .production-routing-editor{gap:var(--space-section,24px);}
+  .production-context .production-routing-editor-footer{margin-top:var(--space-2,8px);padding-top:var(--space-3,12px)}
+  .production-context .production-wfa-edit-groups{gap:var(--space-4,16px);}
+  .production-context .production-settings-list{display:grid;gap:var(--space-2,8px);}
+  .production-context .production-wfa-channel{gap:var(--space-2,8px);}
+  .production-context .production-wfa-new-channel{display:grid;gap:var(--space-1,4px);margin:0;color:var(--muted-2);font-size:.82rem}
+  .production-context .production-wfa-new-channel input{width:100%;min-width:0}
+  .production-context .production-wfa-edit-panel [data-wfa-automatic],.production-context .production-wfa-edit-panel [data-wfa-additional]{padding-top:var(--space-3,12px);}
+  .production-context .production-wfa-edit-panel .production-wfa-add-target{min-height:var(--control-height-dense,38px);width:auto;justify-self:start}
+  .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);display:flex;align-items:center;cursor:pointer}
+  .production-context .production-unconfigured{display:grid;gap:var(--space-section,24px)}
+  .production-context .production-unconfigured-state{display:grid;gap:var(--space-3,12px);padding:var(--space-4,16px);border-top:1px solid var(--divider-color);border-bottom:1px solid var(--divider-color);background:var(--surface-subtle)}
+  .production-context .production-unconfigured-state h2,.production-context .production-unconfigured-state p{margin:0}
+  .production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:var(--space-2,8px) var(--space-3,12px)}
+  .production-context .production-storage-field{display:grid;gap:var(--space-1,4px);min-width:0;color:var(--muted-2)}
+  .production-context .production-storage-field input{width:100%;min-width:0}
+  .production-context .production-storage-actions{margin:0;white-space:nowrap}
+  .production-context .routing-row-menu-panel{position:fixed;z-index:1100;right:auto;max-width:min(280px,calc(100vw - 16px));overflow-y:auto}
+  .production-context dialog select option{background:var(--surface-overlay);color:var(--text)}
+  .production-context dialog select option:disabled{color:var(--muted);background:var(--surface-subtle)}
+  .production-context dialog .button-row{align-items:center;gap:var(--space-2,8px);margin-top:var(--space-3,12px)}
+  .production-context dialog [data-wfa-add-cancel]{background:var(--surface-control);border-color:var(--border-default);color:var(--text)}
+  .production-context dialog [data-wfa-add-confirm]{margin-inline-start:auto}
+  .production-context dialog :focus-visible{outline:2px solid var(--interaction-focus);outline-offset:2px}
   @media(max-width:760px){
     .editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section,.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{padding:18px 0}
     .editorial-workbench .production-context .production-current-issues .production-issue-row{grid-template-columns:minmax(0,1fr);gap:8px}
@@ -911,6 +936,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
     .editorial-workbench .production-context .production-routing-editor .wizard-plan-table [data-routing-row]>td:nth-child(3){grid-column:2;grid-row:1}
     .editorial-workbench .production-context .production-routing-editor .wizard-plan-table [data-routing-row] .routing-select-task{white-space:normal;text-align:left}
     .editorial-workbench .production-context .production-routing-editor .wizard-plan-table [data-routing-row] select{width:100%;min-width:0}
+    .production-context .production-storage-form{grid-template-columns:minmax(0,1fr);align-items:stretch}
+    .production-context .production-storage-actions{justify-content:flex-end}
   }
 `
 

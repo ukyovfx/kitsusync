@@ -166,3 +166,39 @@
 ## Handoff
 
 Review this plan before implementation. The implementation steps depend on a shared Apply request contract, transaction/revision boundary, and global mapping helper, so use `superpowers:executing-plans` for a single native execution pass unless the operator requests subagent-driven execution.
+
+## Operator review follow-up (2026-09-30)
+
+The following bounded follow-up was requested after review of the Staging candidate. It preserves the original four-tab and backend semantics except for the explicitly approved pending Discord channel creation at Notifications Apply.
+
+### Task 8: Align Production Detail controls and unconfigured shell
+
+**Files:** `src/setup/ia_views.go`, `src/setup/current_routing.go`, `src/setup/ui.go`, `src/setup/production_detail_ia_test.go`, `src/setup/reviewer_browser_acceptance_test.go`, `tools/reviewer-browser-acceptance/browser.cjs`, and Current IA docs only for the unconfigured shared-shell contract.
+
+- [ ] Add focused renderer/browser regressions for read-mode status/Edit control height, edit spacing/alignment, dark Add recipient dialog and options, row-anchored route actions without overflow, confirmation before staging route removal, compact Settings disclosures, desktop Storage input+Save alignment, and shared configured/unconfigured Production Detail shell.
+- [ ] Run the owning focused test/browser assertions and confirm each missing contract fails before changing its implementation.
+- [ ] Make the smallest scoped markup/CSS/interaction changes. Route removal remains pending until Apply and never deletes Discord/Kitsu resources; keep the existing separate confirmed Discord-channel deletion behavior distinct.
+- [ ] Verify JP/EN desktop/mobile, sparse/rich data, no page overflow, no unintended internal scroll, no mojibake, and no console/runtime errors.
+- [ ] Update `docs/CURRENT-IA-UI-SPEC.md` / `docs/CURRENT-IA-UI-ACCEPTANCE.md` only to lock the shared shell for configured and unconfigured Production Detail.
+- [ ] Run focused tests and `git diff --check`; commit as `ui: align Production detail controls from staging review`.
+
+### Task 9: Stage new Discord channel creation in Notifications Apply
+
+**Files:** `src/setup/current_routing.go`, `src/setup/production_notifications_apply.go`, `src/model/production_notification_apply.go`, `src/setup/production_notifications_apply_test.go`, `src/model/production_notification_apply_test.go`, and `tools/reviewer-browser-acceptance/browser.cjs`.
+
+- [ ] Add failing model/handler/browser tests for reusing an unassigned existing managed channel, default/custom normalized channel names, pending creation without Discord writes, Cancel/reload creating nothing, Apply creating one channel+webhook and one route, and channel/webhook/persistence failure returning non-success with bounded cleanup diagnostics.
+- [ ] Run focused tests and confirm failures are caused by the missing staged-create contract.
+- [ ] Add a strict Apply payload for per-route destination choice (`existing` webhook ID or `create` normalized name); reject ambiguous, duplicate, unowned, non-text, wrong-category, invalid-name, and unknown Task Type selections.
+- [ ] Keep all new Discord side effects inside final Apply. Create a new text channel and its webhook only after read-only permission/ownership and revision preflight; persist the resulting `ProjectWebhook` and route atomically with reviewer deltas. On any later failure, attempt cleanup of only newly created Discord artifacts and report incomplete recovery without success.
+- [ ] Keep existing Discord channels selectable after their routes are removed; route removal itself never deletes a channel or Kitsu Task Type.
+- [ ] Run focused model/handler/browser tests and `git diff --check`; commit as `feat(notifications): stage channel creation until apply`.
+
+### Task 10: Final operator-review verification
+
+**Files:** only in-scope files from Tasks 8–9.
+
+- [ ] Run focused Production Detail tests, `go test ./src/... -count=1 -timeout=120s`, `go vet ./src/...`, `docker compose config -q`, browser syntax/acceptance, and `git diff --check`.
+- [ ] Capture and visually inspect the requested Notifications, route menu, recipient dialog/dropdown, add-channel choices, Settings, configured/unconfigured, and mobile screenshots.
+- [ ] Push the exact PR head and require exact-head CI, Security Audit, and CodeQL (if configured) PASS.
+- [ ] Deploy the exact verified head to isolated Staging only; verify runtime identity, health/readiness, 127.0.0.1:8091, and Production unchanged.
+- [ ] Stop with PR #230 Draft and unmerged. Do not deploy Production or release.
