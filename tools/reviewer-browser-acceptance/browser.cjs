@@ -680,6 +680,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await addModal.locator('[data-wfa-add-confirm]').click();
         await pendingRow.locator('.routing-row-menu summary').click();
         const routeMenu = pendingRow.locator('.routing-row-menu-panel');
+        await page.waitForFunction(() => { const menu = document.querySelector('.routing-row-menu[open] .routing-row-menu-panel'); if (!menu) return false; const rect = menu.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight + 1; }, null, { timeout: 3000 });
         const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, viewport: innerHeight, summaryTop: summary.top, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }; });
         if (menuGeometry.position !== 'fixed' || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.summaryTop - menuGeometry.top) > 420) throw new Error(`route menu is not anchored to its row within the viewport in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-route-menu-${locale.lang}-${viewport.name}.png`), fullPage: true });
