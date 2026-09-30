@@ -141,10 +141,10 @@ func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *te
 
 func TestProductionSettingsVerticalSections(t *testing.T) {
 	for _, expected := range []string{
-		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
+		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-1,4px);`,
 		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{border:0;border-top:1px solid var(--divider-color);`,
 		`.editorial-workbench .production-context .production-settings-disclosure-row{min-width:0;padding:0;border:0;border-top:1px solid var(--divider-color);`,
-		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 var(--space-3,12px);`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 var(--space-2,8px);`,
 	} {
 		if !strings.Contains(adminThemeCSS, expected) {
 			t.Errorf("Production Settings is missing its vertical section treatment %q", expected)
@@ -662,14 +662,14 @@ func TestProductionDetailTabsShareOpenCurrentIAGrammar(t *testing.T) {
 	for _, rule := range []string{
 		`.editorial-workbench .production-context .production-detail-surface{min-width:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}`,
 		`.editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section,`,
-		`#panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:var(--space-1,4px) 0;border:0;border-top:1px solid var(--divider-color);`,
+		`#panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:0;border:0;border-top:1px solid var(--divider-color);`,
 		`.production-detail-section-title{margin:0 0 10px;font-size:1rem;line-height:1.35;`,
 		`.editorial-workbench .production-context .production-detail-state-row{min-height:42px;padding:10px 12px;border:0;border-left:2px solid var(--line);border-radius:0;background:var(--surface-subtle);`,
 		`.editorial-workbench .production-context .production-notification-table thead th{padding:0 10px 10px;background:transparent;`,
-		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 var(--space-3,12px);`,
-		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 var(--space-2,8px);`,
+		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-1,4px);`,
 		`.editorial-workbench .production-context .production-team-table-wrap{padding:0;border:0;border-radius:0;background:transparent}`,
-		`.editorial-workbench .production-context .production-wfa-edit-panel{padding:14px;border:1px solid var(--border-default);border-radius:var(--radius-md);background:var(--surface-subtle)}`,
+		`.editorial-workbench .production-context .production-wfa-edit-panel{padding:0;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
 			t.Errorf("Production detail visual grammar is missing %q", rule)
