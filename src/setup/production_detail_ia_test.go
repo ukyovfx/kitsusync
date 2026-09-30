@@ -81,6 +81,11 @@ func TestProductionTeamCompactRows(t *testing.T) {
 	if strings.Count(body, `class="production-team-row"`) != 2 || !strings.Contains(body, longDepartment) || !strings.Contains(body, longScope) {
 		t.Fatalf("Team did not render comparative member rows with Department and derived Supervisor scope: %s", body)
 	}
+	for _, marker := range []string{`class="production-team-table"`, `<th scope="col">Member</th>`, `<th scope="col">Kitsu role</th>`, `<th scope="col">Department</th>`, `<th scope="col">Discord</th>`, `<th scope="col">Status / action</th>`, `href="/bot/admin/users?lang=en"`} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("Team is missing the Gemini-derived table/navigation structure %q: %s", marker, body)
+		}
+	}
 	if strings.Contains(body, `class="section-card`) || strings.Contains(body, `class="glass`) {
 		t.Fatal("Production Team regressed to per-person cards")
 	}
@@ -96,10 +101,10 @@ func TestProductionTeamCompactRows(t *testing.T) {
 
 func TestProductionTeamCompactRowStyles(t *testing.T) {
 	for _, expected := range []string{
-		`.production-team-list{display:grid;gap:0;`,
-		`.production-team-row{display:grid;`,
-		`border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none`,
-		`.production-team-row:first-child{border-top:0;padding-top:0}`,
+		`.production-team-table{width:100%;table-layout:fixed;`,
+		`.production-team-row>th,.production-team-row>td{`,
+		`.production-team-row:first-child>th,.production-team-row:first-child>td{border-top:0}`,
+		`.production-team-table thead{position:absolute;`,
 	} {
 		if !strings.Contains(adminThemeCSS, expected) {
 			t.Errorf("Production Team is missing compact row style %q", expected)

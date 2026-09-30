@@ -660,8 +660,19 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク'] : ['Team', 'Supervision scope', 'Not linked']) {
           if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
         }
+        const teamHeaders = (await page.locator('.production-team-table thead th').allTextContents()).map(text => text.trim());
+        const expectedTeamHeaders = locale.lang === 'ja'
+          ? ['メンバー', 'Kitsuロール', 'Department', 'Discord', '状態 / 操作']
+          : ['Member', 'Kitsu role', 'Department', 'Discord', 'Status / action'];
+        if (JSON.stringify(teamHeaders) !== JSON.stringify(expectedTeamHeaders)) {
+          throw new Error(`Team table does not match the five-column structure in ${locale.lang}: ${JSON.stringify(teamHeaders)}`);
+        }
+        const userLinkingHref = await page.locator('.production-team-user-link').first().getAttribute('href');
+        if (!userLinkingHref || !userLinkingHref.startsWith(`/bot/admin/users?lang=${locale.lang}`)) {
+          throw new Error(`Unlinked Team member has no localized User Linking route in ${locale.lang}`);
+        }
         if (viewport.name === 'mobile') {
-          const teamControls = await page.locator('.production-team-discord').evaluateAll(cells => cells.flatMap(cell => {
+          const teamControls = await page.locator('.production-team-discord,.production-team-status').evaluateAll(cells => cells.flatMap(cell => {
             const cellRight = cell.getBoundingClientRect().right;
             return [...cell.querySelectorAll('.status-pill, button')].map(control => ({
               label: control.textContent.trim(),
@@ -674,10 +685,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const teamRows = await page.locator('.production-team-row').evaluateAll(rows => rows.map(row => {
           const style = getComputedStyle(row);
-          return { display: style.display, borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+          const firstCell = row.querySelector('th,td');
+          return { display: style.display, borderTopStyle: style.borderTopStyle, firstCellBorderTopStyle: firstCell && getComputedStyle(firstCell).borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
         }));
-        if (!teamRows.length || teamRows[0].display !== 'grid' || teamRows[0].borderTopStyle !== 'none' || teamRows.slice(1).some(row => row.borderTopStyle !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
-          throw new Error(`Production Team is not a compact divider list in ${locale.lang}: ${JSON.stringify(teamRows)}`);
+        const expectedTeamDisplay = viewport.name === 'mobile' ? 'grid' : 'table-row';
+        if (!teamRows.length || teamRows.some(row => row.display !== expectedTeamDisplay) || teamRows[0].firstCellBorderTopStyle !== 'none' || teamRows.slice(1).some(row => (viewport.name === 'mobile' ? row.borderTopStyle : row.firstCellBorderTopStyle) !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
+          throw new Error(`Production Team is not a compact responsive table in ${locale.lang}: ${JSON.stringify(teamRows)}`);
         }
         const teamLinkButton = page.locator('[data-open-team-link]').first();
         if (!(await teamLinkButton.count())) throw new Error(`Team has no verified in-place global User Linking action in ${locale.lang}`);
