@@ -613,6 +613,18 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク'] : ['Team', 'Supervision scope', 'Not linked']) {
           if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
         }
+        if (viewport.name === 'mobile') {
+          const teamControls = await page.locator('.production-team-discord').evaluateAll(cells => cells.flatMap(cell => {
+            const cellRight = cell.getBoundingClientRect().right;
+            return [...cell.querySelectorAll('.status-pill, button')].map(control => ({
+              label: control.textContent.trim(),
+              right: Math.round(control.getBoundingClientRect().right),
+              cellRight: Math.round(cellRight),
+            }));
+          }));
+          const overflow = teamControls.find(control => control.right > control.cellRight + 1);
+          if (overflow) throw new Error(`Team status/action overflows its Discord cell at 390px in ${locale.lang}: ${JSON.stringify(overflow)}`);
+        }
         const teamRows = await page.locator('.production-team-row').evaluateAll(rows => rows.map(row => {
           const style = getComputedStyle(row);
           return { display: style.display, borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
