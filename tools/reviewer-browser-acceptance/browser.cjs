@@ -775,6 +775,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await reuseForm.locator('[data-apply-submit]').click();
         const reusedResponse = await reusedResponsePromise;
         if (reusedResponse.status() !== 200 || reusedApplyCount !== 1 || !reusedPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.destination_webhook_id === Number(reusableWebhookID) && !route.create_channel_name)) throw new Error('selecting an existing managed channel did not stay a single non-creating Apply route');
+        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
         await page.unroute(applyEndpoint);
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
@@ -794,6 +795,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await createForm.locator('[data-apply-submit]').click();
         const createdResponse = await createdResponsePromise;
         if (createdResponse.status() !== 200 || createdApplyCount !== 1 || !createdPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.create_channel_name === 'unassigned-custom' && !route.destination_webhook_id)) throw new Error('Apply did not submit exactly one staged new-channel route');
+        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
         await page.unroute(applyEndpoint);
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
