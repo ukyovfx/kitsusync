@@ -662,7 +662,7 @@ func TestProductionDetailTabsShareOpenCurrentIAGrammar(t *testing.T) {
 	for _, rule := range []string{
 		`.editorial-workbench .production-context .production-detail-surface{min-width:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}`,
 		`.editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section,`,
-		`#panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:var(--space-3,12px) 0;border:0;border-top:1px solid var(--divider-color);`,
+		`#panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:var(--space-1,4px) 0;border:0;border-top:1px solid var(--divider-color);`,
 		`.production-detail-section-title{margin:0 0 10px;font-size:1rem;line-height:1.35;`,
 		`.editorial-workbench .production-context .production-detail-state-row{min-height:42px;padding:10px 12px;border:0;border-left:2px solid var(--line);border-radius:0;background:var(--surface-subtle);`,
 		`.editorial-workbench .production-context .production-notification-table thead th{padding:0 10px 10px;background:transparent;`,

@@ -858,7 +858,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   /* Production Detail shares Current IA section and row grammar; avoid nested white frames. */
   .editorial-workbench .production-context .production-detail-surface{min-width:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
   .editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section{margin:0;padding:20px 0;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
-  .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:var(--space-3,12px) 0;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
+  .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:var(--space-1,4px) 0;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:transparent;box-shadow:none}
   .editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section:first-child,
   .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section:first-child{border-top:0;padding-top:0}
   .editorial-workbench .production-context #panel-overview>.production-overview{gap:0}
@@ -908,11 +908,10 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-unconfigured{display:grid;gap:var(--space-section,24px)}
   .production-context .production-unconfigured-state{display:grid;gap:var(--space-3,12px);padding:var(--space-3,12px) 0 0;border:0;border-top:1px solid var(--divider-color);background:transparent}
   .production-context .production-unconfigured-state h2,.production-context .production-unconfigured-state p{margin:0}
-  .production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;gap:var(--space-1,4px) var(--space-3,12px)}
-  .production-context .production-storage-field{grid-row:1 / span 2}
+  .production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:var(--space-1,4px) var(--space-3,12px)}
   .production-context .production-storage-field{display:grid;gap:var(--space-1,4px);justify-self:stretch;width:100%;min-width:0;color:var(--muted-2)}
   .production-context .production-storage-field input{box-sizing:border-box;width:100%;max-width:none;min-width:0}
-  .production-context .production-storage-actions{grid-column:2;grid-row:2;align-self:center;margin:0;white-space:nowrap}
+  .production-context .production-storage-actions{grid-column:2;align-self:end;margin:0;white-space:nowrap}
   .production-context .production-routing-editor .wizard-plan-table{overflow:visible}
   .production-context .routing-row-menu-panel{position:absolute;z-index:1100;right:0;top:calc(100% + 6px);max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible}
   .production-context dialog select option{background:var(--surface-overlay);color:var(--text)}
@@ -934,7 +933,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .recipient-listbox>[role="option"][aria-disabled="true"],.recipient-listbox .recipient-option-disabled{display:block;min-height:36px;padding:8px 10px;color:var(--muted-2);background:var(--surface-subtle);cursor:not-allowed}
   @media(max-width:760px){
     .editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section{padding:20px 0}
-    .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{padding:var(--space-3,12px) 0}
+    .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{padding:var(--space-1,4px) 0}
     .editorial-workbench .production-context .production-current-issues .production-issue-row{grid-template-columns:minmax(0,1fr);gap:8px}
     .editorial-workbench .production-context .production-notification-table table,.editorial-workbench .production-context .production-notification-table tbody{display:block;width:100%;min-width:0}
     .editorial-workbench .production-context .production-notification-table thead{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
