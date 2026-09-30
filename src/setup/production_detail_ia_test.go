@@ -138,7 +138,7 @@ func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *te
 func TestProductionSettingsVerticalSections(t *testing.T) {
 	for _, expected := range []string{
 		`.editorial-workbench .production-context #panel-settings>.production-settings-list{gap:10px}`,
-		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}`,
+		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}`,
 		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-disclosure-row{margin:0;padding:0;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}`,
 		`.production-settings-disclosure-row>summary{min-height:52px;padding:0 14px;`,
 	} {

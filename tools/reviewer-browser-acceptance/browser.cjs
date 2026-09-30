@@ -581,10 +581,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const selectedRouteStyle = await selectedRoute.evaluate(node => ({ background: getComputedStyle(node).backgroundColor, marker: getComputedStyle(node).boxShadow, titleDecoration: getComputedStyle(node.querySelector('.routing-select-task')).textDecorationLine }));
         if (selectedRouteStyle.background === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.marker === 'none' || !selectedRouteStyle.titleDecoration.includes('underline')) throw new Error(`Selected Task Type is not visually distinct in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
         if (await editForm.locator('.production-wfa-edit-panel [data-wfa-title]').innerText() !== 'Compositing' || !(await editForm.locator('.production-wfa-edit-panel').innerText()).includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) throw new Error(`selected Task Type edit panel is not a unified Channel/WFA target in ${locale.lang}`);
-        const editPanelStyle = await editForm.locator('.production-wfa-edit-panel').evaluate(node => {
+        const editPanelStyle = await editForm.evaluate(form => {
+          const node = form.querySelector('.production-wfa-edit-panel');
           const panel = getComputedStyle(node);
           const add = getComputedStyle(node.querySelector('[data-wfa-add-target]'));
-          const footer = getComputedStyle(node.querySelector('.production-routing-editor-footer'));
+          const footer = getComputedStyle(form.querySelector('.production-routing-editor-footer'));
           return { border: panel.borderTopStyle, radius: panel.borderRadius, background: panel.backgroundColor, padding: panel.padding,
             addWidth: node.querySelector('[data-wfa-add-target]').getBoundingClientRect().width, addDisplay: add.display,
             footerBorder: footer.borderTopStyle, footerDisplay: footer.display };
