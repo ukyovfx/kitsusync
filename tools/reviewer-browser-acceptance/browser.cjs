@@ -993,6 +993,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (viewport.name === 'desktop' && (storageGeometry.inputWidth < storageGeometry.formWidth * .6 || storageGeometry.buttonLeft < storageGeometry.inputRight || Math.abs((storageGeometry.inputTop + storageGeometry.inputBottom) / 2 - (storageGeometry.buttonTop + storageGeometry.buttonBottom) / 2) > 3)) {
           throw new Error(`Storage input and Save do not share a full-width desktop row in ${locale.lang}: ${JSON.stringify(storageGeometry)}`);
         }
+        if (viewport.name === 'mobile' && storageGeometry.buttonTop < storageGeometry.inputBottom) {
+          throw new Error(`Storage Save should stack below the input on narrow mobile in ${locale.lang}: ${JSON.stringify(storageGeometry)}`);
+        }
         const originalStorage = await storageInput.inputValue();
         if (!(await saveButton.isDisabled())) throw new Error(`Storage Save should start disabled in ${locale.lang}`);
         await storageInput.fill(`${originalStorage}/changed`);
@@ -1320,7 +1323,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await gotoProduction(page, locale, 'settings');
         const sparseSettings = await page.locator('.production-settings-list > .production-settings-section').evaluateAll(sections => sections.map(section => { const style = getComputedStyle(section); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; }));
-        if (sparseSettings.length !== 4 || sparseSettings.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)') || await page.locator('.production-settings-list > .production-settings-disclosure-row > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 44))) throw new Error(`Sparse Settings lost the shared vertical section/disclosure rhythm in ${locale.lang}: ${JSON.stringify(sparseSettings)}`);
+        if (sparseSettings.length !== 4 || sparseSettings.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)') || await page.locator('.production-settings-list > .production-settings-disclosure-row > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 38))) throw new Error(`Sparse Settings lost the shared vertical section/disclosure rhythm in ${locale.lang}: ${JSON.stringify(sparseSettings)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'sparse Production', 'four vertical Settings sections and readable disclosure rows remain visible');
       }

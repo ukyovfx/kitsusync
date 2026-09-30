@@ -932,6 +932,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .recipient-listbox>[role="option"]:hover,.recipient-listbox>[role="option"]:focus-visible{background:var(--interaction-hover);outline:none}
   .recipient-listbox>[role="option"][aria-disabled="true"],.recipient-listbox .recipient-option-disabled{display:block;min-height:36px;padding:8px 10px;color:var(--muted-2);background:var(--surface-subtle);cursor:not-allowed}
   @media(max-width:760px){
+    .editorial-workbench .production-context .production-storage-form{grid-template-columns:minmax(0,1fr)}
+    .editorial-workbench .production-context .production-storage-actions{grid-column:1;justify-self:end}
     .editorial-workbench .production-context #panel-overview>.production-overview>.production-settings-section{padding:20px 0}
     .editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{padding:var(--space-1,4px) 0}
     .editorial-workbench .production-context .production-current-issues .production-issue-row{grid-template-columns:minmax(0,1fr);gap:8px}
