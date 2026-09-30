@@ -175,7 +175,7 @@ func TestCurrentRoutingEditorKeepsAddDialogOutsideApplyForm(t *testing.T) {
 	}
 	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang=en", nil), project, "en", "")
 	formEnd := strings.Index(body, "</form>")
-	dialogStart := strings.Index(body, "<dialog data-wfa-add-modal>")
+	dialogStart := strings.Index(body, "<dialog data-wfa-add-modal")
 	if formEnd < 0 || dialogStart < 0 || dialogStart < formEnd {
 		t.Fatal("recipient dialog must be outside the Apply form to avoid invalid nested forms")
 	}
