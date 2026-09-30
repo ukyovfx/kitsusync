@@ -363,6 +363,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
     const page = await context.newPage();
     let expectedStaleApply = null;
+    let expectedChannelCreateFailure = null;
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {
       if (message.type() !== 'error') return;
@@ -370,6 +371,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       const isExpectedConflictConsole = /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/.test(text);
       if (isExpectedConflictConsole && expectedStaleApply?.active && expectedStaleApply.requestSeen) {
         expectedStaleApply.console409Messages.push(text);
+        return;
+      }
+      const isExpectedChannelCreateConsole = /^Failed to load resource: the server responded with a status of 502 \(Bad Gateway\)$/.test(text);
+      if (isExpectedChannelCreateConsole && expectedChannelCreateFailure?.active && expectedChannelCreateFailure.requestSeen) {
+        expectedChannelCreateFailure.console502Messages.push(text);
         return;
       }
       errors.push(text);
@@ -381,6 +387,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       if (response.status() === 409 && staleScenario?.active && staleScenario.requestSeen && isNotificationsApplyRequest(request) && staleScenario.responseCount === 0) {
         staleScenario.responseCount += 1;
         staleScenario.responseStatus = response.status();
+        return;
+      }
+      const createScenario = expectedChannelCreateFailure;
+      if (response.status() === 502 && createScenario?.active && createScenario.requestSeen && isNotificationsApplyRequest(request) && createScenario.responseCount === 0) {
+        createScenario.responseCount += 1;
+        createScenario.responseStatus = response.status();
         return;
       }
       errors.push(`HTTP ${response.status()} ${request.method()} ${new URL(request.url()).pathname}`);
@@ -642,6 +654,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await editForm.locator('[data-wfa-add-target]').click();
         await addModal.locator('[data-wfa-role-id]').selectOption('33333333333333331');
         await addModal.locator('[data-wfa-add-confirm]').click();
+        await editForm.locator('[data-wfa-add-target]').click();
+        const recipientUserSelect = addModal.locator('[data-wfa-user-id]');
+        await recipientUserSelect.focus();
+        await recipientUserSelect.press('Space');
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.keyboard.press('Escape');
+        await recipientUserSelect.selectOption('');
+        await addModal.locator('[data-wfa-add-cancel]').click();
         const additionalPanel = editForm.locator('[data-wfa-additional]');
         const additionalText = await additionalPanel.innerText();
         if (!additionalText.includes('Guild Nick Override') || !additionalText.includes('Artist Global') || !additionalText.includes('@Reviewers')) throw new Error(`Additional User/Role overrides were not presented together in ${locale.lang}`);
@@ -658,6 +678,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await addModal.locator('[data-wfa-user-id]').selectOption('22222222222222234');
         await addModal.locator('[data-wfa-add-confirm]').click();
         await pendingRow.locator('.routing-row-menu summary').click();
+        const routeMenu = pendingRow.locator('.routing-row-menu-panel');
+        const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, viewport: innerHeight, summaryTop: summary.top, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }; });
+        if (menuGeometry.position !== 'fixed' || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.summaryTop - menuGeometry.top) > 420) throw new Error(`route menu is not anchored to its row within the viewport in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.keyboard.press('Escape');
+        if (await pendingRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('Escape did not close the route action menu');
+        await pendingRow.locator('.routing-row-menu summary').click();
+        page.once('dialog', async dialog => { if (dialog.type() !== 'confirm') throw new Error(`unexpected ${dialog.type()} dialog for pending route removal`); await dialog.accept(); });
         await pendingRow.locator('[data-routing-remove]').click();
         if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
 
@@ -715,10 +743,78 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const refreshForm = page.locator('[data-current-routing-form]');
         await refreshForm.locator('[data-routing-add]').click();
         await refreshForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
+        await refreshForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]').selectOption('__create__');
+        if (!(await refreshForm.locator('[data-new-channel-field]').isVisible()) || await refreshForm.locator('[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('new channel staging did not expose the normalized Task Type default');
+        await refreshForm.locator('[data-new-channel-name]').fill('unassigned-custom');
+        await page.screenshot({ path: path.join(output, `production-notifications-add-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.reload({ waitUntil: 'networkidle' });
         if (page.url().includes('edit_routing=1') && await page.locator('[data-current-routing-form] [data-routing-row][data-task-type="task-unassigned"]').count()) {
           throw new Error('Refresh persisted a browser-only pending route addition');
         }
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const reuseForm = page.locator('[data-current-routing-form]');
+        await reuseForm.locator('[data-routing-add]').click();
+        await reuseForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
+        const reuseSelect = reuseForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]');
+        const reusableWebhookID = await reuseSelect.locator('option').evaluateAll(options => options.find(option => /^\d+$/.test(option.value))?.value || '');
+        if (!reusableWebhookID) throw new Error('managed Discord channel choices are unavailable for an unrouted Task Type');
+        await reuseSelect.selectOption(reusableWebhookID);
+        await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        let reusedPayload = null;
+        let reusedApplyCount = 0;
+        await page.route(applyEndpoint, async route => { reusedApplyCount++; reusedPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
+        const reusedResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        await reuseForm.locator('[data-apply-submit]').click();
+        const reusedResponse = await reusedResponsePromise;
+        if (reusedResponse.status() !== 200 || reusedApplyCount !== 1 || !reusedPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.destination_webhook_id === Number(reusableWebhookID) && !route.create_channel_name)) throw new Error('selecting an existing managed channel did not stay a single non-creating Apply route');
+        await page.unroute(applyEndpoint);
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const createForm = page.locator('[data-current-routing-form]');
+        let createdPayload = null;
+        let createdApplyCount = 0;
+        await page.route(applyEndpoint, async route => { createdApplyCount++; createdPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
+        await createForm.locator('[data-routing-add]').click();
+        await createForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
+        await createForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]').selectOption('__create__');
+        const createName = createForm.locator('[data-new-channel-name]');
+        if (!(await createName.isVisible()) || await createName.inputValue() !== 'unassigned') throw new Error('new channel default does not use the shared Task Type normalization');
+        await createName.fill('unassigned-custom');
+        if (createdApplyCount !== 0) throw new Error('new Discord resources were requested before Apply');
+        await page.screenshot({ path: path.join(output, `production-notifications-new-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        const createdResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        await createForm.locator('[data-apply-submit]').click();
+        const createdResponse = await createdResponsePromise;
+        if (createdResponse.status() !== 200 || createdApplyCount !== 1 || !createdPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.create_channel_name === 'unassigned-custom' && !route.destination_webhook_id)) throw new Error('Apply did not submit exactly one staged new-channel route');
+        await page.unroute(applyEndpoint);
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const failedCreateForm = page.locator('[data-current-routing-form]');
+        await failedCreateForm.locator('[data-routing-add]').click();
+        await failedCreateForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
+        await failedCreateForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]').selectOption('__create__');
+        await failedCreateForm.locator('[data-new-channel-name]').fill('unassigned-failure');
+        expectedChannelCreateFailure = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console502Messages: [] };
+        await page.route(applyEndpoint, async route => {
+          if (!expectedChannelCreateFailure?.active || !isNotificationsApplyRequest(route.request()) || expectedChannelCreateFailure.requestSeen) {
+            errors.push('Unexpected or duplicate route-create Apply was intercepted');
+            await route.abort();
+            return;
+          }
+          expectedChannelCreateFailure.requestSeen = true;
+          await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"channel_create_failed","channel_creation":"outcome_unknown","resource_cleanup":"known_resources_complete"}' });
+        });
+        const failedCreateResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        const failedCreateURL = page.url();
+        await failedCreateForm.locator('[data-apply-submit]').click();
+        const failedCreateResponse = await failedCreateResponsePromise;
+        const failedCreateMessage = (await failedCreateForm.locator('[data-apply-message]').textContent() || '').trim();
+        const createFailure = expectedChannelCreateFailure;
+        expectedChannelCreateFailure.active = false;
+        if (failedCreateResponse.status() !== 502 || createFailure.responseCount !== 1 || createFailure.responseStatus !== 502 || page.url() !== failedCreateURL || !(await failedCreateForm.locator('[data-new-channel-name]').isVisible()) || await failedCreateForm.locator('[data-new-channel-name]').inputValue() !== 'unassigned-failure' || !failedCreateMessage || !(await failedCreateForm.locator('[data-routing-row][data-task-type="task-unassigned"]').isVisible()) || createFailure.console502Messages.length > 1) throw new Error('failed new-channel Apply must retain the staged value and show an inline error without claiming success');
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'channel creation failure', 'exact expected 502 retained browser-pending channel choice; no other error was ignored');
+        await page.unroute(applyEndpoint);
 
         await gotoProduction(page, locale, 'team');
         const teamTab = page.locator('#panel-team');
@@ -782,6 +878,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'live Production Team', 'Kitsu Team, effective role, derived Supervisor scope, and global User Linking state; no local membership editor');
 
         await gotoProduction(page, locale, 'settings');
+        const configuredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
         const settings = await page.locator('#panel-settings').innerText();
         const settingsPositions = ['Storage', locale.lang === 'ja' ? '技術情報' : 'Technical details', locale.lang === 'ja' ? '診断' : 'Diagnostics', 'Danger Zone'].map(label => settings.indexOf(label));
         if (settingsPositions.some(position => position < 0) || settingsPositions.some((position, index) => index > 0 && position <= settingsPositions[index - 1])) {
@@ -798,6 +895,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-settings-collapsed-${locale.lang}-${viewport.name}.png`), fullPage: true });
         const saveButton = page.locator('.drive-storage-form [data-drive-save]');
         const storageInput = page.locator('#storage-url');
         const originalStorage = await storageInput.inputValue();
@@ -827,9 +925,22 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await page.locator('#diagnostics[open]').count()) || await page.locator('#diagnostics details[open]').count()) throw new Error(`Diagnostics did not expand in a compact collapsed-details state in ${locale.lang}`);
         await page.locator('#danger-zone summary').click();
         if (!(await page.locator('#danger-zone[open]').count())) throw new Error(`Danger Zone did not expand in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-settings-expanded-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'settings and disclosures', `section order preserved; Save is change-sensitive; technical indentation=${JSON.stringify(technicalIndent)}`);
+
+        await fixture(page, 'unconnected-production');
+        await page.goto(`${base}/bot/admin/projects?project=reviewer-unconnected&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (await page.locator('.production-context.production-unconfigured').count() !== 1 || await page.locator('.production-identity').count() !== 1 || await page.locator('.production-identity h1').innerText() !== 'Synthetic Unconnected Production' || await page.locator('.production-unconfigured-state').count() !== 1 || await page.locator('.production-tabs').count()) {
+          throw new Error(`Unconfigured Production did not keep the shared shell without fabricated tabs/data in ${locale.lang}`);
+        }
+        const unconfiguredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
+        const unconfiguredOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+        if (configuredShellWidth !== unconfiguredShellWidth || unconfiguredOverflow || !(await page.locator('.production-unconfigured-state a[href*="/bot/setup"]').count())) throw new Error(`Unconfigured Production shell/action/width is inconsistent in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-unconfigured-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-unconnected', locale.lang, viewport.name, 'unconfigured Production', 'shared identity/workbench shell with clear connect action and no fabricated configured-only data');
+        await fixture(page, 'ready');
 
         const legacyCases = [
           { query: 'storage-settings', panel: 'settings', target: '#storage', expanded: null },
