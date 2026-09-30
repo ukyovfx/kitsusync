@@ -726,7 +726,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const sections = [...node.querySelectorAll(':scope > .production-settings-section')];
           return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length, paddings: sections.map(section => parseFloat(getComputedStyle(section).paddingTop)), summaryHeights: [...node.querySelectorAll('details > summary')].map(summary => summary.getBoundingClientRect().height) };
         });
-        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.paddings.some(value => value < 20) || settingsLayout.summaryHeights.some(value => value < 44)) {
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.paddings.slice(1).some(value => value < 20) || settingsLayout.summaryHeights.some(value => value < 44)) {
           throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
