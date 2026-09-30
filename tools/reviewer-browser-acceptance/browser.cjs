@@ -661,16 +661,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await savedRoute.locator('.routing-row-menu summary').click();
         const savedRouteMenu = savedRoute.locator('.routing-row-menu-panel');
         if (!(await savedRouteMenu.locator('.routing-delete-open').isVisible())) throw new Error(`Saved channel route does not expose the permitted Delete channel action in ${locale.lang}`);
-        await page.waitForFunction(() => {
-          const menu = document.querySelector('[data-routing-row][data-task-type="task-comp"] .routing-row-menu-panel');
-          return menu && getComputedStyle(menu).position === 'fixed';
-        }, null, { timeout: 1000 });
         const savedMenuGeometry = await savedRouteMenu.evaluate(node => {
           const menu = node.getBoundingClientRect();
           const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect();
-          return { top: menu.top, bottom: menu.bottom, anchorBottom: summary.bottom, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight };
+          return { position: getComputedStyle(node).position, top: menu.top, bottom: menu.bottom, viewport: innerHeight, right: menu.right, anchorBottom: summary.bottom, anchorRight: summary.right, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight };
         });
-        if (Math.abs(savedMenuGeometry.top - savedMenuGeometry.anchorBottom) > 14 || savedMenuGeometry.scrollHeight > savedMenuGeometry.clientHeight + 1) throw new Error(`Saved route action menu is detached or scrollable in ${locale.lang}: ${JSON.stringify(savedMenuGeometry)}`);
+        if (!['absolute', 'fixed'].includes(savedMenuGeometry.position) || Math.abs(savedMenuGeometry.top - savedMenuGeometry.anchorBottom) > 14 || Math.abs(savedMenuGeometry.right - savedMenuGeometry.anchorRight) > 14 || savedMenuGeometry.bottom > savedMenuGeometry.viewport + 1 || savedMenuGeometry.scrollHeight > savedMenuGeometry.clientHeight + 1) throw new Error(`Saved route action menu is detached, clipped, or scrollable in ${locale.lang}: ${JSON.stringify(savedMenuGeometry)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-route-menu-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
 
@@ -760,8 +756,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await pendingRow.locator('.routing-row-menu summary').click();
         const routeMenu = pendingRow.locator('.routing-row-menu-panel');
         await page.waitForFunction(() => { const menu = document.querySelector('.routing-row-menu[open] .routing-row-menu-panel'); if (!menu) return false; const rect = menu.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight + 1; }, null, { timeout: 3000 });
-        const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, viewport: innerHeight, summaryTop: summary.top, summaryBottom: summary.bottom, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, bodyScrollWidth: document.body.scrollWidth, viewportWidth: document.documentElement.clientWidth }; });
-        if (menuGeometry.position !== 'fixed' || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.top - menuGeometry.summaryBottom) > 14 || menuGeometry.scrollHeight > menuGeometry.clientHeight + 1 || menuGeometry.bodyScrollWidth > menuGeometry.viewportWidth + 1) throw new Error(`route menu is detached, scrollable, clipped, or overflows when opened in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
+        const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, right: rect.right, viewport: innerHeight, summaryTop: summary.top, summaryBottom: summary.bottom, summaryRight: summary.right, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, bodyScrollWidth: document.body.scrollWidth, viewportWidth: document.documentElement.clientWidth }; });
+        if (!['absolute', 'fixed'].includes(menuGeometry.position) || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.top - menuGeometry.summaryBottom) > 14 || Math.abs(menuGeometry.right - menuGeometry.summaryRight) > 14 || menuGeometry.scrollHeight > menuGeometry.clientHeight + 1 || menuGeometry.bodyScrollWidth > menuGeometry.viewportWidth + 1) throw new Error(`route menu is detached, scrollable, clipped, or overflows when opened in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-route-menu-pending-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
         if (await pendingRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('Escape did not close the route action menu');
