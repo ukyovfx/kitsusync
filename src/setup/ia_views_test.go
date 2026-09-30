@@ -2076,10 +2076,13 @@ func TestCurrentProductionTeamRendersSimpleReadOnlyFlow(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=team&lang=en", nil), p, "en")
-	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Department", "Supervision scope"} {
+	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Department"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
+	}
+	if strings.Contains(body, `class="production-team-supervisor-scope"`) {
+		t.Fatalf("ordinary Artist was given a Supervisor scope: %s", body)
 	}
 	for _, forbidden := range []string{"Add a user", "add_production_user", "Assigned", "remove_production_user"} {
 		if strings.Contains(body, forbidden) {

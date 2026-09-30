@@ -272,7 +272,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 
 func reviewerBrowserTeam() []kitsu.Person {
 	return []kitsu.Person{
-		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor"},
+		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor", Departments: []string{"dept-comp"}},
 		{ID: "person-no-department", FullName: "Departmentless Supervisor", Email: "no-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-wrong-department", FullName: "Wrong Department Supervisor", Email: "wrong-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"},
