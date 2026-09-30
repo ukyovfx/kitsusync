@@ -298,7 +298,7 @@ func TestProductionSettingsGroupsExistingSectionsWithoutChangingForms(t *testing
 			t.Fatalf("Settings sections are out of order: %v", positions)
 		}
 	}
-	if !strings.Contains(body, `class="form-stack drive-storage-form"`) || !strings.Contains(body, `name="storage_url"`) || !strings.Contains(body, "https://storage.example") {
+	if !strings.Contains(body, `class="form-stack drive-storage-form production-storage-form"`) || !strings.Contains(body, `name="storage_url"`) || !strings.Contains(body, "https://storage.example") {
 		t.Fatal("Storage form no longer preserves the existing saved value and form contract")
 	}
 	for _, id := range []string{"technical-details", "diagnostics", "danger-zone"} {

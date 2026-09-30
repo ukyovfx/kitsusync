@@ -602,7 +602,7 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 	if tab == "settings" && r.URL.Query().Get("tab") == "storage-settings" && !p.ValidationOnly && !p.ReadOnlyPreview {
 		feedback = renderStorageSettingsFeedback(r, lang)
 	}
-	body := feedback + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, botTokens...) + `</section></div>`
+	body := feedback + `<div class="production-context">` + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, botTokens...) + `</section></div>`
 	if legacySection != "" {
 		fallback := ""
 		if requestedTab == "activity" {

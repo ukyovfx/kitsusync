@@ -7,18 +7,18 @@ import (
 
 func TestApplyProductionNotificationStateRejectsReviewerDeltaForRemovedRoute(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-delete-route", Name: "Apply Delete Route"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	webhook := ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "comp", DiscordChannelID: "123456789012345678"}
+	webhook := ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "comp", WebhookURL: "https://discord.invalid/webhooks/comp", DiscordChannelID: "123456789012345678"}
 	if err := db.Create(&webhook).Error; err != nil {
 		t.Fatal(err)
 	}
-	routes := []ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}
+	routes := []ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}, {ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", DestinationWebhookID: webhook.ID}}
 	if err := SaveProductionNotificationConfig(db, &ProductionNotificationConfig{ProductionID: project.KitsuProjectID, Enabled: true}, routes); err != nil {
 		t.Fatal(err)
 	}
@@ -26,11 +26,11 @@ func TestApplyProductionNotificationStateRejectsReviewerDeltaForRemovedRoute(t *
 		t.Fatal(err)
 	}
 	revision := ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
-	_, err := ApplyProductionNotificationState(db, project.ID, project.KitsuProjectID, project.Name, revision, nil, []ProductionReviewerDelta{{TaskTypeID: "task-comp", AddUserIDs: []string{"123456789012345680"}}})
+	_, err := ApplyProductionNotificationState(db, project.ID, project.KitsuProjectID, project.Name, revision, []ProductionNotificationRoute{{TaskTypeID: "task-animation", DestinationWebhookID: webhook.ID}}, []ProductionReviewerDelta{{TaskTypeID: "task-comp", AddUserIDs: []string{"123456789012345680"}}})
 	if !errors.Is(err, ErrReviewerDeltaForRemovedRoute) {
 		t.Fatalf("expected removed-route delta rejection, got %v", err)
 	}
-	if got := len(ListProductionNotificationRoutes(db, project.KitsuProjectID)); got != 1 {
+	if got := len(ListProductionNotificationRoutes(db, project.KitsuProjectID)); got != 2 {
 		t.Fatalf("route changed after rejected request: %d", got)
 	}
 	if got := len(ListProjectReviewerTargets(db, project.ID)); got != 1 {
@@ -40,14 +40,14 @@ func TestApplyProductionNotificationStateRejectsReviewerDeltaForRemovedRoute(t *
 
 func TestApplyProductionNotificationStateDeletesRemovedRouteTargetsAtomically(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-remove-targets", Name: "Apply Remove Targets"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	webhook := ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "comp", DiscordChannelID: "123456789012345678"}
+	webhook := ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "comp", WebhookURL: "https://discord.invalid/webhooks/comp", DiscordChannelID: "123456789012345678"}
 	if err := db.Create(&webhook).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +106,14 @@ func TestApplyProductionNotificationStateCreatesWebhookAndRouteAtomically(t *tes
 
 func TestApplyProductionNotificationStateCommitsRoutesAndUserRoleDeltasTogether(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-combined-state", Name: "Combined Apply"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	webhook := ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "comp", DiscordChannelID: "123456789012345678"}
+	webhook := ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "comp", WebhookURL: "https://discord.invalid/webhooks/comp", DiscordChannelID: "123456789012345678"}
 	if err := db.Create(&webhook).Error; err != nil {
 		t.Fatal(err)
 	}

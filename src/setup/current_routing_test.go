@@ -143,8 +143,19 @@ func TestCurrentRoutingEditorDeleteDialogDoesNotBlockSaveForm(t *testing.T) {
 	if got := strings.Count(body, `data-current-routing-form data-async-notification-apply`); got != 1 {
 		t.Fatalf("routing editor rendered %d apply forms; want one global Apply form", got)
 	}
-	if strings.Contains(body, `name="confirm_name"`) || strings.Contains(body, " required") {
+	if strings.Contains(body, `name="confirm_name"`) {
 		t.Fatal("delete confirmation controls can participate in save-form validation")
+	}
+	deleteStart := strings.Index(body, `class="routing-delete-dialog"`)
+	if deleteStart < 0 {
+		t.Fatal("delete confirmation dialog is missing")
+	}
+	deleteEnd := strings.Index(body[deleteStart:], `</dialog>`)
+	if deleteEnd < 0 || strings.Contains(body[deleteStart:deleteStart+deleteEnd], " required") {
+		t.Fatal("delete confirmation controls can participate in save-form validation")
+	}
+	if !strings.Contains(body, `data-new-channel-name maxlength="100" autocomplete="off" disabled required`) {
+		t.Fatal("new-channel name must start disabled until New channel mode is selected")
 	}
 	if !strings.Contains(body, `data-routing-delete-form`) {
 		t.Fatal("delete dialog staging container is missing")
