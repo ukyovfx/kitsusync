@@ -751,8 +751,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await refreshForm.locator('[data-routing-add]').click();
         await refreshForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
         await refreshForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]').selectOption('__create__');
-        if (!(await refreshForm.locator('[data-new-channel-field]').isVisible()) || await refreshForm.locator('[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('new channel staging did not expose the normalized Task Type default');
-        await refreshForm.locator('[data-new-channel-name]').fill('unassigned-custom');
+        if (!(await refreshForm.locator('[data-new-channel-field]').isVisible()) || await refreshForm.locator('input[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('new channel staging did not expose the normalized Task Type default');
+        await refreshForm.locator('input[data-new-channel-name]').fill('unassigned-custom');
         await page.screenshot({ path: path.join(output, `production-notifications-add-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.reload({ waitUntil: 'networkidle' });
         if (page.url().includes('edit_routing=1') && await page.locator('[data-current-routing-form] [data-routing-row][data-task-type="task-unassigned"]').count()) {
@@ -785,7 +785,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await createForm.locator('[data-routing-add]').click();
         await createForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
         await createForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]').selectOption('__create__');
-        const createName = createForm.locator('[data-new-channel-name]');
+        const createName = createForm.locator('input[data-new-channel-name]');
         if (!(await createName.isVisible()) || await createName.inputValue() !== 'unassigned') throw new Error('new channel default does not use the shared Task Type normalization');
         await createName.fill('unassigned-custom');
         if (createdApplyCount !== 0) throw new Error('new Discord resources were requested before Apply');
@@ -801,7 +801,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await failedCreateForm.locator('[data-routing-add]').click();
         await failedCreateForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
         await failedCreateForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]').selectOption('__create__');
-        await failedCreateForm.locator('[data-new-channel-name]').fill('unassigned-failure');
+        await failedCreateForm.locator('input[data-new-channel-name]').fill('unassigned-failure');
         expectedChannelCreateFailure = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console502Messages: [] };
         await page.route(applyEndpoint, async route => {
           if (!expectedChannelCreateFailure?.active || !isNotificationsApplyRequest(route.request()) || expectedChannelCreateFailure.requestSeen) {
@@ -819,7 +819,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const failedCreateMessage = (await failedCreateForm.locator('[data-apply-message]').textContent() || '').trim();
         const createFailure = expectedChannelCreateFailure;
         expectedChannelCreateFailure.active = false;
-        if (failedCreateResponse.status() !== 502 || createFailure.responseCount !== 1 || createFailure.responseStatus !== 502 || page.url() !== failedCreateURL || !(await failedCreateForm.locator('[data-new-channel-name]').isVisible()) || await failedCreateForm.locator('[data-new-channel-name]').inputValue() !== 'unassigned-failure' || !failedCreateMessage || !(await failedCreateForm.locator('[data-routing-row][data-task-type="task-unassigned"]').isVisible()) || createFailure.console502Messages.length > 1) throw new Error('failed new-channel Apply must retain the staged value and show an inline error without claiming success');
+        if (failedCreateResponse.status() !== 502 || createFailure.responseCount !== 1 || createFailure.responseStatus !== 502 || page.url() !== failedCreateURL || !(await failedCreateForm.locator('input[data-new-channel-name]').isVisible()) || await failedCreateForm.locator('input[data-new-channel-name]').inputValue() !== 'unassigned-failure' || !failedCreateMessage || !(await failedCreateForm.locator('[data-routing-row][data-task-type="task-unassigned"]').isVisible()) || createFailure.console502Messages.length > 1) throw new Error('failed new-channel Apply must retain the staged value and show an inline error without claiming success');
         await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'channel creation failure', 'exact expected 502 retained browser-pending channel choice; no other error was ignored');
         await page.unroute(applyEndpoint);
 
