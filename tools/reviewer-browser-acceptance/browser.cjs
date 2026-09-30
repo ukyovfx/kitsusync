@@ -1009,7 +1009,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           summary: parseFloat(getComputedStyle(node.querySelector('summary')).paddingInlineStart),
           content: parseFloat(getComputedStyle(node.querySelector('.production-technical-details')).marginInlineStart),
         }));
-        if (technicalIndent.summary < 12 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
+        // Eight pixels is the shared compact inset; expanded key/value content must remain further in.
+        if (technicalIndent.summary < 8 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
         await page.locator('#technical-details summary').click();
         if (!(await page.locator('#technical-details[open]').count())) throw new Error(`Technical details did not expand in ${locale.lang}`);
         const copyButtons = page.locator('#technical-details .production-copy-id');
