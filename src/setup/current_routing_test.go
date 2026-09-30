@@ -217,11 +217,14 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 	}
 }
 
-func TestCurrentRoutingMenuUsesViewportAnchorScript(t *testing.T) {
-	script := currentRoutingMenuPositionScript()
-	for _, behavior := range []string{`getBoundingClientRect()`, `innerWidth-menu.width-pad`, `innerHeight-menu.height-pad`, `document.addEventListener('click'`, `setTimeout(function(){place(details)},0)`, `window.addEventListener('scroll'`} {
-		if !strings.Contains(script, behavior) {
-			t.Errorf("route action menu positioning is missing viewport behavior %q", behavior)
+func TestCurrentRoutingMenuRemainsRowAnchoredWithoutScrollContainer(t *testing.T) {
+	for _, rule := range []string{
+		`.routing-row-menu{position:relative;display:inline-block}`,
+		`.routing-row-menu-panel{position:absolute;z-index:3;right:0;top:calc(100% + 6px);`,
+		`.production-context .production-routing-editor .wizard-plan-table{overflow:visible}`,
+	} {
+		if !strings.Contains(adminThemeCSS, rule) {
+			t.Errorf("route action menu is missing anchored, unclipped layout rule %q", rule)
 		}
 	}
 }

@@ -912,7 +912,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-storage-field{display:grid;gap:var(--space-1,4px);justify-self:stretch;width:100%;min-width:0;color:var(--muted-2)}
   .production-context .production-storage-field input{box-sizing:border-box;width:100%;max-width:none;min-width:0}
   .production-context .production-storage-actions{margin:0;white-space:nowrap}
-  .production-context .routing-row-menu-panel{position:fixed;z-index:1100;right:auto;max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible}
+  .production-context .production-routing-editor .wizard-plan-table{overflow:visible}
+  .production-context .routing-row-menu-panel{position:absolute;z-index:1100;right:0;top:calc(100% + 6px);max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible}
   .production-context dialog select option{background:var(--surface-overlay);color:var(--text)}
   .production-context dialog select option:disabled{color:var(--muted);background:var(--surface-subtle)}
   .production-context dialog .button-row{align-items:center;gap:var(--space-2,8px);margin-top:var(--space-3,12px)}
