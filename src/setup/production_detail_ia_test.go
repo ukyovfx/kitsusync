@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -455,6 +456,9 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345680"); err != nil {
+		t.Fatal(err)
+	}
 	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "")
 	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-wfa-channel-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {
 		if !strings.Contains(body, required) {
@@ -469,6 +473,24 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-route-channel`) || !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) {
 		t.Fatal("selected Task Type editor must preserve route summary and secondary Add recipient control")
+	}
+	attribute := `data-existing-targets="`
+	start := strings.Index(body, attribute)
+	if start < 0 {
+		t.Fatal("existing User/Role targets are missing from the selected route")
+	}
+	start += len(attribute)
+	end := strings.IndexByte(body[start:], '"')
+	if end < 0 {
+		t.Fatal("existing User/Role target attribute is not closed")
+	}
+	encoded := body[start : start+end]
+	if strings.Contains(encoded, `"`) {
+		t.Fatal("existing target JSON must be encoded before insertion into an HTML attribute")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || !strings.Contains(string(decoded), "123456789012345680") {
+		t.Fatalf("encoded existing target could not be safely restored: %s (err=%v)", decoded, err)
 	}
 }
 
