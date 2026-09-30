@@ -144,7 +144,7 @@ func TestProductionSettingsVerticalSections(t *testing.T) {
 		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
 		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{border:0;border-top:1px solid var(--divider-color);`,
 		`.editorial-workbench .production-context .production-settings-disclosure-row{min-width:0;padding:0;border:0;border-top:1px solid var(--divider-color);`,
-		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:48px;`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:48px;padding:0 12px;`,
 	} {
 		if !strings.Contains(adminThemeCSS, expected) {
 			t.Errorf("Production Settings is missing its vertical section treatment %q", expected)
