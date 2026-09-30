@@ -908,10 +908,11 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-unconfigured{display:grid;gap:var(--space-section,24px)}
   .production-context .production-unconfigured-state{display:grid;gap:var(--space-3,12px);padding:var(--space-3,12px) 0 0;border:0;border-top:1px solid var(--divider-color);background:transparent}
   .production-context .production-unconfigured-state h2,.production-context .production-unconfigured-state p{margin:0}
-  .production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:var(--space-2,8px) var(--space-3,12px)}
+  .production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:auto auto;align-items:center;gap:var(--space-1,4px) var(--space-3,12px)}
+  .production-context .production-storage-field{grid-row:1 / span 2}
   .production-context .production-storage-field{display:grid;gap:var(--space-1,4px);justify-self:stretch;width:100%;min-width:0;color:var(--muted-2)}
   .production-context .production-storage-field input{box-sizing:border-box;width:100%;max-width:none;min-width:0}
-  .production-context .production-storage-actions{margin:0;white-space:nowrap}
+  .production-context .production-storage-actions{grid-column:2;grid-row:2;align-self:center;margin:0;white-space:nowrap}
   .production-context .production-routing-editor .wizard-plan-table{overflow:visible}
   .production-context .routing-row-menu-panel{position:absolute;z-index:1100;right:0;top:calc(100% + 6px);max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible}
   .production-context dialog select option{background:var(--surface-overlay);color:var(--text)}
