@@ -997,6 +997,47 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       const routeGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
       if (routeGrid !== dashboardGrid) throw new Error(`authenticated dot positions/background changed with content route ${route}`);
     }
+
+    // Keep canonical non-Production-detail screenshots beside the Production Detail review.
+    // These pages, rather than Production Detail itself, define the visual baseline.
+    const visualReferences = [
+      {
+        name: 'production-list',
+        route: '/bot/admin/projects?lang=en',
+        assert: async () => {
+          if (!(await page.locator('.production-list').count())) throw new Error('Production list visual reference did not render its canonical list');
+        },
+      },
+      {
+        name: 'connections-read',
+        route: '/bot/admin/bot?lang=en',
+        assert: async () => {
+          if (!(await page.locator('.connections-summary-grid').count())) throw new Error('Connections read visual reference did not render its connection summary');
+        },
+      },
+      {
+        name: 'connections-edit',
+        route: '/bot/admin/bot?edit=1&lang=en',
+        assert: async () => {
+          if (!(await page.locator('#external-kitsu-url-form').count())) throw new Error('Connections edit visual reference did not render the existing External Kitsu URL form');
+        },
+      },
+      {
+        name: 'audit-log',
+        route: '/bot/admin/audit?lang=en',
+        assert: async () => {
+          if (!(await page.locator('.audit-log-table').count())) throw new Error('Audit Log visual reference did not render its canonical table');
+        },
+      },
+    ];
+    for (const reference of visualReferences) {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto(`${base}${reference.route}`, { waitUntil: 'networkidle' });
+      await reference.assert();
+      await page.screenshot({ path: path.join(output, `reference-${reference.name}-en-desktop.png`), fullPage: true });
+      await record(page, reference.route, 'en', 'desktop-reference', 'visual baseline', `${reference.name} rendered from its normal application route`);
+    }
+
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
     const appPointer = { x: 420, y: 380 };
     await page.mouse.move(0, 0);
