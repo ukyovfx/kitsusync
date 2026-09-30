@@ -19,8 +19,8 @@ function isNotificationsApplyRequest(request) {
   return request.method() === 'POST' && actual.origin === expected.origin && actual.pathname === expected.pathname && actual.search === expected.search;
 }
 const locales = [
-  { lang: 'en', automatic: 'Automatic recipients', overrides: 'Additional recipients', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
-  { lang: 'ja', automatic: '自動通知先', overrides: '追加通知先', tabs: ['概要', '通知', 'チーム', '設定'] },
+  { lang: 'en', automatic: 'Automatic', overrides: 'Additional', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
+  { lang: 'ja', automatic: '自動', overrides: '追加', tabs: ['概要', '通知', 'チーム', '設定'] },
 ];
 const compositingAutomatic = ['@Guild Nick Supervisor', '@Global Name Fallback', '@username-fallback'];
 const animationAutomatic = ['@Wrong Department Global'];
@@ -86,12 +86,12 @@ async function gotoProduction(page, locale, tab, extra = '') {
 
 async function automaticGroup(page, locale) {
 	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-automatic]');
-	return page.locator('.production-wfa-summary > div').first();
+	return page.locator('.production-wfa-summary [data-wfa-group="automatic"]');
 }
 
 async function overridesGroup(page, locale) {
 	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-additional]');
-	return page.locator('.production-wfa-summary > div').nth(1);
+	return page.locator('.production-wfa-summary [data-wfa-group="additional"]');
 }
 
 async function assertAutomatic(page, locale, expected, forbidden = []) {
@@ -530,7 +530,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const notificationColumnWidths = await page.locator('.production-notification-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
         if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
-        if (await compReadRow.locator('.production-wfa-kind').count() !== 2 || await compReadRow.locator('.production-wfa-value').count() !== 2) throw new Error(`WFA Automatic/Additional summaries are not distinct sub-rows in ${locale.lang}`);
+        if (await compReadRow.locator('.production-wfa-summary-line').count() !== 1 || await compReadRow.locator('[data-wfa-group]').count() !== 2 || await compReadRow.locator('.production-wfa-kind').count() !== 2 || await compReadRow.locator('.production-wfa-value').count() !== 2) throw new Error(`WFA Automatic/Additional summaries are not one compact row in ${locale.lang}`);
+        const summaryAlignment = await compReadRow.locator('.production-wfa-summary-line').evaluate(node => [...node.querySelectorAll('[data-wfa-group]')].map(group => Math.round(group.getBoundingClientRect().top)));
+        if (summaryAlignment.length !== 2 || Math.abs(summaryAlignment[0] - summaryAlignment[1]) > 2) throw new Error(`WFA recipient categories stack instead of aligning in one row in ${locale.lang}: ${JSON.stringify(summaryAlignment)}`);
         const notificationSections = await page.locator('.production-notifications > .production-settings-section').evaluateAll(sections => sections.map(section => {
           const style = getComputedStyle(section);
           return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
@@ -546,10 +548,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('[data-current-routing-form]').count() !== 1 || !(await page.locator('[data-current-routing-form]').innerText()).includes(locale.lang === 'ja' ? '変更を適用' : 'Apply')) {
           throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}`);
         }
-        if (await page.locator('[data-current-routing-form] select[name="task_type_id"]').count() === 0 || await page.locator('[data-current-routing-form] select[name="destination_webhook_id"]').count() === 0) {
+        if (await page.locator('[data-current-routing-form] select[name="task_type_id"]').count() === 0 || await page.locator('[data-current-routing-form] [data-wfa-channel-control] select[name="destination_webhook_id"]').count() !== 1) {
           throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
         }
         const editForm = page.locator('[data-current-routing-form]');
+        if (await editForm.locator('.production-wfa-edit-panel [data-wfa-title]').innerText() !== 'Compositing' || !(await editForm.locator('.production-wfa-edit-panel').innerText()).includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) throw new Error(`selected Task Type edit panel is not a unified Channel/WFA target in ${locale.lang}`);
         const automaticPanel = editForm.locator('[data-wfa-automatic]');
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
@@ -585,7 +588,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const newTypeSelect = editForm.locator('[data-routing-new-row] select[name="task_type_id"]');
         await newTypeSelect.selectOption('task-unassigned');
         const pendingRow = editForm.locator('[data-routing-row][data-task-type="task-unassigned"]');
-        if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? '該当するSupervisorはいません' : 'No matching Supervisor')) {
+        if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? 'Supervisorなし' : 'No Supervisor')) {
           throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
         }
         await editForm.locator('[data-wfa-add-target]').click();
@@ -980,9 +983,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await gotoProduction(page, locale, 'notifications');
         const routeRows = page.locator('.production-notification-table tbody tr[data-task-type-id]');
-        if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await routeRows.first().locator('.production-wfa-kind').count() !== 2) throw new Error(`Sparse Notifications lost the one-route table/WFA summary structure in ${locale.lang}`);
+        if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await routeRows.first().locator('.production-wfa-summary-line').count() !== 1 || await routeRows.first().locator('[data-wfa-group]').count() !== 2) throw new Error(`Sparse Notifications lost the one-route table/WFA summary structure in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-sparse-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the complete three-column table and separate Automatic/Additional rows');
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact single-row Automatic/Additional summary');
 
         await gotoProduction(page, locale, 'team');
         if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 5 || await page.locator('.production-team-table col').count() !== 5) throw new Error(`Sparse Team lost its single row/five-column table structure in ${locale.lang}`);

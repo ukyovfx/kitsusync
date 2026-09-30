@@ -1558,6 +1558,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		taskTypeID := strings.TrimSpace(route.TaskTypeID)
 		taskType := taskTypesByID[taskTypeID]
 		automatic := productionAutomaticReviewerLabel(taskType, data, lang)
+		automaticSummary := compactAutomaticReviewerLabel(automatic, lang)
 		var additional []string
 		targets, _, _ := model.ListProjectReviewerTargetsForTaskType(db, p.ID, taskTypeID)
 		for _, target := range targets {
@@ -1576,7 +1577,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		if len(additional) > 0 {
 			additionalText = strings.Join(additional, ", ")
 		}
-		rows.WriteString(`<tr data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td>` + esc(channel) + `</td><td><div class="production-wfa-summary"><div><span class="production-wfa-kind">` + esc(label("自動通知先", "Automatic recipients")) + `</span><span class="production-wfa-value">` + esc(automatic) + `</span></div><div><span class="production-wfa-kind">` + esc(label("追加通知先", "Additional recipients")) + `</span><span class="production-wfa-value">` + esc(additionalText) + `</span></div></div></td></tr>`)
+		rows.WriteString(`<tr data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td>` + esc(channel) + `</td><td><div class="production-wfa-summary"><div class="production-wfa-summary-line"><span class="production-wfa-group" data-wfa-group="automatic"><span class="production-wfa-kind">` + esc(label("自動", "Automatic")) + `</span><span class="production-wfa-value" data-wfa-automatic-value>` + esc(automaticSummary) + `</span></span><span class="production-wfa-group" data-wfa-group="additional"><span class="production-wfa-kind">` + esc(label("追加", "Additional")) + `</span><span class="production-wfa-value">` + esc(additionalText) + `</span></span></div></div></td></tr>`)
 	}
 	if len(routes) == 0 {
 		rows.WriteString(`<tr><td colspan="3" class="field-help">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</td></tr>`)
@@ -1587,6 +1588,21 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 	}
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, usedTaskTypes, data, lang)
 	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading"><div><h3>` + esc(label("通知ルーティング", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div><div class="table-wrap production-notification-table"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+}
+
+func compactAutomaticReviewerLabel(value, lang string) string {
+	switch strings.TrimSpace(value) {
+	case "No matching Supervisor.", "該当するSupervisorはいません。":
+		return t(lang, "Supervisorなし", "No Supervisor")
+	case "Discord membership could not be verified.", "Discordメンバーを確認できません。",
+		"Production Team unavailable.", "Production Teamを読み込めません。",
+		"Kitsu connection required.", "Kitsu接続が必要です。",
+		"Task Type data unavailable.", "Task Type情報を読み込めません。",
+		"Supervisor data unavailable.", "Supervisor情報を読み込めません。":
+		return t(lang, "確認不可", "Unavailable")
+	default:
+		return value
+	}
 }
 
 func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNotificationReviewerView, lang string) string {
@@ -1635,7 +1651,8 @@ func renderPendingAutomaticReviewerSource(taskTypes []kitsu.TaskType, routed map
 		if id == "" || routed[id] {
 			continue
 		}
-		pending.WriteString(`<div data-task-type-id="` + esc(id) + `"><div class="production-wfa-summary"><div><strong>` + esc(t(lang, "自動通知先", "Automatic recipients")) + `</strong><span>` + esc(productionAutomaticReviewerLabel(taskType, data, lang)) + `</span></div></div></div>`)
+		automatic := productionAutomaticReviewerLabel(taskType, data, lang)
+		pending.WriteString(`<div data-task-type-id="` + esc(id) + `"><div class="production-wfa-summary"><div class="production-wfa-summary-line"><span class="production-wfa-group" data-wfa-group="automatic"><span class="production-wfa-kind">` + esc(t(lang, "自動", "Automatic")) + `</span><span class="production-wfa-value" data-wfa-automatic-value>` + esc(compactAutomaticReviewerLabel(automatic, lang)) + `</span></span></div></div></div>`)
 	}
 	return pending.String()
 }

@@ -316,7 +316,7 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	}
 	r := httptest.NewRequest("GET", "/bot/admin/projects?project=preview-production&tab=notifications&lang=en", nil)
 	body := renderSelectedProductionNotifications(db, r, p, "en", "success", "Healthy", "")
-	for _, expected := range []string{"Notification routing", "WFA recipients", "Automatic recipients", "Additional recipients", "Compositing", "#compositing"} {
+	for _, expected := range []string{"Notification routing", "WFA recipients", "Automatic", "Additional", "Compositing", "#compositing"} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("Notifications missing %q", expected)
 		}
@@ -396,6 +396,12 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 			t.Errorf("Notifications read table missing %q: %s", want, body)
 		}
 	}
+	if got := strings.Count(body, `class="production-wfa-summary-line"`); got != 2 {
+		t.Fatalf("each Task Type should show Automatic and Additional in one compact summary row; got %d summary groups: %s", got, body)
+	}
+	if strings.Contains(body, "No matching Supervisor.") || strings.Contains(body, "該当するSupervisorはいません。") {
+		t.Fatal("read table should use a concise no-Supervisor label, not explanatory prose")
+	}
 	if strings.Contains(body, `name="reviewer_task_type"`) || strings.Contains(body, `class="reviewer-target-form"`) || strings.Contains(body, `action="add_production_reviewer_target"`) {
 		t.Fatalf("Notifications read mode exposed a standalone WFA editor: %s", body)
 	}
@@ -403,8 +409,8 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 
 func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *testing.T) {
 	for _, tc := range []struct{ lang, empty, teamFailure string }{
-		{"en", "No notification routing is configured.", "Production Team unavailable."},
-		{"ja", "通知ルーティングはまだ設定されていません。", "Production Teamを読み込めません。"},
+		{"en", "No notification routing is configured.", "Unavailable"},
+		{"ja", "通知ルーティングはまだ設定されていません。", "確認不可"},
 	} {
 		db := newIAViewDB(t)
 		project := model.Project{KitsuProjectID: "notification-state-" + tc.lang, Name: "Notification State", DiscordGuildID: "123456789012345678"}
@@ -450,7 +456,7 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "")
-	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message"} {
+	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-wfa-channel-control`, `data-wfa-automatic-value`, `class="production-routing-editor-footer"`} {
 		if !strings.Contains(body, required) {
 			t.Errorf("unified pending Apply editor missing %q", required)
 		}
@@ -460,6 +466,9 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	}
 	if strings.Contains(body, `method="post"`) && !strings.Contains(body, `event.preventDefault()`) {
 		t.Fatal("Apply form must not submit as a full-page request")
+	}
+	if !strings.Contains(body, `data-route-channel`) || !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) {
+		t.Fatal("selected Task Type editor must preserve route summary and secondary Add recipient control")
 	}
 }
 
@@ -499,8 +508,8 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForUnroutedTaskTypes(t *
 	if strings.Contains(pendingSource, `data-task-type-id="task-existing"`) {
 		t.Fatal("already-routed Task Type WFA summary should not be duplicated in pending source")
 	}
-	if !strings.Contains(pendingSource[newTask:], "Kitsu connection required.") {
-		t.Fatal("unrouted Task Type must show its truthful Automatic-recipient state")
+	if !strings.Contains(pendingSource[newTask:], "Unavailable") {
+		t.Fatal("unrouted Task Type must show a concise truthful Automatic-recipient state")
 	}
 }
 
@@ -514,8 +523,8 @@ func TestPendingAutomaticReviewerSourceOmitsRoutedTaskTypes(t *testing.T) {
 	if strings.Contains(source, `data-task-type-id="task-routed"`) {
 		t.Fatal("routed Task Type summary must not be duplicated in pending source")
 	}
-	if !strings.Contains(source, `data-task-type-id="task-pending"`) || !strings.Contains(source, "Kitsu connection required.") {
-		t.Fatalf("pending Task Type must expose its truthful Automatic summary: %s", source)
+	if !strings.Contains(source, `data-task-type-id="task-pending"`) || !strings.Contains(source, "Unavailable") {
+		t.Fatalf("pending Task Type must expose its concise truthful Automatic summary: %s", source)
 	}
 }
 
@@ -532,7 +541,7 @@ func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
 	if !strings.Contains(adminThemeCSS, `.production-routing-editor{display:grid;grid-template-columns:minmax(0,1fr);min-width:0;gap:16px}`) {
 		t.Fatal("Production routing editor must constrain its grid track so the table can scroll without widening the page")
 	}
-	for _, rule := range []string{`.production-notification-table table{width:100%;min-width:760px;table-layout:fixed}`, `.production-notification-col-wfa{width:50%}`, `.production-wfa-summary>div{display:grid;grid-template-columns:minmax(132px,auto) minmax(0,1fr);`} {
+	for _, rule := range []string{`.production-notification-table table{width:100%;min-width:760px;table-layout:fixed}`, `.production-notification-col-wfa{width:50%}`, `.production-wfa-summary-line{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);`} {
 		if !strings.Contains(adminThemeCSS, rule) {
 			t.Errorf("Production Notifications is missing sparse-table geometry rule %q", rule)
 		}
