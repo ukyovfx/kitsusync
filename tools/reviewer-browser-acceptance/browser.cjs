@@ -718,7 +718,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const aboveCombo = listboxTheme.bottom <= listboxTheme.comboTop - 3;
         if (listboxTheme.background !== 'rgb(13, 13, 15)' || listboxTheme.position !== 'fixed' || listboxTheme.top < 0 || listboxTheme.bottom > listboxTheme.viewportHeight + 1 || Math.abs(listboxTheme.left - listboxTheme.comboLeft) > 1 || Math.abs(listboxTheme.width - listboxTheme.comboWidth) > 1 || (!belowCombo && !aboveCombo) || listboxTheme.color === 'rgba(0, 0, 0, 0)' || listboxTheme.optionBackground === 'rgb(255, 255, 255)') throw new Error(`Add recipient open option list is clipped, translucent, or not aligned to its control in ${locale.lang}: ${JSON.stringify(listboxTheme)}`);
         if (listboxTheme.disabled.some(option => option.color === 'rgba(0, 0, 0, 0)' || option.background === 'rgb(255, 255, 255)' || option.cursor !== 'not-allowed')) throw new Error(`Disabled recipient choices are not readable or clearly disabled in ${locale.lang}: ${JSON.stringify(listboxTheme.disabled)}`);
-        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-listbox-open-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-listbox-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
+        if (!(await userListbox.isVisible())) throw new Error('Capturing the open Add recipient selector must not close it');
         await userListbox.locator('[data-wfa-option-value="22222222222222225"]').click();
         if (await candidateUsers.inputValue() !== '22222222222222225' || await recipientUserCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Choosing a linked User did not update the preserved recipient value control');
         await addModal.locator('[data-wfa-add-confirm]').click();
