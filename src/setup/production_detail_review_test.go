@@ -18,7 +18,7 @@ func TestUnconfiguredProductionSharesConfiguredDetailShell(t *testing.T) {
 		`class="eyebrow">Production</div>`,
 		`<h1>Live-only Production</h1>`,
 		`status-pill warning`,
-		`class="production-unconfigured-state production-detail-surface"`,
+		`class="production-settings-section production-unconfigured-state production-detail-surface"`,
 		`/bot/setup?lang=en&amp;project=live-only`,
 	} {
 		if !strings.Contains(body, marker) {
@@ -49,14 +49,19 @@ func TestProductionStorageSaveSharesDesktopFieldRow(t *testing.T) {
 
 func TestProductionReviewControlsUseSharedSpacingAndControlTokens(t *testing.T) {
 	for _, rule := range []string{
-		`.production-context .production-notification-heading .status-pill,.production-context .production-routing-editor>.page-heading .status-pill,.production-context .production-notification-heading .btn-ghost{min-height:var(--control-height-dense,38px);`,
-		`.production-context .production-routing-editor{gap:var(--space-section,24px);`,
-		`.production-context .production-routing-editor-footer{margin-top:var(--space-2,8px);`,
-		`.production-context .production-wfa-edit-groups{gap:var(--space-4,16px);`,
+		`.production-context .production-notification-heading{display:flex;align-items:center;justify-content:flex-end;`,
+		`.production-context .production-notification-heading .status-pill,.production-context .production-notification-heading .btn-ghost{box-sizing:border-box;height:var(--control-height-dense,38px);`,
+		`.production-context .production-routing-editor [data-current-routing-form]{display:grid;gap:var(--space-section,24px);`,
+		`.production-context .production-routing-editor .production-routing-editor-footer{margin:0;padding-top:var(--space-3,12px)`,
+		`.production-context .production-wfa-edit-groups{grid-template-columns:minmax(0,1fr);gap:var(--space-4,16px)`,
 		`.production-context .production-settings-list{display:grid;gap:var(--space-2,8px);`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row>summary::before{content:"›";`,
+		`.editorial-workbench .production-context .production-settings-disclosure-row[open]>.detail-list`,
 		`.production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;`,
-		`.production-context dialog select option:disabled{color:var(--muted);`,
-		`.production-context .routing-row-menu-panel{position:fixed;`,
+		`.production-context .production-storage-field input{box-sizing:border-box;width:100%;max-width:none;`,
+		`.production-context .recipient-listbox{position:absolute;z-index:1110;`,
+		`.production-context .routing-row-menu-panel{position:fixed;z-index:1100;right:auto;max-width:min(280px,calc(100vw - 16px));max-height:none;overflow:visible`,
+		`.production-context .production-unconfigured-state{display:grid;gap:var(--space-3,12px);padding:var(--space-3,12px) 0 0;border:0;border-top:1px solid var(--divider-color);background:transparent}`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
 			t.Errorf("Production Detail review treatment is missing shared visual rule %q", rule)

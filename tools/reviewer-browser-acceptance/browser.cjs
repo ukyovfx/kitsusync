@@ -549,6 +549,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('[data-current-routing-form]').count()) throw new Error('Notifications read mode exposed routing edit controls');
         const editLink = page.getByRole('link', { name: locale.lang === 'ja' ? '編集' : 'Edit', exact: true });
         if (await editLink.count() !== 1) throw new Error(`Notifications should show one edit entry point in ${locale.lang}`);
+        const readActions = await page.locator('.production-notification-heading').evaluate(node => {
+          const badge = node.querySelector('.status-pill').getBoundingClientRect();
+          const edit = node.querySelector('a.btn-ghost').getBoundingClientRect();
+          return { badgeTop: badge.top, badgeBottom: badge.bottom, badgeHeight: badge.height, editTop: edit.top, editBottom: edit.bottom, editHeight: edit.height };
+        });
+        if (Math.abs(readActions.badgeTop - readActions.editTop) > 1 || Math.abs(readActions.badgeBottom - readActions.editBottom) > 1 || Math.abs(readActions.badgeHeight - readActions.editHeight) > 1) {
+          throw new Error(`Notifications status and Edit controls do not share one aligned height rhythm in ${locale.lang}: ${JSON.stringify(readActions)}`);
+        }
         if (await page.locator('#notification-preview,.discord-message-preview,[data-notification-preview-select]').count()) throw new Error(`Removed Notification Preview returned in ${locale.lang}`);
         if (await page.locator('.production-wfa-recipients').count()) throw new Error(`Notifications view retained the former standalone Reviewer section in ${locale.lang}`);
         if (!(await compReadRow.innerText()).includes(locale.automatic) || !(await compReadRow.innerText()).includes(locale.overrides)) {
@@ -626,6 +634,20 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (editPanelStyle.border !== 'solid' || editPanelStyle.radius === '0px' || editPanelStyle.background === 'rgba(0, 0, 0, 0)' || parseFloat(editPanelStyle.padding) < 10 || editPanelStyle.addWidth > 240 || editPanelStyle.footerBorder !== 'solid') {
           throw new Error(`Selected Task Type does not read as one contained editor with secondary add/footer actions in ${locale.lang}: ${JSON.stringify(editPanelStyle)}`);
         }
+        const editSpacing = await editForm.evaluate(form => {
+          const rect = selector => form.querySelector(selector).getBoundingClientRect();
+          const table = rect('.wizard-plan-table');
+          const add = rect('.production-routing-editor-actions');
+          const editor = rect('.production-wfa-edit-panel');
+          const footer = rect('.production-routing-editor-footer');
+          const additional = form.querySelector('[data-wfa-additional]').getBoundingClientRect();
+          const automatic = form.querySelector('[data-wfa-automatic]').getBoundingClientRect();
+          return { tableToAdd: add.top - table.bottom, addToEditor: editor.top - add.bottom, editorToFooter: footer.top - editor.bottom,
+            additionalLeft: additional.left, automaticLeft: automatic.left };
+        });
+        if (editSpacing.tableToAdd < 16 || editSpacing.addToEditor < 16 || editSpacing.editorToFooter < 12 || Math.abs(editSpacing.additionalLeft - editSpacing.automaticLeft) > 2) {
+          throw new Error(`Notifications edit spacing or WFA field-grid alignment is cramped/misaligned in ${locale.lang}: ${JSON.stringify(editSpacing)}`);
+        }
         const automaticPanel = editForm.locator('[data-wfa-automatic]');
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
@@ -635,10 +657,35 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await editForm.locator('[data-select-task]').filter({ hasText: 'Compositing' }).click();
         await assertAutomatic(page, locale, compositingAutomatic);
 
+        const savedRoute = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
+        await savedRoute.locator('.routing-row-menu summary').click();
+        const savedRouteMenu = savedRoute.locator('.routing-row-menu-panel');
+        if (!(await savedRouteMenu.locator('.routing-delete-open').isVisible())) throw new Error(`Saved channel route does not expose the permitted Delete channel action in ${locale.lang}`);
+        const savedMenuGeometry = await savedRouteMenu.evaluate(node => {
+          const menu = node.getBoundingClientRect();
+          const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect();
+          return { top: menu.top, bottom: menu.bottom, anchorBottom: summary.bottom, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight };
+        });
+        if (Math.abs(savedMenuGeometry.top - savedMenuGeometry.anchorBottom) > 14 || savedMenuGeometry.scrollHeight > savedMenuGeometry.clientHeight + 1) throw new Error(`Saved route action menu is detached or scrollable in ${locale.lang}: ${JSON.stringify(savedMenuGeometry)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.keyboard.press('Escape');
+
         await editForm.locator('[data-wfa-add-target]').click();
         const addModal = page.locator('[data-wfa-add-modal]');
-        const addModalTheme = await addModal.evaluate(node => { const style = getComputedStyle(node); const select = getComputedStyle(node.querySelector('select')); return { colorScheme: style.colorScheme, background: style.backgroundColor, selectScheme: select.colorScheme, selectBackground: select.backgroundColor }; });
-        if (addModalTheme.colorScheme !== 'dark' || addModalTheme.selectScheme !== 'dark' || addModalTheme.background === 'rgb(255, 255, 255)' || addModalTheme.selectBackground === 'rgb(255, 255, 255)') throw new Error(`Add recipient dialog leaked a native light surface in ${locale.lang}: ${JSON.stringify(addModalTheme)}`);
+        const addModalTheme = await addModal.evaluate(node => {
+          const style = getComputedStyle(node);
+          const control = node.querySelector('[role="combobox"]');
+          const controlStyle = getComputedStyle(control);
+          const heading = node.querySelector('h4').getBoundingClientRect();
+          const formStart = node.querySelector('label').getBoundingClientRect();
+          const actions = [...node.querySelector('.button-row').children].map(child => child.getBoundingClientRect());
+          return { colorScheme: style.colorScheme, background: style.backgroundColor, controlBackground: controlStyle.backgroundColor,
+            controlExists: !!control, headingTop: heading.top, firstFieldTop: formStart.top,
+            actionTops: actions.map(rect => rect.top), actionLefts: actions.map(rect => rect.left) };
+        });
+        if (addModalTheme.colorScheme !== 'dark' || addModalTheme.background === 'rgb(255, 255, 255)' || !addModalTheme.controlExists || addModalTheme.controlBackground === 'rgb(255, 255, 255)' || addModalTheme.headingTop > addModalTheme.firstFieldTop || addModalTheme.actionTops.length !== 2 || Math.abs(addModalTheme.actionTops[0] - addModalTheme.actionTops[1]) > 1 || addModalTheme.actionLefts[0] >= addModalTheme.actionLefts[1]) {
+          throw new Error(`Add recipient dialog surface/form/actions are not a dark, ordered, horizontal layout in ${locale.lang}: ${JSON.stringify(addModalTheme)}`);
+        }
         const candidateUsers = addModal.locator('[data-wfa-user-id]');
         for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
           if (await candidateUsers.locator(`option[value="${blocked}"]`).count()) throw new Error(`ineligible User Override ${blocked} is selectable`);
@@ -649,17 +696,36 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         for (const blocked of [guildID, '33333333333333332']) {
           if (await candidateRoles.locator(`option[value="${blocked}"]`).count()) throw new Error(`@everyone/non-mentionable Role ${blocked} is selectable`);
         }
-        await addModal.locator('[data-wfa-user-id]').selectOption('22222222222222225');
-        await addModal.locator('[data-wfa-add-confirm]').click();
-        await editForm.locator('[data-wfa-add-target]').click();
-        await addModal.locator('[data-wfa-role-id]').selectOption('33333333333333331');
-        await addModal.locator('[data-wfa-add-confirm]').click();
-        await editForm.locator('[data-wfa-add-target]').click();
-        const recipientUserSelect = addModal.locator('[data-wfa-user-id]');
-        await recipientUserSelect.focus();
-        await recipientUserSelect.press('Space');
+        const recipientUserCombo = addModal.locator('[data-wfa-user-combobox]');
+        const userListbox = addModal.locator('[data-wfa-user-listbox]');
+        if (!(await recipientUserCombo.isVisible()) || await candidateUsers.isVisible()) throw new Error('Add recipient user chooser must use a visible KitsuSync combobox and hidden native value control');
         await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await recipientUserCombo.click();
+        if (!(await userListbox.isVisible()) || await recipientUserCombo.getAttribute('aria-expanded') !== 'true') throw new Error('Add recipient user listbox did not open from the accessible combobox');
+        const listboxTheme = await userListbox.evaluate(node => {
+          const style = getComputedStyle(node);
+          const option = node.querySelector('[role="option"]');
+          const optionStyle = getComputedStyle(option);
+          return { background: style.backgroundColor, color: style.color, optionBackground: optionStyle.backgroundColor, optionColor: optionStyle.color,
+            disabled: [...node.querySelectorAll('[aria-disabled="true"]')].map(item => ({ color: getComputedStyle(item).color, background: getComputedStyle(item).backgroundColor, cursor: getComputedStyle(item).cursor })) };
+        });
+        if (listboxTheme.background === 'rgb(255, 255, 255)' || listboxTheme.optionBackground === 'rgb(255, 255, 255)' || listboxTheme.color === 'rgba(0, 0, 0, 0)') throw new Error(`Add recipient open option list is not a readable dark KitsuSync surface in ${locale.lang}: ${JSON.stringify(listboxTheme)}`);
+        if (listboxTheme.disabled.some(option => option.color === 'rgba(0, 0, 0, 0)' || option.background === 'rgb(255, 255, 255)' || option.cursor !== 'not-allowed')) throw new Error(`Disabled recipient choices are not readable or clearly disabled in ${locale.lang}: ${JSON.stringify(listboxTheme.disabled)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-listbox-open-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await userListbox.locator('[data-wfa-option-value="22222222222222225"]').click();
+        if (await candidateUsers.inputValue() !== '22222222222222225' || await recipientUserCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Choosing a linked User did not update the preserved recipient value control');
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('[data-wfa-role-combobox]').click();
+        await addModal.locator('[data-wfa-role-listbox] [data-wfa-option-value="33333333333333331"]').click();
+        if (await candidateRoles.inputValue() !== '33333333333333331') throw new Error('Choosing a mentionable Role did not update the preserved recipient value control');
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('[data-wfa-user-combobox]').focus();
+        await page.keyboard.press('Space');
+        if (!(await userListbox.isVisible())) throw new Error('Keyboard activation did not open the Add recipient listbox');
         await page.keyboard.press('Escape');
+        if (await userListbox.isVisible() || await addModal.locator('[data-wfa-user-combobox]').getAttribute('aria-expanded') !== 'false') throw new Error('Escape did not close the Add recipient listbox');
         if (await addModal.isVisible()) await addModal.locator('[data-wfa-add-cancel]').click();
         const additionalPanel = editForm.locator('[data-wfa-additional]');
         const additionalText = await additionalPanel.innerText();
@@ -676,14 +742,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await editForm.locator('[data-wfa-add-target]').click();
         await addModal.waitFor({ state: 'visible' });
         await page.screenshot({ path: path.join(output, `production-notifications-pending-route-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await addModal.locator('[data-wfa-user-id]').selectOption('22222222222222234');
+        await addModal.locator('[data-wfa-user-combobox]').click();
+        await addModal.locator('[data-wfa-user-listbox] [data-wfa-option-value="22222222222222234"]').click();
         await addModal.locator('[data-wfa-add-confirm]').click();
         await pendingRow.locator('.routing-row-menu summary').click();
         const routeMenu = pendingRow.locator('.routing-row-menu-panel');
         await page.waitForFunction(() => { const menu = document.querySelector('.routing-row-menu[open] .routing-row-menu-panel'); if (!menu) return false; const rect = menu.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight + 1; }, null, { timeout: 3000 });
-        const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, viewport: innerHeight, summaryTop: summary.top, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }; });
-        if (menuGeometry.position !== 'fixed' || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.summaryTop - menuGeometry.top) > 420) throw new Error(`route menu is not anchored to its row within the viewport in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
-        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, viewport: innerHeight, summaryTop: summary.top, summaryBottom: summary.bottom, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, bodyScrollWidth: document.body.scrollWidth, viewportWidth: document.documentElement.clientWidth }; });
+        if (menuGeometry.position !== 'fixed' || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.top - menuGeometry.summaryBottom) > 14 || menuGeometry.scrollHeight > menuGeometry.clientHeight + 1 || menuGeometry.bodyScrollWidth > menuGeometry.viewportWidth + 1) throw new Error(`route menu is detached, scrollable, clipped, or overflows when opened in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-pending-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
         if (await pendingRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('Escape did not close the route action menu');
         await pendingRow.locator('.routing-row-menu summary').click();
@@ -898,15 +965,26 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const sections = [...node.querySelectorAll(':scope > .production-settings-section')];
           return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length,
             surfaces: sections.map(section => { const computed = getComputedStyle(section); return { border: computed.borderTopStyle, width: computed.borderTopWidth, radius: computed.borderRadius, background: computed.backgroundColor, paddingTop: computed.paddingTop, paddingBottom: computed.paddingBottom }; }),
-            summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => summary.getBoundingClientRect().height) };
+            summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => summary.getBoundingClientRect().height),
+            disclosureRows: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => ({ marker: getComputedStyle(summary, '::before').content, height: summary.getBoundingClientRect().height })) };
         });
-        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || parseFloat(index === 0 ? section.paddingBottom : section.paddingTop) < 18) || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 44)) {
-          throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || parseFloat(index === 0 ? section.paddingBottom : section.paddingTop) > 14) || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 38 || value > 44) || settingsLayout.disclosureRows.some(row => row.marker === 'none' || row.marker === 'normal' || row.marker === '')) {
+          throw new Error(`Settings are not a compact four-section vertical layout with clear disclosure indicators in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-settings-collapsed-${locale.lang}-${viewport.name}.png`), fullPage: true });
         const saveButton = page.locator('.drive-storage-form [data-drive-save]');
         const storageInput = page.locator('#storage-url');
+        const storageGeometry = await page.locator('.drive-storage-form').evaluate(form => {
+          const input = form.querySelector('#storage-url').getBoundingClientRect();
+          const button = form.querySelector('[data-drive-save]').getBoundingClientRect();
+          const formRect = form.getBoundingClientRect();
+          return { inputLeft: input.left, inputRight: input.right, inputTop: input.top, inputBottom: input.bottom, inputWidth: input.width,
+            buttonLeft: button.left, buttonRight: button.right, buttonTop: button.top, buttonBottom: button.bottom, formWidth: formRect.width };
+        });
+        if (viewport.name === 'desktop' && (storageGeometry.inputWidth < storageGeometry.formWidth * .6 || storageGeometry.buttonLeft < storageGeometry.inputRight || Math.abs((storageGeometry.inputTop + storageGeometry.inputBottom) / 2 - (storageGeometry.buttonTop + storageGeometry.buttonBottom) / 2) > 3)) {
+          throw new Error(`Storage input and Save do not share a full-width desktop row in ${locale.lang}: ${JSON.stringify(storageGeometry)}`);
+        }
         const originalStorage = await storageInput.inputValue();
         if (!(await saveButton.isDisabled())) throw new Error(`Storage Save should start disabled in ${locale.lang}`);
         await storageInput.fill(`${originalStorage}/changed`);
@@ -946,7 +1024,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const unconfiguredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
         const unconfiguredOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
-        if (configuredShellWidth !== unconfiguredShellWidth || unconfiguredOverflow || !(await page.locator('.production-unconfigured-state a[href*="/bot/setup"]').count())) throw new Error(`Unconfigured Production shell/action/width is inconsistent in ${locale.lang}`);
+        const unconfiguredSurface = await page.locator('.production-unconfigured-state').evaluate(node => ({ background: getComputedStyle(node).backgroundColor, border: getComputedStyle(node).borderTopStyle, paddingInline: getComputedStyle(node).paddingInline, statusBackground: getComputedStyle(node.querySelector('[role="status"]')).backgroundColor }));
+        if (configuredShellWidth !== unconfiguredShellWidth || unconfiguredOverflow || !(await page.locator('.production-unconfigured-state a[href*="/bot/setup"]').count()) || unconfiguredSurface.background !== 'rgba(0, 0, 0, 0)' || unconfiguredSurface.paddingInline !== '0px' || unconfiguredSurface.statusBackground === 'rgba(0, 0, 0, 0)') throw new Error(`Unconfigured Production must reuse the shared shell and section rhythm without a separate setup card in ${locale.lang}: ${JSON.stringify(unconfiguredSurface)}`);
         await page.screenshot({ path: path.join(output, `production-unconfigured-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?project=reviewer-unconnected', locale.lang, viewport.name, 'unconfigured Production', 'shared identity/workbench shell with clear connect action and no fabricated configured-only data');
         await fixture(page, 'ready');
@@ -1031,6 +1110,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const emptyRoleModal = page.locator('[data-wfa-add-modal]');
     if (!(await emptyRoleModal.innerText()).includes('No mentionable Discord roles are available')) throw new Error('No-role empty state is not explained in the Add recipient dialog');
     if (await emptyRoleModal.locator('[data-wfa-role-id] option[value="33333333333333331"]').count()) throw new Error('no-roles scenario left a Role target available');
+    await emptyRoleModal.locator('[data-wfa-role-combobox]').click();
+    const disabledRole = emptyRoleModal.locator('[data-wfa-role-listbox] [aria-disabled="true"]');
+    if (!(await disabledRole.isVisible()) || (await disabledRole.evaluate(node => ({ color: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor, cursor: getComputedStyle(node).cursor }))).cursor !== 'not-allowed') throw new Error('No-role listbox does not show a readable, clearly disabled option state');
     await emptyRoleModal.locator('[data-wfa-add-cancel]').click();
     await fixture(page, 'ready');
 
