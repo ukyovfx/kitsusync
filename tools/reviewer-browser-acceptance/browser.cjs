@@ -504,10 +504,19 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (overview.includes('Must not leak') || overview.includes('Current issues (0)')) throw new Error('Overview leaked cross-Production activity or invented a count');
         const overviewSections = await page.locator('.production-overview > .production-settings-section').evaluateAll(sections => sections.map(section => {
           const style = getComputedStyle(section);
-          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+          const emptyRows = [...section.querySelectorAll('.production-detail-state-row')].map(row => {
+            const rowStyle = getComputedStyle(row);
+            return { borderStyle: rowStyle.borderTopStyle, borderWidth: rowStyle.borderTopWidth, radius: rowStyle.borderRadius, background: rowStyle.backgroundColor, height: row.getBoundingClientRect().height };
+          });
+          return { borderStyle: style.borderTopStyle, borderWidth: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow, padding: style.padding, emptyRows,
+            issueRows: section.querySelectorAll('.production-issue-row').length, activityRows: section.querySelectorAll('.activity-row').length };
         }));
-        if (overviewSections.length !== 3 || overviewSections[0].borderTopStyle !== 'none' || overviewSections.slice(1).some(section => section.borderTopStyle !== 'solid' || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
-          throw new Error(`Overview sections are not a compact divider hierarchy in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        if (overviewSections.length !== 3 || overviewSections.some(section => section.borderStyle !== 'solid' || section.borderWidth !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)' || section.shadow !== 'none' || parseFloat(section.padding) < 12)) {
+          throw new Error(`Overview sections are not contained structured blocks in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        }
+        if (overviewSections[1].issueRows === 0 && (overviewSections[1].emptyRows.length !== 1 || overviewSections[1].emptyRows[0].borderStyle !== 'solid' || overviewSections[1].emptyRows[0].radius === '0px' || overviewSections[1].emptyRows[0].height < 38) ||
+            overviewSections[2].activityRows === 0 && (overviewSections[2].emptyRows.length !== 1 || overviewSections[2].emptyRows[0].borderStyle !== 'solid' || overviewSections[2].emptyRows[0].radius === '0px' || overviewSections[2].emptyRows[0].height < 38)) {
+          throw new Error(`Sparse Current Issues/Recent Activity are not contained inside compact rows in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
         }
         await page.screenshot({ path: path.join(output, `production-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
@@ -531,15 +540,28 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const notificationColumnWidths = await page.locator('.production-notification-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
         if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
         if (await compReadRow.locator('.production-wfa-summary-line').count() !== 1 || await compReadRow.locator('[data-wfa-group]').count() !== 2 || await compReadRow.locator('.production-wfa-kind').count() !== 2 || await compReadRow.locator('.production-wfa-value').count() !== 2) throw new Error(`WFA Automatic/Additional summaries are not one compact row in ${locale.lang}`);
-        const summaryAlignment = await compReadRow.locator('.production-wfa-summary-line').evaluate(node => [...node.querySelectorAll('[data-wfa-group]')].map(group => Math.round(group.getBoundingClientRect().top)));
-        if (summaryAlignment.length !== 2 || Math.abs(summaryAlignment[0] - summaryAlignment[1]) > 2) throw new Error(`WFA recipient categories stack instead of aligning in one row in ${locale.lang}: ${JSON.stringify(summaryAlignment)}`);
-        const notificationSections = await page.locator('.production-notifications > .production-settings-section').evaluateAll(sections => sections.map(section => {
-          const style = getComputedStyle(section);
-          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+        const summaryAlignment = await compReadRow.locator('.production-wfa-summary-line').evaluate(node => ({
+          columns: getComputedStyle(node).gridTemplateColumns,
+          groups: [...node.querySelectorAll('[data-wfa-group]')].map(group => {
+            const rect = group.getBoundingClientRect();
+            return { top: Math.round(rect.top), left: Math.round(rect.left), right: Math.round(rect.right), height: Math.round(rect.height) };
+          }),
+          table: node.closest('table').getBoundingClientRect().toJSON(),
         }));
-        if (notificationSections.length !== 1 || notificationSections[0].borderTopStyle !== 'none' || notificationSections[0].radius !== '0px' || notificationSections[0].background !== 'rgba(0, 0, 0, 0)' || notificationSections[0].shadow !== 'none') {
-          throw new Error(`Notifications table is not a compact flat section in ${locale.lang}: ${JSON.stringify(notificationSections)}`);
+        if (summaryAlignment.groups.length !== 2 || (viewport.name === 'desktop' && Math.abs(summaryAlignment.groups[0].top - summaryAlignment.groups[1].top) > 2) || summaryAlignment.groups.some(group => group.left < summaryAlignment.table.left || group.right > summaryAlignment.table.right)) {
+          throw new Error(`WFA Automatic/Additional are not a compact aligned row within the table in ${locale.lang}/${viewport.name}: ${JSON.stringify(summaryAlignment)}`);
         }
+        const notificationTable = await page.locator('.production-notification-table').evaluate(node => {
+          const style = getComputedStyle(node);
+          const header = getComputedStyle(node.querySelector('thead th'));
+          const firstRow = getComputedStyle(node.querySelector('tbody tr[data-task-type-id] th'));
+          return { border: style.borderTopStyle, borderWidth: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor, headerBackground: header.backgroundColor, headerPadding: header.paddingBlock, rowPadding: firstRow.paddingBlock };
+        });
+        if (notificationTable.border !== 'solid' || notificationTable.borderWidth !== '1px' || notificationTable.radius !== '12px' || notificationTable.background === 'rgba(0, 0, 0, 0)' || notificationTable.headerBackground === 'rgba(0, 0, 0, 0)' || parseFloat(notificationTable.rowPadding) < 12) {
+          throw new Error(`Notifications table lacks the shared contained table treatment in ${locale.lang}: ${JSON.stringify(notificationTable)}`);
+        }
+        const recipientChips = await compReadRow.locator('.production-wfa-target-chip,.production-wfa-state-chip,.production-wfa-more-chip').count();
+        if (!recipientChips) throw new Error(`Notifications WFA recipients are not rendered as compact chips in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Discord Channel → Automatic/Additional summary table; no synthetic Notification Preview');
@@ -552,7 +574,24 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
         }
         const editForm = page.locator('[data-current-routing-form]');
+        const selectedRoute = editForm.locator('[data-routing-row].selected');
+        if (await selectedRoute.count() !== 1 || await selectedRoute.locator('[data-select-task][aria-pressed="true"]').count() !== 1 || await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count()) {
+          throw new Error(`Notifications editor does not present one obvious selected route outside nested cards in ${locale.lang}`);
+        }
+        const selectedRouteStyle = await selectedRoute.evaluate(node => ({ background: getComputedStyle(node).backgroundColor, marker: getComputedStyle(node).boxShadow, titleDecoration: getComputedStyle(node.querySelector('.routing-select-task')).textDecorationLine }));
+        if (selectedRouteStyle.background === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.marker === 'none' || !selectedRouteStyle.titleDecoration.includes('underline')) throw new Error(`Selected Task Type is not visually distinct in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
         if (await editForm.locator('.production-wfa-edit-panel [data-wfa-title]').innerText() !== 'Compositing' || !(await editForm.locator('.production-wfa-edit-panel').innerText()).includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) throw new Error(`selected Task Type edit panel is not a unified Channel/WFA target in ${locale.lang}`);
+        const editPanelStyle = await editForm.locator('.production-wfa-edit-panel').evaluate(node => {
+          const panel = getComputedStyle(node);
+          const add = getComputedStyle(node.querySelector('[data-wfa-add-target]'));
+          const footer = getComputedStyle(node.querySelector('.production-routing-editor-footer'));
+          return { border: panel.borderTopStyle, radius: panel.borderRadius, background: panel.backgroundColor, padding: panel.padding,
+            addWidth: node.querySelector('[data-wfa-add-target]').getBoundingClientRect().width, addDisplay: add.display,
+            footerBorder: footer.borderTopStyle, footerDisplay: footer.display };
+        });
+        if (editPanelStyle.border !== 'solid' || editPanelStyle.radius === '0px' || editPanelStyle.background === 'rgba(0, 0, 0, 0)' || parseFloat(editPanelStyle.padding) < 10 || editPanelStyle.addWidth > 240 || editPanelStyle.footerBorder !== 'solid') {
+          throw new Error(`Selected Task Type does not read as one contained editor with secondary add/footer actions in ${locale.lang}: ${JSON.stringify(editPanelStyle)}`);
+        }
         const automaticPanel = editForm.locator('[data-wfa-automatic]');
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
@@ -727,9 +766,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const settingsLayout = await page.locator('.production-settings-list').evaluate(node => {
           const style = getComputedStyle(node);
           const sections = [...node.querySelectorAll(':scope > .production-settings-section')];
-          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length, paddings: sections.map(section => parseFloat(getComputedStyle(section).paddingTop)), summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure > summary')].map(summary => summary.getBoundingClientRect().height) };
+          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length,
+            surfaces: sections.map(section => { const computed = getComputedStyle(section); return { border: computed.borderTopStyle, width: computed.borderTopWidth, radius: computed.borderRadius, background: computed.backgroundColor, padding: computed.padding }; }),
+            summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => summary.getBoundingClientRect().height) };
         });
-        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4 || settingsLayout.paddings.slice(1).some(value => value < 20) || settingsLayout.summaryHeights.some(value => value < 44)) {
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '10px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some(section => section.border !== 'solid' || section.width !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)' || parseFloat(section.padding) < 12) || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 50)) {
           throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
@@ -978,12 +1019,22 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const emptyIssues = locale.lang === 'ja' ? '現在の問題はありません' : 'No current issues';
         const emptyActivity = locale.lang === 'ja' ? '最近のアクティビティはありません' : 'No recent activity';
         if (sectionCount !== 3 || !overviewText.includes(emptyIssues) || !overviewText.includes(emptyActivity)) throw new Error(`Sparse Overview collapsed its three-section skeleton in ${locale.lang}: ${overviewText}`);
+        const sparseOverviewBlocks = await page.locator('.production-overview > .production-settings-section').evaluateAll(sections => sections.map(section => {
+          const block = getComputedStyle(section);
+          const empty = section.querySelector('.production-detail-state-row');
+          const row = empty && getComputedStyle(empty);
+          return { border: block.borderTopStyle, width: block.borderTopWidth, radius: block.borderRadius, background: block.backgroundColor,
+            emptyBorder: row?.borderTopStyle || '', emptyRadius: row?.borderRadius || '', emptyHeight: empty?.getBoundingClientRect().height || 0 };
+        }));
+        if (sparseOverviewBlocks.some(block => block.border !== 'solid' || block.width !== '1px' || block.radius !== '12px' || block.background === 'rgba(0, 0, 0, 0)') || sparseOverviewBlocks.slice(1).some(block => block.emptyBorder !== 'solid' || block.emptyRadius === '0px' || block.emptyHeight < 38)) throw new Error(`Sparse Overview is not visually complete inside consistent blocks in ${locale.lang}: ${JSON.stringify(sparseOverviewBlocks)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'sparse Production', 'Status / Current Issues / Recent Activity remain visible with concise empty states');
 
         await gotoProduction(page, locale, 'notifications');
         const routeRows = page.locator('.production-notification-table tbody tr[data-task-type-id]');
         if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await routeRows.first().locator('.production-wfa-summary-line').count() !== 1 || await routeRows.first().locator('[data-wfa-group]').count() !== 2) throw new Error(`Sparse Notifications lost the one-route table/WFA summary structure in ${locale.lang}`);
+        const sparseTableStyle = await page.locator('.production-notification-table').evaluate(node => { const style = getComputedStyle(node); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; });
+        if (sparseTableStyle.border !== 'solid' || sparseTableStyle.width !== '1px' || sparseTableStyle.radius !== '12px' || sparseTableStyle.background === 'rgba(0, 0, 0, 0)') throw new Error(`Sparse Notifications table is visually weak in ${locale.lang}: ${JSON.stringify(sparseTableStyle)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact single-row Automatic/Additional summary');
 
@@ -993,7 +1044,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'sparse Production', 'one member retains a stable five-column Team table');
 
         await gotoProduction(page, locale, 'settings');
-        if (await page.locator('.production-settings-list > .production-settings-section').count() !== 4 || await page.locator('.production-settings-list > .production-settings-disclosure > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 44))) throw new Error(`Sparse Settings lost its vertical section/disclosure rhythm in ${locale.lang}`);
+        const sparseSettings = await page.locator('.production-settings-list > .production-settings-section').evaluateAll(sections => sections.map(section => { const style = getComputedStyle(section); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; }));
+        if (sparseSettings.length !== 4 || sparseSettings.some(section => section.border !== 'solid' || section.width !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)') || await page.locator('.production-settings-list > .production-settings-disclosure-row > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 50))) throw new Error(`Sparse Settings lost its vertical section/disclosure rhythm in ${locale.lang}: ${JSON.stringify(sparseSettings)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'sparse Production', 'four vertical Settings sections and readable disclosure rows remain visible');
       }

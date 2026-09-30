@@ -123,6 +123,9 @@ func TestProductionTeamCompactRowStyles(t *testing.T) {
 func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *testing.T) {
 	for _, rule := range []string{
 		`.production-wfa-edit-panel{display:grid;gap:14px;min-width:0;padding:16px;`,
+		`.production-routing-editor{padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}`,
+		`.production-routing-editor [data-routing-row].selected{background:rgba(255,255,255,.045);box-shadow:inset 3px 0 0 var(--accent-2)}`,
+		`.production-routing-editor .routing-select-task[aria-pressed="true"]{text-decoration:underline;`,
 		`.production-wfa-edit-panel dialog,.production-team-page dialog{width:min(460px,calc(100vw - 24px));max-width:calc(100vw - 24px);`,
 		`.production-wfa-edit-panel dialog select,.production-team-page dialog select{width:100%;min-width:0}`,
 	} {
@@ -134,13 +137,27 @@ func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *te
 
 func TestProductionSettingsVerticalSections(t *testing.T) {
 	for _, expected := range []string{
-		`.editorial-workbench .production-context #panel-settings>.production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:0;`,
-		`.production-settings-section{min-width:0;padding:20px 0;border-top:1px solid var(--line)}`,
-		`.production-settings-disclosure>summary{cursor:pointer;list-style:disclosure-closed;min-height:44px;`,
+		`.editorial-workbench .production-context #panel-settings>.production-settings-list{gap:10px}`,
+		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-detail-surface{margin:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}`,
+		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-disclosure-row{margin:0;padding:0;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025);box-shadow:none}`,
+		`.production-settings-disclosure-row>summary{min-height:52px;padding:0 14px;`,
 	} {
 		if !strings.Contains(adminThemeCSS, expected) {
 			t.Errorf("Production Settings is missing its vertical section treatment %q", expected)
 		}
+	}
+}
+
+func TestProductionWFATargetChipsStayCompactAndSummarizeOverflow(t *testing.T) {
+	chips := renderProductionWFATargetChips([]string{"Supervisor A", "Supervisor B", "Supervisor C"}, "No Supervisor", "Unavailable", true)
+	if !strings.Contains(chips, `class="production-wfa-target-chip">Supervisor A</span>`) || !strings.Contains(chips, `class="production-wfa-more-chip">+1</span>`) || !strings.Contains(chips, `aria-label="Supervisor A, Supervisor B, Supervisor C"`) {
+		t.Fatalf("automatic recipients should use compact chips with accessible full summary: %s", chips)
+	}
+	if got := renderProductionWFATargetChips(nil, "Supervisorなし", "確認不可", true); got != `<span class="production-wfa-state-chip">Supervisorなし</span>` {
+		t.Fatalf("empty automatic state should render as a subdued state chip: %s", got)
+	}
+	if got := renderProductionWFATargetChips(nil, "追加なし", "", false); got != `<span class="production-wfa-state-chip">追加なし</span>` {
+		t.Fatalf("empty additional state should render as a subdued state chip: %s", got)
 	}
 }
 
@@ -468,6 +485,9 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if strings.Count(body, `data-async-notification-apply`) != 1 || strings.Contains(body, `action="save_current_production_routing"`) {
 		t.Fatalf("Notifications edit must expose one async Apply and no independent route save: %s", body)
 	}
+	if !strings.Contains(body, `<section class="production-routing-editor"`) || strings.Contains(body, `class="section-card glass production-routing-editor"`) {
+		t.Fatal("routing list must stay a flat selector around one contained selected-task editor")
+	}
 	if strings.Contains(body, `method="post"`) && !strings.Contains(body, `event.preventDefault()`) {
 		t.Fatal("Apply form must not submit as a full-page request")
 	}
@@ -569,11 +589,12 @@ func TestProductionOverviewAndNotificationsSectionHierarchy(t *testing.T) {
 		}
 	}
 	for _, rule := range []string{
-		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section`,
-		`.editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section:first-of-type`,
+		`.production-notification-table.production-detail-surface{padding:0;overflow-x:auto}`,
+		`.production-notification-table thead th{padding:12px 12px;background:rgba(255,255,255,.045);`,
+		`.production-notification-table tbody th,.production-notification-table tbody td{padding:14px 12px;vertical-align:middle;border-bottom:1px solid rgba(255,255,255,.07)}`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
-			t.Errorf("Production Notifications is missing scoped flat-section style %q", rule)
+			t.Errorf("Production Notifications is missing the contained table treatment %q", rule)
 		}
 	}
 	if strings.Contains(adminThemeCSS, `.production-context #panel-notifications>.section-card>.section-card`) {
@@ -593,8 +614,43 @@ func TestProductionOverviewPreservesEmptyCurrentIssuesAndActivitySections(t *tes
 	if !strings.Contains(body, `production-current-issues"`) || !strings.Contains(body, "No current issues.") {
 		t.Fatal("healthy Overview must retain Current Issues with a compact empty state")
 	}
+	for _, marker := range []string{`class="production-detail-surface production-overview-status"`, `class="production-detail-state-row production-issue-empty"`, `class="production-detail-surface production-current-issues"`, `class="production-detail-surface production-activity-section"`, `class="production-detail-state-row production-activity-empty"`} {
+		if !strings.Contains(body, marker) {
+			t.Errorf("sparse Overview must keep structured content inside visual blocks: missing %q", marker)
+		}
+	}
 	if strings.Index(body, `production-overview-status"`) > strings.Index(body, `production-current-issues"`) || strings.Index(body, `production-current-issues"`) > strings.Index(body, `id="recent-activity"`) {
 		t.Fatal("Overview status, Current Issues, and Recent Activity sections must remain in canonical order")
+	}
+}
+
+func TestProductionDetailTabsShareContainedVisualGrammar(t *testing.T) {
+	for _, rule := range []string{
+		`.production-detail-surface{min-width:0;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}`,
+		`.production-detail-section-title{margin:0 0 10px;font-size:1rem;line-height:1.35;`,
+		`.production-detail-state-row{min-height:42px;padding:10px 12px;border:1px solid rgba(255,255,255,.07);border-radius:10px;background:rgba(255,255,255,.02);`,
+		`.production-notification-table thead th{padding:12px 12px;background:rgba(255,255,255,.045);`,
+		`.production-settings-disclosure-row>summary{min-height:52px;padding:0 14px;`,
+		`.production-settings-list{display:grid;gap:10px}`,
+	} {
+		if !strings.Contains(adminThemeCSS, rule) {
+			t.Errorf("Production detail visual grammar is missing %q", rule)
+		}
+	}
+
+	db := newIAViewDB(t)
+	project := createHealthyOverviewProject(t, db, "detail-visual-grammar")
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=detail-visual-grammar&tab=settings&lang=en", nil)
+	settings := renderCurrentProductionSettings(db, request, project, "en")
+	for _, marker := range []string{`class="production-detail-surface production-settings-section"`, `production-settings-disclosure-row`} {
+		if !strings.Contains(settings, marker) {
+			t.Errorf("Settings must use contained blocks and substantial disclosure rows: missing %q", marker)
+		}
+	}
+
+	routes := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
+	if !strings.Contains(routes, `production-notification-table production-detail-surface`) || strings.Contains(routes, `<div class="production-notifications"><h2>Notifications</h2>`) {
+		t.Fatal("Notifications read mode must use the shared contained table and avoid a duplicate tab heading")
 	}
 }
 

@@ -742,7 +742,7 @@ func renderCurrentProductionOverview(db *gorm.DB, r *http.Request, p model.Proje
 	statusRows := statusSummaryRow(t(lang, "プロダクション接続", "Production connection"), productionStateClass, productionState, "", "") +
 		statusSummaryRow(t(lang, "Discordリソース", "Discord resources"), discordClass, discordState, "", "") +
 		statusSummaryRow(t(lang, "通知ルーティング", "Notification routing"), statusClass, statusLabel, statusHint, "")
-	statusSection := `<section class="production-settings-section production-overview-status"><h2>` + esc(t(lang, "状態", "Status")) + `</h2><dl class="status-list production-status-list">` + statusRows + `</dl></section>`
+	statusSection := `<section class="production-settings-section production-detail-surface production-overview-status"><h2 class="production-detail-section-title">` + esc(t(lang, "状態", "Status")) + `</h2><dl class="status-list production-status-list">` + statusRows + `</dl></section>`
 	issues := make([]productionOverviewIssue, 0, 4)
 	issueIndex := map[string]int{}
 	addIssue := func(cause, tab string) {
@@ -795,9 +795,9 @@ func renderCurrentProductionOverview(db *gorm.DB, r *http.Request, p model.Proje
 		}
 		issueContent.WriteString(`</ul>`)
 	} else {
-		issueContent.WriteString(`<p class="field-help production-issue-empty" role="status">` + esc(t(lang, "現在の問題はありません。", "No current issues.")) + `</p>`)
+		issueContent.WriteString(`<div class="production-detail-state-row production-issue-empty" role="status">` + esc(t(lang, "現在の問題はありません。", "No current issues.")) + `</div>`)
 	}
-	issuesSection := `<section class="production-settings-section production-current-issues"><h2>` + esc(t(lang, "現在の問題", "Current issues")) + `</h2>` + issueContent.String() + `</section>`
+	issuesSection := `<section class="production-settings-section production-detail-surface production-current-issues"><h2 class="production-detail-section-title">` + esc(t(lang, "現在の問題", "Current issues")) + `</h2>` + issueContent.String() + `</section>`
 	return `<div class="section-stack production-overview">` + statusSection + issuesSection + renderSelectedProductionActivity(db, p, lang, r) + `</div>`
 }
 
@@ -823,12 +823,12 @@ func renderCurrentProductionSettings(db *gorm.DB, r *http.Request, p model.Proje
 	if r != nil {
 		requestedTab = r.URL.Query().Get("tab")
 	}
-	return `<div class="production-settings-list">` +
-		renderCurrentProductionStorage(r, p, lang) +
+	sections := renderCurrentProductionStorage(r, p, lang) +
 		renderCurrentProductionDetails(p, lang, requestedTab == "advanced") +
 		renderCurrentProductionTroubleshooting(db, p, lang, requestedTab == "troubleshooting") +
-		strings.Replace(renderSelectedProductionDanger(r, p, lang, requestedTab == "danger-zone"), `value="preview_remove_connection_with_discord"`, `value="execute_current_ia_discord_delete"`, 1) +
-		`</div>`
+		strings.Replace(renderSelectedProductionDanger(r, p, lang, requestedTab == "danger-zone"), `value="preview_remove_connection_with_discord"`, `value="execute_current_ia_discord_delete"`, 1)
+	sections = strings.ReplaceAll(sections, `class="production-settings-section production-settings-disclosure `, `class="production-settings-section production-settings-disclosure production-settings-disclosure-row `)
+	return `<div class="production-settings-list">` + sections + `</div>`
 }
 
 func renderCurrentProductionStorage(r *http.Request, p model.Project, lang string) string {
@@ -838,7 +838,7 @@ func renderCurrentProductionStorage(r *http.Request, p model.Project, lang strin
 	} else {
 		storageBody += `<form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack drive-storage-form"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row"><button class="btn" type="submit" data-drive-save disabled>` + esc(t(lang, "保存", "Save")) + `</button></div></form><script>(function(){var form=document.querySelector('.drive-storage-form'),input=form&&form.querySelector('#storage-url'),button=form&&form.querySelector('[data-drive-save]');if(!form||!input||!button)return;var original=input.value;var sync=function(){button.disabled=input.value===original};input.addEventListener('input',sync);input.addEventListener('change',sync);sync();form.addEventListener('submit',function(){button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='` + esc(t(lang, "保存中...", "Saving...")) + `';});}());</script>`
 	}
-	return `<section id="storage" tabindex="-1" class="production-settings-section"><h2>` + esc(t(lang, "Storage", "Storage")) + `</h2>` + storageBody + `</section>`
+	return `<section id="storage" tabindex="-1" class="production-settings-section production-detail-surface"><h2 class="production-detail-section-title">` + esc(t(lang, "Storage", "Storage")) + `</h2>` + storageBody + `</section>`
 }
 
 func renderCurrentProductionDetails(p model.Project, lang string, expanded bool) string {
@@ -1483,7 +1483,7 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 	} else {
 		routing = readTable
 	}
-	return `<div class="production-notifications"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2>` + routing + `</div>`
+	return `<div class="production-notifications">` + routing + `</div>`
 }
 
 type productionNotificationReviewerView struct {
@@ -1573,21 +1573,47 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 				}
 			}
 		}
-		additionalText := label("なし", "None")
-		if len(additional) > 0 {
-			additionalText = strings.Join(additional, ", ")
-		}
-		rows.WriteString(`<tr data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td>` + esc(channel) + `</td><td><div class="production-wfa-summary"><div class="production-wfa-summary-line"><span class="production-wfa-group" data-wfa-group="automatic"><span class="production-wfa-kind">` + esc(label("自動", "Automatic")) + `</span><span class="production-wfa-value" data-wfa-automatic-value>` + esc(automaticSummary) + `</span></span><span class="production-wfa-group" data-wfa-group="additional"><span class="production-wfa-kind">` + esc(label("追加", "Additional")) + `</span><span class="production-wfa-value">` + esc(additionalText) + `</span></span></div></div></td></tr>`)
+		automaticMarkup := renderProductionWFATargetChips(strings.Split(automaticSummary, ", "), label("Supervisorなし", "No Supervisor"), label("確認不可", "Unavailable"), true)
+		additionalMarkup := renderProductionWFATargetChips(additional, label("追加なし", "None"), "", false)
+		rows.WriteString(`<tr class="production-notification-row" data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td>` + esc(channel) + `</td><td><div class="production-wfa-summary"><div class="production-wfa-summary-line"><span class="production-wfa-group" data-wfa-group="automatic"><span class="production-wfa-kind">` + esc(label("自動", "Automatic")) + `</span><span class="production-wfa-value production-wfa-chip-list" data-wfa-automatic-value data-wfa-summary="` + esc(automaticSummary) + `">` + automaticMarkup + `</span></span><span class="production-wfa-group" data-wfa-group="additional"><span class="production-wfa-kind">` + esc(label("追加", "Additional")) + `</span><span class="production-wfa-value production-wfa-chip-list">` + additionalMarkup + `</span></span></div></div></td></tr>`)
 	}
 	if len(routes) == 0 {
-		rows.WriteString(`<tr><td colspan="3" class="field-help">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</td></tr>`)
+		rows.WriteString(`<tr class="production-notification-empty"><td colspan="3"><div class="production-detail-state-row">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</div></td></tr>`)
 	}
 	usedTaskTypes := make(map[string]bool, len(routes))
 	for _, route := range routes {
 		usedTaskTypes[strings.TrimSpace(route.TaskTypeID)] = true
 	}
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, usedTaskTypes, data, lang)
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading"><div><h3>` + esc(label("通知ルーティング", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div><div class="table-wrap production-notification-table"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div><div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+}
+
+func renderProductionWFATargetChips(values []string, emptyLabel, unavailableLabel string, automatic bool) string {
+	unique := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			unique = append(unique, value)
+		}
+	}
+	if automatic && len(unique) == 1 && (unique[0] == emptyLabel || unique[0] == unavailableLabel) {
+		return `<span class="production-wfa-state-chip">` + esc(unique[0]) + `</span>`
+	}
+	if len(unique) == 0 {
+		return `<span class="production-wfa-state-chip">` + esc(emptyLabel) + `</span>`
+	}
+	const visibleLimit = 2
+	var chips strings.Builder
+	for index, value := range unique {
+		if index == visibleLimit {
+			chips.WriteString(`<span class="production-wfa-more-chip">+` + strconv.Itoa(len(unique)-visibleLimit) + `</span>`)
+			break
+		}
+		chips.WriteString(`<span class="production-wfa-target-chip">` + esc(value) + `</span>`)
+	}
+	return `<span class="production-wfa-chip-row" aria-label="` + esc(strings.Join(unique, ", ")) + `">` + chips.String() + `</span>`
 }
 
 func compactAutomaticReviewerLabel(value, lang string) string {
@@ -1664,7 +1690,7 @@ func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string,
 		db.Where("project_id = ?", strings.TrimSpace(p.KitsuProjectID)).Where("(task_id = '' OR task_id IS NULL OR success = ?)", false).Order("created_at desc").Limit(5).Find(&logs)
 	}
 	if len(logs) == 0 {
-		return `<section id="recent-activity" tabindex="-1" class="production-settings-section"><h2>` + esc(t(lang, "最近のアクティビティ", "Recent activity")) + `</h2><p class="field-help production-activity-empty" role="status">` + esc(t(lang, "最近のアクティビティはありません。", "No recent activity.")) + `</p></section>`
+		return `<section id="recent-activity" tabindex="-1" class="production-settings-section production-detail-surface production-activity-section"><h2 class="production-detail-section-title">` + esc(t(lang, "最近のアクティビティ", "Recent activity")) + `</h2><div class="production-detail-state-row production-activity-empty" role="status">` + esc(t(lang, "最近のアクティビティはありません。", "No recent activity.")) + `</div></section>`
 	}
 	for _, log := range logs {
 		result := t(lang, "成功", "Success")
@@ -1683,7 +1709,7 @@ func renderSelectedProductionActivity(db *gorm.DB, p model.Project, lang string,
 		}
 		rows.WriteString(`<li class="activity-row"><time class="activity-date" datetime="` + esc(log.CreatedAt.Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time><strong>` + esc(iaActivityAction(lang, log)) + `</strong>` + contextMarkup + `<span class="status-badge status-badge-` + resultClass + ` activity-result">` + esc(result) + `</span></li>`)
 	}
-	return `<section id="recent-activity" tabindex="-1" class="production-settings-section"><h2>` + esc(t(lang, "最近のアクティビティ", "Recent activity")) + `</h2><ul class="activity-list" role="log">` + rows.String() + `</ul><a class="btn-ghost" href="` + esc(withLang("/bot/admin/audit", r)) + `">` + esc(t(lang, "監査ログを表示", "View audit log")) + `</a></section>`
+	return `<section id="recent-activity" tabindex="-1" class="production-settings-section production-detail-surface production-activity-section"><h2 class="production-detail-section-title">` + esc(t(lang, "最近のアクティビティ", "Recent activity")) + `</h2><ul class="activity-list" role="log">` + rows.String() + `</ul><a class="btn-ghost" href="` + esc(withLang("/bot/admin/audit", r)) + `">` + esc(t(lang, "監査ログを表示", "View audit log")) + `</a></section>`
 }
 
 func renderCurrentProductionTroubleshooting(db *gorm.DB, p model.Project, lang string, expanded bool) string {
