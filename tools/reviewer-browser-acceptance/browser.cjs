@@ -661,6 +661,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await savedRoute.locator('.routing-row-menu summary').click();
         const savedRouteMenu = savedRoute.locator('.routing-row-menu-panel');
         if (!(await savedRouteMenu.locator('.routing-delete-open').isVisible())) throw new Error(`Saved channel route does not expose the permitted Delete channel action in ${locale.lang}`);
+        await page.waitForFunction(() => {
+          const menu = document.querySelector('[data-routing-row][data-task-type="task-comp"] .routing-row-menu-panel');
+          return menu && getComputedStyle(menu).position === 'fixed';
+        }, null, { timeout: 1000 });
         const savedMenuGeometry = await savedRouteMenu.evaluate(node => {
           const menu = node.getBoundingClientRect();
           const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect();
