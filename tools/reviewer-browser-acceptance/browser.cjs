@@ -96,7 +96,10 @@ async function overridesGroup(page, locale) {
 
 async function assertAutomatic(page, locale, expected, forbidden = []) {
 	const group = await automaticGroup(page, locale);
-	const text = await group.innerText();
+	const compactSummary = group.locator('.production-wfa-chip-row[aria-label]');
+	const text = (await compactSummary.count())
+		? await compactSummary.getAttribute('aria-label')
+		: await group.innerText();
   for (const value of expected) if (!text.includes(value)) throw new Error(`Automatic is missing ${value}`);
   for (const value of forbidden) if (text.includes(value)) throw new Error(`Automatic includes ineligible person ${value}`);
 }
@@ -540,6 +543,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const notificationColumnWidths = await page.locator('.production-notification-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
         if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
         if (await compReadRow.locator('.production-wfa-summary-line').count() !== 1 || await compReadRow.locator('[data-wfa-group]').count() !== 2 || await compReadRow.locator('.production-wfa-kind').count() !== 2 || await compReadRow.locator('.production-wfa-value').count() !== 2) throw new Error(`WFA Automatic/Additional summaries are not one compact row in ${locale.lang}`);
+        const automaticChipRow = compReadRow.locator('[data-wfa-group="automatic"] .production-wfa-chip-row');
+        if (await automaticChipRow.locator('.production-wfa-target-chip').count() !== 2 || await automaticChipRow.locator('.production-wfa-more-chip').innerText() !== '+1') throw new Error(`Automatic recipients are not compactly truncated in ${locale.lang}`);
+        const accessibleAutomatic = await automaticChipRow.getAttribute('aria-label');
+        if (!compositingAutomatic.every(recipient => accessibleAutomatic.includes(recipient))) throw new Error(`Compact Automatic summary lost recipients from its accessible label in ${locale.lang}`);
         const summaryAlignment = await compReadRow.locator('.production-wfa-summary-line').evaluate(node => ({
           columns: getComputedStyle(node).gridTemplateColumns,
           groups: [...node.querySelectorAll('[data-wfa-group]')].map(group => {
