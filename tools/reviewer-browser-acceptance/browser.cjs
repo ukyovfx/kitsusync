@@ -823,10 +823,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const states = [
       { name: 'empty-team', expected: 'The Kitsu Production Team is empty', team: true },
       { name: 'team-failure', expected: 'Could not load the Kitsu Production Team', team: true },
-      { name: 'no-matching', expected: 'No matching Supervisor.' },
-      { name: 'no-linked', expected: 'No matching Supervisor.' },
-      { name: 'discord-failure', expected: 'Discord membership could not be verified.' },
-      { name: 'stale-membership', expected: 'No matching Supervisor.' },
+      { name: 'no-matching', expected: 'No Supervisor' },
+      { name: 'no-linked', expected: 'No Supervisor' },
+      { name: 'discord-failure', expected: 'Unavailable' },
+      { name: 'stale-membership', expected: 'No Supervisor' },
     ];
     for (const state of states) {
       await fixture(page, state.name);

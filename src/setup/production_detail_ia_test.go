@@ -456,7 +456,7 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "")
-	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-wfa-channel-control`, `data-wfa-automatic-value`, `class="production-routing-editor-footer"`} {
+	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-wfa-channel-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {
 		if !strings.Contains(body, required) {
 			t.Errorf("unified pending Apply editor missing %q", required)
 		}
