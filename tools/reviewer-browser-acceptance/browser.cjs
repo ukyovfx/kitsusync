@@ -689,7 +689,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await pendingRow.locator('.routing-row-menu summary').click();
         page.once('dialog', async dialog => { if (dialog.type() !== 'confirm') throw new Error(`unexpected ${dialog.type()} dialog for pending route removal`); await dialog.accept(); });
         await pendingRow.locator('[data-routing-remove]').click();
+        await pendingRow.locator('.routing-row-menu summary').click();
         if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
+        await page.keyboard.press('Escape');
 
         let submittedApply = null;
         expectedStaleApply = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console409Messages: [] };
@@ -720,9 +722,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           expected: staleMessage,
         }, { timeout: 5000 });
         if (page.url() !== urlBeforeApply) throw new Error(`HTTP 409 navigated away from the pending editor in ${locale.lang}`);
-        if (!(await pendingRow.isVisible()) || !(await pendingRow.locator('[data-routing-undo]').isVisible())) {
+        if (!(await pendingRow.isVisible())) {
           throw new Error(`HTTP 409 discarded the pending route removal in ${locale.lang}`);
         }
+        await pendingRow.locator('.routing-row-menu summary').click();
+        if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error(`HTTP 409 discarded route Undo in ${locale.lang}`);
         await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
         const preservedTargets = await additionalPanel.innerText();
         for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers']) {
