@@ -228,7 +228,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	ready := func() bool { return true }
 	mux.HandleFunc("/bot/admin", RequireSession(AdminIndexWithRuntime(db, ready)))
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
+	mux.Handle("/bot/admin/bot", RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true })))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
+	mux.HandleFunc("/bot/admin/audit", RequireSession(AuditLogHandler(db)))
 	health := HealthHandler(db)
 	mux.HandleFunc("/bot/admin/health", RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The browser suite visits several pages before System Status; reseed
