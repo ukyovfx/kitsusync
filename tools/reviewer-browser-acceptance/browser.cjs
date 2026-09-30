@@ -542,7 +542,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await compReadRow.innerText()).includes(locale.automatic) || !(await compReadRow.innerText()).includes(locale.overrides)) {
           throw new Error(`Notifications is missing Automatic or Additional recipients in ${locale.lang}`);
         }
-        const notificationColumnWidths = await page.locator('.production-notification-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
+        const notificationColumnWidths = await page.locator('.production-notification-table thead th').evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
         if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
         if (await compReadRow.locator('.production-wfa-summary-line').count() !== 1 || await compReadRow.locator('[data-wfa-group]').count() !== 2 || await compReadRow.locator('.production-wfa-kind').count() !== 2 || await compReadRow.locator('.production-wfa-value').count() !== 2) throw new Error(`WFA Automatic/Additional summaries are not one compact row in ${locale.lang}`);
         const automaticChipRow = compReadRow.locator('[data-wfa-group="automatic"] .production-wfa-chip-row');
