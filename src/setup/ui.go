@@ -909,7 +909,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-unconfigured-state{display:grid;gap:var(--space-3,12px);padding:var(--space-3,12px) 0 0;border:0;border-top:1px solid var(--divider-color);background:transparent}
   .production-context .production-unconfigured-state h2,.production-context .production-unconfigured-state p{margin:0}
   .production-context .production-storage-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:var(--space-1,4px) var(--space-3,12px)}
-  .production-context .production-storage-field{display:grid;gap:var(--space-1,4px);justify-self:stretch;width:100%;min-width:0;color:var(--muted-2)}
+  .production-context .production-storage-field{margin:0;display:grid;gap:var(--space-1,4px);justify-self:stretch;width:100%;min-width:0;color:var(--muted-2)}
   .production-context .production-storage-field input{box-sizing:border-box;width:100%;max-width:none;min-width:0}
   .production-context .production-storage-actions{grid-column:2;align-self:end;margin:0;white-space:nowrap}
   .production-context .production-routing-editor .wizard-plan-table{overflow:visible}
