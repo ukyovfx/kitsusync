@@ -578,8 +578,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await selectedRoute.count() !== 1 || await selectedRoute.locator('[data-select-task][aria-pressed="true"]').count() !== 1 || await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count()) {
           throw new Error(`Notifications editor does not present one obvious selected route outside nested cards in ${locale.lang}`);
         }
-        const selectedRouteStyle = await selectedRoute.evaluate(node => ({ background: getComputedStyle(node).backgroundColor, marker: getComputedStyle(node).boxShadow, titleDecoration: getComputedStyle(node.querySelector('.routing-select-task')).textDecorationLine }));
-        if (selectedRouteStyle.background === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.marker === 'none' || !selectedRouteStyle.titleDecoration.includes('underline')) throw new Error(`Selected Task Type is not visually distinct in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
+        const selectedRouteStyle = await selectedRoute.evaluate(node => {
+          const task = node.querySelector('.routing-select-task');
+          const taskStyle = getComputedStyle(task);
+          return { background: getComputedStyle(node).backgroundColor, marker: getComputedStyle(node).boxShadow, titleDecoration: taskStyle.textDecorationLine, taskBackground: taskStyle.backgroundColor, taskAppearance: taskStyle.appearance };
+        });
+        if (selectedRouteStyle.background === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.marker === 'none' || !selectedRouteStyle.titleDecoration.includes('underline') || selectedRouteStyle.taskBackground !== 'rgba(0, 0, 0, 0)' || selectedRouteStyle.taskAppearance !== 'none') throw new Error(`Selected Task Type is not visually distinct with an unthemed route selector in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
         if (await editForm.locator('.production-wfa-edit-panel [data-wfa-title]').innerText() !== 'Compositing' || !(await editForm.locator('.production-wfa-edit-panel').innerText()).includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) throw new Error(`selected Task Type edit panel is not a unified Channel/WFA target in ${locale.lang}`);
         const editPanelStyle = await editForm.evaluate(form => {
           const node = form.querySelector('.production-wfa-edit-panel');
@@ -771,7 +775,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
             surfaces: sections.map(section => { const computed = getComputedStyle(section); return { border: computed.borderTopStyle, width: computed.borderTopWidth, radius: computed.borderRadius, background: computed.backgroundColor, padding: computed.padding }; }),
             summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => summary.getBoundingClientRect().height) };
         });
-        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '10px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some(section => section.border !== 'solid' || section.width !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)' || parseFloat(section.padding) < 12) || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 50)) {
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '10px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some(section => section.border !== 'solid' || section.width !== '1px' || section.radius !== '12px' || section.background === 'rgba(0, 0, 0, 0)') || parseFloat(settingsLayout.surfaces[0]?.padding) < 12 || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 50)) {
           throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
