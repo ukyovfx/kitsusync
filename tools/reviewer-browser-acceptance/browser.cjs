@@ -13,6 +13,11 @@ fs.mkdirSync(output, { recursive: true });
 
 const records = [];
 const errors = [];
+function isNotificationsApplyRequest(request) {
+  const actual = new URL(request.url());
+  const expected = new URL('/bot/admin/projects?apply_notifications=1', base);
+  return request.method() === 'POST' && actual.origin === expected.origin && actual.pathname === expected.pathname && actual.search === expected.search;
+}
 const locales = [
   { lang: 'en', automatic: 'Automatic recipients', overrides: 'Additional recipients', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
   { lang: 'ja', automatic: '自動通知先', overrides: '追加通知先', tabs: ['概要', '通知', 'チーム', '設定'] },
@@ -354,8 +359,29 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: false });
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
     const page = await context.newPage();
+    let expectedStaleApply = null;
     page.on('pageerror', error => errors.push(error.message));
-    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('console', message => {
+      if (message.type() !== 'error') return;
+      const text = message.text();
+      const isExpectedConflictConsole = /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/.test(text);
+      if (isExpectedConflictConsole && expectedStaleApply?.active && expectedStaleApply.requestSeen) {
+        expectedStaleApply.console409Messages.push(text);
+        return;
+      }
+      errors.push(text);
+    });
+    page.on('response', response => {
+      if (response.status() < 400) return;
+      const request = response.request();
+      const staleScenario = expectedStaleApply;
+      if (response.status() === 409 && staleScenario?.active && staleScenario.requestSeen && isNotificationsApplyRequest(request) && staleScenario.responseCount === 0) {
+        staleScenario.responseCount += 1;
+        staleScenario.responseStatus = response.status();
+        return;
+      }
+      errors.push(`HTTP ${response.status()} ${request.method()} ${new URL(request.url()).pathname}`);
+    });
     const interceptedExternal = [];
     await page.route('**/*', route => {
       const url = new URL(route.request().url());
@@ -565,12 +591,25 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
 
         let submittedApply = null;
-        await page.route('**/bot/admin/projects?apply_notifications=1', async route => {
+        expectedStaleApply = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console409Messages: [] };
+        const applyEndpoint = new URL('/bot/admin/projects?apply_notifications=1', base).href;
+        await page.route(applyEndpoint, async route => {
+          if (!expectedStaleApply?.active || !isNotificationsApplyRequest(route.request()) || expectedStaleApply.requestSeen) {
+            errors.push('Unexpected or duplicate Notifications Apply request during stale-edit interception');
+            await route.continue();
+            return;
+          }
+          expectedStaleApply.requestSeen = true;
           submittedApply = route.request().postDataJSON();
           await route.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"stale_edit"}' });
         });
         const urlBeforeApply = page.url();
+        const staleApplyResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
         await editForm.locator('[data-apply-submit]').click();
+        const staleApplyResponse = await staleApplyResponsePromise;
+        if (staleApplyResponse.status() !== 409 || expectedStaleApply.responseCount !== 1 || expectedStaleApply.responseStatus !== 409) {
+          throw new Error(`Stale Notifications Apply did not produce exactly one expected HTTP 409 in ${locale.lang}: status=${staleApplyResponse.status()} tracked=${expectedStaleApply.responseCount}`);
+        }
         if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-unassigned')) {
           throw new Error('Apply sent a reviewer delta for a route pending removal');
         }
@@ -580,15 +619,23 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           expected: staleMessage,
         }, { timeout: 5000 });
         if (page.url() !== urlBeforeApply) throw new Error(`HTTP 409 navigated away from the pending editor in ${locale.lang}`);
+        if (!(await pendingRow.isVisible()) || !(await pendingRow.locator('[data-routing-undo]').isVisible())) {
+          throw new Error(`HTTP 409 discarded the pending route removal in ${locale.lang}`);
+        }
         await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
         const preservedTargets = await additionalPanel.innerText();
         for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers']) {
           if (!preservedTargets.includes(expected)) throw new Error(`HTTP 409 discarded pending User/Role target ${expected} in ${locale.lang}`);
         }
+        if (expectedStaleApply.console409Messages.length > 1) {
+          errors.push(...expectedStaleApply.console409Messages.slice(1));
+        }
+        expectedStaleApply.console409Consumed = expectedStaleApply.console409Messages.length === 1;
+        expectedStaleApply.active = false;
         await pendingRow.locator('[data-routing-undo]').click();
         await pendingRow.locator('[data-select-task]').click();
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await page.unroute('**/bot/admin/projects?apply_notifications=1');
+        await page.unroute(applyEndpoint);
         await editForm.locator('[data-pending-cancel]').click();
         if (await page.locator('.production-notification-table tbody tr[data-task-type-id="task-unassigned"]').count()) throw new Error('Cancel persisted the pending route addition');
         await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'pending routing/WFA edit and stale Apply', 'select/add/remove/undo and additional User/Role edits stayed local; 409 retained pending state; Cancel discarded it');
