@@ -549,8 +549,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const edit = node.querySelector('a.btn-ghost').getBoundingClientRect();
           return { badgeTop: badge.top, badgeBottom: badge.bottom, badgeHeight: badge.height, editTop: edit.top, editBottom: edit.bottom, editHeight: edit.height };
         });
-        if (Math.abs(readActions.badgeTop - readActions.editTop) > 1 || Math.abs(readActions.badgeBottom - readActions.editBottom) > 1 || Math.abs(readActions.badgeHeight - readActions.editHeight) > 1) {
-          throw new Error(`Notifications status and Edit controls do not share one aligned height rhythm in ${locale.lang}: ${JSON.stringify(readActions)}`);
+        if (Math.abs((readActions.badgeTop + readActions.badgeBottom) / 2 - (readActions.editTop + readActions.editBottom) / 2) > 1 || readActions.badgeHeight >= readActions.editHeight) {
+          throw new Error(`Notifications Healthy status pill must stay vertically centered and visually distinct from the Edit action in ${locale.lang}: ${JSON.stringify(readActions)}`);
         }
         if (await page.locator('#notification-preview,.discord-message-preview,[data-notification-preview-select]').count()) throw new Error(`Removed Notification Preview returned in ${locale.lang}`);
         if (await page.locator('.production-wfa-recipients').count()) throw new Error(`Notifications view retained the former standalone Reviewer section in ${locale.lang}`);
@@ -621,9 +621,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const selectedRouteStyle = await selectedRoute.evaluate(node => {
           const task = node.querySelector('.routing-select-task');
           const taskStyle = getComputedStyle(task);
-          return { background: getComputedStyle(node).backgroundColor, marker: getComputedStyle(node).boxShadow, titleDecoration: taskStyle.textDecorationLine, taskBackground: taskStyle.backgroundColor, taskAppearance: taskStyle.appearance };
+          const indicator = node.querySelector('.routing-expand-indicator');
+          return { background: getComputedStyle(node).backgroundColor, marker: getComputedStyle(node).boxShadow, expanded: task.getAttribute('aria-expanded'), indicatorTransform: getComputedStyle(indicator).transform, taskBackground: taskStyle.backgroundColor, taskAppearance: taskStyle.appearance };
         });
-        if (selectedRouteStyle.background === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.marker === 'none' || !selectedRouteStyle.titleDecoration.includes('underline') || selectedRouteStyle.taskBackground !== 'rgba(0, 0, 0, 0)' || selectedRouteStyle.taskAppearance !== 'none') throw new Error(`Selected Task Type is not visually distinct with an unthemed route selector in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
+        if (selectedRouteStyle.background === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.marker === 'none' || selectedRouteStyle.expanded !== 'true' || selectedRouteStyle.indicatorTransform === 'none' || selectedRouteStyle.taskBackground === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.taskAppearance !== 'none') throw new Error(`Selected Task Type is not visually distinct with an accessible expansion affordance in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
         if (await editForm.locator('.production-wfa-edit-panel [data-wfa-title]').innerText() !== 'Compositing' || !(await editForm.locator('.production-wfa-edit-panel').innerText()).includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) throw new Error(`selected Task Type edit panel is not a unified Channel/WFA target in ${locale.lang}`);
         const editPanelStyle = await editForm.evaluate(form => {
           const node = form.querySelector('.production-wfa-edit-panel');

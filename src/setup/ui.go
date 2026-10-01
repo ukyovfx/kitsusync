@@ -812,12 +812,11 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-settings-disclosure-row .production-diagnostic-current{padding:7px 0}
   .production-settings-disclosure-row .production-diagnostic-item{padding:10px 8px;border-bottom-color:rgba(255,255,255,.07)}
   .production-settings-disclosure-row.danger-zone{border-color:rgba(255,106,80,.2);background:rgba(255,106,80,.025)}
-  .production-settings-disclosure-row.danger-zone>summary{color:#ffb4a7}
+  .production-settings-disclosure-row.danger-zone>summary{color:var(--color-status-danger)}
   .production-wfa-edit-panel{padding:14px;border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.025);gap:12px}
   .production-routing-editor{padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}
   .production-routing-editor [data-routing-row].selected{background:rgba(255,255,255,.045);box-shadow:inset 3px 0 0 var(--accent-2)}
   .production-routing-editor [data-routing-row].selected .routing-select-task{color:var(--text);font-weight:700}
-  .production-routing-editor .routing-select-task[aria-pressed="true"]{text-decoration:underline;text-decoration-color:var(--accent-2);text-decoration-thickness:2px;text-underline-offset:4px}
   .production-wfa-edit-heading{padding-bottom:10px}
   .production-wfa-edit-groups{gap:16px}
   .production-wfa-edit-panel [data-wfa-automatic],.production-wfa-edit-panel [data-wfa-additional]{padding:10px 0 0;border-top:1px solid rgba(255,255,255,.07);gap:8px}
@@ -894,7 +893,12 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-notification-heading{display:flex;justify-content:flex-end;margin:0 0 var(--space-3,12px)}
   .production-context .production-notification-actions{display:flex;align-items:center;gap:var(--space-2,8px);min-height:var(--control-height-dense,38px)}
   .production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:var(--control-height-dense,38px);min-height:var(--control-height-dense,38px);padding-block:0}
-  .production-context .production-notification-actions .status-pill{min-width:96px;padding-inline:12px;border-radius:var(--radius-sm);font-size:.82rem}
+  .production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:28px;height:auto;padding:5px 8px;border-radius:var(--status-radius);font-size:12px;line-height:1.25}
+  .production-context .production-routing-editor .routing-select-task{display:inline-flex;align-items:center;gap:var(--space-2,8px);width:100%;min-width:0;padding:6px 8px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--color-content);text-align:left;cursor:pointer}
+  .production-context .production-routing-editor .routing-task-type-name{min-width:0;overflow-wrap:anywhere}
+  .production-context .production-routing-editor .routing-select-task:hover,.production-context .production-routing-editor [data-routing-row].selected .routing-select-task{background:var(--surface-subtle)}
+  .production-context .production-routing-editor .routing-expand-indicator{width:7px;height:7px;flex:0 0 7px;margin-inline-start:auto;border-right:1px solid var(--color-content-subtle);border-bottom:1px solid var(--color-content-subtle);transform:rotate(45deg);transition:transform .14s ease}
+  .production-context .production-routing-editor .routing-select-task[aria-expanded=true] .routing-expand-indicator{transform:rotate(225deg)}
   .production-context .production-notification-actions .btn-ghost{min-width:84px}
   .production-context .production-routing-editor{gap:var(--space-6,32px)}
   .production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-6,32px);min-width:0}

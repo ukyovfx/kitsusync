@@ -220,6 +220,34 @@ func TestCurrentRoutingEditorRendersOneInlineEditorPerRouteAndDraft(t *testing.T
 	}
 }
 
+func TestCurrentRoutingDisclosureAndCanonicalStatusPresentation(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-disclosure-state", Name: "Routing Disclosure State"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "storyboard", "Storyboard", "synthetic-webhook", "channel-storyboard"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-storyboard", TaskTypeName: "Storyboard", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=routing-disclosure-state&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{})
+	if !strings.Contains(body, `class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"`) {
+		t.Fatal("Task Type row control must expose its collapsed state")
+	}
+	if !strings.Contains(currentRoutingEditorScript(), `setAttribute('aria-expanded',String(item===row))`) {
+		t.Fatal("Task Type inline expansion state must be announced to assistive technology")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:28px;height:auto;padding:5px 8px;border-radius:var(--status-radius);`) {
+		t.Fatal("Healthy must use the shared compact status-pill shape, not an action-button shape")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-settings-disclosure-row.danger-zone>summary{color:var(--color-status-danger)}`) {
+		t.Fatal("Danger Zone must use the canonical semantic danger color")
+	}
+}
+
 func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "routing-recipient-modes", Name: "Routing Recipient Modes"}
