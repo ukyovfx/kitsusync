@@ -1520,11 +1520,12 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 		view.Team, view.TeamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
 		if view.BotToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
 			view.GuildUsers, view.GuildErr = reviewerGuildMembersForGuild(p.DiscordGuildID, view.BotToken)
-			if view.GuildErr == nil {
-				if roles, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, view.BotToken); err == nil {
-					view.Roles = mentionableReviewerRoles(p.DiscordGuildID, roles)
-					view.RolesReady = true
-				}
+			// User eligibility needs the current Guild member list, but Role
+			// candidates come from a separate Guild roles endpoint. Keep those
+			// reads independent so a member-list failure does not hide usable Roles.
+			if roles, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, view.BotToken); err == nil {
+				view.Roles = mentionableReviewerRoles(p.DiscordGuildID, roles)
+				view.RolesReady = true
 			}
 		}
 		view.KitsuBase, view.KitsuToken, view.KitsuReady = runtimeKitsuDataSource(db)
@@ -1561,9 +1562,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		}
 		taskTypeID := strings.TrimSpace(route.TaskTypeID)
 		taskType := taskTypesByID[taskTypeID]
-		automatic := productionAutomaticReviewerLabel(taskType, data, lang)
-		automaticSummary := compactAutomaticReviewerLabel(automatic, lang)
-		var additional []string
+		additional := make([]string, 0)
 		targets, _, _ := model.ListProjectReviewerTargetsForTaskType(db, p.ID, taskTypeID)
 		for _, target := range targets {
 			switch target.TargetKind {
@@ -1577,9 +1576,18 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 				}
 			}
 		}
-		automaticMarkup := renderProductionWFATargetChips(strings.Split(automaticSummary, ", "), label("Supervisorなし", "No Supervisor"), label("確認不可", "Unavailable"), true)
-		additionalMarkup := renderProductionWFATargetChips(additional, label("追加なし", "None"), "", false)
-		rows.WriteString(`<tr class="production-notification-row" data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td data-label="` + esc(channelLabel) + `">` + esc(channel) + `</td><td data-label="` + esc(label("WFA通知先", "WFA recipients")) + `"><div class="production-wfa-summary"><div class="production-wfa-summary-line"><span class="production-wfa-group" data-wfa-group="automatic"><span class="production-wfa-kind">` + esc(label("自動", "Automatic")) + `</span><span class="production-wfa-value production-wfa-chip-list" data-wfa-automatic-value data-wfa-summary="` + esc(automaticSummary) + `">` + automaticMarkup + `</span></span><span class="production-wfa-group" data-wfa-group="additional"><span class="production-wfa-kind">` + esc(label("追加", "Additional")) + `</span><span class="production-wfa-value production-wfa-chip-list">` + additionalMarkup + `</span></span></div></div></td></tr>`)
+		automatic, automaticState := productionAutomaticReviewerRecipients(taskType, data)
+		recipients := append(append([]string(nil), automatic...), additional...)
+		if automaticState != "matched" && automaticState != "none" {
+			recipients = append(recipients, label("自動通知先を確認できません", "Automatic recipients unavailable"))
+		}
+		recipients = uniqueSortedRecipientLabels(recipients)
+		recipientsMarkup := renderProductionWFATargetChips(recipients, label("通知先なし", "No recipients"), "", false)
+		ariaLabel := label("通知先なし", "No recipients")
+		if len(recipients) > 0 {
+			ariaLabel = strings.Join(recipients, ", ")
+		}
+		rows.WriteString(`<tr class="production-notification-row" data-task-type-id="` + esc(taskTypeID) + `"><th scope="row">` + esc(route.TaskTypeName) + `</th><td data-label="` + esc(channelLabel) + `">` + esc(channel) + `</td><td data-label="` + esc(label("WFA通知先", "WFA recipients")) + `"><div class="production-wfa-effective-recipients" data-wfa-recipients aria-label="` + esc(ariaLabel) + `">` + recipientsMarkup + `</div></td></tr>`)
 	}
 	if len(routes) == 0 {
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="3"><div class="production-detail-state-row">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</div></td></tr>`)
@@ -1637,21 +1645,42 @@ func compactAutomaticReviewerLabel(value, lang string) string {
 
 func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNotificationReviewerView, lang string) string {
 	label := func(ja, en string) string { return t(lang, ja, en) }
+	names, state := productionAutomaticReviewerRecipients(taskType, data)
+	switch state {
+	case "discord-unavailable":
+		return label("Discordメンバーを確認できません。", "Discord membership could not be verified.")
+	case "team-unavailable":
+		return label("Production Teamを読み込めません。", "Production Team unavailable.")
+	case "kitsu-required":
+		return label("Kitsu接続が必要です。", "Kitsu connection required.")
+	case "task-type-unavailable":
+		return label("Task Type情報を読み込めません。", "Task Type data unavailable.")
+	case "supervisor-unavailable":
+		return label("Supervisor情報を読み込めません。", "Supervisor data unavailable.")
+	case "none":
+		return label("該当するSupervisorはいません。", "No matching Supervisor.")
+	default:
+		return strings.Join(names, ", ")
+	}
+}
+
+func productionAutomaticReviewerRecipients(taskType kitsu.TaskType, data productionNotificationReviewerView) ([]string, string) {
 	switch {
 	case data.GuildErr != nil || data.BotToken == "":
-		return label("Discordメンバーを確認できません。", "Discord membership could not be verified.")
+		return nil, "discord-unavailable"
 	case data.TeamErr != nil:
-		return label("Production Teamを読み込めません。", "Production Team unavailable.")
+		return nil, "team-unavailable"
 	case !data.KitsuReady:
-		return label("Kitsu接続が必要です。", "Kitsu connection required.")
-	case strings.TrimSpace(taskType.ID) == "":
-		return label("Task Type情報を読み込めません。", "Task Type data unavailable.")
-	case strings.TrimSpace(taskType.DepartmentID) == "":
-		return label("該当するSupervisorはいません。", "No matching Supervisor.")
+		return nil, "kitsu-required"
+	case strings.TrimSpace(taskType.ID) == "" || strings.TrimSpace(taskType.DepartmentID) == "":
+		if strings.TrimSpace(taskType.ID) == "" {
+			return nil, "task-type-unavailable"
+		}
+		return nil, "none"
 	}
 	people, err := reviewerDepartmentSupervisorsForTeam(data.KitsuBase, data.KitsuToken, taskType.DepartmentID, data.Team)
 	if err != nil {
-		return label("Supervisor情報を読み込めません。", "Supervisor data unavailable.")
+		return nil, "supervisor-unavailable"
 	}
 	linked := currentProductionLinkedHumanDiscordIDs(data.Team, data.Users, data.GuildUsers)
 	seen := map[string]bool{}
@@ -1669,9 +1698,23 @@ func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNo
 	}
 	sort.Strings(names)
 	if len(names) == 0 {
-		return label("該当するSupervisorはいません。", "No matching Supervisor.")
+		return nil, "none"
 	}
-	return strings.Join(names, ", ")
+	return names, "matched"
+}
+
+func uniqueSortedRecipientLabels(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			unique = append(unique, value)
+		}
+	}
+	sort.Strings(unique)
+	return unique
 }
 
 func renderPendingAutomaticReviewerSource(taskTypes []kitsu.TaskType, routed map[string]bool, data productionNotificationReviewerView, lang string) string {

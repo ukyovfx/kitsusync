@@ -86,20 +86,15 @@ async function gotoProduction(page, locale, tab, extra = '') {
 
 async function automaticGroup(page, locale) {
 	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-automatic]');
-	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-group="automatic"]');
-}
-
-async function overridesGroup(page, locale) {
-	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-additional]');
-	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-group="additional"]');
+	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-recipients]');
 }
 
 async function assertAutomatic(page, locale, expected, forbidden = []) {
 	const group = await automaticGroup(page, locale);
 	const compactSummary = group.locator('.production-wfa-chip-row[aria-label]');
-	const text = (await compactSummary.count())
+	const text = (await group.getAttribute('aria-label')) || ((await compactSummary.count())
 		? await compactSummary.getAttribute('aria-label')
-		: await group.innerText();
+		: await group.innerText());
   for (const value of expected) if (!text.includes(value)) throw new Error(`Automatic is missing ${value}`);
   for (const value of forbidden) if (text.includes(value)) throw new Error(`Automatic includes ineligible person ${value}`);
 }
@@ -559,26 +554,23 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         if (await page.locator('#notification-preview,.discord-message-preview,[data-notification-preview-select]').count()) throw new Error(`Removed Notification Preview returned in ${locale.lang}`);
         if (await page.locator('.production-wfa-recipients').count()) throw new Error(`Notifications view retained the former standalone Reviewer section in ${locale.lang}`);
-        if (!(await compReadRow.innerText()).includes(locale.automatic) || !(await compReadRow.innerText()).includes(locale.overrides)) {
-          throw new Error(`Notifications is missing Automatic or Additional recipients in ${locale.lang}`);
+        const effectiveRecipients = await compReadRow.locator('[data-wfa-recipients]').getAttribute('aria-label');
+        for (const recipient of compositingAutomatic.concat(['Guild Nick Override', 'Artist Global', '@Reviewers'])) {
+          if (!effectiveRecipients.includes(recipient)) throw new Error(`effective WFA recipients omit ${recipient} in ${locale.lang}`);
+        }
+        if (await compReadRow.locator('[data-wfa-group],.production-wfa-kind').count()) {
+          throw new Error(`normal read mode exposes Automatic/Additional implementation provenance in ${locale.lang}`);
         }
         const notificationColumnWidths = await page.locator('.production-notification-table thead th').evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
         if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
-        if (await compReadRow.locator('.production-wfa-summary-line').count() !== 1 || await compReadRow.locator('[data-wfa-group]').count() !== 2 || await compReadRow.locator('.production-wfa-kind').count() !== 2 || await compReadRow.locator('.production-wfa-value').count() !== 2) throw new Error(`WFA Automatic/Additional summaries are not one compact row in ${locale.lang}`);
-        const automaticChipRow = compReadRow.locator('[data-wfa-group="automatic"] .production-wfa-chip-row');
-        if (await automaticChipRow.locator('.production-wfa-target-chip').count() !== 2 || await automaticChipRow.locator('.production-wfa-more-chip').innerText() !== '+1') throw new Error(`Automatic recipients are not compactly truncated in ${locale.lang}`);
-        const accessibleAutomatic = await automaticChipRow.getAttribute('aria-label');
-        if (!compositingAutomatic.every(recipient => accessibleAutomatic.includes(recipient))) throw new Error(`Compact Automatic summary lost recipients from its accessible label in ${locale.lang}`);
-        const summaryAlignment = await compReadRow.locator('.production-wfa-summary-line').evaluate(node => ({
-          columns: getComputedStyle(node).gridTemplateColumns,
-          groups: [...node.querySelectorAll('[data-wfa-group]')].map(group => {
-            const rect = group.getBoundingClientRect();
-            return { top: Math.round(rect.top), left: Math.round(rect.left), right: Math.round(rect.right), height: Math.round(rect.height) };
-          }),
-          table: node.closest('table').getBoundingClientRect().toJSON(),
-        }));
-        if (summaryAlignment.groups.length !== 2 || (viewport.name === 'desktop' && Math.abs(summaryAlignment.groups[0].top - summaryAlignment.groups[1].top) > 2) || summaryAlignment.groups.some(group => group.left < summaryAlignment.table.left || group.right > summaryAlignment.table.right)) {
-          throw new Error(`WFA Automatic/Additional are not a compact aligned row within the table in ${locale.lang}/${viewport.name}: ${JSON.stringify(summaryAlignment)}`);
+        const effectiveChipRow = compReadRow.locator('[data-wfa-recipients] .production-wfa-chip-row');
+        if (await effectiveChipRow.locator('.production-wfa-target-chip').count() !== 2 || await effectiveChipRow.locator('.production-wfa-more-chip').innerText() !== '+4') throw new Error(`effective WFA recipients are not compactly truncated in ${locale.lang}`);
+        const summaryAlignment = await compReadRow.locator('[data-wfa-recipients]').evaluate(node => {
+          const rect = node.getBoundingClientRect(), table = node.closest('table').getBoundingClientRect();
+          return { left: rect.left, right: rect.right, tableLeft: table.left, tableRight: table.right, whiteSpace: getComputedStyle(node).whiteSpace };
+        });
+        if (summaryAlignment.left < summaryAlignment.tableLeft || summaryAlignment.right > summaryAlignment.tableRight || summaryAlignment.whiteSpace === 'normal') {
+          throw new Error(`effective recipient summary is not a compact single-line table value in ${locale.lang}/${viewport.name}: ${JSON.stringify(summaryAlignment)}`);
         }
         const notificationTable = await page.locator('.production-notification-table').evaluate(node => {
           const style = getComputedStyle(node);
@@ -607,9 +599,20 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
         }
         const editForm = page.locator('[data-current-routing-form]');
+        if (!(await editForm.locator('[data-apply-submit]').isDisabled()) || !(await editForm.locator('[data-pending-status]').innerText()).includes(locale.lang === 'ja' ? '変更はありません' : 'No pending changes')) {
+          throw new Error(`Notifications Apply is not disabled with a clean pending state in ${locale.lang}`);
+        }
         const selectedRoute = editForm.locator('[data-routing-row].selected');
         if (await selectedRoute.count() !== 1 || await selectedRoute.locator('[data-select-task][aria-pressed="true"]').count() !== 1 || await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count()) {
-          throw new Error(`Notifications editor does not present one obvious selected route outside nested cards in ${locale.lang}`);
+          throw new Error(`Notifications editor does not present one obvious selected route without nested page cards in ${locale.lang}`);
+        }
+        const inlineOwnership = await selectedRoute.evaluate(row => ({
+          nextIsEditor: row.nextElementSibling?.matches('[data-route-editor]') || false,
+          panelIsInEditor: row.nextElementSibling?.querySelector('[data-wfa-detail-panel]') !== null,
+          detachedPanelCount: document.querySelectorAll('[data-editor-parking] [data-wfa-detail-panel]').length,
+        }));
+        if (!inlineOwnership.nextIsEditor || !inlineOwnership.panelIsInEditor || inlineOwnership.detachedPanelCount) {
+          throw new Error(`Selected Task Type editor is not expanded immediately beneath its route row in ${locale.lang}: ${JSON.stringify(inlineOwnership)}`);
         }
         if (viewport.name === 'mobile') {
           const routingTableOverflow = await editForm.locator('.wizard-plan-table').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, tableClient: node.querySelector('table').clientWidth, tableScroll: node.querySelector('table').scrollWidth }));
@@ -640,13 +643,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const add = rect('.production-routing-editor-actions');
           const editor = rect('.production-wfa-edit-panel');
           const footer = rect('.production-routing-editor-footer');
+          const selected = form.querySelector('[data-routing-row].selected');
+          const editorRow = selected.nextElementSibling.getBoundingClientRect();
           const additional = form.querySelector('[data-wfa-additional]').getBoundingClientRect();
           const automatic = form.querySelector('[data-wfa-automatic]').getBoundingClientRect();
-          return { tableToAdd: add.top - table.bottom, addToEditor: editor.top - add.bottom, editorToFooter: footer.top - editor.bottom,
+          return { addAfterTable: add.top - table.bottom, editorRowGap: editorRow.top - selected.getBoundingClientRect().bottom, panelInsideRow: editor.top >= editorRow.top && editor.bottom <= editorRow.bottom,
+            panelToFooter: footer.top - editor.bottom,
             additionalLeft: additional.left, automaticLeft: automatic.left };
         });
-        if (editSpacing.tableToAdd < 16 || editSpacing.addToEditor < 16 || editSpacing.editorToFooter < 12 || Math.abs(editSpacing.additionalLeft - editSpacing.automaticLeft) > 2) {
-          throw new Error(`Notifications edit spacing or WFA field-grid alignment is cramped/misaligned in ${locale.lang}: ${JSON.stringify(editSpacing)}`);
+        if (editSpacing.addAfterTable < 16 || Math.abs(editSpacing.editorRowGap) > 1 || !editSpacing.panelInsideRow || editSpacing.panelToFooter < 12 || Math.abs(editSpacing.additionalLeft - editSpacing.automaticLeft) > 2) {
+          throw new Error(`Notifications inline editor spacing or WFA field-grid alignment is cramped/misaligned in ${locale.lang}: ${JSON.stringify(editSpacing)}`);
         }
         const automaticPanel = editForm.locator('[data-wfa-automatic]');
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
@@ -654,6 +660,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes(animationAutomatic[0])) {
           throw new Error(`selecting a route did not select its matching Automatic WFA summary in ${locale.lang}`);
         }
+        if (!(await editForm.locator('[data-routing-row][data-task-type="task-animation"] + [data-route-editor] [data-wfa-detail-panel]').count())) throw new Error('selecting a Task Type did not expand its editor immediately beneath that route');
         await editForm.locator('[data-select-task]').filter({ hasText: 'Compositing' }).click();
         await assertAutomatic(page, locale, compositingAutomatic);
 
@@ -699,7 +706,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const recipientUserCombo = addModal.locator('[data-wfa-user-combobox]');
         const userListbox = addModal.locator('[data-wfa-user-listbox]');
         if (!(await recipientUserCombo.isVisible()) || await candidateUsers.isVisible()) throw new Error('Add recipient user chooser must use a visible KitsuSync combobox and hidden native value control');
-        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-users-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await recipientUserCombo.click();
         if (!(await userListbox.isVisible()) || await recipientUserCombo.getAttribute('aria-expanded') !== 'true') throw new Error('Add recipient user listbox did not open from the accessible combobox');
         if (!(await userListbox.evaluate(node => !!node.closest('dialog[data-wfa-add-modal]')))) throw new Error('Add recipient listbox must remain in the native dialog top layer');
@@ -724,7 +731,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await candidateUsers.inputValue() !== '22222222222222225' || await recipientUserCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Choosing a linked User did not update the preserved recipient value control');
         await addModal.locator('[data-wfa-add-confirm]').click();
         await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('#wfa-role-tab').click();
+        if (!(await addModal.locator('[data-wfa-role-combobox]').isVisible())) throw new Error('explicit Roles mode did not reveal the eligible Discord Role picker');
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-roles-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await addModal.locator('[data-wfa-role-combobox]').click();
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-roles-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
         await addModal.locator('[data-wfa-role-listbox] [data-wfa-option-value="33333333333333331"]').click();
         if (await candidateRoles.inputValue() !== '33333333333333331') throw new Error('Choosing a mentionable Role did not update the preserved recipient value control');
         await addModal.locator('[data-wfa-add-confirm]').click();
@@ -744,6 +755,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const newTypeSelect = editForm.locator('[data-routing-new-row] select[name="task_type_id"]');
         await newTypeSelect.selectOption('task-unassigned');
         const pendingRow = editForm.locator('[data-routing-row][data-task-type="task-unassigned"]');
+        if (!(await pendingRow.isVisible()) || !(await pendingRow.evaluate(row => row.nextElementSibling?.querySelector('[data-wfa-detail-panel]')))) throw new Error(`Add Task Type did not open a single inline draft configuration unit in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-add-task-type-inline-${locale.lang}-${viewport.name}.png`), fullPage: true });
         if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? 'Supervisorなし' : 'No Supervisor')) {
           throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
         }
@@ -766,6 +779,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await pendingRow.locator('[data-routing-remove]').click();
         await pendingRow.locator('.routing-row-menu summary').click();
         if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
+        await page.screenshot({ path: path.join(output, `production-notifications-pending-removal-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
 
         let submittedApply = null;
@@ -841,6 +855,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const reuseSelect = reuseForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]');
         const reusableWebhookID = await reuseSelect.locator('option').evaluateAll(options => options.find(option => /^\d+$/.test(option.value))?.value || '');
         if (!reusableWebhookID) throw new Error('managed Discord channel choices are unavailable for an unrouted Task Type');
+        await reuseSelect.click();
+        await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-selector-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
         await reuseSelect.selectOption(reusableWebhookID);
         await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
         let reusedPayload = null;
@@ -1114,7 +1130,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       } else {
         await gotoWFARecipients(page, locales[0]);
         const text = await page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]').innerText();
-        if (!text.includes(state.expected)) throw new Error(`${state.name} Automatic state is unclear: ${text}`);
+        if (!text.toLowerCase().includes(state.expected.toLowerCase())) throw new Error(`${state.name} Automatic state is unclear: ${text}`);
       }
       await record(page, state.team ? '/bot/admin/projects?tab=team' : '/bot/admin/projects?tab=notifications', 'en', 'desktop', state.name, `visible fail-closed state: ${state.expected}`);
     }
@@ -1122,11 +1138,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await gotoWFARecipients(page, locales[0], '&edit_routing=1');
     await page.locator('[data-wfa-add-target]').click();
     const emptyRoleModal = page.locator('[data-wfa-add-modal]');
-    if (!(await emptyRoleModal.innerText()).includes('No mentionable Discord roles are available')) throw new Error('No-role empty state is not explained in the Add recipient dialog');
+    await emptyRoleModal.locator('#wfa-role-tab').click();
+    if (!(await emptyRoleModal.innerText()).includes('No eligible Discord roles available')) throw new Error('No-role empty state is not explained in the Add recipient dialog');
     if (await emptyRoleModal.locator('[data-wfa-role-id] option[value="33333333333333331"]').count()) throw new Error('no-roles scenario left a Role target available');
-    await emptyRoleModal.locator('[data-wfa-role-combobox]').click();
-    const disabledRole = emptyRoleModal.locator('[data-wfa-role-listbox] [aria-disabled="true"]');
-    if (!(await disabledRole.isVisible()) || (await disabledRole.evaluate(node => ({ color: getComputedStyle(node).color, background: getComputedStyle(node).backgroundColor, cursor: getComputedStyle(node).cursor }))).cursor !== 'not-allowed') throw new Error('No-role listbox does not show a readable, clearly disabled option state');
+    if (await emptyRoleModal.locator('[data-wfa-role-combobox]:visible').count()) throw new Error('No-role state must explain the empty list without showing a blank picker');
+    await page.screenshot({ path: path.join(output, 'production-notifications-add-recipient-roles-empty-en-desktop.png'), fullPage: true });
     await emptyRoleModal.locator('[data-wfa-add-cancel]').click();
     await fixture(page, 'ready');
 
@@ -1313,11 +1329,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await gotoProduction(page, locale, 'notifications');
         const routeRows = page.locator('.production-notification-table tbody tr[data-task-type-id]');
-        if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await routeRows.first().locator('.production-wfa-summary-line').count() !== 1 || await routeRows.first().locator('[data-wfa-group]').count() !== 2) throw new Error(`Sparse Notifications lost the one-route table/WFA summary structure in ${locale.lang}`);
+        const sparseRecipientSummary = routeRows.first().locator('[data-wfa-recipients]');
+        if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await sparseRecipientSummary.count() !== 1 || await sparseRecipientSummary.locator('.production-wfa-state-chip').innerText() !== (locale.lang === 'ja' ? '通知先なし' : 'No recipients') || await sparseRecipientSummary.getAttribute('aria-label') !== (locale.lang === 'ja' ? '通知先なし' : 'No recipients')) throw new Error(`Sparse Notifications lost the one-route table/effective no-recipient summary in ${locale.lang}`);
         const sparseTableStyle = await page.locator('.production-notification-table').evaluate(node => { const style = getComputedStyle(node); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; });
         if (sparseTableStyle.border !== 'none' || sparseTableStyle.width !== '0px' || sparseTableStyle.radius !== '0px' || sparseTableStyle.background !== 'rgba(0, 0, 0, 0)') throw new Error(`Sparse Notifications table does not follow open table styling in ${locale.lang}: ${JSON.stringify(sparseTableStyle)}`);
         await page.screenshot({ path: path.join(output, `production-sparse-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact single-row Automatic/Additional summary');
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact effective-recipient summary');
 
         await gotoProduction(page, locale, 'team');
         if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 5 || await page.locator('.production-team-table col').count() !== 5) throw new Error(`Sparse Team lost its single row/five-column table structure in ${locale.lang}`);

@@ -208,7 +208,7 @@ func TestCurrentRoutingEditorRendersOneInlineEditorPerRouteAndDraft(t *testing.T
 		t.Fatal("configured route row is incomplete")
 	}
 	afterRoute := strings.TrimSpace(body[routeStart+routeEnd+len(`</tr>`):])
-	if !strings.HasPrefix(afterRoute, `<tr data-route-editor data-task-type="task-storyboard"`) {
+	if !strings.HasPrefix(afterRoute, `<tr class="routing-inline-editor-row" data-route-editor data-route-editor-task="task-storyboard"`) {
 		t.Fatal("route editor must be rendered immediately after its route row")
 	}
 	if strings.Contains(body, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`) {
@@ -234,13 +234,17 @@ func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *
 			Roles:      []DiscordGuildRole{{ID: roleID, Name: "comp-leads", Mentionable: true}},
 			RolesReady: true,
 		})
-		for _, want := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, tc.user, tc.role, `data-wfa-option-value="` + roleID + `"`, tc.empty} {
+		for _, want := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, tc.user, tc.role, `data-wfa-option-value="` + roleID + `"`} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s recipient picker missing %q", tc.lang, want)
 			}
 		}
 		if strings.Count(body, `data-wfa-user-combobox`) != 1 || strings.Count(body, `data-wfa-role-combobox`) != 1 {
 			t.Errorf("%s recipient picker should expose one combobox for each explicit mode", tc.lang)
+		}
+		emptyBody := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{RolesReady: true})
+		if !strings.Contains(emptyBody, tc.empty) {
+			t.Errorf("%s role mode should explain the empty candidate state", tc.lang)
 		}
 	}
 }
@@ -273,8 +277,11 @@ func TestCurrentRoutingEditorScriptFindsSiblingAddDialog(t *testing.T) {
 	if !strings.Contains(script, `form.parentElement.querySelector('[data-wfa-add-modal]')`) {
 		t.Fatal("Apply editor script must find the add-recipient dialog outside the Apply form")
 	}
-	if !strings.Contains(script, `var select=kind==='role'?modal.querySelector('[data-wfa-role-id]'):modal.querySelector('[data-wfa-user-id]')`) {
-		t.Fatal("pending recipient labels must be resolved from options in the sibling add-recipient dialog")
+	if !strings.Contains(script, `var kind=modal.dataset.recipientMode,select=modal.querySelector(kind==='role'?'[data-wfa-role-id]':'[data-wfa-user-id]')`) {
+		t.Fatal("recipient mode tabs must select the exact User or Role value control")
+	}
+	if !strings.Contains(script, `host.appendChild(panel)`) || !strings.Contains(script, `editor.hidden=false`) {
+		t.Fatal("selected Task Type editor must move into the adjacent inline editor row")
 	}
 }
 
