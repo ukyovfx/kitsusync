@@ -862,7 +862,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await refreshRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await refreshRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('Automatic destination is not the new route default');
         await refreshRow.locator('[data-destination-control]').selectOption('__custom__');
         if (!(await refreshRow.locator('[data-custom-channel-field]').isVisible()) || await refreshRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('custom channel staging did not expose the normalized Task Type default inline');
-        await refreshForm.locator('input[data-new-channel-name]').fill('unassigned-custom');
+        await refreshRow.locator('input[data-new-channel-name]').fill('unassigned-custom');
         await page.screenshot({ path: path.join(output, `production-notifications-add-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.reload({ waitUntil: 'networkidle' });
         if (page.url().includes('edit_routing=1') && await page.locator('[data-current-routing-form] [data-routing-row][data-task-type="task-unassigned"]').count()) {
