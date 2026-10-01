@@ -1171,7 +1171,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await page.locator('main').innerText()).includes(state.expected)) throw new Error(`${state.name} Team state is unclear`);
       } else {
         await gotoWFARecipients(page, locales[0], '&edit_routing=1');
-        const automatic = page.locator('[data-current-routing-form] [data-wfa-automatic]');
+        const editForm = page.locator('[data-current-routing-form]');
+        const matchingRoute = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
+        await matchingRoute.locator('[data-select-task]').click();
+        const automatic = editForm.locator('[data-wfa-automatic]');
+        if (!(await automatic.isVisible())) throw new Error(`${state.name} WFA detail did not open for the selected Task Type`);
         const automaticText = await automatic.innerText();
         if (!automaticText.toLowerCase().includes(state.expected.toLowerCase())) throw new Error(`${state.name} Automatic state is unclear in the read-only editor summary: ${automaticText}`);
         await gotoWFARecipients(page, locales[0]);
