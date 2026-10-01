@@ -1188,7 +1188,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
     await fixture(page, 'no-roles');
     await gotoWFARecipients(page, locales[0], '&edit_routing=1');
-    await page.locator('[data-wfa-add-target]').click();
+    const emptyRoleEditForm = page.locator('[data-current-routing-form]');
+    await emptyRoleEditForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+    await emptyRoleEditForm.locator('[data-wfa-add-target]').click();
     const emptyRoleModal = page.locator('[data-wfa-add-modal]');
     await emptyRoleModal.locator('#wfa-role-tab').click();
     if (!(await emptyRoleModal.innerText()).includes('No eligible Discord roles available')) throw new Error('No-role empty state is not explained in the Add recipient dialog');
