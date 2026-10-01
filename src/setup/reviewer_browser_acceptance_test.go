@@ -110,12 +110,18 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, `{"access_token":"synthetic-manager-session-token","user":{"role":"manager"}}`)
 		case "/api/data/projects/":
-			_, _ = io.WriteString(w, `[{"id":"reviewer-production","name":"Synthetic Review Production"}]`)
+			projects := []kitsu.Project{{ID: "reviewer-production", Name: "Synthetic Review Production"}}
+			if scenario.Load().(string) == "unconnected-production" {
+				projects = append(projects, kitsu.Project{ID: "reviewer-unconnected", Name: "Synthetic Unconnected Production"})
+			}
+			_ = json.NewEncoder(w).Encode(projects)
 		case "/api/data/persons/":
 			persons := reviewerBrowserPeople()
 			_ = json.NewEncoder(w).Encode(persons)
 		case "/api/data/projects/reviewer-production/team":
 			switch scenario.Load().(string) {
+			case "sparse-production":
+				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"}})
 			case "team-failure":
 				http.Error(w, "synthetic team failure", http.StatusForbidden)
 			case "empty-team":
@@ -130,7 +136,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(reviewerBrowserTeam())
 			}
 		case "/api/data/projects/reviewer-production/task-types":
-			_, _ = io.WriteString(w, `[{"id":"task-comp","name":"Compositing","department_id":"dept-comp","department_name":"Compositing","active":true},{"id":"task-animation","name":"Animation","department_id":"dept-animation","department_name":"Animation","active":true},{"id":"task-unassigned","name":"Unassigned","active":true}]`)
+			_, _ = io.WriteString(w, `[{"id":"task-comp","name":"Compositing","department_id":"dept-comp","department_name":"Compositing","active":true},{"id":"task-animation","name":"Animation","department_id":"dept-animation","department_name":"Animation","active":true},{"id":"task-unassigned","name":"Unassigned","active":true},{"id":"task-concept","name":"Concept","active":true},{"id":"task-modeling","name":"Modeling","active":true}]`)
+		case "/api/data/projects/reviewer-unconnected/task-types":
+			_, _ = io.WriteString(w, `[{"id":"task-live","name":"Live Task Type","active":true}]`)
 		default:
 			if strings.HasPrefix(r.URL.Path, "/api/data/persons/") {
 				personID := strings.TrimPrefix(r.URL.Path, "/api/data/persons/")
@@ -165,12 +173,22 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.synthetic.invalid/webhook", "channel-comp"); err != nil {
 		t.Fatal("seed synthetic routing destination")
 	}
-	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "animation", "animation", "https://discord.synthetic.invalid/webhook", "channel-animation"); err != nil {
+		t.Fatal("seed second synthetic routing destination")
+	}
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	if len(webhooks) != 2 {
+		t.Fatal("expected two synthetic routing destinations")
+	}
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID},
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", DestinationWebhookID: webhooks[1].ID},
+	}); err != nil {
 		t.Fatal("seed synthetic notification route")
 	}
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now()})
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: "other-production", ProjectName: project.Name, EntityName: "Must not leak", Success: true, CreatedAt: time.Now()})
+	model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{ProductionID: project.KitsuProjectID, Reason: "synthetic route check", Detail: "Synthetic route needs review", CreatedAt: time.Now()})
 	seedBrowserMonitoringCycles := func() {
 		cycleAt := time.Now().Truncate(time.Millisecond)
 		Stats.mu.Lock()
@@ -189,10 +207,27 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			t.Fatal("seed disposable global User Linking")
 		}
 	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "22222222222222234"); err != nil {
+		t.Fatal("seed synthetic additional WFA user")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "22222222222222225"); err != nil {
+		t.Fatal("seed synthetic linked User for effective-recipient summary")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetRole, "33333333333333331"); err != nil {
+		t.Fatal("seed synthetic Role for effective-recipient summary")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-animation", "Animation", model.ReviewerTargetRole, "33333333333333331"); err != nil {
+		t.Fatal("seed synthetic additional WFA role")
+	}
 
 	unexpectedDiscord := make(chan string, 16)
 	oldTransport := http.DefaultTransport
-	http.DefaultTransport = reviewerBrowserDiscordTransport{scenario: &scenario, unexpected: unexpectedDiscord}
+	http.DefaultTransport = reviewerBrowserDiscordTransport{
+		scenario:      &scenario,
+		unexpected:    unexpectedDiscord,
+		kitsuHost:     strings.TrimPrefix(kitsuFixture.URL, "http://"),
+		baseTransport: oldTransport,
+	}
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -202,6 +237,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	appURL := "http://" + listener.Addr().String()
 	mux := http.NewServeMux()
 	mux.Handle("GET /favicon.ico", FaviconHandler())
+	mux.Handle("GET /kitsusync.svg", KitsuSyncIconHandler())
 	login := LoginRateLimit(http.HandlerFunc(LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
 		return KitsuLoginAuthority{RuntimeHost: kitsuFixture.URL, Source: "explicit"}
 	}, nil, nil)))
@@ -209,7 +245,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	ready := func() bool { return true }
 	mux.HandleFunc("/bot/admin", RequireSession(AdminIndexWithRuntime(db, ready)))
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
+	mux.Handle("/bot/admin/bot", RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true })))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
+	mux.HandleFunc("/bot/admin/audit", RequireSession(AuditLogHandler(db)))
 	health := HealthHandler(db)
 	mux.HandleFunc("/bot/admin/health", RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The browser suite visits several pages before System Status; reseed
@@ -222,7 +260,27 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "discord-failure", "stale-membership":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "discord-failure", "stale-membership", "unconnected-production":
+			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "sparse-production":
+			webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+			if len(webhooks) == 0 || model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID}}) != nil {
+				http.Error(w, "could not configure sparse Production fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("project_id = ?", project.ID).Delete(&model.ProjectReviewerTarget{}).Error; err != nil {
+				http.Error(w, "could not clear sparse Reviewer fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("project_id = ?", project.KitsuProjectID).Delete(&model.AuditLog{}).Error; err != nil {
+				http.Error(w, "could not clear sparse activity fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("production_id = ?", project.KitsuProjectID).Delete(&model.NotificationRoutingDiagnosis{}).Error; err != nil {
+				http.Error(w, "could not clear sparse issue fixture", http.StatusInternalServerError)
+				return
+			}
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -255,7 +313,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 
 func reviewerBrowserTeam() []kitsu.Person {
 	return []kitsu.Person{
-		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor"},
+		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor", Departments: []string{"dept-comp"}},
 		{ID: "person-no-department", FullName: "Departmentless Supervisor", Email: "no-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-wrong-department", FullName: "Wrong Department Supervisor", Email: "wrong-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"},
@@ -328,11 +386,16 @@ func reviewerBrowserUserMaps() []model.UserMap {
 }
 
 type reviewerBrowserDiscordTransport struct {
-	scenario   *atomic.Value
-	unexpected chan<- string
+	scenario      *atomic.Value
+	unexpected    chan<- string
+	kitsuHost     string
+	baseTransport http.RoundTripper
 }
 
 func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && r.URL.Path == "/api/" && r.URL.RawQuery == "" {
+		return d.baseTransport.RoundTrip(r)
+	}
 	if r.URL.Host != "discord.com" || r.Header.Get("Authorization") != "Bot "+reviewerBrowserBot {
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:

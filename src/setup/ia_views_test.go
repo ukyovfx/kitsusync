@@ -599,18 +599,22 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Notification routing", "Kitsu Task Type", "Discord Channel", "Edit"} {
+	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "Edit"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
 	}
+	if strings.Contains(body, "Notification routing") {
+		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
+	}
 	if strings.Contains(body, "Notification preview") || strings.Contains(body, "Example task") || strings.Contains(body, "discord-message-preview") {
 		t.Fatal("Notifications retained the removed synthetic preview")
 	}
-	for _, want := range []string{"WFA recipients", "Automatic recipients", "Additional recipients"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("Notifications missing WFA recipient section %q", want)
-		}
+	if !strings.Contains(body, "No notification routing is configured.") {
+		t.Fatal("empty Notifications state should explain that no routed Task Types exist")
+	}
+	if strings.Contains(body, "Automatic recipients") || strings.Contains(body, "Additional recipients") {
+		t.Fatal("empty routing state should not show recipient summaries without a routed Task Type")
 	}
 	if strings.Contains(body, `name="action" value="save"`) {
 		t.Fatal("normal Notifications UI exposes routing editor controls")
@@ -1298,15 +1302,22 @@ func TestReadOnlyProductionUsesDedicatedUnconnectedView(t *testing.T) {
 
 func TestProductionTeamShowsLinkedDiscordDisplayName(t *testing.T) {
 	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production"}
+	p := model.Project{KitsuProjectID: "participant-display-p", Name: "Participant Display Production", DiscordGuildID: "123456789012345678"}
 	db.Create(&p)
 	db.Create(&model.UserMap{KitsuID: "synthetic-participant", KitsuName: "Synthetic Participant", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord Name"})
 	oldReader := reviewerProductionTeamReader
+	oldMembers := reviewerGuildMembersForGuild
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
 		return []kitsu.Person{{ID: "synthetic-participant", FullName: "Synthetic Participant"}}, nil
 	}
-	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
-	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en")
+	reviewerGuildMembersForGuild = func(_, token string) ([]DiscordGuildMember, error) {
+		if token != "synthetic-token" {
+			t.Fatalf("unexpected Discord token %q", token)
+		}
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345678", "ukyo", "Synthetic Discord Name", "")}, nil
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldReader, oldMembers })
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=participant-display-p&tab=users&lang=en", nil), p, "en", "synthetic-token")
 	if !strings.Contains(body, "Synthetic Discord Name") {
 		t.Fatal("Production User Settings did not show the linked Discord display name")
 	}
@@ -1327,15 +1338,21 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	for _, expected := range []string{"Notification routing", "Kitsu Task Type", "Discord Channel", "Edit"} {
+	for _, expected := range []string{"Kitsu Task Type", "Discord Channel", "Edit"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
 	}
-	for _, expected := range []string{"WFA recipients", "Automatic recipients", "Additional recipients", "Task Type"} {
+	if strings.Contains(body, "Notification routing") {
+		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
+	}
+	for _, expected := range []string{"WFA recipients", "Unavailable", "Task Type", `data-wfa-recipients`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Notifications missing %q", expected)
 		}
+	}
+	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
+		t.Fatal("read mode must show effective recipients without Automatic/Additional provenance")
 	}
 	for _, forbidden := range []string{"Notification preview", "Task Type to preview", "Example task rendered", "Please review this task."} {
 		if strings.Contains(body, forbidden) {
@@ -1346,16 +1363,16 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal("default notification routing should be read-only")
 	}
 	editBody := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&edit_routing=1&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	if !strings.Contains(editBody, `name="action" value="save_current_production_routing"`) {
-		t.Fatal("explicit routing edit mode did not expose the save action")
+	if !strings.Contains(editBody, `data-async-notification-apply`) || !strings.Contains(editBody, `data-wfa-detail-panel`) {
+		t.Fatal("explicit routing edit mode did not expose one staged Apply flow with linked WFA panel")
 	}
 	body = editBody
-	for _, expected := range []string{"Apply changes", "Cancel", "Add Task Type", "data-routing-row", "data-routing-new-row"} {
+	for _, expected := range []string{"Apply", "Cancel", "Add Task Type", "data-routing-row", "data-routing-row-template"} {
 		if !strings.Contains(editBody, expected) {
 			t.Fatalf("staged routing editor missing %q", expected)
 		}
 	}
-	for _, expected := range []string{"class=\"routing-task-type-name\">Compositing", "class=\"routing-row-menu\"", "name=\"task_type_id\" value=\"compositing\""} {
+	for _, expected := range []string{"class=\"routing-task-type-name\">Compositing", "class=\"routing-row-menu\"", `data-task-type="compositing"`} {
 		if !strings.Contains(editBody, expected) {
 			t.Fatalf("compact routing row missing %q: %s", expected, editBody)
 		}
@@ -2026,7 +2043,7 @@ func TestCurrentNotificationRoutingIsReadOnlyUntilExplicitEdit(t *testing.T) {
 	if strings.Contains(body, `name="action" value="save"`) {
 		t.Fatal("default routing view exposed an edit form")
 	}
-	if !strings.Contains(body, "Notification routing") || !strings.Contains(body, "Edit") {
+	if !strings.Contains(body, "Kitsu Task Type") || !strings.Contains(body, "Edit") || strings.Contains(body, "Notification routing") {
 		t.Fatal("read-only routing summary missing")
 	}
 }
@@ -2068,10 +2085,13 @@ func TestCurrentProductionTeamRendersSimpleReadOnlyFlow(t *testing.T) {
 	}
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerTaskTypesForProduction = oldReader, oldTasks })
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=simple-flow-production&tab=team&lang=en", nil), p, "en")
-	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Department", "Supervision scope"} {
+	for _, want := range []string{"Team", "Kitsu role", "Linked Human", "Artist", "Department"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("simple flow missing %q: %s", want, body)
 		}
+	}
+	if strings.Contains(body, `class="production-team-supervisor-scope"`) {
+		t.Fatalf("ordinary Artist was given a Supervisor scope: %s", body)
 	}
 	for _, forbidden := range []string{"Add a user", "add_production_user", "Assigned", "remove_production_user"} {
 		if strings.Contains(body, forbidden) {
@@ -2085,7 +2105,7 @@ func TestCurrentProductionTeamRendersSimpleReadOnlyFlow(t *testing.T) {
 
 func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testing.T) {
 	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "kitsu-team-production", Name: "Kitsu Team Production"}
+	project := model.Project{KitsuProjectID: "kitsu-team-production", Name: "Kitsu Team Production", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -2104,7 +2124,7 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	if err := db.Create(&model.ProjectUserMap{ProjectID: project.ID, KitsuName: "Legacy Person", DiscordUserID: "123456789012345680"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	oldReader := reviewerProductionTeamReader
+	oldReader, oldMembers := reviewerProductionTeamReader, reviewerGuildMembersForGuild
 	reviewerProductionTeamReader = func(_ *gorm.DB, projectID string) ([]kitsu.Person, error) {
 		if projectID != project.KitsuProjectID {
 			t.Fatalf("Kitsu team read project ID = %q, want %q", projectID, project.KitsuProjectID)
@@ -2115,9 +2135,12 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 			{ID: "person-bot", FullName: "Kitsu Bot", IsBot: true},
 		}, nil
 	}
-	t.Cleanup(func() { reviewerProductionTeamReader = oldReader })
+	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
+		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345678", "ukyo", "ukyo", "")}, nil
+	}
+	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldReader, oldMembers })
 
-	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en", "synthetic-token")
 	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Not linked", "/bot/admin/users", "Kitsu role"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
@@ -2334,7 +2357,7 @@ func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *t
 		reviewerGuildMembersForGuild = oldGuildMembers
 	})
 
-	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=team&lang=en", nil), project, "en")
+	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=team&lang=en", nil), project, "en", "synthetic-discord-token")
 	for _, want := range []string{"Ukyo Matsuo", "@ukyo", "Supervisor", "Comp", "Comp: Compositing, Roto", "Supervisor scope is derived from Departments", "does not indicate actual task assignments", "Linked"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Production Team UI missing %q: %s", want, body)

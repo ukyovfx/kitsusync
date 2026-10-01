@@ -42,6 +42,19 @@ func TestFaviconRouteServesICO(t *testing.T) {
 	}
 }
 
+func TestKitsuSyncIconRouteServesEmbeddedSVG(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.Handle("GET /kitsusync.svg", KitsuSyncIconHandler())
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/kitsusync.svg", nil))
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/svg+xml" {
+		t.Fatalf("KitsuSync SVG status/type = %d/%q", response.Code, response.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(response.Body.String(), `<svg id="Layer_1"`) || !strings.Contains(response.Body.String(), `fill: #fc8742`) {
+		t.Fatal("KitsuSync SVG response does not contain the supplied brand artwork")
+	}
+}
+
 func TestFaviconMetadataPreservesLoginAndAdminPages(t *testing.T) {
 	login := loginPageHTML("en", "", "", false, httptest.NewRequest(http.MethodGet, "/bot/login", nil))
 	if !strings.Contains(login, `<form method="POST" class="section-stack">`) || !strings.Contains(login, `type="password"`) {
@@ -50,6 +63,9 @@ func TestFaviconMetadataPreservesLoginAndAdminPages(t *testing.T) {
 	if !strings.Contains(login, `<link rel="icon" href="/favicon.ico" type="image/x-icon">`) {
 		t.Fatal("login page does not reference the served favicon")
 	}
+	if !strings.Contains(login, `<link rel="icon" href="/kitsusync.svg" type="image/svg+xml">`) {
+		t.Fatal("login page does not reference the supplied KitsuSync icon")
+	}
 
 	admin := appShell("Dashboard", "", "en", httptest.NewRequest(http.MethodGet, "/bot/admin", nil), `<a href="/bot/admin">Admin</a>`, `<h1>Dashboard</h1>`)
 	if !strings.Contains(admin, `<h1>Dashboard</h1>`) || !strings.Contains(admin, `class="admin-surface"`) {
@@ -57,5 +73,8 @@ func TestFaviconMetadataPreservesLoginAndAdminPages(t *testing.T) {
 	}
 	if !strings.Contains(admin, `<link rel="icon" href="/favicon.ico" type="image/x-icon">`) {
 		t.Fatal("admin page does not reference the served favicon")
+	}
+	if !strings.Contains(admin, `<link rel="icon" href="/kitsusync.svg" type="image/svg+xml">`) {
+		t.Fatal("admin page does not reference the supplied KitsuSync icon")
 	}
 }

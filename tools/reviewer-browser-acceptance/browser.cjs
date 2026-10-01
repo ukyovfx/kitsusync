@@ -13,10 +13,17 @@ fs.mkdirSync(output, { recursive: true });
 
 const records = [];
 const errors = [];
+function isNotificationsApplyRequest(request) {
+  const actual = new URL(request.url());
+  const expected = new URL('/bot/admin/projects?apply_notifications=1', base);
+  return request.method() === 'POST' && actual.origin === expected.origin && actual.pathname === expected.pathname && actual.search === expected.search;
+}
 const locales = [
-  { lang: 'en', automatic: 'Automatic recipients', overrides: 'Additional recipients', supervisor: 'Project Supervisor', comp: 'Compositing Supervisor', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
-  { lang: 'ja', automatic: '自動通知先', overrides: '追加通知先', supervisor: 'Project Supervisor', comp: 'Compositing担当', tabs: ['概要', '通知', 'チーム', '設定'] },
+  { lang: 'en', automatic: 'Automatic', overrides: 'Additional', tabs: ['Overview', 'Notifications', 'Team', 'Settings'] },
+  { lang: 'ja', automatic: '自動', overrides: '追加', tabs: ['概要', '通知', 'チーム', '設定'] },
 ];
+const compositingAutomatic = ['@Guild Nick Supervisor', '@Global Name Fallback', '@username-fallback'];
+const animationAutomatic = ['@Wrong Department Global'];
 const viewports = [
   { name: 'desktop', width: 1440, height: 1000 },
   { name: 'mobile', width: 390, height: 844 },
@@ -77,18 +84,17 @@ async function gotoProduction(page, locale, tab, extra = '') {
   await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${tab}&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
-function automaticGroup(page, locale) {
-  const heading = page.getByRole('heading', { name: locale.automatic, exact: true });
-  return page.locator('.reviewer-group').filter({ has: heading });
-}
-
-function overridesGroup(page, locale) {
-  const heading = page.getByRole('heading', { name: locale.overrides, exact: true });
-  return page.locator('.reviewer-group').filter({ has: heading });
+async function automaticGroup(page, locale) {
+	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-automatic]');
+	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-recipients]');
 }
 
 async function assertAutomatic(page, locale, expected, forbidden = []) {
-  const text = await automaticGroup(page, locale).innerText();
+	const group = await automaticGroup(page, locale);
+	const compactSummary = group.locator('.production-wfa-chip-row[aria-label]');
+	const text = (await group.getAttribute('aria-label')) || ((await compactSummary.count())
+		? await compactSummary.getAttribute('aria-label')
+		: await group.innerText());
   for (const value of expected) if (!text.includes(value)) throw new Error(`Automatic is missing ${value}`);
   for (const value of forbidden) if (text.includes(value)) throw new Error(`Automatic includes ineligible person ${value}`);
 }
@@ -351,8 +357,41 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: false });
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
     const page = await context.newPage();
+    let expectedStaleApply = null;
+    let expectedChannelCreateFailure = null;
     page.on('pageerror', error => errors.push(error.message));
-    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('console', message => {
+      if (message.type() !== 'error') return;
+      const text = message.text();
+      const isExpectedConflictConsole = /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/.test(text);
+      if (isExpectedConflictConsole && expectedStaleApply?.active && expectedStaleApply.requestSeen) {
+        expectedStaleApply.console409Messages.push(text);
+        return;
+      }
+      const isExpectedChannelCreateConsole = /^Failed to load resource: the server responded with a status of 502 \(Bad Gateway\)$/.test(text);
+      if (isExpectedChannelCreateConsole && expectedChannelCreateFailure?.active && expectedChannelCreateFailure.requestSeen) {
+        expectedChannelCreateFailure.console502Messages.push(text);
+        return;
+      }
+      errors.push(text);
+    });
+    page.on('response', response => {
+      if (response.status() < 400) return;
+      const request = response.request();
+      const staleScenario = expectedStaleApply;
+      if (response.status() === 409 && staleScenario?.active && staleScenario.requestSeen && isNotificationsApplyRequest(request) && staleScenario.responseCount === 0) {
+        staleScenario.responseCount += 1;
+        staleScenario.responseStatus = response.status();
+        return;
+      }
+      const createScenario = expectedChannelCreateFailure;
+      if (response.status() === 502 && createScenario?.active && createScenario.requestSeen && isNotificationsApplyRequest(request) && createScenario.responseCount === 0) {
+        createScenario.responseCount += 1;
+        createScenario.responseStatus = response.status();
+        return;
+      }
+      errors.push(`HTTP ${response.status()} ${request.method()} ${new URL(request.url()).pathname}`);
+    });
     const interceptedExternal = [];
     await page.route('**/*', route => {
       const url = new URL(route.request().url());
@@ -371,12 +410,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.setViewportSize({ width: viewport.width, height: viewport.height });
         await page.goto(`${base}/bot/login?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (locale === locales[0] && viewport === backgroundViewports[0]) {
-          const iconHref = await page.locator('link[rel="icon"]').getAttribute('href');
+          const iconHref = await page.locator('link[rel="icon"]').first().getAttribute('href');
           if (iconHref !== '/favicon.ico') throw new Error(`page icon link is unexpected: ${iconHref}`);
+          const iconLinks = await page.locator('link[rel="icon"]').evaluateAll(nodes => nodes.map(node => ({ href: node.getAttribute('href'), type: node.getAttribute('type') })));
+          if (!iconLinks.some(icon => icon.href === '/kitsusync.svg' && icon.type === 'image/svg+xml')) throw new Error('page does not reference the supplied KitsuSync SVG icon');
           const response = await page.request.get(`${base}${iconHref}`);
           const favicon = { status: response.status(), type: response.headers()['content-type'], bytes: (await response.body()).byteLength };
           if (favicon.status !== 200 || favicon.type !== 'image/x-icon' || favicon.bytes === 0) throw new Error(`favicon response is invalid: ${JSON.stringify(favicon)}`);
           records.push({ route: '/favicon.ico', locale: locale.lang, viewport: viewport.name, state: 'served', detail: `HTTP ${favicon.status}; ${favicon.type}; ${favicon.bytes} bytes` });
+          const svgIcon = await page.request.get(`${base}/kitsusync.svg`);
+          if (svgIcon.status() !== 200 || svgIcon.headers()['content-type'] !== 'image/svg+xml' || !(await svgIcon.text()).includes('fill: #fc8742')) throw new Error('supplied KitsuSync SVG icon did not serve correctly');
         }
         await assertBackgroundCanvas(page, 'login-fabric', locale, viewport, `login-background-${locale.lang}-${viewport.name}.png`);
         await assertLoginFabricGoldStandard(page, locale, viewport);
@@ -412,9 +455,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop-1440', state: 'reduced motion', detail: 'canvas frame remained stable with reduced motion enabled' });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
 
-    // Enter through the ordinary protected route and complete the ordinary login form.
-    await gotoWFARecipients(page, locales[0]);
-    if (!page.url().includes('/bot/login')) throw new Error('protected Production Users route did not redirect to login');
+    // Enter the sensitive Connections edit route as the ordinary login target.
+    // The normal login flow grants its existing short recent-auth window; this
+    // lets the visual reference capture render without bypassing the guard.
+    await page.goto(`${base}/bot/admin/bot?edit=1&lang=en`, { waitUntil: 'networkidle' });
+    if (!page.url().includes('/bot/login')) throw new Error('protected Connections edit route did not redirect to login');
     const unauthenticatedWrite = await page.request.post(`${base}/bot/admin/projects`, {
       form: { action: 'add_production_reviewer_target', project_id: 'reviewer-production', task_type_id: 'task-comp', target_kind: 'user', target_id: '22222222222222234' },
       maxRedirects: 0,
@@ -425,7 +470,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await page.locator('#login-email').fill(username);
     await page.locator('#login-password').fill(password);
     await page.getByRole('button', { name: 'Login', exact: true }).click();
-    await page.waitForURL(url => url.pathname === '/bot/admin/projects', { timeout: 10000 });
+    await page.waitForURL(url => url.pathname === '/bot/admin/bot' && url.searchParams.get('edit') === '1', { timeout: 10000 });
     if (await context.cookies(base).then(cookies => !cookies.some(cookie => cookie.name === 'kitsu_admin_session' && cookie.httpOnly))) {
       throw new Error('normal login did not establish the HttpOnly KitsuSync session');
     }
@@ -471,47 +516,448 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (overview.includes('Must not leak') || overview.includes('Current issues (0)')) throw new Error('Overview leaked cross-Production activity or invented a count');
         const overviewSections = await page.locator('.production-overview > .production-settings-section').evaluateAll(sections => sections.map(section => {
           const style = getComputedStyle(section);
-          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+          const emptyRows = [...section.querySelectorAll('.production-detail-state-row')].map(row => {
+            const rowStyle = getComputedStyle(row);
+            return { borderStyle: rowStyle.borderTopStyle, borderWidth: rowStyle.borderTopWidth, radius: rowStyle.borderRadius, background: rowStyle.backgroundColor, height: row.getBoundingClientRect().height };
+          });
+          return { borderStyle: style.borderTopStyle, borderWidth: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow, paddingTop: style.paddingTop, paddingBottom: style.paddingBottom, emptyRows,
+            issueRows: section.querySelectorAll('.production-issue-row').length, activityRows: section.querySelectorAll('.activity-row').length };
         }));
-        if (overviewSections.length < 2 || overviewSections[0].borderTopStyle !== 'none' || overviewSections.slice(1).some(section => section.borderTopStyle !== 'solid' || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
-          throw new Error(`Overview sections are not a compact divider hierarchy in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        if (overviewSections.length !== 3 || overviewSections.some((section, index) => section.borderStyle !== (index === 0 ? 'none' : 'solid') || (index > 0 && section.borderWidth !== '1px') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none' || parseFloat(index === 0 ? section.paddingBottom : section.paddingTop) < 18)) {
+          throw new Error(`Overview sections do not follow shared hairline sections in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
+        }
+        if (overviewSections[1].issueRows === 0 && (overviewSections[1].emptyRows.length !== 1 || overviewSections[1].emptyRows[0].borderStyle !== 'none' || overviewSections[1].emptyRows[0].radius !== '0px' || overviewSections[1].emptyRows[0].height < 38 || overviewSections[1].emptyRows[0].background === 'rgba(0, 0, 0, 0)') ||
+            overviewSections[2].activityRows === 0 && (overviewSections[2].emptyRows.length !== 1 || overviewSections[2].emptyRows[0].borderStyle !== 'none' || overviewSections[2].emptyRows[0].radius !== '0px' || overviewSections[2].emptyRows[0].height < 38 || overviewSections[2].emptyRows[0].background === 'rgba(0, 0, 0, 0)')) {
+          throw new Error(`Sparse Current Issues/Recent Activity are not inside subdued rows in ${locale.lang}: ${JSON.stringify(overviewSections)}`);
         }
         await page.screenshot({ path: path.join(output, `production-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, one current-issues section, exact-Production recent activity');
+        await page.screenshot({ path: path.join(output, `production-rich-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'overview', 'compact status, Current Issues and exact-Production Recent Activity sections remain visible');
 
         await gotoProduction(page, locale, 'notifications');
-        const routingHeadings = (await page.locator('.production-routing-summary-head strong').allTextContents()).map(text => text.trim());
-        if (!routingHeadings.includes('Kitsu Task Type') || !routingHeadings.includes(locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel')) {
+        const routingHeadings = (await page.locator('.production-notification-table thead th').allTextContents()).map(text => text.trim());
+        if (JSON.stringify(routingHeadings) !== JSON.stringify(['Kitsu Task Type', locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel', locale.lang === 'ja' ? 'WFA通知先' : 'WFA recipients'])) {
           throw new Error(`Notifications routing columns are missing or concatenated in ${locale.lang}: ${JSON.stringify(routingHeadings)}`);
         }
-        if (!(await page.locator('.production-routing-summary-row').innerText()).includes('#compositing')) throw new Error(`real seeded destination is missing in ${locale.lang}`);
+        const compReadRow = page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]');
+        if (!(await compReadRow.innerText()).includes('#compositing')) throw new Error(`real seeded destination is missing in ${locale.lang}`);
         if (await page.locator('[data-current-routing-form]').count()) throw new Error('Notifications read mode exposed routing edit controls');
         const editLink = page.getByRole('link', { name: locale.lang === 'ja' ? '編集' : 'Edit', exact: true });
         if (await editLink.count() !== 1) throw new Error(`Notifications should show one edit entry point in ${locale.lang}`);
+        const readActions = await page.locator('.production-notification-heading').evaluate(node => {
+          const badge = node.querySelector('.status-pill').getBoundingClientRect();
+          const edit = node.querySelector('a.btn-ghost').getBoundingClientRect();
+          return { badgeTop: badge.top, badgeBottom: badge.bottom, badgeHeight: badge.height, editTop: edit.top, editBottom: edit.bottom, editHeight: edit.height };
+        });
+        if (Math.abs((readActions.badgeTop + readActions.badgeBottom) / 2 - (readActions.editTop + readActions.editBottom) / 2) > 1 || readActions.badgeHeight >= readActions.editHeight) {
+          throw new Error(`Notifications Healthy status pill must stay vertically centered and visually distinct from the Edit action in ${locale.lang}: ${JSON.stringify(readActions)}`);
+        }
         if (await page.locator('#notification-preview,.discord-message-preview,[data-notification-preview-select]').count()) throw new Error(`Removed Notification Preview returned in ${locale.lang}`);
-        if (await page.locator('.production-wfa-recipients').count() !== 1) throw new Error(`WFA recipients are missing from Notifications in ${locale.lang}`);
-        if (!(await page.locator('#wfa-recipients').innerText()).includes(locale.automatic) || !(await page.locator('#wfa-recipients').innerText()).includes(locale.overrides)) {
-          throw new Error(`Notifications is missing Automatic or Additional recipients in ${locale.lang}`);
+        if (await page.locator('.production-wfa-recipients').count()) throw new Error(`Notifications view retained the former standalone Reviewer section in ${locale.lang}`);
+        const effectiveRecipients = await compReadRow.locator('[data-wfa-recipients]').getAttribute('aria-label');
+        for (const recipient of compositingAutomatic.concat(['Guild Nick Override', 'Artist Global', '@Reviewers'])) {
+          if (!effectiveRecipients.includes(recipient)) throw new Error(`effective WFA recipients omit ${recipient} in ${locale.lang}`);
         }
-        const notificationSections = await page.locator('.production-notifications > .production-settings-section').evaluateAll(sections => sections.map(section => {
-          const style = getComputedStyle(section);
-          return { borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
-        }));
-        if (notificationSections.length !== 2 || notificationSections[0].borderTopStyle !== 'none' || notificationSections[1].borderTopStyle !== 'solid' || notificationSections.some(section => section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || section.shadow !== 'none')) {
-          throw new Error(`Routing and WFA are not distinct flat sections in ${locale.lang}: ${JSON.stringify(notificationSections)}`);
+        if (await compReadRow.locator('[data-wfa-group],.production-wfa-kind').count()) {
+          throw new Error(`normal read mode exposes Automatic/Additional implementation provenance in ${locale.lang}`);
         }
+        const notificationColumnWidths = await page.locator('.production-notification-table thead th').evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
+        if (notificationColumnWidths.length !== 3 || notificationColumnWidths.some(width => parseFloat(width) <= 0)) throw new Error(`Notifications lost stable three-column geometry in ${locale.lang}: ${JSON.stringify(notificationColumnWidths)}`);
+        const effectiveChipRow = compReadRow.locator('[data-wfa-recipients] .production-wfa-chip-row');
+        if (await effectiveChipRow.locator('.production-wfa-target-chip').count() !== 2 || await effectiveChipRow.locator('.production-wfa-more-chip').innerText() !== '+4') throw new Error(`effective WFA recipients are not compactly truncated in ${locale.lang}`);
+        const summaryAlignment = await compReadRow.locator('[data-wfa-recipients]').evaluate(node => {
+          const rect = node.getBoundingClientRect(), table = node.closest('table').getBoundingClientRect();
+          return { left: rect.left, right: rect.right, tableLeft: table.left, tableRight: table.right, whiteSpace: getComputedStyle(node).whiteSpace };
+        });
+        if (summaryAlignment.left < summaryAlignment.tableLeft || summaryAlignment.right > summaryAlignment.tableRight || summaryAlignment.whiteSpace === 'normal') {
+          throw new Error(`effective recipient summary is not a compact single-line table value in ${locale.lang}/${viewport.name}: ${JSON.stringify(summaryAlignment)}`);
+        }
+        const notificationTable = await page.locator('.production-notification-table').evaluate(node => {
+          const style = getComputedStyle(node);
+          const header = getComputedStyle(node.querySelector('thead th'));
+          const firstRow = getComputedStyle(node.querySelector('tbody tr[data-task-type-id] th'));
+          return { border: style.borderTopStyle, borderWidth: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor, headerBackground: header.backgroundColor, headerPadding: header.paddingBlock, rowPadding: firstRow.paddingBlock };
+        });
+        if (notificationTable.border !== 'none' || notificationTable.borderWidth !== '0px' || notificationTable.radius !== '0px' || notificationTable.background !== 'rgba(0, 0, 0, 0)' || notificationTable.headerBackground !== 'rgba(0, 0, 0, 0)' || parseFloat(notificationTable.rowPadding) < 12) {
+          throw new Error(`Notifications table does not match the open Team table grammar in ${locale.lang}: ${JSON.stringify(notificationTable)}`);
+        }
+        if (viewport.name === 'mobile') {
+          const routeTableOverflow = await page.locator('.production-notification-table').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, tableClient: node.querySelector('table').clientWidth, tableScroll: node.querySelector('table').scrollWidth }));
+          if (routeTableOverflow.scroll > routeTableOverflow.client + 1 || routeTableOverflow.tableScroll > routeTableOverflow.tableClient + 1) throw new Error(`Notifications read table has an internal horizontal scroller on mobile in ${locale.lang}: ${JSON.stringify(routeTableOverflow)}`);
+        }
+        const recipientChips = await compReadRow.locator('.production-wfa-target-chip,.production-wfa-state-chip,.production-wfa-more-chip').count();
+        if (!recipientChips) throw new Error(`Notifications WFA recipients are not rendered as compact chips in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'real routing state and existing Automatic/additional-recipient controls; no synthetic Notification Preview');
+        await page.screenshot({ path: path.join(output, `production-rich-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        if ((await compReadRow.innerText()).includes(locale.lang === 'ja' ? '自動' : 'Automatic') || (await compReadRow.innerText()).includes(locale.lang === 'ja' ? '追加' : 'Additional')) throw new Error(`read mode exposes internal WFA provenance labels in ${locale.lang}`);
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Discord Channel → effective-recipient summary row; no synthetic Notification Preview');
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
-        if (await page.locator('[data-current-routing-form]').count() !== 1 || !(await page.locator('[data-current-routing-form]').innerText()).includes(locale.lang === 'ja' ? '変更を適用' : 'Apply changes')) {
-          throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}`);
+        const routingFormCount = await page.locator('[data-current-routing-form]').count();
+        const routingFormText = routingFormCount === 1 ? await page.locator('[data-current-routing-form]').innerText() : '';
+        if (routingFormCount !== 1 || !routingFormText.includes(locale.lang === 'ja' ? '変更を適用' : 'Apply')) {
+          throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}: count=${routingFormCount}, text=${JSON.stringify(routingFormText)}, url=${page.url()}`);
         }
-        if (await page.locator('[data-current-routing-form] select[name="task_type_id"]').count() === 0 || await page.locator('[data-current-routing-form] select[name="destination_webhook_id"]').count() === 0) {
-          throw new Error(`routing edit mode lost Task Type or Channel controls in ${locale.lang}`);
+        const editForm = page.locator('[data-current-routing-form]');
+        if (!(await editForm.locator('[data-apply-submit]').isDisabled()) || !(await editForm.locator('[data-pending-status]').innerText()).includes(locale.lang === 'ja' ? '変更はありません' : 'No pending changes')) {
+          throw new Error(`Notifications Apply is not disabled with a clean pending state in ${locale.lang}`);
         }
-        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'routing edit mode', 'existing controls are visible; form was not submitted');
+        const selectedRoute = editForm.locator('[data-routing-row].selected');
+        const panel = editForm.locator('[data-wfa-detail-panel]');
+        if (await selectedRoute.count() !== 0 || await panel.isVisible() || await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count()) {
+          throw new Error(`Notifications edit must open with only routing rows and no selected WFA detail in ${locale.lang}`);
+        }
+        const editorStructure = await editForm.evaluate(form => ({
+          routeCount: form.querySelectorAll('[data-routing-row]').length,
+          eachRouteHasDestination: [...form.querySelectorAll('[data-routing-row]')].every(row => !!row.querySelector('[data-destination-control]')),
+          panelAfterList: form.querySelector('[data-editor-parking]').compareDocumentPosition(form.querySelector('[data-routing-list-scroll]')) & Node.DOCUMENT_POSITION_PRECEDING,
+          panelInsideBottomDetail: !!form.querySelector('[data-editor-parking] [data-wfa-detail-panel]'),
+          routeRowsStayTogether: [...form.querySelectorAll('[data-routing-row]')].every(row => !row.nextElementSibling?.matches('[data-route-editor]')),
+          detailHasRouteControls: !!form.querySelector('[data-wfa-detail-panel] [data-destination-control], [data-wfa-detail-panel] [data-new-channel-name]'),
+        }));
+        if (!editorStructure.routeCount || !editorStructure.eachRouteHasDestination || !editorStructure.panelInsideBottomDetail || !editorStructure.routeRowsStayTogether || editorStructure.detailHasRouteControls) {
+          throw new Error(`Notifications routing rows and bottom WFA detail are not structurally separated in ${locale.lang}: ${JSON.stringify(editorStructure)}`);
+        }
+        if (viewport.name === 'mobile') {
+          const routingTableOverflow = await editForm.locator('.routing-list-scroll').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, tableClient: node.querySelector('table').clientWidth, tableScroll: node.querySelector('table').scrollWidth }));
+          if (routingTableOverflow.scroll > routingTableOverflow.client + 1 || routingTableOverflow.tableScroll > routingTableOverflow.tableClient + 1) throw new Error(`Notifications editor has an internal horizontal route-table scroller on mobile in ${locale.lang}: ${JSON.stringify(routingTableOverflow)}`);
+        }
+        if (await editForm.locator('[data-routing-row] [data-destination-control]').count() !== editorStructure.routeCount) throw new Error('each routing row must own its editable destination control');
+        await page.screenshot({ path: path.join(output, `production-notifications-edit-initial-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        const automaticPanel = panel.locator('[data-wfa-automatic]');
+        const selectedRouteForWFA = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
+        await selectedRouteForWFA.locator('[data-select-task]').click();
+        if (!(await panel.isVisible()) || await panel.locator('[data-wfa-title]').innerText() !== 'Compositing') throw new Error(`Task Type row click did not open the bottom WFA detail panel in ${locale.lang}`);
+        const selectedRouteStyle = await selectedRouteForWFA.evaluate(node => ({
+          rowBoxShadow: getComputedStyle(node).boxShadow,
+          cellBackground: getComputedStyle(node.children[0]).backgroundColor,
+          boxShadow: getComputedStyle(node.children[0]).boxShadow,
+          outline: getComputedStyle(node.children[0]).outlineStyle,
+          expanded: node.querySelector('[data-select-task]').getAttribute('aria-expanded'),
+          indicatorTransform: getComputedStyle(node.querySelector('.routing-expand-indicator')).transform,
+        }));
+        if (selectedRouteStyle.cellBackground === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.rowBoxShadow !== 'none' || selectedRouteStyle.boxShadow !== 'none' || selectedRouteStyle.outline !== 'none' || selectedRouteStyle.expanded !== 'true') throw new Error(`Selected Task Type does not use a subtle dark-surface state without a bright row frame in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
+        if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
+        if (await panel.locator('[data-destination-control], [data-new-channel-name]').count()) throw new Error('WFA detail panel contains routing controls');
+        const detailPlacement = await editForm.evaluate(form => {
+          const list = form.querySelector('[data-routing-list-scroll]').getBoundingClientRect();
+          const add = form.querySelector('[data-routing-add]').getBoundingClientRect();
+          const detail = form.querySelector('[data-wfa-detail-panel]').getBoundingClientRect();
+          const footer = form.querySelector('.production-routing-editor-footer').getBoundingClientRect();
+          const automatic = form.querySelector('[data-wfa-automatic]').getBoundingClientRect();
+          const additional = form.querySelector('[data-wfa-additional]').getBoundingClientRect();
+          return { addAfterList: add.top - list.bottom, detailAfterAdd: detail.top - add.bottom, detailBeforeFooter: footer.top - detail.bottom,
+            automaticLeft: automatic.left, additionalLeft: additional.left };
+        });
+        if (detailPlacement.addAfterList < 8 || detailPlacement.detailAfterAdd < 8 || detailPlacement.detailBeforeFooter < 8 || Math.abs(detailPlacement.automaticLeft - detailPlacement.additionalLeft) > 2) throw new Error(`Bottom WFA detail spacing/alignment is incorrect in ${locale.lang}: ${JSON.stringify(detailPlacement)}`);
+        await panel.screenshot({ path: path.join(output, `production-notifications-wfa-selected-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
+        if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes(animationAutomatic[0])) {
+          throw new Error(`selecting a route did not select its matching Automatic WFA summary in ${locale.lang}`);
+        }
+        if (await editForm.locator('[data-routing-row][data-task-type="task-animation"] + [data-route-editor]').count() || !await panel.isVisible()) throw new Error('selecting another Task Type moved rows or hid the shared bottom WFA detail');
+        await page.screenshot({ path: path.join(output, `production-notifications-wfa-animation-selected-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await editForm.locator('[data-select-task]').filter({ hasText: 'Compositing' }).click();
+        await assertAutomatic(page, locale, compositingAutomatic);
+
+        const savedRoute = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
+        await savedRoute.locator('.routing-row-menu summary').click();
+        const savedRouteMenu = savedRoute.locator('.routing-row-menu-panel');
+        if (!(await savedRouteMenu.locator('.routing-delete-open').isVisible())) throw new Error(`Saved channel route does not expose the permitted Delete channel action in ${locale.lang}`);
+        const savedMenuGeometry = await savedRouteMenu.evaluate(node => {
+          const menu = node.getBoundingClientRect();
+          const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect();
+          return { position: getComputedStyle(node).position, top: menu.top, bottom: menu.bottom, viewport: innerHeight, right: menu.right, anchorBottom: summary.bottom, anchorRight: summary.right, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight };
+        });
+        if (!['absolute', 'fixed'].includes(savedMenuGeometry.position) || Math.abs(savedMenuGeometry.top - savedMenuGeometry.anchorBottom) > 14 || Math.abs(savedMenuGeometry.right - savedMenuGeometry.anchorRight) > 14 || savedMenuGeometry.bottom > savedMenuGeometry.viewport + 1 || savedMenuGeometry.scrollHeight > savedMenuGeometry.clientHeight + 1) throw new Error(`Saved route action menu is detached, clipped, or scrollable in ${locale.lang}: ${JSON.stringify(savedMenuGeometry)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.keyboard.press('Escape');
+
+        await editForm.locator('[data-wfa-add-target]').click();
+        const addModal = page.locator('[data-wfa-add-modal]');
+        const addModalTheme = await addModal.evaluate(node => {
+          const style = getComputedStyle(node);
+          const control = node.querySelector('[role="combobox"]');
+          const controlStyle = getComputedStyle(control);
+          const heading = node.querySelector('h4').getBoundingClientRect();
+          const formStart = node.querySelector('label').getBoundingClientRect();
+          const actions = [...node.querySelector('.button-row').children].map(child => child.getBoundingClientRect());
+          return { colorScheme: style.colorScheme, background: style.backgroundColor, controlBackground: controlStyle.backgroundColor,
+            controlExists: !!control, headingTop: heading.top, firstFieldTop: formStart.top,
+            actionTops: actions.map(rect => rect.top), actionLefts: actions.map(rect => rect.left) };
+        });
+        if (addModalTheme.colorScheme !== 'dark' || addModalTheme.background === 'rgb(255, 255, 255)' || !addModalTheme.controlExists || addModalTheme.controlBackground === 'rgb(255, 255, 255)' || addModalTheme.headingTop > addModalTheme.firstFieldTop || addModalTheme.actionTops.length !== 2 || Math.abs(addModalTheme.actionTops[0] - addModalTheme.actionTops[1]) > 1 || addModalTheme.actionLefts[0] >= addModalTheme.actionLefts[1]) {
+          throw new Error(`Add recipient dialog surface/form/actions are not a dark, ordered, horizontal layout in ${locale.lang}: ${JSON.stringify(addModalTheme)}`);
+        }
+        const candidateUsers = addModal.locator('[data-wfa-user-id]');
+        for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
+          if (await candidateUsers.locator(`option[value="${blocked}"]`).count()) throw new Error(`ineligible User Override ${blocked} is selectable`);
+        }
+        if (!(await candidateUsers.locator('option[value="22222222222222234"]').count())) throw new Error('linked Team Guild member is unavailable as an override');
+        const candidateRoles = addModal.locator('[data-wfa-role-id]');
+        if (!(await candidateRoles.locator('option[value="33333333333333331"]').count())) throw new Error('mentionable Guild Role is not selectable');
+        for (const blocked of [guildID, '33333333333333332']) {
+          if (await candidateRoles.locator(`option[value="${blocked}"]`).count()) throw new Error(`@everyone/non-mentionable Role ${blocked} is selectable`);
+        }
+        const recipientUserCombo = addModal.locator('[data-wfa-user-combobox]');
+        const userListbox = addModal.locator('[data-wfa-user-listbox]');
+        if (!(await recipientUserCombo.isVisible()) || await candidateUsers.isVisible()) throw new Error('Add recipient user chooser must use a visible KitsuSync combobox and hidden native value control');
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-users-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await recipientUserCombo.click();
+        if (!(await userListbox.isVisible()) || await recipientUserCombo.getAttribute('aria-expanded') !== 'true') throw new Error('Add recipient user listbox did not open from the accessible combobox');
+        if (!(await userListbox.evaluate(node => !!node.closest('dialog[data-wfa-add-modal]')))) throw new Error('Add recipient listbox must remain in the native dialog top layer');
+        const listboxTheme = await userListbox.evaluate(node => {
+          const style = getComputedStyle(node);
+          const option = node.querySelector('[role="option"]');
+          const optionStyle = getComputedStyle(option);
+          const list = node.getBoundingClientRect();
+          const combo = document.querySelector(`[aria-controls="${node.id}"]`).getBoundingClientRect();
+          return { background: style.backgroundColor, position: style.position, top: list.top, bottom: list.bottom, left: list.left, width: list.width,
+            comboTop: combo.top, comboBottom: combo.bottom, comboLeft: combo.left, comboWidth: combo.width, viewportHeight: innerHeight,
+            color: style.color, optionBackground: optionStyle.backgroundColor, optionColor: optionStyle.color,
+            disabled: [...node.querySelectorAll('[aria-disabled="true"]')].map(item => ({ color: getComputedStyle(item).color, background: getComputedStyle(item).backgroundColor, cursor: getComputedStyle(item).cursor })) };
+        });
+        const belowCombo = Math.abs(listboxTheme.top - (listboxTheme.comboBottom + 4)) <= 1;
+        const aboveCombo = listboxTheme.bottom <= listboxTheme.comboTop - 3;
+        if (listboxTheme.background !== 'rgb(13, 13, 15)' || listboxTheme.position !== 'fixed' || listboxTheme.top < 0 || listboxTheme.bottom > listboxTheme.viewportHeight + 1 || Math.abs(listboxTheme.left - listboxTheme.comboLeft) > 1 || Math.abs(listboxTheme.width - listboxTheme.comboWidth) > 1 || (!belowCombo && !aboveCombo) || listboxTheme.color === 'rgba(0, 0, 0, 0)' || listboxTheme.optionBackground === 'rgb(255, 255, 255)') throw new Error(`Add recipient open option list is clipped, translucent, or not aligned to its control in ${locale.lang}: ${JSON.stringify(listboxTheme)}`);
+        if (listboxTheme.disabled.some(option => option.color === 'rgba(0, 0, 0, 0)' || option.background === 'rgb(255, 255, 255)' || option.cursor !== 'not-allowed')) throw new Error(`Disabled recipient choices are not readable or clearly disabled in ${locale.lang}: ${JSON.stringify(listboxTheme.disabled)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-listbox-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
+        if (!(await userListbox.isVisible())) throw new Error('Capturing the open Add recipient selector must not close it');
+        await userListbox.locator('[data-wfa-option-value="22222222222222225"]').click();
+        if (await candidateUsers.inputValue() !== '22222222222222225' || await recipientUserCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Choosing a linked User did not update the preserved recipient value control');
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('#wfa-role-tab').click();
+        if (!(await addModal.locator('[data-wfa-role-combobox]').isVisible())) throw new Error('explicit Roles mode did not reveal the eligible Discord Role picker');
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-roles-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await addModal.locator('[data-wfa-role-combobox]').click();
+        await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-roles-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
+        await addModal.locator('[data-wfa-role-listbox] [data-wfa-option-value="33333333333333331"]').click();
+        if (await candidateRoles.inputValue() !== '33333333333333331') throw new Error('Choosing a mentionable Role did not update the preserved recipient value control');
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('[data-wfa-user-combobox]').focus();
+        await page.keyboard.press('Space');
+        if (!(await userListbox.isVisible())) throw new Error('Keyboard activation did not open the Add recipient listbox');
+        await page.keyboard.press('Escape');
+        if (await userListbox.isVisible() || await addModal.locator('[data-wfa-user-combobox]').getAttribute('aria-expanded') !== 'false') throw new Error('Escape did not close the Add recipient listbox');
+        if (await addModal.isVisible()) await addModal.locator('[data-wfa-add-cancel]').click();
+        const additionalPanel = editForm.locator('[data-wfa-additional]');
+        const additionalText = await additionalPanel.innerText();
+        if (!additionalText.includes('Guild Nick Override') || !additionalText.includes('Artist Global') || !additionalText.includes('@Reviewers')) throw new Error(`Additional User/Role overrides were not presented together in ${locale.lang}`);
+        if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 3) throw new Error('User and Role pending removals were not available');
+
+        const removedRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
+        const removedChannelID = await removedRouteRow.getAttribute('data-original-destination');
+        await editForm.locator('[data-routing-add]').click();
+        const newTypeSelect = editForm.locator('[data-routing-row] [data-task-type-select]').last();
+        await newTypeSelect.selectOption('task-unassigned');
+        const pendingRow = editForm.locator('[data-routing-row][data-task-type="task-unassigned"]');
+        if (!(await pendingRow.isVisible()) || !await pendingRow.locator('[data-destination-control]').isVisible()) throw new Error(`Add Task Type did not add a routing row with its destination control in ${locale.lang}`);
+        if (await pendingRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await pendingRow.locator('[data-custom-channel-field]').isVisible()) throw new Error(`new Task Type did not default to Automatic without exposing custom input in ${locale.lang}`);
+        await editForm.locator('[data-routing-add]').click();
+        const secondNewTypeSelect = editForm.locator('[data-routing-row] [data-task-type-select]').last();
+        await secondNewTypeSelect.selectOption('task-concept');
+        const secondPendingRow = editForm.locator('[data-routing-row][data-task-type="task-concept"]');
+        await editForm.locator('[data-routing-add]').click();
+        const thirdNewTypeSelect = editForm.locator('[data-routing-row] [data-task-type-select]').last();
+        await thirdNewTypeSelect.selectOption('task-modeling');
+        if (await editForm.locator('[data-routing-row][data-draft="true"]').count() !== 3) throw new Error('three Task Type rows could not remain browser-pending before a single Apply');
+        await page.screenshot({ path: path.join(output, `production-notifications-add-task-type-inline-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        const removableDraftRow = editForm.locator('[data-routing-row][data-task-type="task-modeling"]');
+        await removableDraftRow.locator('[data-select-task]').click();
+        await removableDraftRow.locator('.routing-row-menu summary').click();
+        await removableDraftRow.locator('[data-routing-remove]').click();
+        if (await removableDraftRow.count() || await editForm.locator('[data-wfa-detail-panel]').isVisible()) throw new Error('removing the selected draft route left a detached WFA detail panel');
+        await editForm.locator('[data-routing-add]').click();
+        await editForm.locator('[data-routing-row] [data-task-type-select]').last().selectOption('task-modeling');
+        await pendingRow.locator('[data-select-task]').click();
+        if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? 'Supervisorなし' : 'No Supervisor')) {
+          throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
+        }
+        if (!await editForm.locator('[data-wfa-detail-panel]').evaluate(node => node.compareDocumentPosition(node.closest('form').querySelector('[data-routing-list-scroll]')) & Node.DOCUMENT_POSITION_PRECEDING)) throw new Error('WFA detail is not below the complete Task Type list');
+        await pendingRow.locator('[data-destination-control]').selectOption(removedChannelID);
+        await pendingRow.locator('[data-destination-control]').selectOption('__auto__');
+        if (await pendingRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('Automatic destination incorrectly shows a custom channel input');
+        await pendingRow.locator('[data-destination-control]').selectOption('__custom__');
+        if (!await pendingRow.locator('[data-custom-channel-field]').isVisible() || await pendingRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('Custom destination did not reveal the normalized inline channel name');
+        await pendingRow.locator('[data-destination-control]').selectOption(removedChannelID);
+        if (await pendingRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('existing managed destination incorrectly shows a custom channel input');
+        await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.waitFor({ state: 'visible' });
+        await page.screenshot({ path: path.join(output, `production-notifications-pending-route-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await addModal.locator('[data-wfa-user-combobox]').click();
+        await addModal.locator('[data-wfa-user-listbox] [data-wfa-option-value="22222222222222234"]').click();
+        await addModal.locator('[data-wfa-add-confirm]').click();
+        await removedRouteRow.locator('[data-select-task]').click();
+        if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 1) throw new Error('existing Animation route did not expose its seeded Reviewer target for pending-removal coverage');
+        await additionalPanel.locator('[data-wfa-remove-target]').click();
+        await removedRouteRow.locator('.routing-row-menu summary').click();
+        const routeMenu = removedRouteRow.locator('.routing-row-menu-panel');
+        await page.waitForFunction(() => { const menu = document.querySelector('.routing-row-menu[open] .routing-row-menu-panel'); if (!menu) return false; const rect = menu.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight + 1; }, null, { timeout: 3000 });
+        const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, right: rect.right, viewport: innerHeight, summaryTop: summary.top, summaryBottom: summary.bottom, summaryRight: summary.right, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, bodyScrollWidth: document.body.scrollWidth, viewportWidth: document.documentElement.clientWidth }; });
+        if (!['absolute', 'fixed'].includes(menuGeometry.position) || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.top - menuGeometry.summaryBottom) > 14 || Math.abs(menuGeometry.right - menuGeometry.summaryRight) > 14 || menuGeometry.scrollHeight > menuGeometry.clientHeight + 1 || menuGeometry.bodyScrollWidth > menuGeometry.viewportWidth + 1) throw new Error(`route menu is detached, scrollable, clipped, or overflows when opened in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-pending-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.keyboard.press('Escape');
+        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('Escape did not close the route action menu');
+        await removedRouteRow.locator('.routing-row-menu summary').click();
+        page.once('dialog', async dialog => { if (dialog.type() !== 'confirm') throw new Error(`unexpected ${dialog.type()} dialog for pending route removal`); await dialog.accept(); });
+        await removedRouteRow.locator('[data-routing-remove]').click();
+        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('route action menu stayed open after staging route removal');
+        if (await removedRouteRow.isVisible() || await removedRouteRow.locator('[data-routing-undo]').count() || await removedRouteRow.locator('[data-routing-remove-status]').count()) throw new Error('staged route removal left visible pending-removal/Undo UI');
+        await page.screenshot({ path: path.join(output, `production-notifications-pending-removal-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.keyboard.press('Escape');
+
+        let submittedApply = null;
+        expectedStaleApply = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console409Messages: [] };
+        const applyEndpoint = new URL('/bot/admin/projects?apply_notifications=1', base).href;
+        await page.route(applyEndpoint, async route => {
+          if (!expectedStaleApply?.active || !isNotificationsApplyRequest(route.request()) || expectedStaleApply.requestSeen) {
+            errors.push('Unexpected or duplicate Notifications Apply request during stale-edit interception');
+            await route.continue();
+            return;
+          }
+          expectedStaleApply.requestSeen = true;
+          submittedApply = route.request().postDataJSON();
+          await route.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"stale_edit"}' });
+        });
+        const urlBeforeApply = page.url();
+        const staleApplyResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        await editForm.locator('[data-apply-submit]').click();
+        const staleApplyResponse = await staleApplyResponsePromise;
+        if (staleApplyResponse.status() !== 409 || expectedStaleApply.responseCount !== 1 || expectedStaleApply.responseStatus !== 409) {
+          throw new Error(`Stale Notifications Apply did not produce exactly one expected HTTP 409 in ${locale.lang}: status=${staleApplyResponse.status()} tracked=${expectedStaleApply.responseCount}`);
+        }
+        if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-animation')) {
+          throw new Error('Apply sent a reviewer delta for a persisted route pending removal');
+        }
+        const staleMessage = locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved';
+        await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent.includes(expected), {
+          selector: '[data-apply-message]',
+          expected: staleMessage,
+        }, { timeout: 5000 });
+        if (page.url() !== urlBeforeApply) throw new Error(`HTTP 409 navigated away from the pending editor in ${locale.lang}`);
+        if (await removedRouteRow.isVisible()) throw new Error(`HTTP 409 discarded the pending route removal in ${locale.lang}`);
+        await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+        const preservedTargets = await additionalPanel.innerText();
+        for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers']) {
+          if (!preservedTargets.includes(expected)) throw new Error(`HTTP 409 discarded pending User/Role target ${expected} in ${locale.lang}`);
+        }
+        if (expectedStaleApply.console409Messages.length > 1) {
+          errors.push(...expectedStaleApply.console409Messages.slice(1));
+        }
+        expectedStaleApply.console409Consumed = expectedStaleApply.console409Messages.length === 1;
+        expectedStaleApply.active = false;
+        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('route action menu unexpectedly opened while preserving stale-edit changes');
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.unroute(applyEndpoint);
+        await editForm.locator('[data-pending-cancel]').click();
+        if (await page.locator('.production-notification-table tbody tr[data-task-type-id="task-unassigned"]').count()) throw new Error('Cancel persisted the pending route addition');
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'pending routing/WFA edit and stale Apply', 'routing rows and WFA detail stayed separate; three route additions and a removal remained local; 409 retained pending state; Cancel discarded edits');
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const refreshForm = page.locator('[data-current-routing-form]');
+        await refreshForm.locator('[data-routing-add]').click();
+        const refreshRow = refreshForm.locator('[data-routing-row]').last();
+        await refreshRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        if (await refreshRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await refreshRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('Automatic destination is not the new route default');
+        await refreshRow.locator('[data-destination-control]').selectOption('__custom__');
+        if (!(await refreshRow.locator('[data-custom-channel-field]').isVisible()) || await refreshRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('custom channel staging did not expose the normalized Task Type default inline');
+        await refreshRow.locator('input[data-new-channel-name]').fill('unassigned-custom');
+        await page.screenshot({ path: path.join(output, `production-notifications-add-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.reload({ waitUntil: 'networkidle' });
+        if (page.url().includes('edit_routing=1') && await page.locator('[data-current-routing-form] [data-routing-row][data-task-type="task-unassigned"]').count()) {
+          throw new Error('Refresh persisted a browser-only pending route addition');
+        }
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const reuseForm = page.locator('[data-current-routing-form]');
+        await reuseForm.locator('[data-routing-add]').click();
+        const reuseRow = reuseForm.locator('[data-routing-row]').last();
+        await reuseRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        const reuseSelect = reuseRow.locator('[data-destination-control]');
+        const reusableWebhookID = removedChannelID;
+        if (!reusableWebhookID || !(await reuseSelect.locator(`option[value="${reusableWebhookID}"]`).innerText()).includes('#animation')) throw new Error('the removed route channel is unavailable for reuse by an unrouted Task Type');
+        await reuseSelect.click();
+        await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-selector-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
+        await reuseSelect.selectOption(reusableWebhookID);
+        await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        let reusedPayload = null;
+        let reusedApplyCount = 0;
+        await page.route(applyEndpoint, async route => { reusedApplyCount++; reusedPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
+        const reusedResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        await reuseForm.locator('[data-apply-submit]').click();
+        const reusedResponse = await reusedResponsePromise;
+        if (reusedResponse.status() !== 200 || reusedApplyCount !== 1 || !reusedPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.destination_webhook_id === Number(reusableWebhookID) && !route.create_channel_name)) throw new Error('selecting an existing managed channel did not stay a single non-creating Apply route');
+        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
+        await page.unroute(applyEndpoint);
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const automaticCreateForm = page.locator('[data-current-routing-form]');
+        let automaticPayload = null;
+        let automaticApplyCount = 0;
+        await page.route(applyEndpoint, async route => { automaticApplyCount++; automaticPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
+        await automaticCreateForm.locator('[data-routing-add]').click();
+        const automaticRow = automaticCreateForm.locator('[data-routing-row]').last();
+        await automaticRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        if (await automaticRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await automaticRow.locator('[data-custom-channel-field]').isVisible() || automaticApplyCount !== 0) throw new Error('Automatic channel choice must remain pending and hide the custom name input until Apply');
+        const automaticResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        await automaticCreateForm.locator('[data-apply-submit]').click();
+        const automaticResponse = await automaticResponsePromise;
+        if (automaticResponse.status() !== 200 || automaticApplyCount !== 1 || !automaticPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.create_channel_name === 'unassigned' && !route.destination_webhook_id)) throw new Error('Automatic Task Type channel creation was not staged and submitted exactly once at Apply');
+        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
+        await page.unroute(applyEndpoint);
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const createForm = page.locator('[data-current-routing-form]');
+        let createdPayload = null;
+        let createdApplyCount = 0;
+        await page.route(applyEndpoint, async route => { createdApplyCount++; createdPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
+        await createForm.locator('[data-routing-add]').click();
+        const createRow = createForm.locator('[data-routing-row]').last();
+        await createRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        const createDestination = createRow.locator('[data-destination-control]');
+        if (await createDestination.inputValue() !== '__auto__') throw new Error('new route must default to Automatic channel creation');
+        await createDestination.selectOption('__custom__');
+        const createName = createRow.locator('input[data-new-channel-name]');
+        if (!(await createName.isVisible()) || await createName.inputValue() !== 'unassigned') throw new Error('new channel default does not use the shared Task Type normalization');
+        await createName.fill('unassigned-custom');
+        if (createdApplyCount !== 0) throw new Error('new Discord resources were requested before Apply');
+        await page.screenshot({ path: path.join(output, `production-notifications-new-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        const createdResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        await createForm.locator('[data-apply-submit]').click();
+        const createdResponse = await createdResponsePromise;
+        if (createdResponse.status() !== 200 || createdApplyCount !== 1 || !createdPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.create_channel_name === 'unassigned-custom' && !route.destination_webhook_id)) throw new Error('Apply did not submit exactly one staged new-channel route');
+        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
+        await page.unroute(applyEndpoint);
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const failedCreateForm = page.locator('[data-current-routing-form]');
+        await failedCreateForm.locator('[data-routing-add]').click();
+        const failedCreateRow = failedCreateForm.locator('[data-routing-row]').last();
+        await failedCreateRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        await failedCreateRow.locator('[data-destination-control]').selectOption('__custom__');
+        await failedCreateRow.locator('input[data-new-channel-name]').fill('unassigned-failure');
+        expectedChannelCreateFailure = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console502Messages: [] };
+        await page.route(applyEndpoint, async route => {
+          if (!expectedChannelCreateFailure?.active || !isNotificationsApplyRequest(route.request()) || expectedChannelCreateFailure.requestSeen) {
+            errors.push('Unexpected or duplicate route-create Apply was intercepted');
+            await route.abort();
+            return;
+          }
+          expectedChannelCreateFailure.requestSeen = true;
+          await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"channel_create_failed","channel_creation":"outcome_unknown","resource_cleanup":"known_resources_complete"}' });
+        });
+        const failedCreateResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        const failedCreateURL = page.url();
+        await failedCreateForm.locator('[data-apply-submit]').click();
+        const failedCreateResponse = await failedCreateResponsePromise;
+        const failedCreateMessage = (await failedCreateForm.locator('[data-apply-message]').textContent() || '').trim();
+        const createFailure = expectedChannelCreateFailure;
+        expectedChannelCreateFailure.active = false;
+        if (failedCreateResponse.status() !== 502 || createFailure.responseCount !== 1 || createFailure.responseStatus !== 502 || page.url() !== failedCreateURL || !(await failedCreateRow.locator('input[data-new-channel-name]').isVisible()) || await failedCreateRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned-failure' || !failedCreateMessage || !(await failedCreateRow.isVisible()) || createFailure.console502Messages.length > 1) throw new Error('failed new-channel Apply must retain the staged value and show an inline error without claiming success');
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'channel creation failure', 'exact expected 502 retained browser-pending channel choice; no other error was ignored');
+        await page.unroute(applyEndpoint);
 
         await gotoProduction(page, locale, 'team');
         const teamTab = page.locator('#panel-team');
@@ -521,20 +967,61 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('form input[name="action"][value*="production_member"],form input[name="action"][value*="production_role"]').count()) throw new Error('Team exposed membership or role mutation');
         if ((await teamTab.innerText()).includes('Example task') || (await teamTab.innerText()).includes('Assigned')) throw new Error('Team inferred task assignments from Department membership');
         const teamText = await teamTab.innerText();
-        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク', 'User Linking'] : ['Team', 'Supervision scope', 'Not linked', 'User Linking']) {
+        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク'] : ['Team', 'Supervision scope', 'Not linked']) {
           if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
+        }
+        const teamHeaders = (await page.locator('.production-team-table thead th').allTextContents()).map(text => text.trim());
+        const expectedTeamHeaders = locale.lang === 'ja'
+          ? ['メンバー', 'Kitsuロール', 'Department', 'Discord', '状態 / 操作']
+          : ['Member', 'Kitsu role', 'Department', 'Discord', 'Status / action'];
+        if (JSON.stringify(teamHeaders) !== JSON.stringify(expectedTeamHeaders)) {
+          throw new Error(`Team table does not match the five-column structure in ${locale.lang}: ${JSON.stringify(teamHeaders)}`);
+        }
+        const userLinkingHref = await page.locator('.production-team-user-link').first().getAttribute('href');
+        if (!userLinkingHref || !userLinkingHref.startsWith(`/bot/admin/users?lang=${locale.lang}`)) {
+          throw new Error(`Unlinked Team member has no localized User Linking route in ${locale.lang}`);
+        }
+        if (viewport.name === 'mobile') {
+          const teamControls = await page.locator('.production-team-discord,.production-team-status').evaluateAll(cells => cells.flatMap(cell => {
+            const cellRight = cell.getBoundingClientRect().right;
+            return [...cell.querySelectorAll('.status-pill, button')].map(control => ({
+              label: control.textContent.trim(),
+              right: Math.round(control.getBoundingClientRect().right),
+              cellRight: Math.round(cellRight),
+            }));
+          }));
+          const overflow = teamControls.find(control => control.right > control.cellRight + 1);
+          if (overflow) throw new Error(`Team status/action overflows its Discord cell at 390px in ${locale.lang}: ${JSON.stringify(overflow)}`);
         }
         const teamRows = await page.locator('.production-team-row').evaluateAll(rows => rows.map(row => {
           const style = getComputedStyle(row);
-          return { display: style.display, borderTopStyle: style.borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
+          const firstCell = row.querySelector('th,td');
+          return { display: style.display, cells: row.children.length, borderTopStyle: style.borderTopStyle, firstCellBorderTopStyle: firstCell && getComputedStyle(firstCell).borderTopStyle, radius: style.borderRadius, background: style.backgroundColor, shadow: style.boxShadow };
         }));
-        if (!teamRows.length || teamRows[0].display !== 'grid' || teamRows[0].borderTopStyle !== 'none' || teamRows.slice(1).some(row => row.borderTopStyle !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
-          throw new Error(`Production Team is not a compact divider list in ${locale.lang}: ${JSON.stringify(teamRows)}`);
+        const expectedTeamDisplay = viewport.name === 'mobile' ? 'grid' : 'table-row';
+        if (!teamRows.length || teamRows.some(row => row.display !== expectedTeamDisplay) || teamRows[0].firstCellBorderTopStyle !== 'none' || teamRows.slice(1).some(row => (viewport.name === 'mobile' ? row.borderTopStyle : row.firstCellBorderTopStyle) !== 'solid') || teamRows.some(row => row.radius !== '0px' || row.background !== 'rgba(0, 0, 0, 0)' || row.shadow !== 'none')) {
+          throw new Error(`Production Team is not a compact responsive table in ${locale.lang}: ${JSON.stringify(teamRows)}`);
+        }
+        const teamColumnWidths = await page.locator('.production-team-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
+        if (teamColumnWidths.length !== 5 || (viewport.name === 'desktop' && teamColumnWidths.some(width => parseFloat(width) <= 0)) || (viewport.name === 'mobile' && teamRows.some(row => row.cells !== 5))) throw new Error(`Team lost stable five-column structure in ${locale.lang}/${viewport.name}: ${JSON.stringify({ teamColumnWidths, teamRows })}`);
+        const teamLinkButton = page.locator('[data-open-team-link]').first();
+        if (!(await teamLinkButton.count())) throw new Error(`Team has no verified in-place global User Linking action in ${locale.lang}`);
+        const teamLinkModal = page.locator('[data-team-link-modal]');
+        const teamUrlBeforeLink = page.url();
+        await teamLinkButton.click();
+        if (!(await teamLinkModal.isVisible()) || !(await teamLinkModal.locator('select[name="discord_user_id"] option:not([value=""])').count())) {
+          throw new Error(`Team global User Linking modal did not open with verified Guild choices in ${locale.lang}`);
+        }
+        await teamLinkModal.locator('[data-team-link-cancel]').click();
+        if (await teamLinkModal.isVisible() || page.url() !== teamUrlBeforeLink) {
+          throw new Error(`Cancel did not close the Team User Linking modal without navigation in ${locale.lang}`);
         }
         await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `production-rich-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'live Production Team', 'Kitsu Team, effective role, derived Supervisor scope, and global User Linking state; no local membership editor');
 
         await gotoProduction(page, locale, 'settings');
+        const configuredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
         const settings = await page.locator('#panel-settings').innerText();
         const settingsPositions = ['Storage', locale.lang === 'ja' ? '技術情報' : 'Technical details', locale.lang === 'ja' ? '診断' : 'Diagnostics', 'Danger Zone'].map(label => settings.indexOf(label));
         if (settingsPositions.some(position => position < 0) || settingsPositions.some((position, index) => index > 0 && position <= settingsPositions[index - 1])) {
@@ -542,14 +1029,34 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const settingsLayout = await page.locator('.production-settings-list').evaluate(node => {
           const style = getComputedStyle(node);
-          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: node.querySelectorAll(':scope > .production-settings-section').length };
+          const sections = [...node.querySelectorAll(':scope > .production-settings-section')];
+          return { display: style.display, columns: style.gridTemplateColumns.trim().split(/\s+/).length, gap: style.rowGap, sections: sections.length,
+            surfaces: sections.map(section => { const computed = getComputedStyle(section); return { border: computed.borderTopStyle, width: computed.borderTopWidth, radius: computed.borderRadius, background: computed.backgroundColor, paddingTop: computed.paddingTop, paddingBottom: computed.paddingBottom }; }),
+            summaryHeights: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => summary.getBoundingClientRect().height),
+            disclosureRows: [...node.querySelectorAll(':scope > .production-settings-disclosure-row > summary')].map(summary => ({ marker: getComputedStyle(summary, '::before').content, height: summary.getBoundingClientRect().height })) };
         });
-        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '0px' || settingsLayout.sections !== 4) {
-          throw new Error(`Settings are not a compact four-section vertical layout in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
+        // The visual acceptance requires a small visible gap between compact operational rows.
+        // Four pixels is the shared spacing token; zero gap would collapse adjacent disclosures.
+        if (settingsLayout.display !== 'grid' || settingsLayout.columns !== 1 || settingsLayout.gap !== '4px' || settingsLayout.sections !== 4 || settingsLayout.surfaces.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)' || parseFloat(index === 0 ? section.paddingBottom : section.paddingTop) > 14) || settingsLayout.summaryHeights.length !== 3 || settingsLayout.summaryHeights.some(value => value < 38 || value > 44) || settingsLayout.disclosureRows.some(row => row.marker === 'none' || row.marker === 'normal' || row.marker === '')) {
+          throw new Error(`Settings are not a compact four-section vertical layout with clear disclosure indicators in ${locale.lang}: ${JSON.stringify(settingsLayout)}`);
         }
         if (await page.locator('#technical-details[open],#diagnostics[open],#danger-zone[open]').count()) throw new Error(`Settings disclosures must start collapsed in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-settings-collapsed-${locale.lang}-${viewport.name}.png`), fullPage: true });
         const saveButton = page.locator('.drive-storage-form [data-drive-save]');
         const storageInput = page.locator('#storage-url');
+        const storageGeometry = await page.locator('.drive-storage-form').evaluate(form => {
+          const input = form.querySelector('#storage-url').getBoundingClientRect();
+          const button = form.querySelector('[data-drive-save]').getBoundingClientRect();
+          const formRect = form.getBoundingClientRect();
+          return { inputLeft: input.left, inputRight: input.right, inputTop: input.top, inputBottom: input.bottom, inputWidth: input.width,
+            buttonLeft: button.left, buttonRight: button.right, buttonTop: button.top, buttonBottom: button.bottom, formWidth: formRect.width };
+        });
+        if (viewport.name === 'desktop' && (storageGeometry.inputWidth < storageGeometry.formWidth * .6 || storageGeometry.buttonLeft < storageGeometry.inputRight || Math.abs((storageGeometry.inputTop + storageGeometry.inputBottom) / 2 - (storageGeometry.buttonTop + storageGeometry.buttonBottom) / 2) > 3)) {
+          throw new Error(`Storage input and Save do not share a full-width desktop row in ${locale.lang}: ${JSON.stringify(storageGeometry)}`);
+        }
+        if (viewport.name === 'mobile' && storageGeometry.buttonTop < storageGeometry.inputBottom) {
+          throw new Error(`Storage Save should stack below the input on narrow mobile in ${locale.lang}: ${JSON.stringify(storageGeometry)}`);
+        }
         const originalStorage = await storageInput.inputValue();
         if (!(await saveButton.isDisabled())) throw new Error(`Storage Save should start disabled in ${locale.lang}`);
         await storageInput.fill(`${originalStorage}/changed`);
@@ -561,7 +1068,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           summary: parseFloat(getComputedStyle(node.querySelector('summary')).paddingInlineStart),
           content: parseFloat(getComputedStyle(node.querySelector('.production-technical-details')).marginInlineStart),
         }));
-        if (technicalIndent.summary < 12 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
+        // Eight pixels is the shared compact inset; expanded key/value content must remain further in.
+        if (technicalIndent.summary < 8 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
         await page.locator('#technical-details summary').click();
         if (!(await page.locator('#technical-details[open]').count())) throw new Error(`Technical details did not expand in ${locale.lang}`);
         const copyButtons = page.locator('#technical-details .production-copy-id');
@@ -573,12 +1081,36 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (clipboardText !== 'reviewer-production' || (await productionCopy.innerText()) !== copyLabel) {
           throw new Error(`Production ID copy action failed in ${locale.lang}: button=${await productionCopy.innerText()}`);
         }
-        await page.locator('#diagnostics summary').click();
+        await page.locator('#diagnostics > summary').click();
         if (!(await page.locator('#diagnostics[open]').count()) || await page.locator('#diagnostics details[open]').count()) throw new Error(`Diagnostics did not expand in a compact collapsed-details state in ${locale.lang}`);
         await page.locator('#danger-zone summary').click();
         if (!(await page.locator('#danger-zone[open]').count())) throw new Error(`Danger Zone did not expand in ${locale.lang}`);
+        const dangerLabelColor = await page.locator('#danger-zone > summary').evaluate(node => {
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--color-status-danger)';
+          document.body.append(probe);
+          const expected = getComputedStyle(probe).color;
+          probe.remove();
+          return { actual: getComputedStyle(node).color, expected };
+        });
+        if (dangerLabelColor.actual !== dangerLabelColor.expected) throw new Error(`Danger Zone disclosure label does not use the canonical semantic danger color in ${locale.lang}: ${JSON.stringify(dangerLabelColor)}`);
+        await page.screenshot({ path: path.join(output, `production-settings-expanded-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await page.screenshot({ path: path.join(output, `production-rich-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'settings and disclosures', `section order preserved; Save is change-sensitive; technical indentation=${JSON.stringify(technicalIndent)}`);
+
+        await fixture(page, 'unconnected-production');
+        await page.goto(`${base}/bot/admin/projects?project=reviewer-unconnected&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (await page.locator('.production-context.production-unconfigured').count() !== 1 || await page.locator('.production-identity').count() !== 1 || await page.locator('.production-identity h1').innerText() !== 'Synthetic Unconnected Production' || await page.locator('.production-unconfigured-state').count() !== 1 || await page.locator('.production-tabs').count()) {
+          throw new Error(`Unconfigured Production did not keep the shared shell without fabricated tabs/data in ${locale.lang}`);
+        }
+        const unconfiguredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
+        const unconfiguredOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+        const unconfiguredSurface = await page.locator('.production-unconfigured-state').evaluate(node => ({ background: getComputedStyle(node).backgroundColor, border: getComputedStyle(node).borderTopStyle, paddingInline: getComputedStyle(node).paddingInline, statusBackground: getComputedStyle(node.querySelector('[role="status"]')).backgroundColor }));
+        if (configuredShellWidth !== unconfiguredShellWidth || unconfiguredOverflow || !(await page.locator('.production-unconfigured-state a[href*="/bot/setup"]').count()) || unconfiguredSurface.background !== 'rgba(0, 0, 0, 0)' || unconfiguredSurface.paddingInline !== '0px' || unconfiguredSurface.statusBackground === 'rgba(0, 0, 0, 0)') throw new Error(`Unconfigured Production must reuse the shared shell and section rhythm without a separate setup card in ${locale.lang}: ${JSON.stringify(unconfiguredSurface)}`);
+        await page.screenshot({ path: path.join(output, `production-unconfigured-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-unconnected', locale.lang, viewport.name, 'unconfigured Production', 'shared identity/workbench shell with clear connect action and no fabricated configured-only data');
+        await fixture(page, 'ready');
 
         const legacyCases = [
           { query: 'storage-settings', panel: 'settings', target: '#storage', expanded: null },
@@ -618,11 +1150,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
 
     await gotoWFARecipients(page, locales[0]);
-    if (!(await page.locator('.production-wfa-recipients').count())) throw new Error('WFA recipients did not render in Notifications');
     if (await page.locator('#tab-reviewers').count() || await page.locator('.production-tabs [role="tab"]').filter({ hasText: /^Reviewers$/ }).count()) throw new Error('Reviewers remains a primary Production tab');
-    await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor'], [
-      'Departmentless Supervisor', 'Wrong Department Supervisor', 'Production Manager', 'Global Admin',
-      'Demoted Supervisor', 'Project Manager Override', 'Position Only', 'Inactive Supervisor', 'Kitsu Bot', 'Unlinked Supervisor',
+    await assertAutomatic(page, locales[0], compositingAutomatic, [
+      '@Departmentless Global', '@Wrong Department Global', '@Manager Global', '@Admin Global',
+      '@Demoted Global', '@Project Manager Global', '@position-only', '@inactive', '@kitsu-bot',
     ]);
     const productionIdentity = await page.locator('.production-identity').innerText();
     if (!productionIdentity.includes('Synthetic Review Production')) throw new Error('Production identity header is missing the selected Production name');
@@ -634,85 +1165,49 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     for (const stale of ['Automatic inactive while overridden', 'Add Production member', 'Remove Production member', 'Reviewer / Checker task types', 'Production Manager fallback', 'global CheckerMap']) {
       if (teamText.includes(stale)) throw new Error(`stale/manual Reviewer copy remains: ${stale}`);
     }
-    await gotoWFARecipients(page, locales[0]);
-    const userForms = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="user"]') });
-    const userSelect = userForms.locator('select[name="target_id"]');
-    for (const blocked of ['22222222222222232', '22222222222222233', '22222222222222235']) {
-      if (await userSelect.locator(`option[value="${blocked}"]`).count()) throw new Error(`ineligible user ${blocked} is selectable`);
-    }
-    if (!(await userSelect.locator('option[value="22222222222222234"]').count())) throw new Error('linked Team Guild member is unavailable as an override');
-    const roleForms = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="role"]') });
-    const roleSelect = roleForms.locator('select[name="target_id"]');
-    if (!(await roleSelect.locator('option[value="33333333333333331"]').count())) throw new Error('mentionable Guild Role is not selectable');
-    for (const blocked of [guildID, '33333333333333332']) {
-      if (await roleSelect.locator(`option[value="${blocked}"]`).count()) throw new Error(`@everyone/non-mentionable Role ${blocked} is selectable`);
-    }
-    await page.screenshot({ path: path.join(output, 'wfa-recipients-en-desktop-automatic.png'), fullPage: true });
-    await record(page, '/bot/admin/projects?tab=notifications', 'en', 'desktop', 'automatic and candidate filtering', 'matching project_role Supervisor shown by guild nickname; ineligible roles and members excluded');
 
-    // The live Task Type Department, not assignment or Position, selects the automatic Supervisor.
-    await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-animation');
-    await page.locator('form.reviewer-task-type-select').getByRole('button', { name: 'View', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['Wrong Department Supervisor', 'Animation Supervisor'], ['Project Supervisor']);
-    await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-unassigned');
-    await page.locator('form.reviewer-task-type-select').getByRole('button', { name: 'View', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['No matching Supervisor']);
-    records.push({ route: '/bot/admin/projects?tab=notifications', locale: 'en', viewport: 'desktop', state: 'Task Type Department changes', detail: 'Animation and Department-less Task Types produce the expected fail-closed Automatic list' });
-
-    // Additive controls are real same-origin POST forms protected by normal session/CSRF middleware.
-    await page.locator('form.reviewer-task-type-select select[name="reviewer_task_type"]').selectOption('task-comp');
-    await page.locator('form.reviewer-task-type-select').getByRole('button', { name: 'View', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    const userForm = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="user"]') });
-    await userForm.locator('select[name="target_id"]').selectOption('22222222222222234');
-    await userForm.getByRole('button', { name: 'Add user', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor']);
-    const roleForm = page.locator('form.reviewer-target-form').filter({ has: page.locator('input[name="target_kind"][value="role"]') });
-    await roleForm.locator('select[name="target_id"]').selectOption('33333333333333331');
-    await roleForm.getByRole('button', { name: 'Add role', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    const overrideText = await overridesGroup(page, locales[0]).innerText();
-    for (const value of ['Guild Nick Override', '@Reviewers']) if (!overrideText.includes(value)) throw new Error(`additive override missing ${value}`);
-    const names = await overridesGroup(page, locales[0]).locator('.reviewer-target-row').allInnerTexts();
-    if (names.length !== 2) throw new Error(`expected two explicit targets, got ${names.length}`);
-    await page.screenshot({ path: path.join(output, 'reviewer-en-desktop-additive.png'), fullPage: true });
-    await record(page, '/bot/admin/projects?tab=notifications', 'en', 'desktop', 'Automatic plus User and Role Overrides', 'both override kinds appear as additional targets while Automatic remains visible');
-
-    // Removing one explicit target does not change the automatic reviewer or the other override.
-    await overridesGroup(page, locales[0]).locator('.reviewer-target-row').filter({ hasText: 'Guild Nick Override' }).getByRole('button', { name: 'Remove', exact: true }).click();
-    await page.waitForLoadState('networkidle');
-    await assertAutomatic(page, locales[0], ['Project Supervisor', 'Compositing Supervisor', 'Global Name Supervisor', 'Username Supervisor']);
-    const afterRemove = await overridesGroup(page, locales[0]).innerText();
-    if (afterRemove.includes('Guild Nick Override') || !afterRemove.includes('@Reviewers')) throw new Error('override removal changed the wrong target');
-
-    // Empty/error states use isolated fixtures and remain visibly distinct.
     const states = [
-      { name: 'empty-team', expected: 'The Kitsu Production Team is empty' },
-      { name: 'team-failure', expected: 'Production Team unavailable' },
-      { name: 'no-matching', expected: 'No matching Supervisor' },
-      { name: 'no-linked', expected: 'No matching Supervisor' },
-      { name: 'no-roles', expected: 'No mentionable Discord roles are available' },
-      { name: 'discord-failure', expected: 'Discord' },
-      { name: 'stale-membership', expected: 'No matching Supervisor' },
+      { name: 'empty-team', expected: 'The Kitsu Production Team is empty', team: true },
+      { name: 'team-failure', expected: 'Could not load the Kitsu Production Team', team: true },
+      { name: 'no-matching', expected: 'No Supervisor' },
+      { name: 'no-linked', expected: 'No Supervisor' },
+      { name: 'discord-failure', expected: 'Unavailable' },
+      { name: 'stale-membership', expected: 'No Supervisor' },
     ];
     for (const state of states) {
       await fixture(page, state.name);
-      const isTeamState = state.name === 'empty-team' || state.name === 'team-failure';
-      if (isTeamState) await gotoProduction(page, locales[0], 'team');
-      else await gotoWFARecipients(page, locales[0]);
-      const body = await page.locator('main').innerText();
-      const expected = state.name === 'team-failure' ? 'Could not load the Kitsu Production Team' : state.expected;
-      if (!body.includes(expected)) throw new Error(`${state.name} state is unclear; missing ${expected}`);
-      if (state.name === 'team-failure' && await page.locator('form.reviewer-target-form input[name="target_kind"][value="user"]').count()) throw new Error('Team read failure left User Reviewer writes enabled');
-      if (state.name === 'no-linked' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('unlinked Supervisor appeared as a User Override candidate');
-      if (state.name === 'discord-failure' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('Guild lookup failure left a User Override candidate selectable');
-      if (state.name === 'stale-membership' && await page.locator('form.reviewer-target-form select[name="target_id"] option[value="22222222222222222"]').count()) throw new Error('stale Team membership remained selectable after live Team changed');
-      if (state.name === 'no-roles' && await page.locator('form.reviewer-target-form input[name="target_kind"][value="role"]').count()) throw new Error('no-roles state left a Role Override form enabled');
-      await record(page, isTeamState ? '/bot/admin/projects?tab=team' : '/bot/admin/projects?tab=notifications', 'en', 'desktop', state.name, `visible fail-closed state: ${expected}`);
+      if (state.team) {
+        await gotoProduction(page, locales[0], 'team');
+        if (!(await page.locator('main').innerText()).includes(state.expected)) throw new Error(`${state.name} Team state is unclear`);
+      } else {
+        await gotoWFARecipients(page, locales[0], '&edit_routing=1');
+        const editForm = page.locator('[data-current-routing-form]');
+        const matchingRoute = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
+        await matchingRoute.locator('[data-select-task]').click();
+        const automatic = editForm.locator('[data-wfa-automatic]');
+        if (!(await automatic.isVisible())) throw new Error(`${state.name} WFA detail did not open for the selected Task Type`);
+        const automaticText = await automatic.innerText();
+        if (!automaticText.toLowerCase().includes(state.expected.toLowerCase())) throw new Error(`${state.name} Automatic state is unclear in the read-only editor summary: ${automaticText}`);
+        await gotoWFARecipients(page, locales[0]);
+        const effectiveRow = page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]');
+        const effectiveText = await effectiveRow.innerText();
+        if (await effectiveRow.locator('[data-wfa-group],.production-wfa-kind').count()) throw new Error(`${state.name} read mode exposes Automatic/Additional provenance`);
+        if (state.name === 'no-matching' && (!effectiveText.includes('@Artist Global') || !effectiveText.includes('@Reviewers'))) throw new Error(`no-matching read mode does not show the remaining effective overrides: ${effectiveText}`);
+      }
+      await record(page, state.team ? '/bot/admin/projects?tab=team' : '/bot/admin/projects?tab=notifications', 'en', 'desktop', state.name, `visible fail-closed state: ${state.expected}`);
     }
+    await fixture(page, 'no-roles');
+    await gotoWFARecipients(page, locales[0], '&edit_routing=1');
+    const emptyRoleEditForm = page.locator('[data-current-routing-form]');
+    await emptyRoleEditForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+    await emptyRoleEditForm.locator('[data-wfa-add-target]').click();
+    const emptyRoleModal = page.locator('[data-wfa-add-modal]');
+    await emptyRoleModal.locator('#wfa-role-tab').click();
+    if (!(await emptyRoleModal.innerText()).includes('No eligible Discord roles available')) throw new Error('No-role empty state is not explained in the Add recipient dialog');
+    if (await emptyRoleModal.locator('[data-wfa-role-id] option[value="33333333333333331"]').count()) throw new Error('no-roles scenario left a Role target available');
+    if (await emptyRoleModal.locator('[data-wfa-role-combobox]:visible').count()) throw new Error('No-role state must explain the empty list without showing a blank picker');
+    await page.screenshot({ path: path.join(output, 'production-notifications-add-recipient-roles-empty-en-desktop.png'), fullPage: true });
+    await emptyRoleModal.locator('[data-wfa-add-cancel]').click();
     await fixture(page, 'ready');
 
     // JP/EN and desktop/mobile acceptance for Production Users, User Linking, and System Status.
@@ -736,8 +1231,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
 
         await gotoWFARecipients(page, locale);
-        if (!(await page.locator('.production-wfa-recipients').count())) throw new Error(`WFA recipients missing in Notifications for ${locale.lang}`);
-        await assertAutomatic(page, locale, [locale.supervisor, locale.comp, 'Global Name Supervisor', 'Username Supervisor']);
+        if (!(await page.locator('.production-notification-table').count())) throw new Error(`Notifications table missing in ${locale.lang}`);
+        await assertAutomatic(page, locale, compositingAutomatic);
         if (await page.locator('#tab-reviewers').count()) throw new Error(`Reviewers is still a primary tab in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `wfa-recipients-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'ready', 'WFA Automatic and additional recipients rendered without overflow or mojibake');
@@ -810,6 +1305,47 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       const routeGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
       if (routeGrid !== dashboardGrid) throw new Error(`authenticated dot positions/background changed with content route ${route}`);
     }
+
+    // Keep canonical non-Production-detail screenshots beside the Production Detail review.
+    // These pages, rather than Production Detail itself, define the visual baseline.
+    const visualReferences = [
+      {
+        name: 'production-list',
+        route: '/bot/admin/projects?lang=en',
+        assert: async () => {
+          if (!(await page.locator('.production-list').count())) throw new Error('Production list visual reference did not render its canonical list');
+        },
+      },
+      {
+        name: 'connections-read',
+        route: '/bot/admin/bot?lang=en',
+        assert: async () => {
+          if (!(await page.locator('.connections-summary-grid').count())) throw new Error('Connections read visual reference did not render its connection summary');
+        },
+      },
+      {
+        name: 'connections-edit',
+        route: '/bot/admin/bot?edit=1&lang=en',
+        assert: async () => {
+          if (!(await page.locator('#external-kitsu-url-form').count())) throw new Error('Connections edit visual reference did not render the existing External Kitsu URL form');
+        },
+      },
+      {
+        name: 'audit-log',
+        route: '/bot/admin/audit?lang=en',
+        assert: async () => {
+          if (!(await page.locator('.audit-log-table').count())) throw new Error('Audit Log visual reference did not render its canonical table');
+        },
+      },
+    ];
+    for (const reference of visualReferences) {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto(`${base}${reference.route}`, { waitUntil: 'networkidle' });
+      await reference.assert();
+      await page.screenshot({ path: path.join(output, `reference-${reference.name}-en-desktop.png`), fullPage: true });
+      await record(page, reference.route, 'en', 'desktop-reference', 'visual baseline', `${reference.name} rendered from its normal application route`);
+    }
+
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
     const appPointer = { x: 420, y: 380 };
     await page.mouse.move(0, 0);
@@ -833,6 +1369,49 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
     records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'reduced motion', detail: 'canvas frame remained stable with reduced motion enabled' });
     await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+    await fixture(page, 'sparse-production');
+    for (const locale of locales) {
+      for (const viewport of viewports) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        await gotoProduction(page, locale, 'overview');
+        const overviewText = await page.locator('#panel-overview').innerText();
+        const sectionCount = await page.locator('.production-overview > .production-settings-section').count();
+        const emptyIssues = locale.lang === 'ja' ? '現在の問題はありません' : 'No current issues';
+        const emptyActivity = locale.lang === 'ja' ? '最近のアクティビティはありません' : 'No recent activity';
+        if (sectionCount !== 3 || !overviewText.includes(emptyIssues) || !overviewText.includes(emptyActivity)) throw new Error(`Sparse Overview collapsed its three-section skeleton in ${locale.lang}: ${overviewText}`);
+        const sparseOverviewBlocks = await page.locator('.production-overview > .production-settings-section').evaluateAll(sections => sections.map(section => {
+          const block = getComputedStyle(section);
+          const empty = section.querySelector('.production-detail-state-row');
+          const row = empty && getComputedStyle(empty);
+          return { border: block.borderTopStyle, width: block.borderTopWidth, radius: block.borderRadius, background: block.backgroundColor,
+            emptyBorder: row?.borderTopStyle || '', emptyRadius: row?.borderRadius || '', emptyHeight: empty?.getBoundingClientRect().height || 0 };
+        }));
+        if (sparseOverviewBlocks.some((block, index) => block.border !== (index === 0 ? 'none' : 'solid') || block.radius !== '0px' || block.background !== 'rgba(0, 0, 0, 0)') || sparseOverviewBlocks.slice(1).some(block => block.emptyBorder !== 'none' || block.emptyRadius !== '0px' || block.emptyHeight < 38)) throw new Error(`Sparse Overview does not follow the open-section grammar in ${locale.lang}: ${JSON.stringify(sparseOverviewBlocks)}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-overview-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=overview', locale.lang, viewport.name, 'sparse Production', 'Status / Current Issues / Recent Activity remain visible with concise empty states');
+
+        await gotoProduction(page, locale, 'notifications');
+        const routeRows = page.locator('.production-notification-table tbody tr[data-task-type-id]');
+        const sparseRecipientSummary = routeRows.first().locator('[data-wfa-recipients]');
+        if (await routeRows.count() !== 1 || await page.locator('.production-notification-table thead th').count() !== 3 || await sparseRecipientSummary.count() !== 1 || await sparseRecipientSummary.locator('.production-wfa-state-chip').innerText() !== (locale.lang === 'ja' ? '通知先なし' : 'No recipients') || await sparseRecipientSummary.getAttribute('aria-label') !== (locale.lang === 'ja' ? '通知先なし' : 'No recipients')) throw new Error(`Sparse Notifications lost the one-route table/effective no-recipient summary in ${locale.lang}`);
+        const sparseTableStyle = await page.locator('.production-notification-table').evaluate(node => { const style = getComputedStyle(node); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; });
+        if (sparseTableStyle.border !== 'none' || sparseTableStyle.width !== '0px' || sparseTableStyle.radius !== '0px' || sparseTableStyle.background !== 'rgba(0, 0, 0, 0)') throw new Error(`Sparse Notifications table does not follow open table styling in ${locale.lang}: ${JSON.stringify(sparseTableStyle)}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact effective-recipient summary');
+
+        await gotoProduction(page, locale, 'team');
+        if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 5 || await page.locator('.production-team-table col').count() !== 5) throw new Error(`Sparse Team lost its single row/five-column table structure in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'sparse Production', 'one member retains a stable five-column Team table');
+
+        await gotoProduction(page, locale, 'settings');
+        const sparseSettings = await page.locator('.production-settings-list > .production-settings-section').evaluateAll(sections => sections.map(section => { const style = getComputedStyle(section); return { border: style.borderTopStyle, width: style.borderTopWidth, radius: style.borderRadius, background: style.backgroundColor }; }));
+        if (sparseSettings.length !== 4 || sparseSettings.some((section, index) => section.border !== (index === 0 ? 'none' : 'solid') || section.radius !== '0px' || section.background !== 'rgba(0, 0, 0, 0)') || await page.locator('.production-settings-list > .production-settings-disclosure-row > summary').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height < 38))) throw new Error(`Sparse Settings lost the shared vertical section/disclosure rhythm in ${locale.lang}: ${JSON.stringify(sparseSettings)}`);
+        await page.screenshot({ path: path.join(output, `production-sparse-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'sparse Production', 'four vertical Settings sections and readable disclosure rows remain visible');
+      }
+    }
 
     if (errors.length) throw new Error(`browser console/runtime or external-origin errors (${errors.length}): ${errors.slice(0, 12).join(' | ')}`);
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };
