@@ -766,19 +766,23 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await addModal.locator('[data-wfa-user-combobox]').click();
         await addModal.locator('[data-wfa-user-listbox] [data-wfa-option-value="22222222222222234"]').click();
         await addModal.locator('[data-wfa-add-confirm]').click();
-        await pendingRow.locator('.routing-row-menu summary').click();
-        const routeMenu = pendingRow.locator('.routing-row-menu-panel');
+        const removedRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
+        await removedRouteRow.locator('[data-select-task]').click();
+        if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 1) throw new Error('existing Animation route did not expose its seeded Reviewer target for pending-removal coverage');
+        await additionalPanel.locator('[data-wfa-remove-target]').click();
+        await removedRouteRow.locator('.routing-row-menu summary').click();
+        const routeMenu = removedRouteRow.locator('.routing-row-menu-panel');
         await page.waitForFunction(() => { const menu = document.querySelector('.routing-row-menu[open] .routing-row-menu-panel'); if (!menu) return false; const rect = menu.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight + 1; }, null, { timeout: 3000 });
         const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, right: rect.right, viewport: innerHeight, summaryTop: summary.top, summaryBottom: summary.bottom, summaryRight: summary.right, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, bodyScrollWidth: document.body.scrollWidth, viewportWidth: document.documentElement.clientWidth }; });
         if (!['absolute', 'fixed'].includes(menuGeometry.position) || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.top - menuGeometry.summaryBottom) > 14 || Math.abs(menuGeometry.right - menuGeometry.summaryRight) > 14 || menuGeometry.scrollHeight > menuGeometry.clientHeight + 1 || menuGeometry.bodyScrollWidth > menuGeometry.viewportWidth + 1) throw new Error(`route menu is detached, scrollable, clipped, or overflows when opened in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-route-menu-pending-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
-        if (await pendingRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('Escape did not close the route action menu');
-        await pendingRow.locator('.routing-row-menu summary').click();
+        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('Escape did not close the route action menu');
+        await removedRouteRow.locator('.routing-row-menu summary').click();
         page.once('dialog', async dialog => { if (dialog.type() !== 'confirm') throw new Error(`unexpected ${dialog.type()} dialog for pending route removal`); await dialog.accept(); });
-        await pendingRow.locator('[data-routing-remove]').click();
-        await pendingRow.locator('.routing-row-menu summary').click();
-        if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
+        await removedRouteRow.locator('[data-routing-remove]').click();
+        await removedRouteRow.locator('.routing-row-menu summary').click();
+        if (!(await removedRouteRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
         await page.screenshot({ path: path.join(output, `production-notifications-pending-removal-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
 
@@ -802,8 +806,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (staleApplyResponse.status() !== 409 || expectedStaleApply.responseCount !== 1 || expectedStaleApply.responseStatus !== 409) {
           throw new Error(`Stale Notifications Apply did not produce exactly one expected HTTP 409 in ${locale.lang}: status=${staleApplyResponse.status()} tracked=${expectedStaleApply.responseCount}`);
         }
-        if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-unassigned')) {
-          throw new Error('Apply sent a reviewer delta for a route pending removal');
+        if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-animation')) {
+          throw new Error('Apply sent a reviewer delta for a persisted route pending removal');
         }
         const staleMessage = locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved';
         await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent.includes(expected), {
@@ -811,11 +815,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           expected: staleMessage,
         }, { timeout: 5000 });
         if (page.url() !== urlBeforeApply) throw new Error(`HTTP 409 navigated away from the pending editor in ${locale.lang}`);
-        if (!(await pendingRow.isVisible())) {
+        if (!(await removedRouteRow.isVisible())) {
           throw new Error(`HTTP 409 discarded the pending route removal in ${locale.lang}`);
         }
-        await pendingRow.locator('.routing-row-menu summary').click();
-        if (!(await pendingRow.locator('[data-routing-undo]').isVisible())) throw new Error(`HTTP 409 discarded route Undo in ${locale.lang}`);
+        await removedRouteRow.locator('.routing-row-menu summary').click();
+        if (!(await removedRouteRow.locator('[data-routing-undo]').isVisible())) throw new Error(`HTTP 409 discarded route Undo in ${locale.lang}`);
         await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
         const preservedTargets = await additionalPanel.innerText();
         for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers']) {
@@ -826,8 +830,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         expectedStaleApply.console409Consumed = expectedStaleApply.console409Messages.length === 1;
         expectedStaleApply.active = false;
-        await pendingRow.locator('.routing-row-menu summary').click();
-        await pendingRow.locator('[data-routing-undo]').click();
+        await removedRouteRow.locator('.routing-row-menu summary').click();
+        await removedRouteRow.locator('[data-routing-undo]').click();
         await pendingRow.locator('[data-select-task]').click();
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.unroute(applyEndpoint);
