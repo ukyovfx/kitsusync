@@ -720,7 +720,7 @@ func TestProductionDetailTabsShareOpenCurrentIAGrammar(t *testing.T) {
 		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 var(--space-2,8px);`,
 		`.editorial-workbench .production-context .production-settings-list{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--space-1,4px);`,
 		`.editorial-workbench .production-context .production-team-table-wrap{padding:0;border:0;border-radius:0;background:transparent}`,
-		`.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px);border:1px solid var(--divider-color);border-radius:var(--radius-md);background:var(--surface-subtle);box-shadow:none}`,
+		`.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px) 18px;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:var(--surface-subtle);box-shadow:none}`,
 	} {
 		if !strings.Contains(adminThemeCSS, rule) {
 			t.Errorf("Production detail visual grammar is missing %q", rule)

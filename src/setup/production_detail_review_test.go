@@ -54,7 +54,7 @@ func TestProductionDetailReviewControlsUseVisibleAlignedGroups(t *testing.T) {
 	for _, rule := range []string{
 		`.production-context .production-notification-actions{display:flex;align-items:center;gap:var(--space-2,8px)`,
 		`.production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-6,32px)`,
-		`.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px);border:1px solid var(--divider-color);border-radius:var(--radius-md);background:var(--surface-subtle);box-shadow:none}`,
+		`.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px) 18px;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:var(--surface-subtle);box-shadow:none}`,
 		`.editorial-workbench .production-context .production-wfa-edit-panel{gap:12px;padding:12px}`,
 		`.production-context .production-settings-list{display:grid;gap:var(--space-1,4px);`,
 		`.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);padding:0 var(--space-2,8px);`,
@@ -73,7 +73,7 @@ func TestProductionReviewControlsUseSharedSpacingAndControlTokens(t *testing.T) 
 		`.production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:var(--control-height-dense,38px);`,
 		`.production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-6,32px);`,
 		`.production-context .production-routing-editor .production-routing-editor-footer{margin:0;padding-top:var(--space-4,16px)`,
-		`.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px);border:1px solid var(--divider-color);border-radius:var(--radius-md);background:var(--surface-subtle);box-shadow:none}`,
+		`.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px) 18px;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:var(--surface-subtle);box-shadow:none}`,
 		`.editorial-workbench .production-context .production-wfa-edit-panel{gap:12px;padding:12px}`,
 		`.production-context .production-settings-list{display:grid;gap:var(--space-1,4px);`,
 		`.editorial-workbench .production-context #panel-settings>.production-settings-list>.production-settings-section{margin:0;padding:0;border:0;border-top:1px solid var(--divider-color);`,
