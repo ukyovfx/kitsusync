@@ -1579,7 +1579,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		automatic, automaticState := productionAutomaticReviewerRecipients(taskType, data)
 		recipients := append(append([]string(nil), automatic...), additional...)
 		if automaticState != "matched" && automaticState != "none" {
-			recipients = append(recipients, label("自動通知先を確認できません", "Automatic recipients unavailable"))
+			recipients = append(recipients, label("確認不可", "Unavailable"))
 		}
 		recipients = uniqueSortedRecipientLabels(recipients)
 		recipientsMarkup := renderProductionWFATargetChips(recipients, label("通知先なし", "No recipients"), "", false)

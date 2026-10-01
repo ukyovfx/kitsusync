@@ -900,8 +900,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-routing-editor .routing-expand-indicator{width:7px;height:7px;flex:0 0 7px;margin-inline-start:auto;border-right:1px solid var(--color-content-subtle);border-bottom:1px solid var(--color-content-subtle);transform:rotate(45deg);transition:transform .14s ease}
   .production-context .production-routing-editor .routing-select-task[aria-expanded=true] .routing-expand-indicator{transform:rotate(225deg)}
   .production-context .production-notification-actions .btn-ghost{min-width:84px}
-  .production-context .production-routing-editor{gap:var(--space-6,32px)}
-  .production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-6,32px);min-width:0}
+  .production-context .production-routing-editor{gap:var(--space-4,16px)}
+  .production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-4,16px);min-width:0}
   .production-context .production-routing-editor .production-routing-editor-actions{margin:0}
   .production-context .production-routing-editor .production-routing-editor-footer{margin:0;padding-top:var(--space-4,16px)}
   .production-context .production-routing-editor [data-apply-message]:empty{display:none}
@@ -915,6 +915,30 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-wfa-edit-panel [data-wfa-automatic],.production-context .production-wfa-edit-panel [data-wfa-additional]{padding-top:var(--space-3,12px);border-top:1px solid var(--divider-color)}
   .production-context .production-wfa-edit-panel [data-wfa-additional]{padding-inline:0}
   .production-context .production-wfa-edit-panel .production-wfa-add-target{min-height:var(--control-height-dense,38px);width:auto;justify-self:start}
+  .production-context .production-routing-editor .routing-list-scroll{max-height:min(58vh,540px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable}
+  .production-context .production-routing-editor .wizard-plan-table{overflow:visible}
+  .production-context .production-routing-editor .wizard-plan-table table{width:100%;min-width:0;table-layout:fixed}
+  .production-context .production-routing-editor .wizard-plan-table th:first-child,.production-context .production-routing-editor .wizard-plan-table td:first-child{width:34%}
+  .production-context .production-routing-editor .wizard-plan-table th:nth-child(2),.production-context .production-routing-editor .wizard-plan-table td:nth-child(2){width:58%}
+  .production-context .production-routing-editor .wizard-plan-table th:last-child,.production-context .production-routing-editor .wizard-plan-table td:last-child{width:8%;text-align:right}
+  .production-context .production-routing-editor .wizard-plan-table td{padding:8px 6px;vertical-align:middle}
+  .production-context .production-routing-editor .routing-select-task{min-height:38px;padding-inline:4px}
+  .production-context .production-routing-editor .routing-new-task-type,.production-context .production-routing-editor .routing-destination-control{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:center;gap:8px;min-width:0}
+  .production-context .production-routing-editor [data-task-selector-wrap][hidden],.production-context .production-routing-editor [data-custom-channel-field][hidden]{display:none!important}
+  .production-context .production-routing-editor [data-task-type-select],.production-context .production-routing-editor [data-destination-control]{width:100%;min-width:0;min-height:var(--control-height-dense,38px);padding-inline:8px;color-scheme:dark;background:var(--surface-control);color:var(--text);border:1px solid var(--border-default);border-radius:var(--radius-sm)}
+  .production-context .production-routing-editor [data-new-channel-name]{width:100%;min-width:0;min-height:var(--control-height-dense,38px)}
+  .production-context .production-routing-editor [data-routing-row].selected>td{background:var(--surface-subtle);border-bottom-color:var(--divider-color)}
+  .production-context .production-routing-editor [data-routing-row].selected>td:first-child{box-shadow:none}
+  .production-context .production-routing-editor [data-routing-row] [data-select-task]:focus-visible,.production-context .production-routing-editor [data-routing-row] select:focus-visible{outline:2px solid var(--accent-2);outline-offset:1px}
+  .production-context .production-routing-editor [data-editor-parking]{min-width:0}
+  .production-context .production-routing-editor .production-routing-wfa-detail{min-width:0}
+  .production-context .production-routing-editor .production-wfa-edit-panel[hidden]{display:none}
+  .production-context .production-routing-editor .production-wfa-edit-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+  .production-context .production-routing-editor .production-wfa-edit-heading>span{color:var(--muted-2);font-size:.8rem}
+  .production-context .production-routing-editor .production-wfa-recipient-row{grid-template-columns:minmax(110px,20%) minmax(0,1fr) auto;min-height:42px;padding:8px 0}
+  .production-context .production-routing-editor-footer{position:relative}
+  @media(max-width:760px){.production-context .production-routing-editor .routing-list-scroll{max-height:58vh}.production-context .production-routing-editor .wizard-plan-table table,.production-context .production-routing-editor .wizard-plan-table tbody{display:block;width:100%;min-width:0}.production-context .production-routing-editor .wizard-plan-table thead{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.production-context .production-routing-editor .wizard-plan-table tr[data-routing-row]{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) auto;gap:5px;padding:6px 0;border-top:1px solid var(--divider-color)}.production-context .production-routing-editor .wizard-plan-table td{display:block;width:auto!important;min-width:0;padding:4px!important;border:0}.production-context .production-routing-editor .wizard-plan-table td:nth-child(2){display:block!important}.production-context .production-routing-editor .routing-new-task-type,.production-context .production-routing-editor .routing-destination-control{grid-template-columns:minmax(0,1fr)}.production-context .production-routing-editor .routing-row-menu summary{width:30px;height:30px}.production-context .production-routing-editor .production-wfa-recipient-row{grid-template-columns:minmax(0,1fr) auto;gap:8px}.production-context .production-routing-editor .production-wfa-recipient-row [data-wfa-target-list]{grid-column:1/-1}.production-context .production-routing-editor .production-wfa-add-target{grid-column:1/-1;justify-self:start}}
+  @media(max-width:430px){.production-context .production-routing-editor .wizard-plan-table tr[data-routing-row]{grid-template-columns:minmax(0,1fr) auto;gap:6px}.production-context .production-routing-editor .wizard-plan-table td:first-child{grid-column:1/-1}.production-context .production-routing-editor .wizard-plan-table td:nth-child(2){grid-column:1}.production-context .production-routing-editor .wizard-plan-table td:last-child{grid-column:2;grid-row:2}.production-context .production-routing-editor .routing-destination-control{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.production-context .production-routing-editor .routing-destination-select{font-size:.82rem}.production-context .production-routing-editor .production-wfa-edit-heading{align-items:flex-start;flex-direction:column;gap:4px}}
   .production-context .production-settings-disclosure-row .production-diagnostic-item{padding:var(--space-2,8px) 0}
   .production-context .production-unconfigured{display:grid;gap:var(--space-section,24px)}
   .production-context .production-unconfigured-state{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--space-5,24px);padding:var(--space-4,16px) 0 0;border:0;border-top:1px solid var(--divider-color);background:transparent}

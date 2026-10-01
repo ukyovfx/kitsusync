@@ -136,7 +136,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(reviewerBrowserTeam())
 			}
 		case "/api/data/projects/reviewer-production/task-types":
-			_, _ = io.WriteString(w, `[{"id":"task-comp","name":"Compositing","department_id":"dept-comp","department_name":"Compositing","active":true},{"id":"task-animation","name":"Animation","department_id":"dept-animation","department_name":"Animation","active":true},{"id":"task-unassigned","name":"Unassigned","active":true}]`)
+			_, _ = io.WriteString(w, `[{"id":"task-comp","name":"Compositing","department_id":"dept-comp","department_name":"Compositing","active":true},{"id":"task-animation","name":"Animation","department_id":"dept-animation","department_name":"Animation","active":true},{"id":"task-unassigned","name":"Unassigned","active":true},{"id":"task-concept","name":"Concept","active":true},{"id":"task-modeling","name":"Modeling","active":true}]`)
 		case "/api/data/projects/reviewer-unconnected/task-types":
 			_, _ = io.WriteString(w, `[{"id":"task-live","name":"Live Task Type","active":true}]`)
 		default:

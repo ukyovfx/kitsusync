@@ -535,7 +535,7 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 			t.Errorf("explicit User/Role chooser or empty state is missing %q", required)
 		}
 	}
-	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-wfa-channel-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {
+	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-destination-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {
 		if !strings.Contains(body, required) {
 			t.Errorf("unified pending Apply editor missing %q", required)
 		}
@@ -549,7 +549,7 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if strings.Contains(body, `method="post"`) && !strings.Contains(body, `event.preventDefault()`) {
 		t.Fatal("Apply form must not submit as a full-page request")
 	}
-	if !strings.Contains(body, `data-route-channel`) || !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) {
+	if !strings.Contains(body, `data-destination-control`) || !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) || strings.Contains(body, `data-wfa-channel-control`) || strings.Contains(body, `data-routing-undo`) {
 		t.Fatal("selected Task Type editor must preserve route summary and secondary Add recipient control")
 	}
 	attribute := `data-existing-targets="`
@@ -596,7 +596,7 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForAllTaskTypes(t *testi
 	if source < 0 {
 		t.Fatal("pending Task Type must have a WFA summary source before Apply")
 	}
-	end := strings.Index(body[source:], `</div><p class="field-help routing-destructive-note">`)
+	end := strings.Index(body[source:], `</section>`)
 	if end < 0 {
 		t.Fatal("pending WFA source boundary is missing")
 	}
@@ -622,13 +622,13 @@ func TestProductionRoutingEditorStagesNewChannelChoiceUntilApply(t *testing.T) {
 	view := productionNotificationReviewerView{TaskTypes: []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}}
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=stage-channel-choice&tab=notifications&edit_routing=1&lang=en", nil)
 	body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, "en", "", view)
-	for _, marker := range []string{`value="__create__"`, `data-default-channel-name="compositing"`, `data-new-channel-name`, `data-new-channel-field`, `data-apply-endpoint="/bot/admin/projects?apply_notifications=1"`} {
+	for _, marker := range []string{`value="__auto__"`, `value="__custom__"`, `data-default-channel-name="compositing"`, `data-new-channel-name`, `data-custom-channel-field`, `data-apply-endpoint="/bot/admin/projects?apply_notifications=1"`} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("routing editor is missing staged channel creation control %q", marker)
 		}
 	}
 	script := currentRoutingEditorScript()
-	for _, marker := range []string{"window.confirm(form.dataset.removeConfirm", "route.create_channel_name=", "route.destination_webhook_id=", "credentials:'same-origin'", "querySelector('[data-wfa-source] [data-wfa-pending-source]')"} {
+	for _, marker := range []string{"window.confirm(form.dataset.removeConfirm", "route.create_channel_name=", "route.destination_webhook_id=", "credentials:'same-origin'", "querySelector('[data-wfa-source] [data-wfa-pending-source]'", "body.appendChild(row)"} {
 		if !strings.Contains(script, marker) {
 			t.Errorf("routing editor script is missing pending/safe Apply behavior %q", marker)
 		}
