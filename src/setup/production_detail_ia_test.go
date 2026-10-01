@@ -430,6 +430,11 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
 		t.Fatal("normal read mode must not expose Automatic/Additional provenance labels")
 	}
+	for _, taskTypeID := range []string{"task-comp", "task-anim"} {
+		if !strings.Contains(body, `<div data-task-type-id="`+taskTypeID+`"><div class="production-wfa-summary">`) || !strings.Contains(body, `data-wfa-automatic-value`) {
+			t.Errorf("hidden editor data is missing the routed Task Type %s Automatic recipient summary", taskTypeID)
+		}
+	}
 	if strings.Contains(body, "No matching Supervisor.") || strings.Contains(body, "該当するSupervisorはいません。") {
 		t.Fatal("read table should use a concise no-Supervisor label, not explanatory prose")
 	}
@@ -626,18 +631,23 @@ func TestProductionRoutingEditorStagesNewChannelChoiceUntilApply(t *testing.T) {
 	}
 }
 
-func TestPendingAutomaticReviewerSourceOmitsRoutedTaskTypes(t *testing.T) {
+func TestPendingAutomaticReviewerSourceIncludesRoutedTaskTypes(t *testing.T) {
 	source := renderPendingAutomaticReviewerSource(
 		[]kitsu.TaskType{{ID: "task-routed", Name: "Routed"}, {ID: "task-pending", Name: "Pending"}},
-		map[string]bool{"task-routed": true},
 		productionNotificationReviewerView{BotToken: "synthetic-discord-token"},
 		"en",
 	)
-	if strings.Contains(source, `data-task-type-id="task-routed"`) {
-		t.Fatal("routed Task Type summary must not be duplicated in pending source")
-	}
-	if !strings.Contains(source, `data-task-type-id="task-pending"`) || !strings.Contains(source, "Unavailable") {
-		t.Fatalf("pending Task Type must expose its concise truthful Automatic summary: %s", source)
+	for _, id := range []string{"task-routed", "task-pending"} {
+		marker := `<div data-task-type-id="` + id + `"><div class="production-wfa-summary">`
+		start := strings.Index(source, marker)
+		if start < 0 {
+			t.Errorf("Automatic editor source is missing Task Type %s", id)
+			continue
+		}
+		end := strings.Index(source[start+len(marker):], `</div></div></div>`)
+		if end < 0 || !strings.Contains(source[start:start+len(marker)+end], `data-wfa-automatic-value`) {
+			t.Errorf("Task Type %s is missing its Automatic recipient value", id)
+		}
 	}
 }
 

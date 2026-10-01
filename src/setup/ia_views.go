@@ -1592,11 +1592,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 	if len(routes) == 0 {
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="3"><div class="production-detail-state-row">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</div></td></tr>`)
 	}
-	usedTaskTypes := make(map[string]bool, len(routes))
-	for _, route := range routes {
-		usedTaskTypes[strings.TrimSpace(route.TaskTypeID)] = true
-	}
-	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, usedTaskTypes, data, lang)
+	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, data, lang)
 	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div><div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
 }
 
@@ -1717,11 +1713,11 @@ func uniqueSortedRecipientLabels(values []string) []string {
 	return unique
 }
 
-func renderPendingAutomaticReviewerSource(taskTypes []kitsu.TaskType, routed map[string]bool, data productionNotificationReviewerView, lang string) string {
+func renderPendingAutomaticReviewerSource(taskTypes []kitsu.TaskType, data productionNotificationReviewerView, lang string) string {
 	var pending strings.Builder
 	for _, taskType := range taskTypes {
 		id := strings.TrimSpace(taskType.ID)
-		if id == "" || routed[id] {
+		if id == "" {
 			continue
 		}
 		automatic := productionAutomaticReviewerLabel(taskType, data, lang)
