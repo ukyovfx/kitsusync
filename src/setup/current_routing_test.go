@@ -184,6 +184,67 @@ func TestCurrentRoutingEditorKeepsAddDialogOutsideApplyForm(t *testing.T) {
 	}
 }
 
+func TestCurrentRoutingEditorRendersOneInlineEditorPerRouteAndDraft(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-inline-editor", Name: "Routing Inline Editor"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "storyboard", "Storyboard", "synthetic-webhook", "channel-storyboard"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-storyboard", TaskTypeName: "Storyboard", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=routing-inline-editor&tab=notifications&edit_routing=1&lang=en", nil)
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, "en", "", productionNotificationReviewerView{})
+	routeStart := strings.Index(body, `data-routing-row data-task-type="task-storyboard"`)
+	if routeStart < 0 {
+		t.Fatal("configured route row is missing")
+	}
+	routeEnd := strings.Index(body[routeStart:], `</tr>`)
+	if routeEnd < 0 {
+		t.Fatal("configured route row is incomplete")
+	}
+	afterRoute := strings.TrimSpace(body[routeStart+routeEnd+len(`</tr>`):])
+	if !strings.HasPrefix(afterRoute, `<tr data-route-editor data-task-type="task-storyboard"`) {
+		t.Fatal("route editor must be rendered immediately after its route row")
+	}
+	if strings.Contains(body, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`) {
+		t.Fatal("Notifications must not render a detached selected-task editor")
+	}
+	if !strings.Contains(body, `<tr data-routing-new-row hidden>`) || !strings.Contains(body, `<tr data-routing-new-editor hidden>`) {
+		t.Fatal("Add Task Type must have an adjacent inline draft-editor row")
+	}
+}
+
+func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-recipient-modes", Name: "Routing Recipient Modes"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	roleID := "123456789012345680"
+	for _, tc := range []struct{ lang, user, role, empty string }{
+		{"ja", "ユーザー", "ロール", "追加可能なDiscordロールはありません"},
+		{"en", "Users", "Roles", "No eligible Discord roles available"},
+	} {
+		body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{
+			Roles:      []DiscordGuildRole{{ID: roleID, Name: "comp-leads", Mentionable: true}},
+			RolesReady: true,
+		})
+		for _, want := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, tc.user, tc.role, `data-wfa-option-value="` + roleID + `"`, tc.empty} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s recipient picker missing %q", tc.lang, want)
+			}
+		}
+		if strings.Count(body, `data-wfa-user-combobox`) != 1 || strings.Count(body, `data-wfa-role-combobox`) != 1 {
+			t.Errorf("%s recipient picker should expose one combobox for each explicit mode", tc.lang)
+		}
+	}
+}
+
 func TestCurrentRoutingEditorNewRouteTemplateCanBeRemoved(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "routing-editor-new-route", Name: "Routing Editor New Route"}

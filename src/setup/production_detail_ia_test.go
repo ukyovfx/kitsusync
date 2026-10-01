@@ -421,14 +421,48 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 			t.Errorf("Notifications read table missing %q: %s", want, body)
 		}
 	}
-	if got := strings.Count(body, `class="production-wfa-summary-line"`); got != 2 {
-		t.Fatalf("each Task Type should show Automatic and Additional in one compact summary row; got %d summary groups: %s", got, body)
+	if got := strings.Count(body, `class="production-wfa-effective-recipients"`); got != 2 {
+		t.Fatalf("each Task Type should show one effective-recipient summary; got %d summaries: %s", got, body)
+	}
+	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
+		t.Fatal("normal read mode must not expose Automatic/Additional provenance labels")
 	}
 	if strings.Contains(body, "No matching Supervisor.") || strings.Contains(body, "該当するSupervisorはいません。") {
 		t.Fatal("read table should use a concise no-Supervisor label, not explanatory prose")
 	}
 	if strings.Contains(body, `name="reviewer_task_type"`) || strings.Contains(body, `class="reviewer-target-form"`) || strings.Contains(body, `action="add_production_reviewer_target"`) {
 		t.Fatalf("Notifications read mode exposed a standalone WFA editor: %s", body)
+	}
+}
+
+func TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "role-candidates-independent", Name: "Role Candidate Read", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-discord-token")
+	oldTasks, oldTeam, oldMembers, oldRoles := reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType { return nil }
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, nil }
+	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) {
+		return nil, errors.New("synthetic guild member lookup failure")
+	}
+	roleReadCount := 0
+	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
+		roleReadCount++
+		return []DiscordGuildRole{{ID: "123456789012345680", Name: "comp-leads", Mentionable: true}, {ID: guildID, Name: "@everyone", Mentionable: true}}, nil
+	}
+	t.Cleanup(func() {
+		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild = oldTasks, oldTeam, oldMembers, oldRoles
+	})
+
+	view := loadProductionNotificationReviewerView(db, project, true)
+	if roleReadCount != 1 || !view.RolesReady || len(view.Roles) != 1 || view.Roles[0].ID != "123456789012345680" {
+		t.Fatalf("Role candidates should be independently read and filtered when User membership lookup fails: reads=%d ready=%v roles=%#v", roleReadCount, view.RolesReady, view.Roles)
+	}
+	if view.GuildErr == nil {
+		t.Fatal("test setup must retain the Guild member failure while exposing the independent Role candidates")
 	}
 }
 
