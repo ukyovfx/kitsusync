@@ -751,6 +751,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!additionalText.includes('Guild Nick Override') || !additionalText.includes('Artist Global') || !additionalText.includes('@Reviewers')) throw new Error(`Additional User/Role overrides were not presented together in ${locale.lang}`);
         if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 3) throw new Error('User and Role pending removals were not available');
 
+        const removedRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
+        const removedChannelID = await removedRouteRow.getAttribute('data-original-destination');
         await editForm.locator('[data-routing-add]').click();
         const newTypeSelect = editForm.locator('[data-routing-new-row] select[name="task_type_id"]');
         await newTypeSelect.selectOption('task-unassigned');
@@ -760,13 +762,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? 'Supervisorなし' : 'No Supervisor')) {
           throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
         }
+        await editForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]').selectOption(removedChannelID);
         await editForm.locator('[data-wfa-add-target]').click();
         await addModal.waitFor({ state: 'visible' });
         await page.screenshot({ path: path.join(output, `production-notifications-pending-route-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await addModal.locator('[data-wfa-user-combobox]').click();
         await addModal.locator('[data-wfa-user-listbox] [data-wfa-option-value="22222222222222234"]').click();
         await addModal.locator('[data-wfa-add-confirm]').click();
-        const removedRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
         await removedRouteRow.locator('[data-select-task]').click();
         if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 1) throw new Error('existing Animation route did not expose its seeded Reviewer target for pending-removal coverage');
         await additionalPanel.locator('[data-wfa-remove-target]').click();
@@ -857,8 +859,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await reuseForm.locator('[data-routing-add]').click();
         await reuseForm.locator('[data-routing-new-row] select[name="task_type_id"]').selectOption('task-unassigned');
         const reuseSelect = reuseForm.locator('[data-wfa-channel-control] select[name="destination_webhook_id"]');
-        const reusableWebhookID = await reuseSelect.locator('option').evaluateAll(options => options.find(option => /^\d+$/.test(option.value))?.value || '');
-        if (!reusableWebhookID) throw new Error('managed Discord channel choices are unavailable for an unrouted Task Type');
+        const reusableWebhookID = removedChannelID;
+        if (!reusableWebhookID || !(await reuseSelect.locator(`option[value="${reusableWebhookID}"]`).innerText()).includes('#animation')) throw new Error('the removed route channel is unavailable for reuse by an unrouted Task Type');
         await reuseSelect.click();
         await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-selector-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
         await reuseSelect.selectOption(reusableWebhookID);
