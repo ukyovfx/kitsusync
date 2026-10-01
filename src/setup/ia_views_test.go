@@ -1346,10 +1346,13 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	if strings.Contains(body, "Notification routing") {
 		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
 	}
-	for _, expected := range []string{"WFA recipients", "Automatic", "Additional", "Task Type"} {
+	for _, expected := range []string{"WFA recipients", "Automatic recipients unavailable", "Task Type", `data-wfa-recipients`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Notifications missing %q", expected)
 		}
+	}
+	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
+		t.Fatal("read mode must show effective recipients without Automatic/Additional provenance")
 	}
 	for _, forbidden := range []string{"Notification preview", "Task Type to preview", "Example task rendered", "Please review this task."} {
 		if strings.Contains(body, forbidden) {

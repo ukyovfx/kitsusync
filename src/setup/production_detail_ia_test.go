@@ -338,10 +338,13 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	}
 	r := httptest.NewRequest("GET", "/bot/admin/projects?project=preview-production&tab=notifications&lang=en", nil)
 	body := renderSelectedProductionNotifications(db, r, p, "en", "success", "Healthy", "")
-	for _, expected := range []string{"WFA recipients", "Automatic", "Additional", "Compositing", "#compositing"} {
+	for _, expected := range []string{"WFA recipients", "Automatic recipients unavailable", "Compositing", "#compositing", `data-wfa-recipients`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("Notifications missing %q", expected)
 		}
+	}
+	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
+		t.Fatal("read mode must summarize the effective recipient set without category rows")
 	}
 	if strings.Contains(body, "Notification routing") {
 		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
@@ -468,8 +471,8 @@ func TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails(t *t
 
 func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *testing.T) {
 	for _, tc := range []struct{ lang, empty, teamFailure string }{
-		{"en", "No notification routing is configured.", "Unavailable"},
-		{"ja", "通知ルーティングはまだ設定されていません。", "利用不可"},
+		{"en", "No notification routing is configured.", "Automatic recipients unavailable"},
+		{"ja", "通知ルーティングはまだ設定されていません。", "自動通知先を確認できません"},
 	} {
 		db := newIAViewDB(t)
 		project := model.Project{KitsuProjectID: "notification-state-" + tc.lang, Name: "Notification State", DiscordGuildID: "123456789012345678"}
@@ -517,10 +520,10 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345680"); err != nil {
 		t.Fatal(err)
 	}
-	body := renderCurrentIARoutingEditorSetupStyle(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "")
-	for _, required := range []string{`role="combobox"`, `role="listbox"`, `aria-disabled="true"`, `hidden aria-hidden="true" tabindex="-1"`, `data-wfa-user-listbox`, `data-wfa-role-listbox`} {
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{RolesReady: true})
+	for _, required := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, `data-recipient-panel="user"`, `data-recipient-panel="role"`, `No eligible Discord roles available`, `data-recipient-select="user"`, `data-recipient-select="role"`} {
 		if !strings.Contains(body, required) {
-			t.Errorf("accessible dark recipient chooser is missing %q", required)
+			t.Errorf("explicit User/Role chooser or empty state is missing %q", required)
 		}
 	}
 	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "data-routing-undo", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-wfa-channel-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {

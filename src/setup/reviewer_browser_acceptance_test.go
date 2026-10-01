@@ -210,6 +210,12 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "22222222222222234"); err != nil {
 		t.Fatal("seed synthetic additional WFA user")
 	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "22222222222222225"); err != nil {
+		t.Fatal("seed synthetic linked User for effective-recipient summary")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetRole, "33333333333333331"); err != nil {
+		t.Fatal("seed synthetic Role for effective-recipient summary")
+	}
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-animation", "Animation", model.ReviewerTargetRole, "33333333333333331"); err != nil {
 		t.Fatal("seed synthetic additional WFA role")
 	}

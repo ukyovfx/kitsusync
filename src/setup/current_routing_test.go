@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"app/src/api/kitsu"
 	"app/src/model"
 )
 
@@ -211,8 +212,8 @@ func TestCurrentRoutingEditorRendersOneInlineEditorPerRouteAndDraft(t *testing.T
 	if !strings.HasPrefix(afterRoute, `<tr class="routing-inline-editor-row" data-route-editor data-route-editor-task="task-storyboard"`) {
 		t.Fatal("route editor must be rendered immediately after its route row")
 	}
-	if strings.Contains(body, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`) {
-		t.Fatal("Notifications must not render a detached selected-task editor")
+	if !strings.Contains(body, `<div hidden data-editor-parking><section class="production-wfa-edit-panel" data-wfa-detail-panel`) {
+		t.Fatal("the shared editor must start in a hidden parking node before the browser moves it into the selected route row")
 	}
 	if !strings.Contains(body, `<tr data-routing-new-row hidden>`) || !strings.Contains(body, `<tr data-routing-new-editor hidden>`) {
 		t.Fatal("Add Task Type must have an adjacent inline draft-editor row")
@@ -231,6 +232,9 @@ func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *
 		{"en", "Users", "Roles", "No eligible Discord roles available"},
 	} {
 		body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{
+			Team:       []kitsu.Person{{ID: "person-linked", FullName: "Linked User", Active: true}},
+			Users:      []model.UserMap{{KitsuID: "person-linked", DiscordID: "123456789012345681", DiscordDisplayName: "Linked User"}},
+			GuildUsers: []DiscordGuildMember{reviewerTestGuildMember("123456789012345681", "linked-user", "Linked User", "")},
 			Roles:      []DiscordGuildRole{{ID: roleID, Name: "comp-leads", Mentionable: true}},
 			RolesReady: true,
 		})
