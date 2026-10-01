@@ -629,13 +629,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await selectedRouteForWFA.locator('[data-select-task]').click();
         if (!(await panel.isVisible()) || await panel.locator('[data-wfa-title]').innerText() !== 'Compositing') throw new Error(`Task Type row click did not open the bottom WFA detail panel in ${locale.lang}`);
         const selectedRouteStyle = await selectedRouteForWFA.evaluate(node => ({
+          rowBoxShadow: getComputedStyle(node).boxShadow,
           cellBackground: getComputedStyle(node.children[0]).backgroundColor,
           boxShadow: getComputedStyle(node.children[0]).boxShadow,
           outline: getComputedStyle(node.children[0]).outlineStyle,
           expanded: node.querySelector('[data-select-task]').getAttribute('aria-expanded'),
           indicatorTransform: getComputedStyle(node.querySelector('.routing-expand-indicator')).transform,
         }));
-        if (selectedRouteStyle.cellBackground === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.boxShadow !== 'none' || selectedRouteStyle.outline !== 'none' || selectedRouteStyle.expanded !== 'true') throw new Error(`Selected Task Type does not use a subtle dark-surface state without a bright row frame in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
+        if (selectedRouteStyle.cellBackground === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.rowBoxShadow !== 'none' || selectedRouteStyle.boxShadow !== 'none' || selectedRouteStyle.outline !== 'none' || selectedRouteStyle.expanded !== 'true') throw new Error(`Selected Task Type does not use a subtle dark-surface state without a bright row frame in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         if (await panel.locator('[data-destination-control], [data-new-channel-name]').count()) throw new Error('WFA detail panel contains routing controls');
         const detailPlacement = await editForm.evaluate(form => {
@@ -1084,6 +1085,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await page.locator('#diagnostics[open]').count()) || await page.locator('#diagnostics details[open]').count()) throw new Error(`Diagnostics did not expand in a compact collapsed-details state in ${locale.lang}`);
         await page.locator('#danger-zone summary').click();
         if (!(await page.locator('#danger-zone[open]').count())) throw new Error(`Danger Zone did not expand in ${locale.lang}`);
+        const dangerLabelColor = await page.locator('#danger-zone > summary').evaluate(node => {
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--color-status-danger)';
+          document.body.append(probe);
+          const expected = getComputedStyle(probe).color;
+          probe.remove();
+          return { actual: getComputedStyle(node).color, expected };
+        });
+        if (dangerLabelColor.actual !== dangerLabelColor.expected) throw new Error(`Danger Zone disclosure label does not use the canonical semantic danger color in ${locale.lang}: ${JSON.stringify(dangerLabelColor)}`);
         await page.screenshot({ path: path.join(output, `production-settings-expanded-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
