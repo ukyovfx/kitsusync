@@ -248,6 +248,13 @@ func TestCurrentRoutingDisclosureAndCanonicalStatusPresentation(t *testing.T) {
 	}
 }
 
+func TestInlineRoutingEditorUsesIntegratedDisclosureSurface(t *testing.T) {
+	expected := `.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px) 18px;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:var(--surface-subtle);box-shadow:none}`
+	if !strings.Contains(adminThemeCSS, expected) {
+		t.Fatal("inline route editor must continue from its selected row without a bright nested card outline")
+	}
+}
+
 func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "routing-recipient-modes", Name: "Routing Recipient Modes"}
