@@ -233,6 +233,12 @@ func TestCurrentRoutingEditorStartsWithRowsAndWFAHiddenBelowList(t *testing.T) {
 	if !strings.Contains(body, `<div data-editor-parking><section class="production-wfa-edit-panel" data-wfa-detail-panel aria-live="polite" hidden>`) {
 		t.Fatal("the WFA-only detail panel must start hidden below the route list")
 	}
+	if !strings.Contains(body, `</section></div><div data-apply-message role="status" aria-live="polite"></div>`) {
+		t.Fatal("the bottom WFA panel must close only its parking container before the Apply controls; an extra section close ejects them from the form")
+	}
+	if apply, formEnd := strings.Index(body, `data-apply-submit`), strings.Index(body, `</form>`); apply < 0 || formEnd < apply {
+		t.Fatal("Apply must remain inside the routing form after the bottom WFA panel")
+	}
 	panelStart := strings.Index(body, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`)
 	if panelStart < 0 {
 		t.Fatal("the hidden WFA detail panel must be complete")
