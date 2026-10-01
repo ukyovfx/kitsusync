@@ -427,7 +427,11 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	if got := strings.Count(body, `class="production-wfa-effective-recipients"`); got != 2 {
 		t.Fatalf("each Task Type should show one effective-recipient summary; got %d summaries: %s", got, body)
 	}
-	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
+	visibleReadMode := body
+	if sourceStart := strings.Index(visibleReadMode, `<div hidden data-wfa-pending-source>`); sourceStart >= 0 {
+		visibleReadMode = visibleReadMode[:sourceStart]
+	}
+	if strings.Contains(visibleReadMode, `data-wfa-group`) || strings.Contains(visibleReadMode, `class="production-wfa-kind"`) {
 		t.Fatal("normal read mode must not expose Automatic/Additional provenance labels")
 	}
 	for _, taskTypeID := range []string{"task-comp", "task-anim"} {
@@ -568,7 +572,7 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	}
 }
 
-func TestProductionRoutingEditorProvidesAutomaticSummaryForUnroutedTaskTypes(t *testing.T) {
+func TestProductionRoutingEditorProvidesAutomaticSummaryForAllTaskTypes(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "pending-new-task-type", Name: "Pending New Task Type"}
 	if err := db.Create(&project).Error; err != nil {
@@ -601,8 +605,8 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForUnroutedTaskTypes(t *
 	if newTask < 0 {
 		t.Fatal("unrouted Task Type must have an Automatic summary available")
 	}
-	if strings.Contains(pendingSource, `data-task-type-id="task-existing"`) {
-		t.Fatal("already-routed Task Type WFA summary should not be duplicated in pending source")
+	if !strings.Contains(pendingSource, `data-task-type-id="task-existing"`) {
+		t.Fatal("already-routed Task Type must keep its Automatic summary available to the inline editor")
 	}
 	if !strings.Contains(pendingSource[newTask:], "Unavailable") {
 		t.Fatal("unrouted Task Type must show a concise truthful Automatic-recipient state")
@@ -624,7 +628,7 @@ func TestProductionRoutingEditorStagesNewChannelChoiceUntilApply(t *testing.T) {
 		}
 	}
 	script := currentRoutingEditorScript()
-	for _, marker := range []string{"window.confirm(form.dataset.removeConfirm", "route.create_channel_name=", "route.destination_webhook_id=", "credentials:'same-origin'"} {
+	for _, marker := range []string{"window.confirm(form.dataset.removeConfirm", "route.create_channel_name=", "route.destination_webhook_id=", "credentials:'same-origin'", "querySelector('[data-wfa-source] [data-wfa-pending-source]')"} {
 		if !strings.Contains(script, marker) {
 			t.Errorf("routing editor script is missing pending/safe Apply behavior %q", marker)
 		}

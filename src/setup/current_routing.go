@@ -377,7 +377,7 @@ func currentRoutingEditorScript() string {
   var body=form.querySelector('[data-current-routing-sort]'), add=form.querySelector('[data-routing-add]');
   var draft=body.querySelector('[data-routing-new-row]'), draftEditor=body.querySelector('[data-routing-new-editor]');
   var panel=form.querySelector('[data-wfa-detail-panel]'), parking=form.querySelector('[data-editor-parking]');
-  var source=form.parentElement.querySelector('[data-wfa-source]'), message=form.querySelector('[data-apply-message]');
+  var source=form.parentElement.querySelector('[data-wfa-source] [data-wfa-pending-source]'), message=form.querySelector('[data-apply-message]');
   var pending=form.querySelector('[data-pending-status]'), apply=form.querySelector('[data-apply-submit]');
   var modal=form.parentElement.querySelector('[data-wfa-add-modal]'), reviewerChanges={}, activeRow=null, openMenu=null;
   var initialRoutes=Array.prototype.map.call(body.querySelectorAll('[data-routing-row]'),function(row){return {task_type_id:row.dataset.taskType||'',destination_webhook_id:row.dataset.originalDestination||''}});
