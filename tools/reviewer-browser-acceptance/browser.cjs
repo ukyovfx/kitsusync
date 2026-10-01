@@ -834,7 +834,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         expectedStaleApply.active = false;
         await removedRouteRow.locator('.routing-row-menu summary').click();
         await removedRouteRow.locator('[data-routing-undo]').click();
-        await pendingRow.locator('[data-select-task]').click();
+        await pendingRow.click();
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.unroute(applyEndpoint);
         await editForm.locator('[data-pending-cancel]').click();
