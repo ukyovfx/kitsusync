@@ -126,7 +126,7 @@ func TestProductionNotificationsAndTeamLinkDialogsStayWithinMobileViewport(t *te
 		`.production-routing-editor{padding:0;border:0;border-radius:0;background:transparent;box-shadow:none}`,
 		`.production-routing-editor .routing-select-task{display:inline-flex;align-items:center;max-width:100%;min-height:34px;padding:5px 8px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text);font:inherit;text-align:start;cursor:pointer;appearance:none}`,
 		`.production-routing-editor [data-routing-row].selected{background:rgba(255,255,255,.045);box-shadow:inset 3px 0 0 var(--accent-2)}`,
-		`.production-routing-editor .routing-select-task[aria-pressed="true"]{text-decoration:underline;`,
+		`.production-context .production-routing-editor .routing-select-task[aria-expanded=true] .routing-expand-indicator{transform:rotate(225deg)}`,
 		`.editorial-workbench .production-context dialog,.editorial-workbench .production-team-page dialog{color-scheme:dark;`,
 		`.production-wfa-edit-panel dialog select,.production-team-page dialog select{width:100%;min-width:0}`,
 		`.editorial-workbench .production-context dialog select,.editorial-workbench .production-team-page dialog select{color-scheme:dark;`,

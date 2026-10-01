@@ -787,7 +787,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await removedRouteRow.locator('.routing-row-menu summary').click();
         page.once('dialog', async dialog => { if (dialog.type() !== 'confirm') throw new Error(`unexpected ${dialog.type()} dialog for pending route removal`); await dialog.accept(); });
         await removedRouteRow.locator('[data-routing-remove]').click();
-        await removedRouteRow.locator('.routing-row-menu summary').click();
+        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('route action menu stayed open after staging route removal');
         if (!(await removedRouteRow.locator('[data-routing-undo]').isVisible())) throw new Error('pending route removal did not offer Undo');
         await page.screenshot({ path: path.join(output, `production-notifications-pending-removal-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.keyboard.press('Escape');
@@ -824,7 +824,6 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await removedRouteRow.isVisible())) {
           throw new Error(`HTTP 409 discarded the pending route removal in ${locale.lang}`);
         }
-        await removedRouteRow.locator('.routing-row-menu summary').click();
         if (!(await removedRouteRow.locator('[data-routing-undo]').isVisible())) throw new Error(`HTTP 409 discarded route Undo in ${locale.lang}`);
         await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
         const preservedTargets = await additionalPanel.innerText();
@@ -836,7 +835,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         expectedStaleApply.console409Consumed = expectedStaleApply.console409Messages.length === 1;
         expectedStaleApply.active = false;
-        await removedRouteRow.locator('.routing-row-menu summary').click();
+        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('route action menu unexpectedly opened while preserving stale-edit changes');
         await removedRouteRow.locator('[data-routing-undo]').click();
         await pendingRow.click();
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
