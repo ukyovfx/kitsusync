@@ -215,7 +215,7 @@ func TestCurrentRoutingEditorRendersOneInlineEditorPerRouteAndDraft(t *testing.T
 	if !strings.Contains(body, `<div hidden data-editor-parking><section class="production-wfa-edit-panel" data-wfa-detail-panel`) {
 		t.Fatal("the shared editor must start in a hidden parking node before the browser moves it into the selected route row")
 	}
-	if !strings.Contains(body, `<tr data-routing-new-row hidden>`) || !strings.Contains(body, `<tr data-routing-new-editor hidden>`) {
+	if !strings.Contains(body, `<tr data-routing-new-row hidden>`) || !strings.Contains(body, `<tr data-routing-new-editor hidden class="routing-inline-editor-row">`) {
 		t.Fatal("Add Task Type must have an adjacent inline draft-editor row")
 	}
 }
