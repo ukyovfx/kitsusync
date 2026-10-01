@@ -593,8 +593,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Discord Channel → effective-recipient summary row; no synthetic Notification Preview');
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
-        if (await page.locator('[data-current-routing-form]').count() !== 1 || !(await page.locator('[data-current-routing-form]').innerText()).includes(locale.lang === 'ja' ? '変更を適用' : 'Apply')) {
-          throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}`);
+        const routingFormCount = await page.locator('[data-current-routing-form]').count();
+        const routingFormText = routingFormCount === 1 ? await page.locator('[data-current-routing-form]').innerText() : '';
+        if (routingFormCount !== 1 || !routingFormText.includes(locale.lang === 'ja' ? '変更を適用' : 'Apply')) {
+          throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}: count=${routingFormCount}, text=${JSON.stringify(routingFormText)}, url=${page.url()}`);
         }
         const editForm = page.locator('[data-current-routing-form]');
         if (!(await editForm.locator('[data-apply-submit]').isDisabled()) || !(await editForm.locator('[data-pending-status]').innerText()).includes(locale.lang === 'ja' ? '変更はありません' : 'No pending changes')) {

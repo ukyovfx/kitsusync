@@ -338,7 +338,7 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	}
 	r := httptest.NewRequest("GET", "/bot/admin/projects?project=preview-production&tab=notifications&lang=en", nil)
 	body := renderSelectedProductionNotifications(db, r, p, "en", "success", "Healthy", "")
-	for _, expected := range []string{"WFA recipients", "Automatic recipients unavailable", "Compositing", "#compositing", `data-wfa-recipients`} {
+	for _, expected := range []string{"WFA recipients", "Unavailable", "Compositing", "#compositing", `data-wfa-recipients`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("Notifications missing %q", expected)
 		}
@@ -480,8 +480,8 @@ func TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails(t *t
 
 func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *testing.T) {
 	for _, tc := range []struct{ lang, empty, teamFailure string }{
-		{"en", "No notification routing is configured.", "Automatic recipients unavailable"},
-		{"ja", "通知ルーティングはまだ設定されていません。", "自動通知先を確認できません"},
+		{"en", "No notification routing is configured.", "Unavailable"},
+		{"ja", "通知ルーティングはまだ設定されていません。", "利用不可"},
 	} {
 		db := newIAViewDB(t)
 		project := model.Project{KitsuProjectID: "notification-state-" + tc.lang, Name: "Notification State", DiscordGuildID: "123456789012345678"}

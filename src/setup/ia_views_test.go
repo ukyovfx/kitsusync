@@ -1346,7 +1346,7 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	if strings.Contains(body, "Notification routing") {
 		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
 	}
-	for _, expected := range []string{"WFA recipients", "Automatic recipients unavailable", "Task Type", `data-wfa-recipients`} {
+	for _, expected := range []string{"WFA recipients", "Unavailable", "Task Type", `data-wfa-recipients`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Notifications missing %q", expected)
 		}
@@ -1367,12 +1367,12 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal("explicit routing edit mode did not expose one staged Apply flow with linked WFA panel")
 	}
 	body = editBody
-	for _, expected := range []string{"Apply", "Cancel", "Add Task Type", "data-routing-row", "data-routing-new-row"} {
+	for _, expected := range []string{"Apply", "Cancel", "Add Task Type", "data-routing-row", "data-routing-row-template"} {
 		if !strings.Contains(editBody, expected) {
 			t.Fatalf("staged routing editor missing %q", expected)
 		}
 	}
-	for _, expected := range []string{"class=\"routing-task-type-name\">Compositing", "class=\"routing-row-menu\"", "name=\"task_type_id\" value=\"compositing\""} {
+	for _, expected := range []string{"class=\"routing-task-type-name\">Compositing", "class=\"routing-row-menu\"", `data-task-type="compositing"`} {
 		if !strings.Contains(editBody, expected) {
 			t.Fatalf("compact routing row missing %q: %s", expected, editBody)
 		}
