@@ -1137,9 +1137,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await gotoProduction(page, locales[0], 'team');
         if (!(await page.locator('main').innerText()).includes(state.expected)) throw new Error(`${state.name} Team state is unclear`);
       } else {
+        await gotoWFARecipients(page, locales[0], '&edit_routing=1');
+        const automatic = page.locator('[data-current-routing-form] [data-wfa-automatic]');
+        const automaticText = await automatic.innerText();
+        if (!automaticText.toLowerCase().includes(state.expected.toLowerCase())) throw new Error(`${state.name} Automatic state is unclear in the read-only editor summary: ${automaticText}`);
         await gotoWFARecipients(page, locales[0]);
-        const text = await page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]').innerText();
-        if (!text.toLowerCase().includes(state.expected.toLowerCase())) throw new Error(`${state.name} Automatic state is unclear: ${text}`);
+        const effectiveRow = page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]');
+        const effectiveText = await effectiveRow.innerText();
+        if (await effectiveRow.locator('[data-wfa-group],.production-wfa-kind').count()) throw new Error(`${state.name} read mode exposes Automatic/Additional provenance`);
+        if (state.name === 'no-matching' && (!effectiveText.includes('@Artist Global') || !effectiveText.includes('@Reviewers'))) throw new Error(`no-matching read mode does not show the remaining effective overrides: ${effectiveText}`);
       }
       await record(page, state.team ? '/bot/admin/projects?tab=team' : '/bot/admin/projects?tab=notifications', 'en', 'desktop', state.name, `visible fail-closed state: ${state.expected}`);
     }
