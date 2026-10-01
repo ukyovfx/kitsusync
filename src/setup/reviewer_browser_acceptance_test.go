@@ -269,6 +269,10 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				http.Error(w, "could not configure sparse Production fixture", http.StatusInternalServerError)
 				return
 			}
+			if err := db.Where("project_id = ?", project.ID).Delete(&model.ProjectReviewerTarget{}).Error; err != nil {
+				http.Error(w, "could not clear sparse Reviewer fixture", http.StatusInternalServerError)
+				return
+			}
 			if err := db.Where("project_id = ?", project.KitsuProjectID).Delete(&model.AuditLog{}).Error; err != nil {
 				http.Error(w, "could not clear sparse activity fixture", http.StatusInternalServerError)
 				return
