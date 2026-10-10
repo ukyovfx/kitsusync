@@ -31,6 +31,7 @@ const (
 	NotificationMutationReordering   = "reordering"
 	NotificationMutationDeleting     = "deleting"
 	NotificationMutationDeletionHelp = "deletion_needs_help"
+	NotificationMutationReorderHelp  = "reorder_needs_help"
 )
 
 var (
@@ -224,6 +225,51 @@ func BeginProductionDeletionMutation(db *gorm.DB, productionID string) (string, 
 		return nil
 	})
 	return token, err
+}
+
+// BeginProductionNotificationOrderRecovery explicitly claims a quarantined
+// reorder so callers can reconcile Discord to the current durable route order.
+// The caller must verify every destination and complete or re-quarantine the
+// operation with FinishProductionNotificationExternalMutation.
+func BeginProductionNotificationOrderRecovery(db *gorm.DB, productionID string) (string, error) {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return "", gorm.ErrInvalidData
+	}
+	token, err := NewProductionNotificationMutationToken()
+	if err != nil {
+		return "", err
+	}
+	productionID = strings.TrimSpace(productionID)
+	var claimedToken string
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedNotificationDeliveries(tx, productionID); err != nil {
+			return err
+		}
+		var lock ProductionNotificationWriteLock
+		if err := tx.Where("production_id = ?", productionID).First(&lock).Error; err != nil {
+			return err
+		}
+		if lock.MutationState != NotificationMutationReorderHelp || strings.TrimSpace(lock.MutationToken) == "" {
+			return ErrNotificationMutationRecoveryRequired
+		}
+		result := tx.Model(&ProductionNotificationWriteLock{}).Where("production_id = ? AND mutation_state = ? AND mutation_token = ?", productionID, NotificationMutationReorderHelp, lock.MutationToken).Updates(map[string]any{
+			"mutation_state": NotificationMutationReordering,
+			"mutation_token": token,
+			"mutation_at":    time.Now().UTC(),
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrNotificationMutationRecoveryRequired
+		}
+		claimedToken = token
+		return nil
+	})
+	return claimedToken, err
 }
 
 func FinishProductionDeletionMutation(db *gorm.DB, productionID, token string, needsHelp bool) error {
@@ -850,7 +896,7 @@ func QuarantineInflightNotificationDeliveries(db *gorm.DB) error {
 		if err := tx.Model(&ProductionNotificationWriteLock{}).Where("mutation_state = ?", NotificationMutationDeleting).Updates(map[string]any{"mutation_state": NotificationMutationDeletionHelp, "mutation_at": nil}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&ProductionNotificationWriteLock{}).Where("mutation_state = ?", NotificationMutationReordering).Updates(map[string]any{"mutation_state": "reorder_needs_help", "mutation_at": nil}).Error; err != nil {
+		if err := tx.Model(&ProductionNotificationWriteLock{}).Where("mutation_state = ?", NotificationMutationReordering).Updates(map[string]any{"mutation_state": NotificationMutationReorderHelp, "mutation_at": nil}).Error; err != nil {
 			return err
 		}
 		// Message deletion is idempotent for the exact stored message ID; a

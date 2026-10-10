@@ -65,6 +65,31 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 }
 
+func TestProductionNotificationsShowsExplicitOrderRecoveryOnlyWhenNeeded(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "order-recovery-ui", Name: "Order Recovery UI"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=order-recovery-ui&tab=notifications&lang=en", nil)
+	withoutRecovery := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
+	if strings.Contains(withoutRecovery, "data-recover-routing-order") {
+		t.Fatal("order-recovery action must not render for an unblocked Production")
+	}
+	if err := db.Create(&model.ProductionNotificationWriteLock{ProductionID: project.KitsuProjectID, MutationState: model.NotificationMutationReorderHelp, MutationToken: "synthetic-recovery-token"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	withRecovery := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
+	for _, marker := range []string{"Channel order requires reconciliation", "data-recover-routing-order", `name="project_id" value="order-recovery-ui"`, `name="action" value="recover_current_routing_order"`} {
+		if !strings.Contains(withRecovery, marker) {
+			t.Errorf("unresolved order recovery should render an explicit safe action: missing %q", marker)
+		}
+	}
+	if strings.Contains(withRecovery, "synthetic-recovery-token") {
+		t.Fatal("order recovery UI must not expose the internal mutation token")
+	}
+}
+
 func TestPipelineNotificationDiagnosticsExposeSafeDeliveryDisposition(t *testing.T) {
 	db := newIAViewDB(t)
 	event := model.NotificationDeliveryEvent{

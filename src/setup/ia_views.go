@@ -1681,7 +1681,37 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="3"><div class="production-detail-state-row">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</div></td></tr>`)
 	}
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, data, lang)
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div><div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+	recoveryMarkup := renderProductionRoutingOrderRecovery(db, r, p, lang)
+	recoveryNotice := ""
+	if r != nil && r.URL != nil {
+		switch r.URL.Query().Get("routing_order_recovery") {
+		case "done":
+			recoveryNotice = `<div class="production-detail-state-row" role="status">` + esc(label("Discordチャンネル順を保存済みルーティングに合わせました。", "Discord channel order was reconciled to the saved routing.")) + `</div>`
+		case "failed":
+			recoveryNotice = `<div class="production-detail-state-row warning" role="alert">` + esc(label("Discordチャンネル順を確認・復旧できませんでした。状態は保護されています。", "Discord channel order could not be verified or reconciled. The configuration remains protected.")) + `</div>`
+		}
+	}
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div>` + recoveryNotice + recoveryMarkup + `<div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+}
+
+func renderProductionRoutingOrderRecovery(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
+	label := func(ja, en string) string { return t(lang, ja, en) }
+	if db == nil || strings.TrimSpace(p.KitsuProjectID) == "" {
+		return `<div class="production-detail-state-row warning" role="status">` + esc(label("Discordチャンネル順の復旧状態を確認できません。", "Channel-order recovery state is unavailable.")) + `</div>`
+	}
+	var lock model.ProductionNotificationWriteLock
+	err := db.Where("production_id = ?", strings.TrimSpace(p.KitsuProjectID)).First(&lock).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ""
+	}
+	if err != nil {
+		return `<div class="production-detail-state-row warning" role="status">` + esc(label("Discordチャンネル順の復旧状態を確認できません。", "Channel-order recovery state is unavailable.")) + `</div>`
+	}
+	if lock.MutationState != model.NotificationMutationReorderHelp {
+		return ""
+	}
+	action := withLang("/bot/admin/projects", r)
+	return `<div class="production-detail-state-row warning production-order-recovery" role="status"><div><strong>` + esc(label("Discordのチャンネル順を再確認する必要があります。", "Discord channel order requires reconciliation.")) + `</strong><p class="field-help">` + esc(label("保存済みのTask Type順を再適用します。送信先が確認できない場合は変更しません。", "The saved Task Type order will be reapplied. No change is made if destinations cannot be verified.")) + `</p></div><form method="post" action="` + esc(action) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="recover_current_routing_order"><button class="btn-ghost" type="submit" data-recover-routing-order>` + esc(label("順序を再確認", "Reconcile order")) + `</button></form></div>`
 }
 
 func renderProductionWFATargetChips(values []string, emptyLabel, unavailableLabel string, automatic bool) string {

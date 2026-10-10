@@ -844,6 +844,84 @@ func TestCurrentRoutingChannelDeleteRejectsWebhookOwnedByAnotherProduction(t *te
 	}
 }
 
+func TestCurrentRoutingOrderRecoveryReconcilesOnlyVerifiedPersistedDestinations(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-order-recovery", Name: "Order Recovery", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-token")
+	webhook := model.ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "comp", TaskType: "task-comp", DiscordChannelID: "channel-comp", WebhookURL: "https://discord.com/api/webhooks/111111111111111111/synthetic-token"}
+	if err := db.Create(&webhook).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProductionNotificationRoute{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProductionNotificationWriteLock{ProductionID: project.KitsuProjectID, MutationState: model.NotificationMutationReorderHelp, MutationToken: "old-token"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldCheck, oldList, oldSet, oldInspect := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingSetPositions, currentRoutingInspectWebhook
+	defer func() {
+		currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingSetPositions, currentRoutingInspectWebhook = oldCheck, oldList, oldSet, oldInspect
+	}()
+	currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
+		return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true}}
+	}
+	currentRoutingListChannels = func(guild, _ string) ([]DiscordGuildChannel, error) {
+		if guild != "guild-1" {
+			t.Fatalf("recovery used an unexpected Guild: %q", guild)
+		}
+		return []DiscordGuildChannel{{ID: "channel-comp", Type: 0, ParentID: "category-1", Position: 9}}, nil
+	}
+	currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+		if raw != webhook.WebhookURL {
+			t.Fatalf("recovery inspected an unexpected webhook identity")
+		}
+		return routingWebhookIdentity{ID: "111111111111111111", Type: 1, GuildID: "guild-1", ChannelID: "channel-comp"}, false, nil
+	}
+	var got []DiscordChannelPosition
+	reorderCalls := 0
+	currentRoutingSetPositions = func(guild string, positions []DiscordChannelPosition, _ string) error {
+		if guild != "guild-1" {
+			t.Fatalf("recovery reordered an unexpected Guild: %q", guild)
+		}
+		reorderCalls++
+		got = append([]DiscordChannelPosition(nil), positions...)
+		if reorderCalls == 1 {
+			return errors.New("synthetic Discord reconciliation failure")
+		}
+		return nil
+	}
+	form := url.Values{"project_id": {project.KitsuProjectID}, "action": {"recover_current_routing_order"}}
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	if !handleCurrentIARoutingMutation(response, request, "en", db) {
+		t.Fatal("order recovery action was not handled")
+	}
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "routing_order_recovery=failed") || reorderCalls != 1 {
+		t.Fatalf("failed Discord reconciliation was not reported through the safe recovery path: status=%d calls=%d location=%q", response.Code, reorderCalls, response.Header().Get("Location"))
+	}
+	var failedLock model.ProductionNotificationWriteLock
+	if err := db.Where("production_id = ?", project.KitsuProjectID).First(&failedLock).Error; err != nil || failedLock.MutationState != model.NotificationMutationReorderHelp {
+		t.Fatalf("failed reconciliation must remain durably fenced: lock=%+v err=%v", failedLock, err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/bot/admin/projects", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response = httptest.NewRecorder()
+	if !handleCurrentIARoutingMutation(response, request, "en", db) {
+		t.Fatal("recovery retry action was not handled")
+	}
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "routing_order_recovery=done") || reorderCalls != 2 || len(got) != 2 || got[1] != (DiscordChannelPosition{ID: "channel-comp", Position: 9}) {
+		t.Fatalf("explicit recovery did not reconcile persisted route order: status=%d positions=%#v location=%q", response.Code, got, response.Header().Get("Location"))
+	}
+	var lock model.ProductionNotificationWriteLock
+	if err := db.Where("production_id = ?", project.KitsuProjectID).First(&lock).Error; err != nil || lock.MutationState != "" || lock.MutationToken != "" {
+		t.Fatalf("successful reconciliation did not release its own mutation fence: lock=%+v err=%v", lock, err)
+	}
+}
+
 func TestLegacyTaskTypeDeleteWaitsForProductionApply(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "legacy-task-delete", Name: "Legacy Task Delete"}

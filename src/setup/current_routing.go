@@ -113,6 +113,9 @@ func handleCurrentIARoutingMutation(w http.ResponseWriter, r *http.Request, lang
 		return true
 	}
 	action := strings.TrimSpace(r.FormValue("action"))
+	if r.Method == http.MethodPost && action == "recover_current_routing_order" {
+		return handleCurrentIARoutingOrderRecovery(w, r, db)
+	}
 	if r.Method == http.MethodPost && action == "delete_current_routing_channel" {
 		return handleCurrentIARoutingChannelDelete(w, r, lang, db)
 	}
@@ -120,6 +123,52 @@ func handleCurrentIARoutingMutation(w http.ResponseWriter, r *http.Request, lang
 		return false
 	}
 	http.Error(w, "Use the unified Production Notifications Apply request", http.StatusConflict)
+	return true
+}
+
+func handleCurrentIARoutingOrderRecovery(w http.ResponseWriter, r *http.Request, db *gorm.DB) bool {
+	productionID := strings.TrimSpace(r.FormValue("project_id"))
+	project := model.FindProjectByKitsuID(db, productionID)
+	redirect := withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)
+	if project == nil || model.IsValidationOnlyProject(db, productionID) {
+		http.Redirect(w, r, redirect+"&routing_order_recovery=failed", http.StatusSeeOther)
+		return true
+	}
+	unlock := lockProductionNotificationApply(productionID)
+	defer unlock()
+	project = model.FindProjectByKitsuID(db, productionID)
+	if project == nil || model.IsValidationOnlyProject(db, productionID) {
+		http.Redirect(w, r, redirect+"&routing_order_recovery=failed", http.StatusSeeOther)
+		return true
+	}
+	token, err := model.BeginProductionNotificationOrderRecovery(db, productionID)
+	if err != nil {
+		http.Redirect(w, r, redirect+"&routing_order_recovery=failed", http.StatusSeeOther)
+		return true
+	}
+	finishFailed := func() {
+		_ = model.FinishProductionNotificationExternalMutation(db, productionID, token, true)
+		http.Redirect(w, r, redirect+"&routing_order_recovery=failed", http.StatusSeeOther)
+	}
+	var routes []model.ProductionNotificationRoute
+	if err := db.Where("production_id = ?", productionID).Order("id asc").Find(&routes).Error; err != nil || len(routes) == 0 {
+		finishFailed()
+		return true
+	}
+	repairs, err := validateCurrentRoutingDestinations(*project, routes, db)
+	if err != nil || len(repairs) != 0 {
+		finishFailed()
+		return true
+	}
+	if err := syncCurrentRoutingDiscordOrder(*project, routes, db); err != nil {
+		finishFailed()
+		return true
+	}
+	if err := model.FinishProductionNotificationExternalMutation(db, productionID, token, false); err != nil {
+		finishFailed()
+		return true
+	}
+	http.Redirect(w, r, redirect+"&routing_order_recovery=done", http.StatusSeeOther)
 	return true
 }
 

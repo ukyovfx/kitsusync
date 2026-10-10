@@ -421,6 +421,16 @@ func TestExternalReorderMutationBarrierBlocksDispatchAndSurfacesRecovery(t *test
 	if err != nil || len(diagnostics) != 1 || diagnostics[0].Disposition != "mutation_reorder_needs_help" {
 		t.Fatalf("unresolved recovery state not surfaced: %#v err=%v", diagnostics, err)
 	}
+	recoveryToken, err := BeginProductionNotificationOrderRecovery(db, project.KitsuProjectID)
+	if err != nil || recoveryToken == "" || recoveryToken == token {
+		t.Fatalf("explicit order reconciliation should claim the persisted recovery state with a fresh token: token=%q err=%v", recoveryToken, err)
+	}
+	if err := FinishProductionNotificationExternalMutation(db, project.KitsuProjectID, recoveryToken, false); err != nil {
+		t.Fatalf("verified reconciliation should release its matching fence: %v", err)
+	}
+	if _, err := PrepareNotificationDelivery(db, notificationIntent()); err != nil {
+		t.Fatalf("dispatch should resume only after explicit order reconciliation completes: %v", err)
+	}
 }
 
 func TestDeletionBatchTombstonesAtomicallyAndBlocksAllRoutes(t *testing.T) {
