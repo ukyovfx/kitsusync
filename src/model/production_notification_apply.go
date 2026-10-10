@@ -393,6 +393,9 @@ func FinishProductionNotificationExternalMutation(db *gorm.DB, productionID, mut
 		updates := map[string]any{"mutation_state": "", "mutation_token": "", "mutation_at": nil}
 		if recoveryRequired {
 			updates["mutation_state"] = "reorder_needs_help"
+			// Retain the durable attempt identity so the explicit recovery path can
+			// claim this exact quarantined mutation with a fresh token.
+			updates["mutation_token"] = strings.TrimSpace(mutationToken)
 		}
 		result := tx.Model(&ProductionNotificationWriteLock{}).Where("production_id = ? AND mutation_state = ? AND mutation_token = ?", strings.TrimSpace(productionID), NotificationMutationReordering, strings.TrimSpace(mutationToken)).Updates(updates)
 		if result.Error != nil {

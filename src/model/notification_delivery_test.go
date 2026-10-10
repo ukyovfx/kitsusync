@@ -414,6 +414,10 @@ func TestExternalReorderMutationBarrierBlocksDispatchAndSurfacesRecovery(t *test
 	if err := FinishProductionNotificationExternalMutation(db, project.KitsuProjectID, token, true); err != nil {
 		t.Fatal(err)
 	}
+	var quarantined ProductionNotificationWriteLock
+	if err := db.Where("production_id = ?", project.KitsuProjectID).First(&quarantined).Error; err != nil || quarantined.MutationState != NotificationMutationReorderHelp || quarantined.MutationToken != token {
+		t.Fatalf("quarantined reorder must retain its durable attempt identity: lock=%+v err=%v", quarantined, err)
+	}
 	if _, err := PrepareNotificationDelivery(db, notificationIntent()); !errors.Is(err, ErrNotificationMutationRecoveryRequired) {
 		t.Fatalf("failed compensation must keep dispatch quarantined: %v", err)
 	}
