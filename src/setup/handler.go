@@ -409,6 +409,38 @@ func isReadinessRecoveryAction(r *http.Request) bool {
 	}
 }
 
+func parseWebhookID(value string) (uint, error) {
+	parsed, err := strconv.ParseUint(strings.TrimSpace(value), 10, strconv.IntSize)
+	if err != nil || parsed == 0 || parsed > uint64(^uint(0)) {
+		return 0, fmt.Errorf("invalid webhook ID")
+	}
+	return uint(parsed), nil
+}
+
+func invalidWebhookIDPage(lang, backURL string) string {
+	return page(lang,
+		t(lang, "削除対象が不正です", "Invalid delete target"),
+		"#ff6a50",
+		"",
+		`<li>`+esc(t(lang, "Webhook IDを確認してください。", "Invalid webhook ID."))+`</li>`,
+		`<a href="`+html.EscapeString(backURL)+`">`+esc(t(lang, "戻る", "Back"))+`</a>`,
+	)
+}
+
+func lockProjectForLegacyRoutingWrite(db *gorm.DB, projectID string) (*model.Project, func(), error) {
+	projectID = strings.TrimSpace(projectID)
+	if db == nil || projectID == "" {
+		return nil, func() {}, fmt.Errorf("project not found")
+	}
+	unlockApply := lockProductionNotificationApply(projectID)
+	project := model.FindProjectByKitsuID(db, projectID)
+	if project == nil {
+		unlockApply()
+		return nil, func() {}, fmt.Errorf("project not found")
+	}
+	return project, unlockApply, nil
+}
+
 func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeReady func() bool, onRuntimeConfigured func()) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -479,13 +511,17 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		if r.Method == http.MethodPost && r.FormValue("action") == "channel_delete" {
 			_ = r.ParseForm()
 			channelName := r.FormValue("channel_name")
-			id, _ := strconv.ParseUint(r.FormValue("webhook_id"), 10, 64)
+			id, parseErr := parseWebhookID(r.FormValue("webhook_id"))
+			if parseErr != nil {
+				fmt.Fprint(w, invalidWebhookIDPage(lang, withLang("/bot/setup", r)))
+				return
+			}
 			expected := t(lang, "削除", "delete")
 			if strings.TrimSpace(r.FormValue("confirm_text")) != expected {
 				fmt.Fprint(w, page(lang, t(lang, "削除確認の入力が一致しませんでした", "Deletion confirmation did not match"), "#ff6a50", channelName, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
-			if err := DeleteProjectChannel(db, botToken, uint(id)); err != nil {
+			if err := DeleteProjectChannel(db, botToken, id); err != nil {
 				fmt.Fprint(w, page(lang, t(lang, "チャンネル削除に失敗しました", "Channel delete failed"), "#ff6a50", "", `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
@@ -495,14 +531,18 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 
 		if r.Method == http.MethodPost && r.FormValue("action") == "task_type_delete" {
 			_ = r.ParseForm()
-			id, _ := strconv.ParseUint(r.FormValue("webhook_id"), 10, 64)
+			id, parseErr := parseWebhookID(r.FormValue("webhook_id"))
+			if parseErr != nil {
+				fmt.Fprint(w, invalidWebhookIDPage(lang, withLang("/bot/setup", r)))
+				return
+			}
 			taskType := r.FormValue("task_type")
 			expected := t(lang, "削除", "delete")
 			if strings.TrimSpace(r.FormValue("confirm_text")) != expected {
 				fmt.Fprint(w, page(lang, t(lang, "削除確認の入力が一致しませんでした", "Deletion confirmation did not match"), "#ff6a50", taskType, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
-			if err := deleteProjectWebhookSerialized(db, uint(id)); err != nil {
+			if err := deleteProjectWebhookSerialized(db, id); err != nil {
 				fmt.Fprint(w, page(lang, t(lang, "タスクタイプの削除に失敗しました", "Task Type delete failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
@@ -513,7 +553,7 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 		// create_channel: create a new Discord channel + webhook in the project category, stored pending (task_type="")
 		if r.Method == http.MethodPost && r.FormValue("action") == "create_channel" {
 			_ = r.ParseForm()
-			projectID := r.FormValue("kitsu_project_id")
+			projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
 			// Server-side merge: if "custom" was selected, use channel_name_custom; otherwise use channel_preset
 			channelName := strings.TrimSpace(r.FormValue("channel_name_custom"))
 			if channelName == "" {
@@ -523,11 +563,12 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 				fmt.Fprint(w, page(lang, t(lang, "入力値が不正です", "Invalid input"), "#ff6a50", "", `<li>`+t(lang, "チャンネル名を入力してください。", "Please enter a channel name.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
-			project := model.FindProjectByKitsuID(db, projectID)
-			if project == nil {
+			project, unlockApply, err := lockProjectForLegacyRoutingWrite(db, projectID)
+			if err != nil {
 				fmt.Fprint(w, page(lang, t(lang, "プロジェクトが見つかりません", "Project not found"), "#ff6a50", "", `<li>`+t(lang, "プロジェクト情報を取得できませんでした。", "Could not load project info.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
+			defer unlockApply()
 			effectiveGuildID := strings.TrimSpace(project.DiscordGuildID)
 			if effectiveGuildID == "" {
 				effectiveGuildID = strings.TrimSpace(fallbackGuildID)
@@ -564,6 +605,12 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 			if projectID == "" || taskType == "" || channelName == "" {
 				fmt.Fprint(w, page(lang, t(lang, "入力値が不正です", "Invalid input"), "#ff6a50", taskType, `<li>`+t(lang, "プロジェクト、タスクタイプ、チャンネルはすべて必須です。", "Project, task type, and channel are all required.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
+			}
+			if _, unlockApply, lockErr := lockProjectForLegacyRoutingWrite(db, projectID); lockErr != nil {
+				fmt.Fprint(w, page(lang, t(lang, "プロジェクトが見つかりません", "Project not found"), "#ff6a50", taskType, `<li>`+t(lang, "プロジェクト情報を取得できませんでした。", "Could not load project info.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
+				return
+			} else {
+				defer unlockApply()
 			}
 
 			// If a pending (task_type="") record exists for this channel, update it rather than creating a new row
@@ -759,43 +806,52 @@ func handleProjectRoutingMutation(w http.ResponseWriter, r *http.Request, lang, 
 		return false
 	}
 
-	backURL := withLang(r.URL.Path, r)
-	adminProjectsURL := withLang(adminProjectsPathFor(r), r)
+	redirectURL := withLang(r.URL.Path, r)
+	backURL := html.EscapeString(redirectURL)
+	adminProjectsURL := html.EscapeString(withLang(adminProjectsPathFor(r), r))
 
 	switch action {
 	case "channel_delete":
 		_ = r.ParseForm()
 		channelName := r.FormValue("channel_name")
-		id, _ := strconv.ParseUint(r.FormValue("webhook_id"), 10, 64)
+		id, parseErr := parseWebhookID(r.FormValue("webhook_id"))
+		if parseErr != nil {
+			fmt.Fprint(w, invalidWebhookIDPage(lang, redirectURL))
+			return true
+		}
 		expected := t(lang, "\u524a\u9664", "delete")
 		if strings.TrimSpace(r.FormValue("confirm_text")) != expected {
 			fmt.Fprint(w, page(lang, t(lang, "\u524a\u9664\u78ba\u8a8d\u306e\u5165\u529b\u304c\u4e00\u81f4\u3057\u307e\u305b\u3093", "Deletion confirmation did not match"), "#ff6a50", channelName, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
-		if err := DeleteProjectChannel(db, botToken, uint(id)); err != nil {
+		if err := DeleteProjectChannel(db, botToken, id); err != nil {
 			fmt.Fprint(w, page(lang, t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u306e\u524a\u9664\u306b\u5931\u6557\u3057\u307e\u3057\u305f", "Channel delete failed"), "#ff6a50", "", `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
-		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		http.Redirect(w, r, redirectURL+"&msg=saved", http.StatusSeeOther)
 		return true
 	case "task_type_delete":
 		_ = r.ParseForm()
-		id, _ := strconv.ParseUint(r.FormValue("webhook_id"), 10, 64)
+		id, parseErr := parseWebhookID(r.FormValue("webhook_id"))
+		if parseErr != nil {
+			fmt.Fprint(w, invalidWebhookIDPage(lang, redirectURL))
+			return true
+		}
 		taskType := r.FormValue("task_type")
 		expected := t(lang, "\u524a\u9664", "delete")
 		if strings.TrimSpace(r.FormValue("confirm_text")) != expected {
 			fmt.Fprint(w, page(lang, t(lang, "\u524a\u9664\u78ba\u8a8d\u306e\u5165\u529b\u304c\u4e00\u81f4\u3057\u307e\u305b\u3093", "Deletion confirmation did not match"), "#ff6a50", taskType, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
-		if err := deleteProjectWebhookSerialized(db, uint(id)); err != nil {
+		if err := deleteProjectWebhookSerialized(db, id); err != nil {
 			fmt.Fprint(w, page(lang, t(lang, "タスクタイプの削除に失敗しました", "Task Type delete failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "戻る", "Back")+`</a>`))
 			return true
 		}
-		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		http.Redirect(w, r, redirectURL+"&msg=saved", http.StatusSeeOther)
 		return true
 	case "create_channel":
 		_ = r.ParseForm()
-		projectID := r.FormValue("kitsu_project_id")
+		projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
 		channelName := strings.TrimSpace(r.FormValue("channel_name_custom"))
 		if channelName == "" {
 			channelName = strings.TrimSpace(r.FormValue("channel_preset"))
@@ -804,11 +860,12 @@ func handleProjectRoutingMutation(w http.ResponseWriter, r *http.Request, lang, 
 			fmt.Fprint(w, page(lang, t(lang, "\u5165\u529b\u304c\u4e0d\u6b63\u3067\u3059", "Invalid input"), "#ff6a50", "", `<li>`+t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u540d\u3092\u5165\u529b\u3057\u3066\u304f\u3060\u3055\u3044", "Please enter a channel name.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
-		project := model.FindProjectByKitsuID(db, projectID)
-		if project == nil {
+		project, unlockApply, err := lockProjectForLegacyRoutingWrite(db, projectID)
+		if err != nil {
 			fmt.Fprint(w, page(lang, t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093", "Project not found"), "#ff6a50", "", `<li>`+t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u60c5\u5831\u3092\u8aad\u307f\u8fbc\u3081\u307e\u305b\u3093\u3067\u3057\u305f", "Could not load project info.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
+		defer unlockApply()
 		effectiveGuildID := strings.TrimSpace(project.DiscordGuildID)
 		if effectiveGuildID == "" {
 			effectiveGuildID = strings.TrimSpace(fallbackGuildID)
@@ -831,7 +888,7 @@ func handleProjectRoutingMutation(w http.ResponseWriter, r *http.Request, lang, 
 			fmt.Fprint(w, page(lang, t(lang, "DB \u3078\u306e\u4fdd\u5b58\u306b\u5931\u6557\u3057\u307e\u3057\u305f", "Failed to save to database"), "#ff6a50", channelName, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
-		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		http.Redirect(w, r, redirectURL+"&msg=saved", http.StatusSeeOther)
 		return true
 	case "task_assign":
 		_ = r.ParseForm()
@@ -842,12 +899,18 @@ func handleProjectRoutingMutation(w http.ResponseWriter, r *http.Request, lang, 
 			fmt.Fprint(w, page(lang, t(lang, "\u5165\u529b\u304c\u4e0d\u6b63\u3067\u3059", "Invalid input"), "#ff6a50", taskType, `<li>`+t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u3001task type\u3001channel \u306f\u3059\u3079\u3066\u5fc5\u9808\u3067\u3059", "Project, task type, and channel are all required.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
+		if _, unlockApply, lockErr := lockProjectForLegacyRoutingWrite(db, projectID); lockErr != nil {
+			fmt.Fprint(w, page(lang, t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093", "Project not found"), "#ff6a50", taskType, `<li>`+t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u60c5\u5831\u3092\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f", "Could not load project info.")+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
+			return true
+		} else {
+			defer unlockApply()
+		}
 		if pending := model.FindPendingChannel(db, projectID, channelName); pending != nil {
 			if err := db.Model(pending).Update("task_type", taskType).Error; err != nil {
 				fmt.Fprint(w, page(lang, t(lang, "\u5272\u308a\u5f53\u3066\u306b\u5931\u6557\u3057\u307e\u3057\u305f", "Assignment failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 				return true
 			}
-			http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+			http.Redirect(w, r, redirectURL+"&msg=saved", http.StatusSeeOther)
 			return true
 		}
 		existing := model.FindChannelRecord(db, projectID, channelName)
@@ -866,7 +929,7 @@ func handleProjectRoutingMutation(w http.ResponseWriter, r *http.Request, lang, 
 			fmt.Fprint(w, page(lang, t(lang, "\u5272\u308a\u5f53\u3066\u306b\u5931\u6557\u3057\u307e\u3057\u305f", "Assignment failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
-		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
+		http.Redirect(w, r, redirectURL+"&msg=saved", http.StatusSeeOther)
 		return true
 	default:
 		return false

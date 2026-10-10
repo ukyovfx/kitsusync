@@ -19,6 +19,7 @@ type setupDiscordProvisioningStub struct {
 	t                *testing.T
 	categoryID       string
 	categoryStarted  chan struct{}
+	channelStarted   chan struct{}
 	createdChannelID []string
 	deletedIDs       []string
 	nextChannelNum   int
@@ -87,6 +88,12 @@ func installSetupDiscordProvisioningStub(t *testing.T) *setupDiscordProvisioning
 				return jsonResp(http.StatusOK, `{"id":"`+stub.categoryID+`"}`), nil
 			}
 			if payload.Type == 0 {
+				if stub.channelStarted != nil {
+					select {
+					case stub.channelStarted <- struct{}{}:
+					default:
+					}
+				}
 				stub.nextChannelNum++
 				channelID := fmt.Sprintf("ch-%d", stub.nextChannelNum)
 				stub.createdChannelID = append(stub.createdChannelID, channelID)
