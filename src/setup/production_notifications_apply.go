@@ -292,20 +292,19 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 				return currentRoutingSetPositions(project.DiscordGuildID, priorOrder, discordToken)
 			},
 		)
-		var resourceErr error
-		resourceCleanup := "not_required"
-		if dbRestoreErr == nil {
-			if len(createdResources) > 0 {
-				resourceCleanup = "complete"
-				resourceErr = cleanupCreated()
-			}
-		} else if len(createdResources) > 0 {
+		var status int
+		var body map[string]string
+		if dbRestoreErr == nil && len(createdResources) > 0 {
+			resourceErr := cleanupCreated()
+			status, body = productionNotificationRecoveryDiagnostic(dbRestoreErr, discordRestoreErr, resourceErr)
+		} else {
+			status, body = productionNotificationRecoveryDiagnostic(dbRestoreErr, discordRestoreErr)
+		}
+		if dbRestoreErr != nil && len(createdResources) > 0 {
 			// Keep external resources when the DB restore failed: deleting them
 			// could leave persisted state pointing at missing Discord objects.
-			resourceCleanup = "deferred_database_restore_failed"
+			body["resource_cleanup"] = "deferred_database_restore_failed"
 		}
-		status, body := productionNotificationRecoveryDiagnostic(dbRestoreErr, discordRestoreErr, resourceErr)
-		body["resource_cleanup"] = resourceCleanup
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(body)
 		return true
