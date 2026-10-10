@@ -293,6 +293,10 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 
 func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, error) {
 	var logs []string
+	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
+		unlockApply := lockProductionNotificationApply(project.ID)
+		defer unlockApply()
+	}
 
 	var webhooks []model.ProjectWebhook
 	db.Where("kitsu_project_id = ?", kitsuProjectID).Find(&webhooks)
@@ -312,7 +316,7 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 		logs = append(logs, "deleted category")
 	}
 
-	if err := DeleteProjectConnectionOnly(kitsuProjectID, db); err != nil {
+	if err := deleteProjectConnectionOnly(kitsuProjectID, db); err != nil {
 		logs = append(logs, "failed to delete project records from database")
 		return logs, err
 	}
@@ -321,6 +325,18 @@ func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, erro
 }
 
 func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
+	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
+	if kitsuProjectID == "" {
+		return fmt.Errorf("empty project id")
+	}
+	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
+		unlockApply := lockProductionNotificationApply(project.ID)
+		defer unlockApply()
+	}
+	return deleteProjectConnectionOnly(kitsuProjectID, db)
+}
+
+func deleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
 	if kitsuProjectID == "" {
 		return fmt.Errorf("empty project id")
@@ -460,7 +476,10 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 				fmt.Fprint(w, page(lang, t(lang, "削除確認の入力が一致しませんでした", "Deletion confirmation did not match"), "#ff6a50", taskType, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
-			model.DeleteProjectWebhookByID(db, uint(id))
+			if err := deleteProjectWebhookSerialized(db, uint(id)); err != nil {
+				fmt.Fprint(w, page(lang, t(lang, "タスクタイプの削除に失敗しました", "Task Type delete failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
+				return
+			}
 			http.Redirect(w, r, withLang("/bot/setup", r)+"&msg=saved", http.StatusSeeOther)
 			return
 		}
@@ -652,13 +671,46 @@ func authenticateDeleteAdmin(ctx context.Context, db *gorm.DB, kitsuHost, email,
 	return nil
 }
 
-func DeleteProjectChannel(db *gorm.DB, botToken string, webhookID uint) error {
+var deleteProjectChannelOnDiscord = DeleteChannel
+
+func lockProjectForWebhookMutation(db *gorm.DB, webhookID uint) (*model.ProjectWebhook, func(), error) {
+	if db == nil || webhookID == 0 {
+		return nil, func() {}, fmt.Errorf("channel record not found")
+	}
 	webhook := model.FindProjectWebhookByID(db, webhookID)
 	if webhook == nil {
-		return fmt.Errorf("channel record not found")
+		return nil, func() {}, fmt.Errorf("channel record not found")
 	}
+	project := model.FindProjectByKitsuID(db, webhook.KitsuProjectID)
+	if project == nil {
+		return webhook, func() {}, nil
+	}
+	unlockApply := lockProductionNotificationApply(project.ID)
+	current := model.FindProjectWebhookByID(db, webhookID)
+	if current == nil || current.KitsuProjectID != project.KitsuProjectID {
+		unlockApply()
+		return nil, func() {}, fmt.Errorf("channel record changed during deletion")
+	}
+	return current, unlockApply, nil
+}
+
+func deleteProjectWebhookSerialized(db *gorm.DB, webhookID uint) error {
+	webhook, unlockApply, err := lockProjectForWebhookMutation(db, webhookID)
+	if err != nil {
+		return err
+	}
+	defer unlockApply()
+	return db.Delete(&model.ProjectWebhook{}, webhook.ID).Error
+}
+
+func DeleteProjectChannel(db *gorm.DB, botToken string, webhookID uint) error {
+	webhook, unlockApply, err := lockProjectForWebhookMutation(db, webhookID)
+	if err != nil {
+		return err
+	}
+	defer unlockApply()
 	if webhook.DiscordChannelID != "" {
-		if err := DeleteChannel(webhook.DiscordChannelID, botToken); err != nil {
+		if err := deleteProjectChannelOnDiscord(webhook.DiscordChannelID, botToken); err != nil {
 			return err
 		}
 	}
@@ -709,7 +761,10 @@ func handleProjectRoutingMutation(w http.ResponseWriter, r *http.Request, lang, 
 			fmt.Fprint(w, page(lang, t(lang, "\u524a\u9664\u78ba\u8a8d\u306e\u5165\u529b\u304c\u4e00\u81f4\u3057\u307e\u305b\u3093", "Deletion confirmation did not match"), "#ff6a50", taskType, `<li>`+html.EscapeString(expected)+`</li>`, `<a href="`+backURL+`">`+t(lang, "\u623b\u308b", "Back")+`</a>`))
 			return true
 		}
-		model.DeleteProjectWebhookByID(db, uint(id))
+		if err := deleteProjectWebhookSerialized(db, uint(id)); err != nil {
+			fmt.Fprint(w, page(lang, t(lang, "タスクタイプの削除に失敗しました", "Task Type delete failed"), "#ff6a50", taskType, `<li>`+html.EscapeString(err.Error())+`</li>`, `<a href="`+backURL+`">`+t(lang, "戻る", "Back")+`</a>`))
+			return true
+		}
 		http.Redirect(w, r, backURL+"&msg=saved", http.StatusSeeOther)
 		return true
 	case "create_channel":

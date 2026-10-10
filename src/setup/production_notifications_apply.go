@@ -84,6 +84,11 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 	}
 	unlockApply := lockProductionNotificationApply(project.ID)
 	defer unlockApply()
+	project = model.FindProjectByKitsuID(db, productionID)
+	if project == nil || model.IsValidationOnlyProject(db, productionID) {
+		http.Error(w, `{"error":"production_not_writable"}`, http.StatusForbidden)
+		return true
+	}
 	if err := model.ValidateReviewerDeltasForRemovedRoutes(convertApplyRoutes(request, productionID), request.ReviewerChanges); err != nil {
 		http.Error(w, `{"error":"reviewer_delta_for_removed_route"}`, http.StatusBadRequest)
 		return true

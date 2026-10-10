@@ -717,3 +717,144 @@ func TestCurrentRoutingChannelDeleteRemovesOnlyVerifiedRouteAndWebhook(t *testin
 		t.Fatalf("verified channel delete did not preserve the remaining route: %#v", routes)
 	}
 }
+
+func TestLegacyTaskTypeDeleteWaitsForProductionApply(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "legacy-task-delete", Name: "Legacy Task Delete"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "https://example.invalid/comp", "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+
+	unlockApply := lockProductionNotificationApply(project.ID)
+	requestStarted := make(chan struct{})
+	requestDone := make(chan struct{})
+	response := httptest.NewRecorder()
+	go func() {
+		defer close(requestDone)
+		close(requestStarted)
+		form := url.Values{"action": {"task_type_delete"}, "webhook_id": {strconv.FormatUint(uint64(webhook.ID), 10)}, "task_type": {"Compositing"}, "confirm_text": {"delete"}}
+		request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		handleProjectRoutingMutation(response, request, "en", "", "", db)
+	}()
+	<-requestStarted
+
+	completedBeforeApply := false
+	select {
+	case <-requestDone:
+		completedBeforeApply = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := model.FindProjectWebhookByID(db, webhook.ID); got == nil {
+		unlockApply()
+		t.Fatal("legacy task-type deletion removed a webhook while Production Apply held its lock")
+	}
+	unlockApply()
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("legacy task-type deletion did not finish after Apply released its lock")
+	}
+	if completedBeforeApply || model.FindProjectWebhookByID(db, webhook.ID) != nil {
+		t.Fatalf("legacy task-type delete was not serialized: early=%v", completedBeforeApply)
+	}
+}
+
+func TestDeleteProjectChannelWaitsForProductionApply(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "legacy-channel-delete", Name: "Legacy Channel Delete"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "https://example.invalid/comp", "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	oldDelete := deleteProjectChannelOnDiscord
+	deleteReached := make(chan struct{})
+	deleteProjectChannelOnDiscord = func(string, string) error {
+		close(deleteReached)
+		return nil
+	}
+	defer func() { deleteProjectChannelOnDiscord = oldDelete }()
+
+	unlockApply := lockProductionNotificationApply(project.ID)
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		close(deleteStarted)
+		deleteDone <- DeleteProjectChannel(db, "test-token", webhook.ID)
+	}()
+	<-deleteStarted
+	deleteRanBeforeApply := false
+	select {
+	case <-deleteReached:
+		deleteRanBeforeApply = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	if model.FindProjectWebhookByID(db, webhook.ID) == nil {
+		unlockApply()
+		t.Fatal("legacy channel deletion removed webhook state while Production Apply held its lock")
+	}
+	unlockApply()
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("legacy channel delete failed after Apply released its lock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("legacy channel delete did not finish after Apply released its lock")
+	}
+	if deleteRanBeforeApply || model.FindProjectWebhookByID(db, webhook.ID) != nil {
+		t.Fatalf("legacy channel delete was not serialized: early=%v", deleteRanBeforeApply)
+	}
+}
+
+func TestDeleteProjectConnectionOnlyWaitsForProductionApply(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "connection-delete-lock", Name: "Connection Delete Lock"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	unlockApply := lockProductionNotificationApply(project.ID)
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		close(deleteStarted)
+		deleteDone <- DeleteProjectConnectionOnly(project.KitsuProjectID, db)
+	}()
+	<-deleteStarted
+
+	completedBeforeApply := false
+	var earlyErr error
+	select {
+	case err := <-deleteDone:
+		completedBeforeApply = err == nil
+		earlyErr = err
+	case <-time.After(100 * time.Millisecond):
+	}
+	if model.FindProjectByKitsuID(db, project.KitsuProjectID) == nil {
+		unlockApply()
+		t.Fatal("connection cleanup removed the Production while Apply held its lock")
+	}
+	unlockApply()
+	if !completedBeforeApply {
+		select {
+		case err := <-deleteDone:
+			if err != nil {
+				t.Fatalf("connection cleanup failed after Apply released its lock: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("connection cleanup did not finish after Apply released its lock")
+		}
+	} else if earlyErr != nil {
+		t.Fatalf("connection cleanup failed before Apply released its lock: %v", earlyErr)
+	}
+	if completedBeforeApply || model.FindProjectByKitsuID(db, project.KitsuProjectID) != nil {
+		t.Fatalf("connection cleanup was not serialized: early=%v", completedBeforeApply)
+	}
+}

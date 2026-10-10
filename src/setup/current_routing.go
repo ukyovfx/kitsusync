@@ -66,6 +66,7 @@ func syncCurrentRoutingDiscordOrder(project model.Project, routes []model.Produc
 		byID[channel.ID] = channel
 	}
 	owned := make(map[string]DiscordGuildChannel, len(routes))
+	routeChannels := make(map[uint]DiscordGuildChannel, len(routes))
 	for _, route := range routes {
 		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
 		if webhook == nil || strings.TrimSpace(webhook.DiscordChannelID) == "" {
@@ -79,6 +80,7 @@ func syncCurrentRoutingDiscordOrder(project model.Project, routes []model.Produc
 			return fmt.Errorf("routing destination ownership is duplicated")
 		}
 		owned[channel.ID] = channel
+		routeChannels[route.DestinationWebhookID] = channel
 	}
 	current := make([]DiscordGuildChannel, 0, len(owned))
 	categoryTextChannels := make([]DiscordGuildChannel, 0)
@@ -98,8 +100,10 @@ func syncCurrentRoutingDiscordOrder(project model.Project, routes []model.Produc
 	}
 	positions := make([]DiscordChannelPosition, 0, len(routes))
 	for i, route := range routes {
-		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
-		channel := byID[strings.TrimSpace(webhook.DiscordChannelID)]
+		channel, ok := routeChannels[route.DestinationWebhookID]
+		if !ok {
+			return fmt.Errorf("routing destination disappeared during order verification")
+		}
 		position := current[i].Position
 		if compactPositions {
 			position = firstPosition + i

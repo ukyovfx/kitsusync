@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"app/src/model"
 	"gorm.io/gorm"
@@ -95,7 +96,7 @@ func TestStrongDeleteFailureMatrix(t *testing.T) {
 			}
 			return nil
 		}, func(productionID string, db *gorm.DB) error {
-			return DeleteProjectConnectionOnly(productionID, db)
+			return deleteProjectConnectionOnly(productionID, db)
 		})
 		result := executeConnectedProductionStrongDelete("en", *project, "guild-1", "bot-token", db)
 		if len(result.Failed) != 1 || result.ConnectionDeleted != true || result.CategoryDeleted != true {
@@ -115,7 +116,7 @@ func TestStrongDeleteFailureMatrix(t *testing.T) {
 			}
 			return nil
 		}, func(productionID string, db *gorm.DB) error {
-			return DeleteProjectConnectionOnly(productionID, db)
+			return deleteProjectConnectionOnly(productionID, db)
 		})
 		result := executeConnectedProductionStrongDelete("en", *project, "guild-1", "bot-token", db)
 		if result.ConnectionDeleted || result.CategoryError == "" || result.CategoryDeleted {
@@ -151,7 +152,7 @@ func TestStrongDeleteFailureMatrix(t *testing.T) {
 			}
 			return nil
 		}, func(productionID string, db *gorm.DB) error {
-			return DeleteProjectConnectionOnly(productionID, db)
+			return deleteProjectConnectionOnly(productionID, db)
 		})
 		result := executeConnectedProductionStrongDelete("en", *project, "guild-1", "bot-token", db)
 		if !result.CategoryDeleted || !result.ConnectionDeleted || result.CategoryError != "" {
@@ -163,7 +164,7 @@ func TestStrongDeleteFailureMatrix(t *testing.T) {
 	t.Run("already absent webhook is idempotent", func(t *testing.T) {
 		project, db, _ := newStrongDeleteFixture(t, 0, false)
 		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, func(productionID string, db *gorm.DB) error {
-			return DeleteProjectConnectionOnly(productionID, db)
+			return deleteProjectConnectionOnly(productionID, db)
 		})
 		result := executeConnectedProductionStrongDelete("en", *project, "guild-1", "bot-token", db)
 		if !result.ConnectionDeleted || !result.CategoryDeleted {
@@ -175,7 +176,7 @@ func TestStrongDeleteFailureMatrix(t *testing.T) {
 	t.Run("already absent route is idempotent", func(t *testing.T) {
 		project, db, _ := newStrongDeleteFixture(t, 1, false)
 		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, func(productionID string, db *gorm.DB) error {
-			return DeleteProjectConnectionOnly(productionID, db)
+			return deleteProjectConnectionOnly(productionID, db)
 		})
 		result := executeConnectedProductionStrongDelete("en", *project, "guild-1", "bot-token", db)
 		if !result.ConnectionDeleted || !result.CategoryDeleted {
@@ -198,7 +199,7 @@ func TestStrongDeleteCombinedFailureConvergesOnRetry(t *testing.T) {
 		}
 		return nil
 	}, func(productionID string, db *gorm.DB) error {
-		return DeleteProjectConnectionOnly(productionID, db)
+		return deleteProjectConnectionOnly(productionID, db)
 	})
 
 	first := executeConnectedProductionStrongDelete("en", *project, "guild-1", "bot-token", db)
@@ -212,4 +213,44 @@ func TestStrongDeleteCombinedFailureConvergesOnRetry(t *testing.T) {
 		t.Fatalf("retry did not converge: %+v", second)
 	}
 	assertStrongDeleteComplete(t, db, project.KitsuProjectID)
+}
+
+func TestStrongDeleteWaitsForProductionApply(t *testing.T) {
+	project, db, _ := newStrongDeleteFixture(t, 1, true)
+	deleteReached := make(chan struct{}, 1)
+	installStrongDeleteTestSeams(t, func(string, string) error {
+		select {
+		case deleteReached <- struct{}{}:
+		default:
+		}
+		return nil
+	}, func(string, *gorm.DB) error { return nil })
+
+	unlockApply := lockProductionNotificationApply(project.ID)
+	deleteStarted := make(chan struct{})
+	deleteDone := make(chan connectedProductionChannelDeleteExecution, 1)
+	go func() {
+		close(deleteStarted)
+		deleteDone <- executeConnectedProductionStrongDelete("en", *project, "guild-1", "bot-token", db)
+	}()
+	<-deleteStarted
+
+	deletedBeforeApply := false
+	select {
+	case <-deleteReached:
+		deletedBeforeApply = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockApply()
+	select {
+	case result := <-deleteDone:
+		if !result.ConnectionDeleted {
+			t.Fatalf("strong deletion did not continue after Apply released its lock: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("strong deletion did not finish after Apply released its lock")
+	}
+	if deletedBeforeApply {
+		t.Fatal("strong deletion reached Discord while Production Apply held its lock")
+	}
 }

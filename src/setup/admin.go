@@ -1680,10 +1680,20 @@ func safeDeleteOperationMessage(lang, stage string, err error) string {
 var (
 	strongDeleteValidateCandidates = validateConnectedProductionChannelCandidates
 	strongDeleteChannelDelete      = DeleteChannel
-	strongDeleteConnectionCleanup  = DeleteProjectConnectionOnly
+	strongDeleteConnectionCleanup  = deleteProjectConnectionOnly
 )
 
 func executeConnectedProductionStrongDelete(lang string, project model.Project, effectiveGuildID, botToken string, db *gorm.DB) connectedProductionChannelDeleteExecution {
+	unlockApply := lockProductionNotificationApply(project.ID)
+	defer unlockApply()
+	currentProject := model.FindProjectByKitsuID(db, project.KitsuProjectID)
+	if currentProject == nil {
+		return connectedProductionChannelDeleteExecution{ConnectionError: t(lang, "連携先が更新されたため削除を中止しました。再読み込みしてください。", "The Production connection changed. Reload and retry.")}
+	}
+	project = *currentProject
+	if strings.TrimSpace(project.DiscordGuildID) != "" {
+		effectiveGuildID = strings.TrimSpace(project.DiscordGuildID)
+	}
 	allWebhooks := model.ListAllProjectWebhooks(db)
 	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
 	candidates := buildConnectedProductionChannelCandidates(webhooks)
