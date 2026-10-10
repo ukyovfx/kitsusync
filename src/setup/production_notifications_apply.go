@@ -48,6 +48,7 @@ var currentRoutingCreateChannel = CreateTextChannel
 var currentRoutingCreateWebhook = CreateWebhook
 var currentRoutingDeleteWebhook = DeleteWebhook
 var currentRoutingInspectWebhook = inspectRoutingWebhook
+var errRoutingWebhookVerificationUnavailable = errors.New("managed webhook verification unavailable")
 
 func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, lang string, db *gorm.DB, botTokens ...string) bool {
 	if r.Method != http.MethodPost || r.URL.Path != "/bot/admin/projects" || r.URL.Query().Get("apply_notifications") != "1" {
@@ -115,6 +116,10 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 	}
 	repairs, err := validateCurrentRoutingDestinations(*project, existingRoutes, db)
 	if err != nil {
+		if errors.Is(err, errRoutingWebhookVerificationUnavailable) {
+			http.Error(w, `{"error":"webhook_verification_unavailable"}`, http.StatusBadGateway)
+			return true
+		}
 		http.Error(w, `{"error":"destination_not_owned"}`, http.StatusBadRequest)
 		return true
 	}
@@ -463,7 +468,7 @@ func validateCurrentRoutingDestinations(project model.Project, routes []model.Pr
 		}
 		identity, missing, inspectErr := currentRoutingInspectWebhook(webhook.WebhookURL)
 		if inspectErr != nil {
-			return nil, inspectErr
+			return nil, errRoutingWebhookVerificationUnavailable
 		}
 		if missing {
 			repairs = append(repairs, routingWebhookRepair{TaskTypeID: route.TaskTypeID, ChannelID: id, ChannelName: channel.Name})

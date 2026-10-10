@@ -184,6 +184,7 @@ func TestProductionNotificationApplyPreservesOrRepairsManagedWebhook(t *testing.
 		wrongChannel    bool
 		createFailure   bool
 		verifyFailure   bool
+		inspectFailure  bool
 		staleRevision   bool
 		wantStatus      int
 		wantNewWebhooks int
@@ -193,6 +194,7 @@ func TestProductionNotificationApplyPreservesOrRepairsManagedWebhook(t *testing.
 		{name: "missing destination webhook is repaired on Apply", missingWebhook: true, wantStatus: http.StatusOK, wantNewWebhooks: 1},
 		{name: "moved webhook is rejected without repair", wrongChannel: true, wantStatus: http.StatusBadRequest},
 		{name: "webhook repair failure leaves routing unchanged", missingWebhook: true, createFailure: true, wantStatus: http.StatusBadGateway},
+		{name: "webhook verification outage is reported as unavailable", inspectFailure: true, wantStatus: http.StatusBadGateway},
 		{name: "unverified repair removes only its new webhook", missingWebhook: true, verifyFailure: true, wantStatus: http.StatusBadGateway},
 		{name: "stale revision never creates repair webhook", missingWebhook: true, staleRevision: true, wantStatus: http.StatusConflict},
 	} {
@@ -231,6 +233,9 @@ func TestProductionNotificationApplyPreservesOrRepairsManagedWebhook(t *testing.
 				return []DiscordGuildChannel{{ID: "channel-first", Name: "first", Type: 0, ParentID: "category-1", Position: 1}, {ID: "channel-second", Name: "second", Type: 0, ParentID: "category-1", Position: 2}, {ID: "channel-third", Name: "third", Type: 0, ParentID: "category-1", Position: 3}}, nil
 			}
 			currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+				if tc.inspectFailure {
+					return routingWebhookIdentity{}, false, errors.New("synthetic Discord API outage")
+				}
 				if raw == urls[2] && tc.missingWebhook {
 					return routingWebhookIdentity{}, true, nil
 				}
@@ -292,6 +297,9 @@ func TestProductionNotificationApplyPreservesOrRepairsManagedWebhook(t *testing.
 			if tc.createFailure && !strings.Contains(response.Body.String(), `"webhook_creation":"outcome_unknown"`) {
 				t.Fatalf("webhook creation failure concealed an unknown external outcome: %s", response.Body.String())
 			}
+			if tc.inspectFailure && !strings.Contains(response.Body.String(), `"error":"webhook_verification_unavailable"`) {
+				t.Fatalf("webhook verification failure was not reported as unavailable: %s", response.Body.String())
+			}
 			expectedAttempts := tc.wantNewWebhooks
 			if tc.createFailure || tc.verifyFailure {
 				expectedAttempts = 1
@@ -304,7 +312,7 @@ func TestProductionNotificationApplyPreservesOrRepairsManagedWebhook(t *testing.
 				t.Fatalf("unexpected resource counts: created=%d persisted=%d deleted=%d", createCount, len(model.ListProjectWebhooks(db, project.KitsuProjectID)), deleteCount)
 			}
 			got := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
-			if tc.createFailure || tc.verifyFailure || tc.staleRevision || tc.wrongChannel {
+			if tc.createFailure || tc.verifyFailure || tc.inspectFailure || tc.staleRevision || tc.wrongChannel {
 				if len(got) != 2 || got[0].DestinationWebhookID != webhooks[0].ID || got[1].DestinationWebhookID != webhooks[1].ID {
 					t.Fatalf("failed Apply changed routes: %#v", got)
 				}
