@@ -1391,6 +1391,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       await record(page, '/bot/admin/bot?edit=1', lang, 'mobile-reference', 'External Kitsu URL controls', 'input, Check link and Save remain visible without horizontal overflow');
     }
 
+    await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
     const appPointer = { x: 420, y: 380 };
     await page.mouse.move(0, 0);

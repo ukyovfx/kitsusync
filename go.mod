@@ -1,6 +1,6 @@
 module app
 
-go 1.26
+go 1.26.9
 
 require (
 	github.com/beefsack/go-rate v0.0.0-20200827232406-6cde80facd47
