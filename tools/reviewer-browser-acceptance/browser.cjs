@@ -1184,6 +1184,19 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (technicalIndent.summary < 8 || technicalIndent.content < technicalIndent.summary) throw new Error(`Technical details indentation is not hierarchical: ${JSON.stringify(technicalIndent)}`);
         await page.locator('#technical-details summary').click();
         if (!(await page.locator('#technical-details[open]').count())) throw new Error(`Technical details did not expand in ${locale.lang}`);
+        if (viewport.width <= 760) {
+          const mobileTechnicalLayout = await page.locator('#technical-details .production-technical-details').evaluate(node => {
+            const children = [...node.children];
+            return {
+              tracks: getComputedStyle(node).gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length,
+              leftEdges: [...new Set(children.map(child => Math.round(child.getBoundingClientRect().left)))],
+              valueWidths: [...node.querySelectorAll('dd code')].map(code => code.getBoundingClientRect().width),
+            };
+          });
+          if (mobileTechnicalLayout.tracks !== 1 || mobileTechnicalLayout.leftEdges.length !== 1 || mobileTechnicalLayout.valueWidths.length !== 3 || mobileTechnicalLayout.valueWidths.some(width => width <= 0)) {
+            throw new Error(`Mobile Technical details must stack labels and give all copied identifiers usable width in ${locale.lang}: ${JSON.stringify(mobileTechnicalLayout)}`);
+          }
+        }
         const copyButtons = page.locator('#technical-details .production-copy-id');
         if (await copyButtons.count() !== 3) throw new Error(`Technical identifiers need three copy controls in ${locale.lang}`);
         const productionCopy = copyButtons.nth(0);

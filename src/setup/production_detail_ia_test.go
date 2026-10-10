@@ -322,6 +322,13 @@ func TestProductionSettingsGroupsExistingSectionsWithoutChangingForms(t *testing
 	}
 }
 
+func TestMobileProductionTechnicalDetailsGiveValuesRoomBesideCopyActions(t *testing.T) {
+	want := `@media(max-width:760px){.editorial-workbench .production-context .production-technical-details{grid-template-columns:minmax(0,1fr);row-gap:4px}`
+	if !strings.Contains(adminThemeCSS, want) {
+		t.Fatal("mobile Technical details must stack labels above full-width values so copy actions cannot squeeze IDs into narrow columns")
+	}
+}
+
 func TestProductionTeamStatusActionsStayAlignedAndDangerDisclosureUsesSemanticRed(t *testing.T) {
 	if !strings.Contains(adminThemeCSS, `.production-team-status-actions{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;`) {
 		t.Fatal("Team status and actions must align on the desktop row rail")
