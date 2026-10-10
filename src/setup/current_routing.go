@@ -549,7 +549,7 @@ func currentRecipientComboboxScript() string {
   pickers=pickers.filter(Boolean);
   document.addEventListener('pointerdown',function(event){pickers.forEach(function(item){if(!item.picker.contains(event.target))item.close()})});
   modal.addEventListener('cancel',function(){pickers.forEach(function(item){item.close()})});
-  modal.addEventListener('close',function(){pickers.forEach(function(item){item.close();item.sync()})});
+  modal.addEventListener('close',function(){if(modal.open)return;pickers.forEach(function(item){item.close();item.sync()})});
   window.addEventListener('resize',function(){pickers.forEach(function(item){item.close()})});
   window.addEventListener('scroll',function(){pickers.forEach(function(item){if(!item.picker.querySelector('[role="listbox"]').hidden)item.close()})},true)
 })();

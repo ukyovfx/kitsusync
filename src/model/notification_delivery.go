@@ -245,7 +245,10 @@ func BeginProductionNotificationOrderRecovery(db *gorm.DB, productionID string) 
 		if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
 			return err
 		}
-		if err := EnsureNoUnresolvedNotificationDeliveries(tx, productionID); err != nil {
+		// Reconciliation changes channel positions only; pending/unknown delivery
+		// intents keep their original destinations. An actively executing send is
+		// the only delivery state that must block this operation.
+		if err := EnsureNoInFlightNotificationDeliveries(tx, productionID); err != nil {
 			return err
 		}
 		var lock ProductionNotificationWriteLock

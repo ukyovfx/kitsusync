@@ -80,7 +80,7 @@ func TestProductionNotificationsShowsExplicitOrderRecoveryOnlyWhenNeeded(t *test
 		t.Fatal(err)
 	}
 	withRecovery := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
-	for _, marker := range []string{"Channel order requires reconciliation", "data-recover-routing-order", `name="project_id" value="order-recovery-ui"`, `name="action" value="recover_current_routing_order"`} {
+	for _, marker := range []string{"Discord channel order requires reconciliation.", "data-recover-routing-order", `name="project_id" value="order-recovery-ui"`, `name="action" value="recover_current_routing_order"`} {
 		if !strings.Contains(withRecovery, marker) {
 			t.Errorf("unresolved order recovery should render an explicit safe action: missing %q", marker)
 		}
