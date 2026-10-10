@@ -245,8 +245,8 @@ const backgroundCanvasScript = `<script>
   const drawDots=seconds=>{
     ctx.clearRect(0,0,width,height);
     const mobile=width<600,spacing=mobile?36:42,drift=seconds*.025;
-    canvas.dataset.profile='app-plus-grid';canvas.dataset.gridSpacing=String(spacing);canvas.dataset.gridOrigin='18';
-    const hazeRadius=Math.min(520,Math.max(160,Math.min(width,height)*.62));
+    canvas.dataset.profile='app-plus-grid';canvas.dataset.gridSymbol='plus';canvas.dataset.gridSpacing=String(spacing);canvas.dataset.gridOrigin='18';
+    const hazeRadius=Math.min(190,Math.max(84,Math.min(width,height)*.22));
     const haze=[
       {x:width*.035,y:height*(.24+Math.sin(drift)*.035),color:[132,89,50]},
       {x:width*.965,y:height*(.72+Math.cos(drift*.82)*.035),color:[112,107,99]},
@@ -255,20 +255,20 @@ const backgroundCanvasScript = `<script>
     ];
     haze.forEach(function(source){
       const gradient=ctx.createRadialGradient(source.x,source.y,0,source.x,source.y,hazeRadius);
-      gradient.addColorStop(0,'rgba('+source.color.join(',')+',.045)');
-      gradient.addColorStop(.38,'rgba('+source.color.join(',')+',.018)');
+      gradient.addColorStop(0,'rgba('+source.color.join(',')+',.008)');
+      gradient.addColorStop(.38,'rgba('+source.color.join(',')+',.003)');
       gradient.addColorStop(1,'rgba('+source.color.join(',')+',0)');
       ctx.fillStyle=gradient;ctx.fillRect(0,0,width,height);
     });
-    const base=[151,104,54],brand=[252,135,66];
-    ctx.lineCap='round';ctx.lineWidth=.72;
+    const base=[130,91,54],brand=[252,135,66];
+    ctx.lineCap='round';ctx.lineWidth=.9;
     for(let y=18;y<height;y+=spacing){
       for(let x=18;x<width;x+=spacing){
         const distance=Math.hypot(pointer.x-x,pointer.y-y);
-        const local=Math.exp(-.5*Math.pow(distance/120,2))*pointer.amount;
+        const local=Math.exp(-.5*Math.pow(distance/120,2))*pointer.amount*.28;
         const color=base.map(function(value,index){return value+(brand[index]-value)*local});
-        const size=2.1*(1+local*.2),half=size/2;
-        ctx.strokeStyle=rgba(color[0],color[1],color[2],.22+local*.18);
+        const size=3.6*(1+local*.2),half=size/2;
+        ctx.strokeStyle=rgba(color[0],color[1],color[2],.16+local*.08);
         ctx.beginPath();ctx.moveTo(x-half,y);ctx.lineTo(x+half,y);ctx.moveTo(x,y-half);ctx.lineTo(x,y+half);ctx.stroke();
       }
     }

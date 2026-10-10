@@ -78,9 +78,14 @@ func TestAuthenticatedPlusGridIsViewportAnchoredWithLocalPointerHaze(t *testing.
 		t.Fatal("authenticated plus-grid renderer is missing")
 	}
 	dots := backgroundCanvasScript[start : start+end]
-	for _, want := range []string{`const mobile=width<600,spacing=mobile?36:42`, `for(let y=18;y<height;y+=spacing)`, `for(let x=18;x<width;x+=spacing)`, `ctx.moveTo(x-half,y)`, `ctx.lineTo(x+half,y)`, `ctx.moveTo(x,y-half)`, `ctx.lineTo(x,y+half)`, `Math.hypot(pointer.x-x,pointer.y-y)`, `distance/120`, `const base=[151,104,54],brand=[252,135,66]`, `size=2.1*(1+local*.2)`, `createRadialGradient`, `seconds*.025`, `gradient.addColorStop(1,'rgba('+source.color.join(',')+',0)')`} {
+	for _, want := range []string{`const mobile=width<600,spacing=mobile?36:42`, `canvas.dataset.gridSymbol='plus'`, `for(let y=18;y<height;y+=spacing)`, `for(let x=18;x<width;x+=spacing)`, `ctx.moveTo(x-half,y)`, `ctx.lineTo(x+half,y)`, `ctx.moveTo(x,y-half)`, `ctx.lineTo(x,y+half)`, `Math.hypot(pointer.x-x,pointer.y-y)`, `distance/120`, `*pointer.amount*.28`, `const base=[130,91,54],brand=[252,135,66]`, `size=3.6*(1+local*.2)`, `ctx.lineWidth=.9`, `Math.min(190,Math.max(84,Math.min(width,height)*.22))`, `createRadialGradient`, `seconds*.025`, `+',.008)'`, `+',.003)'`, `gradient.addColorStop(1,'rgba('+source.color.join(',')+',0)')`} {
 		if !strings.Contains(dots, want) {
 			t.Errorf("authenticated plus grid is missing the fixed/local visual contract %q", want)
+		}
+	}
+	for _, forbidden := range []string{`Math.min(520`, `rgba('+source.color.join(',')+',.045)`, `rgba('+source.color.join(',')+',.018)`, `const base=[151,104,54]`, `size=2.1*`} {
+		if strings.Contains(dots, forbidden) {
+			t.Errorf("authenticated background retains a broad haze or dot-like glyph: %q", forbidden)
 		}
 	}
 	for _, forbidden := range []string{"ctx.translate(", "x+seconds", "y+seconds", "centerX", "centerY"} {
@@ -90,6 +95,15 @@ func TestAuthenticatedPlusGridIsViewportAnchoredWithLocalPointerHaze(t *testing.
 	}
 	if !strings.Contains(backgroundCanvasScript, `if(!reduced.matches)frame=requestAnimationFrame(tick)`) || !strings.Contains(dots, `seconds*.025`) {
 		t.Fatal("edge haze should drift slowly while reduced-motion stays static")
+	}
+}
+
+func TestAuthenticatedPagesUseUniformDarkBaseAndLoginBackgroundStaysSeparate(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `body.admin-surface{background:var(--bg)}`) {
+		t.Fatal("authenticated pages must use a uniform dark base behind the fixed grid")
+	}
+	if !strings.Contains(adminThemeCSS, `body.login-surface{background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%)}`) {
+		t.Fatal("the Login-only surface must retain its independent background treatment")
 	}
 }
 

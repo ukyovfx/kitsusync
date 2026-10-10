@@ -97,7 +97,8 @@ body::before{
 body.admin-surface::before{opacity:.145;animation:particleDrift 60s linear infinite}
 body::after{content:"";position:fixed;inset:0;z-index:0;background:radial-gradient(circle at 50% 20%, rgba(232,90,26,.14), transparent 32%);pointer-events:none;opacity:.55}
 @keyframes particleDrift{from{background-position:0 0,12px 18px,0 0,0 0,0 0}to{background-position:32px 64px,-24px 34px,18px -12px,0 0,0 0}}
-body.login-surface,body.admin-surface{background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%)}
+body.login-surface{background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%)}
+body.admin-surface{background:var(--bg)}
 body.login-surface::before,body.admin-surface::before,body.login-surface::after,body.admin-surface::after{display:none}
 .background-canvas{position:fixed;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;contain:strict}
 body.login-surface main{position:fixed;inset:0;z-index:1;display:grid;place-items:center;padding:20px 14px;pointer-events:none}
@@ -1031,6 +1032,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
     .production-context .production-storage-actions{justify-content:flex-end}
   }
   @media(max-width:520px){.user-linking-lookup-error{grid-template-columns:minmax(0,1fr)}.user-linking-lookup-error>.btn-ghost{grid-column:1;grid-row:auto;justify-self:start}.user-linking-lookup-error>.advanced-details{grid-column:1}}
+  .editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-automatic]{border:0;padding:var(--space-2,8px) 0}
+  .editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-additional]{border:0;border-top:1px solid var(--divider-color);margin-top:var(--space-1,4px);padding:var(--space-3,12px) 0 var(--space-1,4px)}
 `
 
 func shellHeadExtras() string {

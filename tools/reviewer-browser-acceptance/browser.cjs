@@ -187,6 +187,8 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
       width: document.documentElement.scrollWidth,
       clientWidth: document.documentElement.clientWidth,
       lang: document.documentElement.lang,
+      bodyBackgroundColor: getComputedStyle(document.body).backgroundColor,
+      bodyBackgroundImage: getComputedStyle(document.body).backgroundImage,
       gutterBackground: getComputedStyle(document.documentElement).backgroundColor,
     };
   });
@@ -196,11 +198,17 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     const spacing = viewport.width < 600 ? 36 : 42;
     const expectedCount = Math.ceil((viewport.width - 18) / spacing) * Math.ceil((viewport.height - 18) / spacing);
     const edgeMean = grid?.edgeAlpha.reduce((sum, value) => sum + value, 0) / (grid?.edgeAlpha.length || 1);
-    if (!grid || grid.profile !== 'app-plus-grid' || Number(grid.spacing) !== spacing || Number(grid.origin) !== 18 || grid.positions.length !== expectedCount) {
+    if (!grid || grid.profile !== 'app-plus-grid' || grid.symbol !== 'plus' || Number(grid.spacing) !== spacing || Number(grid.origin) !== 18 || grid.positions.length !== expectedCount) {
       throw new Error(`authenticated app background is not the fixed plus grid at ${locale.lang}/${viewport.name}: ${JSON.stringify({ ...grid, expectedCount })}`);
     }
     if (grid.centerAlpha > 24 || edgeMean <= grid.centerAlpha) {
       throw new Error(`authenticated edge haze is not faint/edge-concentrated at ${locale.lang}/${viewport.name}: ${JSON.stringify({ edgeMean, centerAlpha: grid.centerAlpha })}`);
+    }
+    if (details.bodyBackgroundColor !== 'rgb(7, 7, 7)' || details.bodyBackgroundImage !== 'none') {
+      throw new Error(`authenticated page base is not uniform/dark at ${locale.lang}/${viewport.name}: ${JSON.stringify({ color: details.bodyBackgroundColor, image: details.bodyBackgroundImage })}`);
+    }
+    if (grid.glyphArmAlpha.some(alpha => alpha < 12) || grid.glyphDiagonalAlpha > Math.min(...grid.glyphArmAlpha) * .6) {
+      throw new Error(`authenticated grid glyph is not a readable small plus at ${locale.lang}/${viewport.name}: ${JSON.stringify({ arms: grid.glyphArmAlpha, diagonal: grid.glyphDiagonalAlpha })}`);
     }
   }
   if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
@@ -282,13 +290,20 @@ async function plusGridSnapshot(page) {
     }
     const sampleAlpha = (x, y) => { const sx = Math.max(0, Math.min(canvas.width - 1, Math.round(x * dpr))), sy = Math.max(0, Math.min(canvas.height - 1, Math.round(y * dpr))); return pixels[(sy * canvas.width + sx) * 4 + 3]; };
     const edgeAlpha = [sampleAlpha(8, innerHeight * .24), sampleAlpha(innerWidth - 8, innerHeight * .72), sampleAlpha(innerWidth * .78, 8), sampleAlpha(innerWidth * .22, innerHeight - 8)];
+    const glyphX = origin + Math.round((innerWidth * .5 - origin) / spacing) * spacing;
+    const glyphY = origin + Math.round((innerHeight * .5 - origin) / spacing) * spacing;
+    const glyphArmAlpha = [sampleAlpha(glyphX - 1, glyphY), sampleAlpha(glyphX + 1, glyphY), sampleAlpha(glyphX, glyphY - 1), sampleAlpha(glyphX, glyphY + 1)];
+    const glyphDiagonalAlpha = sampleAlpha(glyphX + 1, glyphY + 1);
     return {
       profile: canvas.dataset.profile,
+      symbol: canvas.dataset.gridSymbol,
       spacing: canvas.dataset.gridSpacing,
       origin: canvas.dataset.gridOrigin,
       positions,
       edgeAlpha,
       centerAlpha: sampleAlpha(innerWidth * .5 + 11, innerHeight * .5 + 11),
+      glyphArmAlpha,
+      glyphDiagonalAlpha,
     };
   });
 }
@@ -732,6 +747,22 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (selectedRouteStyle.cellBackground !== 'rgba(0, 0, 0, 0)' || selectedRouteStyle.rowBoxShadow !== 'none' || selectedRouteStyle.boxShadow !== 'none' || selectedRouteStyle.outline !== 'none' || selectedRouteStyle.expanded !== 'true' || selectedRouteStyle.pressed !== 'true') throw new Error(`Selected Task Type should use a restrained no-fill state with an accessible selected/expanded marker in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         if (await panel.locator('[data-destination-control], [data-new-channel-name]').count()) throw new Error('WFA detail panel contains routing controls');
+        const recipientSeparation = await panel.evaluate(node => {
+          const automatic = getComputedStyle(node.querySelector('[data-wfa-automatic]'));
+          const additional = getComputedStyle(node.querySelector('[data-wfa-additional]'));
+          const automaticBox = node.querySelector('[data-wfa-automatic]').getBoundingClientRect();
+          const additionalBox = node.querySelector('[data-wfa-additional]').getBoundingClientRect();
+          return {
+            automaticTop: automatic.borderTopWidth, automaticBottom: automatic.borderBottomWidth,
+            additionalTop: additional.borderTopWidth, additionalTopStyle: additional.borderTopStyle,
+            additionalBottom: additional.borderBottomWidth, additionalMarginTop: additional.marginTop,
+            additionalPaddingTop: additional.paddingTop, rowGap: getComputedStyle(node).rowGap,
+            gap: additionalBox.top - automaticBox.bottom,
+          };
+        });
+        if (recipientSeparation.automaticTop !== '0px' || recipientSeparation.automaticBottom !== '0px' || recipientSeparation.additionalTop !== '1px' || recipientSeparation.additionalTopStyle !== 'solid' || recipientSeparation.additionalBottom !== '0px' || recipientSeparation.additionalMarginTop !== '4px' || recipientSeparation.additionalPaddingTop !== '12px' || recipientSeparation.gap < 4) {
+          throw new Error(`WFA Automatic/Additional rows need one subtle readable separator without doubled borders in ${locale.lang}: ${JSON.stringify(recipientSeparation)}`);
+        }
         const detailPlacement = await editForm.evaluate(form => {
           const list = form.querySelector('[data-routing-list-scroll]').getBoundingClientRect();
           const add = form.querySelector('[data-routing-add]').getBoundingClientRect();
@@ -1231,8 +1262,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const unconfiguredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
         const unconfiguredOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+        const unconfiguredBackground = await page.evaluate(() => ({ color: getComputedStyle(document.body).backgroundColor, image: getComputedStyle(document.body).backgroundImage, symbol: document.querySelector('canvas[data-background="app-dots"]')?.dataset.gridSymbol }));
         const unconfiguredSurface = await page.locator('.production-unconfigured-state').evaluate(node => ({ background: getComputedStyle(node).backgroundColor, border: getComputedStyle(node).borderTopStyle, paddingInline: getComputedStyle(node).paddingInline, statusBackground: getComputedStyle(node.querySelector('[role="status"]')).backgroundColor }));
-        if (configuredShellWidth !== unconfiguredShellWidth || unconfiguredOverflow || !(await page.locator('.production-unconfigured-state a[href*="/bot/setup"]').count()) || unconfiguredSurface.background !== 'rgba(0, 0, 0, 0)' || unconfiguredSurface.paddingInline !== '0px' || unconfiguredSurface.statusBackground === 'rgba(0, 0, 0, 0)') throw new Error(`Unconfigured Production must reuse the shared shell and section rhythm without a separate setup card in ${locale.lang}: ${JSON.stringify(unconfiguredSurface)}`);
+        if (configuredShellWidth !== unconfiguredShellWidth || unconfiguredOverflow || unconfiguredBackground.color !== 'rgb(7, 7, 7)' || unconfiguredBackground.image !== 'none' || unconfiguredBackground.symbol !== 'plus' || !(await page.locator('.production-unconfigured-state a[href*="/bot/setup"]').count()) || unconfiguredSurface.background !== 'rgba(0, 0, 0, 0)' || unconfiguredSurface.paddingInline !== '0px' || unconfiguredSurface.statusBackground === 'rgba(0, 0, 0, 0)') throw new Error(`Unconfigured Production must reuse the shared shell/background without a separate setup card in ${locale.lang}: ${JSON.stringify({ unconfiguredBackground, unconfiguredSurface })}`);
         await page.screenshot({ path: path.join(output, `production-unconfigured-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?project=reviewer-unconnected', locale.lang, viewport.name, 'unconfigured Production', 'shared identity/workbench shell with clear connect action and no fabricated configured-only data');
         await fixture(page, 'ready');
@@ -1345,6 +1377,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `dashboard-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin', locale.lang, viewport.name, 'ready', 'Dashboard rendered without overflow or mojibake');
 
+        await page.goto(`${base}/bot/admin/bot?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (!(await page.locator('.connections-summary-grid').count())) throw new Error(`Connections did not render in ${locale.lang}/${viewport.name}`);
+        await page.screenshot({ path: path.join(output, `connections-read-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/bot', locale.lang, viewport.name, 'read only', 'Kitsu and Discord connection summaries rendered');
+
+        await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        if (!(await page.locator('.connection-external-url-controls').count()) || !(await page.locator('#save-external-kitsu-url').count())) throw new Error(`Connections edit controls did not render in ${locale.lang}/${viewport.name}`);
+        await page.screenshot({ path: path.join(output, `connections-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/bot?edit=1', locale.lang, viewport.name, 'edit view, no submission', 'connection controls rendered without mutating settings');
+
         if (viewport.name === 'desktop') {
           for (const backgroundViewport of backgroundViewports) {
             await page.setViewportSize({ width: backgroundViewport.width, height: backgroundViewport.height });
@@ -1437,10 +1479,23 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     if (JSON.stringify(dashboardGrid?.positions) !== JSON.stringify(driftingGrid?.positions)) {
       throw new Error('authenticated plus-symbol positions changed while the edge haze drifted');
     }
-    for (const route of ['/bot/admin/projects?lang=en', '/bot/admin/users?lang=en', '/bot/admin/health?lang=en']) {
+    for (const route of [
+      '/bot/admin/projects?lang=en',
+      '/bot/admin/bot?lang=en',
+      '/bot/admin/users?lang=en',
+      '/bot/admin/health?lang=en',
+      '/bot/admin/audit?lang=en',
+      '/bot/admin/projects?project=reviewer-production&tab=overview&lang=en',
+      '/bot/admin/projects?project=reviewer-production&tab=notifications&lang=en',
+      '/bot/admin/projects?project=reviewer-production&tab=team&lang=en',
+      '/bot/admin/projects?project=reviewer-production&tab=settings&lang=en',
+    ]) {
       await page.goto(`${base}${route}`, { waitUntil: 'networkidle' });
       const routeGrid = await plusGridSnapshot(page);
-      if (JSON.stringify(routeGrid?.positions) !== JSON.stringify(dashboardGrid?.positions) || routeGrid?.profile !== 'app-plus-grid') throw new Error(`authenticated plus-grid geometry changed with content route ${route}`);
+      const routeBase = await page.evaluate(() => ({ color: getComputedStyle(document.body).backgroundColor, image: getComputedStyle(document.body).backgroundImage }));
+      if (JSON.stringify(routeGrid?.positions) !== JSON.stringify(dashboardGrid?.positions) || routeGrid?.profile !== 'app-plus-grid' || routeGrid?.symbol !== 'plus' || routeBase.color !== 'rgb(7, 7, 7)' || routeBase.image !== 'none') {
+        throw new Error(`authenticated plus background changed with content route ${route}: ${JSON.stringify({ routeBase, routeGrid })}`);
+      }
     }
 
     // Keep canonical non-Production-detail screenshots beside the Production Detail review.
@@ -1513,10 +1568,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const appPixelAfter = await plusPixel(page, appPointer.x, appPointer.y);
     const farAfter = await plusPixel(page, farPoint.x, farPoint.y);
     const fixedPositionsAfter = await plusGridSnapshot(page);
-    if (appAfter <= appBefore || !appPixelBefore || !appPixelAfter || appPixelAfter[3] <= appPixelBefore[3] || appPixelAfter[0] <= appPixelBefore[0] + 30 || appPixelAfter[1] <= appPixelBefore[1] + 8) throw new Error(`app pointer did not locally brighten/enlarge the plus symbol toward brand orange (${JSON.stringify({ appBefore, appAfter, appPixelBefore, appPixelAfter })})`);
+    const appRedDelta = appPixelBefore && appPixelAfter ? appPixelAfter[0] - appPixelBefore[0] : 0;
+    const appGreenDelta = appPixelBefore && appPixelAfter ? appPixelAfter[1] - appPixelBefore[1] : 0;
+    if (appAfter <= appBefore || !appPixelBefore || !appPixelAfter || appPixelAfter[3] <= appPixelBefore[3] || appRedDelta < 14 || appRedDelta > 42 || appGreenDelta < 4 || appGreenDelta > 18) throw new Error(`app pointer did not produce a weak local warm shift toward brand orange (${JSON.stringify({ appBefore, appAfter, appPixelBefore, appPixelAfter, appRedDelta, appGreenDelta })})`);
     if (!farBefore || !farAfter || Math.abs(farAfter[0] - farBefore[0]) > 8 || Math.abs(farAfter[1] - farBefore[1]) > 8 || Math.abs(farAfter[3] - farBefore[3]) > 8) throw new Error(`app pointer affected a distant symbol outside its local field (${JSON.stringify({ farBefore, farAfter })}`);
     if (JSON.stringify(fixedPositionsAfter?.positions) !== JSON.stringify(fixedPositionsBefore?.positions)) throw new Error('pointer activation translated the fixed plus grid');
-    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local fixed symbol changed toward #FC8742 with increased alpha; distant symbol remained stable within haze drift; ${fixedPositionsAfter.positions.length} positions remained unchanged` });
+    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local fixed plus changed subtly toward #FC8742 (red +${appRedDelta}, green +${appGreenDelta}); distant symbol remained stable; ${fixedPositionsAfter.positions.length} positions remained unchanged` });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.waitForTimeout(100);
     const reducedApp = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());

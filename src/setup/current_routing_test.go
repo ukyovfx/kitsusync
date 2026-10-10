@@ -397,6 +397,17 @@ func TestInlineRoutingEditorUsesIntegratedDisclosureSurface(t *testing.T) {
 	}
 }
 
+func TestWFADetailUsesOneSubtleDividerBetweenAutomaticAndAdditional(t *testing.T) {
+	automatic := `.editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-automatic]{border:0;padding:var(--space-2,8px) 0}`
+	additional := `.editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-additional]{border:0;border-top:1px solid var(--divider-color);margin-top:var(--space-1,4px);padding:var(--space-3,12px) 0 var(--space-1,4px)}`
+	if !strings.Contains(adminThemeCSS, automatic) {
+		t.Fatal("Automatic recipients should stay unboxed and have no redundant divider")
+	}
+	if !strings.Contains(adminThemeCSS, additional) {
+		t.Fatal("Additional recipients need one quiet divider and spacing to remain distinguishable")
+	}
+}
+
 func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "routing-recipient-modes", Name: "Routing Recipient Modes"}
