@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"app/src/api/kitsu"
 	"app/src/model"
@@ -45,6 +46,66 @@ func TestProductionNotificationCompensationStillAttemptsDiscordAfterDatabaseRest
 	gotDB, gotDiscord := compensateProductionNotificationApply(func() error { return dbErr }, func() error { discordCalled = true; return nil })
 	if !discordCalled || !errors.Is(gotDB, dbErr) || gotDiscord != nil {
 		t.Fatalf("unexpected compensation result: database=%v discord=%v called=%v", gotDB, gotDiscord, discordCalled)
+	}
+}
+
+func TestProductionNotificationCompensationSkipsDiscordRestoreAfterRevisionConflict(t *testing.T) {
+	discordCalled := false
+	gotDB, gotDiscord := compensateProductionNotificationApply(
+		func() error { return model.ErrProductionNotificationRevisionConflict },
+		func() error { discordCalled = true; return nil },
+	)
+	if !errors.Is(gotDB, model.ErrProductionNotificationRevisionConflict) || discordCalled || gotDiscord != nil {
+		t.Fatalf("stale Apply must preserve newer Discord order: database=%v discord=%v called=%v", gotDB, gotDiscord, discordCalled)
+	}
+	status, body := productionNotificationRecoveryDiagnostic(gotDB, gotDiscord)
+	if status < 400 || body["recovery"] != "incomplete" || body["discord_order_recovery"] != "deferred_newer_revision" {
+		t.Fatalf("stale Apply must explain why Discord order compensation was deferred: status=%d body=%#v", status, body)
+	}
+}
+
+func TestProductionNotificationApplyLockSerializesPerProduction(t *testing.T) {
+	unlockFirst := lockProductionNotificationApply(9001)
+	firstReleased := false
+	defer func() {
+		if !firstReleased {
+			unlockFirst()
+		}
+	}()
+
+	sameAttempting := make(chan struct{})
+	sameAcquired := make(chan struct{})
+	go func() {
+		close(sameAttempting)
+		unlock := lockProductionNotificationApply(9001)
+		defer unlock()
+		close(sameAcquired)
+	}()
+	<-sameAttempting
+
+	otherAcquired := make(chan struct{})
+	go func() {
+		unlock := lockProductionNotificationApply(9002)
+		defer unlock()
+		close(otherAcquired)
+	}()
+	select {
+	case <-otherAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("an Apply for another Production was blocked")
+	}
+	select {
+	case <-sameAcquired:
+		t.Fatal("same-Production Apply entered before the active transaction and compensation finished")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	unlockFirst()
+	firstReleased = true
+	select {
+	case <-sameAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("waiting same-Production Apply did not resume after unlock")
 	}
 }
 

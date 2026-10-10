@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"app/src/api/kitsu"
@@ -49,6 +50,14 @@ var currentRoutingCreateWebhook = CreateWebhook
 var currentRoutingDeleteWebhook = DeleteWebhook
 var currentRoutingInspectWebhook = inspectRoutingWebhook
 var errRoutingWebhookVerificationUnavailable = errors.New("managed webhook verification unavailable")
+var productionNotificationApplyLocks sync.Map
+
+func lockProductionNotificationApply(projectID uint) func() {
+	value, _ := productionNotificationApplyLocks.LoadOrStore(projectID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
 
 func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, lang string, db *gorm.DB, botTokens ...string) bool {
 	if r.Method != http.MethodPost || r.URL.Path != "/bot/admin/projects" || r.URL.Query().Get("apply_notifications") != "1" {
@@ -73,6 +82,8 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		http.Error(w, `{"error":"production_not_writable"}`, http.StatusForbidden)
 		return true
 	}
+	unlockApply := lockProductionNotificationApply(project.ID)
+	defer unlockApply()
 	if err := model.ValidateReviewerDeltasForRemovedRoutes(convertApplyRoutes(request, productionID), request.ReviewerChanges); err != nil {
 		http.Error(w, `{"error":"reviewer_delta_for_removed_route"}`, http.StatusBadRequest)
 		return true
@@ -327,6 +338,9 @@ func productionNotificationRecoveryDiagnostic(databaseErr, discordErr error, res
 		body["database_recovery"] = "failed"
 		body["recovery"] = "incomplete"
 	}
+	if errors.Is(databaseErr, model.ErrProductionNotificationRevisionConflict) {
+		body["discord_order_recovery"] = "deferred_newer_revision"
+	}
 	if discordErr != nil {
 		body["discord_order_recovery"] = "failed"
 		body["recovery"] = "incomplete"
@@ -356,6 +370,11 @@ func compensateProductionNotificationApply(restoreDatabase, restoreDiscordOrder 
 	var databaseErr, discordErr error
 	if restoreDatabase != nil {
 		databaseErr = restoreDatabase()
+	}
+	if errors.Is(databaseErr, model.ErrProductionNotificationRevisionConflict) {
+		// A newer Apply owns the current routing order. Restoring an older
+		// snapshot here would overwrite that newer Discord order.
+		return databaseErr, nil
 	}
 	if restoreDiscordOrder != nil {
 		discordErr = restoreDiscordOrder()
