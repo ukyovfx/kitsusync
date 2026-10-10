@@ -260,7 +260,7 @@ func AdminIndexWithRuntime(db *gorm.DB, runtimeHealthy func() bool) http.Handler
 					esc(t(lang, "\u5931\u6557\u6570:", "failures:")),
 					entry.FailureCount,
 					withLang("/bot/admin/health", r),
-					esc(t(lang, "\u518d\u63a5\u7d9a", "Reconnect")),
+					esc(t(lang, "\u8a73\u7d30", "Details")),
 				))
 			}
 			warns.WriteString(`</div></div>`)
@@ -548,11 +548,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
 					return
 				}
-				if remaining := len(model.ListProjectWebhooks(db, projectID)); remaining != 0 {
-					http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
-					return
-				}
-				if err := DeleteProjectConnectionOnly(projectID, db); err == nil {
+				if err := deleteProjectConnectionOnlyIfNoWebhooks(projectID, db); err == nil {
 					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=saved", http.StatusSeeOther)
 					return
 				}
@@ -1684,7 +1680,7 @@ var (
 )
 
 func executeConnectedProductionStrongDelete(lang string, project model.Project, effectiveGuildID, botToken string, db *gorm.DB) connectedProductionChannelDeleteExecution {
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	defer unlockApply()
 	currentProject := model.FindProjectByKitsuID(db, project.KitsuProjectID)
 	if currentProject == nil {
@@ -2052,7 +2048,7 @@ func compactSortedStrings(values []string) []string {
 // Level 1 (default): overall status + last sync.
 // Level 2 (details accordion): polling, sends, webhook table, resource usage.
 // Broken webhooks auto-expand the details accordion.
-// POST action=reconnect_webhook&webhook_id=N — recreates the Discord webhook for that channel.
+// Legacy POST action=reconnect_webhook is rejected so repairs stay inside Notifications Apply.
 func HealthHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -2064,27 +2060,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 
 		// Handle reconnect action
 		if r.Method == http.MethodPost && r.FormValue("action") == "reconnect_webhook" {
-			webhookID := parseUint(r.FormValue("webhook_id"))
-			wh := model.FindProjectWebhookByID(db, webhookID)
-			if wh == nil || wh.DiscordChannelID == "" {
-				http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_fail", http.StatusSeeOther)
-				return
-			}
-			botToken := storedRuntimeDiscordBotToken(db)
-			newURL, err := CreateWebhook(wh.DiscordChannelID, wh.ChannelName, botToken)
-			if err != nil {
-				slog.Warn("Webhook reconnect failed", "channelID", wh.DiscordChannelID, "err", err)
-				http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_fail", http.StatusSeeOther)
-				return
-			}
-			if err := model.UpdateProjectWebhookURL(db, wh.ID, newURL); err != nil {
-				http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_fail", http.StatusSeeOther)
-				return
-			}
-			// Clear failure counters for the old URL so health shows clean immediately
-			Stats.RecordSend(1, 0, newURL, "")
-			slog.Info("Webhook reconnected", "channelName", wh.ChannelName, "secret_rotated", true)
-			http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_ok", http.StatusSeeOther)
+			http.Error(w, t(lang, "通知先の修復は Production の Notifications Apply から実行してください。", "Repair this destination through the Production Notifications Apply flow."), http.StatusConflict)
 			return
 		}
 
@@ -2191,8 +2167,6 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			failedURLs[e.URL] = e
 		}
 
-		reconnectMsg := r.URL.Query().Get("msg")
-
 		var webhookRows strings.Builder
 		healthyWebhookCount := 0
 		warnWebhookCount := 0
@@ -2217,10 +2191,10 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 				if entry.LastError != "" {
 					statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + html.EscapeString(entry.LastError) + `</div>`
 				}
-				// Reconnect button \u2014 only if channel ID exists (channel not deleted)
+				// Webhook repair is only available from the unified Production Apply flow.
 				if wh.DiscordChannelID != "" {
-					actionCell = fmt.Sprintf(`<form method="POST"><input type="hidden" name="action" value="reconnect_webhook"><input type="hidden" name="webhook_id" value="%d"><button class="btn-sm" type="submit">%s</button></form>`,
-						wh.ID, esc(t(lang, "\u518d\u63a5\u7d9a", "Reconnect")))
+					values := url.Values{"project": {wh.KitsuProjectID}, "tab": {"notifications"}, "edit_routing": {"1"}}
+					actionCell = `<a class="btn-sm" href="` + esc(withLang("/bot/admin/projects?"+values.Encode(), r)) + `">` + esc(t(lang, "\u901a\u77e5\u8a2d\u5b9a\u3092\u958b\u304f", "Open Notifications")) + `</a>`
 				}
 			} else if Stats.WebhookInactive(wh.WebhookURL, 7*24*time.Hour) {
 				warnWebhookCount++
@@ -2253,13 +2227,8 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 				`</tr></thead><tbody>` + webhookRows.String() + `</tbody></table></div>`
 			if hasBrokenWebhook {
 				webhookTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">` +
-					esc(t(lang, "\u5931\u6557\u4e2d\u306eWebhook\u304c\u3042\u308a\u307e\u3059\u3002\u30c1\u30e3\u30f3\u30cd\u30eb\u304c\u5b58\u5728\u3059\u308b\u5834\u5408\u306f\u300c\u518d\u63a5\u7d9a\u300d\u3067\u4fee\u5fa9\u3067\u304d\u307e\u3059\u3002",
-						"Some webhooks are failing. If the channel still exists, use Reconnect to repair.")) + `</p>`
-			}
-			if reconnectMsg == "reconnect_ok" {
-				webhookTableHTML += `<p class="hint" style="color:#8ecf8b;margin-top:10px">✓ ` + esc(t(lang, "Webhook\u3092\u518d\u63a5\u7d9a\u3057\u307e\u3057\u305f\u3002", "Webhook reconnected successfully.")) + `</p>`
-			} else if reconnectMsg == "reconnect_fail" {
-				webhookTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">✗ ` + esc(t(lang, "\u518d\u63a5\u7d9a\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u30c1\u30e3\u30f3\u30cd\u30eb\u304c\u524a\u9664\u3055\u308c\u3066\u3044\u308b\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002", "Reconnect failed. The channel may have been deleted.")) + `</p>`
+					esc(t(lang, "\u5931\u6557\u4e2d\u306eWebhook\u304c\u3042\u308a\u307e\u3059\u3002Production\u306eNotifications\u3067\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066Apply\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+						"Some webhooks are failing. Review the route in Production Notifications and use Apply to repair it.")) + `</p>`
 			}
 		}
 

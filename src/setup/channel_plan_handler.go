@@ -28,7 +28,7 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.production_missing"), redirect)
 		return true
 	}
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	defer unlockApply()
 	project = model.FindProjectByKitsuID(db, projectID)
 	if project == nil {

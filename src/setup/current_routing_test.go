@@ -590,7 +590,7 @@ func TestCurrentRoutingChannelDeleteSerializesWithProductionApply(t *testing.T) 
 
 	// Hold the same Production lock as Apply while simulating an Apply that
 	// removes the second route but keeps the channel this request wants to delete.
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	applyUnlocked := false
 	deleteReleased := false
 	defer func() {
@@ -718,6 +718,45 @@ func TestCurrentRoutingChannelDeleteRemovesOnlyVerifiedRouteAndWebhook(t *testin
 	}
 }
 
+func TestCurrentRoutingChannelDeleteRejectsWebhookOwnedByAnotherProduction(t *testing.T) {
+	db := newIAViewDB(t)
+	projectA := model.Project{KitsuProjectID: "routing-owner-a", Name: "Production A", DiscordGuildID: "guild-shared", DiscordCategoryID: "category-shared"}
+	projectB := model.Project{KitsuProjectID: "routing-owner-b", Name: "Production B", DiscordGuildID: "guild-shared", DiscordCategoryID: "category-shared"}
+	if err := db.Create(&projectA).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&projectB).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, projectB.KitsuProjectID, "owned-b", "", "https://example.invalid/owned-b", "channel-b"); err != nil {
+		t.Fatal(err)
+	}
+	webhookB := model.ListProjectWebhooks(db, projectB.KitsuProjectID)[0]
+	oldCheck, oldList, oldDelete := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel
+	defer func() {
+		currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel = oldCheck, oldList, oldDelete
+	}()
+	currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
+		return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true}}
+	}
+	currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
+		return []DiscordGuildChannel{{ID: "channel-b", Type: 0, ParentID: "category-shared"}}, nil
+	}
+	deleted := false
+	currentRoutingDeleteChannel = func(string, string) error { deleted = true; return nil }
+	form := url.Values{"project_id": {projectA.KitsuProjectID}, "webhook_id": {strconv.FormatUint(uint64(webhookB.ID), 10)}, "action": {"delete_current_routing_channel"}, "confirm_name": {"owned-b"}}
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	handleCurrentIARoutingMutation(response, request, "en", db)
+	if deleted {
+		t.Fatal("cross-Production webhook reached Discord deletion")
+	}
+	if got := model.FindProjectWebhookByID(db, webhookB.ID); got == nil || got.KitsuProjectID != projectB.KitsuProjectID {
+		t.Fatal("cross-Production request removed the other Production's webhook")
+	}
+}
+
 func TestLegacyTaskTypeDeleteWaitsForProductionApply(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "legacy-task-delete", Name: "Legacy Task Delete"}
@@ -729,7 +768,7 @@ func TestLegacyTaskTypeDeleteWaitsForProductionApply(t *testing.T) {
 	}
 	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
 
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	requestStarted := make(chan struct{})
 	requestDone := make(chan struct{})
 	response := httptest.NewRecorder()
@@ -782,7 +821,7 @@ func TestDeleteProjectChannelWaitsForProductionApply(t *testing.T) {
 	}
 	defer func() { deleteProjectChannelOnDiscord = oldDelete }()
 
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	deleteStarted := make(chan struct{})
 	deleteDone := make(chan error, 1)
 	go func() {
@@ -820,7 +859,7 @@ func TestDeleteProjectConnectionOnlyWaitsForProductionApply(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	deleteStarted := make(chan struct{})
 	deleteDone := make(chan error, 1)
 	go func() {

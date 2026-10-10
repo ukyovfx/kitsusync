@@ -52,8 +52,9 @@ var currentRoutingInspectWebhook = inspectRoutingWebhook
 var errRoutingWebhookVerificationUnavailable = errors.New("managed webhook verification unavailable")
 var productionNotificationApplyLocks sync.Map
 
-func lockProductionNotificationApply(projectID uint) func() {
-	value, _ := productionNotificationApplyLocks.LoadOrStore(projectID, &sync.Mutex{})
+func lockProductionNotificationApply(productionID string) func() {
+	productionID = strings.TrimSpace(productionID)
+	value, _ := productionNotificationApplyLocks.LoadOrStore(productionID, &sync.Mutex{})
 	lock := value.(*sync.Mutex)
 	lock.Lock()
 	return lock.Unlock
@@ -82,7 +83,7 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		http.Error(w, `{"error":"production_not_writable"}`, http.StatusForbidden)
 		return true
 	}
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(productionID)
 	defer unlockApply()
 	project = model.FindProjectByKitsuID(db, productionID)
 	if project == nil || model.IsValidationOnlyProject(db, productionID) {

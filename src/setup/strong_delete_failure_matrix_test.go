@@ -226,7 +226,7 @@ func TestStrongDeleteWaitsForProductionApply(t *testing.T) {
 		return nil
 	}, func(string, *gorm.DB) error { return nil })
 
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	deleteStarted := make(chan struct{})
 	deleteDone := make(chan connectedProductionChannelDeleteExecution, 1)
 	go func() {

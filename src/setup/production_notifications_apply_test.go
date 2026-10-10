@@ -65,7 +65,7 @@ func TestProductionNotificationCompensationSkipsDiscordRestoreAfterRevisionConfl
 }
 
 func TestProductionNotificationApplyLockSerializesPerProduction(t *testing.T) {
-	unlockFirst := lockProductionNotificationApply(9001)
+	unlockFirst := lockProductionNotificationApply("production-9001")
 	firstReleased := false
 	defer func() {
 		if !firstReleased {
@@ -77,7 +77,7 @@ func TestProductionNotificationApplyLockSerializesPerProduction(t *testing.T) {
 	sameAcquired := make(chan struct{})
 	go func() {
 		close(sameAttempting)
-		unlock := lockProductionNotificationApply(9001)
+		unlock := lockProductionNotificationApply("production-9001")
 		defer unlock()
 		close(sameAcquired)
 	}()
@@ -85,7 +85,7 @@ func TestProductionNotificationApplyLockSerializesPerProduction(t *testing.T) {
 
 	otherAcquired := make(chan struct{})
 	go func() {
-		unlock := lockProductionNotificationApply(9002)
+		unlock := lockProductionNotificationApply("production-9002")
 		defer unlock()
 		close(otherAcquired)
 	}()

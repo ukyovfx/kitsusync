@@ -294,7 +294,7 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, error) {
 	var logs []string
 	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
-		unlockApply := lockProductionNotificationApply(project.ID)
+		unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 		defer unlockApply()
 	}
 
@@ -330,8 +330,26 @@ func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 		return fmt.Errorf("empty project id")
 	}
 	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
-		unlockApply := lockProductionNotificationApply(project.ID)
+		unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 		defer unlockApply()
+	}
+	return deleteProjectConnectionOnly(kitsuProjectID, db)
+}
+
+func deleteProjectConnectionOnlyIfNoWebhooks(kitsuProjectID string, db *gorm.DB) error {
+	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
+	project := model.FindProjectByKitsuID(db, kitsuProjectID)
+	if project == nil {
+		return fmt.Errorf("project not found: %s", kitsuProjectID)
+	}
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
+	defer unlockApply()
+	project = model.FindProjectByKitsuID(db, kitsuProjectID)
+	if project == nil {
+		return fmt.Errorf("project not found: %s", kitsuProjectID)
+	}
+	if remaining := len(model.ListProjectWebhooks(db, kitsuProjectID)); remaining != 0 {
+		return fmt.Errorf("project still has %d notification destinations", remaining)
 	}
 	return deleteProjectConnectionOnly(kitsuProjectID, db)
 }
@@ -685,7 +703,7 @@ func lockProjectForWebhookMutation(db *gorm.DB, webhookID uint) (*model.ProjectW
 	if project == nil {
 		return webhook, func() {}, nil
 	}
-	unlockApply := lockProductionNotificationApply(project.ID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
 	current := model.FindProjectWebhookByID(db, webhookID)
 	if current == nil || current.KitsuProjectID != project.KitsuProjectID {
 		unlockApply()
