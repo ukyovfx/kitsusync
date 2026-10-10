@@ -255,10 +255,19 @@ func BeginProductionNotificationOrderRecovery(db *gorm.DB, productionID string) 
 		if err := tx.Where("production_id = ?", productionID).First(&lock).Error; err != nil {
 			return err
 		}
-		if lock.MutationState != NotificationMutationReorderHelp || strings.TrimSpace(lock.MutationToken) == "" {
+		if lock.MutationState != NotificationMutationReorderHelp {
 			return ErrNotificationMutationRecoveryRequired
 		}
-		result := tx.Model(&ProductionNotificationWriteLock{}).Where("production_id = ? AND mutation_state = ? AND mutation_token = ?", productionID, NotificationMutationReorderHelp, lock.MutationToken).Updates(map[string]any{
+		claim := tx.Model(&ProductionNotificationWriteLock{}).Where("production_id = ? AND mutation_state = ?", productionID, NotificationMutationReorderHelp)
+		if strings.TrimSpace(lock.MutationToken) == "" {
+			// Older quarantines may have been persisted before the mutation token
+			// was retained. Claim only that exact help state with an empty/NULL
+			// token, then replace it atomically with a fresh recovery token.
+			claim = claim.Where("mutation_token = '' OR mutation_token IS NULL")
+		} else {
+			claim = claim.Where("mutation_token = ?", lock.MutationToken)
+		}
+		result := claim.Updates(map[string]any{
 			"mutation_state": NotificationMutationReordering,
 			"mutation_token": token,
 			"mutation_at":    time.Now().UTC(),

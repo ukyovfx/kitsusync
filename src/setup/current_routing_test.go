@@ -913,7 +913,7 @@ func TestCurrentRoutingOrderRecoveryReconcilesOnlyVerifiedPersistedDestinations(
 	if !handleCurrentIARoutingMutation(response, request, "en", db) {
 		t.Fatal("recovery retry action was not handled")
 	}
-	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "routing_order_recovery=done") || reorderCalls != 2 || len(got) != 2 || got[1] != (DiscordChannelPosition{ID: "channel-comp", Position: 9}) {
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "routing_order_recovery=done") || reorderCalls != 2 || len(got) != 1 || got[0] != (DiscordChannelPosition{ID: "channel-comp", Position: 9}) {
 		t.Fatalf("explicit recovery did not reconcile persisted route order: status=%d positions=%#v location=%q", response.Code, got, response.Header().Get("Location"))
 	}
 	var lock model.ProductionNotificationWriteLock

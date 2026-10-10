@@ -437,6 +437,47 @@ func TestExternalReorderMutationBarrierBlocksDispatchAndSurfacesRecovery(t *test
 	}
 }
 
+func TestOrderRecoveryClaimsLegacyHelpStateWithoutTokenAndBlocksInFlightDelivery(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	notificationDeliveryFixture(t, db)
+	event, err := PrepareNotificationDelivery(db, notificationIntent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", event.EventID).Update("disposition", DeliveryInFlight).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&ProductionNotificationWriteLock{}).Where("production_id = ?", "production-1").Updates(map[string]any{
+		"mutation_state": NotificationMutationReorderHelp,
+		"mutation_token": "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BeginProductionNotificationOrderRecovery(db, "production-1"); !errors.Is(err, ErrNotificationDeliveryInFlight) {
+		t.Fatalf("order recovery must not run while a delivery is in flight: %v", err)
+	}
+	if err := db.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", event.EventID).Update("disposition", DeliveryPending).Error; err != nil {
+		t.Fatal(err)
+	}
+	token, err := BeginProductionNotificationOrderRecovery(db, "production-1")
+	if err != nil || token == "" {
+		t.Fatalf("explicit recovery should claim a persisted legacy help state with a fresh token: token=%q err=%v", token, err)
+	}
+	var claimed ProductionNotificationWriteLock
+	if err := db.Where("production_id = ?", "production-1").First(&claimed).Error; err != nil || claimed.MutationState != NotificationMutationReordering || claimed.MutationToken != token {
+		t.Fatalf("legacy help state was not safely moved under the fresh recovery token: lock=%+v err=%v", claimed, err)
+	}
+	if err := FinishProductionNotificationExternalMutation(db, "production-1", token, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("UPDATE production_notification_write_locks SET mutation_state = ?, mutation_token = NULL WHERE production_id = ?", NotificationMutationReorderHelp, "production-1").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BeginProductionNotificationOrderRecovery(db, "production-1"); err != nil {
+		t.Fatalf("explicit recovery should also claim a persisted legacy help state with a NULL token: %v", err)
+	}
+}
+
 func TestDeletionBatchTombstonesAtomicallyAndBlocksAllRoutes(t *testing.T) {
 	db := notificationDeliveryTestDB(t)
 	notificationDeliveryFixture(t, db)
