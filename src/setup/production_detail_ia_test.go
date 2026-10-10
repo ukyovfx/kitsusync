@@ -649,7 +649,7 @@ func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *t
 
 func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "pending-apply-production", Name: "Pending Apply"}
+	project := model.Project{KitsuProjectID: "pending-apply-production", Name: "Pending Apply", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -663,8 +663,8 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345680"); err != nil {
 		t.Fatal(err)
 	}
-	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{RolesReady: true})
-	for _, required := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, `data-recipient-panel="user"`, `data-recipient-panel="role"`, `No eligible Discord roles available`, `data-recipient-select="user"`, `data-recipient-select="role"`} {
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{BotToken: "configured", RolesReady: true})
+	for _, required := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, `data-recipient-panel="user"`, `data-recipient-panel="role"`, `No custom Discord roles are configured.`, `data-recipient-select="user"`, `data-recipient-select="role"`} {
 		if !strings.Contains(body, required) {
 			t.Errorf("explicit User/Role chooser or empty state is missing %q", required)
 		}

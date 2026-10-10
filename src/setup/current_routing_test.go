@@ -410,21 +410,23 @@ func TestWFADetailUsesOneSubtleDividerBetweenAutomaticAndAdditional(t *testing.T
 
 func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *testing.T) {
 	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "routing-recipient-modes", Name: "Routing Recipient Modes"}
+	project := model.Project{KitsuProjectID: "routing-recipient-modes", Name: "Routing Recipient Modes", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
 	roleID := "123456789012345680"
 	for _, tc := range []struct{ lang, user, role, empty string }{
-		{"ja", "ユーザー", "ロール", "追加可能なDiscordロールはありません"},
-		{"en", "Users", "Roles", "No eligible Discord roles available"},
+		{"ja", "ユーザー", "ロール", "このDiscordサーバーにカスタムロールはありません。"},
+		{"en", "Users", "Roles", "No custom Discord roles are configured."},
 	} {
 		body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{
-			Team:       []kitsu.Person{{ID: "person-linked", FullName: "Linked User", Active: true}},
-			Users:      []model.UserMap{{KitsuID: "person-linked", DiscordID: "123456789012345681", DiscordDisplayName: "Linked User"}},
-			GuildUsers: []DiscordGuildMember{reviewerTestGuildMember("123456789012345681", "linked-user", "Linked User", "")},
-			Roles:      []DiscordGuildRole{{ID: roleID, Name: "comp-leads", Mentionable: true}},
-			RolesReady: true,
+			Team:        []kitsu.Person{{ID: "person-linked", FullName: "Linked User", Active: true}},
+			Users:       []model.UserMap{{KitsuID: "person-linked", DiscordID: "123456789012345681", DiscordDisplayName: "Linked User"}},
+			GuildUsers:  []DiscordGuildMember{reviewerTestGuildMember("123456789012345681", "linked-user", "Linked User", "")},
+			BotToken:    "configured",
+			Roles:       []DiscordGuildRole{{ID: roleID, Name: "comp-leads", Mentionable: true}},
+			RoleCatalog: []DiscordGuildRole{{ID: roleID, Name: "comp-leads", Mentionable: true}},
+			RolesReady:  true,
 		})
 		for _, want := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, tc.user, tc.role, `data-wfa-option-value="` + roleID + `"`} {
 			if !strings.Contains(body, want) {
@@ -434,7 +436,7 @@ func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *
 		if strings.Count(body, `data-wfa-user-combobox`) != 1 || strings.Count(body, `data-wfa-role-combobox`) != 1 {
 			t.Errorf("%s recipient picker should expose one combobox for each explicit mode", tc.lang)
 		}
-		emptyBody := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{RolesReady: true})
+		emptyBody := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{BotToken: "configured", RolesReady: true})
 		if !strings.Contains(emptyBody, tc.empty) {
 			t.Errorf("%s role mode should explain the empty candidate state", tc.lang)
 		}

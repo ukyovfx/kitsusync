@@ -51,11 +51,12 @@ func saveGlobalUserLink(db *gorm.DB, r *http.Request) (bool, string) {
 	selectedID := strings.TrimSpace(r.FormValue("discord_user_id"))
 	guildID := strings.TrimSpace(r.FormValue("discord_guild_id"))
 	directory, err := globalDiscordDirectoryReader(storedRuntimeDiscordBotToken(db), guildID)
-	if err != nil || directory.SelectedGuild.ID == "" || strings.TrimSpace(directory.SelectedGuild.ID) != guildID || selectedID == "" {
+	validatedGuildID := validatedDiscordGuildSelection(directory, guildID)
+	if err != nil || validatedGuildID == "" || selectedID == "" {
 		if project != nil {
 			return false, withLang("/bot/admin/projects?project="+url.QueryEscape(teamProjectID)+"&tab=team", r)
 		}
-		return false, globalUserLinkingURL(r, directory.SelectedGuild.ID, "")
+		return false, globalUserLinkingURL(r, validatedGuildID, "")
 	}
 	var selected globalDiscordUserOption
 	for _, option := range directory.Options {
@@ -126,8 +127,18 @@ func userLinkingGuildForRedirect(db *gorm.DB, r *http.Request) string {
 		return ""
 	}
 	directory, _ := globalDiscordDirectoryReader(storedRuntimeDiscordBotToken(db), guildID)
-	if strings.TrimSpace(directory.SelectedGuild.ID) != guildID {
+	return validatedDiscordGuildSelection(directory, guildID)
+}
+
+func validatedDiscordGuildSelection(directory globalDiscordDirectory, requested string) string {
+	requested = strings.TrimSpace(requested)
+	if !isDiscordSnowflake(requested) || strings.TrimSpace(directory.SelectedGuild.ID) != requested {
 		return ""
 	}
-	return guildID
+	for _, guild := range directory.Guilds {
+		if strings.TrimSpace(guild.ID) == requested && strings.TrimSpace(guild.Name) != "" {
+			return requested
+		}
+	}
+	return ""
 }

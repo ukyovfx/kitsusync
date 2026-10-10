@@ -774,6 +774,9 @@ func ListGuildRoles(guildID, botToken string) ([]DiscordGuildRole, error) {
 	}
 	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/roles", discordAPI, guildID), nil, botToken)
 	if err != nil {
+		if status == http.StatusTooManyRequests {
+			return nil, &discordGuildRoleListError{StatusCode: status}
+		}
 		return nil, err
 	}
 	if status >= 400 {

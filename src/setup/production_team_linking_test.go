@@ -25,7 +25,8 @@ func TestTeamLinkSaveUsesGlobalUserMapAndRevalidatesLiveTeam(t *testing.T) {
 	team := []kitsu.Person{{ID: "person-current", FullName: "Current Member", Email: "member@example.invalid", Active: true}}
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return team, nil }
 	globalDiscordDirectoryReader = func(_, guildID string) (globalDiscordDirectory, error) {
-		return globalDiscordDirectory{SelectedGuild: DiscordGuild{ID: guildID}, Options: []globalDiscordUserOption{{ID: "123456789012345678", Name: "Member"}}}, nil
+		guild := DiscordGuild{ID: guildID, Name: "Fixture Guild"}
+		return globalDiscordDirectory{Guilds: []DiscordGuild{guild}, SelectedGuild: guild, Options: []globalDiscordUserOption{{ID: "123456789012345678", Name: "Member"}}}, nil
 	}
 	values := url.Values{
 		"action": {"save_global_link"}, "team_link_project_id": {project.KitsuProjectID},
