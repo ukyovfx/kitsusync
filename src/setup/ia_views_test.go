@@ -2458,7 +2458,7 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatal(err)
 	}
-	oldTasks, oldRoles, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild
+	oldTasks, oldRoles, oldGuildRoles, oldEvidence, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildRolesReader, reviewerRoleSendEvidenceReader, reviewerProductionTeamReader, reviewerGuildMembersForGuild
 	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}
 	}
@@ -2471,8 +2471,17 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
 		return []DiscordGuildRole{{ID: guildID, Name: "@everyone", Mentionable: true}, {ID: "123456789012345680", Name: "Reviewers", Mentionable: true}, {ID: "123456789012345681", Name: "Private", Mentionable: false}}, nil
 	}
+	reviewerGuildRolesReader = reviewerDiscordRolesForGuild
+	reviewerTestRoute(t, db, project, "task-comp")
+	reviewerRoleSendEvidenceReader = func(guildID, channelID, webhookURL, _ string) (reviewerRoleSendEvidence, error) {
+		webhookID, err := discordWebhookID(webhookURL)
+		if err != nil {
+			return reviewerRoleSendEvidence{}, err
+		}
+		return reviewerRoleSendEvidence{GuildID: guildID, ChannelID: channelID, WebhookID: webhookID, BotID: "123456789012345685", WebhookOwnerID: "123456789012345685", OwnershipVerified: true, PermissionsKnown: true}, nil
+	}
 	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildRolesReader, reviewerRoleSendEvidenceReader, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldGuildRoles, oldEvidence, oldTeam, oldGuildMembers
 	})
 	post := func(values string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader(values+"&project_id=reviewer-mutations"))
