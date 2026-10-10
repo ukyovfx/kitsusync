@@ -4,6 +4,8 @@ This document records the shared visual language already used by KitsuSync's non
 
 ## Authority and references
 
+The site icon uses the supplied KitsuSync brand artwork as the exact SVG asset in `src/setup/kitsusync.svg`; the ICO favicon is rasterized from that same artwork. Do not recreate or approximate the mark with CSS or a separate icon drawing.
+
 - `docs/CURRENT-IA-UI-SPEC.md` remains authoritative for screen meaning, content, state, routes, actions, and behavior.
 - This document is authoritative for shared visual presentation across Current IA pages.
 - Use the Dashboard and Production list for the overall page surface and operational summary/list treatment.
@@ -15,7 +17,7 @@ This document records the shared visual language already used by KitsuSync's non
 
 ## Page shell and content width
 
-Authenticated pages share the KitsuSync header/navigation and a centered content shell. The shell is bounded by the existing 1100px maximum width and uses the existing page padding. The page is presented on the fixed authenticated dot-grid background. A Current IA page normally has one primary workbench surface with its title and content inside it; content should not be wrapped in arbitrary layers of secondary cards.
+Authenticated pages share the KitsuSync header/navigation and a centered content shell. The shell is bounded by the existing 1100px maximum width and uses the existing page padding. The page is presented over a viewport-fixed `+` grid with a faint, slowly drifting edge haze and a dark center. A Current IA page normally has one primary workbench surface with its title and content inside it; content should not be wrapped in arbitrary layers of secondary cards.
 
 Keep the shared workbench width and padding unless a page-specific content constraint is already established. Tables may use their existing responsive treatment; normal page scrolling is preferred over nested scroll regions.
 
@@ -63,7 +65,7 @@ At desktop widths, keep compact multi-column summary/table layouts where establi
 
 ## Motion and backgrounds
 
-Authenticated pages use the existing static reactive dot grid. It is a viewport-level page background; it does not move, recenter, or depend on content-card bounds. Login fabric is a separate login-only treatment. Production Detail must not introduce its own background animation, glow, or decorative gradient.
+Authenticated pages use the fixed viewport-level `+` grid. Its medium-density thin amber symbols never translate or depend on content-card bounds. Pointer proximity within about 120px smoothly brightens nearby symbols toward `#FC8742` and scales them by at most 1.2×; the pointer does not move them. A very faint, slow warm-gray/burnt-orange haze drifts near viewport edges while the center stays dark. Reduced motion holds the haze static and may disable pointer activation; mobile keeps the same lightweight behavior. Login Particle Fabric is a separate Login-only treatment and is not changed by the authenticated background. Production Detail must not introduce its own background, glow, or decorative gradient.
 
 ## Review checklist
 
@@ -75,4 +77,4 @@ Authenticated pages use the existing static reactive dot grid. It is a viewport-
 - Badges use screen-semantic colors and labels from the Current IA UI spec.
 - Empty, warning, and failed states remain compact and inside the content they describe.
 - JP and EN have equivalent information hierarchy; mobile has no page overflow.
-- Authenticated dot-grid positions and behavior remain unchanged.
+- Authenticated `+` positions stay fixed across routes and pointer interaction; only local color/brightness/size react, and the faint haze remains edge-focused.

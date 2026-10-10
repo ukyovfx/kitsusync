@@ -1,7 +1,9 @@
 package setup
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -22,14 +24,23 @@ func TestFaviconRouteServesICO(t *testing.T) {
 		t.Fatalf("favicon Content-Type = %q, want image/x-icon", got)
 	}
 	body := recorder.Body.Bytes()
-	if len(body) < 22 || body[0] != 0 || body[1] != 0 || body[2] != 1 || body[3] != 0 || body[4] != 1 || body[5] != 0 {
+	if len(body) < 6+3*16 || body[0] != 0 || body[1] != 0 || body[2] != 1 || body[3] != 0 || body[4] != 3 || body[5] != 0 {
 		t.Fatalf("favicon response is not a valid ICO resource: %v", body[:min(len(body), 8)])
 	}
-	if got := binary.LittleEndian.Uint32(body[14:18]); got != uint32(len(body)-22) {
-		t.Fatalf("ICO image size = %d, response payload after directory = %d", got, len(body)-22)
-	}
-	if got := binary.LittleEndian.Uint32(body[18:22]); got != 22 {
-		t.Fatalf("ICO image offset = %d, want 22", got)
+	for i, size := range []byte{16, 32, 48} {
+		entry := body[6+i*16 : 6+(i+1)*16]
+		if entry[0] != size || entry[1] != size || binary.LittleEndian.Uint16(entry[4:6]) != 1 || binary.LittleEndian.Uint16(entry[6:8]) != 32 {
+			t.Fatalf("ICO entry %d does not describe a %dx%d 32-bit image: %v", i, size, size, entry)
+		}
+		resourceSize := binary.LittleEndian.Uint32(entry[8:12])
+		resourceOffset := binary.LittleEndian.Uint32(entry[12:16])
+		resourceEnd := uint64(resourceOffset) + uint64(resourceSize)
+		if resourceOffset < uint32(6+3*16) || resourceEnd > uint64(len(body)) || resourceSize < 8 {
+			t.Fatalf("ICO entry %d resource bounds invalid: offset=%d size=%d response=%d", i, resourceOffset, resourceSize, len(body))
+		}
+		if string(body[resourceOffset:resourceOffset+8]) != "\x89PNG\r\n\x1a\n" {
+			t.Fatalf("ICO entry %d is not a PNG raster of the source SVG", i)
+		}
 	}
 	if got := recorder.Header().Get("Content-Length"); got != strconv.Itoa(len(body)) {
 		t.Fatalf("favicon Content-Length = %q, want %d", got, len(body))
@@ -50,8 +61,9 @@ func TestKitsuSyncIconRouteServesEmbeddedSVG(t *testing.T) {
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/svg+xml" {
 		t.Fatalf("KitsuSync SVG status/type = %d/%q", response.Code, response.Header().Get("Content-Type"))
 	}
-	if !strings.Contains(response.Body.String(), `<svg id="Layer_1"`) || !strings.Contains(response.Body.String(), `fill: #fc8742`) {
-		t.Fatal("KitsuSync SVG response does not contain the supplied brand artwork")
+	digest := sha256.Sum256(kitsusyncSVG)
+	if got := strings.ToUpper(hex.EncodeToString(digest[:])); got != "76E19961545AA1B4061DD70D2187D95CF830F674B89C1F24AAE8FF35BE97DB38" {
+		t.Fatalf("KitsuSync SVG does not byte-match the supplied kitsusync2.svg artwork: SHA-256 %s", got)
 	}
 }
 

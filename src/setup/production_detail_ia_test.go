@@ -322,6 +322,26 @@ func TestProductionSettingsGroupsExistingSectionsWithoutChangingForms(t *testing
 	}
 }
 
+func TestProductionTeamStatusActionsStayAlignedAndDangerDisclosureUsesSemanticRed(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.production-team-status-actions{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;`) {
+		t.Fatal("Team status and actions must align on the desktop row rail")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-team-status-actions{align-items:flex-start}`) || strings.Contains(adminThemeCSS, `.production-team-status-actions{align-items:flex-start;flex-direction:column}`) {
+		t.Fatal("Team status actions must remain aligned while wrapping safely on narrow screens")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-settings-disclosure-row.danger-zone>summary{color:var(--color-status-danger)}`) || !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);`) {
+		t.Fatal("Danger Zone disclosure must retain semantic red styling")
+	}
+}
+
+func TestProductionNotificationHeaderActionsShareDenseControlHeight(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:var(--control-height-dense,38px);min-height:var(--control-height-dense,38px);padding-block:0}`) {
+		t.Fatal("Notifications status and Edit controls must share the same visible height rhythm")
+	}
+	if !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);`) {
+		t.Fatal("Settings disclosures must use the compact shared control height")
+	}
+}
 func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "preview-production", Name: "Preview Production", Language: "en"}
@@ -551,6 +571,23 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-destination-control`) || !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) || strings.Contains(body, `data-wfa-channel-control`) || strings.Contains(body, `data-routing-undo`) {
 		t.Fatal("selected Task Type editor must preserve route summary and secondary Add recipient control")
+	}
+	if strings.Count(body, `data-wfa-detail-panel`) != 1 {
+		t.Fatalf("Notifications must have one shared WFA detail panel, got %d", strings.Count(body, `data-wfa-detail-panel`))
+	}
+	tableEnd := strings.Index(body, `</table></div></div>`)
+	addAction := strings.Index(body, `data-routing-add`)
+	panel := strings.Index(body, `data-wfa-detail-panel`)
+	footer := strings.Index(body, `production-routing-editor-footer`)
+	if tableEnd < 0 || addAction < tableEnd || panel < addAction || footer < panel {
+		t.Fatalf("shared WFA-only panel must follow the complete routing list/Add action and precede Apply footer: table=%d add=%d panel=%d footer=%d", tableEnd, addAction, panel, footer)
+	}
+	panelEnd := strings.Index(body[panel:], `</section>`)
+	if panelEnd < 0 || strings.Contains(body[panel:panel+panelEnd], `data-destination-control`) {
+		t.Fatal("shared panel must contain WFA details only; Discord destination editing stays inline")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-context .production-wfa-edit-panel [data-wfa-automatic]{border-block:0`) {
+		t.Fatal("Supervisor row still has redundant dividers above/below it")
 	}
 	attribute := `data-existing-targets="`
 	start := strings.Index(body, attribute)

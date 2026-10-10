@@ -86,6 +86,31 @@ func TestSensitiveBotMutationRejectsExpiredRecentAuthentication(t *testing.T) {
 	}
 }
 
+func TestConnectionsEditStepUpRedirectPreservesTheExistingValidSession(t *testing.T) {
+	resetSessions()
+	t.Cleanup(resetSessions)
+	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+	req := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	rr := httptest.NewRecorder()
+
+	BotHandler(newSetupStateTestDB(t), nil)(rr, req)
+
+	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/login") || !strings.Contains(rr.Header().Get("Location"), "next=") {
+		t.Fatalf("Connections edit must require the deliberate recent-auth step-up: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
+	}
+	stepUpURL, err := url.Parse(rr.Header().Get("Location"))
+	if err != nil || stepUpURL.Query().Get("next") != "/bot/admin/bot?edit=1&lang=en" {
+		t.Fatalf("Connections edit step-up did not preserve its exact return route: location=%q err=%v", rr.Header().Get("Location"), err)
+	}
+	if !validSession(token) {
+		t.Fatal("Connections edit step-up invalidated the still-valid authenticated session")
+	}
+	if strings.Contains(rr.Header().Get("Set-Cookie"), "Max-Age=0") {
+		t.Fatal("Connections edit step-up cleared the existing session cookie")
+	}
+}
+
 func TestLegacyBotMutationRequiresRecentAuthentication(t *testing.T) {
 	resetSessions()
 	t.Cleanup(resetSessions)

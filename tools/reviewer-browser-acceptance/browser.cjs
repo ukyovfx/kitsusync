@@ -171,6 +171,9 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
       visible, centered,
       canvasSize: canvas ? [canvas.width, canvas.height] : null,
       nonzeroAlpha, maxAlpha, gridCenterAlpha,
+      profile: canvas?.dataset.profile || '',
+      gridSpacing: canvas?.dataset.gridSpacing || '',
+      gridOrigin: canvas?.dataset.gridOrigin || '',
       cardBackground, panelBackground,
       cardOpaque: isOpaqueRGB(cardBackground),
       panelOpaque: isOpaqueRGB(panelBackground),
@@ -188,6 +191,18 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     };
   });
   if (!(mode === 'login-fabric' && viewport.name === 'mobile') && details.visible < 3) throw new Error(`${mode} canvas is visually empty for ${locale.lang}/${viewport.name}: ${JSON.stringify({ visible: details.visible, canvasSize: details.canvasSize, nonzeroAlpha: details.nonzeroAlpha, maxAlpha: details.maxAlpha, gridCenterAlpha: details.gridCenterAlpha })}`);
+  if (mode === 'app-dots') {
+    const grid = await plusGridSnapshot(page);
+    const spacing = viewport.width < 600 ? 36 : 42;
+    const expectedCount = Math.ceil((viewport.width - 18) / spacing) * Math.ceil((viewport.height - 18) / spacing);
+    const edgeMean = grid?.edgeAlpha.reduce((sum, value) => sum + value, 0) / (grid?.edgeAlpha.length || 1);
+    if (!grid || grid.profile !== 'app-plus-grid' || Number(grid.spacing) !== spacing || Number(grid.origin) !== 18 || grid.positions.length !== expectedCount) {
+      throw new Error(`authenticated app background is not the fixed plus grid at ${locale.lang}/${viewport.name}: ${JSON.stringify({ ...grid, expectedCount })}`);
+    }
+    if (grid.centerAlpha > 24 || edgeMean <= grid.centerAlpha) {
+      throw new Error(`authenticated edge haze is not faint/edge-concentrated at ${locale.lang}/${viewport.name}: ${JSON.stringify({ edgeMean, centerAlpha: grid.centerAlpha })}`);
+    }
+  }
   if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
     throw new Error(`login foreground surfaces are translucent at ${viewport.name}: ${JSON.stringify({ card: details.cardBackground, panel: details.panelBackground })}`);
   }
@@ -241,6 +256,51 @@ async function localCanvasAlpha(page, x, y, radius) {
     for (let i = 3; i < pixels.length; i += 4) sum += pixels[i];
     return sum;
   }, { x, y, radius });
+}
+
+async function plusGridSnapshot(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector('canvas[data-background="app-dots"]');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return null;
+    const spacing = innerWidth < 600 ? 36 : 42;
+    const origin = 18;
+    const dpr = canvas.width / canvas.getBoundingClientRect().width;
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    const positions = [];
+    for (let y = origin; y < innerHeight; y += spacing) {
+      for (let x = origin; x < innerWidth; x += spacing) {
+        const px = Math.round(x * dpr), py = Math.round(y * dpr);
+        let alpha = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const sx = Math.max(0, Math.min(canvas.width - 1, px + dx));
+          const sy = Math.max(0, Math.min(canvas.height - 1, py + dy));
+          alpha = Math.max(alpha, pixels[(sy * canvas.width + sx) * 4 + 3]);
+        }
+        if (alpha > 20) positions.push(`${x},${y}`);
+      }
+    }
+    const sampleAlpha = (x, y) => { const sx = Math.max(0, Math.min(canvas.width - 1, Math.round(x * dpr))), sy = Math.max(0, Math.min(canvas.height - 1, Math.round(y * dpr))); return pixels[(sy * canvas.width + sx) * 4 + 3]; };
+    const edgeAlpha = [sampleAlpha(8, innerHeight * .24), sampleAlpha(innerWidth - 8, innerHeight * .72), sampleAlpha(innerWidth * .78, 8), sampleAlpha(innerWidth * .22, innerHeight - 8)];
+    return {
+      profile: canvas.dataset.profile,
+      spacing: canvas.dataset.gridSpacing,
+      origin: canvas.dataset.gridOrigin,
+      positions,
+      edgeAlpha,
+      centerAlpha: sampleAlpha(innerWidth * .5 + 11, innerHeight * .5 + 11),
+    };
+  });
+}
+
+async function plusPixel(page, x, y) {
+  return page.evaluate(({ x, y }) => {
+    const canvas = document.querySelector('canvas[data-background="app-dots"]');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return null;
+    const dpr = canvas.width / canvas.getBoundingClientRect().width;
+    return [...ctx.getImageData(Math.round(x * dpr), Math.round(y * dpr), 1, 1).data];
+  }, { x, y });
 }
 
 async function fabricPeakY(page, x) {
@@ -1299,6 +1359,17 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-selected.png`), fullPage: true });
         await record(page, '/bot/admin/users', locale.lang, viewport.name, 'ready', 'four-column User Linking table rendered');
 
+        await fixture(page, 'discord-failure');
+        await page.goto(`${base}/bot/admin/users?lang=${locale.lang}&discord_guild_id=${guildID}`, { waitUntil: 'networkidle' });
+        const lookupFailure = page.locator('.user-linking-lookup-error');
+        if (await lookupFailure.count() !== 1 || await page.locator('.user-linking-table').count()) throw new Error(`Discord lookup failure was not distinguished from an empty User Linking list in ${locale.lang}`);
+        const botActions = lookupFailure.locator('a[href^="/bot/admin/bot?lang="]');
+        if (await botActions.count() !== 1 || await lookupFailure.locator('details[open]').count() || await lookupFailure.locator('a[href*="/bot/admin/projects"]').count()) throw new Error(`Discord lookup failure must show one Bot connection action and collapsed details in ${locale.lang}`);
+        if ((await lookupFailure.innerText()).includes(locale.lang === 'ja' ? '選択できるDiscordユーザーがありません' : 'No Discord users are available')) throw new Error(`Discord lookup failure was rendered as a successful empty list in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-discord-error.png`), fullPage: true });
+        await record(page, '/bot/admin/users', locale.lang, viewport.name, 'Discord lookup failure', 'compact localized failure with one Bot connection action and collapsed diagnostics');
+        await fixture(page, 'ready');
+
         await page.goto(`${base}/bot/admin/health?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         if (!(await page.locator('main').innerText()).trim()) throw new Error(`System Status did not render in ${locale.lang}`);
         const graphContract = await page.evaluate(() => ({
@@ -1335,15 +1406,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
     await page.mouse.move(-50, -50);
     await page.waitForTimeout(100);
-    const dashboardGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
+    const dashboardGrid = await plusGridSnapshot(page);
     await page.waitForTimeout(500);
-    if (await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL()) !== dashboardGrid) {
-      throw new Error('authenticated dot grid changed without pointer interaction');
+    const driftingGrid = await plusGridSnapshot(page);
+    if (JSON.stringify(dashboardGrid?.positions) !== JSON.stringify(driftingGrid?.positions)) {
+      throw new Error('authenticated plus-symbol positions changed while the edge haze drifted');
     }
     for (const route of ['/bot/admin/projects?lang=en', '/bot/admin/users?lang=en', '/bot/admin/health?lang=en']) {
       await page.goto(`${base}${route}`, { waitUntil: 'networkidle' });
-      const routeGrid = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());
-      if (routeGrid !== dashboardGrid) throw new Error(`authenticated dot positions/background changed with content route ${route}`);
+      const routeGrid = await plusGridSnapshot(page);
+      if (JSON.stringify(routeGrid?.positions) !== JSON.stringify(dashboardGrid?.positions) || routeGrid?.profile !== 'app-plus-grid') throw new Error(`authenticated plus-grid geometry changed with content route ${route}`);
     }
 
     // Keep canonical non-Production-detail screenshots beside the Production Detail review.
@@ -1402,19 +1474,24 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });
-    const appPointer = { x: 420, y: 380 };
+    const appPointer = { x: 438, y: 354 };
     await page.mouse.move(0, 0);
     await page.waitForTimeout(250);
     const appBefore = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
-    const farPoint = { x: 1200, y: 820 };
-    const farBefore = await localCanvasAlpha(page, farPoint.x, farPoint.y, 24);
+    const appPixelBefore = await plusPixel(page, appPointer.x, appPointer.y);
+    const farPoint = { x: 1194, y: 816 };
+    const farBefore = await plusPixel(page, farPoint.x, farPoint.y);
+    const fixedPositionsBefore = await plusGridSnapshot(page);
     await page.mouse.move(appPointer.x, appPointer.y);
     await page.waitForTimeout(400);
     const appAfter = await localCanvasAlpha(page, appPointer.x, appPointer.y, 100);
-    const farAfter = await localCanvasAlpha(page, farPoint.x, farPoint.y, 24);
-    if (appAfter <= appBefore) throw new Error(`app pointer did not subtly activate local dots (${appBefore} -> ${appAfter})`);
-    if (farAfter !== farBefore) throw new Error(`app pointer activation changed distant dots (${farBefore} -> ${farAfter})`);
-    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local dot alpha increased from ${appBefore} to ${appAfter}; distant dot alpha stayed ${farAfter}; dot positions remain fixed` });
+    const appPixelAfter = await plusPixel(page, appPointer.x, appPointer.y);
+    const farAfter = await plusPixel(page, farPoint.x, farPoint.y);
+    const fixedPositionsAfter = await plusGridSnapshot(page);
+    if (appAfter <= appBefore || !appPixelBefore || !appPixelAfter || appPixelAfter[3] <= appPixelBefore[3] || appPixelAfter[0] <= appPixelBefore[0] + 30 || appPixelAfter[1] <= appPixelBefore[1] + 8) throw new Error(`app pointer did not locally brighten/enlarge the plus symbol toward brand orange (${JSON.stringify({ appBefore, appAfter, appPixelBefore, appPixelAfter })})`);
+    if (!farBefore || !farAfter || Math.abs(farAfter[0] - farBefore[0]) > 8 || Math.abs(farAfter[1] - farBefore[1]) > 8 || Math.abs(farAfter[3] - farBefore[3]) > 8) throw new Error(`app pointer affected a distant symbol outside its local field (${JSON.stringify({ farBefore, farAfter })}`);
+    if (JSON.stringify(fixedPositionsAfter?.positions) !== JSON.stringify(fixedPositionsBefore?.positions)) throw new Error('pointer activation translated the fixed plus grid');
+    records.push({ route: '/bot/admin', locale: 'en', viewport: 'desktop-1440', state: 'pointer activation', detail: `local fixed symbol changed toward #FC8742 with increased alpha; distant symbol remained stable within haze drift; ${fixedPositionsAfter.positions.length} positions remained unchanged` });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.waitForTimeout(100);
     const reducedApp = await page.locator('canvas[data-background="app-dots"]').evaluate(canvas => canvas.toDataURL());

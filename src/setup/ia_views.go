@@ -2810,27 +2810,22 @@ func globalDiscordMemberLoadMessage(lang string, loadErr error) string {
 			detail += fmt.Sprintf(" (Discord code %d)", failure.Code)
 		}
 	}
-	title := t(lang, "Discordユーザーを取得できませんでした", "Discord users could not be loaded")
-	explanation := t(lang, "Discordユーザー一覧を確認できません。Bot接続とDiscordサーバーの設定を確認してください。", "The Discord user list could not be checked. Verify the Bot connection and Discord server settings.")
-	action := `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+	title := t(lang, "Discordユーザーを取得できません", "Discord users are unavailable")
+	explanation := t(lang, "Discordユーザー一覧を確認できません。Bot接続を確認して再試行してください。", "The Discord user list could not be checked. Verify the Bot connection and try again.")
 	switch kind {
 	case discordMemberFailureFixture:
-		explanation = t(lang, "この画面は合成QAデータのため、実Discordユーザーは取得しません。", "This screen uses synthetic QA data, so real Discord users are not requested.")
-		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+		explanation = t(lang, "QA用の合成データでは実Discordユーザーを取得しません。", "Real Discord users are not loaded for synthetic QA data.")
 	case discordMemberFailureMalformed:
-		explanation = t(lang, "Discordユーザー一覧の取得リクエストを確認できません。Discordサーバーの設定を確認して再読み込みしてください。", "Discord rejected the member-list request. Verify the Discord server configuration and reload.")
-		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/projects", lang)) + `">` + esc(t(lang, "Discordサーバーの設定を確認", "Check Discord server settings")) + `</a>`
+		explanation = t(lang, "Discordがユーザー一覧の要求を受け付けませんでした。", "Discord did not accept the member-list request.")
 	case discordMemberFailureMismatch:
-		explanation = t(lang, "このProductionに設定されたDiscordサーバーへBotが参加していません。", "The Bot has not joined the Discord server connected to this Production.")
-		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+		explanation = t(lang, "Botが接続先Discordサーバーに参加していません。", "The Bot has not joined the connected Discord server.")
 	case discordMemberFailureAccess:
-		explanation = t(lang, "BotにDiscordサーバーのメンバーを確認する権限がありません。", "The Bot does not have permission to inspect members in this Discord server.")
-		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+		explanation = t(lang, "Botにメンバー一覧を読む権限がありません。", "The Bot cannot read the server member list.")
 	case discordMemberFailureIntent:
-		explanation = t(lang, "Discord Developer PortalでServer Members Intentの設定を確認してください。", "Verify the Server Members Intent in the Discord Developer Portal.")
-		action = `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+		explanation = t(lang, "Discord Developer PortalのServer Members Intentを確認してください。", "Check Server Members Intent in the Discord Developer Portal.")
 	}
-	return `<div class="notice notice-warning" role="status"><strong>` + esc(title) + `</strong><p>` + esc(explanation) + `</p><div class="button-row">` + action + `</div><details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="field-help">` + esc(detail) + `</p></details></div>`
+	action := `<a class="btn-ghost" href="` + esc(appendLang("/bot/admin/bot", lang)) + `">` + esc(t(lang, "Bot接続を確認", "Check Bot Connection")) + `</a>`
+	return `<div class="user-linking-lookup-error notice notice-warning" role="status"><div class="user-linking-lookup-copy"><strong>` + esc(title) + `</strong><p>` + esc(explanation) + `</p></div>` + action + `<details class="advanced-details"><summary>` + esc(t(lang, "診断の詳細", "Diagnostic details")) + `</summary><p class="field-help">` + esc(detail) + `</p></details></div>`
 }
 
 func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.DB, user *model.UserMap) {

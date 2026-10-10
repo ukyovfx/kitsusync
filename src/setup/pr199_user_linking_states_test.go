@@ -111,6 +111,28 @@ func TestPR199UserLinkingDiscordFailureIsNotZeroGuilds(t *testing.T) {
 	}
 }
 
+func TestDiscordMemberLookupFailureHasOneLocalizedBotActionAndCollapsedDiagnostics(t *testing.T) {
+	for _, lang := range []string{"ja", "en"} {
+		body := globalDiscordMemberLoadMessage(lang, &discordMemberListFailure{
+			Kind:      discordMemberFailureMalformed,
+			Technical: "Discord member list response was malformed",
+			Status:    http.StatusBadGateway,
+		})
+		if !strings.Contains(body, `class="user-linking-lookup-error notice notice-warning"`) {
+			t.Errorf("%s member lookup failure is missing the compact localized error surface", lang)
+		}
+		if got := strings.Count(body, `href="/bot/admin/bot?lang=`); got != 1 {
+			t.Errorf("%s member lookup failure has %d Bot connection actions, want one", lang, got)
+		}
+		if !strings.Contains(body, `<details class="advanced-details"><summary>`) || strings.Contains(body, `href="/bot/admin/projects?lang=`) {
+			t.Errorf("%s member lookup failure must keep technical details collapsed and offer the Bot connection action", lang)
+		}
+		if strings.Contains(body, "No Discord users are available") || strings.Contains(body, "選択できるDiscordユーザーがありません") {
+			t.Errorf("%s lookup failure was misrepresented as a successful empty directory", lang)
+		}
+	}
+}
+
 func TestPR199UserLinkingZeroGuildsIsSuccessfulEmpty(t *testing.T) {
 	db := pr199UserLinkingDB(t, http.StatusOK, `[{"id":"person-1","full_name":"Person One","email":"one@example.test","active":true}]`)
 	installPR199DiscordReplies(t, map[string]pr199DiscordReply{
