@@ -185,6 +185,26 @@ func TestCSRFProtectionOriginAndRefererValidation(t *testing.T) {
 	}
 }
 
+func TestSameOriginRefererAllowsPathAndQueryButRejectsUnsafeOrigins(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		candidate string
+		want      bool
+	}{
+		{name: "same origin path and query", candidate: "http://127.0.0.1:18091/bot/admin/projects?lang=ja", want: true},
+		{name: "cross origin", candidate: "http://evil.example/bot/admin?lang=ja"},
+		{name: "changed port", candidate: "http://127.0.0.1:18092/bot/admin"},
+		{name: "userinfo", candidate: "http://admin@example.com/bot/admin"},
+		{name: "malformed escape", candidate: "http://127.0.0.1:18091/%zz"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameOriginReferer(tc.candidate, "http://127.0.0.1:18091"); got != tc.want {
+				t.Fatalf("sameOriginReferer(%q)=%v want %v", tc.candidate, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCSRFProtectionLeavesGETAndUnauthenticatedRequestsUnchanged(t *testing.T) {
 	resetSessions()
 	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodOptions} {

@@ -363,6 +363,10 @@ func deleteProjectConnectionOnlyIfNoWebhooks(kitsuProjectID string, db *gorm.DB)
 }
 
 func deleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
+	return deleteProjectConnectionOnlyForMutation(kitsuProjectID, db, "")
+}
+
+func deleteProjectConnectionOnlyForMutation(kitsuProjectID string, db *gorm.DB, allowedMutationToken string) error {
 	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
 	if kitsuProjectID == "" {
 		return fmt.Errorf("empty project id")
@@ -371,6 +375,18 @@ func deleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 		project := model.FindProjectByKitsuID(tx, kitsuProjectID)
 		if project == nil {
 			return fmt.Errorf("project not found: %s", kitsuProjectID)
+		}
+		if err := model.AcquireProductionNotificationWriteLock(tx, kitsuProjectID); err != nil {
+			return err
+		}
+		if err := model.EnsureProductionNotificationMutationIdle(tx, kitsuProjectID, allowedMutationToken); err != nil {
+			return err
+		}
+		if err := model.EnsureNoUnresolvedNotificationDeliveries(tx, kitsuProjectID); err != nil {
+			return err
+		}
+		if err := model.EnsureNoUnresolvedManagedChannelDeletions(tx, kitsuProjectID); err != nil {
+			return err
 		}
 		if err := model.DeleteProjectScopedData(tx, project.ID); err != nil {
 			return fmt.Errorf("db delete project-scoped data: %w", err)
@@ -773,7 +789,35 @@ func deleteProjectWebhookSerialized(db *gorm.DB, webhookID uint) error {
 		return err
 	}
 	defer unlockApply()
-	return db.Delete(&model.ProjectWebhook{}, webhook.ID).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := model.AcquireProductionNotificationWriteLock(tx, webhook.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := model.EnsureProductionNotificationMutationIdle(tx, webhook.KitsuProjectID, ""); err != nil {
+			return err
+		}
+		if err := model.EnsureNoUnresolvedNotificationDeliveries(tx, webhook.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := model.EnsureNoUnresolvedManagedChannelDeletions(tx, webhook.KitsuProjectID); err != nil {
+			return err
+		}
+		var routeCount int64
+		if err := tx.Model(&model.ProductionNotificationRoute{}).Where("production_id = ? AND destination_webhook_id = ?", webhook.KitsuProjectID, webhook.ID).Count(&routeCount).Error; err != nil {
+			return err
+		}
+		if routeCount != 0 {
+			return model.ErrChannelDeletionConflict
+		}
+		result := tx.Where("id = ? AND kitsu_project_id = ?", webhook.ID, webhook.KitsuProjectID).Delete(&model.ProjectWebhook{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func DeleteProjectChannel(db *gorm.DB, botToken string, webhookID uint) error {
@@ -782,12 +826,48 @@ func DeleteProjectChannel(db *gorm.DB, botToken string, webhookID uint) error {
 		return err
 	}
 	defer unlockApply()
-	if webhook.DiscordChannelID != "" {
-		if err := deleteProjectChannelOnDiscord(webhook.DiscordChannelID, botToken); err != nil {
-			return err
+	project := model.FindProjectByKitsuID(db, webhook.KitsuProjectID)
+	if project == nil || strings.TrimSpace(webhook.DiscordChannelID) == "" {
+		return fmt.Errorf("managed channel ownership is unavailable")
+	}
+	var sameChannelRows int64
+	if err := db.Model(&model.ProjectWebhook{}).Where("kitsu_project_id = ? AND discord_channel_id = ?", webhook.KitsuProjectID, webhook.DiscordChannelID).Count(&sameChannelRows).Error; err != nil {
+		return err
+	}
+	if sameChannelRows != 1 {
+		return fmt.Errorf("managed channel ownership is ambiguous")
+	}
+	allowed, err := model.CanDeleteProjectWebhookWithoutRemovingLastRoute(db, webhook.KitsuProjectID, webhook.ID)
+	if err != nil || !allowed {
+		return fmt.Errorf("deleting this channel would remove the last notification route")
+	}
+	discordWebhookID, err := discordWebhookID(webhook.WebhookURL)
+	if err != nil {
+		return fmt.Errorf("managed webhook identity is incomplete")
+	}
+	tombstone, tombstoneErr := model.FindManagedChannelDeletion(db, webhook.ID)
+	if tombstoneErr != nil {
+		return fmt.Errorf("managed channel recovery state could not be read")
+	}
+	resume := tombstone != nil && tombstone.Disposition != model.ChannelDeletionComplete && tombstone.ProductionID == webhook.KitsuProjectID && tombstone.GuildID == project.DiscordGuildID && tombstone.ChannelID == webhook.DiscordChannelID && tombstone.DiscordWebhookID == discordWebhookID
+	if tombstone != nil && tombstone.Disposition != model.ChannelDeletionComplete && !resume {
+		return model.ErrChannelDeletionConflict
+	}
+	if !resume {
+		if err := verifyCurrentRoutingOwnedChannel(*project, *webhook, db); err != nil {
+			return fmt.Errorf("managed channel ownership could not be verified")
 		}
 	}
-	return model.DeleteProjectWebhooksByChannelName(db, webhook.KitsuProjectID, webhook.ChannelName)
+	if err := model.BeginManagedChannelDeletion(db, webhook.KitsuProjectID, webhook.ID, project.DiscordGuildID, webhook.DiscordChannelID, discordWebhookID, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := deleteProjectChannelOnDiscord(webhook.DiscordChannelID, botToken); err != nil {
+		if stateErr := model.RecordManagedChannelDeletionFailure(db, webhook.ID, "discord_channel_delete_failed"); stateErr != nil {
+			return fmt.Errorf("Discord deletion failed and its recovery state could not be recorded")
+		}
+		return err
+	}
+	return model.FinalizeManagedChannelDeletion(db, webhook.ID, time.Now().UTC())
 }
 
 func adminProjectsPathFor(r *http.Request) string {

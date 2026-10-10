@@ -1121,19 +1121,44 @@ func globalUserForKitsuPerson(users []model.UserMap, person kitsu.Person) *model
 			}
 		}
 	}
-	if email := strings.ToLower(strings.TrimSpace(person.Email)); email != "" {
+	// Email/name fallback is retained only for legacy rows without a stable
+	// Kitsu Person ID. A row tied to a different Person must never inherit its
+	// Discord identity through reused names or email addresses.
+	legacyMatch := func(matches func(model.UserMap) bool) (*model.UserMap, bool) {
+		var candidate *model.UserMap
+		matched := false
 		for i := range users {
-			if strings.ToLower(strings.TrimSpace(users[i].KitsuEmail)) == email {
-				return &users[i]
+			if !matches(users[i]) {
+				continue
 			}
+			matched = true
+			if strings.TrimSpace(users[i].KitsuID) != "" {
+				// Even if an identityless row also matches, a stable conflicting
+				// identity makes this fallback ambiguous and unsafe.
+				return nil, true
+			}
+			if candidate == nil {
+				candidate = &users[i]
+				continue
+			}
+			if strings.TrimSpace(candidate.DiscordID) != strings.TrimSpace(users[i].DiscordID) {
+				return nil, true
+			}
+		}
+		return candidate, matched
+	}
+	if email := strings.ToLower(strings.TrimSpace(person.Email)); email != "" {
+		if user, matched := legacyMatch(func(user model.UserMap) bool {
+			return strings.ToLower(strings.TrimSpace(user.KitsuEmail)) == email
+		}); matched {
+			return user
 		}
 	}
 	if name := strings.ToLower(kitsuPersonDisplayName(person)); name != "" {
-		for i := range users {
-			if strings.ToLower(strings.TrimSpace(users[i].KitsuName)) == name {
-				return &users[i]
-			}
-		}
+		user, _ := legacyMatch(func(user model.UserMap) bool {
+			return strings.ToLower(strings.TrimSpace(user.KitsuName)) == name
+		})
+		return user
 	}
 	return nil
 }
@@ -1381,6 +1406,13 @@ func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request,
 		return false
 	}
 	project := model.FindProjectByKitsuID(db, strings.TrimSpace(r.FormValue("project_id")))
+	if project == nil || model.IsValidationOnlyProject(db, project.KitsuProjectID) {
+		http.Error(w, "Production is not writable", http.StatusForbidden)
+		return true
+	}
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
+	defer unlockApply()
+	project = model.FindProjectByKitsuID(db, project.KitsuProjectID)
 	if project == nil || model.IsValidationOnlyProject(db, project.KitsuProjectID) {
 		http.Error(w, "Production is not writable", http.StatusForbidden)
 		return true
@@ -1973,7 +2005,7 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	}
 	items := []pipelineHealthItem{
 		{label: t(lang, "イベント監視", "Event monitoring"), value: pipelineProcessingValue(lang, stats), class: pipelineProcessingClass(stats), explanation: pipelineProcessingHint(lang, stats, readiness), details: pipelineProcessingDetails(lang, stats), detailsLabel: t(lang, "観測診断", "Observation diagnostics"), action: eventAction, actionLabel: eventActionLabel},
-		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats), detailsLabel: t(lang, "通知診断", "Notification diagnostics"), action: notificationAction, actionLabel: notificationActionLabel},
+		{label: t(lang, "通知処理", "Notification processing"), value: pipelineNotificationValue(lang, readiness), class: map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], explanation: pipelineNotificationHint(lang, readiness), details: pipelineNotificationDetails(lang, stats, db), detailsLabel: t(lang, "通知診断", "Notification diagnostics"), action: notificationAction, actionLabel: notificationActionLabel},
 		{label: t(lang, "内部データ", "Internal data"), value: t(lang, "利用可能", "Available"), class: "success"},
 		{label: t(lang, "接続・ルーティング整合性", "Connection / routing integrity"), value: pipelineRoutingValue(lang, readiness), class: map[bool]string{true: "success", false: "warning"}[readiness.RoutingReady], explanation: pipelineRoutingHint(lang, readiness), details: pipelineRoutingDetails(lang, readiness, db), detailsLabel: t(lang, "接続・ルーティング診断", "Connection and routing diagnostics"), action: routingAction, actionLabel: routingActionLabel},
 	}
@@ -2621,11 +2653,30 @@ func pipelineNotificationHint(lang string, readiness SharedBotRuntimeReadiness) 
 	return readinessViewFor(lang, nil, readiness).Hint
 }
 
-func pipelineNotificationDetails(lang string, stats RuntimeSnapshot) string {
-	if stats.SendSuccessTotal == 0 && stats.SendFailureTotal == 0 {
-		return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "成功", "Successful")) + `</dt><dd>0</dd></div><div><dt>` + esc(t(lang, "失敗", "Failed")) + `</dt><dd>0</dd></div></dl>`
+func pipelineNotificationDetails(lang string, stats RuntimeSnapshot, db *gorm.DB) string {
+	var rows strings.Builder
+	rows.WriteString(`<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "成功", "Successful")) + `</dt><dd>` + strconv.FormatInt(stats.SendSuccessTotal, 10) + `</dd></div><div><dt>` + esc(t(lang, "失敗", "Failed")) + `</dt><dd>` + strconv.FormatInt(stats.SendFailureTotal, 10) + `</dd></div>`)
+	deliveries, err := model.ListUnresolvedNotificationDeliveries(db, 50)
+	if err != nil {
+		rows.WriteString(`<div><dt>` + esc(t(lang, "未解決の通知状態", "Unresolved delivery state")) + `</dt><dd>` + esc(t(lang, "確認不可", "Unavailable")) + `</dd></div>`)
+	} else if len(deliveries) == 0 {
+		rows.WriteString(`<div><dt>` + esc(t(lang, "未解決の通知状態", "Unresolved delivery state")) + `</dt><dd>0</dd></div>`)
+	} else {
+		rows.WriteString(`<div><dt>` + esc(t(lang, "未解決の通知状態", "Unresolved delivery state")) + `</dt><dd>` + strconv.Itoa(len(deliveries)) + `</dd></div>`)
+		for _, item := range deliveries {
+			label := item.Disposition
+			if item.Cleanup {
+				label = t(lang, "旧メッセージ削除待ち", "Prior-message cleanup pending")
+			}
+			detail := label
+			if item.FailureClass != "" {
+				detail += " · " + item.FailureClass
+			}
+			rows.WriteString(`<div><dt><code>` + esc(item.EventID) + `</code></dt><dd>` + esc(detail) + `</dd></div>`)
+		}
 	}
-	return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "成功", "Successful")) + `</dt><dd>` + strconv.FormatInt(stats.SendSuccessTotal, 10) + `</dd></div><div><dt>` + esc(t(lang, "失敗", "Failed")) + `</dt><dd>` + strconv.FormatInt(stats.SendFailureTotal, 10) + `</dd></div></dl>`
+	rows.WriteString(`</dl>`)
+	return rows.String()
 }
 
 func pipelineRoutingDetails(lang string, readiness SharedBotRuntimeReadiness, db *gorm.DB) string {

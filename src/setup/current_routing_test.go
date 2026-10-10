@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -692,10 +693,10 @@ func TestCurrentRoutingChannelDeleteRemovesOnlyVerifiedRouteAndWebhook(t *testin
 	project := model.Project{KitsuProjectID: "routing-delete-success", Name: "Routing Delete Success", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
 	db.Create(&project)
 	model.SetSetting(db, RuntimeDiscordBotTokenKey, "test-token")
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "owned", "", "https://example.invalid/owned", "channel-1"); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "owned", "", "https://discord.com/api/webhooks/webhook-owned/token", "channel-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "remaining", "", "https://example.invalid/remaining", "channel-2"); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "remaining", "", "https://discord.com/api/webhooks/webhook-remaining/token", "channel-2"); err != nil {
 		t.Fatal(err)
 	}
 	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
@@ -703,15 +704,22 @@ func TestCurrentRoutingChannelDeleteRemovesOnlyVerifiedRouteAndWebhook(t *testin
 	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-1", TaskTypeName: "Task 1", DestinationWebhookID: webhook.ID}, {ProductionID: project.KitsuProjectID, TaskTypeID: "task-2", TaskTypeName: "Task 2", DestinationWebhookID: webhooks[1].ID}}); err != nil {
 		t.Fatal(err)
 	}
-	oldCheck, oldList, oldDelete := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel
+	oldCheck, oldList, oldDelete, oldInspect := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel, currentRoutingInspectWebhook
 	defer func() {
-		currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel = oldCheck, oldList, oldDelete
+		currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel, currentRoutingInspectWebhook = oldCheck, oldList, oldDelete, oldInspect
 	}()
 	currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
 		return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true}}
 	}
 	currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
 		return []DiscordGuildChannel{{ID: "channel-1", Type: 0, ParentID: "category-1"}}, nil
+	}
+	currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+		id, err := discordWebhookID(raw)
+		if err != nil {
+			return routingWebhookIdentity{}, false, err
+		}
+		return routingWebhookIdentity{ID: id, Type: 1, GuildID: "guild-1", ChannelID: "channel-1"}, false, nil
 	}
 	deleted := false
 	currentRoutingDeleteChannel = func(string, string) error { deleted = true; return nil }
@@ -728,6 +736,72 @@ func TestCurrentRoutingChannelDeleteRemovesOnlyVerifiedRouteAndWebhook(t *testin
 	}
 	if routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID); len(routes) != 1 || routes[0].TaskTypeID != "task-2" {
 		t.Fatalf("verified channel delete did not preserve the remaining route: %#v", routes)
+	}
+	var tombstone model.ManagedChannelDeletion
+	if err := db.Where("webhook_row_id = ?", webhook.ID).First(&tombstone).Error; err != nil || tombstone.Disposition != model.ChannelDeletionComplete {
+		t.Fatalf("successful external deletion did not finalize its tombstone: row=%+v err=%v", tombstone, err)
+	}
+}
+
+func TestCurrentRoutingChannelDeleteFailureLeavesRecoverableTombstone(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-delete-recover", Name: "Routing Delete Recover", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeDiscordBotTokenKey, "test-token")
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "owned", "", "https://discord.com/api/webhooks/webhook-owned/token", "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "remaining", "", "https://discord.com/api/webhooks/webhook-remaining/token", "channel-2"); err != nil {
+		t.Fatal(err)
+	}
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-1", DestinationWebhookID: webhooks[0].ID}, {ProductionID: project.KitsuProjectID, TaskTypeID: "task-2", DestinationWebhookID: webhooks[1].ID}}); err != nil {
+		t.Fatal(err)
+	}
+	oldCheck, oldList, oldDelete, oldInspect := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel, currentRoutingInspectWebhook
+	defer func() {
+		currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel, currentRoutingInspectWebhook = oldCheck, oldList, oldDelete, oldInspect
+	}()
+	currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
+		return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true}}
+	}
+	currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
+		return []DiscordGuildChannel{{ID: "channel-1", Type: 0, ParentID: "category-1"}}, nil
+	}
+	currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+		id, err := discordWebhookID(raw)
+		return routingWebhookIdentity{ID: id, Type: 1, GuildID: "guild-1", ChannelID: "channel-1"}, false, err
+	}
+	deleteCount := 0
+	currentRoutingDeleteChannel = func(string, string) error {
+		deleteCount++
+		if deleteCount == 1 {
+			return errors.New("synthetic Discord deletion failure")
+		}
+		return nil
+	}
+	form := url.Values{"project_id": {project.KitsuProjectID}, "webhook_id": {strconv.FormatUint(uint64(webhooks[0].ID), 10)}, "action": {"delete_current_routing_channel"}, "confirm_name": {"owned"}}
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/bot/admin/projects", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		handleCurrentIARoutingMutation(rec, req, "en", db)
+		return rec
+	}
+	if post().Code != http.StatusSeeOther {
+		t.Fatal("failed external deletion response was not returned")
+	}
+	var tombstone model.ManagedChannelDeletion
+	if err := db.Where("webhook_row_id = ?", webhooks[0].ID).First(&tombstone).Error; err != nil || tombstone.Disposition != model.ChannelDeletionNeedsHelp {
+		t.Fatalf("failed Discord delete lost recoverable tombstone: row=%+v err=%v", tombstone, err)
+	}
+	if model.FindProjectWebhookByID(db, webhooks[0].ID) == nil || len(model.ListProductionNotificationRoutes(db, project.KitsuProjectID)) != 2 {
+		t.Fatal("failed Discord deletion removed local route ownership")
+	}
+	if post().Code != http.StatusSeeOther || model.FindProjectWebhookByID(db, webhooks[0].ID) != nil || len(model.ListProductionNotificationRoutes(db, project.KitsuProjectID)) != 1 {
+		t.Fatal("retry did not converge after external deletion succeeded")
 	}
 }
 

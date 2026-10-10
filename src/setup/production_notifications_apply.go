@@ -158,7 +158,12 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		http.Error(w, `{"error":"state_unavailable"}`, http.StatusInternalServerError)
 		return true
 	}
-	if model.ProductionNotificationRevision(db, project.ID, productionID) != request.ExpectedRevision {
+	currentRevision, err := model.ProductionNotificationRevisionWithError(db, project.ID, productionID)
+	if err != nil {
+		http.Error(w, `{"error":"state_unavailable"}`, http.StatusInternalServerError)
+		return true
+	}
+	if currentRevision != request.ExpectedRevision {
 		http.Error(w, `{"error":"stale_edit"}`, http.StatusConflict)
 		return true
 	}
@@ -278,7 +283,19 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		}
 		return true
 	}
-	appliedRevision, applyErr := model.ApplyProductionNotificationState(db, project.ID, productionID, project.Name, request.ExpectedRevision, routes, request.ReviewerChanges, newWebhooks...)
+	mutationToken := ""
+	var appliedRevision string
+	var applyErr error
+	if routingChanged {
+		mutationToken, err = model.NewProductionNotificationMutationToken()
+		if err == nil {
+			appliedRevision, applyErr = model.ApplyProductionNotificationStateForExternalReorder(db, project.ID, productionID, project.Name, request.ExpectedRevision, routes, request.ReviewerChanges, mutationToken, newWebhooks...)
+		} else {
+			applyErr = err
+		}
+	} else {
+		appliedRevision, applyErr = model.ApplyProductionNotificationState(db, project.ID, productionID, project.Name, request.ExpectedRevision, routes, request.ReviewerChanges, newWebhooks...)
+	}
 	err = applyErr
 	if errors.Is(err, model.ErrProductionNotificationRevisionConflict) {
 		cleanupErr := cleanupCreated()
@@ -310,7 +327,7 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 						ids = append(ids, webhook.ID)
 					}
 				}
-				return model.RestoreProductionNotificationState(db, project.ID, productionID, appliedRevision, config, routesBefore, targetsBefore, ids...)
+				return model.RestoreProductionNotificationStateForExternalReorder(db, project.ID, productionID, appliedRevision, config, routesBefore, targetsBefore, mutationToken, ids...)
 			},
 			func() error {
 				if len(priorOrder) == 0 {
@@ -321,11 +338,20 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		)
 		var status int
 		var body map[string]string
+		var resourceErr error
 		if dbRestoreErr == nil && len(createdResources) > 0 {
-			resourceErr := cleanupCreated()
+			resourceErr = cleanupCreated()
+		}
+		mutationErr := model.FinishProductionNotificationExternalMutation(db, productionID, mutationToken, dbRestoreErr != nil || discordRestoreErr != nil || resourceErr != nil)
+		if resourceErr != nil {
 			status, body = productionNotificationRecoveryDiagnostic(dbRestoreErr, discordRestoreErr, resourceErr)
 		} else {
 			status, body = productionNotificationRecoveryDiagnostic(dbRestoreErr, discordRestoreErr)
+		}
+		if mutationErr != nil {
+			status = http.StatusInternalServerError
+			body["recovery"] = "incomplete"
+			body["mutation_recovery"] = "state_unavailable"
 		}
 		if dbRestoreErr != nil && len(createdResources) > 0 {
 			// Keep external resources when the DB restore failed: deleting them
@@ -335,6 +361,13 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(body)
 		return true
+	}
+	if routingChanged {
+		if err := model.FinishProductionNotificationExternalMutation(db, productionID, mutationToken, false); err != nil {
+			_ = model.FinishProductionNotificationExternalMutation(db, productionID, mutationToken, true)
+			http.Error(w, `{"error":"discord_order_recovery_required","recovery":"incomplete"}`, http.StatusInternalServerError)
+			return true
+		}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
 	return true

@@ -42,9 +42,13 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 		&model.ProjectUserMap{},
 		&model.ProjectCheckerMap{},
 		&model.ProjectReviewerTarget{},
+		&model.ProductionNotificationWriteLock{},
+		&model.ProductionNotificationWriteLock{},
 		&model.ProjectSetting{},
 		&model.UserMap{},
 		&model.CheckerMap{},
+		&model.NotificationDeliveryEvent{},
+		&model.ManagedChannelDeletion{},
 	); err != nil {
 		t.Fatalf("failed to migrate setup schema: %v", err)
 	}
@@ -327,6 +331,32 @@ func TestRunProjectSetup_UsesFallbackGuildIDWhenProjectInputIsBlank(t *testing.T
 	}
 	if got := strings.TrimSpace(project.DiscordGuildID); got != "fallback-guild" {
 		t.Fatalf("expected fallback guild to persist, got %q", got)
+	}
+}
+
+func TestDeleteProjectConnectionOnlyRejectsUnresolvedDeletionTombstone(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	if err := model.CreateProject(db, "tombstone-cleanup", "Tombstone Cleanup", "kitsu", "guild-1", "category-1", "en"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, "tombstone-cleanup", "channel", "task-type-1", "https://discord.com/api/webhooks/12345678901234567/synthetic-token", "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, "tombstone-cleanup")[0]
+	if err := db.Create(&model.ProductionNotificationRoute{ProductionID: "tombstone-cleanup", TaskTypeID: "task-type-1", DestinationWebhookID: webhook.ID, DestinationChannelID: "channel-1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.BeginManagedChannelDeletion(db, "tombstone-cleanup", webhook.ID, "guild-1", "channel-1", "12345678901234567", time.Now()); err == nil {
+		t.Fatal("last route deletion must remain forbidden in the single-channel path")
+	}
+	if err := db.Create(&model.ManagedChannelDeletion{WebhookRowID: webhook.ID, ProductionID: "tombstone-cleanup", GuildID: "guild-1", ChannelID: "channel-1", DiscordWebhookID: "12345678901234567", Disposition: model.ChannelDeletionNeedsHelp}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteProjectConnectionOnly("tombstone-cleanup", db); !errors.Is(err, model.ErrChannelDeletionConflict) {
+		t.Fatalf("connection cleanup erased unresolved deletion state: %v", err)
+	}
+	if model.FindProjectByKitsuID(db, "tombstone-cleanup") == nil {
+		t.Fatal("project was removed despite unresolved channel tombstone")
 	}
 }
 

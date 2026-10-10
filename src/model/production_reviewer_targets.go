@@ -53,15 +53,33 @@ func UpsertProjectReviewerTarget(db *gorm.DB, projectID uint, taskTypeID, taskTy
 		TargetKind:   kind,
 		DiscordID:    strings.TrimSpace(discordID),
 	}
-	var existing ProjectReviewerTarget
-	err := db.Where("project_id = ? AND task_type_id = ? AND target_kind = ? AND discord_id = ?", target.ProjectID, target.TaskTypeID, target.TargetKind, target.DiscordID).First(&existing).Error
-	if err == nil {
-		return db.Model(&existing).Update("task_type_name", target.TaskTypeName).Error
-	}
-	if err != gorm.ErrRecordNotFound {
-		return err
-	}
-	return db.Create(&target).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		var project Project
+		if err := tx.Select("kitsu_project_id").First(&project, projectID).Error; err != nil {
+			return err
+		}
+		if err := AcquireProductionNotificationWriteLock(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, project.KitsuProjectID, ""); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedNotificationDeliveries(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		var existing ProjectReviewerTarget
+		err := tx.Where("project_id = ? AND task_type_id = ? AND target_kind = ? AND discord_id = ?", target.ProjectID, target.TaskTypeID, target.TargetKind, target.DiscordID).First(&existing).Error
+		if err == nil {
+			return tx.Model(&existing).Update("task_type_name", target.TaskTypeName).Error
+		}
+		if err != gorm.ErrRecordNotFound {
+			return err
+		}
+		return tx.Create(&target).Error
+	})
 }
 
 func ListProjectReviewerTargets(db *gorm.DB, projectID uint) []ProjectReviewerTarget {
@@ -87,19 +105,73 @@ func DeleteProjectReviewerTarget(db *gorm.DB, projectID, targetID uint) error {
 	if db == nil || projectID == 0 || targetID == 0 {
 		return gorm.ErrInvalidData
 	}
-	return db.Where("project_id = ? AND id = ?", projectID, targetID).Delete(&ProjectReviewerTarget{}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		var project Project
+		if err := tx.Select("kitsu_project_id").First(&project, projectID).Error; err != nil {
+			return err
+		}
+		if err := AcquireProductionNotificationWriteLock(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, project.KitsuProjectID, ""); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedNotificationDeliveries(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		return tx.Where("project_id = ? AND id = ?", projectID, targetID).Delete(&ProjectReviewerTarget{}).Error
+	})
 }
 
 func DeleteProjectReviewerTargetsForTaskType(db *gorm.DB, projectID uint, taskTypeID string) error {
 	if db == nil || projectID == 0 || strings.TrimSpace(taskTypeID) == "" {
 		return gorm.ErrInvalidData
 	}
-	return db.Where("project_id = ? AND task_type_id = ?", projectID, strings.TrimSpace(taskTypeID)).Delete(&ProjectReviewerTarget{}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		var project Project
+		if err := tx.Select("kitsu_project_id").First(&project, projectID).Error; err != nil {
+			return err
+		}
+		if err := AcquireProductionNotificationWriteLock(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, project.KitsuProjectID, ""); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedNotificationDeliveries(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		return tx.Where("project_id = ? AND task_type_id = ?", projectID, strings.TrimSpace(taskTypeID)).Delete(&ProjectReviewerTarget{}).Error
+	})
 }
 
 func DeleteProjectReviewerTargetsForDiscordUser(db *gorm.DB, projectID uint, discordID string) error {
 	if db == nil || projectID == 0 || strings.TrimSpace(discordID) == "" {
 		return gorm.ErrInvalidData
 	}
-	return db.Where("project_id = ? AND target_kind = ? AND discord_id = ?", projectID, ReviewerTargetUser, strings.TrimSpace(discordID)).Delete(&ProjectReviewerTarget{}).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		var project Project
+		if err := tx.Select("kitsu_project_id").First(&project, projectID).Error; err != nil {
+			return err
+		}
+		if err := AcquireProductionNotificationWriteLock(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, project.KitsuProjectID, ""); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedNotificationDeliveries(tx, project.KitsuProjectID); err != nil {
+			return err
+		}
+		return tx.Where("project_id = ? AND target_kind = ? AND discord_id = ?", projectID, ReviewerTargetUser, strings.TrimSpace(discordID)).Delete(&ProjectReviewerTarget{}).Error
+	})
 }

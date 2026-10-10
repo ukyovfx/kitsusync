@@ -386,7 +386,7 @@ func sameOrigin(candidate, expected string) bool {
 
 func sameOriginReferer(candidate, expected string) bool {
 	candidateURL, err := url.Parse(candidate)
-	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" || candidateURL.User != nil || candidateURL.RawQuery != "" || candidateURL.Fragment != "" {
+	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" || candidateURL.User != nil || candidateURL.Opaque != "" {
 		return false
 	}
 	return sameOriginURL(candidateURL, expected)

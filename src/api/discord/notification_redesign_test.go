@@ -371,7 +371,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	}
 	KitsuPublicURLResolver = func() string { return "https://kitsu.example.com" }
 	GoogleDriveURLResolver = nil
-	UserMapResolver = func(_, _, _ string) string { return "101" }
+	UserMapResolver = func(_, _, _, _ string) string { return "101" }
 	t.Cleanup(func() {
 		KitsuPublicURLResolver = oldPublicURLResolver
 		GoogleDriveURLResolver = oldDriveURLResolver

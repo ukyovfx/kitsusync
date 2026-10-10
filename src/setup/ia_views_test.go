@@ -27,7 +27,7 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -62,6 +62,38 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 	if strings.Contains(body, "name=\"guild_id\"") {
 		t.Fatal("selected Production view exposes manual server ID editing")
+	}
+}
+
+func TestPipelineNotificationDiagnosticsExposeSafeDeliveryDisposition(t *testing.T) {
+	db := newIAViewDB(t)
+	event := model.NotificationDeliveryEvent{
+		EventID: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+		TaskID:  "task-synthetic", ProductionID: "production-synthetic", TaskTypeID: "tt-synthetic", TaskStatus: "WFA",
+		PayloadJSON: `{"content":"private synthetic content"}`, PayloadSHA256: strings.Repeat("a", 64),
+		WebhookRowID: 1, DestinationGuildID: "guild-synthetic", DestinationChannelID: "channel-synthetic", DestinationWebhookID: "webhook-synthetic", DestinationFingerprint: strings.Repeat("b", 64),
+		Disposition: model.DeliveryUnknown, FailureClass: "discord_server_error",
+	}
+	if err := db.Create(&event).Error; err != nil {
+		t.Fatal(err)
+	}
+	body := pipelineNotificationDetails("en", RuntimeSnapshot{}, db)
+	for _, want := range []string{"1234567890ab", "unknown", "discord_server_error"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("safe delivery diagnostics missing %q: %s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"private synthetic content", "webhook-synthetic", "token"} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("diagnostic exposed sensitive value %q", forbidden)
+		}
+	}
+}
+
+func TestPipelineNotificationDiagnosticsDoNotTreatReadFailureAsEmpty(t *testing.T) {
+	body := pipelineNotificationDetails("en", RuntimeSnapshot{}, nil)
+	if !strings.Contains(body, "Unavailable") {
+		t.Fatalf("journal read failure appeared as an empty healthy journal: %s", body)
 	}
 }
 
@@ -848,6 +880,44 @@ func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
 	}
 	if strings.Count(body, "<h1") != 1 {
 		t.Fatalf("global mapping should have exactly one h1, got %d", strings.Count(body, "<h1"))
+	}
+}
+
+func TestGlobalUserForKitsuPersonDoesNotCrossStablePersonIDs(t *testing.T) {
+	users := []model.UserMap{{KitsuID: "old-person", KitsuName: "Shared Name", KitsuEmail: "shared@example.invalid", DiscordID: "123456789012345678"}}
+	person := kitsu.Person{ID: "new-person", FullName: "Shared Name", Email: "shared@example.invalid"}
+	if got := globalUserForKitsuPerson(users, person); got != nil {
+		t.Fatalf("conflicting stable Person ID must not inherit mapping: %+v", got)
+	}
+}
+
+func TestGlobalUserForKitsuPersonAllowsUnambiguousIdentitylessLegacyFallback(t *testing.T) {
+	users := []model.UserMap{{KitsuName: "Legacy Person", KitsuEmail: "legacy@example.invalid", DiscordID: "123456789012345678"}}
+	person := kitsu.Person{ID: "current-person", FullName: "Legacy Person", Email: "legacy@example.invalid"}
+	if got := globalUserForKitsuPerson(users, person); got == nil || got.DiscordID != users[0].DiscordID {
+		t.Fatalf("identityless legacy mapping should remain available, got %+v", got)
+	}
+}
+
+func TestGlobalUserForKitsuPersonRejectsLegacyFallbackWhenIdentityConflicts(t *testing.T) {
+	users := []model.UserMap{
+		{KitsuID: "different-person", KitsuEmail: "shared@example.invalid", DiscordID: "123456789012345678"},
+		{KitsuEmail: "shared@example.invalid", DiscordID: "123456789012345679"},
+	}
+	person := kitsu.Person{ID: "current-person", Email: "shared@example.invalid"}
+	if got := globalUserForKitsuPerson(users, person); got != nil {
+		t.Fatalf("identity conflict must block otherwise matching legacy fallback: %+v", got)
+	}
+}
+
+func TestGlobalUserForKitsuPersonRejectsAmbiguousIdentitylessFallback(t *testing.T) {
+	users := []model.UserMap{
+		{KitsuName: "Same Name", DiscordID: "123456789012345678"},
+		{KitsuName: "Same Name", DiscordID: "123456789012345679"},
+	}
+	person := kitsu.Person{FullName: "Same Name"}
+	if got := globalUserForKitsuPerson(users, person); got != nil {
+		t.Fatalf("ambiguous legacy fallback must fail closed, got %+v", got)
 	}
 }
 
@@ -2527,6 +2597,47 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	}
 	if len(model.ListProjectReviewerTargets(db, project.ID)) != 0 || len(model.ListProjectCheckerMaps(db, project.ID)) != 1 {
 		t.Fatal("reset removed legacy ProjectCheckerMap rows or left explicit targets")
+	}
+}
+
+func TestProductionReviewerMutationWaitsForNotificationApplyLock(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "reviewer-mutation-lock", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldTaskTypes := reviewerTaskTypesForProduction
+	calledTaskTypes := make(chan struct{}, 1)
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+		calledTaskTypes <- struct{}{}
+		return nil
+	}
+	t.Cleanup(func() { reviewerTaskTypesForProduction = oldTaskTypes })
+
+	unlock := lockProductionNotificationApply(project.KitsuProjectID)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/bot/admin/projects", strings.NewReader("action=reset_production_reviewers&project_id=reviewer-mutation-lock&task_type_id=task-comp"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		handleCurrentProductionUserMutation(httptest.NewRecorder(), req, db)
+	}()
+	select {
+	case <-calledTaskTypes:
+		unlock()
+		t.Fatal("Reviewer mutation began validation while Apply owned the Production lock")
+	case <-time.After(30 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-calledTaskTypes:
+	case <-time.After(time.Second):
+		t.Fatal("Reviewer mutation did not resume after Apply released the lock")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Reviewer mutation did not finish after lock release")
 	}
 }
 

@@ -79,7 +79,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		&model.Task{}, &model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{},
 		&model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{},
 		&model.UserMap{}, &model.CheckerMap{}, &model.Setting{}, &model.AdminSession{}, &model.AuditLog{},
-		&model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProjectSetting{},
+		&model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProjectSetting{},
 	); err != nil {
 		t.Fatal("migrate disposable acceptance database")
 	}

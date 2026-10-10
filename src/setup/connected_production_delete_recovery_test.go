@@ -77,9 +77,9 @@ func TestStaleProductionDeleteBypassesOnlyRuntimeReadinessGate(t *testing.T) {
 func TestConnectedProductionStrongDeleteHTTPStatusReflectsLocalCleanup(t *testing.T) {
 	t.Run("healthy cleanup returns success and removes exact rows", func(t *testing.T) {
 		project, db, _ := newStrongDeleteFixture(t, 1, true)
-		// Strong delete already holds the Production lock; use the unlocked
-		// transaction helper just like the production default callback.
-		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, deleteProjectConnectionOnly)
+		// Strong delete already holds the Production barrier, so cleanup must
+		// present the same durable operation token as the production callback.
+		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, deleteProjectConnectionOnlyForMutation)
 
 		form := url.Values{"action": {"execute_validated_channel_delete"}, "project_id": {project.KitsuProjectID}, "confirm_text": {"delete"}}
 		request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader(form.Encode()))
@@ -95,7 +95,7 @@ func TestConnectedProductionStrongDeleteHTTPStatusReflectsLocalCleanup(t *testin
 
 	t.Run("local cleanup failure is not false HTTP success", func(t *testing.T) {
 		project, db, _ := newStrongDeleteFixture(t, 1, true)
-		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, func(string, *gorm.DB) error {
+		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, func(string, *gorm.DB, string) error {
 			return gorm.ErrInvalidDB
 		})
 

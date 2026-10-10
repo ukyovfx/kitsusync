@@ -976,6 +976,9 @@ func DeleteChannel(channelID, botToken string) error {
 	if err != nil {
 		return err
 	}
+	if status == http.StatusNotFound {
+		return nil
+	}
 	if status >= 400 {
 		return discordBotAPIError("discord channel delete failed", status, respBody)
 	}

@@ -231,7 +231,8 @@ func handleCurrentIARoutingChannelDelete(w http.ResponseWriter, r *http.Request,
 		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
 		return true
 	}
-	if !canDeleteWebhookWithoutRemovingLastRoute(db, *project, webhook.ID) {
+	canDelete, countErr := model.CanDeleteProjectWebhookWithoutRemovingLastRoute(db, project.KitsuProjectID, webhook.ID)
+	if countErr != nil || !canDelete {
 		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
 		return true
 	}
@@ -239,15 +240,23 @@ func handleCurrentIARoutingChannelDelete(w http.ResponseWriter, r *http.Request,
 		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
 		return true
 	}
+	discordWebhookID, identityErr := discordWebhookID(webhook.WebhookURL)
+	if identityErr != nil {
+		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
+		return true
+	}
+	if err := model.BeginManagedChannelDeletion(db, project.KitsuProjectID, webhook.ID, project.DiscordGuildID, webhook.DiscordChannelID, discordWebhookID, time.Now().UTC()); err != nil {
+		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
+		return true
+	}
 	if err := currentRoutingDeleteChannel(webhook.DiscordChannelID, storedRuntimeDiscordBotToken(db)); err != nil {
+		if stateErr := model.RecordManagedChannelDeletionFailure(db, webhook.ID, "discord_channel_delete_failed"); stateErr != nil {
+			slog.Error("Managed channel deletion failure could not be recorded", "error_class", "channel_deletion_state_write_failed")
+		}
 		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
 		return true
 	}
-	if err := db.Where("destination_webhook_id = ?", webhook.ID).Delete(&model.ProductionNotificationRoute{}).Error; err != nil {
-		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
-		return true
-	}
-	if err := db.Delete(&model.ProjectWebhook{}, webhook.ID).Error; err != nil {
+	if err := model.FinalizeManagedChannelDeletion(db, webhook.ID, time.Now().UTC()); err != nil {
 		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
 		return true
 	}
@@ -256,16 +265,8 @@ func handleCurrentIARoutingChannelDelete(w http.ResponseWriter, r *http.Request,
 }
 
 func canDeleteWebhookWithoutRemovingLastRoute(db *gorm.DB, project model.Project, webhookID uint) bool {
-	routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
-	if len(routes) == 0 {
-		return true
-	}
-	for _, route := range routes {
-		if route.DestinationWebhookID != webhookID {
-			return true
-		}
-	}
-	return false
+	allowed, err := model.CanDeleteProjectWebhookWithoutRemovingLastRoute(db, project.KitsuProjectID, webhookID)
+	return err == nil && allowed
 }
 
 func verifyCurrentRoutingOwnedChannel(project model.Project, webhook model.ProjectWebhook, db *gorm.DB) error {
@@ -283,6 +284,14 @@ func verifyCurrentRoutingOwnedChannel(project model.Project, webhook model.Proje
 	}
 	for _, channel := range channels {
 		if channel.ID == webhook.DiscordChannelID && channel.Type == 0 && channel.ParentID == project.DiscordCategoryID {
+			webhookID, err := discordWebhookID(webhook.WebhookURL)
+			if err != nil {
+				return fmt.Errorf("managed webhook identity is incomplete")
+			}
+			identity, missing, err := currentRoutingInspectWebhook(webhook.WebhookURL)
+			if err != nil || missing || !routingWebhookMatches(identity, webhookID, project.DiscordGuildID, webhook.DiscordChannelID) {
+				return fmt.Errorf("managed webhook identity could not be verified")
+			}
 			return nil
 		}
 	}

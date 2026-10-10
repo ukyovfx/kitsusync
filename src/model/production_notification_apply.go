@@ -1,6 +1,7 @@
 package model
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -35,13 +37,22 @@ type notificationTargetRevision struct {
 	DiscordID  string `json:"discord_id"`
 }
 
-func productionNotificationRevision(db *gorm.DB, projectID uint, productionID string) string {
-	routes := ListProductionNotificationRoutes(db, productionID)
+func productionNotificationRevision(db *gorm.DB, projectID uint, productionID string) (string, error) {
+	if db == nil {
+		return "", gorm.ErrInvalidDB
+	}
+	var routes []ProductionNotificationRoute
+	if err := db.Where("production_id = ?", strings.TrimSpace(productionID)).Order("id asc").Find(&routes).Error; err != nil {
+		return "", err
+	}
 	canonicalRoutes := make([]notificationRouteRevision, 0, len(routes))
 	for _, route := range routes {
 		canonicalRoutes = append(canonicalRoutes, notificationRouteRevision{strings.TrimSpace(route.TaskTypeID), route.DestinationWebhookID})
 	}
-	targets := ListProjectReviewerTargets(db, projectID)
+	var targets []ProjectReviewerTarget
+	if err := db.Where("project_id = ?", projectID).Order("id asc").Find(&targets).Error; err != nil {
+		return "", err
+	}
 	canonicalTargets := make([]notificationTargetRevision, 0, len(targets))
 	for _, target := range targets {
 		canonicalTargets = append(canonicalTargets, notificationTargetRevision{strings.TrimSpace(target.TaskTypeID), target.TargetKind, strings.TrimSpace(target.DiscordID)})
@@ -61,27 +72,80 @@ func productionNotificationRevision(db *gorm.DB, projectID uint, productionID st
 		Targets []notificationTargetRevision `json:"targets"`
 	}{canonicalRoutes, canonicalTargets})
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func ProductionNotificationRevision(db *gorm.DB, projectID uint, productionID string) string {
-	if db == nil {
-		return ""
-	}
+	revision, _ := ProductionNotificationRevisionWithError(db, projectID, productionID)
+	return revision
+}
+
+// ProductionNotificationRevisionWithError computes the canonical routing
+// revision and propagates storage failures instead of treating them as an
+// empty configuration.
+func ProductionNotificationRevisionWithError(db *gorm.DB, projectID uint, productionID string) (string, error) {
 	return productionNotificationRevision(db, projectID, productionID)
 }
 
 // ApplyProductionNotificationState atomically replaces route state, applies
 // additive User/Role deltas, and removes targets belonging to deleted routes.
 func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID, productionName, expectedRevision string, routes []ProductionNotificationRoute, changes []ProductionReviewerDelta, createdWebhooks ...*ProjectWebhook) (string, error) {
+	return applyProductionNotificationState(db, projectID, productionID, productionName, expectedRevision, routes, changes, "", createdWebhooks...)
+}
+
+// ApplyProductionNotificationStateForExternalReorder commits the new routing
+// revision together with a durable dispatch barrier. The caller must clear or
+// quarantine that barrier after Discord ordering/compensation finishes.
+func ApplyProductionNotificationStateForExternalReorder(db *gorm.DB, projectID uint, productionID, productionName, expectedRevision string, routes []ProductionNotificationRoute, changes []ProductionReviewerDelta, mutationToken string, createdWebhooks ...*ProjectWebhook) (string, error) {
+	if strings.TrimSpace(mutationToken) == "" {
+		return "", gorm.ErrInvalidData
+	}
+	return applyProductionNotificationState(db, projectID, productionID, productionName, expectedRevision, routes, changes, mutationToken, createdWebhooks...)
+}
+
+func NewProductionNotificationMutationToken() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(raw[:]), nil
+}
+
+func applyProductionNotificationState(db *gorm.DB, projectID uint, productionID, productionName, expectedRevision string, routes []ProductionNotificationRoute, changes []ProductionReviewerDelta, mutationToken string, createdWebhooks ...*ProjectWebhook) (string, error) {
 	if db == nil || projectID == 0 || strings.TrimSpace(productionID) == "" || strings.TrimSpace(expectedRevision) == "" {
 		return "", gorm.ErrInvalidData
 	}
 	productionID = strings.TrimSpace(productionID)
 	var newRevision string
 	err := db.Transaction(func(tx *gorm.DB) error {
-		if got := productionNotificationRevision(tx, projectID, productionID); got != expectedRevision {
+		if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedNotificationDeliveries(tx, productionID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, productionID, ""); err != nil {
+			return err
+		}
+		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, productionID); err != nil {
+			return err
+		}
+		got, err := productionNotificationRevision(tx, projectID, productionID)
+		if err != nil {
+			return err
+		}
+		if got != expectedRevision {
 			return ErrProductionNotificationRevisionConflict
+		}
+		if mutationToken != "" {
+			now := time.Now().UTC()
+			result := tx.Model(&ProductionNotificationWriteLock{}).Where("production_id = ? AND mutation_state = ''", productionID).Updates(map[string]any{"mutation_state": NotificationMutationReordering, "mutation_token": mutationToken, "mutation_at": now})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrNotificationMutationRecoveryRequired
+			}
 		}
 		webhooksByTask := make(map[string]*ProjectWebhook, len(createdWebhooks))
 		for _, webhook := range createdWebhooks {
@@ -125,6 +189,15 @@ func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID,
 		if issues := ValidateProductionNotificationConfig(tx, productionID, routes); len(issues) != 0 {
 			return gorm.ErrInvalidData
 		}
+		for _, route := range routes {
+			var tombstones int64
+			if err := tx.Model(&ManagedChannelDeletion{}).Where("webhook_row_id = ? AND disposition <> ?", route.DestinationWebhookID, ChannelDeletionComplete).Count(&tombstones).Error; err != nil {
+				return err
+			}
+			if tombstones > 0 {
+				return ErrChannelDeletionConflict
+			}
+		}
 		for _, delta := range changes {
 			if _, ok := live[strings.TrimSpace(delta.TaskTypeID)]; !ok {
 				return ErrReviewerDeltaForRemovedRoute
@@ -133,7 +206,10 @@ func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID,
 		if len(routes) == 0 {
 			return gorm.ErrInvalidData
 		}
-		oldRoutes := ListProductionNotificationRoutes(tx, productionID)
+		var oldRoutes []ProductionNotificationRoute
+		if err := tx.Where("production_id = ?", productionID).Order("id asc").Find(&oldRoutes).Error; err != nil {
+			return err
+		}
 		oldByID := make(map[string]struct{}, len(oldRoutes))
 		for _, route := range oldRoutes {
 			oldByID[route.TaskTypeID] = struct{}{}
@@ -145,6 +221,8 @@ func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID,
 			config.CreatedAt = existing.CreatedAt
 			config.ProductionName = existing.ProductionName
 			config.Enabled = existing.Enabled
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
 		}
 		if err := tx.Save(&config).Error; err != nil {
 			return err
@@ -193,7 +271,10 @@ func ApplyProductionNotificationState(db *gorm.DB, projectID uint, productionID,
 				}
 			}
 		}
-		newRevision = productionNotificationRevision(tx, projectID, productionID)
+		newRevision, err = productionNotificationRevision(tx, projectID, productionID)
+		if err != nil {
+			return err
+		}
 		return nil
 	})
 	return newRevision, err
@@ -222,11 +303,42 @@ func SnapshotProductionNotificationState(db *gorm.DB, projectID uint, production
 }
 
 func RestoreProductionNotificationState(db *gorm.DB, projectID uint, productionID, expectedCurrentRevision string, config *ProductionNotificationConfig, routes []ProductionNotificationRoute, targets []ProjectReviewerTarget, cleanupWebhookIDs ...uint) error {
+	return restoreProductionNotificationState(db, projectID, productionID, expectedCurrentRevision, config, routes, targets, "", cleanupWebhookIDs...)
+}
+
+func RestoreProductionNotificationStateForExternalReorder(db *gorm.DB, projectID uint, productionID, expectedCurrentRevision string, config *ProductionNotificationConfig, routes []ProductionNotificationRoute, targets []ProjectReviewerTarget, mutationToken string, cleanupWebhookIDs ...uint) error {
+	if strings.TrimSpace(mutationToken) == "" {
+		return gorm.ErrInvalidData
+	}
+	return restoreProductionNotificationState(db, projectID, productionID, expectedCurrentRevision, config, routes, targets, mutationToken, cleanupWebhookIDs...)
+}
+
+func restoreProductionNotificationState(db *gorm.DB, projectID uint, productionID, expectedCurrentRevision string, config *ProductionNotificationConfig, routes []ProductionNotificationRoute, targets []ProjectReviewerTarget, mutationToken string, cleanupWebhookIDs ...uint) error {
 	if db == nil {
 		return gorm.ErrInvalidDB
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		if expectedCurrentRevision == "" || productionNotificationRevision(tx, projectID, productionID) != expectedCurrentRevision {
+		if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
+			return err
+		}
+		if mutationToken == "" {
+			if err := EnsureProductionNotificationMutationIdle(tx, productionID, ""); err != nil {
+				return err
+			}
+		} else {
+			var lock ProductionNotificationWriteLock
+			if err := tx.Where("production_id = ? AND mutation_state = ? AND mutation_token = ?", productionID, NotificationMutationReordering, mutationToken).First(&lock).Error; err != nil {
+				return ErrNotificationMutationRecoveryRequired
+			}
+		}
+		if err := EnsureNoInFlightNotificationDeliveries(tx, productionID); err != nil {
+			return err
+		}
+		currentRevision, err := productionNotificationRevision(tx, projectID, productionID)
+		if err != nil {
+			return err
+		}
+		if expectedCurrentRevision == "" || currentRevision != expectedCurrentRevision {
 			return ErrProductionNotificationRevisionConflict
 		}
 		if err := tx.Where("production_id = ?", productionID).Delete(&ProductionNotificationRoute{}).Error; err != nil {
@@ -265,6 +377,29 @@ func RestoreProductionNotificationState(db *gorm.DB, projectID uint, productionI
 			if err := tx.Create(&copy).Error; err != nil {
 				return err
 			}
+		}
+		return nil
+	})
+}
+
+func FinishProductionNotificationExternalMutation(db *gorm.DB, productionID, mutationToken string, recoveryRequired bool) error {
+	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(mutationToken) == "" {
+		return gorm.ErrInvalidData
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
+			return err
+		}
+		updates := map[string]any{"mutation_state": "", "mutation_token": "", "mutation_at": nil}
+		if recoveryRequired {
+			updates["mutation_state"] = "reorder_needs_help"
+		}
+		result := tx.Model(&ProductionNotificationWriteLock{}).Where("production_id = ? AND mutation_state = ? AND mutation_token = ?", strings.TrimSpace(productionID), NotificationMutationReordering, strings.TrimSpace(mutationToken)).Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrNotificationMutationRecoveryRequired
 		}
 		return nil
 	})

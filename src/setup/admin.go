@@ -1676,8 +1676,82 @@ func safeDeleteOperationMessage(lang, stage string, err error) string {
 var (
 	strongDeleteValidateCandidates = validateConnectedProductionChannelCandidates
 	strongDeleteChannelDelete      = DeleteChannel
-	strongDeleteConnectionCleanup  = deleteProjectConnectionOnly
+	strongDeleteConnectionCleanup  = deleteProjectConnectionOnlyForMutation
+	strongDeleteInspectWebhook     = currentRoutingInspectWebhook
+	strongDeleteInspectChannel     = inspectManagedDiscordChannel
 )
+
+type managedDiscordChannelIdentity struct {
+	ID      string `json:"id"`
+	GuildID string `json:"guild_id"`
+	Type    int    `json:"type"`
+}
+
+func inspectManagedDiscordChannel(channelID, token string) (managedDiscordChannelIdentity, int, error) {
+	var identity managedDiscordChannelIdentity
+	body, status, err := botDo(http.MethodGet, discordAPI+"/channels/"+strings.TrimSpace(channelID), nil, token)
+	if err != nil {
+		return identity, status, err
+	}
+	if status == http.StatusNotFound {
+		return identity, status, nil
+	}
+	if status != http.StatusOK {
+		return identity, status, fmt.Errorf("Discord channel read failed")
+	}
+	if err := json.Unmarshal(body, &identity); err != nil || strings.TrimSpace(identity.ID) != strings.TrimSpace(channelID) {
+		return managedDiscordChannelIdentity{}, status, fmt.Errorf("Discord channel response was invalid")
+	}
+	return identity, status, nil
+}
+
+func listStrongDeleteWebhookInventory(db *gorm.DB, productionID string) ([]model.ProjectWebhook, []model.ProjectWebhook, error) {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return nil, nil, gorm.ErrInvalidData
+	}
+	var all []model.ProjectWebhook
+	if err := db.Order("kitsu_project_id asc, id asc").Find(&all).Error; err != nil {
+		return nil, nil, err
+	}
+	var production []model.ProjectWebhook
+	if err := db.Where("kitsu_project_id = ?", productionID).Order("id asc").Find(&production).Error; err != nil {
+		return nil, nil, err
+	}
+	return all, production, nil
+}
+
+func recoverableStrongDeleteTargets(db *gorm.DB, project model.Project, channelID string, webhooks []model.ProjectWebhook, allWebhooks []model.ProjectWebhook, token string) ([]model.ManagedChannelDeletionTarget, bool) {
+	targets := make([]model.ManagedChannelDeletionTarget, 0)
+	rows := make([]model.ProjectWebhook, 0)
+	for _, webhook := range webhooks {
+		if strings.TrimSpace(webhook.DiscordChannelID) == strings.TrimSpace(channelID) {
+			rows = append(rows, webhook)
+		}
+	}
+	if len(rows) == 0 {
+		return nil, false
+	}
+	for _, webhook := range allWebhooks {
+		if strings.TrimSpace(webhook.DiscordChannelID) == strings.TrimSpace(channelID) && strings.TrimSpace(webhook.KitsuProjectID) != project.KitsuProjectID {
+			return nil, false
+		}
+	}
+	for _, webhook := range rows {
+		tombstone, err := model.FindManagedChannelDeletion(db, webhook.ID)
+		webhookID, idErr := discordWebhookID(webhook.WebhookURL)
+		if err != nil || idErr != nil || tombstone == nil || tombstone.Disposition == model.ChannelDeletionComplete ||
+			tombstone.ProductionID != project.KitsuProjectID || tombstone.GuildID != project.DiscordGuildID ||
+			tombstone.ChannelID != channelID || tombstone.DiscordWebhookID != webhookID {
+			return nil, false
+		}
+		targets = append(targets, model.ManagedChannelDeletionTarget{WebhookRowID: webhook.ID, GuildID: tombstone.GuildID, ChannelID: tombstone.ChannelID, DiscordWebhookID: tombstone.DiscordWebhookID})
+	}
+	_, status, err := strongDeleteInspectChannel(channelID, token)
+	if err != nil || status != http.StatusNotFound {
+		return nil, false
+	}
+	return targets, true
+}
 
 func executeConnectedProductionStrongDelete(lang string, project model.Project, effectiveGuildID, botToken string, db *gorm.DB) connectedProductionChannelDeleteExecution {
 	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
@@ -1687,11 +1761,27 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 		return connectedProductionChannelDeleteExecution{ConnectionError: t(lang, "連携先が更新されたため削除を中止しました。再読み込みしてください。", "The Production connection changed. Reload and retry.")}
 	}
 	project = *currentProject
+	mutationToken, mutationErr := model.BeginProductionDeletionMutation(db, project.KitsuProjectID)
+	if mutationErr != nil {
+		return connectedProductionChannelDeleteExecution{ConnectionError: safeDeleteOperationMessage(lang, "database_cleanup", mutationErr)}
+	}
+	finishFailedMutation := func(result *connectedProductionChannelDeleteExecution) {
+		if result.ConnectionDeleted {
+			return
+		}
+		if err := model.FinishProductionDeletionMutation(db, project.KitsuProjectID, mutationToken, true); err != nil {
+			result.ConnectionError = t(lang, "削除の復旧状態を保存できません。現在の状態を確認してください。", "Deletion recovery state could not be persisted. Inspect the current state before retrying.")
+		}
+	}
 	if strings.TrimSpace(project.DiscordGuildID) != "" {
 		effectiveGuildID = strings.TrimSpace(project.DiscordGuildID)
 	}
-	allWebhooks := model.ListAllProjectWebhooks(db)
-	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	allWebhooks, webhooks, inventoryErr := listStrongDeleteWebhookInventory(db, project.KitsuProjectID)
+	if inventoryErr != nil {
+		result := connectedProductionChannelDeleteExecution{ConnectionError: safeDeleteOperationMessage(lang, "database_cleanup", inventoryErr)}
+		finishFailedMutation(&result)
+		return result
+	}
 	candidates := buildConnectedProductionChannelCandidates(webhooks)
 	deletable, skipped, summary, checks := strongDeleteValidateCandidates(lang, project, effectiveGuildID, botToken, allWebhooks, candidates)
 	result := connectedProductionChannelDeleteExecution{
@@ -1699,29 +1789,107 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 		Checks:            checks,
 		Skipped:           skipped,
 	}
+	webhookTargetsByChannel := make(map[string][]model.ManagedChannelDeletionTarget)
+	verifiedDeletable := make([]connectedProductionChannelValidationResult, 0, len(deletable))
+	recoveredDeletable := make([]connectedProductionChannelValidationResult, 0)
+	for i := 0; i < len(skipped); {
+		candidate := skipped[i]
+		if targets, ok := recoverableStrongDeleteTargets(db, project, candidate.ChannelID, webhooks, allWebhooks, botToken); ok {
+			webhookTargetsByChannel[candidate.ChannelID] = targets
+			recoveredDeletable = append(recoveredDeletable, candidate)
+			skipped = append(skipped[:i], skipped[i+1:]...)
+			continue
+		}
+		i++
+	}
+	result.Skipped = skipped
+	for _, candidate := range deletable {
+		rows := make([]model.ProjectWebhook, 0)
+		for _, webhook := range webhooks {
+			if strings.TrimSpace(webhook.DiscordChannelID) == strings.TrimSpace(candidate.ChannelID) {
+				rows = append(rows, webhook)
+			}
+		}
+		if len(rows) == 0 {
+			candidate.Reason = t(lang, "保存済みWebhookを確認できません。", "Stored webhook identity could not be verified.")
+			result.Skipped = append(result.Skipped, candidate)
+			continue
+		}
+		verified := make([]model.ManagedChannelDeletionTarget, 0, len(rows))
+		valid := true
+		for _, webhook := range rows {
+			webhookID, parseErr := discordWebhookID(webhook.WebhookURL)
+			if parseErr != nil {
+				valid = false
+				break
+			}
+			identity, missing, inspectErr := strongDeleteInspectWebhook(webhook.WebhookURL)
+			if inspectErr != nil || missing || !routingWebhookMatches(identity, webhookID, project.DiscordGuildID, candidate.ChannelID) {
+				valid = false
+				break
+			}
+			verified = append(verified, model.ManagedChannelDeletionTarget{WebhookRowID: webhook.ID, GuildID: project.DiscordGuildID, ChannelID: candidate.ChannelID, DiscordWebhookID: webhookID})
+		}
+		if !valid {
+			candidate.Reason = t(lang, "Discord Webhookの所有先を確認できません。", "Discord webhook ownership could not be verified.")
+			result.Skipped = append(result.Skipped, candidate)
+			continue
+		}
+		webhookTargetsByChannel[candidate.ChannelID] = verified
+		verifiedDeletable = append(verifiedDeletable, candidate)
+	}
+	verifiedDeletable = append(verifiedDeletable, recoveredDeletable...)
+	deletable = verifiedDeletable
+	var deletionTargets []model.ManagedChannelDeletionTarget
+	for _, candidate := range deletable {
+		deletionTargets = append(deletionTargets, webhookTargetsByChannel[candidate.ChannelID]...)
+	}
+	if len(deletionTargets) > 0 {
+		allowLastRoute := len(result.Skipped) == 0 && len(deletable) == len(candidates)
+		if err := model.BeginManagedChannelDeletionBatchForProductionTeardown(db, project.KitsuProjectID, deletionTargets, time.Now().UTC(), allowLastRoute, mutationToken); err != nil {
+			for _, candidate := range deletable {
+				candidate.Reason = safeDeleteOperationMessage(lang, "database_cleanup", err)
+				result.Failed = append(result.Failed, candidate)
+			}
+			deletable = nil
+		}
+	}
 	for _, candidate := range deletable {
 		if err := strongDeleteChannelDelete(candidate.ChannelID, botToken); err != nil {
 			failed := candidate
 			failed.Reason = safeDeleteOperationMessage(lang, "channel_delete", err)
+			for _, target := range webhookTargetsByChannel[candidate.ChannelID] {
+				if stateErr := model.RecordManagedChannelDeletionFailure(db, target.WebhookRowID, "discord_channel_delete_failed"); stateErr != nil {
+					failed.Reason = t(lang, "削除状態の復旧情報を保存できません。", "Deletion recovery state could not be persisted.")
+				}
+			}
 			result.Failed = append(result.Failed, failed)
 			continue
 		}
-		result.Deleted = append(result.Deleted, candidate)
-		var candidateWebhookCount int64
-		_ = db.Model(&model.ProjectWebhook{}).Where("kitsu_project_id = ? AND discord_channel_id = ?", project.KitsuProjectID, candidate.ChannelID).Count(&candidateWebhookCount)
-		if err := db.Where("kitsu_project_id = ? AND discord_channel_id = ?", project.KitsuProjectID, candidate.ChannelID).Delete(&model.ProjectWebhook{}).Error; err != nil {
+		finalized := true
+		for _, target := range webhookTargetsByChannel[candidate.ChannelID] {
+			if err := model.FinalizeManagedChannelDeletionForProductionTeardown(db, target.WebhookRowID, time.Now().UTC(), mutationToken); err != nil {
+				finalized = false
+				break
+			}
+		}
+		if !finalized {
 			warn := candidate
-			warn.Reason = safeDeleteOperationMessage(lang, "database_cleanup", err)
+			warn.Reason = t(lang, "Discord削除後のデータベース整理に失敗しました。", "Database finalization failed after Discord deletion.")
 			result.CleanupWarnings = append(result.CleanupWarnings, warn)
 			continue
 		}
-		result.DeletedWebhookCount += int(candidateWebhookCount)
+		result.Deleted = append(result.Deleted, candidate)
+		result.DeletedWebhookCount += len(webhookTargetsByChannel[candidate.ChannelID])
 	}
 
 	categoryID := strings.TrimSpace(project.DiscordCategoryID)
 	result.CategoryDeleted = categoryID == ""
-	canRemoveConnection := true
-	if categoryID != "" {
+	canRemoveConnection := len(result.Failed) == 0 && len(result.Skipped) == 0 && len(result.CleanupWarnings) == 0
+	if categoryID != "" && !canRemoveConnection {
+		result.CategoryError = t(lang, "管理対象チャンネルの削除が未完了のため、カテゴリ削除を保留しました。", "Category deletion was deferred because managed channel cleanup is incomplete.")
+	}
+	if canRemoveConnection && categoryID != "" {
 		if err := strongDeleteChannelDelete(categoryID, botToken); err != nil {
 			if isDiscordNotFoundDeleteError(err) {
 				result.CategoryDeleted = true
@@ -1733,8 +1901,8 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 			result.CategoryDeleted = true
 		}
 	}
-	if canRemoveConnection {
-		if err := strongDeleteConnectionCleanup(project.KitsuProjectID, db); err != nil {
+	if canRemoveConnection && result.CategoryDeleted {
+		if err := strongDeleteConnectionCleanup(project.KitsuProjectID, db, mutationToken); err != nil {
 			result.ConnectionError = safeDeleteOperationMessage(lang, "database_cleanup", err)
 		} else {
 			result.ConnectionDeleted = true
@@ -1742,7 +1910,15 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 	} else if result.CategoryError != "" {
 		result.ConnectionError = t(lang, "Discord 側の削除が完了していないため、連携情報の削除は止めました。", "Connection cleanup was skipped because Discord deletion did not complete.")
 	}
-	result.RemainingWebhooks = len(model.ListProjectWebhooks(db, project.KitsuProjectID))
+	_, remaining, remainingErr := listStrongDeleteWebhookInventory(db, project.KitsuProjectID)
+	if remainingErr != nil {
+		if result.ConnectionError == "" {
+			result.ConnectionError = safeDeleteOperationMessage(lang, "database_cleanup", remainingErr)
+		}
+	} else {
+		result.RemainingWebhooks = len(remaining)
+	}
+	finishFailedMutation(&result)
 	return result
 }
 

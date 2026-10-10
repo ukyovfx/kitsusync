@@ -3,11 +3,87 @@ package model
 import (
 	"errors"
 	"testing"
+
+	"gorm.io/gorm"
 )
+
+func TestProductionNotificationRevisionReturnsReadFailures(t *testing.T) {
+	for _, table := range []string{"production_notification_routes", "project_reviewer_targets"} {
+		t.Run(table, func(t *testing.T) {
+			db := newRoutingTestDB(t)
+			if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+				t.Fatal(err)
+			}
+			readErr := errors.New("injected revision read failure")
+			name := "test:fail_revision_read:" + table
+			if err := db.Callback().Query().Before("gorm:query").Register(name, func(tx *gorm.DB) {
+				if tx.Statement.Table == table {
+					tx.AddError(readErr)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			revision, err := ProductionNotificationRevisionWithError(db, 1, "project")
+			if !errors.Is(err, readErr) || revision != "" {
+				t.Fatalf("revision=%q err=%v, want propagated read error and no digest", revision, err)
+			}
+		})
+	}
+}
+
+func TestProductionNotificationRevisionLegacyWrapperFailsClosed(t *testing.T) {
+	db := newRoutingTestDB(t)
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+		t.Fatal(err)
+	}
+	readErr := errors.New("injected revision read failure")
+	if err := db.Callback().Query().Before("gorm:query").Register("test:fail_revision_read_legacy", func(tx *gorm.DB) {
+		if tx.Statement.Table == "production_notification_routes" {
+			tx.AddError(readErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ProductionNotificationRevision(db, 1, "project"); got != "" {
+		t.Fatalf("legacy wrapper must not return a valid digest on read failure: %q", got)
+	}
+}
+
+func TestRestoreProductionNotificationStateStopsOnRevisionReadFailure(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	project := Project{KitsuProjectID: "restore-read-failure", Name: "Restore Read Failure"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	webhook := ProjectWebhook{KitsuProjectID: project.KitsuProjectID, ChannelName: "task", WebhookURL: "https://discord.com/api/webhooks/12345678901234567/synthetic", DiscordChannelID: "channel-1"}
+	if err := db.Create(&webhook).Error; err != nil {
+		t.Fatal(err)
+	}
+	route := ProductionNotificationRoute{ProductionID: project.KitsuProjectID, TaskTypeID: "tt-1", DestinationWebhookID: webhook.ID, DestinationChannelID: webhook.DiscordChannelID}
+	if err := db.Create(&route).Error; err != nil {
+		t.Fatal(err)
+	}
+	before := ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
+	readErr := errors.New("injected restore revision read failure")
+	if err := db.Callback().Query().Before("gorm:query").Register("test:fail_restore_revision", func(tx *gorm.DB) {
+		if tx.Statement.Table == "production_notification_routes" {
+			tx.AddError(readErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RestoreProductionNotificationState(db, project.ID, project.KitsuProjectID, before, nil, nil, nil); !errors.Is(err, readErr) {
+		t.Fatalf("restore must propagate revision read failure before writes: %v", err)
+	}
+	var count int64
+	if err := db.Model(&ProductionNotificationRoute{}).Where("production_id = ?", project.KitsuProjectID).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("restore modified route state despite failed revision read: count=%d err=%v", count, err)
+	}
+}
 
 func TestApplyProductionNotificationStateRejectsReviewerDeltaForRemovedRoute(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-delete-route", Name: "Apply Delete Route"}
@@ -40,7 +116,7 @@ func TestApplyProductionNotificationStateRejectsReviewerDeltaForRemovedRoute(t *
 
 func TestApplyProductionNotificationStateDeletesRemovedRouteTargetsAtomically(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-remove-targets", Name: "Apply Remove Targets"}
@@ -73,7 +149,7 @@ func TestApplyProductionNotificationStateDeletesRemovedRouteTargetsAtomically(t 
 
 func TestApplyProductionNotificationStateCreatesWebhookAndRouteAtomically(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-new-channel", Name: "New Channel"}
@@ -106,7 +182,7 @@ func TestApplyProductionNotificationStateCreatesWebhookAndRouteAtomically(t *tes
 
 func TestApplyProductionNotificationStateCommitsRoutesAndUserRoleDeltasTogether(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-combined-state", Name: "Combined Apply"}
@@ -159,7 +235,7 @@ func TestApplyProductionNotificationStateCommitsRoutesAndUserRoleDeltasTogether(
 
 func TestApplyProductionNotificationStateRejectsStaleRevisionWithoutWrites(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-stale", Name: "Apply Stale"}
@@ -193,7 +269,7 @@ func TestApplyProductionNotificationStateRejectsStaleRevisionWithoutWrites(t *te
 
 func TestApplyProductionNotificationStateRollsBackInvalidTargetAfterRouteReplacement(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-rollback", Name: "Apply Rollback"}
