@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"app/src/api/kitsu"
 	"app/src/model"
@@ -529,6 +531,114 @@ func TestCurrentRoutingChannelDeleteCannotRemoveLastNotificationRoute(t *testing
 	}
 	if canDeleteWebhookWithoutRemovingLastRoute(db, project, webhook.ID) {
 		t.Fatal("last notification route can be removed by deleting its Discord channel")
+	}
+}
+
+func TestCurrentRoutingChannelDeleteSerializesWithProductionApply(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-delete-apply-race", Name: "Routing Delete Apply Race", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeDiscordBotTokenKey, "test-token")
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "first", "", "https://example.invalid/first", "channel-first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "second", "", "https://example.invalid/second", "channel-second"); err != nil {
+		t.Fatal(err)
+	}
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	if len(webhooks) != 2 {
+		t.Fatalf("expected two managed webhooks, got %d", len(webhooks))
+	}
+	var first, second model.ProjectWebhook
+	for _, webhook := range webhooks {
+		switch webhook.ChannelName {
+		case "first":
+			first = webhook
+		case "second":
+			second = webhook
+		}
+	}
+	if first.ID == 0 || second.ID == 0 {
+		t.Fatalf("test webhooks were not found: %#v", webhooks)
+	}
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-first", TaskTypeName: "First", DestinationWebhookID: first.ID},
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-second", TaskTypeName: "Second", DestinationWebhookID: second.ID},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	oldCheck, oldList, oldDelete := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel
+	defer func() {
+		currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingDeleteChannel = oldCheck, oldList, oldDelete
+	}()
+	currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
+		return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true}}
+	}
+	currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
+		return []DiscordGuildChannel{{ID: "channel-first", Type: 0, ParentID: "category-1"}}, nil
+	}
+	deleteReached := make(chan struct{})
+	allowDelete := make(chan struct{})
+	currentRoutingDeleteChannel = func(string, string) error {
+		close(deleteReached)
+		<-allowDelete
+		return nil
+	}
+
+	// Hold the same Production lock as Apply while simulating an Apply that
+	// removes the second route but keeps the channel this request wants to delete.
+	unlockApply := lockProductionNotificationApply(project.ID)
+	applyUnlocked := false
+	deleteReleased := false
+	defer func() {
+		if !deleteReleased {
+			close(allowDelete)
+		}
+		if !applyUnlocked {
+			unlockApply()
+		}
+	}()
+	revision := model.ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
+	form := url.Values{"project_id": {project.KitsuProjectID}, "webhook_id": {strconv.FormatUint(uint64(first.ID), 10)}, "action": {"delete_current_routing_channel"}, "confirm_name": {"first"}}
+	requestStarted := make(chan struct{})
+	requestDone := make(chan struct{})
+	response := httptest.NewRecorder()
+	go func() {
+		defer close(requestDone)
+		close(requestStarted)
+		request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		handleCurrentIARoutingMutation(response, request, "en", db)
+	}()
+	<-requestStarted
+
+	deleteRanBeforeApplyFinished := false
+	select {
+	case <-deleteReached:
+		deleteRanBeforeApplyFinished = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if _, err := model.ApplyProductionNotificationState(db, project.ID, project.KitsuProjectID, project.Name, revision, []model.ProductionNotificationRoute{
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-first", TaskTypeName: "First", DestinationWebhookID: first.ID},
+	}, nil); err != nil {
+		t.Fatalf("simulated Apply could not keep the selected route: %v", err)
+	}
+	unlockApply()
+	applyUnlocked = true
+	close(allowDelete)
+	deleteReleased = true
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("routing deletion did not finish after Apply released the Production lock")
+	}
+	routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
+	if deleteRanBeforeApplyFinished || response.Code != http.StatusSeeOther || len(routes) != 1 || routes[0].TaskTypeID != "task-first" {
+		t.Fatalf("channel delete raced Apply and removed the last route: early_delete=%v status=%d routes=%#v", deleteRanBeforeApplyFinished, response.Code, routes)
 	}
 }
 

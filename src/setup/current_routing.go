@@ -126,6 +126,11 @@ func handleCurrentIARoutingChannelDelete(w http.ResponseWriter, r *http.Request,
 		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
 		return true
 	}
+	// Serialize the route-count check and channel/DB deletion with Apply so a
+	// concurrent Apply cannot turn an allowed deletion into removal of the last
+	// remaining notification route.
+	unlockApply := lockProductionNotificationApply(project.ID)
+	defer unlockApply()
 	webhook := model.FindProjectWebhookByID(db, uint(webhookID))
 	if webhook == nil || strings.TrimSpace(r.FormValue("confirm_name")) != strings.TrimPrefix(strings.TrimSpace(webhook.ChannelName), "#") {
 		http.Redirect(w, r, redirect+"&msg=error", http.StatusSeeOther)
