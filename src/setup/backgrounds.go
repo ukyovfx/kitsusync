@@ -265,7 +265,7 @@ const backgroundCanvasScript = `<script>
     for(let y=18;y<height;y+=spacing){
       for(let x=18;x<width;x+=spacing){
         const distance=Math.hypot(pointer.x-x,pointer.y-y);
-        const local=Math.exp(-.5*Math.pow(distance/120,2))*pointer.amount*.28;
+        const local=Math.exp(-.5*Math.pow(distance/120,2))*pointer.amount*.24;
         const color=base.map(function(value,index){return value+(brand[index]-value)*local});
         const size=3.6*(1+local*.2),half=size/2;
         ctx.strokeStyle=rgba(color[0],color[1],color[2],.16+local*.08);
