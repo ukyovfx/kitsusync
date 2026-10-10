@@ -196,7 +196,7 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		guild, category := strings.TrimSpace(project.DiscordGuildID), strings.TrimSpace(project.DiscordCategoryID)
 		status := currentRoutingDiscordCheck(discordToken, guild)
 		if !routingDiscordStatusReady(status) || !status.Permissions.ManageWebhooks {
-			http.Error(w, `{"error":"discord_preflight_failed"}`, http.StatusBadRequest)
+			writeRoutingCreateFailure(w, "discord_preflight_failed", cleanupCreated())
 			return true
 		}
 		for _, webhook := range channelWebhooks {
