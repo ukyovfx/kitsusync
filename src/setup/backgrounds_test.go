@@ -78,7 +78,7 @@ func TestAuthenticatedPlusGridIsViewportAnchoredWithLocalPointerHaze(t *testing.
 		t.Fatal("authenticated plus-grid renderer is missing")
 	}
 	dots := backgroundCanvasScript[start : start+end]
-	for _, want := range []string{`const mobile=width<600,spacing=mobile?36:42`, `canvas.dataset.gridSymbol='plus'`, `for(let y=18;y<height;y+=spacing)`, `for(let x=18;x<width;x+=spacing)`, `ctx.moveTo(x-half,y)`, `ctx.lineTo(x+half,y)`, `ctx.moveTo(x,y-half)`, `ctx.lineTo(x,y+half)`, `Math.hypot(pointer.x-x,pointer.y-y)`, `distance/120`, `*pointer.amount*.24`, `const base=[130,91,54],brand=[252,135,66]`, `size=5.0*(1+local*.2)`, `ctx.lineWidth=1.1`, `ctx.strokeStyle=rgba(color[0],color[1],color[2],.18+local*.06)`, `Math.min(190,Math.max(84,Math.min(width,height)*.22))`, `createRadialGradient`, `seconds*.025`, `+',.008)'`, `+',.003)'`, `gradient.addColorStop(1,'rgba('+source.color.join(',')+',0)')`} {
+	for _, want := range []string{`const mobile=width<600,spacing=mobile?36:42`, `canvas.dataset.gridSymbol='plus'`, `for(let y=18;y<height;y+=spacing)`, `for(let x=18;x<width;x+=spacing)`, `ctx.moveTo(x-half,y)`, `ctx.lineTo(x+half,y)`, `ctx.moveTo(x,y-half)`, `ctx.lineTo(x,y+half)`, `Math.hypot(pointer.x-x,pointer.y-y)`, `distance/120`, `*pointer.amount*.58`, `const base=[130,91,54],brand=[252,135,66]`, `size=5.0*(1+local*.34)`, `ctx.lineWidth=1.1`, `ctx.strokeStyle=rgba(color[0],color[1],color[2],.18+local*.30)`, `Math.min(190,Math.max(84,Math.min(width,height)*.22))`, `createRadialGradient`, `seconds*.025`, `+',.008)'`, `+',.003)'`, `gradient.addColorStop(1,'rgba('+source.color.join(',')+',0)')`} {
 		if !strings.Contains(dots, want) {
 			t.Errorf("authenticated plus grid is missing the fixed/local visual contract %q", want)
 		}
@@ -102,8 +102,17 @@ func TestAuthenticatedPagesUseUniformDarkBaseAndLoginBackgroundStaysSeparate(t *
 	if !strings.Contains(adminThemeCSS, `body.admin-surface{background:var(--bg)}`) {
 		t.Fatal("authenticated pages must use a uniform dark base behind the fixed grid")
 	}
-	if !strings.Contains(adminThemeCSS, `body.login-surface{background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%)}`) {
-		t.Fatal("the Login-only surface must retain its independent background treatment")
+	if !strings.Contains(adminThemeCSS, `html{scrollbar-gutter:stable;background:#070707}`) || !strings.Contains(adminThemeCSS, `body.login-surface{background:#070707}`) {
+		t.Fatal("Login and its transparent fabric canvas must share a uniform dark surface")
+	}
+	if strings.Contains(adminThemeCSS, `body.login-surface{background:linear-gradient`) {
+		t.Fatal("Login retains a vertical gradient that can create visible black banding")
+	}
+}
+
+func TestSystemStatusAPIHeadingHasSharedTopInset(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.system-status-sections>.system-observability>.page-heading{padding-block-start:var(--system-status-content-inset)}`) {
+		t.Fatal("API response status heading has no vertical inset from the section boundary")
 	}
 }
 

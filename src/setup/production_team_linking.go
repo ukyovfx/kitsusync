@@ -55,7 +55,7 @@ func saveGlobalUserLink(db *gorm.DB, r *http.Request) (bool, string) {
 		if project != nil {
 			return false, withLang("/bot/admin/projects?project="+url.QueryEscape(teamProjectID)+"&tab=team", r)
 		}
-		return false, ""
+		return false, globalUserLinkingURL(r, directory.SelectedGuild.ID, "")
 	}
 	var selected globalDiscordUserOption
 	for _, option := range directory.Options {
@@ -68,7 +68,7 @@ func saveGlobalUserLink(db *gorm.DB, r *http.Request) (bool, string) {
 		if project != nil {
 			return false, withLang("/bot/admin/projects?project="+url.QueryEscape(teamProjectID)+"&tab=team", r)
 		}
-		return false, ""
+		return false, globalUserLinkingURL(r, directory.SelectedGuild.ID, "")
 	}
 	kitsuID, kitsuName, kitsuEmail := r.FormValue("kitsu_id"), r.FormValue("kitsu_name"), r.FormValue("kitsu_email")
 	if id := parseUint(r.FormValue("user_id")); id > 0 {
@@ -77,7 +77,7 @@ func saveGlobalUserLink(db *gorm.DB, r *http.Request) (bool, string) {
 			if project != nil {
 				return false, withLang("/bot/admin/projects?project="+url.QueryEscape(teamProjectID)+"&tab=team", r)
 			}
-			return false, ""
+			return false, globalUserLinkingURL(r, directory.SelectedGuild.ID, "")
 		}
 		if validatedTeamPerson == nil {
 			if strings.TrimSpace(user.KitsuName) != "" {
@@ -97,5 +97,37 @@ func saveGlobalUserLink(db *gorm.DB, r *http.Request) (bool, string) {
 	if project != nil {
 		return true, withLang("/bot/admin/projects?project="+url.QueryEscape(teamProjectID)+"&tab=team&msg=saved", r)
 	}
-	return true, withLang("/bot/admin/users?msg=saved", r)
+	return true, globalUserLinkingURL(r, directory.SelectedGuild.ID, "saved")
+}
+
+func globalUserLinkingURL(r *http.Request, validatedGuildID, message string) string {
+	path := "/bot/admin/users"
+	if isDiscordSnowflake(validatedGuildID) {
+		path += "?discord_guild_id=" + url.QueryEscape(validatedGuildID)
+	}
+	if message != "" {
+		separator := "?"
+		if strings.Contains(path, "?") {
+			separator = "&"
+		}
+		path += separator + "msg=" + url.QueryEscape(message)
+	}
+	return withLang(path, r)
+}
+
+// userLinkingGuildForRedirect revalidates the submitted selection through the
+// Bot's live Guild directory before it is retained across a redirect. A
+// member-list failure may still return the Guild selected from the trusted
+// Guild list, which is sufficient to preserve page context without accepting
+// an arbitrary client-supplied Guild ID.
+func userLinkingGuildForRedirect(db *gorm.DB, r *http.Request) string {
+	guildID := strings.TrimSpace(r.FormValue("discord_guild_id"))
+	if !isDiscordSnowflake(guildID) {
+		return ""
+	}
+	directory, _ := globalDiscordDirectoryReader(storedRuntimeDiscordBotToken(db), guildID)
+	if strings.TrimSpace(directory.SelectedGuild.ID) != guildID {
+		return ""
+	}
+	return guildID
 }

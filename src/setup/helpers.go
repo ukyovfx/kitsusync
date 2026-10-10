@@ -690,6 +690,17 @@ type DiscordGuildRole struct {
 	Mentionable bool   `json:"mentionable"`
 }
 
+type discordGuildRoleListError struct {
+	StatusCode int
+}
+
+func (e *discordGuildRoleListError) Error() string {
+	if e == nil || e.StatusCode <= 0 {
+		return "Discord Guild roles could not be verified"
+	}
+	return fmt.Sprintf("Discord Guild roles could not be verified (HTTP %d)", e.StatusCode)
+}
+
 type DiscordGuild struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -766,13 +777,34 @@ func ListGuildRoles(guildID, botToken string) ([]DiscordGuildRole, error) {
 		return nil, err
 	}
 	if status >= 400 {
-		return nil, discordBotAPIError("Discord guild role list failed", status, body)
+		return nil, &discordGuildRoleListError{StatusCode: status}
 	}
 	var roles []DiscordGuildRole
 	if err := json.Unmarshal(body, &roles); err != nil {
 		return nil, errors.New("Discord guild role list response was invalid")
 	}
 	return roles, nil
+}
+
+func reviewerRoleCatalog(guildID string, roles []DiscordGuildRole) []DiscordGuildRole {
+	catalog := make([]DiscordGuildRole, 0, len(roles))
+	for _, role := range roles {
+		role.ID = strings.TrimSpace(role.ID)
+		if role.ID == strings.TrimSpace(guildID) || !isDiscordSnowflake(role.ID) {
+			continue
+		}
+		catalog = append(catalog, role)
+	}
+	sort.Slice(catalog, func(i, j int) bool {
+		if catalog[i].Position != catalog[j].Position {
+			return catalog[i].Position > catalog[j].Position
+		}
+		if catalog[i].Name != catalog[j].Name {
+			return catalog[i].Name < catalog[j].Name
+		}
+		return catalog[i].ID < catalog[j].ID
+	})
+	return catalog
 }
 
 func mentionableReviewerRoles(guildID string, roles []DiscordGuildRole) []DiscordGuildRole {

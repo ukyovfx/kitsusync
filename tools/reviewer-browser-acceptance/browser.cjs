@@ -1362,11 +1362,49 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await emptyRoleEditForm.locator('[data-wfa-add-target]').click();
     const emptyRoleModal = page.locator('[data-wfa-add-modal]');
     await emptyRoleModal.locator('#wfa-role-tab').click();
-    if (!(await emptyRoleModal.innerText()).includes('No eligible Discord roles available')) throw new Error('No-role empty state is not explained in the Add recipient dialog');
+    if (!(await emptyRoleModal.innerText()).includes('No custom Discord roles are configured.')) throw new Error('A genuine empty role response is not distinguished from an unavailable role lookup');
     if (await emptyRoleModal.locator('[data-wfa-role-id] option[value="33333333333333331"]').count()) throw new Error('no-roles scenario left a Role target available');
     if (await emptyRoleModal.locator('[data-wfa-role-combobox]:visible').count()) throw new Error('No-role state must explain the empty list without showing a blank picker');
+    if (!(await emptyRoleModal.locator('[data-wfa-add-confirm]').isDisabled())) throw new Error('Role Add must be disabled when the Guild has no custom roles');
     await page.screenshot({ path: path.join(output, 'production-notifications-add-recipient-roles-empty-en-desktop.png'), fullPage: true });
     await emptyRoleModal.locator('[data-wfa-add-cancel]').click();
+
+    await fixture(page, 'non-mentionable-roles');
+    await gotoWFARecipients(page, locales[0], '&edit_routing=1');
+    const nonMentionableForm = page.locator('[data-current-routing-form]');
+    await nonMentionableForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+    await nonMentionableForm.locator('[data-wfa-add-target]').click();
+    const nonMentionableModal = page.locator('[data-wfa-add-modal]');
+    await nonMentionableModal.locator('#wfa-role-tab').click();
+    if (!(await nonMentionableModal.innerText()).includes('Roles exist, but none are mentionable.')) throw new Error('Non-mentionable Guild roles are not explained distinctly');
+    const nonMentionableCombo = nonMentionableModal.locator('[data-wfa-role-combobox]');
+    if (!(await nonMentionableCombo.isVisible())) throw new Error('Existing non-mentionable Guild roles must remain visible with a reason');
+    await nonMentionableCombo.click();
+    const disabledRole = nonMentionableModal.locator('[data-wfa-role-listbox] [role="option"][data-wfa-option-value="33333333333333332"]');
+    if (!(await disabledRole.isVisible()) || await disabledRole.getAttribute('aria-disabled') !== 'true' || !(await disabledRole.innerText()).includes('Not mentionable')) throw new Error('Non-mentionable role is not visibly disabled with its reason');
+    if (await nonMentionableModal.locator('[data-wfa-role-listbox] [data-wfa-option-value="11111111111111111"]').count()) throw new Error('@everyone must never appear in the custom role picker');
+    await disabledRole.click({ force: true });
+    if (await nonMentionableModal.locator('[data-wfa-role-id]').inputValue() || !(await nonMentionableModal.locator('[data-wfa-add-confirm]').isDisabled())) throw new Error('Non-mentionable role selection must not create an eligible target');
+    await page.screenshot({ path: path.join(output, 'production-notifications-add-recipient-roles-non-mentionable-en-desktop.png'), fullPage: true });
+    await nonMentionableModal.locator('[data-wfa-add-cancel]').click();
+
+    for (const failure of [
+      { scenario: 'roles-forbidden', status: 'HTTP 403', file: 'production-notifications-add-recipient-roles-forbidden-en-desktop.png' },
+      { scenario: 'roles-rate-limited', status: 'HTTP 429', file: 'production-notifications-add-recipient-roles-rate-limited-en-desktop.png' },
+    ]) {
+      await fixture(page, failure.scenario);
+      await gotoWFARecipients(page, locales[0], '&edit_routing=1');
+      const failureForm = page.locator('[data-current-routing-form]');
+      await failureForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+      await failureForm.locator('[data-wfa-add-target]').click();
+      const failureModal = page.locator('[data-wfa-add-modal]');
+      await failureModal.locator('#wfa-role-tab').click();
+      if (!(await failureModal.innerText()).includes(failure.status)) throw new Error(`${failure.scenario} role lookup must show its distinct safe status`);
+      if (await failureModal.locator('[data-wfa-role-combobox]:visible').count()) throw new Error(`${failure.scenario} must not present lookup failure as an empty selectable role list`);
+      if (!(await failureModal.locator('[data-wfa-add-confirm]').isDisabled())) throw new Error(`${failure.scenario} must fail closed with Add disabled`);
+      await page.screenshot({ path: path.join(output, failure.file), fullPage: true });
+      await failureModal.locator('[data-wfa-add-cancel]').click();
+    }
     await fixture(page, 'ready');
 
     // JP/EN and desktop/mobile acceptance for Production Users, User Linking, and System Status.
@@ -1457,6 +1495,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           selector: document.querySelector('[data-system-status-window]') !== null,
           generatedAt: document.querySelector('[data-system-status-refresh]')?.textContent.includes('payload.generated_at') || false,
         }));
+        const observabilityHeadingInset = await page.locator('.system-status-sections > .system-observability').evaluate(section => {
+          const heading = section.querySelector(':scope > .page-heading h2');
+          return heading ? heading.getBoundingClientRect().top - section.getBoundingClientRect().top : -1;
+        });
+        if (observabilityHeadingInset < 12) throw new Error(`API response heading is too close to its section boundary in ${locale.lang}/${viewport.name}: ${observabilityHeadingInset}px`);
         const expectedLabels = locale.lang === 'ja' ? ['60秒', '30秒', '今'] : ['60s', '30s', 'Now'];
         const expectedX = [44, 248, 452];
         if (graphContract.lines !== 2 || graphContract.bars || graphContract.failureMarks || graphContract.oldDetails || graphContract.redundantResponseLabels || graphContract.selector || !graphContract.generatedAt || graphContract.plots.length !== 2 || graphContract.plots.some(plot => plot.baselineLeft !== 44 || plot.baselineRight !== 452 || plot.labels.some((label, index) => label[0] !== expectedX[index] || label[1] !== expectedLabels[index]) || plot.points.some(x => x < 48 || x > 448) || plot.paths.length !== 1 || !plot.paths[0].startsWith('M48.0,')) || JSON.stringify(graphContract.plots[0].points) !== JSON.stringify(graphContract.plots[1].points) || JSON.stringify(graphContract.plots[0].labels) !== JSON.stringify(graphContract.plots[1].labels)) {

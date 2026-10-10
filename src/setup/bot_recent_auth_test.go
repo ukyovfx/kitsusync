@@ -111,6 +111,46 @@ func TestConnectionsEditStepUpRedirectPreservesTheExistingValidSession(t *testin
 	}
 }
 
+func TestNormalLoginGrantsRecentAuthenticationForConnectionsEdit(t *testing.T) {
+	resetSessions()
+	t.Cleanup(resetSessions)
+	kitsu := newLoginPersistenceKitsuServer(t)
+	defer kitsu.Close()
+
+	login := httptest.NewRecorder()
+	LoginHandler(kitsu.URL)(login, loginRequest(url.Values{"email": {"manager@example.com"}, "password": {"not-returned"}}))
+	if login.Code != http.StatusSeeOther || len(login.Result().Cookies()) == 0 {
+		t.Fatalf("normal authorized login failed: status=%d", login.Code)
+	}
+	cookie := login.Result().Cookies()[0]
+	sessionMu.Lock()
+	createdSession, exists := sessions[cookie.Value]
+	sessionMu.Unlock()
+	if !validSession(cookie.Value) || !exists || !time.Now().Before(createdSession.BotEditUntil) || time.Until(createdSession.BotEditUntil) > 10*time.Minute {
+		t.Fatal("newly authenticated admin session did not receive the 10-minute recent-auth window")
+	}
+
+	db := newSetupStateTestDB(t)
+	edit := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
+	edit.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	BotHandler(db, nil)(response, edit)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Connections") && !strings.Contains(response.Body.String(), "Kitsu") {
+		t.Fatalf("normal login still demands a second step-up for Connections edit: status=%d", response.Code)
+	}
+
+	sessionMu.Lock()
+	session := sessions[cookie.Value]
+	session.BotEditUntil = time.Now().Add(-time.Second)
+	sessions[cookie.Value] = session
+	sessionMu.Unlock()
+	response = httptest.NewRecorder()
+	BotHandler(db, nil)(response, edit)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "/bot/login") || !validSession(cookie.Value) {
+		t.Fatalf("expired recent-auth did not require step-up while preserving the valid session: status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+}
+
 func TestLegacyBotMutationRequiresRecentAuthentication(t *testing.T) {
 	resetSessions()
 	t.Cleanup(resetSessions)

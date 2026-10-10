@@ -175,7 +175,7 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 		if mapped != nil && mapped.ID > 0 {
 			form += `<form method="POST" class="inline-form delete-form" data-confirm="` +
 				esc(t(lang, "Kitsuユーザー「"+person.FullName+"」とDiscordユーザー「"+identity+"」の紐づけを解除します。", "Unlink the Kitsu user \""+person.FullName+"\" from Discord user \""+identity+"\".")) +
-				`"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` +
+				`"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="discord_guild_id" value="` + esc(directory.SelectedGuild.ID) + `"><input type="hidden" name="user_id" value="` +
 				esc(fmt.Sprint(mapped.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Unlink")) + `</button></form>`
 		}
 		rows.WriteString(`<tr class="user-link-grid-row"><td data-label="` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `">` +

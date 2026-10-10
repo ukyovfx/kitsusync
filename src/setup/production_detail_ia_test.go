@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -500,8 +501,114 @@ func TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails(t *t
 	if roleReadCount != 1 || !view.RolesReady || len(view.Roles) != 1 || view.Roles[0].ID != "123456789012345680" {
 		t.Fatalf("Role candidates should be independently read and filtered when User membership lookup fails: reads=%d ready=%v roles=%#v", roleReadCount, view.RolesReady, view.Roles)
 	}
+	if len(view.RoleCatalog) != 1 || view.RoleCatalog[0].ID != "123456789012345680" {
+		t.Fatalf("Role catalog should preserve only roles from the selected Guild response: %#v", view.RoleCatalog)
+	}
 	if view.GuildErr == nil {
 		t.Fatal("test setup must retain the Guild member failure while exposing the independent Role candidates")
+	}
+}
+
+func TestProductionRoleReadUsesConfiguredProjectGuild(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "role-read-guild-scope", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-discord-token")
+	oldRoles, oldTasks, oldTeam, oldMembers := reviewerDiscordRolesForGuild, reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild
+	gotGuild := ""
+	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
+		gotGuild = guildID
+		if guildID != project.DiscordGuildID {
+			return nil, errors.New("role endpoint was called for the wrong Guild")
+		}
+		return []DiscordGuildRole{{ID: "123456789012345680", Name: "Reviewers", Mentionable: true}}, nil
+	}
+	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType { return nil }
+	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, nil }
+	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) {
+		return nil, errors.New("fixture member read failure")
+	}
+	t.Cleanup(func() {
+		reviewerDiscordRolesForGuild, reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldRoles, oldTasks, oldTeam, oldMembers
+	})
+	view := loadProductionNotificationReviewerView(db, project, true)
+	if gotGuild != project.DiscordGuildID || !view.RolesReady || len(view.Roles) != 1 {
+		t.Fatalf("Role lookup was not scoped to the configured Production Guild: requested=%q view=%#v", gotGuild, view)
+	}
+}
+
+func TestProductionNotificationRoleAvailabilityDistinguishesUnavailableStates(t *testing.T) {
+	project := model.Project{DiscordGuildID: "123456789012345678"}
+	validRole := DiscordGuildRole{ID: "123456789012345680", Name: "Reviewers", Mentionable: true}
+	quietRole := DiscordGuildRole{ID: "123456789012345681", Name: "Quiet", Mentionable: false}
+	cases := []struct {
+		name    string
+		project model.Project
+		view    productionNotificationReviewerView
+		want    reviewerRoleAvailability
+	}{
+		{name: "no guild", project: model.Project{}, view: productionNotificationReviewerView{BotToken: "configured"}, want: reviewerRolesNoGuild},
+		{name: "no bot", project: project, want: reviewerRolesNoBot},
+		{name: "forbidden API", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesErr: &discordGuildRoleListError{StatusCode: http.StatusForbidden}}, want: reviewerRolesUnavailable},
+		{name: "rate limited API", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesErr: &discordGuildRoleListError{StatusCode: http.StatusTooManyRequests}}, want: reviewerRolesUnavailable},
+		{name: "empty response", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true}, want: reviewerRolesEmpty},
+		{name: "only non-mentionable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{quietRole}}, want: reviewerRolesNonMentionable},
+		{name: "mentionable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{quietRole, validRole}, Roles: []DiscordGuildRole{validRole}}, want: reviewerRolesAvailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := productionNotificationRoleAvailability(tc.project, tc.view); got != tc.want {
+				t.Fatalf("role availability = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProductionNotificationRoleErrorsAreLocalizedAndSafe(t *testing.T) {
+	project := model.Project{DiscordGuildID: "123456789012345678"}
+	for _, tc := range []struct {
+		status int
+		wantEN string
+		wantJA string
+	}{
+		{http.StatusForbidden, "HTTP 403", "HTTP 403"},
+		{http.StatusTooManyRequests, "HTTP 429", "HTTP 429"},
+	} {
+		view := productionNotificationReviewerView{BotToken: "configured", RolesErr: &discordGuildRoleListError{StatusCode: tc.status}}
+		for lang, want := range map[string]string{"en": tc.wantEN, "ja": tc.wantJA} {
+			message := reviewerRoleAvailabilityMessage(lang, project, view)
+			if !strings.Contains(message, want) || strings.Contains(message, "token") || strings.Contains(message, "secret") {
+				t.Fatalf("%s role failure did not show safe API status %q: %s", lang, want, message)
+			}
+		}
+	}
+}
+
+func TestProductionNotificationRolePickerShowsDisabledRolesWithoutMakingThemSelectable(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "role-picker-states", DiscordGuildID: "123456789012345678"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	data := productionNotificationReviewerView{
+		RolesReady: true,
+		RoleCatalog: []DiscordGuildRole{
+			{ID: project.DiscordGuildID, Name: "@everyone", Mentionable: true},
+			{ID: "123456789012345680", Name: "Reviewers", Mentionable: true},
+			{ID: "123456789012345681", Name: "Quiet", Mentionable: false},
+		},
+		Roles: []DiscordGuildRole{{ID: "123456789012345680", Name: "Reviewers", Mentionable: true}},
+	}
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=role-picker-states&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", data)
+	for _, want := range []string{`data-wfa-option-value="123456789012345680"`, `data-wfa-option-value="123456789012345681"`, `aria-disabled="true"`, "Not mentionable", "@Reviewers"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("role picker missing safe role state %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `data-wfa-option-value="123456789012345678"`) || strings.Contains(body, `<option value="123456789012345681">`) {
+		t.Fatalf("@everyone or a non-mentionable role became selectable: %s", body)
 	}
 }
 

@@ -2,6 +2,7 @@ package setup
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -57,6 +58,74 @@ func TestTeamLinkSaveUsesGlobalUserMapAndRevalidatesLiveTeam(t *testing.T) {
 	}
 	if got := len(model.ListUserMap(db)); got != 1 {
 		t.Fatalf("rejected stale Team link changed global mappings: %d", got)
+	}
+}
+
+func TestGlobalUserLinkingPostRedirectPreservesOnlyValidatedGuild(t *testing.T) {
+	db := newIAViewDB(t)
+	const guildID = "11111111111111111"
+	oldReader := globalDiscordDirectoryReader
+	t.Cleanup(func() { globalDiscordDirectoryReader = oldReader })
+	globalDiscordDirectoryReader = func(_, requested string) (globalDiscordDirectory, error) {
+		if requested != guildID {
+			return globalDiscordDirectory{}, errors.New("unverified Guild")
+		}
+		return globalDiscordDirectory{
+			Guilds:        []DiscordGuild{{ID: guildID, Name: "Fixture Guild"}},
+			SelectedGuild: DiscordGuild{ID: guildID, Name: "Fixture Guild"},
+			Options:       []globalDiscordUserOption{{ID: "22222222222222222", Name: "Discord Member"}},
+		}, nil
+	}
+
+	values := url.Values{
+		"action": {"save_global_link"}, "discord_guild_id": {guildID},
+		"kitsu_id": {"person-global"}, "kitsu_name": {"Global Person"},
+		"kitsu_email": {"person@example.invalid"}, "discord_user_id": {"22222222222222222"},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/users?lang=en", strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	UsersHandler(db, "").ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "discord_guild_id="+guildID) || !strings.Contains(response.Header().Get("Location"), "msg=saved") {
+		t.Fatalf("global save lost the selected Guild context: status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+
+	user := model.ListUserMap(db)[0]
+	unlink := url.Values{"action": {"remove_global_link"}, "user_id": {fmt.Sprint(user.ID)}, "discord_guild_id": {guildID}}
+	request = httptest.NewRequest(http.MethodPost, "/bot/admin/users?lang=ja", strings.NewReader(unlink.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response = httptest.NewRecorder()
+	UsersHandler(db, "").ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "discord_guild_id="+guildID) || !strings.Contains(response.Header().Get("Location"), "msg=saved") {
+		t.Fatalf("global unlink lost the selected Guild context: status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+	if len(model.ListUserMap(db)) != 1 || model.ListUserMap(db)[0].DiscordID != "" {
+		t.Fatal("unlink did not preserve the existing global-link mutation semantics")
+	}
+
+	globalDiscordDirectoryReader = func(_, requested string) (globalDiscordDirectory, error) {
+		return globalDiscordDirectory{Guilds: []DiscordGuild{{ID: guildID, Name: "Fixture Guild"}}, SelectedGuild: DiscordGuild{ID: guildID, Name: "Fixture Guild"}}, errors.New("temporary member lookup failure")
+	}
+	values.Set("discord_user_id", "22222222222222222")
+	request = httptest.NewRequest(http.MethodPost, "/bot/admin/users?lang=en", strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response = httptest.NewRecorder()
+	UsersHandler(db, "").ServeHTTP(response, request)
+	if !strings.Contains(response.Header().Get("Location"), "discord_guild_id="+guildID) || !strings.Contains(response.Header().Get("Location"), "msg=error") {
+		t.Fatalf("recoverable directory failure lost its validated Guild context: %q", response.Header().Get("Location"))
+	}
+
+	globalDiscordDirectoryReader = func(_, _ string) (globalDiscordDirectory, error) {
+		return globalDiscordDirectory{SelectedGuild: DiscordGuild{ID: "33333333333333333", Name: "Other Guild"}}, nil
+	}
+	values.Set("discord_guild_id", "44444444444444444")
+	request = httptest.NewRequest(http.MethodPost, "/bot/admin/users?lang=en", strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response = httptest.NewRecorder()
+	UsersHandler(db, "").ServeHTTP(response, request)
+	location := response.Header().Get("Location")
+	if strings.Contains(location, "44444444444444444") || strings.Contains(location, "33333333333333333") {
+		t.Fatalf("unverified Guild context was reflected in redirect: %q", location)
 	}
 }
 

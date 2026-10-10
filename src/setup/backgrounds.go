@@ -265,10 +265,10 @@ const backgroundCanvasScript = `<script>
     for(let y=18;y<height;y+=spacing){
       for(let x=18;x<width;x+=spacing){
         const distance=Math.hypot(pointer.x-x,pointer.y-y);
-        const local=Math.exp(-.5*Math.pow(distance/120,2))*pointer.amount*.24;
+        const local=Math.exp(-.5*Math.pow(distance/120,2))*pointer.amount*.58;
         const color=base.map(function(value,index){return value+(brand[index]-value)*local});
-        const size=5.0*(1+local*.2),half=size/2;
-        ctx.strokeStyle=rgba(color[0],color[1],color[2],.18+local*.06);
+        const size=5.0*(1+local*.34),half=size/2;
+        ctx.strokeStyle=rgba(color[0],color[1],color[2],.18+local*.30);
         ctx.beginPath();ctx.moveTo(x-half,y);ctx.lineTo(x+half,y);ctx.moveTo(x,y-half);ctx.lineTo(x,y+half);ctx.stroke();
       }
     }

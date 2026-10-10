@@ -226,6 +226,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		scenario:      &scenario,
 		unexpected:    unexpectedDiscord,
 		kitsuHost:     strings.TrimPrefix(kitsuFixture.URL, "http://"),
+		expectedGuild: reviewerBrowserGuild,
 		baseTransport: oldTransport,
 	}
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
@@ -260,7 +261,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "discord-failure", "stale-membership", "unconnected-production":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production":
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "sparse-production":
@@ -389,6 +390,7 @@ type reviewerBrowserDiscordTransport struct {
 	scenario      *atomic.Value
 	unexpected    chan<- string
 	kitsuHost     string
+	expectedGuild string
 	baseTransport http.RoundTripper
 }
 
@@ -416,9 +418,23 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			body = `[{"user":{"id":"22222222222222222","username":"project-supervisor","global_name":"Global Supervisor Name"},"nick":"Guild Nick Supervisor"},{"user":{"id":"22222222222222223","username":"departmentless","global_name":"Departmentless Global"}},{"user":{"id":"22222222222222224","username":"wrong-department","global_name":"Wrong Department Global"}},{"user":{"id":"22222222222222225","username":"artist","global_name":"Artist Global"}},{"user":{"id":"22222222222222226","username":"manager","global_name":"Manager Global"}},{"user":{"id":"22222222222222227","username":"admin","global_name":"Admin Global"}},{"user":{"id":"22222222222222228","username":"demoted","global_name":"Demoted Global"}},{"user":{"id":"22222222222222229","username":"project-manager","global_name":"Project Manager Global"}},{"user":{"id":"22222222222222230","username":"position-only"}},{"user":{"id":"22222222222222231","username":"inactive"}},{"user":{"id":"22222222222222232","username":"kitsu-bot","bot":true}},{"user":{"id":"22222222222222234","username":"override-candidate","global_name":"Override Global"},"nick":"Guild Nick Override"},{"user":{"id":"22222222222222236","username":"global-name-fallback","global_name":"Global Name Fallback"}},{"user":{"id":"22222222222222237","username":"username-fallback"}}]`
 		}
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/roles"):
-		if d.scenario.Load().(string) == "no-roles" {
+		if r.URL.Path != "/api/v10/guilds/"+d.expectedGuild+"/roles" {
+			select {
+			case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
+			default:
+			}
+			return nil, fmt.Errorf("blocked synthetic Discord role lookup outside the configured Production Guild")
+		}
+		switch d.scenario.Load().(string) {
+		case "no-roles":
 			body = `[]`
-		} else {
+		case "non-mentionable-roles":
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false}]`
+		case "roles-forbidden":
+			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`
+		case "roles-rate-limited":
+			status, body = http.StatusTooManyRequests, `{"message":"synthetic failure"}`
+		default:
 			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false}]`
 		}
 	default:
@@ -428,5 +444,9 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 		}
 		return nil, fmt.Errorf("blocked unexpected synthetic Discord request")
 	}
-	return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	header := http.Header{"Content-Type": []string{"application/json"}}
+	if status == http.StatusTooManyRequests {
+		header.Set("Retry-After", "0.001")
+	}
+	return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 }

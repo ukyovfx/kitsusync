@@ -1491,18 +1491,20 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 }
 
 type productionNotificationReviewerView struct {
-	TaskTypes  []kitsu.TaskType
-	Team       []kitsu.Person
-	TeamErr    error
-	Users      []model.UserMap
-	BotToken   string
-	GuildUsers []DiscordGuildMember
-	GuildErr   error
-	Roles      []DiscordGuildRole
-	RolesReady bool
-	KitsuBase  string
-	KitsuToken string
-	KitsuReady bool
+	TaskTypes   []kitsu.TaskType
+	Team        []kitsu.Person
+	TeamErr     error
+	Users       []model.UserMap
+	BotToken    string
+	GuildUsers  []DiscordGuildMember
+	GuildErr    error
+	Roles       []DiscordGuildRole
+	RoleCatalog []DiscordGuildRole
+	RolesErr    error
+	RolesReady  bool
+	KitsuBase   string
+	KitsuToken  string
+	KitsuReady  bool
 }
 
 func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includeAutomatic bool, botTokens ...string) productionNotificationReviewerView {
@@ -1523,8 +1525,11 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 			// User eligibility needs the current Guild member list, but Role
 			// candidates come from a separate Guild roles endpoint. Keep those
 			// reads independent so a member-list failure does not hide usable Roles.
-			if roles, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, view.BotToken); err == nil {
-				view.Roles = mentionableReviewerRoles(p.DiscordGuildID, roles)
+			roles, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, view.BotToken)
+			view.RolesErr = err
+			if err == nil {
+				view.RoleCatalog = reviewerRoleCatalog(p.DiscordGuildID, roles)
+				view.Roles = mentionableReviewerRoles(p.DiscordGuildID, view.RoleCatalog)
 				view.RolesReady = true
 			}
 		}

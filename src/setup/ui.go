@@ -97,7 +97,7 @@ body::before{
 body.admin-surface::before{opacity:.145;animation:particleDrift 60s linear infinite}
 body::after{content:"";position:fixed;inset:0;z-index:0;background:radial-gradient(circle at 50% 20%, rgba(232,90,26,.14), transparent 32%);pointer-events:none;opacity:.55}
 @keyframes particleDrift{from{background-position:0 0,12px 18px,0 0,0 0,0 0}to{background-position:32px 64px,-24px 34px,18px -12px,0 0,0 0}}
-body.login-surface{background:linear-gradient(180deg,#0b0909 0%,#090808 42%,#050505 100%)}
+body.login-surface{background:#070707}
 body.admin-surface{background:var(--bg)}
 body.login-surface::before,body.admin-surface::before,body.login-surface::after,body.admin-surface::after{display:none}
 .background-canvas{position:fixed;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;contain:strict}
@@ -653,6 +653,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .system-status-sections>.system-observability,.system-status-sections>.section-stack{gap:var(--space-section)}
   .system-status-sections{--system-status-content-inset:var(--space-4)}
   .system-status-sections>.system-observability>.page-heading,.system-status-sections>.pipeline-health>.page-heading,.system-status-sections>.system-issues>.page-heading{padding-inline:var(--system-status-content-inset)}
+  .system-status-sections>.system-observability>.page-heading{padding-block-start:var(--system-status-content-inset)}
   .system-status-sections>.section-stack>.pipeline-health>.page-heading,.system-status-sections>.section-stack>.system-issues>.page-heading{padding-inline:var(--system-status-content-inset)}
   .system-status-sections .system-observability-grid>article{padding-inline:var(--system-status-content-inset)}
   .system-status-sections .pipeline-health-item{padding-inline:var(--system-status-content-inset)}

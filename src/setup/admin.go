@@ -2326,7 +2326,9 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			action := r.FormValue("action")
 			saved := false
 			redirectURL := withLang("/bot/admin/users?msg=error", r)
+			selectedGuildID := ""
 			if action == "remove_global_link" && id > 0 {
+				selectedGuildID = userLinkingGuildForRedirect(db, r)
 				if user := model.FindUserMapByID(db, id); user != nil {
 					model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, "")
 					model.UpdateUserMapDisplayName(db, id, "")
@@ -2341,7 +2343,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 				msg = "saved"
 			}
 			if action == "remove_global_link" {
-				redirectURL = withLang("/bot/admin/users?msg="+msg, r)
+				redirectURL = globalUserLinkingURL(r, selectedGuildID, msg)
 			} else if action == "save_global_link" && !saved && redirectURL != "" {
 				separator := "?"
 				if strings.Contains(redirectURL, "?") {
