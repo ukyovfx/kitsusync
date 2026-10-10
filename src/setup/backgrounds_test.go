@@ -69,9 +69,12 @@ func TestMobileLoginBackgroundOmitsFabricAndAnimation(t *testing.T) {
 }
 
 func TestAuthenticatedPlusGridIsViewportAnchoredWithLocalPointerHaze(t *testing.T) {
-	start := strings.Index(backgroundCanvasScript, `const drawDots=()=>{`)
+	start := strings.Index(backgroundCanvasScript, `const drawDots=seconds=>{`)
+	if start < 0 {
+		t.Fatal("authenticated plus-grid renderer must receive its animation timestamp")
+	}
 	end := strings.Index(backgroundCanvasScript[start:], `const draw=seconds=>`)
-	if start < 0 || end < 0 {
+	if end < 0 {
 		t.Fatal("authenticated plus-grid renderer is missing")
 	}
 	dots := backgroundCanvasScript[start : start+end]

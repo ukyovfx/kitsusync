@@ -242,7 +242,7 @@ const backgroundCanvasScript = `<script>
       ctx.fill();
     }
   };
-  const drawDots=()=>{
+  const drawDots=seconds=>{
     ctx.clearRect(0,0,width,height);
     const mobile=width<600,spacing=mobile?36:42,drift=seconds*.025;
     canvas.dataset.profile='app-plus-grid';canvas.dataset.gridSpacing=String(spacing);canvas.dataset.gridOrigin='18';
