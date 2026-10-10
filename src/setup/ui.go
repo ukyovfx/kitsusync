@@ -898,6 +898,8 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .production-context .production-settings-disclosure-row.danger-zone>summary{color:var(--color-status-danger)}
   .editorial-workbench .production-context .production-routing-editor [data-routing-row].selected{box-shadow:none}
    .editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px) 18px;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:var(--surface-subtle);box-shadow:none}
+  .editorial-workbench .production-context .production-wfa-edit-panel .production-wfa-edit-heading{padding-bottom:0;border-bottom:0}
+  .editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-automatic]{border-block:0}
   .editorial-workbench .production-context dialog,.editorial-workbench .production-team-page dialog{color-scheme:dark;border-color:var(--border-default);border-radius:var(--radius-md);background:var(--surface-overlay);color:var(--text)}
   .editorial-workbench .production-context dialog select,.editorial-workbench .production-team-page dialog select{color-scheme:dark;background:var(--surface-control);color:var(--text);border-color:var(--border-default)}
   .production-context .production-notification-heading{display:flex;justify-content:flex-end;margin:0 0 var(--space-3,12px)}

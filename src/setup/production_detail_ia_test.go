@@ -587,8 +587,8 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if panelEnd < 0 || strings.Contains(body[panel:panel+panelEnd], `data-destination-control`) {
 		t.Fatal("shared panel must contain WFA details only; Discord destination editing stays inline")
 	}
-	if !strings.Contains(adminThemeCSS, `.production-context .production-wfa-edit-panel [data-wfa-automatic]{border-block:0`) {
-		t.Fatal("Supervisor row still has redundant dividers above/below it")
+	if !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-wfa-edit-panel .production-wfa-edit-heading{padding-bottom:0;border-bottom:0}`) || !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-automatic]{border-block:0}`) {
+		t.Fatal("Supervisor row must not be bracketed by redundant horizontal dividers")
 	}
 	attribute := `data-existing-targets="`
 	start := strings.Index(body, attribute)

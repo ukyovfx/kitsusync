@@ -726,9 +726,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           boxShadow: getComputedStyle(node.children[0]).boxShadow,
           outline: getComputedStyle(node.children[0]).outlineStyle,
           expanded: node.querySelector('[data-select-task]').getAttribute('aria-expanded'),
+          pressed: node.querySelector('[data-select-task]').getAttribute('aria-pressed'),
           indicatorTransform: getComputedStyle(node.querySelector('.routing-expand-indicator')).transform,
         }));
-        if (selectedRouteStyle.cellBackground === 'rgba(0, 0, 0, 0)' || selectedRouteStyle.rowBoxShadow !== 'none' || selectedRouteStyle.boxShadow !== 'none' || selectedRouteStyle.outline !== 'none' || selectedRouteStyle.expanded !== 'true') throw new Error(`Selected Task Type does not use a subtle dark-surface state without a bright row frame in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
+        if (selectedRouteStyle.cellBackground !== 'rgba(0, 0, 0, 0)' || selectedRouteStyle.rowBoxShadow !== 'none' || selectedRouteStyle.boxShadow !== 'none' || selectedRouteStyle.outline !== 'none' || selectedRouteStyle.expanded !== 'true' || selectedRouteStyle.pressed !== 'true') throw new Error(`Selected Task Type should use a restrained no-fill state with an accessible selected/expanded marker in ${locale.lang}: ${JSON.stringify(selectedRouteStyle)}`);
         if (await automaticPanel.locator('input,button,select').count()) throw new Error('Automatic WFA recipients are editable');
         if (await panel.locator('[data-destination-control], [data-new-channel-name]').count()) throw new Error('WFA detail panel contains routing controls');
         const detailPlacement = await editForm.evaluate(form => {
