@@ -70,20 +70,24 @@ func TestGetUserMapForProjectWithIdentityUsesExactIDAndUnambiguousLegacyFallback
 	}
 }
 
-func TestGetUserMapForProjectWithIdentityRejectsAmbiguousLegacyProjectRows(t *testing.T) {
+func TestGetUserMapForProjectWithIdentityRejectsProjectFallbackWhenGlobalIdentityConflicts(t *testing.T) {
 	db := userMapIdentityTestDB(t)
 	project := Project{KitsuProjectID: "p-1"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	legacy := []ProjectUserMap{
-		{ProjectID: project.ID, KitsuName: "Legacy Person", KitsuEmail: "legacy@example.test", DiscordUserID: "discord-one"},
-		{ProjectID: project.ID, KitsuName: "Legacy Person", KitsuEmail: "legacy@example.test", DiscordUserID: "discord-two"},
-	}
+	legacy := ProjectUserMap{ProjectID: project.ID, KitsuName: "Legacy Person", KitsuEmail: "legacy@example.test", DiscordUserID: "discord-project"}
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatal(err)
 	}
+	conflicting := []UserMap{
+		{KitsuID: "person-a", KitsuName: "Legacy Person", KitsuEmail: "legacy@example.test", DiscordID: "discord-one"},
+		{KitsuID: "person-b", KitsuName: "Legacy Person", KitsuEmail: "legacy@example.test", DiscordID: "discord-two"},
+	}
+	if err := db.Create(&conflicting).Error; err != nil {
+		t.Fatal(err)
+	}
 	if got := GetUserMapForProjectWithIdentity(db, project.KitsuProjectID, "person-new", "Legacy Person", "legacy@example.test"); got != "" {
-		t.Fatalf("ambiguous legacy project mappings must fail closed, got %q", got)
+		t.Fatalf("project fallback must not override conflicting global Person identities, got %q", got)
 	}
 }

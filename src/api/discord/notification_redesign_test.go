@@ -2,6 +2,7 @@ package discord
 
 import (
 	"app/src/api/kitsu"
+	"app/src/model"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 
 	"app/src/utils/config"
 )
@@ -381,9 +385,15 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	})
 
 	var sent Payload
+	const webhookID = "123456789012345678"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"123456789012345678","type":1,"guild_id":"guild-1","channel_id":"channel-1"}`))
+			return
+		}
 		if r.Method != http.MethodPost {
-			t.Fatalf("delivery method = %s, want POST", r.Method)
+			t.Fatalf("delivery method = %s, want GET or POST", r.Method)
 		}
 		var decoded Payload
 		if err := json.NewDecoder(r.Body).Decode(&decoded); err != nil {
@@ -394,7 +404,25 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
 	defer server.Close()
-	expectedSenderWebhookURL = server.URL
+	expectedSenderWebhookURL = server.URL + "/api/webhooks/" + webhookID + "/test-token"
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
+		t.Fatal(err)
+	}
+	project := model.Project{KitsuProjectID: "production-1", Name: "KitsuSync Local Test", DiscordGuildID: "guild-1"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ProjectWebhook{KitsuProjectID: project.KitsuProjectID, WebhookURL: expectedSenderWebhookURL, DiscordChannelID: "channel-1"}
+	if err := db.Create(&webhook).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProductionNotificationRoute{ProductionID: project.KitsuProjectID, TaskTypeID: "task-type-42", DestinationWebhookID: webhook.ID, DestinationChannelID: webhook.DiscordChannelID}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	var event kitsu.MessagePayload
 	event.Project.Project = kitsu.Project{ID: "production-1", Name: "KitsuSync Local Test"}
@@ -409,7 +437,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 
 	conf := config.Config{TplPreset: "legacy"}
 	conf.GoogleDrive.URL = "https://drive.example.com/folder"
-	results := SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	results := SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" {
 		t.Fatalf("status-change delivery did not complete: %+v", results)
 	}

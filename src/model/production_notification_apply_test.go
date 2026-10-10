@@ -11,7 +11,7 @@ func TestProductionNotificationRevisionReturnsReadFailures(t *testing.T) {
 	for _, table := range []string{"production_notification_routes", "project_reviewer_targets"} {
 		t.Run(table, func(t *testing.T) {
 			db := newRoutingTestDB(t)
-			if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+			if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 				t.Fatal(err)
 			}
 			readErr := errors.New("injected revision read failure")
@@ -33,7 +33,7 @@ func TestProductionNotificationRevisionReturnsReadFailures(t *testing.T) {
 
 func TestProductionNotificationRevisionLegacyWrapperFailsClosed(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	readErr := errors.New("injected revision read failure")
@@ -65,8 +65,10 @@ func TestRestoreProductionNotificationStateStopsOnRevisionReadFailure(t *testing
 	}
 	before := ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
 	readErr := errors.New("injected restore revision read failure")
+	failureInjected := false
 	if err := db.Callback().Query().Before("gorm:query").Register("test:fail_restore_revision", func(tx *gorm.DB) {
-		if tx.Statement.Table == "production_notification_routes" {
+		if tx.Statement.Table == "production_notification_routes" && !failureInjected {
+			failureInjected = true
 			tx.AddError(readErr)
 		}
 	}); err != nil {
@@ -83,7 +85,7 @@ func TestRestoreProductionNotificationStateStopsOnRevisionReadFailure(t *testing
 
 func TestApplyProductionNotificationStateRejectsReviewerDeltaForRemovedRoute(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-delete-route", Name: "Apply Delete Route"}
@@ -116,7 +118,7 @@ func TestApplyProductionNotificationStateRejectsReviewerDeltaForRemovedRoute(t *
 
 func TestApplyProductionNotificationStateDeletesRemovedRouteTargetsAtomically(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-remove-targets", Name: "Apply Remove Targets"}
@@ -149,7 +151,7 @@ func TestApplyProductionNotificationStateDeletesRemovedRouteTargetsAtomically(t 
 
 func TestApplyProductionNotificationStateCreatesWebhookAndRouteAtomically(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-new-channel", Name: "New Channel"}
@@ -182,7 +184,7 @@ func TestApplyProductionNotificationStateCreatesWebhookAndRouteAtomically(t *tes
 
 func TestApplyProductionNotificationStateCommitsRoutesAndUserRoleDeltasTogether(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-combined-state", Name: "Combined Apply"}
@@ -235,7 +237,7 @@ func TestApplyProductionNotificationStateCommitsRoutesAndUserRoleDeltasTogether(
 
 func TestApplyProductionNotificationStateRejectsStaleRevisionWithoutWrites(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-stale", Name: "Apply Stale"}
@@ -269,7 +271,7 @@ func TestApplyProductionNotificationStateRejectsStaleRevisionWithoutWrites(t *te
 
 func TestApplyProductionNotificationStateRollsBackInvalidTargetAfterRouteReplacement(t *testing.T) {
 	db := newRoutingTestDB(t)
-	if err := db.AutoMigrate(&Project{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &ProjectReviewerTarget{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	project := Project{KitsuProjectID: "apply-rollback", Name: "Apply Rollback"}

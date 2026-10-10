@@ -418,7 +418,7 @@ func TestExternalReorderMutationBarrierBlocksDispatchAndSurfacesRecovery(t *test
 		t.Fatalf("failed compensation must keep dispatch quarantined: %v", err)
 	}
 	diagnostics, err = ListUnresolvedNotificationDeliveries(db, 50)
-	if err != nil || len(diagnostics) != 1 || diagnostics[0].Disposition != "mutation_needs_help" {
+	if err != nil || len(diagnostics) != 1 || diagnostics[0].Disposition != "mutation_reorder_needs_help" {
 		t.Fatalf("unresolved recovery state not surfaced: %#v err=%v", diagnostics, err)
 	}
 }
@@ -503,6 +503,13 @@ func TestManagedChannelDeletionTombstoneBlocksDispatchAndFinalizesAtomically(t *
 	if err := db.Create(&ProjectReviewerTarget{ProjectID: project.ID, TaskTypeID: "task-type-1", TargetKind: ReviewerTargetUser, DiscordID: "discord-user-1"}).Error; err != nil {
 		t.Fatal(err)
 	}
+	secondWebhook := ProjectWebhook{KitsuProjectID: "production-1", DiscordChannelID: "channel-2", WebhookURL: "https://discord.com/api/webhooks/webhook-2/token"}
+	if err := db.Create(&secondWebhook).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ProductionNotificationRoute{ProductionID: "production-1", TaskTypeID: "task-type-2", DestinationWebhookID: secondWebhook.ID, DestinationChannelID: "channel-2"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := BeginManagedChannelDeletion(db, "production-1", 1, "guild-1", "channel-1", "webhook-1", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +536,8 @@ func TestManagedChannelDeletionTombstoneBlocksDispatchAndFinalizesAtomically(t *
 	if err := FinalizeManagedChannelDeletion(db, 1, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if FindProjectWebhookByID(db, 1) != nil || len(ListProductionNotificationRoutes(db, "production-1")) != 0 || len(ListProjectReviewerTargets(db, project.ID)) != 0 {
+	routes := ListProductionNotificationRoutes(db, "production-1")
+	if FindProjectWebhookByID(db, 1) != nil || len(routes) != 1 || routes[0].TaskTypeID != "task-type-2" || len(ListProjectReviewerTargets(db, project.ID)) != 0 {
 		t.Fatal("finalized deletion did not atomically remove local destination state")
 	}
 }

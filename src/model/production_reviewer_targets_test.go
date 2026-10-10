@@ -13,7 +13,7 @@ func reviewerTargetTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&Project{}, &UserMap{}, &ProjectUserMap{}, &CheckerMap{}, &ProjectCheckerMap{}, &ProjectReviewerTarget{}, &ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &UserMap{}, &ProjectUserMap{}, &CheckerMap{}, &ProjectCheckerMap{}, &ProjectReviewerTarget{}, &ProductionNotificationWriteLock{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	return db

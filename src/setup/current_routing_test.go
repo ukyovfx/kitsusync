@@ -892,14 +892,35 @@ func TestLegacyTaskTypeDeleteWaitsForProductionApply(t *testing.T) {
 
 func TestDeleteProjectChannelWaitsForProductionApply(t *testing.T) {
 	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "legacy-channel-delete", Name: "Legacy Channel Delete"}
+	project := model.Project{KitsuProjectID: "legacy-channel-delete", Name: "Legacy Channel Delete", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "https://example.invalid/comp", "channel-1"); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "https://discord.com/api/webhooks/123456789012345678/test-token", "channel-1"); err != nil {
 		t.Fatal(err)
 	}
 	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "animation", "Animation", "https://discord.com/api/webhooks/123456789012345679/test-token", "channel-2"); err != nil {
+		t.Fatal(err)
+	}
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "comp", DestinationWebhookID: webhooks[0].ID}, {ProductionID: project.KitsuProjectID, TaskTypeID: "animation", DestinationWebhookID: webhooks[1].ID}}); err != nil {
+		t.Fatal(err)
+	}
+	oldCheck, oldList, oldInspect := currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingInspectWebhook
+	currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
+		return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true}}
+	}
+	currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
+		return []DiscordGuildChannel{{ID: "channel-1", Type: 0, ParentID: "category-1"}}, nil
+	}
+	currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+		id, err := discordWebhookID(raw)
+		return routingWebhookIdentity{ID: id, Type: 1, GuildID: "guild-1", ChannelID: "channel-1"}, false, err
+	}
+	defer func() {
+		currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingInspectWebhook = oldCheck, oldList, oldInspect
+	}()
 	oldDelete := deleteProjectChannelOnDiscord
 	deleteReached := make(chan struct{})
 	deleteProjectChannelOnDiscord = func(string, string) error {
