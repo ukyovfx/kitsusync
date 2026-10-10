@@ -18,7 +18,7 @@ var reviewerGuildRolesReader = ListGuildRoles
 // ResolveProductionWFAReviewerTargets combines current automatic Supervisors
 // with explicit targets, validating every Discord target against the live
 // Production Team and linked Guild immediately before delivery.
-func ResolveProductionWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID string) ([]model.ProjectReviewerTarget, error) {
+func ResolveProductionWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID string, senderWebhookURLs ...string) ([]model.ProjectReviewerTarget, error) {
 	if db == nil {
 		return nil, gorm.ErrInvalidDB
 	}
@@ -87,12 +87,12 @@ func ResolveProductionWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, 
 	}
 	allowedRoles := map[string]struct{}{}
 	if roleTargetsExist {
-		roles, err := reviewerGuildRolesReader(project.DiscordGuildID, discordToken)
-		if err != nil {
-			return nil, fmt.Errorf("read linked Discord Guild roles: %w", err)
+		if len(senderWebhookURLs) == 0 || strings.TrimSpace(senderWebhookURLs[0]) == "" {
+			return nil, errors.New("current Discord Reviewer sender is unavailable")
 		}
-		for _, role := range mentionableReviewerRoles(project.DiscordGuildID, roles) {
-			allowedRoles[strings.TrimSpace(role.ID)] = struct{}{}
+		allowedRoles, err = verifiedReviewerRolesForTaskType(db, project, taskTypeID, discordToken, senderWebhookURLs[0])
+		if err != nil {
+			return nil, fmt.Errorf("verify linked Discord Reviewer roles: %w", err)
 		}
 	}
 

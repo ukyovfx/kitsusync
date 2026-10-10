@@ -47,6 +47,29 @@ func productionNotificationRoleAvailability(project model.Project, view producti
 	if len(view.RoleCatalog) == 0 {
 		return reviewerRolesEmpty
 	}
+	if view.RoleSendEvidenceRequested || len(view.RoleSendEvidenceByTaskType) > 0 || len(view.RoleSendErrorsByTaskType) > 0 {
+		evidenceUnavailable := false
+		for _, evidenceErr := range view.RoleSendErrorsByTaskType {
+			if evidenceErr != nil {
+				evidenceUnavailable = true
+			}
+		}
+		for taskTypeID, evidence := range view.RoleSendEvidenceByTaskType {
+			sender := view.RoleSendersByTaskType[taskTypeID]
+			for _, role := range view.RoleCatalog {
+				if reviewerRoleCanBeMentioned(project.DiscordGuildID, sender.ChannelID, sender.WebhookURL, role, evidence, view.RoleSendErrorsByTaskType[taskTypeID]) {
+					return reviewerRolesAvailable
+				}
+			}
+		}
+		if len(view.RoleSendEvidenceByTaskType) == 0 && !evidenceUnavailable {
+			return reviewerRolesUnavailable
+		}
+		if evidenceUnavailable {
+			return reviewerRolesUnavailable
+		}
+		return reviewerRolesNonMentionable
+	}
 	if len(view.Roles) == 0 {
 		return reviewerRolesNonMentionable
 	}
@@ -72,12 +95,12 @@ func reviewerRoleAvailabilityMessage(lang string, project model.Project, view pr
 				message = t(lang, fmt.Sprintf("Discordロールを確認できません（HTTP %d）。", apiErr.StatusCode), fmt.Sprintf("Discord roles could not be verified (HTTP %d).", apiErr.StatusCode))
 			}
 		} else {
-			message = t(lang, "Discordロールを確認できません。", "Discord roles could not be verified.")
+			message = t(lang, "Discordロールと送信先の権限を確認できません。", "Discord roles and destination permissions could not be verified.")
 		}
 	case reviewerRolesEmpty:
 		message = t(lang, "このDiscordサーバーにカスタムロールはありません。", "No custom Discord roles are configured.")
 	case reviewerRolesNonMentionable:
-		message = t(lang, "ロールはありますが、メンション可能なロールはありません。", "Roles exist, but none are mentionable.")
+		message = t(lang, "確認済みの送信先で利用できるロールはありません。", "No roles are eligible for a verified destination.")
 	}
 	if message == "" {
 		return ""
@@ -267,7 +290,7 @@ func verifyCurrentRoutingOwnedChannel(project model.Project, webhook model.Proje
 }
 
 func renderCurrentIARoutingEditorSetupStyle(db *gorm.DB, r *http.Request, p model.Project, lang, readTable string, botTokens ...string) string {
-	view := loadProductionNotificationReviewerView(db, p, true, botTokens...)
+	view := loadProductionNotificationReviewerView(db, p, true, true, botTokens...)
 	return renderCurrentIARoutingEditorSetupStyleWithData(db, r, p, lang, readTable, view)
 }
 
@@ -305,9 +328,9 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 	if view.TeamErr == nil && view.GuildErr == nil {
 		eligibleUsers = currentProductionLinkedHumanDiscordIDs(view.Team, view.Users, view.GuildUsers)
 	}
-	roleLabels := map[string]string{}
-	for _, role := range view.Roles {
-		roleLabels[role.ID] = "@" + role.Name
+	roleLabels := map[string]DiscordGuildRole{}
+	for _, role := range view.RoleCatalog {
+		roleLabels[role.ID] = role
 	}
 	var userOptions, roleOptions strings.Builder
 	userIDs := make([]string, 0, len(eligibleUsers))
@@ -320,22 +343,17 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 		userOptions.WriteString(`<option value="` + esc(id) + `">` + esc(eligibleUsers[id]) + `</option>`)
 		userListboxOptions.WriteString(`<button type="button" role="option" tabindex="-1" aria-selected="false" data-wfa-option-value="` + esc(id) + `">` + esc(eligibleUsers[id]) + `</button>`)
 	}
-	mentionableRoles := append([]DiscordGuildRole(nil), view.Roles...)
-	sort.Slice(mentionableRoles, func(i, j int) bool { return mentionableRoles[i].Name < mentionableRoles[j].Name })
 	roleCatalog := reviewerRoleCatalog(p.DiscordGuildID, view.RoleCatalog)
 	sort.Slice(roleCatalog, func(i, j int) bool { return roleCatalog[i].Name < roleCatalog[j].Name })
 	var roleListboxOptions strings.Builder
 	for _, role := range roleCatalog {
-		disabled := !role.Mentionable
 		label := "@" + role.Name
-		optionDisabled := ""
-		if disabled {
-			label += " — " + t(lang, "メンション不可", "Not mentionable")
-			optionDisabled = ` aria-disabled="true" class="recipient-option-disabled"`
-		} else {
-			roleOptions.WriteString(`<option value="` + esc(role.ID) + `">@` + esc(role.Name) + `</option>`)
+		disabledLabel := t(lang, "送信先を確認できません", "Destination could not be verified")
+		if !role.Mentionable {
+			disabledLabel = t(lang, "メンション不可・Bot権限を確認できません", "Not mentionable; Bot permission is unavailable")
 		}
-		roleListboxOptions.WriteString(`<button type="button" role="option" tabindex="-1" aria-selected="false"` + optionDisabled + ` data-wfa-option-value="` + esc(role.ID) + `">` + esc(label) + `</button>`)
+		roleOptions.WriteString(`<option value="` + esc(role.ID) + `" disabled>@` + esc(role.Name) + `</option>`)
+		roleListboxOptions.WriteString(`<button type="button" role="option" tabindex="-1" aria-selected="false" aria-disabled="true" class="recipient-option-disabled" data-role-mentionable="` + strconv.FormatBool(role.Mentionable) + `" data-role-name="` + esc(label) + `" data-role-disabled-label="` + esc(disabledLabel) + `" data-wfa-option-value="` + esc(role.ID) + `">` + esc(label+" — "+disabledLabel) + `</button>`)
 	}
 	userAvailability, roleAvailability := "", ""
 	if view.TeamErr != nil {
@@ -360,6 +378,9 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 		}
 		menuLabel := t(lang, "行の操作", "Route actions")
 		targets, _, _ := model.ListProjectReviewerTargetsForTaskType(db, p.ID, route.TaskTypeID)
+		evidence := view.RoleSendEvidenceByTaskType[route.TaskTypeID]
+		evidenceErr := view.RoleSendErrorsByTaskType[route.TaskTypeID]
+		sender := view.RoleSendersByTaskType[route.TaskTypeID]
 		type targetView struct {
 			Kind  string `json:"kind"`
 			ID    string `json:"id"`
@@ -374,8 +395,12 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 				} else {
 					label = t(lang, "リンクまたはメンバーを確認できません", "User is no longer verified")
 				}
-			} else if roleLabels[target.DiscordID] != "" {
-				label = roleLabels[target.DiscordID]
+			} else if role, ok := roleLabels[target.DiscordID]; ok {
+				if reviewerRoleCanBeMentioned(p.DiscordGuildID, sender.ChannelID, sender.WebhookURL, role, evidence, evidenceErr) {
+					label = "@" + role.Name
+				} else {
+					label = t(lang, "ロール利用不可", "Role unavailable")
+				}
 			} else {
 				label = t(lang, "ロールを確認できません", "Role is no longer verified")
 			}
@@ -387,7 +412,14 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 		if taskType, ok := taskTypesByID[route.TaskTypeID]; ok {
 			defaultChannelName = NormalizeTaskTypeChannelName(taskType.Name)
 		}
-		rows.WriteString(`<tr draggable="true" data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-default-channel-name="` + esc(defaultChannelName) + `" data-existing-targets="` + targetsAttribute + `" data-original-destination="` + strconv.FormatUint(uint64(route.DestinationWebhookID), 10) + `"><td><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></td><td><div class="routing-destination-control"><select class="routing-destination-select" name="destination_mode" data-destination-control aria-label="` + esc(channelLabel) + `">` + destinationList(route.DestinationWebhookID) + `</select><label class="routing-custom-channel" data-custom-channel-field hidden><span class="sr-only">` + esc(t(lang, "チャンネル名", "Channel name")) + `</span><input data-new-channel-name maxlength="100" autocomplete="off" disabled>` + `</label></div></td><td><details class="routing-row-menu"><summary aria-label="` + esc(menuLabel) + `">&#8942;</summary><div class="routing-row-menu-panel" role="menu"><button type="button" class="routing-remove" data-routing-remove role="menuitem">` + esc(removeLabel) + `</button>` + deleteButton + `</div></details></td></tr>`)
+		eligibleRoleIDs := make([]string, 0, len(roleCatalog))
+		for _, role := range roleCatalog {
+			if reviewerRoleCanBeMentioned(p.DiscordGuildID, sender.ChannelID, sender.WebhookURL, role, evidence, evidenceErr) {
+				eligibleRoleIDs = append(eligibleRoleIDs, role.ID)
+			}
+		}
+		evidenceVerified := evidenceErr == nil && evidence.PermissionsKnown && evidence.OwnershipVerified
+		rows.WriteString(`<tr draggable="true" data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-default-channel-name="` + esc(defaultChannelName) + `" data-existing-targets="` + targetsAttribute + `" data-original-destination="` + strconv.FormatUint(uint64(route.DestinationWebhookID), 10) + `" data-role-sender-verified="` + strconv.FormatBool(evidenceVerified) + `" data-bot-can-mention-roles="` + strconv.FormatBool(evidence.CanMentionRoles) + `" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `"><td><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></td><td><div class="routing-destination-control"><select class="routing-destination-select" name="destination_mode" data-destination-control aria-label="` + esc(channelLabel) + `">` + destinationList(route.DestinationWebhookID) + `</select><label class="routing-custom-channel" data-custom-channel-field hidden><span class="sr-only">` + esc(t(lang, "チャンネル名", "Channel name")) + `</span><input data-new-channel-name maxlength="100" autocomplete="off" disabled>` + `</label></div></td><td><details class="routing-row-menu"><summary aria-label="` + esc(menuLabel) + `">&#8942;</summary><div class="routing-row-menu-panel" role="menu"><button type="button" class="routing-remove" data-routing-remove role="menuitem">` + esc(removeLabel) + `</button>` + deleteButton + `</div></details></td></tr>`)
 	}
 	userSelectLabel := t(lang, "選択", "Select")
 	userPicker := userAvailability
@@ -400,7 +432,7 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 	if view.RolesReady && len(roleCatalog) > 0 {
 		rolePicker = roleAvailability + `<label class="recipient-picker-label">` + esc(t(lang, "Discordロール", "Discord role")) + `<span class="recipient-picker" data-recipient-picker><button type="button" class="recipient-combobox" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="wfa-role-listbox" aria-label="` + esc(t(lang, "Discordロール", "Discord role")) + `" data-wfa-role-combobox><span data-recipient-combobox-value>` + esc(userSelectLabel) + `</span><span aria-hidden="true" class="recipient-combobox-indicator">▾</span></button><div id="wfa-role-listbox" class="recipient-listbox" role="listbox" aria-label="` + esc(t(lang, "Discordロール", "Discord role")) + `" data-wfa-role-listbox hidden>` + roleListboxOptions.String() + `</div></span></label>`
 	}
-	addModal := `<dialog data-wfa-add-modal data-has-role-options="` + strconv.FormatBool(len(mentionableRoles) > 0) + `" data-recipient-mode="user" aria-labelledby="wfa-add-modal-title"><h4 id="wfa-add-modal-title">` + esc(t(lang, "通知先を追加", "Add recipient")) + `</h4><div class="recipient-mode-tabs" role="tablist" aria-label="` + esc(t(lang, "通知先の種類", "Recipient type")) + `"><button type="button" role="tab" id="wfa-user-tab" aria-selected="true" aria-controls="wfa-user-panel" data-recipient-mode="user">` + esc(t(lang, "ユーザー", "Users")) + `</button><button type="button" role="tab" id="wfa-role-tab" aria-selected="false" aria-controls="wfa-role-panel" tabindex="-1" data-recipient-mode="role">` + esc(t(lang, "ロール", "Roles")) + `</button></div><div id="wfa-user-panel" role="tabpanel" aria-labelledby="wfa-user-tab" data-recipient-panel="user">` + userPicker + `<select data-wfa-user-id data-recipient-select="user" hidden aria-hidden="true" tabindex="-1"><option value=""></option>` + userOptions.String() + `</select></div><div id="wfa-role-panel" role="tabpanel" aria-labelledby="wfa-role-tab" data-recipient-panel="role" hidden>` + rolePicker + `<select data-wfa-role-id data-recipient-select="role" hidden aria-hidden="true" tabindex="-1"><option value=""></option>` + roleOptions.String() + `</select></div><div class="button-row"><button type="button" class="btn-ghost" data-wfa-add-cancel>` + esc(t(lang, "キャンセル", "Cancel")) + `</button><button type="button" class="btn" data-wfa-add-confirm>` + esc(t(lang, "追加", "Add")) + `</button></div></dialog>`
+	addModal := `<dialog data-wfa-add-modal data-has-role-options="false" data-role-unverified-label="` + esc(t(lang, "送信先Webhookを確認できません", "Sender webhook could not be verified")) + `" data-role-permission-label="` + esc(t(lang, "メンション不可・Bot権限を確認できません", "Not mentionable; Bot permission is unavailable")) + `" data-recipient-mode="user" aria-labelledby="wfa-add-modal-title"><h4 id="wfa-add-modal-title">` + esc(t(lang, "通知先を追加", "Add recipient")) + `</h4><div class="recipient-mode-tabs" role="tablist" aria-label="` + esc(t(lang, "通知先の種類", "Recipient type")) + `"><button type="button" role="tab" id="wfa-user-tab" aria-selected="true" aria-controls="wfa-user-panel" data-recipient-mode="user">` + esc(t(lang, "ユーザー", "Users")) + `</button><button type="button" role="tab" id="wfa-role-tab" aria-selected="false" aria-controls="wfa-role-panel" tabindex="-1" data-recipient-mode="role">` + esc(t(lang, "ロール", "Roles")) + `</button></div><div id="wfa-user-panel" role="tabpanel" aria-labelledby="wfa-user-tab" data-recipient-panel="user">` + userPicker + `<select data-wfa-user-id data-recipient-select="user" hidden aria-hidden="true" tabindex="-1"><option value=""></option>` + userOptions.String() + `</select></div><div id="wfa-role-panel" role="tabpanel" aria-labelledby="wfa-role-tab" data-recipient-panel="role" hidden>` + rolePicker + `<select data-wfa-role-id data-recipient-select="role" hidden aria-hidden="true" tabindex="-1"><option value=""></option>` + roleOptions.String() + `</select></div><div class="button-row"><button type="button" class="btn-ghost" data-wfa-add-cancel>` + esc(t(lang, "キャンセル", "Cancel")) + `</button><button type="button" class="btn" data-wfa-add-confirm>` + esc(t(lang, "追加", "Add")) + `</button></div></dialog>`
 	html := `<section class="production-routing-editor" aria-labelledby="production-routing-editor-title"><div class="page-heading"><div><h3 id="production-routing-editor-title">` + esc(t(lang, "\u901a\u77e5\u30eb\u30fc\u30c6\u30a3\u30f3\u30b0", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(iaStatusClass(db, p))) + `">` + esc(iaStatusLabel(db, p, lang)) + `</span></div><form method="post" action="` + esc(formAction) + `" data-current-routing-form data-async-notification-apply data-apply-endpoint="/bot/admin/projects?apply_notifications=1" data-project-id="` + esc(p.KitsuProjectID) + `" data-remove-confirm="` + esc(t(lang, "このTask Typeの通知ルートをApply時に解除します。続行しますか？", "Remove this Task Type route?")) + `" data-stale-message="` + esc(t(lang, "別の編集が保存されました。入力内容は保持されています。内容を確認してください。", "Another edit was saved. Your pending changes are preserved; review them before continuing.")) + `" data-error-message="` + esc(t(lang, "変更を適用できませんでした。入力内容は保持されています。", "Changes could not be applied. Your pending edits are preserved.")) + `" data-empty-wfa="` + esc(t(lang, "Supervisorなし", "No Supervisor")) + `" data-draft-label="` + esc(t(lang, "新しい通知ルート", "New notification route")) + `" data-remove-label="` + esc(t(lang, "解除", "Remove")) + `" data-no-pending="` + esc(t(lang, "変更はありません", "No pending changes")) + `" data-pending-one="` + esc(t(lang, "件の未適用の変更", "pending change")) + `" data-pending-many="` + esc(t(lang, "件の未適用の変更", "pending changes")) + `" data-success-url="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="expected_revision" value="` + esc(model.ProductionNotificationRevision(db, p.ID, p.KitsuProjectID)) + `"><div class="table-wrap wizard-plan-table"><table><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th></th></tr></thead><tbody data-current-routing-sort>` + rows.String() + `</tbody></table></div><div class="button-row production-routing-editor-actions"><button type="button" class="btn-ghost" data-routing-add>+ ` + esc(t(lang, "Task Type\u3092追加", "Add Task Type")) + `</button></div><div hidden data-editor-parking><section class="production-wfa-edit-panel" data-wfa-detail-panel aria-live="polite"></section></div><div data-apply-message role="status" aria-live="polite"></div><div class="button-row production-routing-editor-footer"><span data-pending-status role="status">` + esc(t(lang, "変更はありません", "No pending changes")) + `</span><button type="submit" class="btn" data-apply-submit disabled>` + esc(t(lang, "\u5909\u66f4\u3092\u9069\u7528", "Apply")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `" data-pending-cancel>` + esc(t(lang, "\u30ad\u30e3\u30f3\u30bb\u30eb", "Cancel")) + `</a></div></form>` + addModal + deleteDialogs.String() + `<div hidden data-wfa-source>` + readTable + `</div><p class="field-help routing-destructive-note">` + esc(t(lang, "\u3053\u3053\u3067\u5916\u3059\u306e\u306fKitsuSync\u306e\u901a\u77e5\u30eb\u30fc\u30c6\u30a3\u30f3\u30b0\u3060\u3051\u3067\u3059\u3002Kitsu Task Type\u3084Discord\u30c1\u30e3\u30f3\u30cd\u30eb\u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002", "Removing a route changes only KitsuSync routing; it never deletes Kitsu Task Types or Discord channels.")) + `</p></section>` + currentRoutingEditorScript() + currentRoutingDeleteScript()
 	return html
 }

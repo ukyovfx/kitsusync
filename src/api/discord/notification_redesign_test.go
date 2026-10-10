@@ -351,6 +351,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	reviewerTargets := []ReviewerTarget{{Kind: "user", ID: "123456789012345670"}}
 	reviewerResolverCalls := 0
 	var reviewerResolveErr error
+	var expectedSenderWebhookURL string
 	checkResolverArgs := func(projectID, taskTypeID, taskTypeName string) {
 		if projectID != "production-1" || taskTypeID != "task-type-42" || taskTypeName != "Compositing" {
 			t.Errorf("Reviewer resolver arguments = (%q, %q, %q), want (production-1, task-type-42, Compositing)", projectID, taskTypeID, taskTypeName)
@@ -360,9 +361,12 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
 		return checkerIDs
 	}
-	ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, error) {
+	ReviewerResolver = func(projectID, taskTypeID, taskTypeName, senderWebhookURL string) ([]ReviewerTarget, error) {
 		reviewerResolverCalls++
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
+		if senderWebhookURL != expectedSenderWebhookURL {
+			t.Errorf("Reviewer sender webhook URL = %q, want current delivery URL", senderWebhookURL)
+		}
 		return reviewerTargets, reviewerResolveErr
 	}
 	KitsuPublicURLResolver = func() string { return "https://kitsu.example.com" }
@@ -390,6 +394,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
 	defer server.Close()
+	expectedSenderWebhookURL = server.URL
 
 	var event kitsu.MessagePayload
 	event.Project.Project = kitsu.Project{ID: "production-1", Name: "KitsuSync Local Test"}

@@ -2251,9 +2251,9 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
 	})
 
-	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole string }{
-		{"ja", "自動通知先", "追加通知先", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加"},
-		{"en", "Automatic recipients", "Additional recipients", "None", "Add user", "Discord user", "Add role"},
+	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole, wantRoleDisabled string }{
+		{"ja", "自動通知先", "追加通知先", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加", "送信先の権限を確認できません"},
+		{"en", "Automatic recipients", "Additional recipients", "None", "Add user", "Discord user", "Add role", "Destination permissions could not be verified"},
 	} {
 		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
 		body := renderCurrentProductionWFARecipients(db, request, project, tc.lang, "bot-token")
@@ -2265,8 +2265,11 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 		if !strings.Contains(body, tc.wantOverrides) || !strings.Contains(body, tc.wantNone) || strings.Contains(body, "Not active while an override is set.") {
 			t.Fatalf("%s Reviewer UI must state that no override exists", tc.lang)
 		}
-		if strings.Contains(body, `value="123456789012345678"`) || strings.Contains(body, `value="123456789012345681"`) || strings.Contains(body, `value="123456789012345682"`) || strings.Contains(body, "unlinked-person") {
-			t.Fatalf("%s Reviewer UI exposed @everyone, a non-mentionable role, a non-Team user, or an unlinked ID", tc.lang)
+		if strings.Contains(body, `value="123456789012345678"`) || strings.Contains(body, `value="123456789012345682"`) || strings.Contains(body, "unlinked-person") {
+			t.Fatalf("%s Reviewer UI exposed @everyone, a non-Team user, or an unlinked ID", tc.lang)
+		}
+		if !strings.Contains(body, `value="123456789012345681" disabled`) || !strings.Contains(body, tc.wantRoleDisabled) {
+			t.Fatalf("%s Reviewer UI must show a non-mentionable role as disabled with a reason when no verified route exists", tc.lang)
 		}
 		if strings.Contains(body, "save_production_checker") {
 			t.Fatalf("%s Reviewer UI still exposes the single-target legacy form", tc.lang)

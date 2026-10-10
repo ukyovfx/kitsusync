@@ -170,10 +170,10 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.synthetic.invalid/webhook", "channel-comp"); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.com/api/webhooks/44444444444444441/synthetic-compositing-token", "55555555555555551"); err != nil {
 		t.Fatal("seed synthetic routing destination")
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "animation", "animation", "https://discord.synthetic.invalid/webhook", "channel-animation"); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "animation", "animation", "https://discord.com/api/webhooks/44444444444444442/synthetic-animation-token", "55555555555555552"); err != nil {
 		t.Fatal("seed second synthetic routing destination")
 	}
 	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
@@ -261,7 +261,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production":
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "sparse-production":
@@ -409,8 +409,14 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 	switch {
 	case r.URL.Path == "/api/v10/users/@me":
 		body = `{"id":"11111111111111113","username":"Synthetic KitsuSync Bot"}`
+	case r.URL.Path == "/api/v10/webhooks/44444444444444441":
+		body = `{"id":"44444444444444441","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555551","user":{"id":"11111111111111113"}}`
+	case r.URL.Path == "/api/v10/webhooks/44444444444444442":
+		body = `{"id":"44444444444444442","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555552","user":{"id":"11111111111111113"}}`
 	case r.URL.Path == "/api/v10/users/@me/guilds":
 		body = `[{"id":"11111111111111111","name":"Synthetic Discord"},{"id":"11111111111111112","name":"Other Synthetic Discord"}]`
+	case r.URL.Path == "/api/v10/guilds/"+d.expectedGuild+"/members/11111111111111113":
+		body = `{"user":{"id":"11111111111111113"},"roles":[]}`
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/members"):
 		if d.scenario.Load().(string) == "discord-failure" {
 			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`
@@ -429,14 +435,18 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 		case "no-roles":
 			body = `[]`
 		case "non-mentionable-roles":
-			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false}]`
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"3072"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"}]`
+		case "bot-can-mention-roles":
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"134144"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"}]`
 		case "roles-forbidden":
 			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`
 		case "roles-rate-limited":
 			status, body = http.StatusTooManyRequests, `{"message":"synthetic failure"}`
 		default:
-			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false}]`
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"3072"},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true,"permissions":"0"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"}]`
 		}
+	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
+		body = `[{"id":"55555555555555551","guild_id":"` + d.expectedGuild + `","type":0,"permission_overwrites":[]},{"id":"55555555555555552","guild_id":"` + d.expectedGuild + `","type":0,"permission_overwrites":[]}]`
 	default:
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:

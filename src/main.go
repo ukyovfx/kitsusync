@@ -901,14 +901,14 @@ func main() {
 	discord.CheckerResolver = func(projectID, taskTypeID, taskTypeName string) []string {
 		return model.GetCheckerForProjectByTaskTypeID(db, projectID, taskTypeID, taskTypeName)
 	}
-	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
+	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName, senderWebhookURL string) ([]discord.ReviewerTarget, error) {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
 		baseURL := ""
 		if connectionErr == nil {
 			baseURL = connection.ResolvedAPIBaseURL
 		}
-		targets, err := setup.ResolveProductionWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.StoredRuntimeDiscordBotToken(db), projectID, taskTypeID)
+		targets, err := setup.ResolveProductionWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.StoredRuntimeDiscordBotToken(db), projectID, taskTypeID, senderWebhookURL)
 		resolved := make([]discord.ReviewerTarget, 0, len(targets))
 		for _, target := range targets {
 			resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})

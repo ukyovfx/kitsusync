@@ -1213,9 +1213,14 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	roles, rolesReady := []DiscordGuildRole{}, false
 	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
 		if listed, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, botToken); err == nil {
-			roles = mentionableReviewerRoles(p.DiscordGuildID, listed)
+			roles = reviewerRoleCatalog(p.DiscordGuildID, listed)
 			rolesReady = true
 		}
+	}
+	eligibleRoleIDs := map[string]struct{}{}
+	var roleEligibilityErr error
+	if selectedTaskType.ID != "" && botToken != "" {
+		eligibleRoleIDs, roleEligibilityErr = currentReviewerRoleEligibility(db, p, selectedTaskType.ID, botToken)
 	}
 	var explicitRows []model.ProjectReviewerTarget
 	for _, target := range model.ListProjectReviewerTargets(db, p.ID) {
@@ -1326,10 +1331,31 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		}
 		if rolesReady && len(roles) > 0 {
 			var roleOptions strings.Builder
+			eligibleCount := 0
 			for _, role := range roles {
-				roleOptions.WriteString(`<option value="` + esc(role.ID) + `">@` + esc(role.Name) + `</option>`)
+				_, eligible := eligibleRoleIDs[role.ID]
+				disabled, reason := "", ""
+				if !eligible {
+					disabled = ` disabled`
+					if roleEligibilityErr != nil {
+						reason = label("送信先の権限を確認できません", "Destination permissions could not be verified")
+					} else {
+						reason = label("メンション不可・Bot権限なし", "Not mentionable; Bot lacks permission")
+					}
+				} else {
+					eligibleCount++
+				}
+				optionText := "@" + role.Name
+				if reason != "" {
+					optionText += " — " + reason
+				}
+				roleOptions.WriteString(`<option value="` + esc(role.ID) + `"` + disabled + `>` + esc(optionText) + `</option>`)
 			}
-			addForm += `<form method="post" class="reviewer-target-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="action" value="add_production_reviewer_target"><input type="hidden" name="target_kind" value="role"><label>` + esc(label("Discordロール", "Discord role")) + `<select name="target_id" required>` + roleOptions.String() + `</select></label><button class="btn" type="submit">` + esc(label("ロールを追加", "Add role")) + `</button></form>`
+			disabled := ""
+			if eligibleCount == 0 {
+				disabled = ` disabled`
+			}
+			addForm += `<form method="post" class="reviewer-target-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="action" value="add_production_reviewer_target"><input type="hidden" name="target_kind" value="role"><label>` + esc(label("Discordロール", "Discord role")) + `<select name="target_id" required>` + roleOptions.String() + `</select></label><button class="btn" type="submit"` + disabled + `>` + esc(label("ロールを追加", "Add role")) + `</button></form>`
 		} else {
 			addForm += `<p class="field-help">` + esc(label("メンション可能なDiscordロールはありません。", "No mentionable Discord roles are available.")) + `</p>`
 		}
@@ -1411,19 +1437,12 @@ func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request,
 				if len(botTokens) > 0 {
 					botToken = botTokens[0]
 				}
-				roles, err := reviewerDiscordRolesForGuild(project.DiscordGuildID, botToken)
+				eligibleRoles, err := currentReviewerRoleEligibility(db, *project, taskType.ID, botToken)
 				if err != nil {
 					writeReviewerMutationError()
 					return true
 				}
-				eligible := false
-				for _, role := range mentionableReviewerRoles(project.DiscordGuildID, roles) {
-					if role.ID == id {
-						eligible = true
-						break
-					}
-				}
-				if !eligible {
+				if _, eligible := eligibleRoles[id]; !eligible {
 					writeReviewerMutationError()
 					return true
 				}
@@ -1479,7 +1498,8 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 		statusLabel = t(lang, "利用不可", "Unavailable")
 	}
 	editing := r != nil && r.URL.Query().Get("edit_routing") == "1"
-	data := loadProductionNotificationReviewerView(db, p, len(model.ListProductionNotificationRoutes(db, p.KitsuProjectID)) > 0 || editing, botTokens...)
+	routeCount := len(model.ListProductionNotificationRoutes(db, p.KitsuProjectID))
+	data := loadProductionNotificationReviewerView(db, p, routeCount > 0 || editing, routeCount > 0 || editing, botTokens...)
 	readTable := renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 	var routing string
 	if editing {
@@ -1491,23 +1511,27 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 }
 
 type productionNotificationReviewerView struct {
-	TaskTypes   []kitsu.TaskType
-	Team        []kitsu.Person
-	TeamErr     error
-	Users       []model.UserMap
-	BotToken    string
-	GuildUsers  []DiscordGuildMember
-	GuildErr    error
-	Roles       []DiscordGuildRole
-	RoleCatalog []DiscordGuildRole
-	RolesErr    error
-	RolesReady  bool
-	KitsuBase   string
-	KitsuToken  string
-	KitsuReady  bool
+	TaskTypes                  []kitsu.TaskType
+	Team                       []kitsu.Person
+	TeamErr                    error
+	Users                      []model.UserMap
+	BotToken                   string
+	GuildUsers                 []DiscordGuildMember
+	GuildErr                   error
+	Roles                      []DiscordGuildRole
+	RoleCatalog                []DiscordGuildRole
+	RolesErr                   error
+	RolesReady                 bool
+	RoleSendEvidenceByTaskType map[string]reviewerRoleSendEvidence
+	RoleSendErrorsByTaskType   map[string]error
+	RoleSendersByTaskType      map[string]reviewerRoleSender
+	RoleSendEvidenceRequested  bool
+	KitsuBase                  string
+	KitsuToken                 string
+	KitsuReady                 bool
 }
 
-func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includeAutomatic bool, botTokens ...string) productionNotificationReviewerView {
+func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includeAutomatic, includeRoleSendEvidence bool, botTokens ...string) productionNotificationReviewerView {
 	view := productionNotificationReviewerView{
 		TaskTypes: reviewerTaskTypesForProduction(db, p.KitsuProjectID),
 		Users:     filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)),
@@ -1518,6 +1542,7 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 	if stored := storedRuntimeDiscordBotToken(db); stored != "" {
 		view.BotToken = stored
 	}
+	view.RoleSendEvidenceRequested = includeRoleSendEvidence
 	if includeAutomatic {
 		view.Team, view.TeamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
 		if view.BotToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
@@ -1531,6 +1556,25 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 				view.RoleCatalog = reviewerRoleCatalog(p.DiscordGuildID, roles)
 				view.Roles = mentionableReviewerRoles(p.DiscordGuildID, view.RoleCatalog)
 				view.RolesReady = true
+				if includeRoleSendEvidence {
+					view.RoleSendEvidenceByTaskType = make(map[string]reviewerRoleSendEvidence)
+					view.RoleSendErrorsByTaskType = make(map[string]error)
+					view.RoleSendersByTaskType = make(map[string]reviewerRoleSender)
+					for _, route := range model.ListProductionNotificationRoutes(db, p.KitsuProjectID) {
+						webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
+						if webhook == nil || webhook.KitsuProjectID != p.KitsuProjectID || strings.TrimSpace(webhook.WebhookURL) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" {
+							view.RoleSendErrorsByTaskType[route.TaskTypeID] = errors.New("managed Reviewer sender is unavailable")
+							continue
+						}
+						view.RoleSendersByTaskType[route.TaskTypeID] = reviewerRoleSender{WebhookURL: webhook.WebhookURL, ChannelID: webhook.DiscordChannelID}
+						evidence, evidenceErr := reviewerRoleSendEvidenceReader(p.DiscordGuildID, webhook.DiscordChannelID, webhook.WebhookURL, view.BotToken)
+						view.RoleSendEvidenceByTaskType[route.TaskTypeID] = evidence
+						if evidenceErr != nil {
+							view.RoleSendErrorsByTaskType[route.TaskTypeID] = evidenceErr
+							continue
+						}
+					}
+				}
 			}
 		}
 		view.KitsuBase, view.KitsuToken, view.KitsuReady = runtimeKitsuDataSource(db)
@@ -1540,7 +1584,7 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 
 func renderProductionNotificationsReadTable(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, botTokens ...string) string {
 	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
-	data := loadProductionNotificationReviewerView(db, p, len(routes) > 0, botTokens...)
+	data := loadProductionNotificationReviewerView(db, p, len(routes) > 0, len(routes) > 0, botTokens...)
 	return renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 }
 
@@ -1555,9 +1599,9 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		taskTypesByID[strings.TrimSpace(taskType.ID)] = taskType
 	}
 	linked := currentProductionLinkedHumanDiscordIDs(data.Team, data.Users, data.GuildUsers)
-	roleNames := make(map[string]string, len(data.Roles))
-	for _, role := range data.Roles {
-		roleNames[role.ID] = "@" + role.Name
+	roleNames := make(map[string]DiscordGuildRole, len(data.RoleCatalog))
+	for _, role := range data.RoleCatalog {
+		roleNames[role.ID] = role
 	}
 	var rows strings.Builder
 	for _, route := range routes {
@@ -1576,8 +1620,15 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 					additional = append(additional, name)
 				}
 			case model.ReviewerTargetRole:
-				if data.RolesReady && roleNames[target.DiscordID] != "" {
-					additional = append(additional, roleNames[target.DiscordID])
+				if role, ok := roleNames[target.DiscordID]; data.RolesReady && ok {
+					sender := data.RoleSendersByTaskType[taskTypeID]
+					if reviewerRoleCanBeMentioned(p.DiscordGuildID, sender.ChannelID, sender.WebhookURL, role, data.RoleSendEvidenceByTaskType[taskTypeID], data.RoleSendErrorsByTaskType[taskTypeID]) {
+						additional = append(additional, "@"+role.Name)
+					} else {
+						additional = append(additional, label("ロール利用不可", "Role unavailable"))
+					}
+				} else {
+					additional = append(additional, label("ロール利用不可", "Role unavailable"))
 				}
 			}
 		}

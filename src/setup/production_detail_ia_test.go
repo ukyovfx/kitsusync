@@ -395,8 +395,11 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []struct{ taskID, taskName, channel string }{{"task-comp", "Compositing", "comp"}, {"task-anim", "Animation", "anim"}} {
-		if err := model.CreateProjectWebhook(db, project.KitsuProjectID, route.channel, route.taskName, "synthetic-webhook-secret", "channel-"+route.channel); err != nil {
+	for _, route := range []struct{ taskID, taskName, channel, channelID, webhookURL string }{
+		{"task-comp", "Compositing", "comp", "55555555555555551", "https://discord.com/api/webhooks/44444444444444441/synthetic-token"},
+		{"task-anim", "Animation", "anim", "55555555555555552", "https://discord.com/api/webhooks/44444444444444442/synthetic-token"},
+	} {
+		if err := model.CreateProjectWebhook(db, project.KitsuProjectID, route.channel, route.taskName, route.webhookURL, route.channelID); err != nil {
 			t.Fatal(err)
 		}
 		webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[len(model.ListProjectWebhooks(db, project.KitsuProjectID))-1]
@@ -421,7 +424,11 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-anim", "Animation", model.ReviewerTargetRole, "123456789012345681"); err != nil {
 		t.Fatal(err)
 	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetRole, "123456789012345684"); err != nil {
+		t.Fatal(err)
+	}
 	oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors := reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam
+	oldEvidence := reviewerRoleSendEvidenceReader
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"}, {ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"}}
 	}
@@ -432,7 +439,14 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345680", "linked-artist", "Linked Artist", "Artist Nick"), reviewerTestGuildMember("123456789012345682", "comp-supervisor", "Comp Supervisor", ""), reviewerTestGuildMember("123456789012345683", "anim-supervisor", "Animation Supervisor", "")}, nil
 	}
 	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) {
-		return []DiscordGuildRole{{ID: "123456789012345681", Name: "Leads", Mentionable: true}}, nil
+		return []DiscordGuildRole{{ID: "123456789012345681", Name: "Leads", Mentionable: true}, {ID: "123456789012345684", Name: "Quiet", Mentionable: false}}, nil
+	}
+	reviewerRoleSendEvidenceReader = func(guildID, channelID, webhookURL, _ string) (reviewerRoleSendEvidence, error) {
+		webhookID, err := discordWebhookID(webhookURL)
+		if err != nil {
+			return reviewerRoleSendEvidence{}, err
+		}
+		return reviewerRoleSendEvidence{GuildID: guildID, ChannelID: channelID, WebhookID: webhookID, BotID: "123456789012345685", WebhookOwnerID: "123456789012345685", OwnershipVerified: true, PermissionsKnown: true}, nil
 	}
 	reviewerDepartmentSupervisorsForTeam = func(_, _, departmentID string, _ []kitsu.Person) ([]kitsu.Person, error) {
 		if departmentID == "dept-comp" {
@@ -444,10 +458,10 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 		return nil, nil
 	}
 	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam = oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors
+		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam, reviewerRoleSendEvidenceReader = oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors, oldEvidence
 	})
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=notifications-read-table&tab=notifications&lang=en", nil), project, "en", "success", "Healthy", "", "synthetic-discord-token")
-	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@Artist Nick", "@Leads", "task-comp", "task-anim"} {
+	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@Artist Nick", "@Leads", "Role unavailable", "task-comp", "task-anim"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Notifications read table missing %q: %s", want, body)
 		}
@@ -497,7 +511,7 @@ func TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails(t *t
 		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild = oldTasks, oldTeam, oldMembers, oldRoles
 	})
 
-	view := loadProductionNotificationReviewerView(db, project, true)
+	view := loadProductionNotificationReviewerView(db, project, true, false)
 	if roleReadCount != 1 || !view.RolesReady || len(view.Roles) != 1 || view.Roles[0].ID != "123456789012345680" {
 		t.Fatalf("Role candidates should be independently read and filtered when User membership lookup fails: reads=%d ready=%v roles=%#v", roleReadCount, view.RolesReady, view.Roles)
 	}
@@ -533,7 +547,7 @@ func TestProductionRoleReadUsesConfiguredProjectGuild(t *testing.T) {
 	t.Cleanup(func() {
 		reviewerDiscordRolesForGuild, reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldRoles, oldTasks, oldTeam, oldMembers
 	})
-	view := loadProductionNotificationReviewerView(db, project, true)
+	view := loadProductionNotificationReviewerView(db, project, true, false)
 	if gotGuild != project.DiscordGuildID || !view.RolesReady || len(view.Roles) != 1 {
 		t.Fatalf("Role lookup was not scoped to the configured Production Guild: requested=%q view=%#v", gotGuild, view)
 	}
@@ -556,6 +570,7 @@ func TestProductionNotificationRoleAvailabilityDistinguishesUnavailableStates(t 
 		{name: "empty response", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true}, want: reviewerRolesEmpty},
 		{name: "only non-mentionable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{quietRole}}, want: reviewerRolesNonMentionable},
 		{name: "mentionable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{quietRole, validRole}, Roles: []DiscordGuildRole{validRole}}, want: reviewerRolesAvailable},
+		{name: "route permissions not yet verifiable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{validRole}, RoleSendEvidenceRequested: true}, want: reviewerRolesUnavailable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -582,6 +597,26 @@ func TestProductionNotificationRoleErrorsAreLocalizedAndSafe(t *testing.T) {
 			if !strings.Contains(message, want) || strings.Contains(message, "token") || strings.Contains(message, "secret") {
 				t.Fatalf("%s role failure did not show safe API status %q: %s", lang, want, message)
 			}
+		}
+	}
+}
+
+func TestProductionNotificationPermissionLookupFailureIsLocalizedAsUnavailable(t *testing.T) {
+	project := model.Project{DiscordGuildID: "123456789012345678"}
+	view := productionNotificationReviewerView{
+		BotToken:                 "configured",
+		RolesReady:               true,
+		RoleCatalog:              []DiscordGuildRole{{ID: "123456789012345679", Name: "Quiet"}},
+		RoleSendErrorsByTaskType: map[string]error{"task-comp": errors.New("synthetic HTTP 403")},
+		RoleSendersByTaskType:    map[string]reviewerRoleSender{"task-comp": {WebhookURL: "https://discord.com/api/webhooks/123456789012345680/synthetic", ChannelID: "123456789012345681"}},
+	}
+	if got := productionNotificationRoleAvailability(project, view); got != reviewerRolesUnavailable {
+		t.Fatalf("permission lookup error state = %q, want unavailable", got)
+	}
+	for lang, want := range map[string]string{"en": "destination permissions could not be verified", "ja": "送信先の権限を確認できません"} {
+		message := strings.ToLower(reviewerRoleAvailabilityMessage(lang, project, view))
+		if !strings.Contains(message, strings.ToLower(want)) {
+			t.Fatalf("%s permission failure should explain that destination permissions are unavailable: %s", lang, message)
 		}
 	}
 }

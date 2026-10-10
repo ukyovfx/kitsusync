@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -152,10 +153,6 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		http.Error(w, `{"error":"channel_name_unavailable"}`, http.StatusBadRequest)
 		return true
 	}
-	if err := validateProductionReviewerDeltas(db, *project, request.ReviewerChanges, tokenFallback); err != nil {
-		http.Error(w, `{"error":"reviewer_target_not_eligible"}`, http.StatusBadRequest)
-		return true
-	}
 	config, routesBefore, targetsBefore, err := model.SnapshotProductionNotificationState(db, project.ID, productionID)
 	if err != nil {
 		http.Error(w, `{"error":"state_unavailable"}`, http.StatusInternalServerError)
@@ -267,6 +264,19 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 			webhook.DiscordChannelID = resource.ChannelID
 			webhook.WebhookURL = webhookURL
 		}
+	}
+	if err := validateProductionReviewerDeltas(db, *project, request.ReviewerChanges, routes, newWebhooks, discordToken); err != nil {
+		cleanupErr := cleanupCreated()
+		if cleanupErr != nil {
+			writeRoutingCreateFailure(w, "reviewer_target_not_eligible", cleanupErr)
+			return true
+		}
+		if errors.Is(err, errReviewerEligibilityUnavailable) {
+			http.Error(w, `{"error":"reviewer_eligibility_unavailable"}`, http.StatusBadGateway)
+		} else {
+			http.Error(w, `{"error":"reviewer_target_not_eligible"}`, http.StatusBadRequest)
+		}
+		return true
 	}
 	appliedRevision, applyErr := model.ApplyProductionNotificationState(db, project.ID, productionID, project.Name, request.ExpectedRevision, routes, request.ReviewerChanges, newWebhooks...)
 	err = applyErr
@@ -396,34 +406,16 @@ func convertApplyRoutes(request notificationApplyRequest, productionID string) [
 	return routes
 }
 
-func validateProductionReviewerDeltas(db *gorm.DB, project model.Project, changes []model.ProductionReviewerDelta, botTokenFallback string) error {
+func validateProductionReviewerDeltas(db *gorm.DB, project model.Project, changes []model.ProductionReviewerDelta, routes []model.ProductionNotificationRoute, newWebhooks []*model.ProjectWebhook, token string) error {
 	if len(changes) == 0 {
 		return nil
 	}
-	team, err := reviewerProductionTeamReader(db, project.KitsuProjectID)
-	if err != nil {
-		return err
-	}
-	users := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
-	token := storedRuntimeDiscordBotToken(db)
-	if token == "" {
-		token = botTokenFallback
-	}
-	members, err := reviewerGuildMembersForGuild(project.DiscordGuildID, token)
-	if err != nil {
-		return err
-	}
-	eligibleUsers := currentProductionLinkedHumanDiscordIDs(team, users, members)
-	roles, err := reviewerDiscordRolesForGuild(project.DiscordGuildID, token)
-	if err != nil {
-		return err
-	}
-	eligibleRoles := map[string]bool{}
-	for _, role := range mentionableReviewerRoles(project.DiscordGuildID, roles) {
-		eligibleRoles[role.ID] = true
-	}
+	var eligibleUsers map[string]string
+	usersLoaded := false
+	eligibleRolesByTask := make(map[string]map[string]struct{})
 	for _, change := range changes {
-		targets, _, readErr := model.ListProjectReviewerTargetsForTaskType(db, project.ID, strings.TrimSpace(change.TaskTypeID))
+		taskTypeID := strings.TrimSpace(change.TaskTypeID)
+		targets, _, readErr := model.ListProjectReviewerTargetsForTaskType(db, project.ID, taskTypeID)
 		if readErr != nil {
 			return readErr
 		}
@@ -432,13 +424,56 @@ func validateProductionReviewerDeltas(db *gorm.DB, project model.Project, change
 			existing[target.TargetKind+":"+target.DiscordID] = true
 		}
 		for _, id := range change.AddUserIDs {
+			if !usersLoaded {
+				team, err := reviewerProductionTeamReader(db, project.KitsuProjectID)
+				if err != nil {
+					return fmt.Errorf("%w: read Kitsu Production Team", errReviewerEligibilityUnavailable)
+				}
+				members, err := reviewerGuildMembersForGuild(project.DiscordGuildID, token)
+				if err != nil {
+					return fmt.Errorf("%w: read linked Discord Guild membership", errReviewerEligibilityUnavailable)
+				}
+				eligibleUsers = currentProductionLinkedHumanDiscordIDs(team, filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)), members)
+				usersLoaded = true
+			}
 			if eligibleUsers[strings.TrimSpace(id)] == "" {
 				return errors.New("user target is not a linked current Production member")
 			}
 		}
 		for _, id := range change.AddRoleIDs {
-			if !eligibleRoles[strings.TrimSpace(id)] {
-				return errors.New("role target is not mentionable in the linked Guild")
+			eligibleRoles := eligibleRolesByTask[taskTypeID]
+			if eligibleRoles == nil {
+				var destination *model.ProjectWebhook
+				for _, route := range routes {
+					if strings.TrimSpace(route.TaskTypeID) != taskTypeID {
+						continue
+					}
+					if route.DestinationWebhookID > 0 {
+						destination = model.FindProjectWebhookByID(db, route.DestinationWebhookID)
+					}
+					if destination == nil {
+						for _, created := range newWebhooks {
+							if created != nil && strings.TrimSpace(created.TaskType) == taskTypeID {
+								destination = created
+								break
+							}
+						}
+					}
+					break
+				}
+				if destination == nil || strings.TrimSpace(destination.KitsuProjectID) != strings.TrimSpace(project.KitsuProjectID) ||
+					strings.TrimSpace(destination.DiscordChannelID) == "" || strings.TrimSpace(destination.WebhookURL) == "" {
+					return errors.New("role target has no verified route destination")
+				}
+				var err error
+				eligibleRoles, err = eligibleReviewerRolesForSender(project.DiscordGuildID, destination.DiscordChannelID, destination.WebhookURL, token)
+				if err != nil {
+					return fmt.Errorf("%w: verify role target for current destination", errReviewerEligibilityUnavailable)
+				}
+				eligibleRolesByTask[taskTypeID] = eligibleRoles
+			}
+			if _, ok := eligibleRoles[strings.TrimSpace(id)]; !ok {
+				return errors.New("role target is not eligible for the verified destination")
 			}
 		}
 		for _, id := range change.RemoveUserIDs {

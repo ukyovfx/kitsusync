@@ -129,7 +129,7 @@ type ReviewerTarget struct {
 	ID   string
 }
 
-var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, error)
+var ReviewerResolver func(projectID, taskTypeID, taskTypeName, senderWebhookURL string) ([]ReviewerTarget, error)
 
 // GoogleDriveURLResolver はプロジェクト ID に対応するファイルストレージ URL を返すフック。
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
@@ -872,7 +872,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		isWFAReviewer := !elem.IsAssignNotification && currentStatus == "WFA"
 		if isWFAReviewer {
 			if ReviewerResolver != nil {
-				rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
+				rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name, webHookURL)
 				if resolveErr != nil {
 					slog.Warn("Reviewer lookup failed; WFA will be posted without targeted mentions",
 						"error_class", "reviewer_resolution_failed",

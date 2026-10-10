@@ -822,9 +822,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!(await candidateUsers.locator('option[value="22222222222222234"]').count())) throw new Error('linked Team Guild member is unavailable as an override');
         const candidateRoles = addModal.locator('[data-wfa-role-id]');
         if (!(await candidateRoles.locator('option[value="33333333333333331"]').count())) throw new Error('mentionable Guild Role is not selectable');
-        for (const blocked of [guildID, '33333333333333332']) {
-          if (await candidateRoles.locator(`option[value="${blocked}"]`).count()) throw new Error(`@everyone/non-mentionable Role ${blocked} is selectable`);
-        }
+        if (await candidateRoles.locator(`option[value="${guildID}"]`).count()) throw new Error('@everyone must never appear in the custom role picker');
+        const disabledNonMentionable = candidateRoles.locator('option[value="33333333333333332"]');
+        if (!(await disabledNonMentionable.count()) || !(await disabledNonMentionable.isDisabled())) throw new Error('non-mentionable Guild Role must remain visible but unavailable without destination Bot permission');
         const recipientUserCombo = addModal.locator('[data-wfa-user-combobox]');
         const userListbox = addModal.locator('[data-wfa-user-listbox]');
         if (!(await recipientUserCombo.isVisible()) || await candidateUsers.isVisible()) throw new Error('Add recipient user chooser must use a visible KitsuSync combobox and hidden native value control');
@@ -1376,7 +1376,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await nonMentionableForm.locator('[data-wfa-add-target]').click();
     const nonMentionableModal = page.locator('[data-wfa-add-modal]');
     await nonMentionableModal.locator('#wfa-role-tab').click();
-    if (!(await nonMentionableModal.innerText()).includes('Roles exist, but none are mentionable.')) throw new Error('Non-mentionable Guild roles are not explained distinctly');
+    if (!(await nonMentionableModal.innerText()).includes('No roles are eligible for a verified destination.')) throw new Error('Non-mentionable Guild roles are not explained distinctly');
     const nonMentionableCombo = nonMentionableModal.locator('[data-wfa-role-combobox]');
     if (!(await nonMentionableCombo.isVisible())) throw new Error('Existing non-mentionable Guild roles must remain visible with a reason');
     await nonMentionableCombo.click();
@@ -1387,6 +1387,20 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     if (await nonMentionableModal.locator('[data-wfa-role-id]').inputValue() || !(await nonMentionableModal.locator('[data-wfa-add-confirm]').isDisabled())) throw new Error('Non-mentionable role selection must not create an eligible target');
     await page.screenshot({ path: path.join(output, 'production-notifications-add-recipient-roles-non-mentionable-en-desktop.png'), fullPage: true });
     await nonMentionableModal.locator('[data-wfa-add-cancel]').click();
+
+    await fixture(page, 'bot-can-mention-roles');
+    await gotoWFARecipients(page, locales[0], '&edit_routing=1');
+    const permittedRoleForm = page.locator('[data-current-routing-form]');
+    await permittedRoleForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+    await permittedRoleForm.locator('[data-wfa-add-target]').click();
+    const permittedRoleModal = page.locator('[data-wfa-add-modal]');
+    await permittedRoleModal.locator('#wfa-role-tab').click();
+    await permittedRoleModal.locator('[data-wfa-role-combobox]').click();
+    const permittedRoleOption = permittedRoleModal.locator('[data-wfa-role-listbox] [role="option"][data-wfa-option-value="33333333333333332"]');
+    if (await permittedRoleOption.getAttribute('aria-disabled') !== 'false') throw new Error('verified destination Bot permission should enable the non-mentionable Role');
+    await permittedRoleOption.click();
+    if (await permittedRoleModal.locator('[data-wfa-role-id]').inputValue() !== '33333333333333332') throw new Error('verified Bot-permission Role could not be selected');
+    await permittedRoleModal.locator('[data-wfa-add-cancel]').click();
 
     for (const failure of [
       { scenario: 'roles-forbidden', status: 'HTTP 403', file: 'production-notifications-add-recipient-roles-forbidden-en-desktop.png' },
