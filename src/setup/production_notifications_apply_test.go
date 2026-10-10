@@ -375,10 +375,11 @@ func TestProductionNotificationApplyCleansWebhookRepairWhenLaterChannelPreflight
 			reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
 				return []kitsu.TaskType{{ID: "task-existing", Name: "Existing"}, {ID: "task-new", Name: "New"}}
 			}
-			checkCalls := 0
+			repairCreated := false
+			channelPreflightFailed := false
 			currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
-				checkCalls++
-				if checkCalls == 4 {
+				if repairCreated {
+					channelPreflightFailed = true
 					return DiscordStatusInfo{}
 				}
 				return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true, ManageWebhooks: true}}
@@ -399,6 +400,7 @@ func TestProductionNotificationApplyCleansWebhookRepairWhenLaterChannelPreflight
 				if channel != "channel-existing" || name != "existing-channel" {
 					t.Fatalf("unexpected repair target: channel=%q name=%q", channel, name)
 				}
+				repairCreated = true
 				return "https://discord.com/api/webhooks/444444444444444444/repaired", nil
 			}
 			currentRoutingCreateChannel = func(string, string, string, string) (string, error) {
@@ -428,8 +430,8 @@ func TestProductionNotificationApplyCleansWebhookRepairWhenLaterChannelPreflight
 			if !handleProductionNotificationApply(response, request, "en", db) {
 				t.Fatal("Apply endpoint did not handle the request")
 			}
-			if checkCalls != 4 {
-				t.Fatalf("expected the fourth Discord check to fail after the webhook repair, got %d checks", checkCalls)
+			if !repairCreated || !channelPreflightFailed {
+				t.Fatalf("expected channel preflight to fail after the repair webhook was created: repair_created=%t channel_preflight_failed=%t", repairCreated, channelPreflightFailed)
 			}
 			if response.Code != tc.wantStatus || !strings.Contains(response.Body.String(), `"error":"discord_preflight_failed"`) || !strings.Contains(response.Body.String(), tc.wantCleanup) {
 				t.Fatalf("failed post-repair channel preflight must report failure and cleanup outcome: status=%d body=%s", response.Code, response.Body.String())
