@@ -136,13 +136,24 @@ func TestFilterTasksDoesNotResendUnknownDiscordDelivery(t *testing.T) {
 	}
 	configurePipelineRoute(t, db)
 	attempts := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		w.WriteHeader(http.StatusInternalServerError)
+	const webhookID = "123456789012345678"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"123456789012345678","type":1,"guild_id":"guild-1","channel_id":"channel-1"}`))
+		case http.MethodPost:
+			attempts++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Errorf("unexpected webhook request method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	}))
 	defer server.Close()
 	webhook := model.ListProjectWebhooks(db, "p1")[0]
-	if err := db.Model(&model.ProjectWebhook{}).Where("id = ?", webhook.ID).Update("webhook_url", server.URL).Error; err != nil {
+	webhookURL := server.URL + "/api/webhooks/" + webhookID + "/test-token"
+	if err := db.Model(&model.ProjectWebhook{}).Where("id = ?", webhook.ID).Update("webhook_url", webhookURL).Error; err != nil {
 		t.Fatal(err)
 	}
 	conf := pipelineConfig()

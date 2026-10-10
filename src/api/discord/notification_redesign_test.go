@@ -392,6 +392,10 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 			_, _ = w.Write([]byte(`{"id":"123456789012345678","type":1,"guild_id":"guild-1","channel_id":"channel-1"}`))
 			return
 		}
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.Method != http.MethodPost {
 			t.Fatalf("delivery method = %s, want GET or POST", r.Method)
 		}
@@ -469,7 +473,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	conf.Mention.Checkers = []config.CheckerEntry{{TaskType: "Compositing", DiscordID: "303"}}
 	event.TaskStatus.TaskStatus = kitsu.TaskStatus{ID: "wfa", ShortName: "WFA"}
 	event.PreviousStatusName = "WIP"
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345670>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "123456789012345670" {
 		t.Fatalf("WFA did not use the Reviewer recipient: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
@@ -481,7 +485,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		{Kind: "role", ID: "123456789012345672"},
 		{Kind: "role", ID: "@everyone"},
 	}
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345670> <@123456789012345671> <@&123456789012345672>" {
 		t.Fatalf("automatic and override targets were not additively deduplicated: content=%q result=%+v", sent.Content, results["task-1"])
 	}

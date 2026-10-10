@@ -514,7 +514,7 @@ func TestManagedChannelDeletionTombstoneBlocksDispatchAndFinalizesAtomically(t *
 		t.Fatal(err)
 	}
 	intent, err := PrepareNotificationDelivery(db, notificationIntent())
-	if err == nil || !errors.Is(err, ErrDeliveryUnavailable) || intent != nil {
+	if err == nil || !errors.Is(err, ErrChannelDeletionConflict) || intent != nil {
 		t.Fatalf("tombstoned destination must reject new delivery intent: intent=%+v err=%v", intent, err)
 	}
 	if err := db.Exec("CREATE TRIGGER fail_route_delete BEFORE DELETE ON production_notification_routes BEGIN SELECT RAISE(ABORT, 'injected finalize failure'); END").Error; err != nil {
