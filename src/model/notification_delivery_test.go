@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -252,6 +253,34 @@ func TestRedactedDeliveredNotificationPayloadSurvivesSQLiteRestartWithoutResend(
 	}
 	if _, started, err := BeginNotificationDelivery(reopened, replayed.EventID, now); started || !errors.Is(err, ErrDeliveryUnavailable) {
 		t.Fatalf("restart made delivered event resendable: started=%v err=%v", started, err)
+	}
+}
+
+func TestDeliveredPayloadRedactionEnforcesMaximumBatchSize(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	rows := make([]NotificationDeliveryEvent, NotificationPayloadRedactionBatchSize+5)
+	for i := range rows {
+		n := strconv.Itoa(i)
+		deliveredAt := now.Add(-31 * 24 * time.Hour)
+		rows[i] = NotificationDeliveryEvent{
+			EventID: "bounded-event-" + n, TaskID: "bounded-task-" + n, ProductionID: "production-1",
+			TaskTypeID: "task-type-1", TaskStatus: "WFA", PayloadJSON: `{"content":"synthetic"}`,
+			PayloadSHA256: "retained-payload-hash", WebhookRowID: 1, DestinationGuildID: "guild-1",
+			DestinationChannelID: "channel-1", DestinationWebhookID: "webhook-1", DestinationFingerprint: "destination-fingerprint",
+			Disposition: DeliveryDelivered, DeliveredAt: &deliveredAt, DiscordMessageID: "message-" + n,
+		}
+	}
+	if err := db.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	redacted, err := RedactDeliveredNotificationPayloads(db, now.Add(-30*24*time.Hour), now, len(rows))
+	if err != nil || redacted != NotificationPayloadRedactionBatchSize {
+		t.Fatalf("oversized request redacted %d rows, err=%v; want capped batch %d", redacted, err, NotificationPayloadRedactionBatchSize)
+	}
+	var remaining int64
+	if err := db.Model(&NotificationDeliveryEvent{}).Where("payload_redacted_at IS NULL AND payload_json <> ''").Count(&remaining).Error; err != nil || remaining != 5 {
+		t.Fatalf("oversized request did not leave the bounded remainder intact: remaining=%d err=%v", remaining, err)
 	}
 }
 

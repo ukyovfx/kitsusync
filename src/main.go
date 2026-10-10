@@ -653,7 +653,7 @@ func redactExpiredNotificationPayloads(conf config.Config, db *gorm.DB, now time
 	if db == nil || days <= 0 {
 		return
 	}
-	redacted, err := model.RedactDeliveredNotificationPayloads(db, now.UTC().AddDate(0, 0, -days), now.UTC(), 100)
+	redacted, err := model.RedactDeliveredNotificationPayloads(db, now.UTC().AddDate(0, 0, -days), now.UTC(), model.NotificationPayloadRedactionBatchSize)
 	if err != nil {
 		slog.Error("Notification delivery payload retention failed", "error_class", "delivery_payload_retention_failed")
 	} else if redacted > 0 {

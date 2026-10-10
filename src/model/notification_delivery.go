@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	NotificationPayloadRedactionBatchSize = 100
+
 	DeliveryPending         = "pending"
 	DeliveryInFlight        = "in_flight"
 	DeliveryDelivered       = "delivered"
@@ -500,6 +502,9 @@ func ListPendingNotificationDeliveries(db *gorm.DB, limit int) ([]NotificationDe
 func RedactDeliveredNotificationPayloads(db *gorm.DB, deliveredBefore, redactedAt time.Time, limit int) (int64, error) {
 	if db == nil || deliveredBefore.IsZero() || redactedAt.IsZero() || limit <= 0 {
 		return 0, gorm.ErrInvalidData
+	}
+	if limit > NotificationPayloadRedactionBatchSize {
+		limit = NotificationPayloadRedactionBatchSize
 	}
 	var rowsAffected int64
 	err := db.Transaction(func(tx *gorm.DB) error {
