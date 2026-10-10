@@ -337,98 +337,113 @@ func TestProductionNotificationApplyPreservesOrRepairsManagedWebhook(t *testing.
 }
 
 func TestProductionNotificationApplyCleansWebhookRepairWhenLaterChannelPreflightFails(t *testing.T) {
-	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "apply-repair-then-channel-failure", Name: "Repair Then Channel Failure", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-token")
-	oldURL := "https://discord.com/api/webhooks/333333333333333333/old-token"
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "existing-channel", "", oldURL, "channel-existing"); err != nil {
-		t.Fatal(err)
-	}
-	webhook := model.FindProjectWebhookByChannel(db, project.KitsuProjectID, "channel-existing")
-	if webhook == nil {
-		t.Fatal("existing managed webhook fixture was not persisted")
-	}
-	originalRoutes := []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-existing", TaskTypeName: "Existing", DestinationWebhookID: webhook.ID}}
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, originalRoutes); err != nil {
-		t.Fatal(err)
-	}
-	revision := model.ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
-	oldTasks, oldCheck, oldList := reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels
-	oldCreateChannel, oldCreateWebhook, oldDeleteWebhook, oldDeleteChannel, oldSetPositions, oldInspect := currentRoutingCreateChannel, currentRoutingCreateWebhook, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions, currentRoutingInspectWebhook
-	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels = oldTasks, oldCheck, oldList
-		currentRoutingCreateChannel, currentRoutingCreateWebhook, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions, currentRoutingInspectWebhook = oldCreateChannel, oldCreateWebhook, oldDeleteWebhook, oldDeleteChannel, oldSetPositions, oldInspect
-	})
-	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
-		return []kitsu.TaskType{{ID: "task-existing", Name: "Existing"}, {ID: "task-new", Name: "New"}}
-	}
-	checkCalls := 0
-	currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
-		checkCalls++
-		if checkCalls == 4 {
-			return DiscordStatusInfo{}
-		}
-		return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true, ManageWebhooks: true}}
-	}
-	currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
-		return []DiscordGuildChannel{{ID: "channel-existing", Name: "existing-channel", Type: 0, ParentID: "category-1", Position: 1}}, nil
-	}
-	currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
-		if raw == oldURL {
-			return routingWebhookIdentity{}, true, nil
-		}
-		if raw == "https://discord.com/api/webhooks/444444444444444444/repaired" {
-			return routingWebhookIdentity{ID: "444444444444444444", Type: 1, GuildID: "guild-1", ChannelID: "channel-existing"}, false, nil
-		}
-		return routingWebhookIdentity{}, false, errors.New("unexpected webhook inspection")
-	}
-	currentRoutingCreateWebhook = func(channel, name, _ string) (string, error) {
-		if channel != "channel-existing" || name != "existing-channel" {
-			t.Fatalf("unexpected repair target: channel=%q name=%q", channel, name)
-		}
-		return "https://discord.com/api/webhooks/444444444444444444/repaired", nil
-	}
-	currentRoutingCreateChannel = func(string, string, string, string) (string, error) {
-		t.Fatal("channel creation must not start after the second Discord preflight fails")
-		return "", nil
-	}
-	deletedWebhooks := []string{}
-	currentRoutingDeleteWebhook = func(id, _ string) error {
-		deletedWebhooks = append(deletedWebhooks, id)
-		return nil
-	}
-	currentRoutingDeleteChannel = func(string, string) error {
-		t.Fatal("no newly created channel should be present to clean up")
-		return nil
-	}
-	currentRoutingSetPositions = func(string, []DiscordChannelPosition, string) error {
-		t.Fatal("Discord reorder must not run before a failed preflight")
-		return nil
-	}
-	body := `{"project_id":"apply-repair-then-channel-failure","expected_revision":"` + revision + `","routes":[{"task_type_id":"task-existing","destination_webhook_id":` + strconv.FormatUint(uint64(webhook.ID), 10) + `},{"task_type_id":"task-new","create_channel_name":"new-channel"}],"reviewer_changes":[]}`
-	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?apply_notifications=1", strings.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	if !handleProductionNotificationApply(response, request, "en", db) {
-		t.Fatal("Apply endpoint did not handle the request")
-	}
-	if checkCalls != 4 {
-		t.Fatalf("expected the fourth Discord check to fail after the webhook repair, got %d checks", checkCalls)
-	}
-	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), `"error":"discord_preflight_failed"`) || !strings.Contains(response.Body.String(), `"resource_cleanup":"complete"`) {
-		t.Fatalf("failed post-repair channel preflight must report failure and completed cleanup: status=%d body=%s", response.Code, response.Body.String())
-	}
-	if len(deletedWebhooks) != 1 || deletedWebhooks[0] != "444444444444444444" {
-		t.Fatalf("the newly repaired webhook must be cleaned up exactly once: deleted=%v", deletedWebhooks)
-	}
-	if got := model.ListProductionNotificationRoutes(db, project.KitsuProjectID); len(got) != 1 || got[0].DestinationWebhookID != webhook.ID {
-		t.Fatalf("failed Apply changed persisted routes: %#v", got)
-	}
-	if got := model.ListProjectWebhooks(db, project.KitsuProjectID); len(got) != 1 || got[0].WebhookURL != oldURL {
-		t.Fatalf("failed Apply changed persisted webhook state: %#v", got)
+	for _, tc := range []struct {
+		name         string
+		cleanupFails bool
+		wantStatus   int
+		wantCleanup  string
+	}{
+		{name: "cleanup succeeds", wantStatus: http.StatusBadGateway, wantCleanup: `"resource_cleanup":"complete"`},
+		{name: "cleanup fails closed", cleanupFails: true, wantStatus: http.StatusInternalServerError, wantCleanup: `"resource_cleanup":"incomplete"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newIAViewDB(t)
+			project := model.Project{KitsuProjectID: "apply-repair-then-channel-failure", Name: "Repair Then Channel Failure", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
+			if err := db.Create(&project).Error; err != nil {
+				t.Fatal(err)
+			}
+			model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-token")
+			oldURL := "https://discord.com/api/webhooks/333333333333333333/old-token"
+			if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "existing-channel", "", oldURL, "channel-existing"); err != nil {
+				t.Fatal(err)
+			}
+			webhook := model.FindChannelRecord(db, project.KitsuProjectID, "existing-channel")
+			if webhook == nil {
+				t.Fatal("existing managed webhook fixture was not persisted")
+			}
+			originalRoutes := []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-existing", TaskTypeName: "Existing", DestinationWebhookID: webhook.ID}}
+			if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, originalRoutes); err != nil {
+				t.Fatal(err)
+			}
+			revision := model.ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
+			oldTasks, oldCheck, oldList := reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels
+			oldCreateChannel, oldCreateWebhook, oldDeleteWebhook, oldDeleteChannel, oldSetPositions, oldInspect := currentRoutingCreateChannel, currentRoutingCreateWebhook, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions, currentRoutingInspectWebhook
+			t.Cleanup(func() {
+				reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels = oldTasks, oldCheck, oldList
+				currentRoutingCreateChannel, currentRoutingCreateWebhook, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions, currentRoutingInspectWebhook = oldCreateChannel, oldCreateWebhook, oldDeleteWebhook, oldDeleteChannel, oldSetPositions, oldInspect
+			})
+			reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+				return []kitsu.TaskType{{ID: "task-existing", Name: "Existing"}, {ID: "task-new", Name: "New"}}
+			}
+			checkCalls := 0
+			currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
+				checkCalls++
+				if checkCalls == 4 {
+					return DiscordStatusInfo{}
+				}
+				return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true, ManageWebhooks: true}}
+			}
+			currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
+				return []DiscordGuildChannel{{ID: "channel-existing", Name: "existing-channel", Type: 0, ParentID: "category-1", Position: 1}}, nil
+			}
+			currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+				if raw == oldURL {
+					return routingWebhookIdentity{}, true, nil
+				}
+				if raw == "https://discord.com/api/webhooks/444444444444444444/repaired" {
+					return routingWebhookIdentity{ID: "444444444444444444", Type: 1, GuildID: "guild-1", ChannelID: "channel-existing"}, false, nil
+				}
+				return routingWebhookIdentity{}, false, errors.New("unexpected webhook inspection")
+			}
+			currentRoutingCreateWebhook = func(channel, name, _ string) (string, error) {
+				if channel != "channel-existing" || name != "existing-channel" {
+					t.Fatalf("unexpected repair target: channel=%q name=%q", channel, name)
+				}
+				return "https://discord.com/api/webhooks/444444444444444444/repaired", nil
+			}
+			currentRoutingCreateChannel = func(string, string, string, string) (string, error) {
+				t.Fatal("channel creation must not start after the second Discord preflight fails")
+				return "", nil
+			}
+			deletedWebhooks := []string{}
+			currentRoutingDeleteWebhook = func(id, _ string) error {
+				deletedWebhooks = append(deletedWebhooks, id)
+				if tc.cleanupFails {
+					return errors.New("synthetic webhook delete failure")
+				}
+				return nil
+			}
+			currentRoutingDeleteChannel = func(string, string) error {
+				t.Fatal("no newly created channel should be present to clean up")
+				return nil
+			}
+			currentRoutingSetPositions = func(string, []DiscordChannelPosition, string) error {
+				t.Fatal("Discord reorder must not run before a failed preflight")
+				return nil
+			}
+			body := `{"project_id":"apply-repair-then-channel-failure","expected_revision":"` + revision + `","routes":[{"task_type_id":"task-existing","destination_webhook_id":` + strconv.FormatUint(uint64(webhook.ID), 10) + `},{"task_type_id":"task-new","create_channel_name":"new-channel"}],"reviewer_changes":[]}`
+			request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?apply_notifications=1", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			if !handleProductionNotificationApply(response, request, "en", db) {
+				t.Fatal("Apply endpoint did not handle the request")
+			}
+			if checkCalls != 4 {
+				t.Fatalf("expected the fourth Discord check to fail after the webhook repair, got %d checks", checkCalls)
+			}
+			if response.Code != tc.wantStatus || !strings.Contains(response.Body.String(), `"error":"discord_preflight_failed"`) || !strings.Contains(response.Body.String(), tc.wantCleanup) {
+				t.Fatalf("failed post-repair channel preflight must report failure and cleanup outcome: status=%d body=%s", response.Code, response.Body.String())
+			}
+			if len(deletedWebhooks) != 1 || deletedWebhooks[0] != "444444444444444444" {
+				t.Fatalf("the newly repaired webhook must be cleaned up exactly once: deleted=%v", deletedWebhooks)
+			}
+			if got := model.ListProductionNotificationRoutes(db, project.KitsuProjectID); len(got) != 1 || got[0].DestinationWebhookID != webhook.ID {
+				t.Fatalf("failed Apply changed persisted routes: %#v", got)
+			}
+			if got := model.ListProjectWebhooks(db, project.KitsuProjectID); len(got) != 1 || got[0].WebhookURL != oldURL {
+				t.Fatalf("failed Apply changed persisted webhook state: %#v", got)
+			}
+		})
 	}
 }
 
