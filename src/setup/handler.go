@@ -116,6 +116,7 @@ func cleanupSetupArtifacts(kitsuProjectID, categoryID, botToken string, channels
 
 func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHost, fallbackGuildID, requestedGuildID, botToken string, db *gorm.DB) (res SetupResult) {
 	setupStart := time.Now()
+	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
 	guildID := strings.TrimSpace(requestedGuildID)
 	if guildID == "" {
 		guildID = model.ResolveProjectGuildID(db, kitsuProjectID, fallbackGuildID)
@@ -143,12 +144,18 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 	if kitsuProjectID == "" {
 		kitsuProjectID = GetKitsuProjectID(kitsuHost, projectName)
 	}
+	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
 	if kitsuProjectID == "" {
 		res.warn("Kitsu project was not found, using a fallback project ID")
 		kitsuProjectID = "unknown-" + strings.ToLower(strings.ReplaceAll(projectName, " ", "-"))
 	} else {
 		res.ok("Kitsu project confirmed")
 	}
+	// Serialize the legacy setup path with every other writer for this
+	// Production, including while no Project row exists yet and rollback may
+	// remove persisted state by Kitsu ID.
+	unlockApply := lockProductionNotificationApply(kitsuProjectID)
+	defer unlockApply()
 
 	if existing := model.FindProjectByKitsuID(db, kitsuProjectID); existing != nil {
 		res.fail("project is already configured")
@@ -292,11 +299,14 @@ func RunProjectSetup(kitsuProjectID, projectName, projectType, language, kitsuHo
 }
 
 func DeleteProject(kitsuProjectID, botToken string, db *gorm.DB) ([]string, error) {
-	var logs []string
-	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
-		unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
-		defer unlockApply()
+	kitsuProjectID = strings.TrimSpace(kitsuProjectID)
+	if kitsuProjectID == "" {
+		return nil, fmt.Errorf("empty project id")
 	}
+	unlockApply := lockProductionNotificationApply(kitsuProjectID)
+	defer unlockApply()
+
+	var logs []string
 
 	var webhooks []model.ProjectWebhook
 	db.Where("kitsu_project_id = ?", kitsuProjectID).Find(&webhooks)
@@ -329,10 +339,8 @@ func DeleteProjectConnectionOnly(kitsuProjectID string, db *gorm.DB) error {
 	if kitsuProjectID == "" {
 		return fmt.Errorf("empty project id")
 	}
-	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
-		unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
-		defer unlockApply()
-	}
+	unlockApply := lockProductionNotificationApply(kitsuProjectID)
+	defer unlockApply()
 	return deleteProjectConnectionOnly(kitsuProjectID, db)
 }
 
@@ -699,13 +707,13 @@ func lockProjectForWebhookMutation(db *gorm.DB, webhookID uint) (*model.ProjectW
 	if webhook == nil {
 		return nil, func() {}, fmt.Errorf("channel record not found")
 	}
-	project := model.FindProjectByKitsuID(db, webhook.KitsuProjectID)
-	if project == nil {
-		return webhook, func() {}, nil
+	productionID := strings.TrimSpace(webhook.KitsuProjectID)
+	if productionID == "" {
+		return nil, func() {}, fmt.Errorf("channel record has no Production identity")
 	}
-	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
+	unlockApply := lockProductionNotificationApply(productionID)
 	current := model.FindProjectWebhookByID(db, webhookID)
-	if current == nil || current.KitsuProjectID != project.KitsuProjectID {
+	if current == nil || strings.TrimSpace(current.KitsuProjectID) != productionID {
 		unlockApply()
 		return nil, func() {}, fmt.Errorf("channel record changed during deletion")
 	}

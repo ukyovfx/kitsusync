@@ -33,8 +33,8 @@ func TestCompleteConnectionCleanupRechecksWebhookStateAfterWaitingForApply(t *te
 	}()
 	<-requestStarted
 
-	// Let the handler observe the initially empty connection state before the
-	// simulated Apply commits its first webhook while holding the shared lock.
+	// Give the cleanup request time to reach the shared lock before the
+	// simulated Apply commits its first webhook while holding that lock.
 	time.Sleep(100 * time.Millisecond)
 	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "new-route", "", "https://example.invalid/new-route", "channel-new"); err != nil {
 		unlockApply()
@@ -75,5 +75,40 @@ func TestHealthReconnectWebhookFailsClosedOutsideProductionApply(t *testing.T) {
 	}
 	if got := model.FindProjectWebhookByID(db, webhook.ID); got == nil || got.WebhookURL != "https://example.invalid/original" {
 		t.Fatal("legacy reconnect changed the persisted webhook URL outside Apply")
+	}
+}
+
+func TestLegacyWebhookDeletionWaitsForApplyWithoutProjectRow(t *testing.T) {
+	db := newIAViewDB(t)
+	const productionID = "orphan-webhook-delete-lock"
+	if err := model.CreateProjectWebhook(db, productionID, "orphan", "", "https://example.invalid/orphan", "channel-orphan"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, productionID)[0]
+	unlockApply := lockProductionNotificationApply(productionID)
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- deleteProjectWebhookSerialized(db, webhook.ID) }()
+
+	select {
+	case err := <-deleteDone:
+		unlockApply()
+		t.Fatalf("orphan webhook deletion bypassed the Production lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if model.FindProjectWebhookByID(db, webhook.ID) == nil {
+		unlockApply()
+		t.Fatal("orphan webhook was deleted while the Production Apply lock was held")
+	}
+	unlockApply()
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("orphan webhook deletion failed after Apply released the lock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("orphan webhook deletion did not resume after Apply released the lock")
+	}
+	if model.FindProjectWebhookByID(db, webhook.ID) != nil {
+		t.Fatal("orphan webhook remained after the serialized deletion")
 	}
 }
