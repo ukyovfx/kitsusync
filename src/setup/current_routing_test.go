@@ -380,8 +380,8 @@ func TestCurrentRoutingDisclosureAndCanonicalStatusPresentation(t *testing.T) {
 	if !strings.Contains(currentRoutingEditorScript(), `setAttribute('aria-expanded',String(selected))`) {
 		t.Fatal("Task Type inline expansion state must be announced to assistive technology")
 	}
-	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:28px;height:auto;padding:5px 8px;border-radius:var(--status-radius);`) {
-		t.Fatal("Healthy must use the shared compact status-pill shape, not an action-button shape")
+	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:var(--control-height-dense,38px);height:var(--control-height-dense,38px);padding:0 10px;border-radius:var(--status-radius);`) {
+		t.Fatal("Healthy and Edit must share the compact control-height rhythm while retaining the semantic status-pill shape")
 	}
 	if !strings.Contains(adminThemeCSS, `.production-settings-disclosure-row.danger-zone>summary{color:var(--color-status-danger)}`) {
 		t.Fatal("Danger Zone must use the canonical semantic danger color")

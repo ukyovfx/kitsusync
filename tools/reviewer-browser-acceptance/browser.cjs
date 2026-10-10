@@ -617,12 +617,23 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const editLink = page.getByRole('link', { name: locale.lang === 'ja' ? '編集' : 'Edit', exact: true });
         if (await editLink.count() !== 1) throw new Error(`Notifications should show one edit entry point in ${locale.lang}`);
         const readActions = await page.locator('.production-notification-heading').evaluate(node => {
-          const badge = node.querySelector('.status-pill').getBoundingClientRect();
-          const edit = node.querySelector('a.btn-ghost').getBoundingClientRect();
-          return { badgeTop: badge.top, badgeBottom: badge.bottom, badgeHeight: badge.height, editTop: edit.top, editBottom: edit.bottom, editHeight: edit.height };
+          const badgeElement = node.querySelector('.status-pill');
+          const editElement = node.querySelector('a.btn-ghost');
+          const badge = badgeElement.getBoundingClientRect();
+          const edit = editElement.getBoundingClientRect();
+          return {
+            badgeTop: badge.top, badgeBottom: badge.bottom, badgeHeight: badge.height,
+            editTop: edit.top, editBottom: edit.bottom, editHeight: edit.height,
+            badgeClass: badgeElement.className, editClass: editElement.className,
+            badgeBackground: getComputedStyle(badgeElement).backgroundColor,
+            editBackground: getComputedStyle(editElement).backgroundColor,
+          };
         });
-        if (Math.abs((readActions.badgeTop + readActions.badgeBottom) / 2 - (readActions.editTop + readActions.editBottom) / 2) > 1 || readActions.badgeHeight >= readActions.editHeight) {
-          throw new Error(`Notifications Healthy status pill must stay vertically centered and visually distinct from the Edit action in ${locale.lang}: ${JSON.stringify(readActions)}`);
+        const centered = Math.abs((readActions.badgeTop + readActions.badgeBottom) / 2 - (readActions.editTop + readActions.editBottom) / 2) <= 1;
+        const sameHeightRhythm = Math.abs(readActions.badgeHeight - readActions.editHeight) <= 1;
+        const distinctTreatments = readActions.badgeClass.includes('status-pill') && readActions.editClass.includes('btn-ghost') && readActions.badgeBackground !== readActions.editBackground;
+        if (!centered || !sameHeightRhythm || !distinctTreatments) {
+          throw new Error(`Notifications Healthy status pill and Edit action must share alignment/height while retaining distinct semantic treatments in ${locale.lang}: ${JSON.stringify(readActions)}`);
         }
         if (await page.locator('#notification-preview,.discord-message-preview,[data-notification-preview-select]').count()) throw new Error(`Removed Notification Preview returned in ${locale.lang}`);
         if (await page.locator('.production-wfa-recipients').count()) throw new Error(`Notifications view retained the former standalone Reviewer section in ${locale.lang}`);

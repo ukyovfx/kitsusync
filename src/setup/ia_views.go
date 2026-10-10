@@ -2810,7 +2810,7 @@ func globalDiscordMemberLoadMessage(lang string, loadErr error) string {
 			detail += fmt.Sprintf(" (Discord code %d)", failure.Code)
 		}
 	}
-	title := t(lang, "Discordユーザーを取得できません", "Discord users are unavailable")
+	title := t(lang, "Discordユーザーを取得できませんでした", "Discord users could not be loaded")
 	explanation := t(lang, "Discordユーザー一覧を確認できません。Bot接続を確認して再試行してください。", "The Discord user list could not be checked. Verify the Bot connection and try again.")
 	switch kind {
 	case discordMemberFailureFixture:

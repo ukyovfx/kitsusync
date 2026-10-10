@@ -572,8 +572,9 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if !strings.Contains(body, `data-destination-control`) || !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) || strings.Contains(body, `data-wfa-channel-control`) || strings.Contains(body, `data-routing-undo`) {
 		t.Fatal("selected Task Type editor must preserve route summary and secondary Add recipient control")
 	}
-	if strings.Count(body, `data-wfa-detail-panel`) != 1 {
-		t.Fatalf("Notifications must have one shared WFA detail panel, got %d", strings.Count(body, `data-wfa-detail-panel`))
+	panelCount := strings.Count(body, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`)
+	if panelCount != 1 {
+		t.Fatalf("Notifications must render one shared WFA detail panel element, got %d", panelCount)
 	}
 	tableEnd := strings.Index(body, `</table></div></div>`)
 	addAction := strings.Index(body, `data-routing-add`)
