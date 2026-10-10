@@ -636,6 +636,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         if (await editForm.locator('[data-routing-row] [data-destination-control]').count() !== editorStructure.routeCount) throw new Error('each routing row must own its editable destination control');
         await page.screenshot({ path: path.join(output, `production-notifications-edit-initial-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        const compRoute = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
+        const animationRoute = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
+        await animationRoute.dragTo(compRoute, { sourcePosition: { x: 30, y: 20 }, targetPosition: { x: 30, y: 20 } });
+        const reorderedIDs = await editForm.locator('[data-routing-row]').evaluateAll(rows => rows.map(row => row.dataset.taskType));
+        if (reorderedIDs[0] !== 'task-animation' || reorderedIDs[1] !== 'task-comp') throw new Error(`route drag did not reorder Task Types in ${locale.lang}/${viewport.name}: ${JSON.stringify(reorderedIDs)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-route-reordered-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await compRoute.dragTo(animationRoute, { sourcePosition: { x: 30, y: 20 }, targetPosition: { x: 30, y: 20 } });
+        const restoredIDs = await editForm.locator('[data-routing-row]').evaluateAll(rows => rows.map(row => row.dataset.taskType));
+        if (restoredIDs[0] !== 'task-comp' || restoredIDs[1] !== 'task-animation' || !(await editForm.locator('[data-apply-submit]').isDisabled())) throw new Error(`route order did not return to its clean state in ${locale.lang}/${viewport.name}: ${JSON.stringify(restoredIDs)}`);
         const automaticPanel = panel.locator('[data-wfa-automatic]');
         const selectedRouteForWFA = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
         await selectedRouteForWFA.locator('[data-select-task]').click();
