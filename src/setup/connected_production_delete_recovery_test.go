@@ -77,7 +77,9 @@ func TestStaleProductionDeleteBypassesOnlyRuntimeReadinessGate(t *testing.T) {
 func TestConnectedProductionStrongDeleteHTTPStatusReflectsLocalCleanup(t *testing.T) {
 	t.Run("healthy cleanup returns success and removes exact rows", func(t *testing.T) {
 		project, db, _ := newStrongDeleteFixture(t, 1, true)
-		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, DeleteProjectConnectionOnly)
+		// Strong delete already holds the Production lock; use the unlocked
+		// transaction helper just like the production default callback.
+		installStrongDeleteTestSeams(t, func(string, string) error { return nil }, deleteProjectConnectionOnly)
 
 		form := url.Values{"action": {"execute_validated_channel_delete"}, "project_id": {project.KitsuProjectID}, "confirm_text": {"delete"}}
 		request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader(form.Encode()))
