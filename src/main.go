@@ -648,6 +648,19 @@ func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) error {
 	return model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
 }
 
+func redactExpiredNotificationPayloads(conf config.Config, db *gorm.DB, now time.Time) {
+	days := conf.Notification.DeliveryPayloadRetentionDays
+	if db == nil || days <= 0 {
+		return
+	}
+	redacted, err := model.RedactDeliveredNotificationPayloads(db, now.UTC().AddDate(0, 0, -days), now.UTC(), 100)
+	if err != nil {
+		slog.Error("Notification delivery payload retention failed", "error_class", "delivery_payload_retention_failed")
+	} else if redacted > 0 {
+		slog.Info("Notification delivery payload retention completed", "redacted_payloads", redacted)
+	}
+}
+
 // auditActorFromPayload uses only actor data tied to the event we can prove.
 // The latest comment author is an actor for comment-only changes. A task
 // status payload does not expose its changer, so it remains unknown rather
@@ -1164,12 +1177,14 @@ func main() {
 		}
 		runtime.runWhenReady(func() { runOnePoll(conf, db) })
 	})
+	c.AddFunc("@every 1h", func() { redactExpiredNotificationPayloads(conf, db, time.Now()) })
 	c.AddFunc("0 3 * * *", func() {
 		deleted := model.PurgeOldAuditLogs(db, 90)
 		if deleted > 0 {
 			slog.Info("audit log purge", "deleted_rows", deleted)
 		}
 	})
+	redactExpiredNotificationPayloads(conf, db, time.Now())
 
 	c.Start()
 

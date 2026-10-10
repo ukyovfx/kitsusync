@@ -44,8 +44,8 @@ var (
 )
 
 // NotificationDeliveryEvent is a durable, destination-bound dispatch intent.
-// PayloadJSON is the exact non-secret Discord message body; webhook URLs/tokens
-// are deliberately never copied into this journal.
+// PayloadJSON is the exact Discord request body and may contain user-authored
+// content. Webhook URLs/tokens are deliberately never copied into this journal.
 type NotificationDeliveryEvent struct {
 	ID                     uint   `gorm:"primaryKey"`
 	EventID                string `gorm:"not null;uniqueIndex;size:64"`
@@ -59,6 +59,7 @@ type NotificationDeliveryEvent struct {
 	IsAssignNotification   bool
 	PayloadJSON            string `gorm:"type:text;not null"`
 	PayloadSHA256          string `gorm:"not null;size:64"`
+	PayloadRedactedAt      *time.Time
 	WebhookRowID           uint   `gorm:"not null;index"`
 	DestinationGuildID     string `gorm:"not null;index"`
 	DestinationChannelID   string `gorm:"not null;index"`
@@ -488,6 +489,40 @@ func ListPendingNotificationDeliveries(db *gorm.DB, limit int) ([]NotificationDe
 		return nil, err
 	}
 	return rows, nil
+}
+
+// RedactDeliveredNotificationPayloads clears only old, successfully delivered
+// payload bodies whose prior-message cleanup has completed. Event identity,
+// payload hash, destination identity, disposition and Discord message/thread
+// checkpoints remain durable so a repeated Kitsu observation cannot resend.
+// The bounded conditional update is safe to run repeatedly and never loads or
+// logs the payload text.
+func RedactDeliveredNotificationPayloads(db *gorm.DB, deliveredBefore, redactedAt time.Time, limit int) (int64, error) {
+	if db == nil || deliveredBefore.IsZero() || redactedAt.IsZero() || limit <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	var rowsAffected int64
+	err := db.Transaction(func(tx *gorm.DB) error {
+		eligible := tx.Model(&NotificationDeliveryEvent{}).
+			Select("id").
+			Where("disposition = ? AND delivered_at IS NOT NULL AND delivered_at < ?", DeliveryDelivered, deliveredBefore).
+			Where("prior_cleanup_pending = ? AND prior_cleanup_in_flight = ?", false, false).
+			Where("payload_redacted_at IS NULL AND payload_json <> ''").
+			Order("delivered_at ASC, id ASC").
+			Limit(limit)
+		result := tx.Model(&NotificationDeliveryEvent{}).
+			Where("id IN (?)", eligible).
+			Where("disposition = ? AND delivered_at IS NOT NULL AND delivered_at < ?", DeliveryDelivered, deliveredBefore).
+			Where("prior_cleanup_pending = ? AND prior_cleanup_in_flight = ?", false, false).
+			Where("payload_redacted_at IS NULL AND payload_json <> ''").
+			Updates(map[string]any{"payload_json": "", "payload_redacted_at": redactedAt.UTC()})
+		if result.Error != nil {
+			return result.Error
+		}
+		rowsAffected = result.RowsAffected
+		return nil
+	})
+	return rowsAffected, err
 }
 
 func FindNotificationDeliveryByID(db *gorm.DB, eventID string) (*NotificationDeliveryEvent, error) {

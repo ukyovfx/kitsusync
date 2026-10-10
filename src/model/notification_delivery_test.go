@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -68,6 +69,189 @@ func TestNotificationDeliveryIntentIsUniqueAndDestinationBound(t *testing.T) {
 	var stored NotificationDeliveryEvent
 	if err := db.Where("event_id = ?", first.EventID).First(&stored).Error; err != nil || stored.Disposition != DeliveryUnknown {
 		t.Fatalf("identity conflict must quarantine the original event: row=%+v err=%v", stored, err)
+	}
+}
+
+func TestRedactDeliveredNotificationPayloadsIsBoundedAndPreservesDeduplication(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	notificationDeliveryFixture(t, db)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	cutoff := now.Add(-30 * 24 * time.Hour)
+	makeDelivered := func(taskID string, deliveredAt time.Time, cleanupPending, cleanupInFlight bool) NotificationDeliveryEvent {
+		t.Helper()
+		intent := notificationIntent()
+		intent.TaskID = taskID
+		intent.TaskUpdatedAt = taskID + "-updated"
+		event, err := PrepareNotificationDelivery(db, intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attempt, started, err := BeginNotificationDelivery(db, event.EventID, deliveredAt.Add(-time.Minute))
+		if err != nil || !started {
+			t.Fatalf("start delivery %s: started=%v err=%v", taskID, started, err)
+		}
+		if err := CompleteNotificationDelivery(db, *attempt, "message-"+taskID, "thread-"+taskID, deliveredAt); err != nil {
+			t.Fatal(err)
+		}
+		if cleanupPending || cleanupInFlight {
+			if err := db.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", event.EventID).Updates(map[string]any{
+				"prior_cleanup_pending": cleanupPending, "prior_cleanup_in_flight": cleanupInFlight,
+			}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		var stored NotificationDeliveryEvent
+		if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+
+	eligibleA := makeDelivered("old-a", cutoff.Add(-time.Hour), false, false)
+	eligibleB := makeDelivered("old-b", cutoff.Add(-2*time.Hour), false, false)
+	eligibleC := makeDelivered("old-c", cutoff.Add(-3*time.Hour), false, false)
+	cleanupPending := makeDelivered("cleanup-pending", cutoff.Add(-4*time.Hour), true, false)
+	cleanupInFlight := makeDelivered("cleanup-in-flight", cutoff.Add(-5*time.Hour), true, true)
+	recent := makeDelivered("recent", cutoff.Add(time.Hour), false, false)
+	unresolved := make([]NotificationDeliveryEvent, 0, 6)
+	for _, disposition := range []string{DeliveryPending, DeliveryInFlight, DeliveryRetryable, DeliveryUnknown, DeliveryTerminalFailure, DeliveryLegacyUnknown} {
+		intent := notificationIntent()
+		intent.TaskID, intent.TaskUpdatedAt = "unresolved-"+disposition, "unresolved-"+disposition+"-updated"
+		event, err := PrepareNotificationDelivery(db, intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", event.EventID).Update("disposition", disposition).Error; err != nil {
+			t.Fatal(err)
+		}
+		unresolved = append(unresolved, *event)
+	}
+
+	redacted, err := RedactDeliveredNotificationPayloads(db, cutoff, now, 2)
+	if err != nil || redacted != 2 {
+		t.Fatalf("first bounded redaction = %d, %v; want 2", redacted, err)
+	}
+	rowsToCheck := []NotificationDeliveryEvent{eligibleA, eligibleB, eligibleC, cleanupPending, cleanupInFlight, recent}
+	rowsToCheck = append(rowsToCheck, unresolved...)
+	expectedDispositions := map[string]string{}
+	for _, row := range rowsToCheck {
+		expectedDispositions[row.EventID] = row.Disposition
+	}
+	for i, disposition := range []string{DeliveryPending, DeliveryInFlight, DeliveryRetryable, DeliveryUnknown, DeliveryTerminalFailure, DeliveryLegacyUnknown} {
+		expectedDispositions[unresolved[i].EventID] = disposition
+	}
+	for _, row := range rowsToCheck {
+		var got NotificationDeliveryEvent
+		if err := db.Where("event_id = ?", row.EventID).First(&got).Error; err != nil {
+			t.Fatal(err)
+		}
+		wantRedacted := row.EventID == eligibleB.EventID || row.EventID == eligibleC.EventID
+		if (got.PayloadRedactedAt != nil) != wantRedacted {
+			t.Fatalf("event %s redaction marker = %v, want redacted=%v", row.EventID, got.PayloadRedactedAt, wantRedacted)
+		}
+		if got.Disposition != expectedDispositions[row.EventID] {
+			t.Fatalf("redaction changed event %s disposition to %q; want %q", row.EventID, got.Disposition, expectedDispositions[row.EventID])
+		}
+		if wantRedacted {
+			if got.PayloadJSON != "" || got.PayloadSHA256 != row.PayloadSHA256 || got.Disposition != DeliveryDelivered || got.DiscordMessageID != row.DiscordMessageID || got.DiscordThreadID != row.DiscordThreadID || got.EventID != row.EventID || got.WebhookRowID != row.WebhookRowID || got.DestinationGuildID != row.DestinationGuildID || got.DestinationChannelID != row.DestinationChannelID || got.DestinationWebhookID != row.DestinationWebhookID || got.DestinationFingerprint != row.DestinationFingerprint {
+				t.Fatalf("redaction discarded dedupe/recovery metadata: before=%+v after=%+v", row, got)
+			}
+		} else if got.PayloadJSON != row.PayloadJSON {
+			t.Fatalf("ineligible payload changed for event %s", row.EventID)
+		}
+	}
+
+	redacted, err = RedactDeliveredNotificationPayloads(db, cutoff, now, 10)
+	if err != nil || redacted != 1 {
+		t.Fatalf("second redaction = %d, %v; want final eligible record", redacted, err)
+	}
+	redacted, err = RedactDeliveredNotificationPayloads(db, cutoff, now, 10)
+	if err != nil || redacted != 0 {
+		t.Fatalf("repeated redaction must be idempotent: %d, %v", redacted, err)
+	}
+
+	// A redacted event remains the same delivered event on replay and cannot
+	// become dispatchable after process restart or a repeated Kitsu observation.
+	intent := notificationIntent()
+	intent.TaskID, intent.TaskUpdatedAt = "old-a", "old-a-updated"
+	replayed, err := PrepareNotificationDelivery(db, intent)
+	if err != nil || replayed.EventID != eligibleA.EventID || replayed.Disposition != DeliveryDelivered || replayed.PayloadJSON != "" || replayed.PayloadSHA256 != eligibleA.PayloadSHA256 {
+		t.Fatalf("redacted event was not retained as deduplication evidence: event=%+v err=%v", replayed, err)
+	}
+	if _, started, err := BeginNotificationDelivery(db, replayed.EventID, now); started || !errors.Is(err, ErrDeliveryUnavailable) {
+		t.Fatalf("redacted delivered event became resendable: started=%v err=%v", started, err)
+	}
+	var count int64
+	if err := db.Model(&NotificationDeliveryEvent{}).Count(&count).Error; err != nil || count != int64(len(rowsToCheck)) {
+		t.Fatalf("retention must preserve all event identities: count=%d want=%d err=%v", count, len(rowsToCheck), err)
+	}
+}
+
+func TestRedactedDeliveredNotificationPayloadSurvivesSQLiteRestartWithoutResend(t *testing.T) {
+	dbPath := t.TempDir() + "/delivery-retention.db"
+	openDB := func() *gorm.DB {
+		t.Helper()
+		db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &Task{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProjectReviewerTarget{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
+			t.Fatal(err)
+		}
+		return db
+	}
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	db := openDB()
+	notificationDeliveryFixture(t, db)
+	event, err := PrepareNotificationDelivery(db, notificationIntent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, now.Add(-46*24*time.Hour))
+	if err != nil || !started {
+		t.Fatalf("start old delivery: started=%v err=%v", started, err)
+	}
+	deliveredAt := now.Add(-45 * 24 * time.Hour)
+	if err := CompleteNotificationDelivery(db, *attempt, "durable-message", "durable-thread", deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	if redacted, err := RedactDeliveredNotificationPayloads(db, now.Add(-30*24*time.Hour), now, 100); err != nil || redacted != 1 {
+		t.Fatalf("redact old delivered event: count=%d err=%v", redacted, err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := t.TempDir() + "/delivery-retention-backup.db"
+	contents, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backupPath, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := gorm.Open(sqlite.Open(backupPath), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.AutoMigrate(&Project{}, &ProjectWebhook{}, &Task{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProjectReviewerTarget{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
+		t.Fatal(err)
+	}
+	reopenedSQL, err := reopened.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopenedSQL.Close() })
+	replayed, err := PrepareNotificationDelivery(reopened, notificationIntent())
+	if err != nil || replayed.EventID != event.EventID || replayed.Disposition != DeliveryDelivered || replayed.PayloadJSON != "" || replayed.PayloadSHA256 != event.PayloadSHA256 || replayed.DiscordMessageID != "durable-message" || replayed.DiscordThreadID != "durable-thread" {
+		t.Fatalf("restart lost deduplication/recovery metadata: event=%+v err=%v", replayed, err)
+	}
+	if _, started, err := BeginNotificationDelivery(reopened, replayed.EventID, now); started || !errors.Is(err, ErrDeliveryUnavailable) {
+		t.Fatalf("restart made delivered event resendable: started=%v err=%v", started, err)
 	}
 }
 

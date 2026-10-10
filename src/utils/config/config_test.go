@@ -31,6 +31,53 @@ func TestReadFromPathExpandsEnvironmentWithoutPersistingValues(t *testing.T) {
 	}
 }
 
+func TestDeliveryPayloadRetentionDefaultsCanBeConfiguredOrDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.toml")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadFromPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Notification.DeliveryPayloadRetentionDays != defaultDeliveryPayloadRetentionDays {
+		t.Fatalf("unset retention = %d, want default %d", loaded.Notification.DeliveryPayloadRetentionDays, defaultDeliveryPayloadRetentionDays)
+	}
+
+	if err := os.WriteFile(path, []byte("[notification]\ndeliveryPayloadRetentionDays = 60\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = ReadFromPath(path)
+	if err != nil || loaded.Notification.DeliveryPayloadRetentionDays != 60 {
+		t.Fatalf("configured retention = %d, err=%v; want 60", loaded.Notification.DeliveryPayloadRetentionDays, err)
+	}
+	for _, issue := range loaded.Validate() {
+		if strings.Contains(issue, "notification.deliveryPayloadRetentionDays") {
+			t.Fatalf("valid retention configuration rejected: %v", issue)
+		}
+	}
+
+	if err := os.WriteFile(path, []byte("[notification]\ndeliveryPayloadRetentionDays = 0\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = ReadFromPath(path)
+	if err != nil || loaded.Notification.DeliveryPayloadRetentionDays != 0 {
+		t.Fatalf("zero retention should disable redaction: value=%d err=%v", loaded.Notification.DeliveryPayloadRetentionDays, err)
+	}
+}
+
+func TestDeliveryPayloadRetentionRejectsOutOfRangeValues(t *testing.T) {
+	for _, days := range []int{-1, maxDeliveryPayloadRetentionDays + 1} {
+		config := Config{}
+		config.Notification.DeliveryPayloadRetentionDays = days
+		issues := strings.Join(config.Validate(), "\n")
+		if !strings.Contains(issues, "notification.deliveryPayloadRetentionDays must be between 0 and") {
+			t.Fatalf("retention %d should be rejected, got %q", days, issues)
+		}
+	}
+}
+
 func TestValidateRejectsNonPositiveDiscordBatchAndRateValues(t *testing.T) {
 	for _, value := range []int{0, -1} {
 		config := Config{}
