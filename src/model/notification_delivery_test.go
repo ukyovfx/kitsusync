@@ -523,7 +523,7 @@ func TestManagedChannelDeletionTombstoneBlocksDispatchAndFinalizesAtomically(t *
 	if err := FinalizeManagedChannelDeletion(db, 1, time.Now()); err == nil {
 		t.Fatal("injected local-finalize failure must be reported")
 	}
-	if FindProjectWebhookByID(db, 1) == nil || len(ListProductionNotificationRoutes(db, "production-1")) != 1 {
+	if FindProjectWebhookByID(db, 1) == nil || len(ListProductionNotificationRoutes(db, "production-1")) != 2 || len(ListProjectReviewerTargets(db, project.ID)) != 1 {
 		t.Fatal("failed finalization partially deleted local route state")
 	}
 	var tombstone ManagedChannelDeletion

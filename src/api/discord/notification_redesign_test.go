@@ -478,6 +478,10 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		t.Fatalf("WFA did not use the Reviewer recipient: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 
+	// Each additional assertion models a distinct observed Kitsu event. Reusing
+	// one identity with altered recipients must be quarantined rather than
+	// replayed with a new payload.
+	event.Task.UpdatedAt = "2026-08-07T00:01:00"
 	reviewerTargets = []ReviewerTarget{
 		{Kind: "user", ID: "123456789012345670"},
 		{Kind: "user", ID: "123456789012345671"},
@@ -494,25 +498,29 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	}
 
 	reviewerTargets = nil
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:02:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 || len(sent.AllowedMentions.Roles) != 0 {
 		t.Fatalf("empty Reviewer result fell through to legacy/config recipients: content=%q allowed=%+v", sent.Content, sent.AllowedMentions)
 	}
 
 	checkerIDs = nil
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:03:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
 		t.Fatalf("zero Reviewer suppressed or broadened the WFA card: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 
 	reviewerResolveErr = errors.New("synthetic Supervisor read failure")
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:04:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
 		t.Fatalf("WFA lookup failure broadened recipients: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 	reviewerReader := ReviewerResolver
 	ReviewerResolver = nil
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:05:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	ReviewerResolver = reviewerReader
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
 		t.Fatalf("missing Reviewer resolver fell back to legacy Checkers: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
@@ -523,7 +531,8 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	checkerIDs = []string{"202"}
 	conf.Mention.CheckerStatuses = []string{"WFA"}
 	event.IsAssignNotification = true
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:06:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "<@202>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "202" {
 		t.Fatalf("assignment Checker behavior changed: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
