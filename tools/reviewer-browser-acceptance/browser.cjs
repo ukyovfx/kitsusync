@@ -207,8 +207,8 @@ async function assertBackgroundCanvas(page, mode, locale, viewport, screenshotNa
     if (details.bodyBackgroundColor !== 'rgb(7, 7, 7)' || details.bodyBackgroundImage !== 'none') {
       throw new Error(`authenticated page base is not uniform/dark at ${locale.lang}/${viewport.name}: ${JSON.stringify({ color: details.bodyBackgroundColor, image: details.bodyBackgroundImage })}`);
     }
-    if (grid.glyphArmAlpha.some(alpha => alpha < 12) || grid.glyphDiagonalAlpha > Math.min(...grid.glyphArmAlpha) * .6) {
-      throw new Error(`authenticated grid glyph is not a readable small plus at ${locale.lang}/${viewport.name}: ${JSON.stringify({ arms: grid.glyphArmAlpha, diagonal: grid.glyphDiagonalAlpha })}`);
+    if (grid.glyphArmAlpha.some(alpha => alpha < 12) || grid.glyphArmReachAlpha.some(alpha => alpha < 10) || grid.glyphDiagonalAlpha > Math.min(...grid.glyphArmAlpha) * .6) {
+      throw new Error(`authenticated grid glyph is not a readable small plus at ${locale.lang}/${viewport.name}: ${JSON.stringify({ arms: grid.glyphArmAlpha, armReach: grid.glyphArmReachAlpha, diagonal: grid.glyphDiagonalAlpha })}`);
     }
   }
   if (mode === 'login-fabric' && (!details.cardOpaque || !details.panelOpaque)) {
@@ -293,6 +293,7 @@ async function plusGridSnapshot(page) {
     const glyphX = origin + Math.round((innerWidth * .5 - origin) / spacing) * spacing;
     const glyphY = origin + Math.round((innerHeight * .5 - origin) / spacing) * spacing;
     const glyphArmAlpha = [sampleAlpha(glyphX - 1, glyphY), sampleAlpha(glyphX + 1, glyphY), sampleAlpha(glyphX, glyphY - 1), sampleAlpha(glyphX, glyphY + 1)];
+    const glyphArmReachAlpha = [sampleAlpha(glyphX - 2, glyphY), sampleAlpha(glyphX + 2, glyphY), sampleAlpha(glyphX, glyphY - 2), sampleAlpha(glyphX, glyphY + 2)];
     const glyphDiagonalAlpha = sampleAlpha(glyphX + 1, glyphY + 1);
     return {
       profile: canvas.dataset.profile,
@@ -303,6 +304,7 @@ async function plusGridSnapshot(page) {
       edgeAlpha,
       centerAlpha: sampleAlpha(innerWidth * .5 + 11, innerHeight * .5 + 11),
       glyphArmAlpha,
+      glyphArmReachAlpha,
       glyphDiagonalAlpha,
     };
   });

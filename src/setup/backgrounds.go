@@ -261,14 +261,14 @@ const backgroundCanvasScript = `<script>
       ctx.fillStyle=gradient;ctx.fillRect(0,0,width,height);
     });
     const base=[130,91,54],brand=[252,135,66];
-    ctx.lineCap='round';ctx.lineWidth=.9;
+    ctx.lineCap='round';ctx.lineWidth=1.1;
     for(let y=18;y<height;y+=spacing){
       for(let x=18;x<width;x+=spacing){
         const distance=Math.hypot(pointer.x-x,pointer.y-y);
         const local=Math.exp(-.5*Math.pow(distance/120,2))*pointer.amount*.24;
         const color=base.map(function(value,index){return value+(brand[index]-value)*local});
-        const size=3.6*(1+local*.2),half=size/2;
-        ctx.strokeStyle=rgba(color[0],color[1],color[2],.16+local*.08);
+        const size=5.0*(1+local*.2),half=size/2;
+        ctx.strokeStyle=rgba(color[0],color[1],color[2],.18+local*.06);
         ctx.beginPath();ctx.moveTo(x-half,y);ctx.lineTo(x+half,y);ctx.moveTo(x,y-half);ctx.lineTo(x,y+half);ctx.stroke();
       }
     }
