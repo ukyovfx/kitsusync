@@ -18,6 +18,14 @@ func TestCurrentRoutingDraftTemplateSupportsInlineDestinationModesAndRepeatedAdd
 			t.Errorf("draft routing row template is missing %q", marker)
 		}
 	}
+	for _, marker := range []string{`data-task-type-combobox`, `role="listbox"`, `data-task-type-option="task-comp"`, `data-select-task aria-pressed="false" aria-expanded="false" hidden`} {
+		if !strings.Contains(template, marker) {
+			t.Errorf("draft Task Type must use one accessible dark picker before selection: missing %q", marker)
+		}
+	}
+	if strings.Contains(template, `value="">Select Discord Channel`) {
+		t.Fatal("draft destination must default to automatic creation without a selectable empty channel option")
+	}
 	script := currentRoutingEditorScript()
 	for _, marker := range []string{`template.content.firstElementChild.cloneNode(true)`, `body.appendChild(row)`, `new_channel_name`, `route.create_channel_name=`, `control.value==='__custom__'`} {
 		if !strings.Contains(script, marker) {
@@ -26,6 +34,11 @@ func TestCurrentRoutingDraftTemplateSupportsInlineDestinationModesAndRepeatedAdd
 	}
 	if strings.Contains(script, `if(visibleRows().length)selectRow`) || strings.Contains(script, `add.disabled=`) {
 		t.Fatal("edit entry must not auto-select a route or disable repeated Add Task Type actions")
+	}
+	for _, marker := range []string{`taskSelect.dispatchEvent(new Event('change'`, `select.hidden=!taskSelect.value`, `aria-disabled`, `event.key==='Escape'`, `[data-task-type-combobox]')?.focus()`} {
+		if !strings.Contains(script, marker) {
+			t.Errorf("draft Task Type selection must remain single-row and keyboard accessible: missing %q", marker)
+		}
 	}
 }
 

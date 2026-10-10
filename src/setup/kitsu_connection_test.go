@@ -203,6 +203,11 @@ func TestConnectionsEditFormSeparatesKitsuAndDiscordFields(t *testing.T) {
 	if !strings.Contains(body, `id="save-external-kitsu-url" type="submit" class="btn" disabled`) {
 		t.Fatal("external URL Save must start disabled until the field changes")
 	}
+	controls := body[strings.Index(body, `<div class="connection-external-url-controls">`):]
+	controls = controls[:strings.Index(controls, `</div>`)]
+	if !strings.Contains(controls, `id="kitsu-external-url"`) || !strings.Contains(controls, `>Check link</a>`) || !strings.Contains(controls, `id="save-external-kitsu-url"`) {
+		t.Fatal("External Kitsu URL, Check link and Save must share one control row")
+	}
 	if !strings.Contains(body, `data-initial-value="https://external.kitsu.example.test"`) {
 		t.Fatal("external URL field must retain its saved value as the change baseline")
 	}

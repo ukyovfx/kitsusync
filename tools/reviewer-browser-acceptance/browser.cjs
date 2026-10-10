@@ -84,6 +84,18 @@ async function gotoProduction(page, locale, tab, extra = '') {
   await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${tab}&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
+async function chooseDraftTaskType(row, id) {
+  const combo = row.locator('[data-task-type-combobox]');
+  const listbox = row.locator('[data-task-type-listbox]');
+  if (!(await combo.isVisible()) || await row.locator('[data-select-task]').isVisible()) throw new Error('draft route displayed two Task Type controls before selection');
+  await combo.click();
+  if (!(await listbox.isVisible()) || await combo.getAttribute('aria-expanded') !== 'true') throw new Error('Task Type listbox did not open');
+  const option = listbox.locator(`[data-task-type-option="${id}"]`);
+  if (await option.getAttribute('aria-disabled') === 'true') throw new Error('available Task Type was disabled');
+  await option.click();
+  if (await combo.isVisible() || !(await row.locator('[data-select-task]').isVisible()) || await row.locator('[data-task-type-select]').inputValue() !== id) throw new Error('selected draft route did not become one visible Task Type row');
+}
+
 async function automaticGroup(page, locale) {
 	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-automatic]');
 	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-recipients]');
@@ -750,19 +762,28 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const removedRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
         const removedChannelID = await removedRouteRow.getAttribute('data-original-destination');
         await editForm.locator('[data-routing-add]').click();
-        const newTypeSelect = editForm.locator('[data-routing-row] [data-task-type-select]').last();
-        await newTypeSelect.selectOption('task-unassigned');
+        const firstDraftRow = editForm.locator('[data-routing-row]').last();
+        await page.screenshot({ path: path.join(output, `production-notifications-task-type-before-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        const taskCombo = firstDraftRow.locator('[data-task-type-combobox]');
+        await taskCombo.click();
+        const taskListbox = firstDraftRow.locator('[data-task-type-listbox]');
+        const taskTheme = await taskListbox.evaluate(node => ({ background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color, disabled: [...node.querySelectorAll('[aria-disabled="true"]')].map(option => getComputedStyle(option).color) }));
+        if (!(await taskListbox.isVisible()) || taskTheme.background === 'rgb(255, 255, 255)' || taskTheme.color === 'rgba(0, 0, 0, 0)' || taskTheme.disabled.length < 2 || taskTheme.disabled.some(color => color === 'rgba(0, 0, 0, 0)')) throw new Error(`Task Type dropdown is light, unreadable, or missing unavailable options in ${locale.lang}: ${JSON.stringify(taskTheme)}`);
+        await page.screenshot({ path: path.join(output, `production-notifications-task-type-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
+        await page.keyboard.press('Escape');
+        if (await taskListbox.isVisible() || await taskCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Escape did not close the Task Type listbox');
+        await chooseDraftTaskType(firstDraftRow, 'task-unassigned');
         const pendingRow = editForm.locator('[data-routing-row][data-task-type="task-unassigned"]');
         if (!(await pendingRow.isVisible()) || !await pendingRow.locator('[data-destination-control]').isVisible()) throw new Error(`Add Task Type did not add a routing row with its destination control in ${locale.lang}`);
+        if (await editForm.locator('[data-destination-control] option[value=""]').count()) throw new Error(`routing destination still exposes a redundant empty placeholder in ${locale.lang}`);
         if (await pendingRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await pendingRow.locator('[data-custom-channel-field]').isVisible()) throw new Error(`new Task Type did not default to Automatic without exposing custom input in ${locale.lang}`);
         await editForm.locator('[data-routing-add]').click();
-        const secondNewTypeSelect = editForm.locator('[data-routing-row] [data-task-type-select]').last();
-        await secondNewTypeSelect.selectOption('task-concept');
+        await chooseDraftTaskType(editForm.locator('[data-routing-row]').last(), 'task-concept');
         const secondPendingRow = editForm.locator('[data-routing-row][data-task-type="task-concept"]');
         await editForm.locator('[data-routing-add]').click();
-        const thirdNewTypeSelect = editForm.locator('[data-routing-row] [data-task-type-select]').last();
-        await thirdNewTypeSelect.selectOption('task-modeling');
+        await chooseDraftTaskType(editForm.locator('[data-routing-row]').last(), 'task-modeling');
         if (await editForm.locator('[data-routing-row][data-draft="true"]').count() !== 3) throw new Error('three Task Type rows could not remain browser-pending before a single Apply');
+        if (await editForm.locator('[data-routing-row][data-draft="true"] [data-task-type-combobox]:visible').count()) throw new Error('selected drafts still show a duplicate Task Type selector');
         await page.screenshot({ path: path.join(output, `production-notifications-add-task-type-inline-${locale.lang}-${viewport.name}.png`), fullPage: true });
         const removableDraftRow = editForm.locator('[data-routing-row][data-task-type="task-modeling"]');
         await removableDraftRow.locator('[data-select-task]').click();
@@ -770,7 +791,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await removableDraftRow.locator('[data-routing-remove]').click();
         if (await removableDraftRow.count() || await editForm.locator('[data-wfa-detail-panel]').isVisible()) throw new Error('removing the selected draft route left a detached WFA detail panel');
         await editForm.locator('[data-routing-add]').click();
-        await editForm.locator('[data-routing-row] [data-task-type-select]').last().selectOption('task-modeling');
+        await chooseDraftTaskType(editForm.locator('[data-routing-row]').last(), 'task-modeling');
         await pendingRow.locator('[data-select-task]').click();
         if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? 'Supervisorなし' : 'No Supervisor')) {
           throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
@@ -859,7 +880,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const refreshForm = page.locator('[data-current-routing-form]');
         await refreshForm.locator('[data-routing-add]').click();
         const refreshRow = refreshForm.locator('[data-routing-row]').last();
-        await refreshRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        await chooseDraftTaskType(refreshRow, 'task-unassigned');
         if (await refreshRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await refreshRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('Automatic destination is not the new route default');
         await refreshRow.locator('[data-destination-control]').selectOption('__custom__');
         if (!(await refreshRow.locator('[data-custom-channel-field]').isVisible()) || await refreshRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('custom channel staging did not expose the normalized Task Type default inline');
@@ -874,7 +895,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const reuseForm = page.locator('[data-current-routing-form]');
         await reuseForm.locator('[data-routing-add]').click();
         const reuseRow = reuseForm.locator('[data-routing-row]').last();
-        await reuseRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        await chooseDraftTaskType(reuseRow, 'task-unassigned');
         const reuseSelect = reuseRow.locator('[data-destination-control]');
         const reusableWebhookID = removedChannelID;
         if (!reusableWebhookID || !(await reuseSelect.locator(`option[value="${reusableWebhookID}"]`).innerText()).includes('#animation')) throw new Error('the removed route channel is unavailable for reuse by an unrouted Task Type');
@@ -899,7 +920,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.route(applyEndpoint, async route => { automaticApplyCount++; automaticPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
         await automaticCreateForm.locator('[data-routing-add]').click();
         const automaticRow = automaticCreateForm.locator('[data-routing-row]').last();
-        await automaticRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        await chooseDraftTaskType(automaticRow, 'task-unassigned');
         if (await automaticRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await automaticRow.locator('[data-custom-channel-field]').isVisible() || automaticApplyCount !== 0) throw new Error('Automatic channel choice must remain pending and hide the custom name input until Apply');
         const automaticResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
         await automaticCreateForm.locator('[data-apply-submit]').click();
@@ -915,7 +936,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.route(applyEndpoint, async route => { createdApplyCount++; createdPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
         await createForm.locator('[data-routing-add]').click();
         const createRow = createForm.locator('[data-routing-row]').last();
-        await createRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        await chooseDraftTaskType(createRow, 'task-unassigned');
         const createDestination = createRow.locator('[data-destination-control]');
         if (await createDestination.inputValue() !== '__auto__') throw new Error('new route must default to Automatic channel creation');
         await createDestination.selectOption('__custom__');
@@ -935,7 +956,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const failedCreateForm = page.locator('[data-current-routing-form]');
         await failedCreateForm.locator('[data-routing-add]').click();
         const failedCreateRow = failedCreateForm.locator('[data-routing-row]').last();
-        await failedCreateRow.locator('[data-task-type-select]').selectOption('task-unassigned');
+        await chooseDraftTaskType(failedCreateRow, 'task-unassigned');
         await failedCreateRow.locator('[data-destination-control]').selectOption('__custom__');
         await failedCreateRow.locator('input[data-new-channel-name]').fill('unassigned-failure');
         expectedChannelCreateFailure = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console502Messages: [] };
@@ -980,6 +1001,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const userLinkingHref = await page.locator('.production-team-user-link').first().getAttribute('href');
         if (!userLinkingHref || !userLinkingHref.startsWith(`/bot/admin/users?lang=${locale.lang}`)) {
           throw new Error(`Unlinked Team member has no localized User Linking route in ${locale.lang}`);
+        }
+        const userLinkingLabel = (await page.locator('.production-team-user-link').first().innerText()).trim();
+        if (userLinkingLabel !== (locale.lang === 'ja' ? 'ユーザー紐づけ' : 'User Linking')) throw new Error(`Team User Linking action is not localized in ${locale.lang}: ${userLinkingLabel}`);
+        if (viewport.name === 'desktop') {
+          const statusAction = await page.locator('.production-team-status-actions:has(.production-team-user-link)').first().evaluate(node => {
+            const status = node.querySelector('.status-pill');
+            const action = node.querySelector('.production-team-user-link');
+            return { display: getComputedStyle(node).display, statusY: status?.getBoundingClientRect().y, actionY: action?.getBoundingClientRect().y };
+          });
+          if (statusAction.display !== 'flex' || !Number.isFinite(statusAction.statusY) || Math.abs(statusAction.statusY - statusAction.actionY) > 8) throw new Error(`Team status and User Linking action are not inline in ${locale.lang}: ${JSON.stringify(statusAction)}`);
         }
         if (viewport.name === 'mobile') {
           const teamControls = await page.locator('.production-team-discord,.production-team-status').evaluateAll(cells => cells.flatMap(cell => {
@@ -1328,6 +1359,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         route: '/bot/admin/bot?edit=1&lang=en',
         assert: async () => {
           if (!(await page.locator('#external-kitsu-url-form').count())) throw new Error('Connections edit visual reference did not render the existing External Kitsu URL form');
+          const controls = await page.locator('.connection-external-url-controls').evaluate(node => {
+            const fields = [node.querySelector('input'), node.querySelector('.btn-ghost'), node.querySelector('#save-external-kitsu-url')];
+            return fields.map(field => ({ x: field.getBoundingClientRect().x, y: field.getBoundingClientRect().y, height: field.getBoundingClientRect().height, width: field.getBoundingClientRect().width }));
+          });
+          if (controls.length !== 3 || controls.some(control => control.width <= 0 || control.height <= 0) || Math.max(...controls.map(control => control.y)) - Math.min(...controls.map(control => control.y)) > 3 || Math.max(...controls.map(control => control.height)) - Math.min(...controls.map(control => control.height)) > 3 || !(controls[0].x < controls[1].x && controls[1].x < controls[2].x)) throw new Error(`External Kitsu URL input, Check link and Save are not aligned in one row: ${JSON.stringify(controls)}`);
         },
       },
       {
@@ -1344,6 +1380,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       await reference.assert();
       await page.screenshot({ path: path.join(output, `reference-${reference.name}-en-desktop.png`), fullPage: true });
       await record(page, reference.route, 'en', 'desktop-reference', 'visual baseline', `${reference.name} rendered from its normal application route`);
+    }
+
+    for (const lang of ['ja', 'en']) {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${base}/bot/admin/bot?edit=1&lang=${lang}`, { waitUntil: 'networkidle' });
+      const externalControls = page.locator('.connection-external-url-controls');
+      if (!(await externalControls.count()) || !(await externalControls.locator('#save-external-kitsu-url').count())) throw new Error(`External Kitsu URL controls are missing on mobile in ${lang}`);
+      await page.screenshot({ path: path.join(output, `reference-connections-edit-${lang}-mobile.png`), fullPage: true });
+      await record(page, '/bot/admin/bot?edit=1', lang, 'mobile-reference', 'External Kitsu URL controls', 'input, Check link and Save remain visible without horizontal overflow');
     }
 
     await page.goto(`${base}/bot/admin?lang=en`, { waitUntil: 'networkidle' });

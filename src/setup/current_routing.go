@@ -200,17 +200,21 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 	webhooks := model.ListProjectWebhooks(db, p.KitsuProjectID)
 	destinationList := func(selected uint) string {
 		var b strings.Builder
-		b.WriteString(`<option value="">` + esc(t(lang, "Discord\u30c1\u30e3\u30f3\u30cd\u30eb\u3092\u9078\u629e", "Select Discord Channel")) + `</option>`)
+		found := false
 		for _, webhook := range webhooks {
 			mark := ""
 			if webhook.ID == selected {
 				mark = " selected"
+				found = true
 			}
 			label := strings.TrimSpace(webhook.ChannelName)
 			if label == "" {
 				label = t(lang, "\u8a2d\u5b9a\u6e08\u307f\u30c1\u30e3\u30f3\u30cd\u30eb", "Configured channel")
 			}
 			b.WriteString(`<option value="` + strconv.FormatUint(uint64(webhook.ID), 10) + `"` + mark + `>#` + esc(strings.TrimPrefix(label, "#")) + `</option>`)
+		}
+		if selected != 0 && !found {
+			return `<option value="" selected disabled>` + esc(t(lang, "保存先を確認できません", "Saved destination unavailable")) + `</option>` + b.String() + `<option value="__auto__">` + esc(t(lang, "自動作成", "Automatic")) + `</option><option value="__custom__">` + esc(t(lang, "カスタム...", "Custom...")) + `</option>`
 		}
 		b.WriteString(`<option value="__auto__">` + esc(t(lang, "自動作成", "Automatic")) + `</option><option value="__custom__">` + esc(t(lang, "カスタム...", "Custom...")) + `</option>`)
 		return b.String()

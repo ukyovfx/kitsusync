@@ -2957,12 +2957,12 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 			return ` external-kitsu-url-error`
 		}
 		return ""
-	}() + `">` + checkLink + `</div><p id="external-kitsu-url-help" class="field-help">` + esc(t(lang, "空欄で保存すると通常のKitsu URLを使用します。確認リンクは現在保存済みのURLを開きます。", "Saving an empty value uses the normal Kitsu URL. Check link opens the currently saved URL.")) + `</p>` + func() string {
+	}() + `">` + checkLink + `<button id="save-external-kitsu-url" type="submit" class="btn"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div><p id="external-kitsu-url-help" class="field-help">` + esc(t(lang, "空欄で保存すると通常のKitsu URLを使用します。確認リンクは現在保存済みのURLを開きます。", "Saving an empty value uses the normal Kitsu URL. Check link opens the currently saved URL.")) + `</p>` + func() string {
 		if externalURLSaveError == "" {
 			return ""
 		}
 		return `<p id="external-kitsu-url-error" class="field-help" style="color:var(--danger)" role="alert">` + esc(externalURLSaveError) + `</p>`
-	}() + `</div><div class="button-row connections-actions"><button id="save-external-kitsu-url" type="submit" class="btn"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
+	}() + `</div></form>`
 	expertOpen := ""
 	if apiBaseURL != "" {
 		expertOpen = " open"

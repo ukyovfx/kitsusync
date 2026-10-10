@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"app/src/api/kitsu"
 	"app/src/model"
@@ -30,9 +31,23 @@ type createdRoutingDiscordResource struct {
 	WebhookID string
 }
 
+type routingWebhookIdentity struct {
+	ID        string `json:"id"`
+	Type      int    `json:"type"`
+	GuildID   string `json:"guild_id"`
+	ChannelID string `json:"channel_id"`
+}
+
+type routingWebhookRepair struct {
+	TaskTypeID  string
+	ChannelID   string
+	ChannelName string
+}
+
 var currentRoutingCreateChannel = CreateTextChannel
 var currentRoutingCreateWebhook = CreateWebhook
 var currentRoutingDeleteWebhook = DeleteWebhook
+var currentRoutingInspectWebhook = inspectRoutingWebhook
 
 func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, lang string, db *gorm.DB, botTokens ...string) bool {
 	if r.Method != http.MethodPost || r.URL.Path != "/bot/admin/projects" || r.URL.Query().Get("apply_notifications") != "1" {
@@ -98,7 +113,8 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		http.Error(w, `{"error":"invalid_routing"}`, http.StatusBadRequest)
 		return true
 	}
-	if err := validateCurrentRoutingDestinations(*project, existingRoutes, db); err != nil {
+	repairs, err := validateCurrentRoutingDestinations(*project, existingRoutes, db)
+	if err != nil {
 		http.Error(w, `{"error":"destination_not_owned"}`, http.StatusBadRequest)
 		return true
 	}
@@ -136,16 +152,49 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 			return true
 		}
 	}
-	createdResources := make([]createdRoutingDiscordResource, 0, len(newWebhooks))
+	channelWebhooks := append([]*model.ProjectWebhook(nil), newWebhooks...)
+	createdResources := make([]createdRoutingDiscordResource, 0, len(newWebhooks)+len(repairs))
 	cleanupCreated := func() error { return cleanupCreatedRoutingResources(createdResources, discordToken) }
-	if len(newWebhooks) > 0 {
+	if len(repairs) > 0 {
+		status := currentRoutingDiscordCheck(discordToken, project.DiscordGuildID)
+		if !routingDiscordStatusReady(status) || !status.Permissions.ManageWebhooks {
+			http.Error(w, `{"error":"webhook_repair_preflight_failed"}`, http.StatusBadRequest)
+			return true
+		}
+		for _, repair := range repairs {
+			webhookURL, createErr := currentRoutingCreateWebhook(repair.ChannelID, repair.ChannelName, discordToken)
+			if createErr != nil {
+				writeRoutingWebhookCreateFailure(w, "webhook_repair_failed", cleanupCreated())
+				return true
+			}
+			webhookID, parseErr := discordWebhookID(webhookURL)
+			if parseErr != nil {
+				writeRoutingWebhookCreateFailure(w, "webhook_response_invalid", cleanupCreated())
+				return true
+			}
+			createdResources = append(createdResources, createdRoutingDiscordResource{WebhookID: webhookID})
+			identity, missing, inspectErr := currentRoutingInspectWebhook(webhookURL)
+			if inspectErr != nil || missing || !routingWebhookMatches(identity, webhookID, project.DiscordGuildID, repair.ChannelID) {
+				writeRoutingCreateFailure(w, "webhook_verification_failed", cleanupCreated())
+				return true
+			}
+			newWebhooks = append(newWebhooks, &model.ProjectWebhook{KitsuProjectID: productionID, ChannelName: repair.ChannelName, TaskType: repair.TaskTypeID, WebhookURL: webhookURL, DiscordChannelID: repair.ChannelID})
+			for i := range routes {
+				if routes[i].TaskTypeID == repair.TaskTypeID {
+					routes[i].DestinationWebhookID = 0
+					break
+				}
+			}
+		}
+	}
+	if len(channelWebhooks) > 0 {
 		guild, category := strings.TrimSpace(project.DiscordGuildID), strings.TrimSpace(project.DiscordCategoryID)
 		status := currentRoutingDiscordCheck(discordToken, guild)
 		if !routingDiscordStatusReady(status) || !status.Permissions.ManageWebhooks {
 			http.Error(w, `{"error":"discord_preflight_failed"}`, http.StatusBadRequest)
 			return true
 		}
-		for _, webhook := range newWebhooks {
+		for _, webhook := range channelWebhooks {
 			channelID, createErr := currentRoutingCreateChannel(guild, category, webhook.ChannelName, discordToken)
 			if createErr != nil {
 				cleanupErr := cleanupCreated()
@@ -179,15 +228,20 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 			}
 			webhookURL, createErr := currentRoutingCreateWebhook(resource.ChannelID, webhook.ChannelName, discordToken)
 			if createErr != nil {
-				writeRoutingCreateFailure(w, "webhook_create_failed", cleanupCreated())
+				writeRoutingWebhookCreateFailure(w, "webhook_create_failed", cleanupCreated())
 				return true
 			}
 			webhookID, parseErr := discordWebhookID(webhookURL)
 			if parseErr != nil {
-				writeRoutingCreateFailure(w, "webhook_response_invalid", cleanupCreated())
+				writeRoutingWebhookCreateFailure(w, "webhook_response_invalid", cleanupCreated())
 				return true
 			}
 			createdResources[len(createdResources)-1].WebhookID = webhookID
+			identity, missing, inspectErr := currentRoutingInspectWebhook(webhookURL)
+			if inspectErr != nil || missing || !routingWebhookMatches(identity, webhookID, guild, resource.ChannelID) {
+				writeRoutingCreateFailure(w, "webhook_verification_failed", cleanupCreated())
+				return true
+			}
 			webhook.DiscordChannelID = resource.ChannelID
 			webhook.WebhookURL = webhookURL
 		}
@@ -372,37 +426,85 @@ func validateProductionReviewerDeltas(db *gorm.DB, project model.Project, change
 	return nil
 }
 
-func validateCurrentRoutingDestinations(project model.Project, routes []model.ProductionNotificationRoute, db *gorm.DB) error {
+func validateCurrentRoutingDestinations(project model.Project, routes []model.ProductionNotificationRoute, db *gorm.DB) ([]routingWebhookRepair, error) {
 	if len(routes) == 0 {
-		return nil
+		return nil, nil
 	}
 	guild, category, token := strings.TrimSpace(project.DiscordGuildID), strings.TrimSpace(project.DiscordCategoryID), storedRuntimeDiscordBotToken(db)
 	status := currentRoutingDiscordCheck(token, guild)
 	if !routingDiscordStatusReady(status) {
-		return errors.New("Discord ownership preflight failed")
+		return nil, errors.New("Discord ownership preflight failed")
 	}
 	channels, err := currentRoutingListChannels(guild, token)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	byID := make(map[string]DiscordGuildChannel, len(channels))
 	for _, channel := range channels {
 		byID[channel.ID] = channel
 	}
 	seen := map[string]bool{}
+	repairs := make([]routingWebhookRepair, 0)
 	for _, route := range routes {
 		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
 		if webhook == nil || webhook.KitsuProjectID != project.KitsuProjectID {
-			return errors.New("routing destination is not owned by this Production")
+			return nil, errors.New("routing destination is not owned by this Production")
 		}
 		id := strings.TrimSpace(webhook.DiscordChannelID)
 		channel, ok := byID[id]
 		if !ok || channel.Type != 0 || strings.TrimSpace(channel.ParentID) != category || seen[id] {
-			return errors.New("routing destination is not a unique verified child of the managed category")
+			return nil, errors.New("routing destination is not a unique verified child of the managed category")
 		}
 		seen[id] = true
+		webhookID, parseErr := discordWebhookID(webhook.WebhookURL)
+		if parseErr != nil {
+			repairs = append(repairs, routingWebhookRepair{TaskTypeID: route.TaskTypeID, ChannelID: id, ChannelName: channel.Name})
+			continue
+		}
+		identity, missing, inspectErr := currentRoutingInspectWebhook(webhook.WebhookURL)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if missing {
+			repairs = append(repairs, routingWebhookRepair{TaskTypeID: route.TaskTypeID, ChannelID: id, ChannelName: channel.Name})
+			continue
+		}
+		if !routingWebhookMatches(identity, webhookID, guild, id) {
+			return nil, errors.New("managed webhook does not belong to the selected Discord destination")
+		}
 	}
-	return nil
+	return repairs, nil
+}
+
+func routingWebhookMatches(identity routingWebhookIdentity, id, guild, channel string) bool {
+	return identity.Type == 1 && strings.TrimSpace(identity.ID) == strings.TrimSpace(id) && strings.TrimSpace(identity.GuildID) == strings.TrimSpace(guild) && strings.TrimSpace(identity.ChannelID) == strings.TrimSpace(channel)
+}
+
+func inspectRoutingWebhook(raw string) (routingWebhookIdentity, bool, error) {
+	var identity routingWebhookIdentity
+	if _, err := discordWebhookID(raw); err != nil {
+		return identity, true, nil
+	}
+	request, err := http.NewRequest(http.MethodGet, strings.TrimSpace(raw), nil)
+	if err != nil {
+		return identity, false, errors.New("managed webhook read could not be prepared")
+	}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
+	if err != nil {
+		return identity, false, errors.New("managed webhook could not be reached")
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnauthorized {
+		return identity, true, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return identity, false, errors.New("managed webhook read failed")
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<10)).Decode(&identity); err != nil {
+		return routingWebhookIdentity{}, false, errors.New("managed webhook response was invalid")
+	}
+	return identity, false, nil
 }
 
 func validateNewRoutingChannelNames(project model.Project, names map[string]string, token string) error {
@@ -434,7 +536,7 @@ func validateNewRoutingChannelNames(project model.Project, names map[string]stri
 
 func discordWebhookID(raw string) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "https" || parsed.Hostname() != "discord.com" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "discord.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("Discord webhook response was not a trusted URL")
 	}
 	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
@@ -487,6 +589,21 @@ func writeRoutingChannelCreateFailure(w http.ResponseWriter, cleanupErr error) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error":            "channel_create_failed",
 		"channel_creation": "outcome_unknown",
+		"resource_cleanup": cleanup,
+	})
+}
+
+func writeRoutingWebhookCreateFailure(w http.ResponseWriter, reason string, cleanupErr error) {
+	status := http.StatusBadGateway
+	cleanup := "known_resources_complete"
+	if cleanupErr != nil {
+		status = http.StatusInternalServerError
+		cleanup = "known_resources_incomplete"
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":            reason,
+		"webhook_creation": "outcome_unknown",
 		"resource_cleanup": cleanup,
 	})
 }

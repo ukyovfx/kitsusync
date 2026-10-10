@@ -952,12 +952,12 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			userLinkingAction := ""
 			if person.Active && !person.Archived {
 				linkButton = `<button type="button" class="btn-ghost" data-open-team-link data-person-id="` + esc(person.ID) + `" data-person-name="` + esc(kitsuPersonDisplayName(person)) + `" data-person-email="` + esc(person.Email) + `">` + esc(userText("Discordをリンク", "Link Discord")) + `</button>`
-				userLinkingAction = `<a class="production-team-user-link" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(userText("User Linkingを開く", "Open User Linking")) + `</a>`
+				userLinkingAction = `<a class="production-team-user-link" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(userText("ユーザー紐づけ", "User Linking")) + `</a>`
 			}
 			discordCell := `<span class="field-help">—</span>`
 			statusCell := `<span class="status-pill warning" role="status">` + esc(userText("未リンク", "Not linked")) + `</span>`
 			if guildReadOK {
-				statusCell += linkButton + userLinkingAction
+				statusCell += userLinkingAction + linkButton
 			} else {
 				discordCell += `<span class="field-help">` + esc(userText("Discord所属を確認できません", "Guild membership could not be verified")) + `</span>`
 				statusCell += userLinkingAction
@@ -967,7 +967,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 					discordCell = `<span class="field-help">` + esc(userText("Discord所属を再確認", "Discord membership needs review")) + `</span>`
 					statusCell = `<span class="status-pill warning" role="status">` + esc(userText("再確認", "Needs review")) + `</span>`
 					if guildReadOK {
-						statusCell += linkButton + userLinkingAction
+						statusCell += userLinkingAction + linkButton
 					} else {
 						statusCell += userLinkingAction
 					}

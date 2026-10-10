@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -118,10 +119,11 @@ func TestProductionNotificationApplyCreatesRequestedChannelOnlyOnApply(t *testin
 	}
 	revision := model.ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
 	oldTaskReader, oldCheck, oldList := reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels
-	oldCreateChannel, oldCreateWebhook, oldDeleteWebhook, oldDeleteChannel, oldSetPositions := currentRoutingCreateChannel, currentRoutingCreateWebhook, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions
+	oldCreateChannel, oldCreateWebhook, oldDeleteWebhook, oldDeleteChannel, oldSetPositions, oldInspect := currentRoutingCreateChannel, currentRoutingCreateWebhook, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions, currentRoutingInspectWebhook
 	defer func() {
 		reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels = oldTaskReader, oldCheck, oldList
 		currentRoutingCreateChannel, currentRoutingCreateWebhook, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions = oldCreateChannel, oldCreateWebhook, oldDeleteWebhook, oldDeleteChannel, oldSetPositions
+		currentRoutingInspectWebhook = oldInspect
 	}()
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}
@@ -148,6 +150,9 @@ func TestProductionNotificationApplyCreatesRequestedChannelOnlyOnApply(t *testin
 		}
 		return "https://discord.com/api/webhooks/123456789012345678/synthetic-token", nil
 	}
+	currentRoutingInspectWebhook = func(string) (routingWebhookIdentity, bool, error) {
+		return routingWebhookIdentity{ID: "123456789012345678", Type: 1, GuildID: "guild-1", ChannelID: "channel-new"}, false, nil
+	}
 	currentRoutingSetPositions = func(_ string, positions []DiscordChannelPosition, _ string) error {
 		reordered = len(positions) == 1 && positions[0].ID == "channel-new"
 		return nil
@@ -168,6 +173,158 @@ func TestProductionNotificationApplyCreatesRequestedChannelOnlyOnApply(t *testin
 	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
 	if len(routes) != 1 || len(webhooks) != 1 || routes[0].DestinationWebhookID != webhooks[0].ID || webhooks[0].DiscordChannelID != "channel-new" {
 		t.Fatalf("new managed channel and route were not persisted together: routes=%#v webhooks=%#v", routes, webhooks)
+	}
+}
+
+func TestProductionNotificationApplyPreservesOrRepairsManagedWebhook(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		reorder         bool
+		missingWebhook  bool
+		wrongChannel    bool
+		createFailure   bool
+		verifyFailure   bool
+		staleRevision   bool
+		wantStatus      int
+		wantNewWebhooks int
+	}{
+		{name: "reorder preserves destinations", reorder: true, wantStatus: http.StatusOK},
+		{name: "destination switch reuses verified webhook", wantStatus: http.StatusOK},
+		{name: "missing destination webhook is repaired on Apply", missingWebhook: true, wantStatus: http.StatusOK, wantNewWebhooks: 1},
+		{name: "moved webhook is rejected without repair", wrongChannel: true, wantStatus: http.StatusBadRequest},
+		{name: "webhook repair failure leaves routing unchanged", missingWebhook: true, createFailure: true, wantStatus: http.StatusBadGateway},
+		{name: "unverified repair removes only its new webhook", missingWebhook: true, verifyFailure: true, wantStatus: http.StatusBadGateway},
+		{name: "stale revision never creates repair webhook", missingWebhook: true, staleRevision: true, wantStatus: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := newIAViewDB(t)
+			project := model.Project{KitsuProjectID: "apply-webhook-identity", Name: "Webhook Identity", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
+			if err := db.Create(&project).Error; err != nil {
+				t.Fatal(err)
+			}
+			model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-token")
+			urls := []string{"https://discord.com/api/webhooks/111111111111111111/token-a", "https://discord.com/api/webhooks/222222222222222222/token-b", "https://discord.com/api/webhooks/333333333333333333/token-c"}
+			for i, name := range []string{"first", "second", "third"} {
+				if err := model.CreateProjectWebhook(db, project.KitsuProjectID, name, "", urls[i], "channel-"+name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+			original := []model.ProductionNotificationRoute{{TaskTypeID: "task-a", DestinationWebhookID: webhooks[0].ID}, {TaskTypeID: "task-b", DestinationWebhookID: webhooks[1].ID}}
+			if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, original); err != nil {
+				t.Fatal(err)
+			}
+			revision := model.ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
+			oldTasks, oldCheck, oldList, oldInspect := reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingInspectWebhook
+			oldCreate, oldCreateChannel, oldDelete, oldDeleteChannel, oldPositions := currentRoutingCreateWebhook, currentRoutingCreateChannel, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions
+			t.Cleanup(func() {
+				reviewerTaskTypesForProduction, currentRoutingDiscordCheck, currentRoutingListChannels, currentRoutingInspectWebhook = oldTasks, oldCheck, oldList, oldInspect
+				currentRoutingCreateWebhook, currentRoutingCreateChannel, currentRoutingDeleteWebhook, currentRoutingDeleteChannel, currentRoutingSetPositions = oldCreate, oldCreateChannel, oldDelete, oldDeleteChannel, oldPositions
+			})
+			reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
+				return []kitsu.TaskType{{ID: "task-a", Name: "First"}, {ID: "task-b", Name: "Second"}}
+			}
+			currentRoutingDiscordCheck = func(string, string) DiscordStatusInfo {
+				return DiscordStatusInfo{BotValid: true, GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true, ManageWebhooks: true}}
+			}
+			currentRoutingListChannels = func(string, string) ([]DiscordGuildChannel, error) {
+				return []DiscordGuildChannel{{ID: "channel-first", Name: "first", Type: 0, ParentID: "category-1", Position: 1}, {ID: "channel-second", Name: "second", Type: 0, ParentID: "category-1", Position: 2}, {ID: "channel-third", Name: "third", Type: 0, ParentID: "category-1", Position: 3}}, nil
+			}
+			currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+				if raw == urls[2] && tc.missingWebhook {
+					return routingWebhookIdentity{}, true, nil
+				}
+				if raw == urls[2] && tc.wrongChannel {
+					return routingWebhookIdentity{ID: "333333333333333333", Type: 1, GuildID: "guild-1", ChannelID: "unrelated-channel"}, false, nil
+				}
+				if raw == "https://discord.com/api/webhooks/444444444444444444/repaired" && tc.verifyFailure {
+					return routingWebhookIdentity{ID: "444444444444444444", Type: 1, GuildID: "guild-1", ChannelID: "unrelated-channel"}, false, nil
+				}
+				for i, known := range append(urls, "https://discord.com/api/webhooks/444444444444444444/repaired") {
+					if raw == known {
+						channels := []string{"channel-first", "channel-second", "channel-third", "channel-third"}
+						id, _ := discordWebhookID(raw)
+						return routingWebhookIdentity{ID: id, Type: 1, GuildID: "guild-1", ChannelID: channels[i]}, false, nil
+					}
+				}
+				return routingWebhookIdentity{}, false, errors.New("unexpected webhook read")
+			}
+			createCount, reorderCount, deleteCount := 0, 0, 0
+			currentRoutingCreateWebhook = func(channel, name, _ string) (string, error) {
+				createCount++
+				if channel != "channel-third" || name != "third" || !tc.missingWebhook {
+					t.Fatalf("unexpected webhook creation for %q/%q", channel, name)
+				}
+				if tc.createFailure {
+					return "", errors.New("synthetic creation failure")
+				}
+				return "https://discord.com/api/webhooks/444444444444444444/repaired", nil
+			}
+			currentRoutingCreateChannel = func(string, string, string, string) (string, error) {
+				t.Fatal("existing-channel Apply must not create a channel")
+				return "", nil
+			}
+			currentRoutingDeleteWebhook = func(id, _ string) error {
+				if id != "444444444444444444" {
+					t.Fatalf("preexisting webhook %s must never be deleted", id)
+				}
+				deleteCount++
+				return nil
+			}
+			currentRoutingDeleteChannel = func(string, string) error { t.Fatal("preexisting channel must never be deleted"); return nil }
+			currentRoutingSetPositions = func(string, []DiscordChannelPosition, string) error { reorderCount++; return nil }
+			firstID, secondID := webhooks[2].ID, webhooks[1].ID
+			if tc.reorder {
+				firstID, secondID = webhooks[1].ID, webhooks[0].ID
+			}
+			requested := `{"project_id":"apply-webhook-identity","expected_revision":"` + revision + `","routes":[{"task_type_id":"task-a","destination_webhook_id":` + strconv.FormatUint(uint64(firstID), 10) + `},{"task_type_id":"task-b","destination_webhook_id":` + strconv.FormatUint(uint64(secondID), 10) + `}],"reviewer_changes":[]}`
+			if tc.reorder {
+				requested = `{"project_id":"apply-webhook-identity","expected_revision":"` + revision + `","routes":[{"task_type_id":"task-b","destination_webhook_id":` + strconv.FormatUint(uint64(firstID), 10) + `},{"task_type_id":"task-a","destination_webhook_id":` + strconv.FormatUint(uint64(secondID), 10) + `}],"reviewer_changes":[]}`
+			}
+			if tc.staleRevision {
+				requested = strings.Replace(requested, revision, "stale-revision", 1)
+			}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?apply_notifications=1", strings.NewReader(requested))
+			if !handleProductionNotificationApply(response, request, "en", db) || response.Code != tc.wantStatus {
+				t.Fatalf("Apply status=%d want=%d body=%s", response.Code, tc.wantStatus, response.Body.String())
+			}
+			if tc.createFailure && !strings.Contains(response.Body.String(), `"webhook_creation":"outcome_unknown"`) {
+				t.Fatalf("webhook creation failure concealed an unknown external outcome: %s", response.Body.String())
+			}
+			expectedAttempts := tc.wantNewWebhooks
+			if tc.createFailure || tc.verifyFailure {
+				expectedAttempts = 1
+			}
+			expectedDeletes := 0
+			if tc.verifyFailure {
+				expectedDeletes = 1
+			}
+			if createCount != expectedAttempts || len(model.ListProjectWebhooks(db, project.KitsuProjectID)) != len(webhooks)+tc.wantNewWebhooks || deleteCount != expectedDeletes {
+				t.Fatalf("unexpected resource counts: created=%d persisted=%d deleted=%d", createCount, len(model.ListProjectWebhooks(db, project.KitsuProjectID)), deleteCount)
+			}
+			got := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
+			if tc.createFailure || tc.verifyFailure || tc.staleRevision || tc.wrongChannel {
+				if len(got) != 2 || got[0].DestinationWebhookID != webhooks[0].ID || got[1].DestinationWebhookID != webhooks[1].ID {
+					t.Fatalf("failed Apply changed routes: %#v", got)
+				}
+				return
+			}
+			if len(got) != 2 || reorderCount != 1 {
+				t.Fatalf("saved routing/order incomplete: routes=%#v reorder=%d", got, reorderCount)
+			}
+			if tc.reorder {
+				if got[0].TaskTypeID != "task-b" || got[0].DestinationWebhookID != webhooks[1].ID || got[1].TaskTypeID != "task-a" || got[1].DestinationWebhookID != webhooks[0].ID {
+					t.Fatalf("reorder redirected a route: %#v", got)
+				}
+			} else if tc.missingWebhook {
+				if got[0].DestinationWebhookID == webhooks[2].ID || got[0].DestinationWebhookID == 0 {
+					t.Fatalf("missing webhook was not repaired: %#v", got)
+				}
+			} else if got[0].DestinationWebhookID != webhooks[2].ID {
+				t.Fatalf("destination switch lost selected webhook: %#v", got)
+			}
+		})
 	}
 }
 
