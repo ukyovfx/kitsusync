@@ -277,7 +277,7 @@ func TestCurrentRoutingEditorStartsWithRowsAndWFAHiddenBelowList(t *testing.T) {
 	if apply, formEnd := strings.Index(body, `data-apply-submit`), strings.Index(body, `</form>`); apply < 0 || formEnd < apply {
 		t.Fatal("Apply must remain inside the routing form after the bottom WFA panel")
 	}
-	panelStart := strings.Index(body, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`)
+	panelStart := strings.Index(body, `<section id="production-wfa-detail-panel" class="production-wfa-edit-panel" data-wfa-detail-panel`)
 	if panelStart < 0 {
 		t.Fatal("the hidden WFA detail panel must be complete")
 	}
@@ -326,7 +326,7 @@ func TestCurrentRoutingEditorKeepsWFAInBottomDetailAndRoutingInRows(t *testing.T
 		t.Fatal("WFA detail must not be inserted between Task Type rows")
 	}
 	listEnd := strings.Index(body, `</tbody></table></div>`)
-	panelStart := strings.Index(body, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`)
+	panelStart := strings.Index(body, `<section id="production-wfa-detail-panel" class="production-wfa-edit-panel" data-wfa-detail-panel`)
 	if listEnd < 0 || panelStart < listEnd {
 		t.Fatal("the single WFA detail panel must be placed after the complete Task Type list")
 	}

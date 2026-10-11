@@ -716,8 +716,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const selectedRoute = editForm.locator('[data-routing-row].selected');
         const panel = editForm.locator('[data-wfa-detail-panel]');
-        if (await selectedRoute.count() !== 0 || await panel.isVisible() || await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count()) {
-          throw new Error(`Notifications edit must open with only routing rows and no selected WFA detail in ${locale.lang}`);
+        const initialEditState = {
+          selectedRoutes: await selectedRoute.count(),
+          panelVisible: await panel.isVisible(),
+          legacyCardWrappers: await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count(),
+          panelHidden: await panel.getAttribute('hidden'),
+          panelParentHidden: await panel.evaluate(node => node.parentElement?.hidden ?? false),
+          routeClasses: await editForm.locator('[data-routing-row]').evaluateAll(rows => rows.map(row => row.className)),
+        };
+        if (initialEditState.selectedRoutes !== 0 || initialEditState.panelVisible || initialEditState.legacyCardWrappers !== 0) {
+          throw new Error(`Notifications edit must open with only routing rows and no selected WFA detail in ${locale.lang}: ${JSON.stringify(initialEditState)}`);
         }
         const editorStructure = await editForm.evaluate(form => ({
           routeCount: form.querySelectorAll('[data-routing-row]').length,
