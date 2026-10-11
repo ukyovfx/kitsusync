@@ -2,7 +2,7 @@
 
 Status: canonical design direction for the next UI/UX refresh. Documentation only; it does not change the current renderer, routes, product behavior, or notification semantics.
 
-Evidence baseline: `docs/UI-UX-DISTRIBUTED-AUDIT.md`, `docs/UI-UX-RUNTIME-EVIDENCE.md`, `docs/audits/`, `docs/design-work/`, and the current admin theme in `src/setup/ui.go`. Runtime facts and future rules are intentionally separated.
+Historical evidence baseline: this document originally referenced `docs/UI-UX-DISTRIBUTED-AUDIT.md`, `docs/UI-UX-RUNTIME-EVIDENCE.md`, `docs/audits/`, and `docs/design-work/`; those files are not present in the archived repository. The current admin theme was in `src/setup/ui.go`. Runtime facts and future rules were intentionally separated.
 
 ## 1. Purpose
 
@@ -366,4 +366,4 @@ Before accepting an implementation, verify:
 
 This document is ready for a later implementation plan, not implementation itself. The next implementation phase must first convert the candidate token layers into an audited CSS authority, then implement shell/navigation, typography delivery, semantic surfaces, status/forms/dialogs, screen-specific density, and finally runtime accessibility/visual QA. Each phase must preserve the current route and behavior boundary unless separately authorized.
 
-Supporting specialist reports: `docs/design-work/design-agent0-current-tokens.md` through `design-agent9-content.md`.
+Supporting specialist reports were formerly under `docs/design-work/` and are not retained in this repository.

@@ -106,7 +106,7 @@ All notable changes to this project should be recorded here.
 
 ### Added
 
-- Release notes for the setup/admin redesign in `RELEASE_NOTES_v0.4.0.md`
+- Historical release detail: [`docs/releases/RELEASE_NOTES_v0.4.0.md`](docs/releases/RELEASE_NOTES_v0.4.0.md)
 - Deterministic JP/EN Discord notification rendering with safe mention and audit behavior
 - Current IA routing editor regression coverage and Discord permission/readiness diagnostics
 
@@ -125,7 +125,7 @@ All notable changes to this project should be recorded here.
 - GitHub issue templates for bug reports, feature requests, and security redirect guidance
 - Pull request template, CODEOWNERS, label guidance, and release checklist
 - First public-ready release notes for the v0.1.0 release
-- Screenshot guidance in `screenshots/README.md`
+- Historical screenshot guidance is preserved in `docs/archive/screenshots/README.md`.
 
 ### Changed
 

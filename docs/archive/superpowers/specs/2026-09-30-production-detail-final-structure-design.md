@@ -9,7 +9,7 @@ Adopt the approved Gemini Production Detail prototype's information architecture
 - Accepted implementation base: `f57409c2858afc666146ab5758965c7258154c5a`.
 - The final prototype at `C:\AI-Workspace\artifacts\kitsusync-ui-reference\production-detail-final\kitsusync_production_detail_prototype.html` was verified to exist before implementation. It is authoritative only for the four-tab structure, section order, table/list shape, interaction flow, and visible/hidden priority; it is not a styling authority.
 - `docs/CURRENT-IA-UI-SPEC.md` remains authoritative for KitsuSync status meaning, behavior, routes, and safety semantics. This feature updates its Production Detail presentation/interaction clauses only when implementation is accepted.
-- `docs/superpowers/specs/2026-09-29-kitsu-ui-baseline-design.md` and the existing accepted KitsuSync UI remain authoritative for all visual styling.
+- `docs/archive/superpowers/specs/2026-09-29-kitsu-ui-baseline-design.md` and the existing accepted KitsuSync UI remain authoritative for all visual styling.
 - Scope is the connected Production Detail screen and the minimal handler/model glue needed for its unified edit and Team linking interactions. No whole-app redesign, unrelated setup/auth change, deployment/release change, or Production operation is included.
 
 ## Visual inheritance
