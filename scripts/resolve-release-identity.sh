@@ -17,6 +17,7 @@ artifact_kind=nonrelease
 source_commit="${checkout_sha}"
 merge_test_commit=""
 release_commit=""
+release_tag=""
 
 case "${event}" in
   pull_request)
@@ -31,6 +32,7 @@ case "${event}" in
         [[ "${ref#refs/tags/}" == "v${version}" ]] || { printf 'release tag does not match VERSION\n' >&2; exit 1; }
         artifact_kind=release
         release_commit="${source_commit}"
+        release_tag="${ref#refs/tags/}"
         ;;
       refs/heads/master) ;;
       *) printf 'unsupported push ref: %s\n' "${ref}" >&2; exit 1 ;;
@@ -49,4 +51,5 @@ esac
   printf 'source_id=%s\n' "${source_commit}"
   printf 'merge_test_commit=%s\n' "${merge_test_commit}"
   printf 'release_commit=%s\n' "${release_commit}"
+  printf 'release_tag=%s\n' "${release_tag}"
 } >> "${output}"

@@ -6,7 +6,7 @@ All notable changes to this project should be recorded here.
 
 - No unreleased changes yet.
 
-## v0.5.0
+## v0.5.1
 
 ### Added
 
@@ -19,10 +19,16 @@ All notable changes to this project should be recorded here.
 
 - User Linking displays verified Discord identity while keeping immutable Discord User IDs as the mapping identity.
 - Staging candidate deployment and release artifacts use exact-source provenance and isolated deployment verification.
+- Tag CI passes the validated immutable release tag into source-image provenance verification, matching the deployment-bundle provenance gate.
 
 ### Validation note
 
 - Real Discord message and mention delivery was not exercised as part of this release acceptance. No live Discord E2E is claimed.
+
+## v0.5.0 (tagged, not published)
+
+- The immutable `v0.5.0` tag points to `78c6fe86b002ec320ad03ea3b56fd7d1e38b6a2d`, but no GitHub Release or deployment bundle was published for it.
+- Tag CI failed because the source-image provenance step did not receive `RELEASE_TAG`; the accepted v0.5.0 product changes are carried forward in v0.5.1.
 
 ## v0.4.4
 
