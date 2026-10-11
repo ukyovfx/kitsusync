@@ -126,7 +126,13 @@ class CollectorTests(unittest.TestCase):
     def test_complete_backup_passes_read_only_validation(self):
         backup = self._complete_backup()
         before = {path.name: path.read_bytes() for path in backup.iterdir() if path.is_file()}
-        self.assertTrue(collector.validate_backup_directory(backup, expected_uid=TEST_UID))
+        inventory = []
+        for path in (backup, *backup.iterdir()):
+            info = path.lstat()
+            inventory.append((path.name, info.st_uid, info.st_gid,
+                              oct(info.st_mode & 0o777), info.st_size))
+        self.assertTrue(collector.validate_backup_directory(backup, expected_uid=TEST_UID),
+                        repr(inventory))
         after = {path.name: path.read_bytes() for path in backup.iterdir() if path.is_file()}
         self.assertEqual(before, after)
 
