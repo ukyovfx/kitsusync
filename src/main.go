@@ -386,6 +386,16 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			commentChanged := deliveredCommentID != data[i].LatestComment.Comment.ID || deliveredCommentUpdatedAt != data[i].LatestComment.Comment.UpdatedAt
 
 			if statusChanged || timestampChanged || commentChanged {
+				observed := model.NotificationDeliveryIntent{
+					TaskID: data[i].Task.ID, ProductionID: data[i].Project.ID, TaskTypeID: data[i].TaskType.ID,
+					TaskStatus: currentStatus, TaskUpdatedAt: data[i].Task.Task.UpdatedAt,
+					CommentID: data[i].LatestComment.Comment.ID, CommentUpdatedAt: data[i].LatestComment.Comment.UpdatedAt,
+					IsAssignNotification: strings.EqualFold(currentStatus, "none"),
+				}
+				if _, supersedeErr := model.SupersedeObsoleteKnownRejectedNotificationDeliveries(db, observed); supersedeErr != nil {
+					slog.Error("Older known-rejected notification could not be reconciled against the current Kitsu event", "error_class", "delivery_supersession_failed")
+					continue
+				}
 				// Mark notifications that only changed comment content. Persisting
 				// the observation is deferred until routing and delivery are known.
 				data[i].IsCommentOnly = commentChanged && !statusChanged && !timestampChanged
@@ -701,9 +711,9 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	defer pollMu.Unlock()
 	started := time.Now()
 	if !conf.SilentUpdateDB {
-		if sent, failed := discord.RetryPendingNotificationDeliveries(db, 50); sent > 0 || failed > 0 {
-			slog.Info("Notification outbox retry result", "sentCount", sent, "failedCount", failed)
-		}
+		// Retryable notification intents are retried only after this poll fetches
+		// current Kitsu data and FilterTasks freshly renders their recipients and
+		// resolves the current authorized destination.
 		discord.RetryPriorMessageCleanup(db, 50)
 	}
 

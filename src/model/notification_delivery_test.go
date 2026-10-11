@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -49,6 +50,15 @@ func notificationIntent() NotificationDeliveryIntent {
 		TaskUpdatedAt: "2026-10-10T12:00:00Z", CommentID: "comment-1", CommentUpdatedAt: "2026-10-10T12:00:00Z",
 		Payload:      []byte(`{"content":"safe synthetic message","allowed_mentions":{"parse":[]}}`),
 		WebhookRowID: 1, GuildID: "guild-1", ChannelID: "channel-1", DiscordWebhookID: "webhook-1",
+	}
+}
+
+func TestNotificationEventIdentityNormalizesKitsuStatusCase(t *testing.T) {
+	upper := notificationIntent()
+	lower := upper
+	lower.TaskStatus = strings.ToLower(lower.TaskStatus)
+	if NotificationEventIdentity(lower) != NotificationEventIdentity(upper) {
+		t.Fatal("event identity should use the same canonical status normalization as delivery rendering")
 	}
 }
 
@@ -104,6 +114,36 @@ func TestNotificationDeliveryIntentIsUniqueAndDestinationBound(t *testing.T) {
 	}
 	if !foundConflict {
 		t.Fatalf("identity conflict must be visible in safe delivery diagnostics: %+v", diagnostics)
+	}
+}
+
+func TestBundledSQLiteRuntimeIsAtLeast3534(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	var version string
+	if err := db.Raw("SELECT sqlite_version()").Scan(&version).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("bundled SQLite runtime: %s", version)
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		t.Fatalf("unexpected SQLite version format %q", version)
+	}
+	actual := [3]int{}
+	for i := range actual {
+		value, err := strconv.Atoi(parts[i])
+		if err != nil {
+			t.Fatalf("invalid SQLite version %q: %v", version, err)
+		}
+		actual[i] = value
+	}
+	minimum := [3]int{3, 53, 4}
+	for i := range actual {
+		if actual[i] > minimum[i] {
+			return
+		}
+		if actual[i] < minimum[i] {
+			t.Fatalf("bundled SQLite runtime %s is older than the maintained baseline 3.53.4", version)
+		}
 	}
 }
 
@@ -277,6 +317,229 @@ func TestIdentityConflictEvidenceFailureRollsBackWithoutChangingDeliveredEvent(t
 	var stored NotificationDeliveryEvent
 	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil || stored.Disposition != DeliveryDelivered || stored.DiscordMessageID != "message-original" || stored.DiscordThreadID != "thread-original" {
 		t.Fatalf("failed conflict recording changed delivered history: event=%+v err=%v", stored, err)
+	}
+}
+
+func TestKnownRejectedIntentRefreshIsConcurrentAndRestartSafe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "known-rejection.db")
+	db := notificationDeliveryFileDB(t, path)
+	notificationDeliveryFixture(t, db)
+	initial := notificationIntent()
+	event, err := PrepareNotificationDelivery(db, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, time.Now().UTC())
+	if err != nil || !started {
+		t.Fatalf("begin initial attempt: started=%v err=%v", started, err)
+	}
+	if err := SetNotificationDeliveryDisposition(db, *attempt, DeliveryRetryable, "rate_limited"); err != nil {
+		t.Fatal(err)
+	}
+	secondDB := notificationDeliveryFileDB(t, path)
+	if err := db.Create(&ProjectWebhook{ID: 2, KitsuProjectID: "production-1", DiscordChannelID: "channel-2", WebhookURL: "https://discord.com/api/webhooks/webhook-2/token"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&ProductionNotificationRoute{}).Where("production_id = ? AND task_type_id = ?", "production-1", "task-type-1").Updates(map[string]any{"destination_webhook_id": 2, "destination_channel_id": "channel-2"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	project := FindProjectByKitsuID(db, "production-1")
+	currentRevision, err := ProductionNotificationRevisionWithError(db, project.ID, project.KitsuProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := initial
+	fresh.Payload = []byte(`{"content":"fresh reviewer mention","allowed_mentions":{"users":["reviewer-current"]}}`)
+	fresh.ChannelID = "channel-2"
+	fresh.DiscordWebhookID = "webhook-2"
+	fresh.WebhookRowID = 2
+	fresh.NotificationRevision = currentRevision
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, conn := range []*gorm.DB{db, secondDB} {
+		wg.Add(1)
+		go func(conn *gorm.DB) {
+			defer wg.Done()
+			<-start
+			_, err := PrepareNotificationDelivery(conn, fresh)
+			results <- err
+		}(conn)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			t.Fatalf("same fresh known-rejected intent should converge under concurrent prepare: %v", err)
+		}
+	}
+	var stored NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Disposition != DeliveryPending || stored.FailureClass != "fresh_intent_after_known_rejection" || stored.PayloadJSON != string(fresh.Payload) || stored.DestinationChannelID != "channel-2" || stored.DestinationWebhookID != "webhook-2" || stored.NotificationRevision != currentRevision || stored.AttemptCount != 1 || stored.IdentityConflictCount != 1 {
+		t.Fatalf("fresh rejected intent did not converge while retaining durable history: %+v", stored)
+	}
+	if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		t.Fatal(err)
+	}
+	db = notificationDeliveryFileDB(t, path)
+	replayed, err := PrepareNotificationDelivery(db, fresh)
+	if err != nil || replayed.Disposition != DeliveryPending || replayed.PayloadSHA256 != stored.PayloadSHA256 {
+		t.Fatalf("fresh intent did not survive restart idempotently: row=%+v err=%v", replayed, err)
+	}
+}
+
+func TestKnownRejectedIntentRefreshRollsBackOnSQLiteWriteFailure(t *testing.T) {
+	db := notificationDeliveryFileDB(t, filepath.Join(t.TempDir(), "known-rejection-rollback.db"))
+	notificationDeliveryFixture(t, db)
+	initial := notificationIntent()
+	event, err := PrepareNotificationDelivery(db, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, time.Now().UTC())
+	if err != nil || !started {
+		t.Fatalf("begin initial attempt: started=%v err=%v", started, err)
+	}
+	if err := SetNotificationDeliveryDisposition(db, *attempt, DeliveryRetryable, "rate_limited"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TRIGGER reject_known_rejection_refresh BEFORE UPDATE OF payload_json ON notification_delivery_events BEGIN SELECT RAISE(ABORT, 'forced payload write failure'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	fresh := initial
+	fresh.Payload = []byte(`{"content":"newly rendered body","allowed_mentions":{"parse":[]}}`)
+	if _, err := PrepareNotificationDelivery(db, fresh); err == nil || errors.Is(err, ErrDeliveryIdentityConflict) {
+		t.Fatalf("failed refresh write must fail closed with its DB error, got %v", err)
+	}
+	var stored NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Disposition != DeliveryRetryable || stored.FailureClass != "rate_limited" || stored.PayloadJSON != string(initial.Payload) || stored.IdentityConflictCount != 0 {
+		t.Fatalf("failed refresh write partially changed the durable attempt: %+v", stored)
+	}
+}
+
+func TestKnownRejectedEventIsExplicitlySupersededByNewerKitsuObservation(t *testing.T) {
+	db := notificationDeliveryFileDB(t, filepath.Join(t.TempDir(), "known-rejection-superseded.db"))
+	notificationDeliveryFixture(t, db)
+	oldIntent := notificationIntent()
+	event, err := PrepareNotificationDelivery(db, oldIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, time.Now().UTC())
+	if err != nil || !started {
+		t.Fatalf("begin initial attempt: started=%v err=%v", started, err)
+	}
+	if err := SetNotificationDeliveryDisposition(db, *attempt, DeliveryRetryable, "rate_limited"); err != nil {
+		t.Fatal(err)
+	}
+
+	newer := oldIntent
+	newer.TaskStatus = "RETAKE"
+	newer.TaskUpdatedAt = "2026-10-10T13:00:00Z"
+	newer.CommentID = "comment-2"
+	newer.CommentUpdatedAt = "2026-10-10T13:00:00Z"
+	superseded, err := SupersedeObsoleteKnownRejectedNotificationDeliveries(db, newer)
+	if err != nil || superseded != 1 {
+		t.Fatalf("newer Kitsu observation should explicitly supersede one known-rejected event: count=%d err=%v", superseded, err)
+	}
+
+	var oldRow NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&oldRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	newEventID := NotificationEventIdentity(newer)
+	if oldRow.Disposition != DeliveryTerminalFailure || oldRow.FailureClass != "superseded_by_newer_kitsu_event" || oldRow.SupersededByEventID != newEventID || oldRow.PayloadJSON != string(oldIntent.Payload) {
+		t.Fatalf("old known rejection must remain explicit and auditable: %+v", oldRow)
+	}
+
+	newer.Payload = []byte(`{"content":"current Kitsu state","allowed_mentions":{"parse":[]}}`)
+	newEvent, err := PrepareNotificationDelivery(db, newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, started, err := BeginNotificationDelivery(db, newEvent.EventID, time.Now().UTC()); err != nil || !started {
+		t.Fatalf("current event should not be blocked by its explicitly superseded predecessor: started=%v err=%v", started, err)
+	}
+	if count, err := SupersedeObsoleteKnownRejectedNotificationDeliveries(db, newer); err != nil || count != 0 {
+		t.Fatalf("repeated observation should be idempotent: count=%d err=%v", count, err)
+	}
+}
+
+func TestKnownRejectedIntentRefreshesForRevisionOnlyChange(t *testing.T) {
+	db := notificationDeliveryFileDB(t, filepath.Join(t.TempDir(), "known-rejection-revision.db"))
+	notificationDeliveryFixture(t, db)
+	initial := notificationIntent()
+	project := FindProjectByKitsuID(db, initial.ProductionID)
+	revisionBefore, err := ProductionNotificationRevisionWithError(db, project.ID, initial.ProductionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial.NotificationRevision = revisionBefore
+	event, err := PrepareNotificationDelivery(db, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, time.Now().UTC())
+	if err != nil || !started {
+		t.Fatalf("begin initial attempt: started=%v err=%v", started, err)
+	}
+	if err := SetNotificationDeliveryDisposition(db, *attempt, DeliveryRetryable, "rate_limited"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Create(&ProjectReviewerTarget{ProjectID: project.ID, TaskTypeID: "unrelated-task-type", TargetKind: ReviewerTargetUser, DiscordID: "reviewer-current"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	revisionAfter, err := ProductionNotificationRevisionWithError(db, project.ID, initial.ProductionID)
+	if err != nil || revisionAfter == revisionBefore {
+		t.Fatalf("fixture did not change notification revision: before=%q after=%q err=%v", revisionBefore, revisionAfter, err)
+	}
+	fresh := initial
+	fresh.NotificationRevision = revisionAfter
+	refreshed, err := PrepareNotificationDelivery(db, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Disposition != DeliveryPending || refreshed.NotificationRevision != fresh.NotificationRevision || refreshed.PayloadSHA256 != event.PayloadSHA256 || refreshed.DestinationFingerprint != event.DestinationFingerprint {
+		t.Fatalf("known rejection should refresh revision without changing message or destination identity: %+v", refreshed)
+	}
+	if _, started, err := BeginNotificationDelivery(db, refreshed.EventID, time.Now().UTC()); err != nil || !started {
+		t.Fatalf("fresh revision should be dispatchable: started=%v err=%v", started, err)
+	}
+}
+
+func TestUnknownOutcomeIdentityConflictIsNeverRefreshed(t *testing.T) {
+	db := notificationDeliveryFileDB(t, filepath.Join(t.TempDir(), "unknown-conflict.db"))
+	notificationDeliveryFixture(t, db)
+	initial := notificationIntent()
+	event, err := PrepareNotificationDelivery(db, initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, time.Now().UTC())
+	if err != nil || !started {
+		t.Fatalf("begin initial attempt: started=%v err=%v", started, err)
+	}
+	if err := SetNotificationDeliveryDisposition(db, *attempt, DeliveryUnknown, "network_error"); err != nil {
+		t.Fatal(err)
+	}
+	fresh := initial
+	fresh.Payload = []byte(`{"content":"must not be resent","allowed_mentions":{"parse":[]}}`)
+	if _, err := PrepareNotificationDelivery(db, fresh); !errors.Is(err, ErrDeliveryIdentityConflict) {
+		t.Fatalf("unknown outcome must remain quarantined, got %v", err)
+	}
+	var stored NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Disposition != DeliveryUnknown || stored.FailureClass != "network_error" || stored.PayloadJSON != string(initial.Payload) {
+		t.Fatalf("fresh payload overwrote unknown-outcome evidence: %+v", stored)
 	}
 }
 

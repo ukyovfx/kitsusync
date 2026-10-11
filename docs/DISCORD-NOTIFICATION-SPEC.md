@@ -72,13 +72,30 @@ cleared with the body only after successful delivery and prior-message cleanup
 are complete. A repeated observation is still deduplicated by the retained
 event ID/hash and delivered disposition.
 
-A payload or destination identity collision is rejected. It increments only a
+A payload or destination identity collision against a delivered, unknown,
+in-flight, or otherwise non-retryable event is rejected. It increments only a
 separate conflict count/timestamp on the original event and appears in safe
-operational diagnostics as an aggregated `identity_conflict` count; this
-summary is prioritized without consuming one slot per historical event. It
-does not change the original disposition, payload/hash, destination, or Discord
-checkpoints. The conflicting request body is neither stored nor logged. A
+operational diagnostics as an aggregated `identity_conflict` count. The
+original disposition, payload/hash, destination, and Discord checkpoints remain
+unchanged. The conflicting request body is neither stored nor logged. A
 conflict against a redacted delivered event is never reconstructed or resent.
+
+Retryable delivery intents are never dispatched from stored payloads before a
+fresh Kitsu poll. The current task is re-rendered and its current recipients,
+notification revision, and route destination are resolved first. If the prior
+attempt ended in an explicit Discord HTTP 429 (known rejection), that same
+event row may be updated transactionally to the fresh intent before dispatch;
+the attempt counter and conflict evidence remain. This includes a revision-only
+change and can update recipients or destination without sending the obsolete
+request. A delivery claim compares the previously verified event snapshot with
+the current durable payload, destination, and revision before POST, preventing
+a concurrent refresh from sending new content to an old webhook URL. If Kitsu
+has advanced to a newer event, an older known-429 event is marked terminal as
+`superseded_by_newer_kitsu_event` and linked to the deterministic successor
+event ID; its payload and attempt evidence remain for diagnosis, and it no
+longer blocks the current event. Unknown outcomes, in-flight attempts, and
+delivered events are never replaced or replayed by these paths. If Kitsu cannot
+be read, retryable events wait for a later successful poll.
 
 This is logical row redaction in the active SQLite database, not secure
 erasure of every historical copy. SQLite WAL/checkpoint behavior and retained

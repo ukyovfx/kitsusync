@@ -926,7 +926,7 @@ func dispatchPreparedNotification(db *gorm.DB, event model.NotificationDeliveryE
 	if event.Disposition == model.DeliveryDelivered {
 		return SendResult{Durable: true, AlreadyDelivered: true, MessageID: event.DiscordMessageID, ThreadID: event.DiscordThreadID}
 	}
-	attempt, started, err := model.BeginNotificationDelivery(db, event.EventID, time.Now().UTC())
+	attempt, started, err := model.BeginNotificationDeliveryForEvent(db, event, time.Now().UTC())
 	if err != nil || !started {
 		return SendResult{FailureCategory: "delivery_not_dispatchable", Unknown: event.Disposition == model.DeliveryInFlight || event.Disposition == model.DeliveryUnknown}
 	}
@@ -969,35 +969,6 @@ func dispatchPreparedNotification(db *gorm.DB, event model.NotificationDeliveryE
 		}
 	}
 	return result
-}
-
-// RetryPendingNotificationDeliveries retries only durable events whose last
-// outcome is known not to have been accepted. Unknown/in-flight events remain
-// quarantined for reconciliation and are never resent automatically.
-func RetryPendingNotificationDeliveries(db *gorm.DB, limit int) (int, int) {
-	if db == nil {
-		return 0, 0
-	}
-	events, err := model.ListPendingNotificationDeliveries(db, limit)
-	if err != nil {
-		slog.Error("Notification outbox read failed", "error_class", "delivery_outbox_read_failed")
-		return 0, 0
-	}
-	sent, failed := 0, 0
-	for _, event := range events {
-		webhook := model.FindProjectWebhookByID(db, event.WebhookRowID)
-		if webhook == nil || strings.TrimSpace(webhook.WebhookURL) == "" {
-			failed++
-			continue
-		}
-		result := dispatchPreparedNotification(db, event, webhook.WebhookURL)
-		if result.Durable {
-			sent++
-		} else {
-			failed++
-		}
-	}
-	return sent, failed
 }
 
 // RetryPriorMessageCleanup uses only the exact webhook identity recorded for

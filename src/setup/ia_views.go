@@ -2848,14 +2848,67 @@ func renderIAUsers(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 }
 
 type globalDiscordUserOption struct {
-	ID   string
-	Name string
+	ID       string
+	Name     string
+	Username string
 }
 
 type globalDiscordDirectory struct {
 	Guilds        []DiscordGuild
 	SelectedGuild DiscordGuild
 	Options       []globalDiscordUserOption
+}
+
+func globalDiscordOptionsFromMembers(members []DiscordGuildMember) []globalDiscordUserOption {
+	options := make([]globalDiscordUserOption, 0, len(members))
+	nameCounts := make(map[string]int)
+	usernameCounts := make(map[string]int)
+	seenIDs := make(map[string]bool)
+	for _, member := range members {
+		if member.User.Bot {
+			continue
+		}
+		id := strings.TrimSpace(member.User.ID)
+		username := strings.TrimSpace(member.User.Username)
+		name := strings.TrimSpace(member.Nick)
+		if name == "" {
+			name = strings.TrimSpace(member.User.GlobalName)
+		}
+		if name == "" {
+			name = username
+		}
+		if id == "" || name == "" || seenIDs[id] {
+			continue
+		}
+		seenIDs[id] = true
+		options = append(options, globalDiscordUserOption{ID: id, Name: name, Username: username})
+		nameCounts[strings.ToLower(name)]++
+		if username != "" {
+			usernameCounts[strings.ToLower(username)]++
+		}
+	}
+	for i := range options {
+		if nameCounts[strings.ToLower(options[i].Name)] < 2 {
+			continue
+		}
+		suffix := ""
+		username := strings.TrimSpace(options[i].Username)
+		if username != "" && usernameCounts[strings.ToLower(username)] == 1 {
+			suffix = "@" + username
+		} else {
+			// Use the complete immutable account ID when names cannot disambiguate.
+			// A short suffix could still collide and leave two options ambiguous.
+			suffix = "ID " + options[i].ID
+		}
+		options[i].Name += " · " + suffix
+	}
+	sort.Slice(options, func(i, j int) bool {
+		if strings.EqualFold(options[i].Name, options[j].Name) {
+			return options[i].ID < options[j].ID
+		}
+		return strings.ToLower(options[i].Name) < strings.ToLower(options[j].Name)
+	})
+	return options
 }
 
 func loadGlobalDiscordDirectory(botToken, selectedGuildID string) (globalDiscordDirectory, error) {
@@ -2895,31 +2948,7 @@ func loadGlobalDiscordDirectory(botToken, selectedGuildID string) (globalDiscord
 	if err != nil {
 		return directory, err
 	}
-	seen := map[string]bool{}
-	for _, member := range members {
-		if member.User.Bot {
-			continue
-		}
-		name := strings.TrimSpace(member.Nick)
-		if name == "" {
-			name = strings.TrimSpace(member.User.DisplayName)
-		}
-		if name == "" {
-			name = strings.TrimSpace(member.User.GlobalName)
-		}
-		if name == "" {
-			name = strings.TrimSpace(member.User.Username)
-		}
-		id := strings.TrimSpace(member.User.ID)
-		if id == "" || name == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		directory.Options = append(directory.Options, globalDiscordUserOption{ID: id, Name: name})
-	}
-	sort.Slice(directory.Options, func(i, j int) bool {
-		return strings.ToLower(directory.Options[i].Name) < strings.ToLower(directory.Options[j].Name)
-	})
+	directory.Options = globalDiscordOptionsFromMembers(members)
 	return directory, nil
 }
 

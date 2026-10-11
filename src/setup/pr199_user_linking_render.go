@@ -100,6 +100,13 @@ func userLinkingEmptyState(lang, title, detail string) string {
 
 func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDiscordDirectory, people []KitsuPerson) string {
 	localMaps := model.ListUserMap(db)
+	liveDiscordUsers := make(map[string]globalDiscordUserOption, len(directory.Options))
+	for _, option := range directory.Options {
+		id := strings.TrimSpace(option.ID)
+		if id != "" {
+			liveDiscordUsers[id] = option
+		}
+	}
 	findMap := func(person KitsuPerson) *model.UserMap {
 		for i := range localMaps {
 			m := &localMaps[i]
@@ -118,12 +125,17 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 	memberOptions := func(current string) string {
 		var b strings.Builder
 		b.WriteString(`<option value="">` + esc(t(lang, "未設定", "Not set")) + `</option>`)
+		if current != "" {
+			if _, found := liveDiscordUsers[current]; !found {
+				b.WriteString(`<option value="` + esc(current) + `" selected disabled>` + esc(t(lang, "選択中のDiscordサーバーで利用できません", "Unavailable in selected Discord server")) + `</option>`)
+			}
+		}
 		for _, option := range directory.Options {
 			selected := ""
 			if strings.TrimSpace(option.ID) == strings.TrimSpace(current) {
 				selected = " selected"
 			}
-			b.WriteString(`<option value="` + esc(option.ID) + `"` + selected + `>` + esc(option.Name) + `</option>`)
+			b.WriteString(`<option value="` + esc(option.ID) + `" title="` + esc(option.Name) + `"` + selected + `>` + esc(option.Name) + `</option>`)
 		}
 		return b.String()
 	}
@@ -144,11 +156,16 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 			case isSyntheticDiscordID(currentDiscordID):
 				identity, state, class = t(lang, "検証用データ", "Fixture data"), t(lang, "検証用データ", "Fixture data"), "neutral"
 				currentDiscordID = ""
-			case currentDiscordID != "" && strings.TrimSpace(mapped.DiscordDisplayName) != "":
-				identity, state, class = strings.TrimSpace(mapped.DiscordDisplayName), t(lang, "紐づけ済み", "Linked"), "success"
 			case currentDiscordID != "":
-				identity, state, class = t(lang, "表示名未確認", "Display name not verified"), t(lang, "確認が必要", "Needs verification"), "warning"
-				currentDiscordID = ""
+				live, found := liveDiscordUsers[currentDiscordID]
+				switch {
+				case !found:
+					identity, state, class = t(lang, "選択中のDiscordサーバーで利用できません", "Unavailable in selected Discord server"), t(lang, "要確認", "Needs verification"), "warning"
+				case strings.TrimSpace(live.Username) == "":
+					identity, state, class = t(lang, "Discordユーザー名を確認できません", "Discord username unavailable"), t(lang, "要確認", "Needs verification"), "warning"
+				default:
+					identity, state, class = "@"+strings.TrimSpace(live.Username), t(lang, "紐づけ済み", "Linked"), "success"
+				}
 			}
 		}
 
@@ -159,6 +176,9 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 					initialIndex = i + 1
 					break
 				}
+			}
+			if initialIndex == 0 {
+				initialIndex = 1
 			}
 		}
 		form := `<form method="POST" class="inline-form user-link-form">` +
@@ -179,8 +199,8 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 				esc(fmt.Sprint(mapped.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Unlink")) + `</button></form>`
 		}
 		rows.WriteString(`<tr class="user-link-grid-row"><td data-label="` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `">` +
-			esc(person.FullName) + `</td><td data-label="` + esc(t(lang, "Discordユーザー", "Discord user")) + `">` +
-			esc(identity) + `</td><td data-label="` + esc(t(lang, "状態", "Status")) + `"><span class="status-badge status-badge-` +
+			esc(person.FullName) + `</td><td data-label="` + esc(t(lang, "Discordユーザー", "Discord user")) + `"><span class="user-link-discord-identity" title="` + esc(identity) + `">` +
+			esc(identity) + `</span></td><td data-label="` + esc(t(lang, "状態", "Status")) + `"><span class="status-badge status-badge-` +
 			class + `" role="status">` + esc(state) + `</span></td><td data-label="` + esc(t(lang, "操作", "Actions")) +
 			`"><div class="user-link-actions">` + form + `</div></td></tr>`)
 	}

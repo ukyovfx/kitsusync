@@ -118,6 +118,11 @@ Expected: `{"status":"ok"}`
 Open a browser and go to `http://YOUR_SERVER:8090/bot/login`.
 
 If you are using a reverse proxy (nginx, Traefik), use your public URL instead.
+The proxy must overwrite `X-Forwarded-Proto` and `X-Forwarded-Host` with the
+validated external request values; do not append client-supplied forwarded
+headers. KitsuSync uses these headers to infer secure-cookie/origin and public
+Kitsu URL schemes. Keep the application listener private/loopback-only behind
+the proxy.
 
 ### Step 1: Log in
 

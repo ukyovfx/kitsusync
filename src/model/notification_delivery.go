@@ -81,6 +81,7 @@ type NotificationDeliveryEvent struct {
 	PriorCleanupPending    bool `gorm:"not null;default:false;index"`
 	PriorCleanupInFlight   bool `gorm:"not null;default:false;index"`
 	FailureClass           string
+	SupersededByEventID    string `gorm:"size:64;index"`
 	CleanupFailureClass    string
 	IdentityConflictCount  int        `gorm:"not null;default:0" json:"-"`
 	IdentityConflictAt     *time.Time `json:"-"`
@@ -380,12 +381,13 @@ type DeliveryAttempt struct {
 }
 
 type DeliveryDiagnostic struct {
-	EventID       string    `json:"event_id"`
-	Disposition   string    `json:"disposition"`
-	FailureClass  string    `json:"failure_class,omitempty"`
-	ConflictCount int       `json:"conflict_count,omitempty"`
-	Cleanup       bool      `json:"cleanup_pending,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	EventID          string    `json:"event_id"`
+	SuccessorEventID string    `json:"successor_event_id,omitempty"`
+	Disposition      string    `json:"disposition"`
+	FailureClass     string    `json:"failure_class,omitempty"`
+	ConflictCount    int       `json:"conflict_count,omitempty"`
+	Cleanup          bool      `json:"cleanup_pending,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type NotificationDestinationIdentity struct {
@@ -398,11 +400,94 @@ type NotificationDestinationIdentity struct {
 func NotificationEventIdentity(intent NotificationDeliveryIntent) string {
 	data, _ := json.Marshal([]string{
 		strings.TrimSpace(intent.ProductionID), strings.TrimSpace(intent.TaskID), strings.TrimSpace(intent.TaskTypeID),
-		strings.TrimSpace(intent.TaskStatus), strings.TrimSpace(intent.TaskUpdatedAt), strings.TrimSpace(intent.CommentID),
+		strings.ToUpper(strings.TrimSpace(intent.TaskStatus)), strings.TrimSpace(intent.TaskUpdatedAt), strings.TrimSpace(intent.CommentID),
 		strings.TrimSpace(intent.CommentUpdatedAt), fmt.Sprint(intent.IsAssignNotification),
 	})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+func notificationEventTime(taskUpdatedAt, commentUpdatedAt string) (time.Time, bool) {
+	var latest time.Time
+	for _, raw := range []string{taskUpdatedAt, commentUpdatedAt} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		var parsed time.Time
+		var err error
+		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999"} {
+			parsed, err = time.Parse(layout, strings.TrimSpace(raw))
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			continue
+		}
+		if latest.IsZero() || parsed.After(latest) {
+			latest = parsed
+		}
+	}
+	return latest, !latest.IsZero()
+}
+
+func supersedeKnownRejectedNotificationEvents(tx *gorm.DB, intent NotificationDeliveryIntent, now time.Time) (int64, error) {
+	if tx == nil || strings.TrimSpace(intent.TaskID) == "" || strings.TrimSpace(intent.ProductionID) == "" {
+		return 0, gorm.ErrInvalidData
+	}
+	observedAt, ok := notificationEventTime(intent.TaskUpdatedAt, intent.CommentUpdatedAt)
+	if !ok {
+		return 0, nil
+	}
+	newEventID := NotificationEventIdentity(intent)
+	var retryable []NotificationDeliveryEvent
+	if err := tx.Where("task_id = ? AND production_id = ? AND event_id <> ? AND disposition = ? AND failure_class = ? AND attempt_count > 0 AND attempt_id <> ? AND discord_message_id = '' AND delivered_at IS NULL AND payload_redacted_at IS NULL",
+		strings.TrimSpace(intent.TaskID), strings.TrimSpace(intent.ProductionID), newEventID, DeliveryRetryable, "rate_limited", "").Find(&retryable).Error; err != nil {
+		return 0, err
+	}
+	var count int64
+	for _, prior := range retryable {
+		priorAt, valid := notificationEventTime(prior.TaskUpdatedAt, prior.CommentUpdatedAt)
+		if !valid || !observedAt.After(priorAt) {
+			continue
+		}
+		result := tx.Model(&NotificationDeliveryEvent{}).
+			Where("id = ? AND event_id = ? AND disposition = ? AND failure_class = ?", prior.ID, prior.EventID, DeliveryRetryable, "rate_limited").
+			UpdateColumns(map[string]any{
+				"disposition":            DeliveryTerminalFailure,
+				"failure_class":          "superseded_by_newer_kitsu_event",
+				"superseded_by_event_id": newEventID,
+				"updated_at":             now.UTC(),
+			})
+		if result.Error != nil {
+			return count, result.Error
+		}
+		count += result.RowsAffected
+	}
+	return count, nil
+}
+
+// SupersedeObsoleteKnownRejectedNotificationDeliveries records a later Kitsu
+// event as the explicit terminal successor to any older, known-rejected (429)
+// event for that task. It never resends stale content and never discards the
+// prior payload or attempt evidence. Unparseable timestamps fail closed.
+func SupersedeObsoleteKnownRejectedNotificationDeliveries(db *gorm.DB, intent NotificationDeliveryIntent) (int64, error) {
+	if db == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	var count int64
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := AcquireProductionNotificationWriteLock(tx, intent.ProductionID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, intent.ProductionID, ""); err != nil {
+			return err
+		}
+		var err error
+		count, err = supersedeKnownRejectedNotificationEvents(tx, intent, time.Now().UTC())
+		return err
+	})
+	return count, err
 }
 
 func notificationDestinationFingerprint(guildID, channelID, webhookID string) string {
@@ -582,10 +667,13 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, intent.ProductionID); err != nil {
 			return err
 		}
+		if _, err := supersedeKnownRejectedNotificationEvents(tx, intent, time.Now().UTC()); err != nil {
+			return err
+		}
 		var existing NotificationDeliveryEvent
 		err := tx.Where("event_id = ?", eventID).First(&existing).Error
 		if err == nil {
-			if existing.DestinationFingerprint != row.DestinationFingerprint || existing.WebhookRowID != row.WebhookRowID || existing.PayloadSHA256 != row.PayloadSHA256 {
+			if existing.DestinationFingerprint != row.DestinationFingerprint || existing.WebhookRowID != row.WebhookRowID || existing.PayloadSHA256 != row.PayloadSHA256 || existing.NotificationRevision != row.NotificationRevision {
 				conflictAt := time.Now().UTC()
 				update := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ?", existing.ID, eventID).
 					UpdateColumns(map[string]any{"identity_conflict_count": gorm.Expr("identity_conflict_count + 1"), "identity_conflict_at": conflictAt})
@@ -594,6 +682,36 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 				}
 				if update.RowsAffected != 1 {
 					return ErrProductionNotificationRevisionConflict
+				}
+				// A rate-limit response is an explicit Discord rejection. It is safe
+				// to refresh that never-accepted intent from the current Kitsu render
+				// and currently resolved destination. Unknown, in-flight, delivered,
+				// and other terminal records retain their immutable delivery evidence.
+				if existing.Disposition == DeliveryRetryable && existing.FailureClass == "rate_limited" &&
+					existing.AttemptCount > 0 && existing.AttemptID != "" && existing.DiscordMessageID == "" && existing.DeliveredAt == nil && existing.PayloadRedactedAt == nil {
+					result := tx.Model(&NotificationDeliveryEvent{}).
+						Where("id = ? AND event_id = ? AND disposition = ? AND failure_class = ? AND discord_message_id = ?", existing.ID, eventID, DeliveryRetryable, "rate_limited", "").
+						UpdateColumns(map[string]any{
+							"task_id": row.TaskID, "production_id": row.ProductionID, "task_type_id": row.TaskTypeID,
+							"task_status": row.TaskStatus, "task_updated_at": row.TaskUpdatedAt, "comment_id": row.CommentID,
+							"comment_updated_at": row.CommentUpdatedAt, "is_assign_notification": row.IsAssignNotification,
+							"payload_json": row.PayloadJSON, "payload_sha256": row.PayloadSHA256, "payload_redacted_at": nil,
+							"webhook_row_id": row.WebhookRowID, "destination_guild_id": row.DestinationGuildID,
+							"destination_channel_id": row.DestinationChannelID, "destination_webhook_id": row.DestinationWebhookID,
+							"destination_fingerprint": row.DestinationFingerprint, "notification_revision": row.NotificationRevision,
+							"thread_name": row.ThreadName, "prior_message_id": row.PriorMessageID, "prior_thread_id": row.PriorThreadID,
+							"disposition": DeliveryPending, "failure_class": "fresh_intent_after_known_rejection", "updated_at": conflictAt,
+						})
+					if result.Error != nil {
+						return result.Error
+					}
+					if result.RowsAffected != 1 {
+						return ErrProductionNotificationRevisionConflict
+					}
+					if err := tx.Where("id = ?", existing.ID).First(&row).Error; err != nil {
+						return err
+					}
+					return nil
 				}
 				identityConflict = true
 				row = existing
@@ -624,6 +742,18 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 }
 
 func BeginNotificationDelivery(db *gorm.DB, eventID string, now time.Time) (*DeliveryAttempt, bool, error) {
+	return beginNotificationDelivery(db, eventID, nil, now)
+}
+
+// BeginNotificationDeliveryForEvent atomically verifies that the event read
+// and destination-checked by the caller is still the durable intent being
+// claimed. A known-rejected refresh racing the external webhook identity read
+// therefore cannot make the caller send a replacement payload to the old URL.
+func BeginNotificationDeliveryForEvent(db *gorm.DB, expected NotificationDeliveryEvent, now time.Time) (*DeliveryAttempt, bool, error) {
+	return beginNotificationDelivery(db, expected.EventID, &expected, now)
+}
+
+func beginNotificationDelivery(db *gorm.DB, eventID string, expected *NotificationDeliveryEvent, now time.Time) (*DeliveryAttempt, bool, error) {
 	if db == nil {
 		return nil, false, gorm.ErrInvalidDB
 	}
@@ -633,6 +763,12 @@ func BeginNotificationDelivery(db *gorm.DB, eventID string, now time.Time) (*Del
 		var row NotificationDeliveryEvent
 		if err := tx.Where("event_id = ?", eventID).First(&row).Error; err != nil {
 			return err
+		}
+		if expected != nil && (row.EventID != expected.EventID || row.PayloadSHA256 != expected.PayloadSHA256 ||
+			row.DestinationFingerprint != expected.DestinationFingerprint || row.WebhookRowID != expected.WebhookRowID ||
+			row.NotificationRevision != expected.NotificationRevision) {
+			unavailable = true
+			return nil
 		}
 		if err := AcquireProductionNotificationWriteLock(tx, row.ProductionID); err != nil {
 			return err
@@ -1004,7 +1140,11 @@ func ListUnresolvedNotificationDeliveries(db *gorm.DB, limit int) ([]DeliveryDia
 		if len(id) > 12 {
 			id = id[:12]
 		}
-		out = append(out, DeliveryDiagnostic{EventID: id, Disposition: row.Disposition, FailureClass: row.FailureClass, Cleanup: row.PriorCleanupPending, UpdatedAt: row.UpdatedAt})
+		successorID := row.SupersededByEventID
+		if len(successorID) > 12 {
+			successorID = successorID[:12]
+		}
+		out = append(out, DeliveryDiagnostic{EventID: id, SuccessorEventID: successorID, Disposition: row.Disposition, FailureClass: row.FailureClass, Cleanup: row.PriorCleanupPending, UpdatedAt: row.UpdatedAt})
 	}
 	var deletions []ManagedChannelDeletion
 	dq := db.Where("disposition <> ?", ChannelDeletionComplete).Order("updated_at asc")
