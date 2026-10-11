@@ -2699,6 +2699,9 @@ func pipelineNotificationDetails(lang string, stats RuntimeSnapshot, db *gorm.DB
 				label = t(lang, "旧メッセージ削除待ち", "Prior-message cleanup pending")
 			}
 			detail := label
+			if item.ConflictCount > 0 {
+				detail += " · " + strconv.Itoa(item.ConflictCount) + t(lang, "件", " conflicts")
+			}
 			if item.FailureClass != "" {
 				detail += " · " + item.FailureClass
 			}

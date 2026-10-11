@@ -2,8 +2,11 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +23,23 @@ func notificationDeliveryTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &Task{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProjectReviewerTarget{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
+	return db
+}
+
+func notificationDeliveryFileDB(t *testing.T, path string) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+filepath.ToSlash(path)+"?_busy_timeout=10000&_journal_mode=WAL"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&Project{}, &ProjectWebhook{}, &Task{}, &ProductionNotificationConfig{}, &ProductionNotificationRoute{}, &ProjectReviewerTarget{}, &ProductionNotificationWriteLock{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
 }
 
@@ -68,8 +88,195 @@ func TestNotificationDeliveryIntentIsUniqueAndDestinationBound(t *testing.T) {
 		t.Fatalf("route change must not rebind an existing event, got %v", err)
 	}
 	var stored NotificationDeliveryEvent
-	if err := db.Where("event_id = ?", first.EventID).First(&stored).Error; err != nil || stored.Disposition != DeliveryUnknown {
-		t.Fatalf("identity conflict must quarantine the original event: row=%+v err=%v", stored, err)
+	if err := db.Where("event_id = ?", first.EventID).First(&stored).Error; err != nil || stored.Disposition != DeliveryPending {
+		t.Fatalf("identity conflict must preserve the original delivery disposition: row=%+v err=%v", stored, err)
+	}
+	diagnostics, err := ListUnresolvedNotificationDeliveries(db, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundConflict := false
+	for _, diagnostic := range diagnostics {
+		if diagnostic.EventID == "identity-conflicts" && diagnostic.Disposition == "identity_conflict" && diagnostic.FailureClass == "event_identity_conflict" && diagnostic.ConflictCount == 1 {
+			foundConflict = true
+			break
+		}
+	}
+	if !foundConflict {
+		t.Fatalf("identity conflict must be visible in safe delivery diagnostics: %+v", diagnostics)
+	}
+}
+
+func TestDeliveredIdentityCollisionPreservesHistoryAcrossSQLiteRestart(t *testing.T) {
+	for _, redacted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unredacted", true: "redacted"}[redacted], func(t *testing.T) {
+			for _, collision := range []string{"payload", "destination"} {
+				t.Run(collision, func(t *testing.T) {
+					path := filepath.Join(t.TempDir(), "delivery.db")
+					db := notificationDeliveryFileDB(t, path)
+					notificationDeliveryFixture(t, db)
+					intent := notificationIntent()
+					intent.ThreadName = "synthetic-sensitive-thread-name"
+					original, err := PrepareNotificationDelivery(db, intent)
+					if err != nil {
+						t.Fatal(err)
+					}
+					deliveredAt := time.Now().UTC().Add(-40 * 24 * time.Hour)
+					attempt, started, err := BeginNotificationDelivery(db, original.EventID, deliveredAt.Add(-time.Minute))
+					if err != nil || !started {
+						t.Fatalf("begin original delivery: started=%v err=%v", started, err)
+					}
+					if err := CompleteNotificationDelivery(db, *attempt, "message-original", "thread-original", deliveredAt); err != nil {
+						t.Fatal(err)
+					}
+					if redacted {
+						if count, err := RedactDeliveredNotificationPayloads(db, deliveredAt.Add(time.Hour), time.Now().UTC(), 100); err != nil || count != 1 {
+							t.Fatalf("redact original payload: rows=%d err=%v", count, err)
+						}
+					}
+					var before NotificationDeliveryEvent
+					if err := db.Where("event_id = ?", original.EventID).First(&before).Error; err != nil {
+						t.Fatal(err)
+					}
+					if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+						t.Fatal(err)
+					}
+					sqlDB, err := db.DB()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := sqlDB.Close(); err != nil {
+						t.Fatal(err)
+					}
+
+					db = notificationDeliveryFileDB(t, path)
+					conflicting := intent
+					if collision == "payload" {
+						conflicting.Payload = []byte(`{"content":"different conflicting body","allowed_mentions":{"parse":[]}}`)
+					} else {
+						conflicting.ChannelID = "different-channel"
+					}
+					if _, err := PrepareNotificationDelivery(db, conflicting); !errors.Is(err, ErrDeliveryIdentityConflict) {
+						t.Fatalf("conflicting identity after restart must fail closed, got %v", err)
+					}
+					var after NotificationDeliveryEvent
+					if err := db.Where("event_id = ?", original.EventID).First(&after).Error; err != nil {
+						t.Fatal(err)
+					}
+					if after.Disposition != DeliveryDelivered || after.AttemptID != before.AttemptID || after.AttemptCount != before.AttemptCount ||
+						after.DeliveredAt == nil || !after.DeliveredAt.Equal(*before.DeliveredAt) || after.DiscordMessageID != "message-original" ||
+						after.DiscordThreadID != "thread-original" || after.PayloadSHA256 != before.PayloadSHA256 || !after.UpdatedAt.Equal(before.UpdatedAt) ||
+						after.PayloadJSON != before.PayloadJSON || (after.PayloadRedactedAt == nil) != (before.PayloadRedactedAt == nil) {
+						t.Fatalf("identity collision rewrote durable delivery history: before=%+v after=%+v", before, after)
+					}
+					var conflicts int
+					if err := db.Raw("SELECT identity_conflict_count FROM notification_delivery_events WHERE event_id = ?", original.EventID).Scan(&conflicts).Error; err != nil || conflicts != 1 {
+						t.Fatalf("safe conflict evidence was not durably recorded: count=%d err=%v", conflicts, err)
+					}
+					diagnostics, err := ListUnresolvedNotificationDeliveries(db, 50)
+					if err != nil {
+						t.Fatal(err)
+					}
+					found := false
+					for _, item := range diagnostics {
+						if item.Disposition == "identity_conflict" && item.FailureClass == "event_identity_conflict" {
+							found = true
+						}
+					}
+					if !found {
+						t.Fatalf("identity conflict is not operator-visible: %+v", diagnostics)
+					}
+					replayed, err := PrepareNotificationDelivery(db, intent)
+					if err != nil || replayed.Disposition != DeliveryDelivered || replayed.DiscordMessageID != "message-original" {
+						t.Fatalf("original replay did not resolve to delivered event: event=%+v err=%v", replayed, err)
+					}
+					if _, started, err := BeginNotificationDelivery(db, replayed.EventID, time.Now().UTC()); started || !errors.Is(err, ErrDeliveryUnavailable) {
+						t.Fatalf("conflict or redaction caused resend: started=%v err=%v", started, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestConcurrentDeliveredIdentityConflictsAreCountedAcrossSQLiteConnections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent-delivery.db")
+	db := notificationDeliveryFileDB(t, path)
+	notificationDeliveryFixture(t, db)
+	intent := notificationIntent()
+	intent.ThreadName = "synthetic-sensitive-thread-name"
+	event, err := PrepareNotificationDelivery(db, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveredAt := time.Now().UTC().Add(-time.Minute)
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, deliveredAt.Add(-time.Minute))
+	if err != nil || !started {
+		t.Fatalf("begin delivery: started=%v err=%v", started, err)
+	}
+	if err := CompleteNotificationDelivery(db, *attempt, "message-original", "thread-original", deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	secondDB := notificationDeliveryFileDB(t, path)
+	conflictIntent := intent
+	conflictIntent.Payload = []byte(`{"content":"concurrent conflict","allowed_mentions":{"parse":[]}}`)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, conn := range []*gorm.DB{db, secondDB} {
+		wg.Add(1)
+		go func(conn *gorm.DB) {
+			defer wg.Done()
+			<-start
+			_, err := PrepareNotificationDelivery(conn, conflictIntent)
+			results <- err
+		}(conn)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if !errors.Is(err, ErrDeliveryIdentityConflict) {
+			t.Fatalf("concurrent conflict should be rejected and recorded, got %v", err)
+		}
+	}
+	var stored NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil || stored.Disposition != DeliveryDelivered || stored.DiscordMessageID != "message-original" {
+		t.Fatalf("concurrent conflict changed delivered history: event=%+v err=%v", stored, err)
+	}
+	var conflicts int
+	if err := db.Raw("SELECT identity_conflict_count FROM notification_delivery_events WHERE event_id = ?", event.EventID).Scan(&conflicts).Error; err != nil || conflicts != 2 {
+		t.Fatalf("lost concurrent conflict evidence: count=%d err=%v", conflicts, err)
+	}
+}
+
+func TestIdentityConflictEvidenceFailureRollsBackWithoutChangingDeliveredEvent(t *testing.T) {
+	db := notificationDeliveryFileDB(t, filepath.Join(t.TempDir(), "rollback-conflict.db"))
+	notificationDeliveryFixture(t, db)
+	intent := notificationIntent()
+	event, err := PrepareNotificationDelivery(db, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveredAt := time.Now().UTC()
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, deliveredAt.Add(-time.Minute))
+	if err != nil || !started {
+		t.Fatalf("begin delivery: started=%v err=%v", started, err)
+	}
+	if err := CompleteNotificationDelivery(db, *attempt, "message-original", "thread-original", deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`CREATE TRIGGER reject_identity_conflict BEFORE UPDATE OF identity_conflict_count ON notification_delivery_events WHEN NEW.identity_conflict_count > OLD.identity_conflict_count BEGIN SELECT RAISE(ABORT, 'forced conflict write failure'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	conflicting := intent
+	conflicting.Payload = []byte(`{"content":"rollback conflict","allowed_mentions":{"parse":[]}}`)
+	if _, err := PrepareNotificationDelivery(db, conflicting); err == nil || errors.Is(err, ErrDeliveryIdentityConflict) {
+		t.Fatalf("conflict write failure must be returned, got %v", err)
+	}
+	var stored NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil || stored.Disposition != DeliveryDelivered || stored.DiscordMessageID != "message-original" || stored.DiscordThreadID != "thread-original" {
+		t.Fatalf("failed conflict recording changed delivered history: event=%+v err=%v", stored, err)
 	}
 }
 
@@ -83,6 +290,7 @@ func TestRedactDeliveredNotificationPayloadsIsBoundedAndPreservesDeduplication(t
 		intent := notificationIntent()
 		intent.TaskID = taskID
 		intent.TaskUpdatedAt = taskID + "-updated"
+		intent.ThreadName = "synthetic-thread-" + taskID
 		event, err := PrepareNotificationDelivery(db, intent)
 		if err != nil {
 			t.Fatal(err)
@@ -154,11 +362,11 @@ func TestRedactDeliveredNotificationPayloadsIsBoundedAndPreservesDeduplication(t
 			t.Fatalf("redaction changed event %s disposition to %q; want %q", row.EventID, got.Disposition, expectedDispositions[row.EventID])
 		}
 		if wantRedacted {
-			if got.PayloadJSON != "" || got.PayloadSHA256 != row.PayloadSHA256 || got.Disposition != DeliveryDelivered || got.DiscordMessageID != row.DiscordMessageID || got.DiscordThreadID != row.DiscordThreadID || got.EventID != row.EventID || got.WebhookRowID != row.WebhookRowID || got.DestinationGuildID != row.DestinationGuildID || got.DestinationChannelID != row.DestinationChannelID || got.DestinationWebhookID != row.DestinationWebhookID || got.DestinationFingerprint != row.DestinationFingerprint {
+			if got.PayloadJSON != "" || got.ThreadName != "" || got.PayloadSHA256 != row.PayloadSHA256 || got.Disposition != DeliveryDelivered || got.DiscordMessageID != row.DiscordMessageID || got.DiscordThreadID != row.DiscordThreadID || got.EventID != row.EventID || got.WebhookRowID != row.WebhookRowID || got.DestinationGuildID != row.DestinationGuildID || got.DestinationChannelID != row.DestinationChannelID || got.DestinationWebhookID != row.DestinationWebhookID || got.DestinationFingerprint != row.DestinationFingerprint {
 				t.Fatalf("redaction discarded dedupe/recovery metadata: before=%+v after=%+v", row, got)
 			}
-		} else if got.PayloadJSON != row.PayloadJSON {
-			t.Fatalf("ineligible payload changed for event %s", row.EventID)
+		} else if got.PayloadJSON != row.PayloadJSON || got.ThreadName != row.ThreadName {
+			t.Fatalf("ineligible recovery data changed for event %s", row.EventID)
 		}
 	}
 
@@ -185,6 +393,192 @@ func TestRedactDeliveredNotificationPayloadsIsBoundedAndPreservesDeduplication(t
 	var count int64
 	if err := db.Model(&NotificationDeliveryEvent{}).Count(&count).Error; err != nil || count != int64(len(rowsToCheck)) {
 		t.Fatalf("retention must preserve all event identities: count=%d want=%d err=%v", count, len(rowsToCheck), err)
+	}
+}
+
+func TestPayloadRetentionCoexistsWithDeletionTombstoneAndMutationRecovery(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	notificationDeliveryFixture(t, db)
+	var project Project
+	var webhook ProjectWebhook
+	if err := db.Where("kitsu_project_id = ?", "production-1").First(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("id = ?", 1).First(&webhook).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	intent := notificationIntent()
+	intent.ThreadName = "synthetic-sensitive-thread-name"
+	event, err := PrepareNotificationDelivery(db, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, now.Add(-40*24*time.Hour))
+	if err != nil || !started {
+		t.Fatalf("start delivery: started=%v err=%v", started, err)
+	}
+	deliveredAt := now.Add(-39 * 24 * time.Hour)
+	if err := CompleteNotificationDelivery(db, *attempt, "retained-message", "retained-thread", deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ManagedChannelDeletion{WebhookRowID: webhook.ID, ProductionID: project.KitsuProjectID, GuildID: "guild-1", ChannelID: "channel-1", DiscordWebhookID: "webhook-1", Disposition: ChannelDeletionNeedsHelp, FailureClass: "synthetic_recovery_required", CreatedAt: now}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&ProductionNotificationWriteLock{}).Where("production_id = ?", project.KitsuProjectID).Updates(map[string]any{"mutation_state": NotificationMutationReorderHelp, "mutation_token": "synthetic-operation"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	redacted, err := RedactDeliveredNotificationPayloads(db, now.Add(-30*24*time.Hour), now, 100)
+	if err != nil || redacted != 1 {
+		t.Fatalf("completed delivery remains redactable beside unrelated recoveries: rows=%d err=%v", redacted, err)
+	}
+	var stored NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.PayloadJSON != "" || stored.ThreadName != "" || stored.PayloadRedactedAt == nil || stored.PayloadSHA256 != event.PayloadSHA256 ||
+		stored.DiscordMessageID != "retained-message" || stored.DiscordThreadID != "retained-thread" || stored.DestinationFingerprint != event.DestinationFingerprint {
+		t.Fatalf("redaction did not preserve the minimum delivery recovery identity: %+v", stored)
+	}
+	deletion, err := FindManagedChannelDeletion(db, webhook.ID)
+	if err != nil || deletion == nil || deletion.Disposition != ChannelDeletionNeedsHelp || deletion.FailureClass != "synthetic_recovery_required" {
+		t.Fatalf("redaction affected deletion recovery tombstone: row=%+v err=%v", deletion, err)
+	}
+	var mutation ProductionNotificationWriteLock
+	if err := db.Where("production_id = ?", project.KitsuProjectID).First(&mutation).Error; err != nil || mutation.MutationState != NotificationMutationReorderHelp || mutation.MutationToken != "synthetic-operation" {
+		t.Fatalf("redaction affected mutation recovery state: row=%+v err=%v", mutation, err)
+	}
+}
+
+func TestPayloadRetentionScrubsLegacyRedactedThreadNameWithoutChangingMarker(t *testing.T) {
+	db := notificationDeliveryFileDB(t, filepath.Join(t.TempDir(), "legacy-thread-name.db"))
+	notificationDeliveryFixture(t, db)
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	intent := notificationIntent()
+	intent.ThreadName = "legacy-sensitive-thread-name"
+	event, err := PrepareNotificationDelivery(db, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, now.Add(-40*24*time.Hour))
+	if err != nil || !started {
+		t.Fatalf("start delivery: started=%v err=%v", started, err)
+	}
+	deliveredAt := now.Add(-39 * 24 * time.Hour)
+	if err := CompleteNotificationDelivery(db, *attempt, "legacy-message", "legacy-thread", deliveredAt); err != nil {
+		t.Fatal(err)
+	}
+	originalMarker := now.Add(-31 * 24 * time.Hour)
+	if err := db.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", event.EventID).Updates(map[string]any{"payload_json": "", "payload_redacted_at": originalMarker}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if redacted, err := RedactDeliveredNotificationPayloads(db, now.Add(-30*24*time.Hour), now, 100); err != nil || redacted != 1 {
+		t.Fatalf("legacy redacted thread name should be scrubbed in bounded cleanup: rows=%d err=%v", redacted, err)
+	}
+	var stored NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", event.EventID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ThreadName != "" || stored.PayloadJSON != "" || stored.PayloadRedactedAt == nil || !stored.PayloadRedactedAt.Equal(originalMarker) ||
+		stored.EventID != event.EventID || stored.PayloadSHA256 != event.PayloadSHA256 || stored.Disposition != DeliveryDelivered ||
+		stored.DiscordMessageID != "legacy-message" || stored.DiscordThreadID != "legacy-thread" || stored.DestinationFingerprint != event.DestinationFingerprint {
+		t.Fatalf("legacy scrub changed redaction marker or durable identity: %+v", stored)
+	}
+	if redacted, err := RedactDeliveredNotificationPayloads(db, now.Add(-30*24*time.Hour), now.Add(time.Hour), 100); err != nil || redacted != 0 {
+		t.Fatalf("legacy thread-name scrub must be idempotent: rows=%d err=%v", redacted, err)
+	}
+}
+
+func TestIdentityConflictDiagnosticsArePrioritizedWithinLimit(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	notificationDeliveryFixture(t, db)
+	intent := notificationIntent()
+	event, err := PrepareNotificationDelivery(db, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := BeginNotificationDelivery(db, event.EventID, time.Now().UTC())
+	if err != nil || !started {
+		t.Fatalf("start delivery: started=%v err=%v", started, err)
+	}
+	if err := CompleteNotificationDelivery(db, *attempt, "diagnostic-message", "diagnostic-thread", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	conflicting := intent
+	conflicting.Payload = []byte(`{"content":"different diagnostic body","allowed_mentions":{"parse":[]}}`)
+	if _, err := PrepareNotificationDelivery(db, conflicting); !errors.Is(err, ErrDeliveryIdentityConflict) {
+		t.Fatalf("record identity conflict: %v", err)
+	}
+	for i := 0; i < 55; i++ {
+		row := NotificationDeliveryEvent{
+			EventID: fmt.Sprintf("pending-%02d", i), TaskID: fmt.Sprintf("pending-task-%02d", i), ProductionID: "production-1",
+			TaskTypeID: "task-type-1", TaskStatus: "WFA", PayloadJSON: `{}`, PayloadSHA256: "synthetic", WebhookRowID: 1,
+			DestinationGuildID: "guild-1", DestinationChannelID: "channel-1", DestinationWebhookID: "webhook-1",
+			DestinationFingerprint: event.DestinationFingerprint, Disposition: DeliveryPending,
+		}
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	diagnostics, err := ListUnresolvedNotificationDeliveries(db, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Disposition == "identity_conflict" && diagnostic.EventID == "identity-conflicts" && diagnostic.ConflictCount == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("identity conflict was starved by ordinary pending events: %+v", diagnostics)
+	}
+}
+
+func TestIdentityConflictDiagnosticSummaryPreservesOtherRecoveryVisibility(t *testing.T) {
+	db := notificationDeliveryTestDB(t)
+	notificationDeliveryFixture(t, db)
+	baseTime := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 55; i++ {
+		conflictAt := baseTime.Add(time.Duration(i) * time.Minute)
+		event := NotificationDeliveryEvent{
+			EventID: fmt.Sprintf("conflict-%03d", i), TaskID: fmt.Sprintf("conflict-task-%03d", i), ProductionID: "production-1",
+			TaskTypeID: "task-type-1", TaskStatus: "WFA", PayloadJSON: "", PayloadSHA256: "synthetic", PayloadRedactedAt: &baseTime,
+			WebhookRowID: 1, DestinationGuildID: "guild-1", DestinationChannelID: "channel-1", DestinationWebhookID: "webhook-1",
+			DestinationFingerprint: "synthetic-fingerprint", Disposition: DeliveryDelivered, IdentityConflictCount: 1,
+			IdentityConflictAt: &conflictAt, CreatedAt: baseTime, UpdatedAt: conflictAt,
+		}
+		if err := db.Create(&event).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	unknown := NotificationDeliveryEvent{EventID: "unknown-event", TaskID: "unknown-task", ProductionID: "production-1", TaskTypeID: "task-type-1", TaskStatus: "WFA", PayloadJSON: `{}`, PayloadSHA256: "synthetic", WebhookRowID: 1, DestinationGuildID: "guild-1", DestinationChannelID: "channel-1", DestinationWebhookID: "webhook-1", DestinationFingerprint: "synthetic-fingerprint", Disposition: DeliveryUnknown, CreatedAt: baseTime, UpdatedAt: baseTime}
+	if err := db.Create(&unknown).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ManagedChannelDeletion{WebhookRowID: 2, ProductionID: "production-1", GuildID: "guild-1", ChannelID: "channel-2", DiscordWebhookID: "webhook-2", Disposition: ChannelDeletionNeedsHelp, FailureClass: "synthetic_delete_recovery", CreatedAt: baseTime}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ProductionNotificationWriteLock{ProductionID: "reorder-recovery", MutationState: NotificationMutationReorderHelp, MutationToken: "synthetic-reorder", UpdatedAt: baseTime}).Error; err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := ListUnresolvedNotificationDeliveries(db, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diagnostics) != 4 || diagnostics[0].EventID != "identity-conflicts" || diagnostics[0].ConflictCount != 55 || diagnostics[0].UpdatedAt.IsZero() {
+		t.Fatalf("conflict summary should remain visible without starving recovery details: %#v", diagnostics)
+	}
+	want := map[string]bool{"unknown-even": false, "delete-2": false, "mutation-reorder-reco": false}
+	for _, diagnostic := range diagnostics[1:] {
+		if _, ok := want[diagnostic.EventID]; ok {
+			want[diagnostic.EventID] = true
+		}
+	}
+	for id, found := range want {
+		if !found {
+			t.Fatalf("recovery diagnostic %q was hidden by historical conflicts: %#v", id, diagnostics)
+		}
 	}
 }
 

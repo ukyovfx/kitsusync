@@ -102,8 +102,18 @@ func TestPipelineNotificationDiagnosticsExposeSafeDeliveryDisposition(t *testing
 	if err := db.Create(&event).Error; err != nil {
 		t.Fatal(err)
 	}
+	conflictAt := time.Now().UTC()
+	conflict := model.NotificationDeliveryEvent{
+		EventID: "identity-conflict-event", TaskID: "conflict-task", ProductionID: "production-synthetic", TaskTypeID: "tt-synthetic", TaskStatus: "WFA",
+		PayloadJSON: "", PayloadSHA256: strings.Repeat("c", 64), PayloadRedactedAt: &conflictAt,
+		WebhookRowID: 1, DestinationGuildID: "guild-synthetic", DestinationChannelID: "channel-synthetic", DestinationWebhookID: "webhook-synthetic", DestinationFingerprint: strings.Repeat("d", 64),
+		Disposition: model.DeliveryDelivered, IdentityConflictCount: 3, IdentityConflictAt: &conflictAt,
+	}
+	if err := db.Create(&conflict).Error; err != nil {
+		t.Fatal(err)
+	}
 	body := pipelineNotificationDetails("en", RuntimeSnapshot{}, db)
-	for _, want := range []string{"1234567890ab", "unknown", "discord_server_error"} {
+	for _, want := range []string{"1234567890ab", "unknown", "discord_server_error", "identity-conflicts", "3 conflicts", "event_identity_conflict"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("safe delivery diagnostics missing %q: %s", want, body)
 		}

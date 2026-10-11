@@ -82,7 +82,9 @@ type NotificationDeliveryEvent struct {
 	PriorCleanupInFlight   bool `gorm:"not null;default:false;index"`
 	FailureClass           string
 	CleanupFailureClass    string
-	CreatedAt              time.Time `gorm:"index"`
+	IdentityConflictCount  int        `gorm:"not null;default:0" json:"-"`
+	IdentityConflictAt     *time.Time `json:"-"`
+	CreatedAt              time.Time  `gorm:"index"`
 	UpdatedAt              time.Time
 }
 
@@ -378,11 +380,12 @@ type DeliveryAttempt struct {
 }
 
 type DeliveryDiagnostic struct {
-	EventID      string    `json:"event_id"`
-	Disposition  string    `json:"disposition"`
-	FailureClass string    `json:"failure_class,omitempty"`
-	Cleanup      bool      `json:"cleanup_pending,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	EventID       string    `json:"event_id"`
+	Disposition   string    `json:"disposition"`
+	FailureClass  string    `json:"failure_class,omitempty"`
+	ConflictCount int       `json:"conflict_count,omitempty"`
+	Cleanup       bool      `json:"cleanup_pending,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type NotificationDestinationIdentity struct {
@@ -512,15 +515,15 @@ func RedactDeliveredNotificationPayloads(db *gorm.DB, deliveredBefore, redactedA
 			Select("id").
 			Where("disposition = ? AND delivered_at IS NOT NULL AND delivered_at < ?", DeliveryDelivered, deliveredBefore).
 			Where("prior_cleanup_pending = ? AND prior_cleanup_in_flight = ?", false, false).
-			Where("payload_redacted_at IS NULL AND payload_json <> ''").
+			Where("payload_json <> '' OR thread_name <> ''").
 			Order("delivered_at ASC, id ASC").
 			Limit(limit)
 		result := tx.Model(&NotificationDeliveryEvent{}).
 			Where("id IN (?)", eligible).
 			Where("disposition = ? AND delivered_at IS NOT NULL AND delivered_at < ?", DeliveryDelivered, deliveredBefore).
 			Where("prior_cleanup_pending = ? AND prior_cleanup_in_flight = ?", false, false).
-			Where("payload_redacted_at IS NULL AND payload_json <> ''").
-			Updates(map[string]any{"payload_json": "", "payload_redacted_at": redactedAt.UTC()})
+			Where("payload_json <> '' OR thread_name <> ''").
+			Updates(map[string]any{"payload_json": "", "thread_name": "", "payload_redacted_at": gorm.Expr("COALESCE(payload_redacted_at, ?)", redactedAt.UTC())})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -583,8 +586,14 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 		err := tx.Where("event_id = ?", eventID).First(&existing).Error
 		if err == nil {
 			if existing.DestinationFingerprint != row.DestinationFingerprint || existing.WebhookRowID != row.WebhookRowID || existing.PayloadSHA256 != row.PayloadSHA256 {
-				if updateErr := tx.Model(&NotificationDeliveryEvent{}).Where("id = ?", existing.ID).Updates(map[string]any{"disposition": DeliveryUnknown, "failure_class": "event_identity_conflict"}).Error; updateErr != nil {
-					return updateErr
+				conflictAt := time.Now().UTC()
+				update := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ?", existing.ID, eventID).
+					UpdateColumns(map[string]any{"identity_conflict_count": gorm.Expr("identity_conflict_count + 1"), "identity_conflict_at": conflictAt})
+				if update.Error != nil {
+					return update.Error
+				}
+				if update.RowsAffected != 1 {
+					return ErrProductionNotificationRevisionConflict
 				}
 				identityConflict = true
 				row = existing
@@ -962,15 +971,34 @@ func ListUnresolvedNotificationDeliveries(db *gorm.DB, limit int) ([]DeliveryDia
 	if db == nil {
 		return nil, gorm.ErrInvalidDB
 	}
-	var rows []NotificationDeliveryEvent
-	query := db.Where("disposition IN ? OR prior_cleanup_pending = ?", []string{DeliveryPending, DeliveryInFlight, DeliveryRetryable, DeliveryUnknown, DeliveryTerminalFailure, DeliveryLegacyUnknown}, true).Order("updated_at asc")
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-	if err := query.Find(&rows).Error; err != nil {
+	out := make([]DeliveryDiagnostic, 0)
+	var conflictCount int
+	if err := db.Model(&NotificationDeliveryEvent{}).Select("COALESCE(SUM(identity_conflict_count), 0)").Where("identity_conflict_count > 0").Scan(&conflictCount).Error; err != nil {
 		return nil, err
 	}
-	out := make([]DeliveryDiagnostic, 0, len(rows))
+	if conflictCount > 0 {
+		var latestConflict NotificationDeliveryEvent
+		if err := db.Select("identity_conflict_at", "updated_at").Where("identity_conflict_count > 0").Order("identity_conflict_at desc, id desc").First(&latestConflict).Error; err != nil {
+			return nil, err
+		}
+		updated := time.Time{}
+		if latestConflict.IdentityConflictAt != nil {
+			updated = *latestConflict.IdentityConflictAt
+		} else {
+			updated = latestConflict.UpdatedAt
+		}
+		out = append(out, DeliveryDiagnostic{EventID: "identity-conflicts", Disposition: "identity_conflict", FailureClass: "event_identity_conflict", ConflictCount: conflictCount, UpdatedAt: updated})
+	}
+	var rows []NotificationDeliveryEvent
+	if limit <= 0 || len(out) < limit {
+		query := db.Where("disposition IN ? OR prior_cleanup_pending = ?", []string{DeliveryPending, DeliveryInFlight, DeliveryRetryable, DeliveryUnknown, DeliveryTerminalFailure, DeliveryLegacyUnknown}, true).Order("updated_at asc")
+		if limit > 0 {
+			query = query.Limit(limit - len(out))
+		}
+		if err := query.Find(&rows).Error; err != nil {
+			return nil, err
+		}
+	}
 	for _, row := range rows {
 		id := row.EventID
 		if len(id) > 12 {

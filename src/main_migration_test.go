@@ -131,7 +131,7 @@ func TestMigrateApplicationSchemaAddsDeliveryJournalIdempotentlyAndSurvivesBacku
 	for _, check := range []struct {
 		model any
 		name  string
-	}{{&model.NotificationDeliveryEvent{}, "prior_cleanup_in_flight"}, {&model.NotificationDeliveryEvent{}, "payload_redacted_at"}, {&model.ProductionNotificationWriteLock{}, "mutation_state"}, {&model.ProductionNotificationWriteLock{}, "mutation_token"}, {&model.ProductionNotificationWriteLock{}, "mutation_at"}} {
+	}{{&model.NotificationDeliveryEvent{}, "prior_cleanup_in_flight"}, {&model.NotificationDeliveryEvent{}, "payload_redacted_at"}, {&model.NotificationDeliveryEvent{}, "identity_conflict_count"}, {&model.NotificationDeliveryEvent{}, "identity_conflict_at"}, {&model.ProductionNotificationWriteLock{}, "mutation_state"}, {&model.ProductionNotificationWriteLock{}, "mutation_token"}, {&model.ProductionNotificationWriteLock{}, "mutation_at"}} {
 		if !db.Migrator().HasColumn(check.model, check.name) {
 			t.Fatalf("additive migration omitted column %s on %T", check.name, check.model)
 		}
@@ -171,7 +171,7 @@ func TestMigrateApplicationSchemaAddsDeliveryJournalIdempotentlyAndSurvivesBacku
 		t.Fatalf("repeated migration failed: %v", err)
 	}
 	var quarantined model.NotificationDeliveryEvent
-	if err := db.Where("event_id = ?", event.EventID).First(&quarantined).Error; err != nil || quarantined.Disposition != model.DeliveryUnknown || quarantined.PayloadJSON != event.PayloadJSON || quarantined.PayloadRedactedAt != nil {
+	if err := db.Where("event_id = ?", event.EventID).First(&quarantined).Error; err != nil || quarantined.Disposition != model.DeliveryUnknown || quarantined.PayloadJSON != event.PayloadJSON || quarantined.PayloadRedactedAt != nil || quarantined.IdentityConflictCount != 0 || quarantined.IdentityConflictAt != nil {
 		t.Fatalf("repeated startup did not quarantine in-flight delivery: row=%+v err=%v", quarantined, err)
 	}
 	var deletionLock, reorderLock model.ProductionNotificationWriteLock

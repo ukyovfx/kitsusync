@@ -66,9 +66,19 @@ Kitsu comments or other user-authored text. It is retained while delivery or
 recovery is unresolved. Only successfully delivered records older than the
 configured retention period may have this body redacted. A redacted row keeps
 its event ID, payload SHA-256, disposition, destination binding, and message/
-thread IDs; `payload_redacted_at` records when the body was cleared. A repeated
-observation is still deduplicated by the retained event ID/hash and delivered
-disposition.
+thread IDs; `payload_redacted_at` records when the body was cleared. The
+transient `ThreadName` needed for a not-yet-delivered forum/thread creation is
+cleared with the body only after successful delivery and prior-message cleanup
+are complete. A repeated observation is still deduplicated by the retained
+event ID/hash and delivered disposition.
+
+A payload or destination identity collision is rejected. It increments only a
+separate conflict count/timestamp on the original event and appears in safe
+operational diagnostics as an aggregated `identity_conflict` count; this
+summary is prioritized without consuming one slot per historical event. It
+does not change the original disposition, payload/hash, destination, or Discord
+checkpoints. The conflicting request body is neither stored nor logged. A
+conflict against a redacted delivered event is never reconstructed or resent.
 
 This is logical row redaction in the active SQLite database, not secure
 erasure of every historical copy. SQLite WAL/checkpoint behavior and retained
@@ -80,8 +90,10 @@ The retention setting is `[notification].deliveryPayloadRetentionDays` in
 validated from 0 through 3650 days. Startup and an hourly maintenance job each
 redact at most 100 eligible rows, oldest first. A later run continues the
 bounded cleanup, even when Kitsu polling is paused.
-The additive migration only adds the nullable `payload_redacted_at` marker;
-retention processing, not schema migration, performs the conditional redaction.
+The additive migration adds the nullable `payload_redacted_at` marker and
+identity-conflict count/timestamp; retention processing, not schema migration,
+performs the conditional redaction. Conflict metadata contains no payload or
+credential values.
 Pending, in-flight, retryable, unknown, terminal-failure, legacy-unknown, or
 otherwise unresolved events are never redacted. Delivered events with prior
 message cleanup pending or in flight are also retained until cleanup resolves.
