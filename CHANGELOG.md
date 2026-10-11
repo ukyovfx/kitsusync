@@ -4,7 +4,25 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- The next release will be documented here; v0.4.0 through v0.4.3 remain historical.
+- No unreleased changes yet.
+
+## v0.5.0
+
+### Added
+
+- Production-aware WFA Reviewer resolution from the live Kitsu Production Team, with additive Discord User and Role overrides.
+- A redesigned Production Detail operator surface for Overview, Notifications, Team, and Settings.
+- Durable notification-delivery tracking and recovery diagnostics for retries, uncertain outcomes, and route changes.
+- A static reactive plus-grid authenticated background, a silk Login background, and aligned System Status monitoring charts.
+
+### Changed
+
+- User Linking displays verified Discord identity while keeping immutable Discord User IDs as the mapping identity.
+- Staging candidate deployment and release artifacts use exact-source provenance and isolated deployment verification.
+
+### Validation note
+
+- Real Discord message and mention delivery was not exercised as part of this release acceptance. No live Discord E2E is claimed.
 
 ## v0.4.4
 
