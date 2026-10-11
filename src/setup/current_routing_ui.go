@@ -15,7 +15,11 @@ func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request
 	if scriptStart := strings.Index(html, `<script>`); scriptStart >= 0 {
 		html = html[:scriptStart]
 	}
-	panelStart := strings.Index(html, `<section class="production-wfa-edit-panel" data-wfa-detail-panel`)
+	panelMarker := strings.Index(html, `data-wfa-detail-panel`)
+	panelStart := -1
+	if panelMarker >= 0 {
+		panelStart = strings.LastIndex(html[:panelMarker], `<section`)
+	}
 	if panelStart >= 0 {
 		panelEnd := strings.Index(html[panelStart:], `</section>`)
 		if panelEnd >= 0 {
