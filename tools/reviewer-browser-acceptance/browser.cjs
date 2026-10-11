@@ -1715,6 +1715,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
     await storyboardRow.locator('[data-select-task]').click();
     const japanesePanel = japaneseForm.locator('[data-wfa-detail-panel]');
+    // Older or malformed rendered rows may still carry JSON null. Exercise the
+    // client-side normalization independently from the server's [] encoding.
+    await storyboardRow.evaluate((row, encodedNull) => row.setAttribute('data-existing-targets', encodedNull), Buffer.from('null').toString('base64'));
     await japanesePanel.locator('[data-wfa-add-target]').click();
     const japaneseDialog = page.locator('[data-wfa-add-modal]');
     const japaneseAdd = japaneseDialog.locator('[data-wfa-add-confirm]');
@@ -1781,9 +1784,21 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await japaneseForm.locator('[data-apply-submit]').click();
     const japaneseApplyResult = await japaneseApplyResponse;
     const japaneseApplyError = japaneseApplyResult.ok() ? null : await japaneseApplyResult.json().catch(() => ({}));
-    const storyboardDelta = japaneseApplyPayload?.reviewer_changes?.find(change => change.task_type_id === 'task-storyboard');
-    if (japaneseApplyResult.status() !== 200 || japaneseApplyCount.value !== 1 || !storyboardDelta?.add_user_ids?.includes(japaneseUserID) || !storyboardDelta?.add_role_ids?.includes('33333333333333331')) {
-      throw new Error(`Japanese Storyboard Apply did not submit exact User/Role IDs once: status=${japaneseApplyResult.status()} error=${japaneseApplyError?.error || 'none'} payload=${JSON.stringify(japaneseApplyPayload)}`);
+    const expectedRoleID = '33333333333333331';
+    const storyboardDelta = japaneseApplyPayload?.reviewer_changes?.[0];
+    const exactReviewerDelta = japaneseApplyPayload?.reviewer_changes?.length === 1 &&
+      storyboardDelta?.task_type_id === 'task-storyboard' &&
+      JSON.stringify(storyboardDelta.add_user_ids) === JSON.stringify([japaneseUserID]) &&
+      JSON.stringify(storyboardDelta.remove_user_ids) === JSON.stringify([]) &&
+      JSON.stringify(storyboardDelta.add_role_ids) === JSON.stringify([expectedRoleID]) &&
+      JSON.stringify(storyboardDelta.remove_role_ids) === JSON.stringify([]);
+    const exactRoute = japaneseApplyPayload?.routes?.length === 1 &&
+      japaneseApplyPayload.routes[0]?.task_type_id === 'task-storyboard' &&
+      Number(japaneseApplyPayload.routes[0]?.destination_webhook_id) === Number(await storyboardRow.getAttribute('data-original-destination'));
+    if (japaneseApplyResult.status() !== 200 || japaneseApplyCount.value !== 1 ||
+      japaneseApplyPayload?.project_id !== 'reviewer-production' ||
+      !japaneseApplyPayload?.expected_revision || !exactRoute || !exactReviewerDelta) {
+      throw new Error(`Japanese Storyboard Apply did not submit the exact route and User/Role delta once: status=${japaneseApplyResult.status()} error=${japaneseApplyError?.error || 'none'} payload=${JSON.stringify(japaneseApplyPayload)}`);
     }
     await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
     await page.unroute(japaneseApplyEndpoint);
