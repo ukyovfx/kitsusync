@@ -132,27 +132,6 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		http.Error(w, `{"error":"invalid_routing"}`, http.StatusBadRequest)
 		return true
 	}
-	repairs, err := validateCurrentRoutingDestinations(*project, existingRoutes, db)
-	if err != nil {
-		if errors.Is(err, errRoutingWebhookVerificationUnavailable) {
-			http.Error(w, `{"error":"webhook_verification_unavailable"}`, http.StatusBadGateway)
-			return true
-		}
-		http.Error(w, `{"error":"destination_not_owned"}`, http.StatusBadRequest)
-		return true
-	}
-	tokenFallback := ""
-	if len(botTokens) > 0 {
-		tokenFallback = botTokens[0]
-	}
-	discordToken := storedRuntimeDiscordBotToken(db)
-	if discordToken == "" {
-		discordToken = tokenFallback
-	}
-	if err := validateNewRoutingChannelNames(*project, createNames, discordToken); err != nil {
-		http.Error(w, `{"error":"channel_name_unavailable"}`, http.StatusBadRequest)
-		return true
-	}
 	config, routesBefore, targetsBefore, err := model.SnapshotProductionNotificationState(db, project.ID, productionID)
 	if err != nil {
 		http.Error(w, `{"error":"state_unavailable"}`, http.StatusInternalServerError)
@@ -168,6 +147,31 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		return true
 	}
 	routingChanged := !sameProductionNotificationRoutes(routesBefore, routes)
+	repairs, err := validateCurrentRoutingDestinations(*project, existingRoutes, db)
+	if err != nil {
+		if errors.Is(err, errRoutingWebhookVerificationUnavailable) {
+			http.Error(w, `{"error":"webhook_verification_unavailable"}`, http.StatusBadGateway)
+			return true
+		}
+		http.Error(w, `{"error":"destination_not_owned"}`, http.StatusBadRequest)
+		return true
+	}
+	if !routingChanged && len(repairs) > 0 {
+		http.Error(w, `{"error":"webhook_repair_required"}`, http.StatusConflict)
+		return true
+	}
+	tokenFallback := ""
+	if len(botTokens) > 0 {
+		tokenFallback = botTokens[0]
+	}
+	discordToken := storedRuntimeDiscordBotToken(db)
+	if discordToken == "" {
+		discordToken = tokenFallback
+	}
+	if err := validateNewRoutingChannelNames(*project, createNames, discordToken); err != nil {
+		http.Error(w, `{"error":"channel_name_unavailable"}`, http.StatusBadRequest)
+		return true
+	}
 	var priorOrder []DiscordChannelPosition
 	if routingChanged && len(routesBefore)+len(existingRoutes) > 0 {
 		priorOrder, err = captureCurrentRoutingPositions(*project, append(append([]model.ProductionNotificationRoute{}, routesBefore...), existingRoutes...), db)

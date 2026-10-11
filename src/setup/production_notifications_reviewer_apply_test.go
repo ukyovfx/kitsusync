@@ -88,6 +88,18 @@ func TestProductionNotificationApplyPersistsUserAndRoleReviewerDeltas(t *testing
 		[]kitsu.Person{{ID: "person-1", FullName: "Linked teammate", Email: "linked@example.test", Active: true}}, nil,
 		[]DiscordGuildMember{reviewerTestGuildMember(userID, "linked", "Linked", "Linked teammate")}, nil,
 		[]DiscordGuildRole{{ID: roleID, Name: "Compositing Reviewers", Mentionable: true}}, nil)
+	topologyWrites := 0
+	oldCreateWebhook, oldDeleteWebhook := currentRoutingCreateWebhook, currentRoutingDeleteWebhook
+	oldCreateChannel, oldDeleteChannel, oldSetPositions := currentRoutingCreateChannel, currentRoutingDeleteChannel, currentRoutingSetPositions
+	currentRoutingCreateWebhook = func(string, string, string) (string, error) { topologyWrites++; return "", nil }
+	currentRoutingDeleteWebhook = func(string, string) error { topologyWrites++; return nil }
+	currentRoutingCreateChannel = func(string, string, string, string) (string, error) { topologyWrites++; return "", nil }
+	currentRoutingDeleteChannel = func(string, string) error { topologyWrites++; return nil }
+	currentRoutingSetPositions = func(string, []DiscordChannelPosition, string) error { topologyWrites++; return nil }
+	t.Cleanup(func() {
+		currentRoutingCreateWebhook, currentRoutingDeleteWebhook = oldCreateWebhook, oldDeleteWebhook
+		currentRoutingCreateChannel, currentRoutingDeleteChannel, currentRoutingSetPositions = oldCreateChannel, oldDeleteChannel, oldSetPositions
+	})
 	revision := model.ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
 	payload := `{"project_id":"` + project.KitsuProjectID + `","expected_revision":"` + revision + `","routes":[{"task_type_id":"task-1","destination_webhook_id":` + strconv.FormatUint(uint64(webhook.ID), 10) + `}],"reviewer_changes":[{"task_type_id":"task-1","add_user_ids":["` + userID + `"],"add_role_ids":["` + roleID + `"]}]}`
 	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?apply_notifications=1", strings.NewReader(payload))
@@ -105,6 +117,78 @@ func TestProductionNotificationApplyPersistsUserAndRoleReviewerDeltas(t *testing
 	}
 	if len(got) != 2 || got[0].DiscordID != userID && got[1].DiscordID != userID || got[0].DiscordID != roleID && got[1].DiscordID != roleID {
 		t.Fatalf("Apply succeeded without persisting both User and Role targets: %#v", got)
+	}
+	if topologyWrites != 0 {
+		t.Fatalf("recipient-only Apply changed Discord topology %d times", topologyWrites)
+	}
+}
+
+func TestRecipientOnlyApplyNeverRepairsMissingManagedWebhook(t *testing.T) {
+	db, project := reviewerResolutionTestDB(t)
+	prepareReviewerApplyTestDB(t, db)
+	project.DiscordCategoryID = "123456789012345610"
+	if err := db.Save(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	const userID = "123456789012345611"
+	if err := db.Create(&model.UserMap{KitsuID: "person-1", KitsuName: "Linked teammate", DiscordID: userID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	reviewerTestRoute(t, db, project, "task-1")
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	webhook.ChannelName = "compositing"
+	webhook.DiscordChannelID = "123456789012345608"
+	if err := db.Save(&webhook).Error; err != nil {
+		t.Fatal(err)
+	}
+	model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-token")
+	installReviewerApplySyntheticReaders(t, db, project, webhook,
+		[]kitsu.Person{{ID: "person-1", FullName: "Linked teammate", Email: "linked@example.test", Active: true}}, nil,
+		[]DiscordGuildMember{reviewerTestGuildMember(userID, "linked", "Linked", "Linked teammate")}, nil,
+		nil, nil)
+	oldInspect := currentRoutingInspectWebhook
+	currentRoutingInspectWebhook = func(raw string) (routingWebhookIdentity, bool, error) {
+		if raw == webhook.WebhookURL {
+			return routingWebhookIdentity{}, true, nil
+		}
+		if raw == "https://discord.com/api/webhooks/123456789012345699/synthetic-repair" {
+			return routingWebhookIdentity{ID: "123456789012345699", Type: 1, GuildID: project.DiscordGuildID, ChannelID: webhook.DiscordChannelID}, false, nil
+		}
+		t.Fatalf("unexpected webhook verification URL %q", raw)
+		return routingWebhookIdentity{}, false, nil
+	}
+	t.Cleanup(func() { currentRoutingInspectWebhook = oldInspect })
+	createWebhookCalls, deleteWebhookCalls, createChannelCalls, deleteChannelCalls, reorderCalls := 0, 0, 0, 0, 0
+	oldCreateWebhook, oldDeleteWebhook := currentRoutingCreateWebhook, currentRoutingDeleteWebhook
+	oldCreateChannel, oldDeleteChannel, oldSetPositions := currentRoutingCreateChannel, currentRoutingDeleteChannel, currentRoutingSetPositions
+	currentRoutingCreateWebhook = func(string, string, string) (string, error) {
+		createWebhookCalls++
+		return "https://discord.com/api/webhooks/123456789012345699/synthetic-repair", nil
+	}
+	currentRoutingDeleteWebhook = func(string, string) error { deleteWebhookCalls++; return nil }
+	currentRoutingCreateChannel = func(string, string, string, string) (string, error) { createChannelCalls++; return "", nil }
+	currentRoutingDeleteChannel = func(string, string) error { deleteChannelCalls++; return nil }
+	currentRoutingSetPositions = func(string, []DiscordChannelPosition, string) error { reorderCalls++; return nil }
+	t.Cleanup(func() {
+		currentRoutingCreateWebhook, currentRoutingDeleteWebhook = oldCreateWebhook, oldDeleteWebhook
+		currentRoutingCreateChannel, currentRoutingDeleteChannel, currentRoutingSetPositions = oldCreateChannel, oldDeleteChannel, oldSetPositions
+	})
+	revision := model.ProductionNotificationRevision(db, project.ID, project.KitsuProjectID)
+	payload := `{"project_id":"` + project.KitsuProjectID + `","expected_revision":"` + revision + `","routes":[{"task_type_id":"task-1","destination_webhook_id":` + strconv.FormatUint(uint64(webhook.ID), 10) + `}],"reviewer_changes":[{"task_type_id":"task-1","add_user_ids":["` + userID + `"]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?apply_notifications=1", strings.NewReader(payload))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	if !handleProductionNotificationApply(response, request, "en", db, "synthetic-token") {
+		t.Fatal("the Notifications Apply endpoint did not handle the synthetic recipient-only request")
+	}
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"error":"webhook_repair_required"`) {
+		t.Fatalf("recipient-only Apply with an unverified managed webhook must fail closed without repairing it: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if createWebhookCalls != 0 || deleteWebhookCalls != 0 || createChannelCalls != 0 || deleteChannelCalls != 0 || reorderCalls != 0 {
+		t.Fatalf("recipient-only Apply changed Discord topology: createWebhook=%d deleteWebhook=%d createChannel=%d deleteChannel=%d reorder=%d", createWebhookCalls, deleteWebhookCalls, createChannelCalls, deleteChannelCalls, reorderCalls)
+	}
+	if got := model.ListProjectReviewerTargets(db, project.ID); len(got) != 0 {
+		t.Fatalf("rejected recipient-only Apply persisted Reviewer targets: %#v", got)
 	}
 }
 
@@ -172,8 +256,8 @@ func TestCurrentRoutingEditorExplainsPendingSaveAndSafeApplyErrors(t *testing.T)
 		lang     string
 		expected []string
 	}{
-		{lang: "ja", expected: []string{"変更はまだ保存されていません", "変更を適用", "このProductionは読み取り専用", "ユーザーまたはロールを現在の送信先で確認できません", "チーム所属またはDiscord権限を確認できませんでした", "Discord送信先を確認できませんでした"}},
-		{lang: "en", expected: []string{"Changes are pending; click Apply below to save.", "This Production is read-only", "The selected User or Role could not be verified", "Team membership or Discord permissions could not be verified", "The Discord destination could not be verified"}},
+		{lang: "ja", expected: []string{"変更はまだ保存されていません", "変更を適用", "通知先Webhookを確認できないため、受信者だけの変更は保存できません", "このProductionは読み取り専用", "ユーザーまたはロールを現在の送信先で確認できません", "チーム所属またはDiscord権限を確認できませんでした", "Discord送信先を確認できませんでした"}},
+		{lang: "en", expected: []string{"Changes are pending; click Apply below to save.", "This Production is read-only", "The destination webhook could not be verified, so a recipients-only change cannot be saved", "The selected User or Role could not be verified", "Team membership or Discord permissions could not be verified", "The Discord destination could not be verified"}},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
 			body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, tc.lang, "", productionNotificationReviewerView{})
@@ -182,7 +266,7 @@ func TestCurrentRoutingEditorExplainsPendingSaveAndSafeApplyErrors(t *testing.T)
 					t.Errorf("%s Apply guidance missing %q", tc.lang, text)
 				}
 			}
-			for _, required := range []string{"safeApplyErrors[code]", "await response.json()", "data-pending-instruction", "form.dataset.pendingInstruction"} {
+			for _, required := range []string{"safeApplyErrors[code]", "webhook_repair_required:form.dataset.errorWebhookRepairRequired", "await response.json()", "data-pending-instruction", "form.dataset.pendingInstruction"} {
 				if !strings.Contains(body, required) {
 					t.Errorf("safe Apply feedback flow missing %q", required)
 				}
