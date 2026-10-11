@@ -112,6 +112,7 @@ class CollectorTests(unittest.TestCase):
             root.mode = 0o755
             archive.addfile(root)
         (backup / "backup-complete").write_text("")
+        os.chmod(backup / "backup-complete", 0o600)
         names = ("sqlite.db", "conf.toml", "templates.tar", "operator.env", "runtime-secret.absent")
         lines = []
         for name in names:
