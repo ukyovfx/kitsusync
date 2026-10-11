@@ -849,21 +849,25 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (listboxTheme.disabled.some(option => option.color === 'rgba(0, 0, 0, 0)' || option.background === 'rgb(255, 255, 255)' || option.cursor !== 'not-allowed')) throw new Error(`Disabled recipient choices are not readable or clearly disabled in ${locale.lang}: ${JSON.stringify(listboxTheme.disabled)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-listbox-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
         if (!(await userListbox.isVisible())) throw new Error('Capturing the open Add recipient selector must not close it');
-        await userListbox.locator('[data-wfa-option-value="22222222222222225"]').click();
-        if (await candidateUsers.inputValue() !== '22222222222222225' || await recipientUserCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Choosing a linked User did not update the preserved recipient value control');
+        await userListbox.locator('[data-wfa-option-value="22222222222222223"]').click();
+        if (await candidateUsers.inputValue() !== '22222222222222223' || await recipientUserCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Choosing a linked User did not update the preserved recipient value control');
         await addModal.locator('[data-wfa-add-confirm]').click();
-        const stagedInstruction = locale.lang === 'ja' ? '追加はまだ保存されていません' : 'Added locally; click Apply below to save.';
-        if (!(await editForm.locator('[data-pending-status]').innerText()).includes(stagedInstruction) || await editForm.locator('[data-apply-submit]').isDisabled()) throw new Error(`modal Add did not clearly stage the User and enable the single Apply save in ${locale.lang}`);
+        const stagedInstruction = locale.lang === 'ja' ? '変更はまだ保存されていません' : 'Changes are pending; click Apply below to save.';
+        const stagedUserStatus = await editForm.locator('[data-pending-status]').innerText();
+        const stagedUserApplyDisabled = await editForm.locator('[data-apply-submit]').isDisabled();
+        if (!stagedUserStatus.includes(stagedInstruction) || stagedUserApplyDisabled) throw new Error(`modal Add did not clearly stage the User and enable the single Apply save in ${locale.lang}: status=${stagedUserStatus} disabled=${stagedUserApplyDisabled}`);
         await editForm.locator('[data-wfa-add-target]').click();
         await addModal.locator('#wfa-role-tab').click();
         if (!(await addModal.locator('[data-wfa-role-combobox]').isVisible())) throw new Error('explicit Roles mode did not reveal the eligible Discord Role picker');
         await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-roles-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await addModal.locator('[data-wfa-role-combobox]').click();
         await page.screenshot({ path: path.join(output, `production-notifications-add-recipient-roles-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
-        await addModal.locator('[data-wfa-role-listbox] [data-wfa-option-value="33333333333333331"]').click();
-        if (await candidateRoles.inputValue() !== '33333333333333331') throw new Error('Choosing a mentionable Role did not update the preserved recipient value control');
+        await addModal.locator('[data-wfa-role-listbox] [data-wfa-option-value="33333333333333333"]').click();
+        if (await candidateRoles.inputValue() !== '33333333333333333') throw new Error('Choosing a mentionable Role did not update the preserved recipient value control');
         await addModal.locator('[data-wfa-add-confirm]').click();
-        if (!(await editForm.locator('[data-pending-status]').innerText()).includes(stagedInstruction) || await editForm.locator('[data-apply-submit]').isDisabled()) throw new Error(`modal Add did not clearly stage the Role and enable the single Apply save in ${locale.lang}`);
+        const stagedRoleStatus = await editForm.locator('[data-pending-status]').innerText();
+        const stagedRoleApplyDisabled = await editForm.locator('[data-apply-submit]').isDisabled();
+        if (!stagedRoleStatus.includes(stagedInstruction) || stagedRoleApplyDisabled) throw new Error(`modal Add did not clearly stage the Role and enable the single Apply save in ${locale.lang}: status=${stagedRoleStatus} disabled=${stagedRoleApplyDisabled}`);
         await editForm.locator('[data-wfa-add-target]').click();
         await addModal.locator('[data-wfa-user-combobox]').focus();
         await page.keyboard.press('Space');
@@ -874,7 +878,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const additionalPanel = editForm.locator('[data-wfa-additional]');
         const additionalText = await additionalPanel.innerText();
         if (!additionalText.includes('Guild Nick Override') || !additionalText.includes('Artist Global') || !additionalText.includes('@Reviewers')) throw new Error(`Additional User/Role overrides were not presented together in ${locale.lang}`);
-        if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 3) throw new Error('User and Role pending removals were not available');
+        if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 5) throw new Error('two staged additions and three existing targets were not all present');
 
         const removedRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
         const removedChannelID = await removedRouteRow.getAttribute('data-original-destination');
@@ -970,7 +974,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error('Apply sent a reviewer delta for a persisted route pending removal');
         }
         const compReviewerDelta = submittedApply.reviewer_changes.find(change => change.task_type_id === 'task-comp');
-        if (!compReviewerDelta || !compReviewerDelta.add_user_ids.includes('22222222222222225') || !compReviewerDelta.add_role_ids.includes('33333333333333331')) {
+        if (!compReviewerDelta || !compReviewerDelta.add_user_ids.includes('22222222222222223') || !compReviewerDelta.add_role_ids.includes('33333333333333333')) {
           throw new Error('the single Apply request did not include the staged User and Role additions for Compositing');
         }
         const staleMessage = locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved';
@@ -982,7 +986,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await removedRouteRow.isVisible()) throw new Error(`HTTP 409 discarded the pending route removal in ${locale.lang}`);
         await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
         const preservedTargets = await additionalPanel.innerText();
-        for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers']) {
+        for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers', 'Departmentless Global', '@Review Leads']) {
           if (!preservedTargets.includes(expected)) throw new Error(`HTTP 409 discarded pending User/Role target ${expected} in ${locale.lang}`);
         }
         if (expectedStaleApply.console409Messages.length > 1) {

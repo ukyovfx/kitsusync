@@ -443,7 +443,7 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 		case "roles-rate-limited":
 			status, body = http.StatusTooManyRequests, `{"message":"synthetic failure"}`
 		default:
-			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"3072"},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true,"permissions":"0"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"}]`
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"3072"},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true,"permissions":"0"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"},{"id":"33333333333333333","name":"Review Leads","position":6,"mentionable":true,"permissions":"0"}]`
 		}
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
 		body = `[{"id":"55555555555555551","guild_id":"` + d.expectedGuild + `","type":0,"permission_overwrites":[]},{"id":"55555555555555552","guild_id":"` + d.expectedGuild + `","type":0,"permission_overwrites":[]}]`

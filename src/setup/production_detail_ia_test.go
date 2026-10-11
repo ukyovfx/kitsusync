@@ -704,7 +704,7 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 			t.Errorf("explicit User/Role chooser or empty state is missing %q", required)
 		}
 	}
-	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "fetch(", "response.status===409", "live.has(id)", "data-stale-message", `data-destination-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {
+	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "fetch(", "safeApplyErrors[code]", "stale_edit:", "response.ok", "live.has(id)", "data-stale-message", `data-destination-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {
 		if !strings.Contains(body, required) {
 			t.Errorf("unified pending Apply editor missing %q", required)
 		}

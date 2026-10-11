@@ -172,8 +172,8 @@ func TestCurrentRoutingEditorExplainsPendingSaveAndSafeApplyErrors(t *testing.T)
 		lang     string
 		expected []string
 	}{
-		{lang: "ja", expected: []string{"追加はまだ保存されていません", "変更を適用", "このProductionは読み取り専用", "ユーザーまたはロールを現在の送信先で確認できません", "チーム所属またはDiscord権限を確認できませんでした", "Discord送信先を確認できませんでした"}},
-		{lang: "en", expected: []string{"Added locally; click Apply below to save.", "This Production is read-only", "The selected User or Role could not be verified", "Team membership or Discord permissions could not be verified", "The Discord destination could not be verified"}},
+		{lang: "ja", expected: []string{"変更はまだ保存されていません", "変更を適用", "このProductionは読み取り専用", "ユーザーまたはロールを現在の送信先で確認できません", "チーム所属またはDiscord権限を確認できませんでした", "Discord送信先を確認できませんでした"}},
+		{lang: "en", expected: []string{"Changes are pending; click Apply below to save.", "This Production is read-only", "The selected User or Role could not be verified", "Team membership or Discord permissions could not be verified", "The Discord destination could not be verified"}},
 	} {
 		t.Run(tc.lang, func(t *testing.T) {
 			body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, tc.lang, "", productionNotificationReviewerView{})
