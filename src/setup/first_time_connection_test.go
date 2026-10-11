@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"app/src/api/kitsu"
 	"app/src/model"
@@ -170,6 +171,63 @@ func TestFirstTimeExecutionPersistsSelectedNotificationLanguage(t *testing.T) {
 	project := model.FindProjectByKitsuID(db, "p1")
 	if project == nil || project.Language != "en" {
 		t.Fatalf("selected notification language was not persisted: %#v", project)
+	}
+}
+
+func TestFirstTimeExecutionWaitsForProductionApplyBeforeCreatingResources(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "p1", Name: "Test Production", DiscordGuildID: "g1", DiscordCategoryID: "cat1"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	previous := firstTimeOps
+	channelCreateStarted := make(chan struct{})
+	allowChannelCreate := make(chan struct{})
+	firstTimeOps = firstTimeTestOps(func(name string) (string, error) {
+		select {
+		case <-channelCreateStarted:
+		default:
+			close(channelCreateStarted)
+		}
+		<-allowChannelCreate
+		return "channel-" + name, nil
+	})
+	defer func() {
+		firstTimeOps = previous
+		select {
+		case <-allowChannelCreate:
+		default:
+			close(allowChannelCreate)
+		}
+	}()
+
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
+	requestDone := make(chan struct{})
+	response := httptest.NewRecorder()
+	go func() {
+		defer close(requestDone)
+		handleFirstTimeConnectionAction(response, firstTimeTestRequest("execute_production_connection", firstTimeTestPlan()), "en", "https://kitsu.invalid/", "bot-token", db)
+	}()
+	startedBeforeApplyFinished := false
+	select {
+	case <-channelCreateStarted:
+		startedBeforeApplyFinished = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	if startedBeforeApplyFinished {
+		close(allowChannelCreate)
+		unlockApply()
+		t.Fatal("first-time setup mutated Discord while the Production Apply lock was held")
+	}
+	unlockApply()
+	close(allowChannelCreate)
+	select {
+	case <-requestDone:
+	case <-time.After(time.Second):
+		t.Fatal("first-time setup did not resume after Apply released the Production lock")
+	}
+	if !strings.Contains(response.Body.String(), "Connection setup complete") {
+		t.Fatalf("first-time setup did not complete after lock release: %q", response.Body.String())
 	}
 }
 

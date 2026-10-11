@@ -6,6 +6,7 @@ import (
 	"app/src/utils/config"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -112,11 +113,11 @@ type DiscordMessage struct {
 	ChannelID string `json:"channel_id"` // スレッド作成時はここにスレッドIDが入る
 }
 
-// UserMapResolver は Kitsu 名 → Discord ID を解決するフック。
+// UserMapResolver は Kitsu Person identity → Discord ID を解決するフック。
 // main 起動時に DB バックエンドの実装を注入する。
 // nil の場合は conf.Mention.UserMap にフォールバックする。
 // projectID はプロジェクトスコープ検索に使用; kitsuEmail はリネーム時のフォールバック検索に使用（空でも可）。
-var UserMapResolver func(projectID, kitsuName, kitsuEmail string) string
+var UserMapResolver func(projectID, kitsuPersonID, kitsuName, kitsuEmail string) string
 
 // CheckerResolver はタスクタイプ ID / 名前 → チェッカーの Discord ID 一覧を解決するフック。
 // nil の場合は conf.Mention.Checkers にフォールバックする。
@@ -129,7 +130,7 @@ type ReviewerTarget struct {
 	ID   string
 }
 
-var ReviewerResolver func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, error)
+var ReviewerResolver func(projectID, taskTypeID, taskTypeName, senderWebhookURL string) ([]ReviewerTarget, error)
 
 // GoogleDriveURLResolver はプロジェクト ID に対応するファイルストレージ URL を返すフック。
 // プロジェクトごとの URL を DB から引く。nil または空文字の場合は conf.GoogleDrive.URL にフォールバック。
@@ -142,11 +143,13 @@ var KitsuPublicURLResolver func() string
 
 // SendResult は SendMessage / SendMessageBunch の戻り値
 type SendResult struct {
-	MessageID       string // Discord メッセージID
-	ThreadID        string // Discord スレッドID（UseThreads=true 時のみ）
-	FailureCategory string // safe category for a failed delivery
-	Retryable       bool   // safe to retry automatically on the next poll
-	Unknown         bool   // the request may have been accepted without a response
+	MessageID        string // Discord メッセージID
+	ThreadID         string // Discord スレッドID（UseThreads=true 時のみ）
+	FailureCategory  string // safe category for a failed delivery
+	Retryable        bool   // safe to retry automatically on the next poll
+	Unknown          bool   // the request may have been accepted without a response
+	Durable          bool   // Discord acceptance and delivery checkpoint committed atomically
+	AlreadyDelivered bool   // deterministic event already has a committed delivery record
 }
 
 // containsIgnoreCase reports whether `target` (case-insensitive) is present in `list`.
@@ -470,7 +473,7 @@ func notificationRecipientCandidates(status string, assignNotification bool, ass
 
 func resolveAssigneeDiscordID(projectID string, person kitsu.Person, displayName string, conf config.Config) string {
 	if UserMapResolver != nil {
-		if id := UserMapResolver(projectID, person.FullName, person.Email); id != "" {
+		if id := UserMapResolver(projectID, person.ID, person.FullName, person.Email); id != "" {
 			return id
 		}
 	}
@@ -647,13 +650,13 @@ func DeleteMessage(webhookURL, messageID, threadID string) bool {
 	}
 	req, err := http.NewRequest(http.MethodDelete, deleteURL, nil)
 	if err != nil {
-		slog.Warn("DeleteMessage: failed to build request", "err", err, "messageID", messageID)
+		slog.Warn("DeleteMessage: failed to build request", "error_class", "request_invalid", "messageID", messageID)
 		return false
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
-		slog.Warn("DeleteMessage: request failed", "err", err, "messageID", messageID)
+		slog.Warn("DeleteMessage: request failed", "error_class", "network_error", "messageID", messageID)
 		return false
 	}
 	defer resp.Body.Close()
@@ -671,7 +674,7 @@ func DeleteMessage(webhookURL, messageID, threadID string) bool {
 // 戻り値: (result, retryable, err)
 // retryable=true なら呼び出し側がリトライを判断する。
 func sendMessageOnce(body []byte, reqURL string) (respBody []byte, statusCode int, retryAfterSec float64, err error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Post(reqURL, "application/json", bytes.NewBuffer(body))
 	if err != nil {
 		return nil, 0, 0, err
@@ -759,7 +762,7 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 		slog.Error("SendMessage: non-2xx response",
 			"status", statusCode,
 			"category", discordHTTPErrorCategory(statusCode))
-		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests, Unknown: statusCode >= 500}
+		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests, Unknown: statusCode >= 500 || statusCode >= 300 && statusCode < 400}
 	}
 
 	var msg DiscordMessage
@@ -806,6 +809,219 @@ func discordHTTPErrorCategory(statusCode int) string {
 	}
 }
 
+// DiscordWebhookIDFromURL extracts only the non-secret webhook snowflake.
+// Tokens are never returned, formatted in errors, or written to the journal.
+func DiscordWebhookIDFromURL(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("managed webhook URL is invalid")
+	}
+	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && (parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "localhost")) {
+		return "", fmt.Errorf("managed webhook URL scheme is not trusted")
+	}
+	if parsed.Scheme == "https" && !strings.EqualFold(parsed.Hostname(), "discord.com") {
+		return "", fmt.Errorf("managed webhook host is not trusted")
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == "webhooks" && strings.TrimSpace(parts[i+1]) != "" && strings.TrimSpace(parts[i+2]) != "" {
+			return parts[i+1], nil
+		}
+	}
+	return "", fmt.Errorf("managed webhook identity is incomplete")
+}
+
+// VerifyWebhookIdentity performs a read-only credentialed GET to the stored
+// webhook URL and checks exact webhook, Guild, and channel identity. Redirects
+// are forbidden so an untrusted endpoint cannot receive the webhook token.
+func VerifyWebhookIdentity(raw, expectedWebhookID, expectedGuildID, expectedChannelID string) error {
+	webhookID, err := DiscordWebhookIDFromURL(raw)
+	if err != nil || webhookID != strings.TrimSpace(expectedWebhookID) || expectedWebhookID == "" || expectedGuildID == "" || expectedChannelID == "" {
+		return fmt.Errorf("managed webhook identity is not verifiable")
+	}
+	request, err := http.NewRequest(http.MethodGet, strings.TrimSpace(raw), nil)
+	if err != nil {
+		return fmt.Errorf("managed webhook identity read could not be prepared")
+	}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("managed webhook identity read failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("managed webhook identity read returned HTTP %d", response.StatusCode)
+	}
+	var identity DiscordMessageWebhookIdentity
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<10)).Decode(&identity); err != nil {
+		return fmt.Errorf("managed webhook identity response is invalid")
+	}
+	if identity.Type != 1 || strings.TrimSpace(identity.ID) != expectedWebhookID || strings.TrimSpace(identity.GuildID) != expectedGuildID || strings.TrimSpace(identity.ChannelID) != expectedChannelID {
+		return fmt.Errorf("managed webhook identity does not match the saved destination")
+	}
+	return nil
+}
+
+func sendDurableNotification(db *gorm.DB, elem kitsu.MessagePayload, payload Payload, webhookURL, threadName, notificationRevision string) SendResult {
+	webhookID, err := DiscordWebhookIDFromURL(webhookURL)
+	if err != nil {
+		return SendResult{FailureCategory: "unverified_destination"}
+	}
+	destination, err := model.ResolveNotificationDestination(db, elem.Project.ID, elem.TaskType.ID, webhookURL, webhookID)
+	if err != nil {
+		return SendResult{FailureCategory: "unverified_destination"}
+	}
+	previous, err := model.LatestDeliveredNotificationForDestination(db, elem.Task.ID, destination)
+	if err != nil {
+		return SendResult{FailureCategory: "delivery_state_read_failed"}
+	}
+	priorMessageID, priorThreadID := "", ""
+	if previous != nil {
+		priorMessageID, priorThreadID = previous.DiscordMessageID, previous.DiscordThreadID
+	}
+	if threadName != "" && priorThreadID != "" {
+		threadName = ""
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return SendResult{FailureCategory: "invalid_payload"}
+	}
+	intent := model.NotificationDeliveryIntent{
+		TaskID: elem.Task.ID, ProductionID: elem.Project.ID, TaskTypeID: elem.TaskType.ID,
+		TaskStatus: strings.ToUpper(strings.TrimSpace(elem.TaskStatus.ShortName)), TaskUpdatedAt: elem.Task.UpdatedAt,
+		CommentID: elem.LatestComment.Comment.ID, CommentUpdatedAt: elem.LatestComment.Comment.UpdatedAt,
+		IsAssignNotification: elem.IsAssignNotification, Payload: payloadBytes, WebhookRowID: destination.WebhookRowID,
+		GuildID: destination.GuildID, ChannelID: destination.ChannelID, DiscordWebhookID: destination.WebhookID,
+		NotificationRevision: notificationRevision,
+		ThreadName:           threadName, PriorMessageID: priorMessageID, PriorThreadID: priorThreadID,
+	}
+	event, err := model.PrepareNotificationDelivery(db, intent)
+	if err != nil {
+		return SendResult{FailureCategory: "delivery_intent_persist_failed", Unknown: errors.Is(err, model.ErrDeliveryIdentityConflict)}
+	}
+	return dispatchPreparedNotification(db, *event, webhookURL)
+}
+
+func dispatchPreparedNotification(db *gorm.DB, event model.NotificationDeliveryEvent, webhookURL string) SendResult {
+	webhookID, err := DiscordWebhookIDFromURL(webhookURL)
+	if err != nil || webhookID != event.DestinationWebhookID {
+		if stateErr := model.SetUnstartedNotificationDeliveryDisposition(db, event.EventID, model.DeliveryTerminalFailure, "webhook_identity_changed"); stateErr != nil {
+			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+		}
+		return SendResult{FailureCategory: "unverified_destination"}
+	}
+	destination, err := model.ResolveNotificationDestination(db, event.ProductionID, event.TaskTypeID, webhookURL, webhookID)
+	if errors.Is(err, gorm.ErrRecordNotFound) || err == nil && (destination.WebhookRowID != event.WebhookRowID || destination.GuildID != event.DestinationGuildID || destination.ChannelID != event.DestinationChannelID) {
+		if stateErr := model.SetUnstartedNotificationDeliveryDisposition(db, event.EventID, model.DeliveryTerminalFailure, "destination_changed"); stateErr != nil {
+			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+		}
+		return SendResult{FailureCategory: "unverified_destination"}
+	}
+	if err != nil {
+		return SendResult{FailureCategory: "unverified_destination"}
+	}
+	if err := VerifyWebhookIdentity(webhookURL, event.DestinationWebhookID, event.DestinationGuildID, event.DestinationChannelID); err != nil {
+		return SendResult{FailureCategory: "unverified_destination", Retryable: true}
+	}
+	if event.Disposition == model.DeliveryDelivered {
+		return SendResult{Durable: true, AlreadyDelivered: true, MessageID: event.DiscordMessageID, ThreadID: event.DiscordThreadID}
+	}
+	attempt, started, err := model.BeginNotificationDeliveryForEvent(db, event, time.Now().UTC())
+	if err != nil || !started {
+		return SendResult{FailureCategory: "delivery_not_dispatchable", Unknown: event.Disposition == model.DeliveryInFlight || event.Disposition == model.DeliveryUnknown}
+	}
+	var persisted Payload
+	if err := json.Unmarshal([]byte(attempt.Event.PayloadJSON), &persisted); err != nil {
+		if stateErr := model.SetNotificationDeliveryDisposition(db, *attempt, model.DeliveryTerminalFailure, "invalid_persisted_payload"); stateErr != nil {
+			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+		}
+		return SendResult{FailureCategory: "invalid_persisted_payload"}
+	}
+	result := SendMessage(persisted, webhookURL, attempt.Event.PriorThreadID, attempt.Event.ThreadName)
+	if result.MessageID == "" {
+		disposition := model.DeliveryTerminalFailure
+		if result.Unknown {
+			disposition = model.DeliveryUnknown
+		} else if result.Retryable {
+			disposition = model.DeliveryRetryable
+		}
+		if stateErr := model.SetNotificationDeliveryDisposition(db, *attempt, disposition, result.FailureCategory); stateErr != nil {
+			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+		}
+		return result
+	}
+	if err := model.CompleteNotificationDelivery(db, *attempt, result.MessageID, result.ThreadID, time.Now().UTC()); err != nil {
+		if quarantineErr := model.QuarantineAcceptedButUnpersisted(db, *attempt); quarantineErr != nil {
+			slog.Error("Accepted Discord delivery requires reconciliation", "error_class", "accepted_delivery_checkpoint_uncommitted", "event", attempt.Event.EventID[:12], "quarantine_state", "durable_attempt_retained")
+		}
+		return SendResult{FailureCategory: "delivery_persistence_failed", Unknown: true}
+	}
+	result.Durable = true
+	if attempt.Event.PriorMessageID != "" {
+		cleanup, claimed, claimErr := model.BeginPriorMessageCleanup(db, attempt.Event.EventID)
+		if claimErr != nil || !claimed || cleanup == nil {
+			slog.Warn("Prior notification cleanup requires review", "error_class", "prior_message_cleanup_claim_failed", "event", attempt.Event.EventID[:12])
+		} else {
+			deleted := DeleteMessage(webhookURL, cleanup.PriorMessageID, cleanup.PriorThreadID)
+			if err := model.RecordPriorMessageCleanup(db, attempt.Event.EventID, deleted, map[bool]string{true: "", false: "prior_message_cleanup_failed"}[deleted]); err != nil || !deleted {
+				slog.Warn("Prior notification cleanup requires review", "error_class", "prior_message_cleanup_failed", "event", attempt.Event.EventID[:12])
+			}
+		}
+	}
+	return result
+}
+
+// RetryPriorMessageCleanup uses only the exact webhook identity recorded for
+// the delivered event. It never follows a newly configured route to another
+// channel or webhook.
+func RetryPriorMessageCleanup(db *gorm.DB, limit int) {
+	if db == nil {
+		return
+	}
+	var events []model.NotificationDeliveryEvent
+	query := db.Where("disposition = ? AND prior_cleanup_pending = ? AND prior_cleanup_in_flight = ?", model.DeliveryDelivered, true, false).Order("id asc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&events).Error; err != nil {
+		slog.Error("Notification cleanup journal read failed", "error_class", "delivery_cleanup_read_failed")
+		return
+	}
+	for _, candidate := range events {
+		event, claimed, claimErr := model.BeginPriorMessageCleanup(db, candidate.EventID)
+		if claimErr != nil || !claimed || event == nil {
+			continue
+		}
+		webhook := model.FindProjectWebhookByID(db, event.WebhookRowID)
+		if webhook == nil || webhook.DiscordChannelID != event.DestinationChannelID {
+			_ = model.RecordPriorMessageCleanup(db, event.EventID, false, "destination_identity_changed")
+			continue
+		}
+		webhookID, err := DiscordWebhookIDFromURL(webhook.WebhookURL)
+		if err != nil || webhookID != event.DestinationWebhookID || VerifyWebhookIdentity(webhook.WebhookURL, event.DestinationWebhookID, event.DestinationGuildID, event.DestinationChannelID) != nil {
+			if stateErr := model.RecordPriorMessageCleanup(db, event.EventID, false, "prior_webhook_verification_failed"); stateErr != nil {
+				slog.Warn("Prior notification cleanup claim could not be released", "error_class", "delivery_cleanup_state_write_failed", "event", event.EventID[:12])
+			}
+			continue
+		}
+		deleted := DeleteMessage(webhook.WebhookURL, event.PriorMessageID, event.PriorThreadID)
+		failure := ""
+		if !deleted {
+			failure = "prior_message_cleanup_failed"
+		}
+		if err := model.RecordPriorMessageCleanup(db, event.EventID, deleted, failure); err != nil {
+			slog.Warn("Prior notification cleanup state update failed", "error_class", "delivery_cleanup_state_write_failed", "event", event.EventID[:12])
+		}
+	}
+}
+
+type DiscordMessageWebhookIdentity struct {
+	ID        string `json:"id"`
+	Type      int    `json:"type"`
+	GuildID   string `json:"guild_id"`
+	ChannelID string `json:"channel_id"`
+}
+
 // SendMessageBunch は各タスクを処理して SendResult のマップを返す
 // キーはタスクID
 func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookURL string, previousMessageIDs map[string]string, previousWebhookURLs map[string]string, previousThreadIDs map[string]string, projectNotificationLanguages map[string]string, db *gorm.DB) map[string]SendResult {
@@ -814,6 +1030,22 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 	for _, elem := range data {
 		var placeholders Template
 		notifLang := normalizeNotificationLang(projectNotificationLanguages[elem.Project.ID])
+		notificationRevision := ""
+		if db == nil {
+			result[elem.Task.ID] = SendResult{FailureCategory: "notification_state_unavailable"}
+			continue
+		}
+		project := model.FindProjectByKitsuID(db, elem.Project.ID)
+		if project == nil {
+			result[elem.Task.ID] = SendResult{FailureCategory: "notification_state_unavailable"}
+			continue
+		}
+		var revisionErr error
+		notificationRevision, revisionErr = model.ProductionNotificationRevisionWithError(db, project.ID, elem.Project.ID)
+		if revisionErr != nil {
+			result[elem.Task.ID] = SendResult{FailureCategory: "notification_state_unavailable"}
+			continue
+		}
 
 		placeholders.ProjectName = sanitizeDiscordText(elem.Project.Name)
 		placeholders.GroupName = sanitizeDiscordText(elem.EntityType.Name)
@@ -872,7 +1104,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		isWFAReviewer := !elem.IsAssignNotification && currentStatus == "WFA"
 		if isWFAReviewer {
 			if ReviewerResolver != nil {
-				rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)
+				rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name, webHookURL)
 				if resolveErr != nil {
 					slog.Warn("Reviewer lookup failed; WFA will be posted without targeted mentions",
 						"error_class", "reviewer_resolution_failed",
@@ -992,11 +1224,10 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 		placeholders.Color = int(intColor)
 		payload := RenderNotificationPayload(placeholders, tplPreset)
 
-		// スレッドモード: 既存スレッドに返信 or 新規スレッドを作成
-		prevThreadID := previousThreadIDs[elem.Task.ID]
 		threadName := ""
-		if conf.Discord.UseThreads && prevThreadID == "" {
-			// 初回のみスレッド名を生成（スレッド作成）
+		if conf.Discord.UseThreads {
+			// sendDurableNotification selects an existing verified thread if one
+			// exists; otherwise this name creates the first thread.
 			threadName = fmt.Sprintf("%s %s/%s - %s",
 				placeholders.ProcessEmoji,
 				placeholders.ParentName,
@@ -1004,9 +1235,7 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 				placeholders.TaskType)
 		}
 
-		// まず新規メッセージを送信。送信成功時のみ旧メッセージを削除する
-		// （順序が逆だと、新規送信失敗時に Discord 上の履歴が消失する）
-		newResult := SendMessage(payload, webHookURL, prevThreadID, threadName)
+		newResult := sendDurableNotification(db, elem, payload, webHookURL, threadName, notificationRevision)
 		if newResult.MessageID == "" {
 			slog.Warn("SendMessage failed; preserving prior delivery state",
 				"taskID", elem.Task.ID,
@@ -1017,16 +1246,6 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			// unknown outcomes can be recorded without claiming delivery.
 			result[elem.Task.ID] = newResult
 			continue
-		}
-
-		// 送信成功 → 旧メッセージを削除
-		// スレッドモード時はスレッド内の古いメッセージだけ消す（スレッド自体は残す）
-		if prevMsgID, ok := previousMessageIDs[elem.Task.ID]; ok && prevMsgID != "" {
-			prevWebhook := previousWebhookURLs[elem.Task.ID]
-			if prevWebhook == "" {
-				prevWebhook = webHookURL
-			}
-			DeleteMessage(prevWebhook, prevMsgID, prevThreadID)
 		}
 
 		result[elem.Task.ID] = newResult

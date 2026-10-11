@@ -118,13 +118,17 @@ type Task struct {
 	// LastObservedStatus and PreviousObservedStatus retain the actual Kitsu
 	// status sequence independently from delivery state. TaskStatus remains the
 	// last successfully handled status so transient delivery failures retry.
-	LastObservedStatus     string `gorm:"index"`
-	PreviousObservedStatus string
-	CommentID              string
-	CommentUpdatedAt       string
-	DiscordMessageID       string
-	WebhookURL             string
-	DiscordThreadID        string
+	LastObservedStatus        string `gorm:"index"`
+	PreviousObservedStatus    string
+	CommentID                 string
+	CommentUpdatedAt          string
+	DiscordMessageID          string
+	WebhookURL                string
+	DiscordThreadID           string
+	DeliveredTaskUpdatedAt    string
+	DeliveredTaskStatus       string
+	DeliveredCommentID        string
+	DeliveredCommentUpdatedAt string
 }
 
 func CreateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
@@ -148,18 +152,26 @@ func UpdateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, comme
 
 // MarkTaskObserved records a non-deliverable or permanently failed event
 // without clearing a previously delivered Discord message.
-func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
-	ObserveTaskStatus(db, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt)
-	updates := map[string]interface{}{
-		"task_updated_at":    taskUpdatedAt,
-		"task_status":        taskStatus,
-		"comment_id":         commentID,
-		"comment_updated_at": commentUpdatedAt,
+func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) error {
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return gorm.ErrInvalidData
 	}
-	result := db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
-	if result.RowsAffected == 0 {
-		db.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt})
-	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var existing Task
+		err := tx.Where("task_id = ?", taskID).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return tx.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: taskStatus, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt,
+				DeliveredTaskUpdatedAt: taskUpdatedAt, DeliveredTaskStatus: taskStatus, DeliveredCommentID: commentID, DeliveredCommentUpdatedAt: commentUpdatedAt}).Error
+		}
+		if err != nil {
+			return err
+		}
+		return tx.Model(&Task{}).Where("id = ?", existing.ID).Updates(map[string]interface{}{
+			"task_updated_at": taskUpdatedAt, "last_observed_status": taskStatus, "comment_id": commentID, "comment_updated_at": commentUpdatedAt,
+			"task_status": taskStatus, "delivered_task_updated_at": taskUpdatedAt, "delivered_task_status": taskStatus,
+			"delivered_comment_id": commentID, "delivered_comment_updated_at": commentUpdatedAt,
+		}).Error
+	})
 }
 
 // PreviousTaskStatus returns the deterministic status immediately before the
@@ -180,60 +192,58 @@ func PreviousTaskStatus(task Task, currentStatus string) string {
 // ObserveTaskStatus durably records Kitsu status order without marking the
 // notification delivered. This preserves retry behavior while retaining a
 // real previous status across poll cycles and process recreation.
-func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
+func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) error {
 	if db == nil || strings.TrimSpace(taskID) == "" {
-		return
+		return gorm.ErrInvalidData
 	}
-	var existing Task
-	result := db.Where("task_id = ?", taskID).First(&existing)
-	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		db.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: existing.TaskStatus, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt})
-		return
-	}
-	if result.Error != nil {
-		return
-	}
-	last := strings.TrimSpace(existing.LastObservedStatus)
-	if last == "" {
-		last = strings.TrimSpace(existing.TaskStatus)
-	}
-	updates := map[string]interface{}{
-		"task_updated_at":      taskUpdatedAt,
-		"last_observed_status": taskStatus,
-		"comment_id":           commentID,
-		"comment_updated_at":   commentUpdatedAt,
-	}
-	if last != "" && !strings.EqualFold(last, taskStatus) {
-		updates["previous_observed_status"] = last
-	}
-	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
+	return db.Transaction(func(tx *gorm.DB) error {
+		var existing Task
+		result := tx.Where("task_id = ?", taskID).First(&existing)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return tx.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt}).Error
+		}
+		if result.Error != nil {
+			return result.Error
+		}
+		last := strings.TrimSpace(existing.LastObservedStatus)
+		if last == "" {
+			last = strings.TrimSpace(existing.TaskStatus)
+		}
+		updates := map[string]interface{}{
+			"task_updated_at": taskUpdatedAt, "last_observed_status": taskStatus,
+			"comment_id": commentID, "comment_updated_at": commentUpdatedAt,
+		}
+		// Legacy rows have no separate successful checkpoint. Seed it once from
+		// the old snapshot before replacing the observed values; never reinterpret
+		// the new observation as a successful delivery checkpoint.
+		if existing.DeliveredTaskStatus == "" && (existing.TaskStatus != "" || existing.TaskUpdatedAt != "" || existing.CommentUpdatedAt != "") {
+			updates["delivered_task_status"] = existing.TaskStatus
+			updates["delivered_task_updated_at"] = existing.TaskUpdatedAt
+			updates["delivered_comment_id"] = existing.CommentID
+			updates["delivered_comment_updated_at"] = existing.CommentUpdatedAt
+		}
+		if last != "" && !strings.EqualFold(last, taskStatus) {
+			updates["previous_observed_status"] = last
+		}
+		return tx.Model(&Task{}).Where("id = ?", existing.ID).Updates(updates).Error
+	})
 }
 
-func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID string) {
-	ObserveTaskStatus(db, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt)
-	updates := map[string]interface{}{
-		"task_updated_at":    taskUpdatedAt,
-		"task_status":        taskStatus,
-		"comment_id":         commentID,
-		"comment_updated_at": commentUpdatedAt,
-		"discord_message_id": discordMessageID,
-		"webhook_url":        "",
+func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID string) error {
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return gorm.ErrInvalidData
 	}
-	if threadID != "" {
-		updates["discord_thread_id"] = threadID
-	}
-	result := db.Model(&Task{}).Where("task_id = ?", taskID).Updates(updates)
-	if result.RowsAffected == 0 {
-		db.Create(&Task{
-			TaskID:           taskID,
-			TaskUpdatedAt:    taskUpdatedAt,
-			TaskStatus:       taskStatus,
-			CommentID:        commentID,
-			CommentUpdatedAt: commentUpdatedAt,
-			DiscordMessageID: discordMessageID,
-			DiscordThreadID:  threadID,
-		})
-	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt); err != nil {
+			return err
+		}
+		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
+			"task_updated_at": taskUpdatedAt, "task_status": taskStatus, "comment_id": commentID, "comment_updated_at": commentUpdatedAt,
+			"discord_message_id": discordMessageID, "webhook_url": "", "discord_thread_id": threadID,
+			"delivered_task_updated_at": taskUpdatedAt, "delivered_task_status": taskStatus,
+			"delivered_comment_id": commentID, "delivered_comment_updated_at": commentUpdatedAt,
+		}).Error
+	})
 }
 
 func ClearMessageID(db *gorm.DB, taskID string) {
@@ -263,6 +273,18 @@ func FindTask(db *gorm.DB, taskID string) Task {
 	var task Task
 	db.First(&task, "task_id = ?", taskID)
 	return task
+}
+
+func FindTaskWithError(db *gorm.DB, taskID string) (Task, error) {
+	var task Task
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return task, gorm.ErrInvalidData
+	}
+	err := db.First(&task, "task_id = ?", taskID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Task{}, nil
+	}
+	return task, err
 }
 
 type Project struct {
@@ -701,6 +723,11 @@ func DeleteProductionOperationalState(db *gorm.DB, productionID string) error {
 			continue
 		}
 		if err := db.Where("production_id = ?", productionID).Delete(table).Error; err != nil {
+			return err
+		}
+	}
+	if db.Migrator().HasTable(&ProductionNotificationWriteLock{}) {
+		if err := db.Where("production_id = ?", productionID).Delete(&ProductionNotificationWriteLock{}).Error; err != nil {
 			return err
 		}
 	}
@@ -1344,52 +1371,67 @@ type ProjectSetting struct {
 // GetUserMapForProject resolves a Kitsu user to a Discord ID.
 // Checks the project-scoped mapping first, then falls back to the global UserMap.
 func GetUserMapForProject(db *gorm.DB, kitsuProjectID, kitsuName, kitsuEmail string) string {
-	if p := FindProjectByKitsuID(db, kitsuProjectID); p != nil {
-		var row ProjectUserMap
-		if kitsuEmail != "" {
-			if err := db.Where("project_id = ? AND kitsu_email = ?", p.ID, kitsuEmail).First(&row).Error; err == nil {
-				return row.DiscordUserID
-			}
-		}
-		if err := db.Where("project_id = ? AND kitsu_name = ?", p.ID, kitsuName).First(&row).Error; err == nil {
-			return row.DiscordUserID
-		}
-	}
-	return FindDiscordIDByKitsuNameOrEmail(db, kitsuName, kitsuEmail)
+	return GetUserMapForProjectWithIdentity(db, kitsuProjectID, "", kitsuName, kitsuEmail)
 }
 
 // GetUserMapForProjectWithIdentity resolves a Kitsu user to a Discord ID.
-// Global User Linking uses stable Kitsu identity first; legacy project-scoped
-// mappings remain a read-only fallback for older installations.
+// Stable Person IDs are authoritative. Name/email fallback is allowed only
+// when exactly one matching row has no stable ID; conflicting or ambiguous
+// stable identities fail closed. Legacy project-scoped rows are considered
+// only when no global row conflicts with the supplied identity.
 func GetUserMapForProjectWithIdentity(db *gorm.DB, kitsuProjectID, kitsuPersonID, kitsuName, kitsuEmail string) string {
+	if db == nil {
+		return ""
+	}
 	project := FindProjectByKitsuID(db, kitsuProjectID)
+	kitsuPersonID = strings.TrimSpace(kitsuPersonID)
+	kitsuName = strings.TrimSpace(kitsuName)
+	kitsuEmail = strings.TrimSpace(kitsuEmail)
 	if kitsuPersonID != "" {
-		var user UserMap
-		if err := db.Where("kitsu_id = ?", kitsuPersonID).First(&user).Error; err == nil {
-			return user.DiscordID
+		var exact []UserMap
+		if err := db.Where("kitsu_id = ?", kitsuPersonID).Order("id asc").Find(&exact).Error; err != nil {
+			return ""
+		}
+		if len(exact) == 1 {
+			return strings.TrimSpace(exact[0].DiscordID)
+		}
+		if len(exact) > 1 {
+			return ""
 		}
 	}
+	globalQuery := db.Model(&UserMap{})
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, 2)
 	if kitsuEmail != "" {
-		var user UserMap
-		if err := db.Where("kitsu_email = ?", kitsuEmail).First(&user).Error; err == nil {
-			return user.DiscordID
-		}
+		conditions = append(conditions, "kitsu_email = ?")
+		args = append(args, kitsuEmail)
 	}
 	if kitsuName != "" {
-		var user UserMap
-		if err := db.Where("kitsu_name = ?", kitsuName).First(&user).Error; err == nil {
-			return user.DiscordID
+		conditions = append(conditions, "kitsu_name = ?")
+		args = append(args, kitsuName)
+	}
+	var globalRows []UserMap
+	if len(conditions) > 0 {
+		if err := globalQuery.Where(strings.Join(conditions, " OR "), args...).Order("id asc").Find(&globalRows).Error; err != nil {
+			return ""
+		}
+		if len(globalRows) > 0 {
+			if len(globalRows) != 1 || strings.TrimSpace(globalRows[0].KitsuID) != "" {
+				return ""
+			}
+			return strings.TrimSpace(globalRows[0].DiscordID)
 		}
 	}
 	if project != nil {
-		var row ProjectUserMap
-		if kitsuEmail != "" {
-			if err := db.Where("project_id = ? AND kitsu_email = ?", project.ID, kitsuEmail).First(&row).Error; err == nil {
-				return row.DiscordUserID
+		query := db.Model(&ProjectUserMap{}).Where("project_id = ?", project.ID)
+		if len(conditions) > 0 {
+			var legacyRows []ProjectUserMap
+			if err := query.Where(strings.Join(conditions, " OR "), append([]any{project.ID}, args...)...).Order("id asc").Find(&legacyRows).Error; err != nil {
+				return ""
 			}
-		}
-		if err := db.Where("project_id = ? AND kitsu_name = ?", project.ID, kitsuName).First(&row).Error; err == nil {
-			return row.DiscordUserID
+			if len(legacyRows) == 1 {
+				return strings.TrimSpace(legacyRows[0].DiscordUserID)
+			}
 		}
 	}
 	return ""

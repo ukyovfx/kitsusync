@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -20,7 +21,7 @@ func newNotificationPipelineDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -32,7 +33,7 @@ func reopenNotificationPipelineDB(t *testing.T, path string) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -136,13 +137,24 @@ func TestFilterTasksDoesNotResendUnknownDiscordDelivery(t *testing.T) {
 	}
 	configurePipelineRoute(t, db)
 	attempts := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		attempts++
-		w.WriteHeader(http.StatusInternalServerError)
+	const webhookID = "123456789012345678"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"123456789012345678","type":1,"guild_id":"guild-1","channel_id":"channel-1"}`))
+		case http.MethodPost:
+			attempts++
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Errorf("unexpected webhook request method: %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	}))
 	defer server.Close()
 	webhook := model.ListProjectWebhooks(db, "p1")[0]
-	if err := db.Model(&model.ProjectWebhook{}).Where("id = ?", webhook.ID).Update("webhook_url", server.URL).Error; err != nil {
+	webhookURL := server.URL + "/api/webhooks/" + webhookID + "/test-token"
+	if err := db.Model(&model.ProjectWebhook{}).Where("id = ?", webhook.ID).Update("webhook_url", webhookURL).Error; err != nil {
 		t.Fatal(err)
 	}
 	conf := pipelineConfig()
@@ -254,6 +266,91 @@ func TestFilterTasksRetriesKnownTransitionAfterRestart(t *testing.T) {
 	want := []string{" -> WFA", "WFA -> RETAKE", "WFA -> RETAKE"}
 	if fmt.Sprint(transitions) != fmt.Sprint(want) {
 		t.Fatalf("retry lost durable previous status: got %v, want %v", transitions, want)
+	}
+}
+
+func TestFilterTasksSupersedesKnownRejectedOlderEventAndUnblocksCurrentEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "superseded-notification.db")
+	db, err := gorm.Open(sqlite.Open("file:"+filepath.ToSlash(path)+"?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+	configurePipelineRoute(t, db)
+	old := pipelinePayload("WFA")
+	old.Task.UpdatedAt = "2026-08-07T00:00:00"
+	if err := model.UpdateTaskWithDiscord(db, old.Task.ID, old.Task.UpdatedAt, "WFA", "comment-1", "2026-08-07T00:00:00", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	project := model.FindProjectByKitsuID(db, "p1")
+	webhook := model.ListProjectWebhooks(db, "p1")[0]
+	revision, err := model.ProductionNotificationRevisionWithError(db, project.ID, project.KitsuProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIntent := model.NotificationDeliveryIntent{
+		TaskID: old.Task.ID, ProductionID: old.Project.ID, TaskTypeID: old.TaskType.ID,
+		TaskStatus: "WFA", TaskUpdatedAt: old.Task.UpdatedAt, CommentID: "comment-1", CommentUpdatedAt: "2026-08-07T00:00:00",
+		Payload:      []byte(`{"content":"older WFA event","allowed_mentions":{"parse":[]}}`),
+		WebhookRowID: webhook.ID, GuildID: "guild-1", ChannelID: "channel-1", DiscordWebhookID: "webhook-1", NotificationRevision: revision,
+	}
+	oldEvent, err := model.PrepareNotificationDelivery(db, oldIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, started, err := model.BeginNotificationDelivery(db, oldEvent.EventID, time.Now().UTC())
+	if err != nil || !started {
+		t.Fatalf("begin old attempt: started=%v err=%v", started, err)
+	}
+	if err := model.SetNotificationDeliveryDisposition(db, *attempt, model.DeliveryRetryable, "rate_limited"); err != nil {
+		t.Fatal(err)
+	}
+
+	originalDispatch := notificationDispatch
+	t.Cleanup(func() { notificationDispatch = originalDispatch })
+	dispatched := 0
+	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
+		dispatched += len(data)
+		if len(data) == 1 && data[0].TaskStatus.TaskStatus.ShortName != "RETAKE" {
+			t.Errorf("expected the current Kitsu event after old rejection, got %s", data[0].TaskStatus.TaskStatus.ShortName)
+		}
+		return data
+	}
+
+	current := pipelinePayload("RETAKE")
+	current.Task.UpdatedAt = "2026-08-07T00:10:00"
+	current.LatestComment.Comment.ID = "comment-2"
+	current.LatestComment.Comment.UpdatedAt = "2026-08-07T00:10:00"
+	FilterTasks([]kitsu.MessagePayload{current}, pipelineConfig(), db)
+	if dispatched != 1 {
+		t.Fatalf("current Kitsu event was still blocked by an older known rejection: dispatches=%d", dispatched)
+	}
+	var storedOld model.NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", oldEvent.EventID).First(&storedOld).Error; err != nil {
+		t.Fatal(err)
+	}
+	currentIntent := model.NotificationDeliveryIntent{
+		TaskID: current.Task.ID, ProductionID: current.Project.ID, TaskTypeID: current.TaskType.ID,
+		TaskStatus: "RETAKE", TaskUpdatedAt: current.Task.UpdatedAt, CommentID: current.LatestComment.Comment.ID, CommentUpdatedAt: current.LatestComment.Comment.UpdatedAt,
+		Payload:      []byte(`{"content":"current RETAKE event","allowed_mentions":{"parse":[]}}`),
+		WebhookRowID: webhook.ID, GuildID: "guild-1", ChannelID: "channel-1", DiscordWebhookID: "webhook-1", NotificationRevision: revision,
+	}
+	currentEvent, err := model.PrepareNotificationDelivery(db, currentIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedOld.Disposition != model.DeliveryTerminalFailure || storedOld.FailureClass != "superseded_by_newer_kitsu_event" || storedOld.SupersededByEventID != currentEvent.EventID || storedOld.PayloadJSON != string(oldIntent.Payload) {
+		t.Fatalf("old event was not retained with explicit successor evidence: %+v", storedOld)
+	}
+	if _, started, err := model.BeginNotificationDelivery(db, currentEvent.EventID, time.Now().UTC()); err != nil || !started {
+		t.Fatalf("current event should be claimable after predecessor supersession: started=%v err=%v", started, err)
 	}
 }
 

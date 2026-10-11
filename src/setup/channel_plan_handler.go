@@ -28,6 +28,13 @@ func handleTaskTypeChannelPlanMutation(w http.ResponseWriter, r *http.Request, l
 		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.production_missing"), redirect)
 		return true
 	}
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
+	defer unlockApply()
+	project = model.FindProjectByKitsuID(db, projectID)
+	if project == nil {
+		renderTaskTypeChannelPlanResult(w, r, lang, tr(lang, "channel_plan.production_missing"), redirect)
+		return true
+	}
 	taskTypes := setupKitsuTaskTypes(db, projectID)
 	taskTypes, overrides := taskTypePlanRequest(r, taskTypes)
 	channels, err := ListGuildChannels(guildID, botToken)

@@ -360,23 +360,57 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 
 	var filtered []kitsu.MessagePayload
 	for i := 0; i < len(data); i++ {
-
-		dbResult := model.FindTask(db, data[i].Task.ID)
+		dbResult, findErr := model.FindTaskWithError(db, data[i].Task.ID)
+		if findErr != nil {
+			slog.Error("Notification state read failed; event not dispatched", "error_class", "delivery_checkpoint_read_failed")
+			continue
+		}
 
 		currentStatus := data[i].TaskStatus.TaskStatus.ShortName
 		data[i].PreviousStatusName = model.PreviousTaskStatus(dbResult, currentStatus)
 
 		if len(dbResult.TaskID) > 0 {
-			statusChanged := dbResult.TaskStatus != data[i].TaskStatus.TaskStatus.ShortName
-			timestampChanged := dbResult.TaskUpdatedAt != data[i].Task.Task.UpdatedAt
-			commentChanged := dbResult.CommentUpdatedAt != data[i].LatestComment.Comment.UpdatedAt
+			deliveredStatus := dbResult.DeliveredTaskStatus
+			deliveredTaskUpdatedAt := dbResult.DeliveredTaskUpdatedAt
+			deliveredCommentID := dbResult.DeliveredCommentID
+			deliveredCommentUpdatedAt := dbResult.DeliveredCommentUpdatedAt
+			if deliveredStatus == "" {
+				// Old records have only one checkpoint snapshot. Preserve it as a
+				// historical baseline; it is never replayed merely because the new
+				// additive journal has no row for it.
+				deliveredStatus, deliveredTaskUpdatedAt = dbResult.TaskStatus, dbResult.TaskUpdatedAt
+				deliveredCommentID, deliveredCommentUpdatedAt = dbResult.CommentID, dbResult.CommentUpdatedAt
+			}
+			statusChanged := deliveredStatus != currentStatus
+			timestampChanged := deliveredTaskUpdatedAt != data[i].Task.Task.UpdatedAt
+			commentChanged := deliveredCommentID != data[i].LatestComment.Comment.ID || deliveredCommentUpdatedAt != data[i].LatestComment.Comment.UpdatedAt
 
 			if statusChanged || timestampChanged || commentChanged {
+				observed := model.NotificationDeliveryIntent{
+					TaskID: data[i].Task.ID, ProductionID: data[i].Project.ID, TaskTypeID: data[i].TaskType.ID,
+					TaskStatus: currentStatus, TaskUpdatedAt: data[i].Task.Task.UpdatedAt,
+					CommentID: data[i].LatestComment.Comment.ID, CommentUpdatedAt: data[i].LatestComment.Comment.UpdatedAt,
+					IsAssignNotification: strings.EqualFold(currentStatus, "none"),
+				}
+				if _, supersedeErr := model.SupersedeObsoleteKnownRejectedNotificationDeliveries(db, observed); supersedeErr != nil {
+					slog.Error("Older known-rejected notification could not be reconciled against the current Kitsu event", "error_class", "delivery_supersession_failed")
+					continue
+				}
 				// Mark notifications that only changed comment content. Persisting
 				// the observation is deferred until routing and delivery are known.
 				data[i].IsCommentOnly = commentChanged && !statusChanged && !timestampChanged
 			} else {
-				continue
+				// An unfinished durable intent is still eligible even when the
+				// Kitsu event matches the last observed snapshot.
+				intent := model.NotificationDeliveryIntent{TaskID: data[i].Task.ID, ProductionID: data[i].Project.ID, TaskTypeID: data[i].TaskType.ID, TaskStatus: currentStatus, TaskUpdatedAt: data[i].Task.Task.UpdatedAt, CommentID: data[i].LatestComment.Comment.ID, CommentUpdatedAt: data[i].LatestComment.Comment.UpdatedAt, IsAssignNotification: strings.EqualFold(currentStatus, "none")}
+				disposition, stateErr := model.NotificationDeliveryDisposition(db, model.NotificationEventIdentity(intent))
+				if stateErr != nil {
+					slog.Error("Notification delivery state read failed; event not dispatched", "error_class", "delivery_journal_read_failed")
+					continue
+				}
+				if disposition != model.DeliveryPending && disposition != model.DeliveryRetryable {
+					continue
+				}
 			}
 		}
 
@@ -384,14 +418,18 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			if conf.Log {
 				log.Printf("Ignoring message\n")
 			}
-			persistTaskObservation(db, data[i])
+			if err := persistTaskObservation(db, data[i]); err != nil {
+				slog.Error("Task observation could not be persisted", "error_class", "task_observation_write_failed")
+			}
 			continue
 		}
 		// StatusFilter: only notify on WFA, RETAKE, DONE.
 		// Treat "none" status as an assign notification when enabled.
 		if strings.EqualFold(currentStatus, "none") {
 			if !conf.Notification.NotifyOnAssign {
-				persistTaskObservation(db, data[i])
+				if err := persistTaskObservation(db, data[i]); err != nil {
+					slog.Error("Task observation could not be persisted", "error_class", "task_observation_write_failed")
+				}
 				continue
 			}
 			data[i].IsAssignNotification = true
@@ -420,7 +458,10 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 		// explicit route. Delivery state remains separate so transient failures
 		// retry with the same real transition, while unrouted events stay
 		// available if a route is configured later.
-		model.ObserveTaskStatus(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
+		if err := model.ObserveTaskStatus(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt); err != nil {
+			slog.Error("Task observation could not be persisted; event not dispatched", "error_class", "task_observation_write_failed")
+			continue
+		}
 		webhooks[plan.DestinationID] = plan.WebhookURL
 		routes[plan.DestinationID] = append(routes[plan.DestinationID], payload)
 		if labels[plan.DestinationID] == nil {
@@ -467,20 +508,14 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 
 	rl := rate.New(conf.Discord.RequestsPerMinute, time.Minute)
 
-	// Cache previous message/thread state for edit/reply behavior.
+	// Previous Discord messages are loaded from the durable destination-bound
+	// delivery journal inside the sender. Legacy Task rows have no verified
+	// destination identity and are not reused for edits or deletion.
 	previousMessageIDs := make(map[string]string)
 	previousWebhookURLs := make(map[string]string)
 	previousThreadIDs := make(map[string]string)
 	projectNotificationLanguages := make(map[string]string)
 	for _, elem := range data {
-		dbResult := model.FindTask(db, elem.Task.ID)
-		if dbResult.DiscordMessageID != "" {
-			previousMessageIDs[elem.Task.ID] = dbResult.DiscordMessageID
-			previousWebhookURLs[elem.Task.ID] = dbResult.WebhookURL
-		}
-		if dbResult.DiscordThreadID != "" {
-			previousThreadIDs[elem.Task.ID] = dbResult.DiscordThreadID
-		}
 		if _, ok := projectNotificationLanguages[elem.Project.ID]; !ok {
 			projectNotificationLanguages[elem.Project.ID] = "ja"
 			if project := model.FindProjectByKitsuID(db, elem.Project.ID); project != nil && strings.EqualFold(strings.TrimSpace(project.Language), "en") {
@@ -525,34 +560,19 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 					EntityName:   task.Entity.Name,
 					TaskType:     task.TaskType.TaskType.Name,
 					NewStatus:    task.TaskStatus.TaskStatus.ShortName,
-					DiscordMsgID: res.MessageID,
-					WebhookURL:   webhookURL,
-					Success:      res.MessageID != "",
+					DiscordMsgID: map[bool]string{true: res.MessageID}[res.Durable],
+					Success:      res.Durable,
 					ErrorMessage: res.FailureCategory,
 					ActorKind:    actorKind,
 					ActorID:      actorID,
 					ActorName:    actorName,
 				})
-				if res.MessageID != "" {
-					sentCount++
-					model.UpdateTaskWithDiscord(
-						db,
-						taskID,
-						task.Task.Task.UpdatedAt,
-						task.TaskStatus.TaskStatus.ShortName,
-						task.LatestComment.Comment.ID,
-						task.LatestComment.Comment.UpdatedAt,
-						res.MessageID,
-						webhookURL,
-						res.ThreadID,
-					)
+				if res.Durable {
+					if !res.AlreadyDelivered {
+						sentCount++
+					}
 				} else {
 					failedCount++
-					if !res.Retryable || res.Unknown {
-						// Permanent or unknown outcomes are not retried forever and
-						// never clear a previously delivered message reference.
-						model.MarkTaskObserved(db, taskID, task.Task.UpdatedAt, task.TaskStatus.TaskStatus.ShortName, task.LatestComment.Comment.ID, task.LatestComment.Comment.UpdatedAt)
-					}
 				}
 			}
 
@@ -634,8 +654,21 @@ var pollMu sync.Mutex
 var notificationDispatch = DiscordQueueSend
 var makeKitsuResponse = MakeKitsuResponse
 
-func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) {
-	model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
+func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) error {
+	return model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
+}
+
+func redactExpiredNotificationPayloads(conf config.Config, db *gorm.DB, now time.Time) {
+	days := conf.Notification.DeliveryPayloadRetentionDays
+	if db == nil || days <= 0 {
+		return
+	}
+	redacted, err := model.RedactDeliveredNotificationPayloads(db, now.UTC().AddDate(0, 0, -days), now.UTC(), model.NotificationPayloadRedactionBatchSize)
+	if err != nil {
+		slog.Error("Notification delivery payload retention failed", "error_class", "delivery_payload_retention_failed")
+	} else if redacted > 0 {
+		slog.Info("Notification delivery payload retention completed", "redacted_payloads", redacted)
+	}
 }
 
 // auditActorFromPayload uses only actor data tied to the event we can prove.
@@ -677,6 +710,12 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	}
 	defer pollMu.Unlock()
 	started := time.Now()
+	if !conf.SilentUpdateDB {
+		// Retryable notification intents are retried only after this poll fetches
+		// current Kitsu data and FilterTasks freshly renders their recipients and
+		// resolves the current authorized destination.
+		discord.RetryPriorMessageCleanup(db, 50)
+	}
 
 	// Poll Kitsu with runtime credentials from DB/env/conf priority.
 	kitsuResponse, err := makeKitsuResponse(conf)
@@ -778,8 +817,14 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ProjectCheckerMap{},
 		&model.ProjectReviewerTarget{},
 		&model.ProjectSetting{},
+		&model.ProductionNotificationWriteLock{},
+		&model.NotificationDeliveryEvent{},
+		&model.ManagedChannelDeletion{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
+	}
+	if err := model.QuarantineInflightNotificationDeliveries(db); err != nil {
+		return fmt.Errorf("quarantine interrupted notification deliveries: %w", err)
 	}
 	return nil
 }
@@ -895,20 +940,20 @@ func main() {
 	_, seedGuildID, _ := getDiscordSettings(db, conf)
 	model.SeedProjectGuildFallback(db, seedGuildID)
 
-	discord.UserMapResolver = func(projectID, kitsuName, kitsuEmail string) string {
-		return model.GetUserMapForProject(db, projectID, kitsuName, kitsuEmail)
+	discord.UserMapResolver = func(projectID, kitsuPersonID, kitsuName, kitsuEmail string) string {
+		return model.GetUserMapForProjectWithIdentity(db, projectID, kitsuPersonID, kitsuName, kitsuEmail)
 	}
 	discord.CheckerResolver = func(projectID, taskTypeID, taskTypeName string) []string {
 		return model.GetCheckerForProjectByTaskTypeID(db, projectID, taskTypeID, taskTypeName)
 	}
-	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
+	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName, senderWebhookURL string) ([]discord.ReviewerTarget, error) {
 		hostname, _, _ := getKitsuCreds(db, conf)
 		connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
 		baseURL := ""
 		if connectionErr == nil {
 			baseURL = connection.ResolvedAPIBaseURL
 		}
-		targets, err := setup.ResolveProductionWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.StoredRuntimeDiscordBotToken(db), projectID, taskTypeID)
+		targets, err := setup.ResolveProductionWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.StoredRuntimeDiscordBotToken(db), projectID, taskTypeID, senderWebhookURL)
 		resolved := make([]discord.ReviewerTarget, 0, len(targets))
 		for _, target := range targets {
 			resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
@@ -978,6 +1023,7 @@ func main() {
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
 	mux.Handle("GET /favicon.ico", setup.FaviconHandler())
+	mux.Handle("GET /kitsusync.svg", setup.KitsuSyncIconHandler())
 	mux.HandleFunc("/health", healthHandler(runtime, func(ctx context.Context) error {
 		sqlDB, err := db.DB()
 		if err != nil {
@@ -1141,12 +1187,14 @@ func main() {
 		}
 		runtime.runWhenReady(func() { runOnePoll(conf, db) })
 	})
+	c.AddFunc("@every 1h", func() { redactExpiredNotificationPayloads(conf, db, time.Now()) })
 	c.AddFunc("0 3 * * *", func() {
 		deleted := model.PurgeOldAuditLogs(db, 90)
 		if deleted > 0 {
 			slog.Info("audit log purge", "deleted_rows", deleted)
 		}
 	})
+	redactExpiredNotificationPayloads(conf, db, time.Now())
 
 	c.Start()
 

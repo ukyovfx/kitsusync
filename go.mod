@@ -1,6 +1,6 @@
 module app
 
-go 1.26
+go 1.26.9
 
 require (
 	github.com/beefsack/go-rate v0.0.0-20200827232406-6cde80facd47
@@ -19,7 +19,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.2 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/mattn/go-sqlite3 v1.14.5 // indirect
+	github.com/mattn/go-sqlite3 v1.14.52 // indirect
 	github.com/naoina/go-stringutil v0.1.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect

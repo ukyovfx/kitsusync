@@ -37,7 +37,6 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 	for _, want := range []string{
 		`matchMedia('(prefers-reduced-motion: reduce)')`,
 		`(mode==='login-fabric'&&width>=600)||Math.abs(pointer.amount-pointer.target)>=.002`,
-		`pointer.target=(mode==='app-dots'&&reduced.matches)||(mode==='login-fabric'&&width<600)?0:1`,
 		`pointer.target=0`,
 		`width=document.documentElement.clientWidth`,
 		`const mobile=width<600`,
@@ -45,18 +44,12 @@ func TestBackgroundCanvasUsesReducedMotionAndNonRepellingPointerContracts(t *tes
 		`centerY=rect.top+rect.height*.5`,
 		`pointer.targetX-pointer.x)*.10`,
 		`Math.pow(.94,elapsed*60)`,
-		`const spacing=34`,
-		`const local=Math.exp`,
-		`const alpha=.04+local*.034`,
-		`const radius=.92+local*.18`,
-		`rgba(218,126,82,alpha)`,
-		`if(mode==='app-dots'&&!reduced.matches&&!frame&&!document.hidden)`,
 	} {
 		if !strings.Contains(backgroundCanvasScript, want) {
 			t.Errorf("background script missing expected behavior %q", want)
 		}
 	}
-	for _, forbidden := range []string{"Math.atan2", "repel", "createRadialGradient", "shadowBlur", "const fields=[", "field.direction", `const slow=Math.sin(x*.003+y*.004+seconds*.09)`, `local*Math.sin`, `local*Math.cos`, `ctx.translate(`} {
+	for _, forbidden := range []string{"Math.atan2", "repel", "shadowBlur", "const fields=[", "field.direction", `const slow=Math.sin(x*.003+y*.004+seconds*.09)`, `local*Math.sin`, `local*Math.cos`} {
 		if strings.Contains(backgroundCanvasScript, forbidden) {
 			t.Errorf("background script contains forbidden effect %q", forbidden)
 		}
@@ -75,22 +68,51 @@ func TestMobileLoginBackgroundOmitsFabricAndAnimation(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedDotGridIsStaticAndViewportAnchored(t *testing.T) {
-	start := strings.Index(backgroundCanvasScript, `const drawDots=()=>{`)
+func TestAuthenticatedPlusGridIsViewportAnchoredWithLocalPointerHaze(t *testing.T) {
+	start := strings.Index(backgroundCanvasScript, `const drawDots=seconds=>{`)
+	if start < 0 {
+		t.Fatal("authenticated plus-grid renderer must receive its animation timestamp")
+	}
 	end := strings.Index(backgroundCanvasScript[start:], `const draw=seconds=>`)
-	if start < 0 || end < 0 {
-		t.Fatal("authenticated dot-grid renderer is missing")
+	if end < 0 {
+		t.Fatal("authenticated plus-grid renderer is missing")
 	}
 	dots := backgroundCanvasScript[start : start+end]
-	for _, want := range []string{`const spacing=34`, `for(let y=18;y<height;y+=spacing)`, `for(let x=18;x<width;x+=spacing)`, `ctx.arc(x,y,radius,0,Math.PI*2)`} {
+	for _, want := range []string{`const mobile=width<600,spacing=mobile?36:42`, `canvas.dataset.gridSymbol='plus'`, `for(let y=18;y<height;y+=spacing)`, `for(let x=18;x<width;x+=spacing)`, `ctx.moveTo(x-half,y)`, `ctx.lineTo(x+half,y)`, `ctx.moveTo(x,y-half)`, `ctx.lineTo(x,y+half)`, `Math.hypot(pointer.x-x,pointer.y-y)`, `distance/120`, `*pointer.amount*.30`, `const base=[130,91,54],brand=[252,135,66]`, `size=5.0*(1+local*.34)`, `ctx.lineWidth=1.1`, `ctx.strokeStyle=rgba(color[0],color[1],color[2],.18+local*.30)`, `Math.min(190,Math.max(84,Math.min(width,height)*.22))`, `createRadialGradient`, `seconds*.025`, `+',.008)'`, `+',.003)'`, `gradient.addColorStop(1,'rgba('+source.color.join(',')+',0)')`} {
 		if !strings.Contains(dots, want) {
-			t.Errorf("authenticated dot grid is missing fixed viewport geometry %q", want)
+			t.Errorf("authenticated plus grid is missing the fixed/local visual contract %q", want)
 		}
 	}
-	for _, forbidden := range []string{"seconds", "Math.sin", "Math.cos", "translate", "centerX", "centerY"} {
+	for _, forbidden := range []string{`Math.min(520`, `rgba('+source.color.join(',')+',.045)`, `rgba('+source.color.join(',')+',.018)`, `const base=[151,104,54]`, `size=2.1*`} {
 		if strings.Contains(dots, forbidden) {
-			t.Errorf("authenticated dot-grid positions or appearance depend on global motion/card geometry (%q)", forbidden)
+			t.Errorf("authenticated background retains a broad haze or dot-like glyph: %q", forbidden)
 		}
+	}
+	for _, forbidden := range []string{"ctx.translate(", "x+seconds", "y+seconds", "centerX", "centerY"} {
+		if strings.Contains(dots, forbidden) {
+			t.Errorf("authenticated plus positions depend on motion/card geometry (%q)", forbidden)
+		}
+	}
+	if !strings.Contains(backgroundCanvasScript, `if(!reduced.matches)frame=requestAnimationFrame(tick)`) || !strings.Contains(dots, `seconds*.025`) {
+		t.Fatal("edge haze should drift slowly while reduced-motion stays static")
+	}
+}
+
+func TestAuthenticatedPagesUseUniformDarkBaseAndLoginBackgroundStaysSeparate(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `body.admin-surface{background:var(--bg)}`) {
+		t.Fatal("authenticated pages must use a uniform dark base behind the fixed grid")
+	}
+	if !strings.Contains(adminThemeCSS, `html{scrollbar-gutter:stable;background:#070707}`) || !strings.Contains(adminThemeCSS, `body.login-surface{background:#070707}`) {
+		t.Fatal("Login and its transparent fabric canvas must share a uniform dark surface")
+	}
+	if strings.Contains(adminThemeCSS, `body.login-surface{background:linear-gradient`) {
+		t.Fatal("Login retains a vertical gradient that can create visible black banding")
+	}
+}
+
+func TestSystemStatusAPIHeadingHasSharedTopInset(t *testing.T) {
+	if !strings.Contains(adminThemeCSS, `.system-status-sections>.system-observability>.page-heading{padding-block-start:var(--system-status-content-inset)}`) {
+		t.Fatal("API response status heading has no vertical inset from the section boundary")
 	}
 }
 

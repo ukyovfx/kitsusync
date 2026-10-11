@@ -341,7 +341,7 @@ func rollbackFirstTimeConnection(db *gorm.DB, botToken string, ops firstTimeConn
 	return err
 }
 
-func executeFirstTimeConnection(plan firstTimeConnectionPlan, botToken, lang string, r *http.Request, db *gorm.DB) (result string) {
+func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, lang string, r *http.Request, db *gorm.DB) (result string) {
 	ops := firstTimeOps
 	project := model.FindProjectByKitsuID(db, plan.Project.ID)
 	createdProject := project == nil
@@ -350,11 +350,10 @@ func executeFirstTimeConnection(plan firstTimeConnectionPlan, botToken, lang str
 	owned := firstTimeOwnedResources{ProductionID: plan.Project.ID, OperationID: operationID, CreatedProject: createdProject, CreatedCategory: createdProject}
 	completed := false
 	defer func() {
-		if completed {
-			return
-		}
-		if err := rollbackFirstTimeConnection(db, botToken, ops, owned); err != nil {
-			result += " " + err.Error()
+		if !completed {
+			if err := rollbackFirstTimeConnection(db, botToken, ops, owned); err != nil {
+				result += " " + err.Error()
+			}
 		}
 	}()
 	if project != nil {
@@ -431,17 +430,24 @@ func handleFirstTimeConnectionAction(w http.ResponseWriter, r *http.Request, lan
 	if action != "prepare_production_connection" && action != "execute_production_connection" {
 		return false
 	}
-	plan, err := validateFirstTimeConnectionRequest(r, kitsuHost, botToken, db)
-	if err != nil {
-		fmt.Fprint(w, renderFirstTimeExecutionError(lang, r, firstTimeConnectionErrorMessage(lang, err)))
-		return true
-	}
 	if action == "prepare_production_connection" {
+		plan, err := validateFirstTimeConnectionRequest(r, kitsuHost, botToken, db)
+		if err != nil {
+			fmt.Fprint(w, renderFirstTimeExecutionError(lang, r, firstTimeConnectionErrorMessage(lang, err)))
+			return true
+		}
 		fmt.Fprint(w, renderFirstTimeExecutionPage(lang, r, plan))
 		return true
 	}
 	firstTimeExecutionMu.Lock()
 	defer firstTimeExecutionMu.Unlock()
-	fmt.Fprint(w, executeFirstTimeConnection(plan, botToken, lang, r, db))
+	unlockApply := lockProductionNotificationApply(strings.TrimSpace(r.FormValue("project_id")))
+	defer unlockApply()
+	plan, err := validateFirstTimeConnectionRequest(r, kitsuHost, botToken, db)
+	if err != nil {
+		fmt.Fprint(w, renderFirstTimeExecutionError(lang, r, firstTimeConnectionErrorMessage(lang, err)))
+		return true
+	}
+	fmt.Fprint(w, executeFirstTimeConnectionLocked(plan, botToken, lang, r, db))
 	return true
 }

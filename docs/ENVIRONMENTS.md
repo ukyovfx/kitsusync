@@ -96,6 +96,7 @@ migration, and the normal no-argument deployment command.
 **conf.toml** holds operational settings that can be changed without rebuilding the image:
 
 - Polling behavior (`ignoreMessagesDaysOld`, `requestInterval`, `threads`)
+- Delivered notification payload retention (`notification.deliveryPayloadRetentionDays`; 30-day default, `0` disables payload redaction)
 - Discord message layout (`tplPreset`, `useThreads`, `embedsPerRequests`)
 - Routing rules (`[[discord.productions]]`, `[[discord.taskTypeWebhooks]]`)
 - Mention configuration (`checkerStatuses`, `artistStatuses`, `hereStatuses`)

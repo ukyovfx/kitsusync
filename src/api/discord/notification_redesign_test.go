@@ -2,6 +2,7 @@ package discord
 
 import (
 	"app/src/api/kitsu"
+	"app/src/model"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 
 	"app/src/utils/config"
 )
@@ -351,6 +355,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	reviewerTargets := []ReviewerTarget{{Kind: "user", ID: "123456789012345670"}}
 	reviewerResolverCalls := 0
 	var reviewerResolveErr error
+	var expectedSenderWebhookURL string
 	checkResolverArgs := func(projectID, taskTypeID, taskTypeName string) {
 		if projectID != "production-1" || taskTypeID != "task-type-42" || taskTypeName != "Compositing" {
 			t.Errorf("Reviewer resolver arguments = (%q, %q, %q), want (production-1, task-type-42, Compositing)", projectID, taskTypeID, taskTypeName)
@@ -360,14 +365,17 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
 		return checkerIDs
 	}
-	ReviewerResolver = func(projectID, taskTypeID, taskTypeName string) ([]ReviewerTarget, error) {
+	ReviewerResolver = func(projectID, taskTypeID, taskTypeName, senderWebhookURL string) ([]ReviewerTarget, error) {
 		reviewerResolverCalls++
 		checkResolverArgs(projectID, taskTypeID, taskTypeName)
+		if senderWebhookURL != expectedSenderWebhookURL {
+			t.Errorf("Reviewer sender webhook URL = %q, want current delivery URL", senderWebhookURL)
+		}
 		return reviewerTargets, reviewerResolveErr
 	}
 	KitsuPublicURLResolver = func() string { return "https://kitsu.example.com" }
 	GoogleDriveURLResolver = nil
-	UserMapResolver = func(_, _, _ string) string { return "101" }
+	UserMapResolver = func(_, _, _, _ string) string { return "101" }
 	t.Cleanup(func() {
 		KitsuPublicURLResolver = oldPublicURLResolver
 		GoogleDriveURLResolver = oldDriveURLResolver
@@ -377,9 +385,19 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	})
 
 	var sent Payload
+	const webhookID = "123456789012345678"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"123456789012345678","type":1,"guild_id":"guild-1","channel_id":"channel-1"}`))
+			return
+		}
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if r.Method != http.MethodPost {
-			t.Fatalf("delivery method = %s, want POST", r.Method)
+			t.Fatalf("delivery method = %s, want GET or POST", r.Method)
 		}
 		var decoded Payload
 		if err := json.NewDecoder(r.Body).Decode(&decoded); err != nil {
@@ -390,6 +408,25 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"message-1"}`))
 	}))
 	defer server.Close()
+	expectedSenderWebhookURL = server.URL + "/api/webhooks/" + webhookID + "/test-token"
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
+		t.Fatal(err)
+	}
+	project := model.Project{KitsuProjectID: "production-1", Name: "KitsuSync Local Test", DiscordGuildID: "guild-1"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ProjectWebhook{KitsuProjectID: project.KitsuProjectID, WebhookURL: expectedSenderWebhookURL, DiscordChannelID: "channel-1"}
+	if err := db.Create(&webhook).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProductionNotificationRoute{ProductionID: project.KitsuProjectID, TaskTypeID: "task-type-42", DestinationWebhookID: webhook.ID, DestinationChannelID: webhook.DiscordChannelID}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	var event kitsu.MessagePayload
 	event.Project.Project = kitsu.Project{ID: "production-1", Name: "KitsuSync Local Test"}
@@ -404,7 +441,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 
 	conf := config.Config{TplPreset: "legacy"}
 	conf.GoogleDrive.URL = "https://drive.example.com/folder"
-	results := SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	results := SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" {
 		t.Fatalf("status-change delivery did not complete: %+v", results)
 	}
@@ -436,11 +473,15 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	conf.Mention.Checkers = []config.CheckerEntry{{TaskType: "Compositing", DiscordID: "303"}}
 	event.TaskStatus.TaskStatus = kitsu.TaskStatus{ID: "wfa", ShortName: "WFA"}
 	event.PreviousStatusName = "WIP"
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345670>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "123456789012345670" {
 		t.Fatalf("WFA did not use the Reviewer recipient: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 
+	// Each additional assertion models a distinct observed Kitsu event. Reusing
+	// one identity with altered recipients must be quarantined rather than
+	// replayed with a new payload.
+	event.Task.UpdatedAt = "2026-08-07T00:01:00"
 	reviewerTargets = []ReviewerTarget{
 		{Kind: "user", ID: "123456789012345670"},
 		{Kind: "user", ID: "123456789012345671"},
@@ -448,7 +489,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 		{Kind: "role", ID: "123456789012345672"},
 		{Kind: "role", ID: "@everyone"},
 	}
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "<@123456789012345670> <@123456789012345671> <@&123456789012345672>" {
 		t.Fatalf("automatic and override targets were not additively deduplicated: content=%q result=%+v", sent.Content, results["task-1"])
 	}
@@ -457,25 +498,29 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	}
 
 	reviewerTargets = nil
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:02:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 || len(sent.AllowedMentions.Roles) != 0 {
 		t.Fatalf("empty Reviewer result fell through to legacy/config recipients: content=%q allowed=%+v", sent.Content, sent.AllowedMentions)
 	}
 
 	checkerIDs = nil
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:03:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
 		t.Fatalf("zero Reviewer suppressed or broadened the WFA card: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 
 	reviewerResolveErr = errors.New("synthetic Supervisor read failure")
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:04:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
 		t.Fatalf("WFA lookup failure broadened recipients: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}
 	reviewerReader := ReviewerResolver
 	ReviewerResolver = nil
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:05:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	ReviewerResolver = reviewerReader
 	if results["task-1"].MessageID != "message-1" || sent.Content != "" || len(sent.AllowedMentions.Users) != 0 {
 		t.Fatalf("missing Reviewer resolver fell back to legacy Checkers: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
@@ -486,7 +531,8 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	checkerIDs = []string{"202"}
 	conf.Mention.CheckerStatuses = []string{"WFA"}
 	event.IsAssignNotification = true
-	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, server.URL, nil, nil, nil, map[string]string{"production-1": "en"}, nil)
+	event.Task.UpdatedAt = "2026-08-07T00:06:00"
+	results = SendMessageBunch(conf, []kitsu.MessagePayload{event}, expectedSenderWebhookURL, nil, nil, nil, map[string]string{"production-1": "en"}, db)
 	if results["task-1"].MessageID != "message-1" || sent.Content != "<@202>" || len(sent.AllowedMentions.Users) != 1 || sent.AllowedMentions.Users[0] != "202" {
 		t.Fatalf("assignment Checker behavior changed: content=%q allowed=%+v result=%+v", sent.Content, sent.AllowedMentions, results["task-1"])
 	}

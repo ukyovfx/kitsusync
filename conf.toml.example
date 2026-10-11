@@ -57,6 +57,7 @@ log = true
 
 [notification]
     notifyOnAssign = false
+    deliveryPayloadRetentionDays = 30 # Redact delivered outbox payload bodies after this many days; 0 disables redaction.
 
 [googleDrive]
     url = "https://drive.google.com/drive/folders/YOUR_FOLDER_ID"

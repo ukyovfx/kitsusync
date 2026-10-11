@@ -1,0 +1,741 @@
+package setup
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"app/src/api/kitsu"
+	"app/src/model"
+	"gorm.io/gorm"
+)
+
+type notificationApplyRequest struct {
+	ProjectID        string `json:"project_id"`
+	ExpectedRevision string `json:"expected_revision"`
+	Routes           []struct {
+		TaskTypeID           string `json:"task_type_id"`
+		DestinationWebhookID uint   `json:"destination_webhook_id"`
+		CreateChannelName    string `json:"create_channel_name"`
+	} `json:"routes"`
+	ReviewerChanges []model.ProductionReviewerDelta `json:"reviewer_changes"`
+}
+
+type createdRoutingDiscordResource struct {
+	ChannelID string
+	WebhookID string
+}
+
+type routingWebhookIdentity struct {
+	ID        string `json:"id"`
+	Type      int    `json:"type"`
+	GuildID   string `json:"guild_id"`
+	ChannelID string `json:"channel_id"`
+}
+
+type routingWebhookRepair struct {
+	TaskTypeID  string
+	ChannelID   string
+	ChannelName string
+}
+
+var currentRoutingCreateChannel = CreateTextChannel
+var currentRoutingCreateWebhook = CreateWebhook
+var currentRoutingDeleteWebhook = DeleteWebhook
+var currentRoutingInspectWebhook = inspectRoutingWebhook
+var errRoutingWebhookVerificationUnavailable = errors.New("managed webhook verification unavailable")
+var productionNotificationApplyLocks sync.Map
+
+func lockProductionNotificationApply(productionID string) func() {
+	productionID = strings.TrimSpace(productionID)
+	value, _ := productionNotificationApplyLocks.LoadOrStore(productionID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
+func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, lang string, db *gorm.DB, botTokens ...string) bool {
+	if r.Method != http.MethodPost || r.URL.Path != "/bot/admin/projects" || r.URL.Query().Get("apply_notifications") != "1" {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	var request notificationApplyRequest
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
+		return true
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		http.Error(w, `{"error":"invalid_request"}`, http.StatusBadRequest)
+		return true
+	}
+	productionID := strings.TrimSpace(request.ProjectID)
+	project := model.FindProjectByKitsuID(db, productionID)
+	if project == nil || model.IsValidationOnlyProject(db, productionID) {
+		http.Error(w, `{"error":"production_not_writable"}`, http.StatusForbidden)
+		return true
+	}
+	unlockApply := lockProductionNotificationApply(productionID)
+	defer unlockApply()
+	project = model.FindProjectByKitsuID(db, productionID)
+	if project == nil || model.IsValidationOnlyProject(db, productionID) {
+		http.Error(w, `{"error":"production_not_writable"}`, http.StatusForbidden)
+		return true
+	}
+	if err := model.ValidateReviewerDeltasForRemovedRoutes(convertApplyRoutes(request, productionID), request.ReviewerChanges); err != nil {
+		http.Error(w, `{"error":"reviewer_delta_for_removed_route"}`, http.StatusBadRequest)
+		return true
+	}
+	known := reviewerTaskTypesForProduction(db, productionID)
+	knownByID := make(map[string]kitsu.TaskType, len(known))
+	for _, task := range known {
+		knownByID[strings.TrimSpace(task.ID)] = task
+	}
+	routes := make([]model.ProductionNotificationRoute, 0, len(request.Routes))
+	createNames := make(map[string]string)
+	newWebhooks := make([]*model.ProjectWebhook, 0)
+	existingRoutes := make([]model.ProductionNotificationRoute, 0, len(request.Routes))
+	seen := map[string]bool{}
+	for _, item := range request.Routes {
+		id := strings.TrimSpace(item.TaskTypeID)
+		task, ok := knownByID[id]
+		createName := strings.TrimSpace(item.CreateChannelName)
+		if id == "" || !ok || seen[id] || (item.DestinationWebhookID == 0) == (createName == "") {
+			http.Error(w, `{"error":"invalid_route"}`, http.StatusBadRequest)
+			return true
+		}
+		seen[id] = true
+		route := model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: id, TaskTypeName: task.Name, DestinationWebhookID: item.DestinationWebhookID}
+		routes = append(routes, route)
+		if createName != "" {
+			normalized := NormalizeTaskTypeChannelName(createName)
+			if createNames[id] != "" {
+				http.Error(w, `{"error":"invalid_route"}`, http.StatusBadRequest)
+				return true
+			}
+			createNames[id] = normalized
+			newWebhooks = append(newWebhooks, &model.ProjectWebhook{KitsuProjectID: productionID, ChannelName: normalized, TaskType: id})
+		} else {
+			existingRoutes = append(existingRoutes, route)
+		}
+	}
+	if len(routes) == 0 {
+		http.Error(w, `{"error":"invalid_routing"}`, http.StatusBadRequest)
+		return true
+	}
+	config, routesBefore, targetsBefore, err := model.SnapshotProductionNotificationState(db, project.ID, productionID)
+	if err != nil {
+		http.Error(w, `{"error":"state_unavailable"}`, http.StatusInternalServerError)
+		return true
+	}
+	currentRevision, err := model.ProductionNotificationRevisionWithError(db, project.ID, productionID)
+	if err != nil {
+		http.Error(w, `{"error":"state_unavailable"}`, http.StatusInternalServerError)
+		return true
+	}
+	if currentRevision != request.ExpectedRevision {
+		http.Error(w, `{"error":"stale_edit"}`, http.StatusConflict)
+		return true
+	}
+	routingChanged := !sameProductionNotificationRoutes(routesBefore, routes)
+	repairs, err := validateCurrentRoutingDestinations(*project, existingRoutes, db)
+	if err != nil {
+		if errors.Is(err, errRoutingWebhookVerificationUnavailable) {
+			http.Error(w, `{"error":"webhook_verification_unavailable"}`, http.StatusBadGateway)
+			return true
+		}
+		http.Error(w, `{"error":"destination_not_owned"}`, http.StatusBadRequest)
+		return true
+	}
+	if !routingChanged && len(repairs) > 0 {
+		http.Error(w, `{"error":"webhook_repair_required"}`, http.StatusConflict)
+		return true
+	}
+	tokenFallback := ""
+	if len(botTokens) > 0 {
+		tokenFallback = botTokens[0]
+	}
+	discordToken := storedRuntimeDiscordBotToken(db)
+	if discordToken == "" {
+		discordToken = tokenFallback
+	}
+	if err := validateNewRoutingChannelNames(*project, createNames, discordToken); err != nil {
+		http.Error(w, `{"error":"channel_name_unavailable"}`, http.StatusBadRequest)
+		return true
+	}
+	var priorOrder []DiscordChannelPosition
+	if routingChanged && len(routesBefore)+len(existingRoutes) > 0 {
+		priorOrder, err = captureCurrentRoutingPositions(*project, append(append([]model.ProductionNotificationRoute{}, routesBefore...), existingRoutes...), db)
+		if err != nil {
+			http.Error(w, `{"error":"discord_preflight_failed"}`, http.StatusBadRequest)
+			return true
+		}
+	}
+	channelWebhooks := append([]*model.ProjectWebhook(nil), newWebhooks...)
+	createdResources := make([]createdRoutingDiscordResource, 0, len(newWebhooks)+len(repairs))
+	cleanupCreated := func() error { return cleanupCreatedRoutingResources(createdResources, discordToken) }
+	if len(repairs) > 0 {
+		status := currentRoutingDiscordCheck(discordToken, project.DiscordGuildID)
+		if !routingDiscordStatusReady(status) || !status.Permissions.ManageWebhooks {
+			http.Error(w, `{"error":"webhook_repair_preflight_failed"}`, http.StatusBadRequest)
+			return true
+		}
+		for _, repair := range repairs {
+			webhookURL, createErr := currentRoutingCreateWebhook(repair.ChannelID, repair.ChannelName, discordToken)
+			if createErr != nil {
+				writeRoutingWebhookCreateFailure(w, "webhook_repair_failed", cleanupCreated())
+				return true
+			}
+			webhookID, parseErr := discordWebhookID(webhookURL)
+			if parseErr != nil {
+				writeRoutingWebhookCreateFailure(w, "webhook_response_invalid", cleanupCreated())
+				return true
+			}
+			createdResources = append(createdResources, createdRoutingDiscordResource{WebhookID: webhookID})
+			identity, missing, inspectErr := currentRoutingInspectWebhook(webhookURL)
+			if inspectErr != nil || missing || !routingWebhookMatches(identity, webhookID, project.DiscordGuildID, repair.ChannelID) {
+				writeRoutingCreateFailure(w, "webhook_verification_failed", cleanupCreated())
+				return true
+			}
+			newWebhooks = append(newWebhooks, &model.ProjectWebhook{KitsuProjectID: productionID, ChannelName: repair.ChannelName, TaskType: repair.TaskTypeID, WebhookURL: webhookURL, DiscordChannelID: repair.ChannelID})
+			for i := range routes {
+				if routes[i].TaskTypeID == repair.TaskTypeID {
+					routes[i].DestinationWebhookID = 0
+					break
+				}
+			}
+		}
+	}
+	if len(channelWebhooks) > 0 {
+		guild, category := strings.TrimSpace(project.DiscordGuildID), strings.TrimSpace(project.DiscordCategoryID)
+		status := currentRoutingDiscordCheck(discordToken, guild)
+		if !routingDiscordStatusReady(status) || !status.Permissions.ManageWebhooks {
+			writeRoutingCreateFailure(w, "discord_preflight_failed", cleanupCreated())
+			return true
+		}
+		for _, webhook := range channelWebhooks {
+			channelID, createErr := currentRoutingCreateChannel(guild, category, webhook.ChannelName, discordToken)
+			if createErr != nil {
+				cleanupErr := cleanupCreated()
+				// The Discord request may have reached the server even when the
+				// client received an error. We have no channel ID to safely
+				// compensate, so report the creation outcome as unknown.
+				writeRoutingChannelCreateFailure(w, cleanupErr)
+				return true
+			}
+			resource := createdRoutingDiscordResource{ChannelID: strings.TrimSpace(channelID)}
+			createdResources = append(createdResources, resource)
+			if resource.ChannelID == "" {
+				writeRoutingChannelCreateFailure(w, cleanupCreated())
+				return true
+			}
+			channels, listErr := currentRoutingListChannels(guild, discordToken)
+			if listErr != nil {
+				writeRoutingCreateFailure(w, "channel_verification_failed", cleanupCreated())
+				return true
+			}
+			verified := false
+			for _, channel := range channels {
+				if channel.ID == resource.ChannelID && channel.Type == 0 && strings.TrimSpace(channel.ParentID) == category {
+					verified = true
+					break
+				}
+			}
+			if !verified {
+				writeRoutingCreateFailure(w, "channel_verification_failed", cleanupCreated())
+				return true
+			}
+			webhookURL, createErr := currentRoutingCreateWebhook(resource.ChannelID, webhook.ChannelName, discordToken)
+			if createErr != nil {
+				writeRoutingWebhookCreateFailure(w, "webhook_create_failed", cleanupCreated())
+				return true
+			}
+			webhookID, parseErr := discordWebhookID(webhookURL)
+			if parseErr != nil {
+				writeRoutingWebhookCreateFailure(w, "webhook_response_invalid", cleanupCreated())
+				return true
+			}
+			createdResources[len(createdResources)-1].WebhookID = webhookID
+			identity, missing, inspectErr := currentRoutingInspectWebhook(webhookURL)
+			if inspectErr != nil || missing || !routingWebhookMatches(identity, webhookID, guild, resource.ChannelID) {
+				writeRoutingCreateFailure(w, "webhook_verification_failed", cleanupCreated())
+				return true
+			}
+			webhook.DiscordChannelID = resource.ChannelID
+			webhook.WebhookURL = webhookURL
+		}
+	}
+	if err := validateProductionReviewerDeltas(db, *project, request.ReviewerChanges, routes, newWebhooks, discordToken); err != nil {
+		cleanupErr := cleanupCreated()
+		if cleanupErr != nil {
+			writeRoutingCreateFailure(w, "reviewer_target_not_eligible", cleanupErr)
+			return true
+		}
+		if errors.Is(err, errReviewerEligibilityUnavailable) {
+			http.Error(w, `{"error":"reviewer_eligibility_unavailable"}`, http.StatusBadGateway)
+		} else {
+			http.Error(w, `{"error":"reviewer_target_not_eligible"}`, http.StatusBadRequest)
+		}
+		return true
+	}
+	mutationToken := ""
+	var appliedRevision string
+	var applyErr error
+	if routingChanged {
+		mutationToken, err = model.NewProductionNotificationMutationToken()
+		if err == nil {
+			appliedRevision, applyErr = model.ApplyProductionNotificationStateForExternalReorder(db, project.ID, productionID, project.Name, request.ExpectedRevision, routes, request.ReviewerChanges, mutationToken, newWebhooks...)
+		} else {
+			applyErr = err
+		}
+	} else {
+		appliedRevision, applyErr = model.ApplyProductionNotificationState(db, project.ID, productionID, project.Name, request.ExpectedRevision, routes, request.ReviewerChanges, newWebhooks...)
+	}
+	err = applyErr
+	if errors.Is(err, model.ErrProductionNotificationRevisionConflict) {
+		cleanupErr := cleanupCreated()
+		if cleanupErr != nil {
+			writeRoutingCreateFailure(w, "stale_edit", cleanupErr)
+			return true
+		}
+		http.Error(w, `{"error":"stale_edit"}`, http.StatusConflict)
+		return true
+	}
+	if err != nil {
+		if cleanupErr := cleanupCreated(); cleanupErr != nil {
+			writeRoutingCreateFailure(w, "apply_failed", cleanupErr)
+		} else {
+			http.Error(w, `{"error":"apply_failed"}`, http.StatusInternalServerError)
+		}
+		return true
+	}
+	routes = model.ListProductionNotificationRoutes(db, productionID)
+	if routingChanged {
+		err = syncCurrentRoutingDiscordOrder(*project, routes, db)
+	}
+	if err != nil {
+		dbRestoreErr, discordRestoreErr := compensateProductionNotificationApply(
+			func() error {
+				ids := make([]uint, 0, len(newWebhooks))
+				for _, webhook := range newWebhooks {
+					if webhook.ID > 0 {
+						ids = append(ids, webhook.ID)
+					}
+				}
+				return model.RestoreProductionNotificationStateForExternalReorder(db, project.ID, productionID, appliedRevision, config, routesBefore, targetsBefore, mutationToken, ids...)
+			},
+			func() error {
+				if len(priorOrder) == 0 {
+					return nil
+				}
+				return currentRoutingSetPositions(project.DiscordGuildID, priorOrder, discordToken)
+			},
+		)
+		var status int
+		var body map[string]string
+		var resourceErr error
+		if dbRestoreErr == nil && len(createdResources) > 0 {
+			resourceErr = cleanupCreated()
+		}
+		mutationErr := model.FinishProductionNotificationExternalMutation(db, productionID, mutationToken, dbRestoreErr != nil || discordRestoreErr != nil || resourceErr != nil)
+		if resourceErr != nil {
+			status, body = productionNotificationRecoveryDiagnostic(dbRestoreErr, discordRestoreErr, resourceErr)
+		} else {
+			status, body = productionNotificationRecoveryDiagnostic(dbRestoreErr, discordRestoreErr)
+		}
+		if mutationErr != nil {
+			status = http.StatusInternalServerError
+			body["recovery"] = "incomplete"
+			body["mutation_recovery"] = "state_unavailable"
+		}
+		if dbRestoreErr != nil && len(createdResources) > 0 {
+			// Keep external resources when the DB restore failed: deleting them
+			// could leave persisted state pointing at missing Discord objects.
+			body["resource_cleanup"] = "deferred_database_restore_failed"
+		}
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(body)
+		return true
+	}
+	if routingChanged {
+		if err := model.FinishProductionNotificationExternalMutation(db, productionID, mutationToken, false); err != nil {
+			_ = model.FinishProductionNotificationExternalMutation(db, productionID, mutationToken, true)
+			http.Error(w, `{"error":"discord_order_recovery_required","recovery":"incomplete"}`, http.StatusInternalServerError)
+			return true
+		}
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
+	return true
+}
+
+func productionNotificationRecoveryDiagnostic(databaseErr, discordErr error, resourceErrors ...error) (int, map[string]string) {
+	status := http.StatusBadGateway
+	var resourceErr error
+	if len(resourceErrors) > 0 {
+		resourceErr = resourceErrors[0]
+	}
+	if databaseErr != nil || discordErr != nil || resourceErr != nil {
+		status = http.StatusInternalServerError
+	}
+	body := map[string]string{"error": "discord_order_failed", "recovery": "complete", "database_recovery": "restored", "discord_order_recovery": "restored", "resource_cleanup": "not_required"}
+	if databaseErr != nil {
+		body["database_recovery"] = "failed"
+		body["recovery"] = "incomplete"
+	}
+	if errors.Is(databaseErr, model.ErrProductionNotificationRevisionConflict) {
+		body["discord_order_recovery"] = "deferred_newer_revision"
+	}
+	if discordErr != nil {
+		body["discord_order_recovery"] = "failed"
+		body["recovery"] = "incomplete"
+	}
+	if resourceErr != nil {
+		body["resource_cleanup"] = "failed"
+		body["recovery"] = "incomplete"
+	} else if len(resourceErrors) > 0 {
+		body["resource_cleanup"] = "complete"
+	}
+	return status, body
+}
+
+func sameProductionNotificationRoutes(before, after []model.ProductionNotificationRoute) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for i := range before {
+		if strings.TrimSpace(before[i].TaskTypeID) != strings.TrimSpace(after[i].TaskTypeID) || before[i].DestinationWebhookID != after[i].DestinationWebhookID {
+			return false
+		}
+	}
+	return true
+}
+
+func compensateProductionNotificationApply(restoreDatabase, restoreDiscordOrder func() error) (error, error) {
+	var databaseErr, discordErr error
+	if restoreDatabase != nil {
+		databaseErr = restoreDatabase()
+	}
+	if errors.Is(databaseErr, model.ErrProductionNotificationRevisionConflict) {
+		// A newer Apply owns the current routing order. Restoring an older
+		// snapshot here would overwrite that newer Discord order.
+		return databaseErr, nil
+	}
+	if restoreDiscordOrder != nil {
+		discordErr = restoreDiscordOrder()
+	}
+	return databaseErr, discordErr
+}
+
+func convertApplyRoutes(request notificationApplyRequest, productionID string) []model.ProductionNotificationRoute {
+	routes := make([]model.ProductionNotificationRoute, 0, len(request.Routes))
+	for _, route := range request.Routes {
+		routes = append(routes, model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: strings.TrimSpace(route.TaskTypeID), DestinationWebhookID: route.DestinationWebhookID})
+	}
+	return routes
+}
+
+func validateProductionReviewerDeltas(db *gorm.DB, project model.Project, changes []model.ProductionReviewerDelta, routes []model.ProductionNotificationRoute, newWebhooks []*model.ProjectWebhook, token string) error {
+	if len(changes) == 0 {
+		return nil
+	}
+	var eligibleUsers map[string]string
+	usersLoaded := false
+	eligibleRolesByTask := make(map[string]map[string]struct{})
+	for _, change := range changes {
+		taskTypeID := strings.TrimSpace(change.TaskTypeID)
+		targets, _, readErr := model.ListProjectReviewerTargetsForTaskType(db, project.ID, taskTypeID)
+		if readErr != nil {
+			return readErr
+		}
+		existing := map[string]bool{}
+		for _, target := range targets {
+			existing[target.TargetKind+":"+target.DiscordID] = true
+		}
+		for _, id := range change.AddUserIDs {
+			if !usersLoaded {
+				team, err := reviewerProductionTeamReader(db, project.KitsuProjectID)
+				if err != nil {
+					return fmt.Errorf("%w: read Kitsu Production Team", errReviewerEligibilityUnavailable)
+				}
+				members, err := reviewerGuildMembersForGuild(project.DiscordGuildID, token)
+				if err != nil {
+					return fmt.Errorf("%w: read linked Discord Guild membership", errReviewerEligibilityUnavailable)
+				}
+				eligibleUsers = currentProductionLinkedHumanDiscordIDs(team, filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db)), members)
+				usersLoaded = true
+			}
+			if eligibleUsers[strings.TrimSpace(id)] == "" {
+				return errors.New("user target is not a linked current Production member")
+			}
+		}
+		for _, id := range change.AddRoleIDs {
+			eligibleRoles := eligibleRolesByTask[taskTypeID]
+			if eligibleRoles == nil {
+				var destination *model.ProjectWebhook
+				for _, route := range routes {
+					if strings.TrimSpace(route.TaskTypeID) != taskTypeID {
+						continue
+					}
+					if route.DestinationWebhookID > 0 {
+						destination = model.FindProjectWebhookByID(db, route.DestinationWebhookID)
+					}
+					if destination == nil {
+						for _, created := range newWebhooks {
+							if created != nil && strings.TrimSpace(created.TaskType) == taskTypeID {
+								destination = created
+								break
+							}
+						}
+					}
+					break
+				}
+				if destination == nil || strings.TrimSpace(destination.KitsuProjectID) != strings.TrimSpace(project.KitsuProjectID) ||
+					strings.TrimSpace(destination.DiscordChannelID) == "" || strings.TrimSpace(destination.WebhookURL) == "" {
+					return errors.New("role target has no verified route destination")
+				}
+				var err error
+				eligibleRoles, err = eligibleReviewerRolesForSender(project.DiscordGuildID, destination.DiscordChannelID, destination.WebhookURL, token)
+				if err != nil {
+					return fmt.Errorf("%w: verify role target for current destination", errReviewerEligibilityUnavailable)
+				}
+				eligibleRolesByTask[taskTypeID] = eligibleRoles
+			}
+			if _, ok := eligibleRoles[strings.TrimSpace(id)]; !ok {
+				return errors.New("role target is not eligible for the verified destination")
+			}
+		}
+		for _, id := range change.RemoveUserIDs {
+			if !existing[model.ReviewerTargetUser+":"+strings.TrimSpace(id)] {
+				return errors.New("user target removal is not an existing additional target")
+			}
+		}
+		for _, id := range change.RemoveRoleIDs {
+			if !existing[model.ReviewerTargetRole+":"+strings.TrimSpace(id)] {
+				return errors.New("role target removal is not an existing additional target")
+			}
+		}
+	}
+	return nil
+}
+
+func validateCurrentRoutingDestinations(project model.Project, routes []model.ProductionNotificationRoute, db *gorm.DB) ([]routingWebhookRepair, error) {
+	if len(routes) == 0 {
+		return nil, nil
+	}
+	guild, category, token := strings.TrimSpace(project.DiscordGuildID), strings.TrimSpace(project.DiscordCategoryID), storedRuntimeDiscordBotToken(db)
+	status := currentRoutingDiscordCheck(token, guild)
+	if !routingDiscordStatusReady(status) {
+		return nil, errors.New("Discord ownership preflight failed")
+	}
+	channels, err := currentRoutingListChannels(guild, token)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]DiscordGuildChannel, len(channels))
+	for _, channel := range channels {
+		byID[channel.ID] = channel
+	}
+	seen := map[string]bool{}
+	repairs := make([]routingWebhookRepair, 0)
+	for _, route := range routes {
+		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
+		if webhook == nil || webhook.KitsuProjectID != project.KitsuProjectID {
+			return nil, errors.New("routing destination is not owned by this Production")
+		}
+		id := strings.TrimSpace(webhook.DiscordChannelID)
+		channel, ok := byID[id]
+		if !ok || channel.Type != 0 || strings.TrimSpace(channel.ParentID) != category || seen[id] {
+			return nil, errors.New("routing destination is not a unique verified child of the managed category")
+		}
+		seen[id] = true
+		webhookID, parseErr := discordWebhookID(webhook.WebhookURL)
+		if parseErr != nil {
+			repairs = append(repairs, routingWebhookRepair{TaskTypeID: route.TaskTypeID, ChannelID: id, ChannelName: channel.Name})
+			continue
+		}
+		identity, missing, inspectErr := currentRoutingInspectWebhook(webhook.WebhookURL)
+		if inspectErr != nil {
+			return nil, errRoutingWebhookVerificationUnavailable
+		}
+		if missing {
+			repairs = append(repairs, routingWebhookRepair{TaskTypeID: route.TaskTypeID, ChannelID: id, ChannelName: channel.Name})
+			continue
+		}
+		if !routingWebhookMatches(identity, webhookID, guild, id) {
+			return nil, errors.New("managed webhook does not belong to the selected Discord destination")
+		}
+	}
+	return repairs, nil
+}
+
+func routingWebhookMatches(identity routingWebhookIdentity, id, guild, channel string) bool {
+	return identity.Type == 1 && strings.TrimSpace(identity.ID) == strings.TrimSpace(id) && strings.TrimSpace(identity.GuildID) == strings.TrimSpace(guild) && strings.TrimSpace(identity.ChannelID) == strings.TrimSpace(channel)
+}
+
+func inspectRoutingWebhook(raw string) (routingWebhookIdentity, bool, error) {
+	var identity routingWebhookIdentity
+	if _, err := discordWebhookID(raw); err != nil {
+		return identity, true, nil
+	}
+	request, err := http.NewRequest(http.MethodGet, strings.TrimSpace(raw), nil)
+	if err != nil {
+		return identity, false, errors.New("managed webhook read could not be prepared")
+	}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
+	if err != nil {
+		return identity, false, errors.New("managed webhook could not be reached")
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnauthorized {
+		return identity, true, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return identity, false, errors.New("managed webhook read failed")
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<10)).Decode(&identity); err != nil {
+		return routingWebhookIdentity{}, false, errors.New("managed webhook response was invalid")
+	}
+	return identity, false, nil
+}
+
+func validateNewRoutingChannelNames(project model.Project, names map[string]string, token string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	guild, category := strings.TrimSpace(project.DiscordGuildID), strings.TrimSpace(project.DiscordCategoryID)
+	if guild == "" || category == "" || !routingDiscordStatusReady(currentRoutingDiscordCheck(token, guild)) {
+		return errors.New("Discord channel creation preflight failed")
+	}
+	channels, err := currentRoutingListChannels(guild, token)
+	if err != nil {
+		return err
+	}
+	used := map[string]bool{}
+	for _, channel := range channels {
+		used[NormalizeTaskTypeChannelName(channel.Name)] = true
+	}
+	requested := map[string]bool{}
+	for _, name := range names {
+		normalized := NormalizeTaskTypeChannelName(name)
+		if requested[normalized] || used[normalized] {
+			return errors.New("Discord channel name is already present")
+		}
+		requested[normalized] = true
+	}
+	return nil
+}
+
+func discordWebhookID(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "discord.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("Discord webhook response was not a trusted URL")
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "webhooks" || strings.TrimSpace(parts[2]) == "" || strings.TrimSpace(parts[3]) == "" {
+		return "", errors.New("Discord webhook response was incomplete")
+	}
+	return parts[2], nil
+}
+
+func cleanupCreatedRoutingResources(resources []createdRoutingDiscordResource, token string) error {
+	failed := false
+	for i := len(resources) - 1; i >= 0; i-- {
+		resource := resources[i]
+		if resource.WebhookID != "" {
+			if err := currentRoutingDeleteWebhook(resource.WebhookID, token); err != nil {
+				failed = true
+			}
+		}
+		if resource.ChannelID != "" {
+			if err := currentRoutingDeleteChannel(resource.ChannelID, token); err != nil {
+				failed = true
+			}
+		}
+	}
+	if failed {
+		return errors.New("newly created Discord resources could not all be removed")
+	}
+	return nil
+}
+
+func writeRoutingCreateFailure(w http.ResponseWriter, reason string, cleanupErr error) {
+	status := http.StatusBadGateway
+	cleanup := "complete"
+	if cleanupErr != nil {
+		status = http.StatusInternalServerError
+		cleanup = "incomplete"
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": reason, "resource_cleanup": cleanup})
+}
+
+func writeRoutingChannelCreateFailure(w http.ResponseWriter, cleanupErr error) {
+	status := http.StatusBadGateway
+	cleanup := "known_resources_complete"
+	if cleanupErr != nil {
+		status = http.StatusInternalServerError
+		cleanup = "known_resources_incomplete"
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":            "channel_create_failed",
+		"channel_creation": "outcome_unknown",
+		"resource_cleanup": cleanup,
+	})
+}
+
+func writeRoutingWebhookCreateFailure(w http.ResponseWriter, reason string, cleanupErr error) {
+	status := http.StatusBadGateway
+	cleanup := "known_resources_complete"
+	if cleanupErr != nil {
+		status = http.StatusInternalServerError
+		cleanup = "known_resources_incomplete"
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":            reason,
+		"webhook_creation": "outcome_unknown",
+		"resource_cleanup": cleanup,
+	})
+}
+
+func captureCurrentRoutingPositions(project model.Project, routes []model.ProductionNotificationRoute, db *gorm.DB) ([]DiscordChannelPosition, error) {
+	guild := strings.TrimSpace(project.DiscordGuildID)
+	token := storedRuntimeDiscordBotToken(db)
+	status := currentRoutingDiscordCheck(token, guild)
+	if !routingDiscordStatusReady(status) {
+		return nil, errors.New("Discord channel-order preflight failed")
+	}
+	channels, err := currentRoutingListChannels(guild, token)
+	if err != nil {
+		return nil, err
+	}
+	byWebhook := map[string]bool{}
+	positions := []DiscordChannelPosition{}
+	seen := map[string]bool{}
+	for _, route := range routes {
+		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
+		if webhook == nil || webhook.KitsuProjectID != project.KitsuProjectID {
+			return nil, errors.New("route destination ownership is incomplete")
+		}
+		byWebhook[strings.TrimSpace(webhook.DiscordChannelID)] = true
+	}
+	for _, channel := range channels {
+		if byWebhook[channel.ID] && !seen[channel.ID] {
+			positions = append(positions, DiscordChannelPosition{ID: channel.ID, Position: channel.Position})
+			seen[channel.ID] = true
+		}
+	}
+	sort.Slice(positions, func(i, j int) bool { return positions[i].Position < positions[j].Position })
+	return positions, nil
+}

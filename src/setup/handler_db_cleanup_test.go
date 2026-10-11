@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"app/src/model"
 	"gorm.io/driver/sqlite"
@@ -17,6 +18,8 @@ import (
 type setupDiscordProvisioningStub struct {
 	t                *testing.T
 	categoryID       string
+	categoryStarted  chan struct{}
+	channelStarted   chan struct{}
 	createdChannelID []string
 	deletedIDs       []string
 	nextChannelNum   int
@@ -39,9 +42,13 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 		&model.ProjectUserMap{},
 		&model.ProjectCheckerMap{},
 		&model.ProjectReviewerTarget{},
+		&model.ProductionNotificationWriteLock{},
+		&model.ProductionNotificationWriteLock{},
 		&model.ProjectSetting{},
 		&model.UserMap{},
 		&model.CheckerMap{},
+		&model.NotificationDeliveryEvent{},
+		&model.ManagedChannelDeletion{},
 	); err != nil {
 		t.Fatalf("failed to migrate setup schema: %v", err)
 	}
@@ -76,9 +83,21 @@ func installSetupDiscordProvisioningStub(t *testing.T) *setupDiscordProvisioning
 				return nil, err
 			}
 			if payload.Type == 4 {
+				if stub.categoryStarted != nil {
+					select {
+					case stub.categoryStarted <- struct{}{}:
+					default:
+					}
+				}
 				return jsonResp(http.StatusOK, `{"id":"`+stub.categoryID+`"}`), nil
 			}
 			if payload.Type == 0 {
+				if stub.channelStarted != nil {
+					select {
+					case stub.channelStarted <- struct{}{}:
+					default:
+					}
+				}
 				stub.nextChannelNum++
 				channelID := fmt.Sprintf("ch-%d", stub.nextChannelNum)
 				stub.createdChannelID = append(stub.createdChannelID, channelID)
@@ -104,6 +123,40 @@ func installSetupDiscordProvisioningStub(t *testing.T) *setupDiscordProvisioning
 		http.DefaultTransport = oldTransport
 	})
 	return stub
+}
+
+func TestRunProjectSetupWaitsForProductionApplyBeforeProvisioning(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	stub := installSetupDiscordProvisioningStub(t)
+	stub.categoryStarted = make(chan struct{}, 1)
+	const productionID = "legacy-setup-lock"
+
+	unlockApply := lockProductionNotificationApply(productionID)
+	setupDone := make(chan SetupResult, 1)
+	go func() {
+		setupDone <- RunProjectSetup(productionID, "Legacy Setup Lock", "cg", "en", "http://kitsu.local/", "fallback-guild", "guild-123", "bot-token", db)
+	}()
+
+	select {
+	case <-stub.categoryStarted:
+		unlockApply()
+		select {
+		case <-setupDone:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("legacy setup provisioned Discord resources while the Production Apply lock was held")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlockApply()
+
+	select {
+	case result := <-setupDone:
+		if !result.OK {
+			t.Fatalf("legacy setup did not resume after Apply released the lock: %v", result.Lines)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("legacy setup did not resume after Apply released the lock")
+	}
 }
 
 func jsonResp(status int, body string) *http.Response {
@@ -281,6 +334,32 @@ func TestRunProjectSetup_UsesFallbackGuildIDWhenProjectInputIsBlank(t *testing.T
 	}
 }
 
+func TestDeleteProjectConnectionOnlyRejectsUnresolvedDeletionTombstone(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	if err := model.CreateProject(db, "tombstone-cleanup", "Tombstone Cleanup", "kitsu", "guild-1", "category-1", "en"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, "tombstone-cleanup", "channel", "task-type-1", "https://discord.com/api/webhooks/12345678901234567/synthetic-token", "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, "tombstone-cleanup")[0]
+	if err := db.Create(&model.ProductionNotificationRoute{ProductionID: "tombstone-cleanup", TaskTypeID: "task-type-1", DestinationWebhookID: webhook.ID, DestinationChannelID: "channel-1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.BeginManagedChannelDeletion(db, "tombstone-cleanup", webhook.ID, "guild-1", "channel-1", "12345678901234567", time.Now()); err == nil {
+		t.Fatal("last route deletion must remain forbidden in the single-channel path")
+	}
+	if err := db.Create(&model.ManagedChannelDeletion{WebhookRowID: webhook.ID, ProductionID: "tombstone-cleanup", GuildID: "guild-1", ChannelID: "channel-1", DiscordWebhookID: "12345678901234567", Disposition: model.ChannelDeletionNeedsHelp}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteProjectConnectionOnly("tombstone-cleanup", db); !errors.Is(err, model.ErrChannelDeletionConflict) {
+		t.Fatalf("connection cleanup erased unresolved deletion state: %v", err)
+	}
+	if model.FindProjectByKitsuID(db, "tombstone-cleanup") == nil {
+		t.Fatal("project was removed despite unresolved channel tombstone")
+	}
+}
+
 func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
 	db := newSetupHandlerTestDB(t)
 	if err := model.CreateProject(db, "kitsu-proj-unlink", "Project Unlink", "cg", "guild-123", "cat-123", "ja"); err != nil {
@@ -346,6 +425,73 @@ func TestDeleteProjectConnectionOnly_RemovesOnlyKitsuSyncRecords(t *testing.T) {
 	db.Find(&globalCheckers)
 	if len(globalCheckers) != 1 {
 		t.Fatalf("expected global checker mappings to remain, got %d", len(globalCheckers))
+	}
+}
+
+func TestDeleteProjectConnectionOnlyWaitsForApplyBeforeProjectRowExists(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	const productionID = "connection-delete-before-row"
+	unlockApply := lockProductionNotificationApply(productionID)
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- DeleteProjectConnectionOnly(productionID, db) }()
+
+	select {
+	case err := <-deleteDone:
+		unlockApply()
+		t.Fatalf("connection deletion bypassed the Apply lock before the Project row existed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := db.Create(&model.Project{KitsuProjectID: productionID, Name: "Created while Apply held lock"}).Error; err != nil {
+		unlockApply()
+		t.Fatal(err)
+	}
+	unlockApply()
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("connection deletion failed after Apply released the lock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connection deletion did not resume after Apply released the lock")
+	}
+	if model.FindProjectByKitsuID(db, productionID) != nil {
+		t.Fatal("connection deletion did not remove the Project created while it waited")
+	}
+}
+
+func TestDeleteProjectWaitsForApplyBeforeProjectRowExists(t *testing.T) {
+	db := newSetupHandlerTestDB(t)
+	const productionID = "project-delete-before-row"
+	unlockApply := lockProductionNotificationApply(productionID)
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, err := DeleteProject(productionID, "bot-token", db)
+		deleteDone <- err
+	}()
+
+	select {
+	case err := <-deleteDone:
+		unlockApply()
+		t.Fatalf("project deletion bypassed the Apply lock before the Project row existed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := db.Create(&model.Project{KitsuProjectID: productionID, Name: "Created while Apply held lock"}).Error; err != nil {
+		unlockApply()
+		t.Fatal(err)
+	}
+	unlockApply()
+	select {
+	case err := <-deleteDone:
+		if err != nil {
+			t.Fatalf("project deletion failed after Apply released the lock: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("project deletion did not resume after Apply released the lock")
+	}
+	if model.FindProjectByKitsuID(db, productionID) != nil {
+		t.Fatal("project deletion did not remove the Project created while it waited")
 	}
 }
 

@@ -114,6 +114,15 @@ func newSessionToken(email, kitsuToken, role, next string) string {
 }
 
 func newSessionTokenChecked(email, kitsuToken, role, next string) (string, error) {
+	grantRecentAuth := strings.Contains(next, "/bot/admin/bot") && strings.Contains(next, "edit=1")
+	return createSessionTokenChecked(email, kitsuToken, role, grantRecentAuth)
+}
+
+func newRecentlyAuthenticatedSessionTokenChecked(email, kitsuToken, role string) (string, error) {
+	return createSessionTokenChecked(email, kitsuToken, role, true)
+}
+
+func createSessionTokenChecked(email, kitsuToken, role string, grantRecentAuth bool) (string, error) {
 	buffer := make([]byte, 16)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", err
@@ -125,7 +134,10 @@ func newSessionTokenChecked(email, kitsuToken, role, next string) (string, error
 		KitsuToken: kitsuToken,
 		Role:       role,
 	}
-	if strings.Contains(next, "/bot/admin/bot") && strings.Contains(next, "edit=1") {
+	if grantRecentAuth {
+		// The authenticated login path reaches this only after successful Kitsu
+		// manager/admin verification. Reuse that verification for ten minutes;
+		// this window remains independent of the longer session TTL.
 		session.BotEditUntil = time.Now().Add(10 * time.Minute)
 	}
 	sessionMu.Lock()
@@ -374,7 +386,7 @@ func sameOrigin(candidate, expected string) bool {
 
 func sameOriginReferer(candidate, expected string) bool {
 	candidateURL, err := url.Parse(candidate)
-	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" || candidateURL.User != nil || candidateURL.RawQuery != "" || candidateURL.Fragment != "" {
+	if err != nil || candidateURL.Scheme == "" || candidateURL.Host == "" || candidateURL.User != nil || candidateURL.Opaque != "" {
 		return false
 	}
 	return sameOriginURL(candidateURL, expected)
@@ -782,7 +794,7 @@ func loginHandlerWithPersist(kitsuHostname string, currentDisplay func() string,
 				fmt.Fprint(w, loginPageHTML(lang, t(lang, "ログインに失敗しました。Kitsu のメール、パスワード、manager/admin 権限を確認してください。", "Login failed. Check the Kitsu email, password, and manager/admin permissions."), next, false, r))
 				return
 			}
-			token, sessionErr := newSessionTokenChecked(email, kitsuToken, role, next)
+			token, sessionErr := newRecentlyAuthenticatedSessionTokenChecked(email, kitsuToken, role)
 			if sessionErr != nil {
 				slog.Error("admin session persistence failed", "error_class", classifySessionPersistenceError(sessionErr))
 				w.WriteHeader(http.StatusInternalServerError)

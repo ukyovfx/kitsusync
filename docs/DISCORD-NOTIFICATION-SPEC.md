@@ -52,9 +52,74 @@ The pure renderer is `src/api/discord/notification_foundation.go`. `RenderNotifi
 
 Routing identity is `ProductionID + TaskTypeID`. Display names are metadata only. Archived/stale Task Types, missing routes, missing channels, incomplete webhook rows, and ambiguous destinations fail closed and are recorded as routing diagnoses. A notification is not sent to a guessed or legacy destination.
 
-## Idempotency and audit
+## Idempotency, recovery, and payload retention
 
-The `Task` row stores the last observed task/comment state and the delivered Discord message/thread identifiers. An unchanged observation is skipped. A failed or unknown delivery does not claim success and preserves the previous delivered state; it can be retried on a later poll. Successful delivery writes a sanitized `AuditLog` entry and updates the task delivery state. Webhook URLs are removed before audit persistence.
+Each notification event has a deterministic, uniquely constrained event ID.
+The SQLite delivery journal records its disposition, payload hash, exact
+Production/Guild/channel/webhook identity, and Discord message/thread IDs.
+The journal row is retained after delivery: pruning never deletes event
+identity or delivery checkpoints, so replaying the same Kitsu observation
+after restart still resolves to the delivered row and cannot send it again.
+
+`PayloadJSON` is the exact rendered Discord request body, which can contain
+Kitsu comments or other user-authored text. It is retained while delivery or
+recovery is unresolved. Only successfully delivered records older than the
+configured retention period may have this body redacted. A redacted row keeps
+its event ID, payload SHA-256, disposition, destination binding, and message/
+thread IDs; `payload_redacted_at` records when the body was cleared. The
+transient `ThreadName` needed for a not-yet-delivered forum/thread creation is
+cleared with the body only after successful delivery and prior-message cleanup
+are complete. A repeated observation is still deduplicated by the retained
+event ID/hash and delivered disposition.
+
+A payload or destination identity collision against a delivered, unknown,
+in-flight, or otherwise non-retryable event is rejected. It increments only a
+separate conflict count/timestamp on the original event and appears in safe
+operational diagnostics as an aggregated `identity_conflict` count. The
+original disposition, payload/hash, destination, and Discord checkpoints remain
+unchanged. The conflicting request body is neither stored nor logged. A
+conflict against a redacted delivered event is never reconstructed or resent.
+
+Retryable delivery intents are never dispatched from stored payloads before a
+fresh Kitsu poll. The current task is re-rendered and its current recipients,
+notification revision, and route destination are resolved first. If the prior
+attempt ended in an explicit Discord HTTP 429 (known rejection), that same
+event row may be updated transactionally to the fresh intent before dispatch;
+the attempt counter and conflict evidence remain. This includes a revision-only
+change and can update recipients or destination without sending the obsolete
+request. A delivery claim compares the previously verified event snapshot with
+the current durable payload, destination, and revision before POST, preventing
+a concurrent refresh from sending new content to an old webhook URL. If Kitsu
+has advanced to a newer event, an older known-429 event is marked terminal as
+`superseded_by_newer_kitsu_event` and linked to the deterministic successor
+event ID; its payload and attempt evidence remain for diagnosis, and it no
+longer blocks the current event. Unknown outcomes, in-flight attempts, and
+delivered events are never replaced or replayed by these paths. If Kitsu cannot
+be read, retryable events wait for a later successful poll.
+
+This is logical row redaction in the active SQLite database, not secure
+erasure of every historical copy. SQLite WAL/checkpoint behavior and retained
+database backups can preserve earlier page contents; backup retention and
+access controls must cover the same sensitive notification text.
+
+The retention setting is `[notification].deliveryPayloadRetentionDays` in
+`conf.toml`. It defaults to 30 days, accepts `0` to disable redaction, and is
+validated from 0 through 3650 days. Startup and an hourly maintenance job each
+redact at most 100 eligible rows, oldest first. A later run continues the
+bounded cleanup, even when Kitsu polling is paused.
+The additive migration adds the nullable `payload_redacted_at` marker and
+identity-conflict count/timestamp; retention processing, not schema migration,
+performs the conditional redaction. Conflict metadata contains no payload or
+credential values.
+Pending, in-flight, retryable, unknown, terminal-failure, legacy-unknown, or
+otherwise unresolved events are never redacted. Delivered events with prior
+message cleanup pending or in flight are also retained until cleanup resolves.
+If cleanup fails, the application logs only a safe error class and retries on
+a later poll; it never logs payload bodies. Redaction does not call Discord
+and does not change routing or Task checkpoints.
+
+Successful delivery writes a sanitized `AuditLog` entry and updates the task
+delivery state. Webhook URLs are removed before audit persistence.
 
 ## Links and rendering
 

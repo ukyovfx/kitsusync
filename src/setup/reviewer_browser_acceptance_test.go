@@ -25,12 +25,13 @@ import (
 )
 
 const (
-	reviewerBrowserRunEnv = "KITSUSYNC_RUN_REVIEWER_BROWSER"
-	reviewerBrowserToken  = "synthetic-reviewer-runtime-token"
-	reviewerBrowserBot    = "synthetic-reviewer-discord-token"
-	reviewerBrowserEmail  = "manager@synthetic.invalid"
-	reviewerBrowserPass   = "synthetic-browser-password"
-	reviewerBrowserGuild  = "11111111111111111"
+	reviewerBrowserRunEnv   = "KITSUSYNC_RUN_REVIEWER_BROWSER"
+	reviewerBrowserToken    = "synthetic-reviewer-runtime-token"
+	reviewerBrowserBot      = "synthetic-reviewer-discord-token"
+	reviewerBrowserEmail    = "manager@synthetic.invalid"
+	reviewerBrowserPass     = "synthetic-browser-password"
+	reviewerBrowserGuild    = "11111111111111111"
+	reviewerBrowserCategory = "55555555555555550"
 )
 
 // TestReviewerBrowserAcceptance uses normal KitsuSync login/session routes,
@@ -79,7 +80,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		&model.Task{}, &model.Project{}, &model.ProjectWebhook{}, &model.ProductionChannelMapping{},
 		&model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{},
 		&model.UserMap{}, &model.CheckerMap{}, &model.Setting{}, &model.AdminSession{}, &model.AuditLog{},
-		&model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProjectSetting{},
+		&model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProjectSetting{},
 	); err != nil {
 		t.Fatal("migrate disposable acceptance database")
 	}
@@ -110,12 +111,26 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			}
 			_, _ = io.WriteString(w, `{"access_token":"synthetic-manager-session-token","user":{"role":"manager"}}`)
 		case "/api/data/projects/":
-			_, _ = io.WriteString(w, `[{"id":"reviewer-production","name":"Synthetic Review Production"}]`)
+			projects := []kitsu.Project{{ID: "reviewer-production", Name: "Synthetic Review Production"}}
+			if scenario.Load().(string) == "japanese-wfa-add" {
+				projects[0].Name = "aa"
+			}
+			if scenario.Load().(string) == "unconnected-production" {
+				projects = append(projects, kitsu.Project{ID: "reviewer-unconnected", Name: "Synthetic Unconnected Production"})
+			}
+			_ = json.NewEncoder(w).Encode(projects)
 		case "/api/data/persons/":
 			persons := reviewerBrowserPeople()
+			if scenario.Load().(string) == "japanese-wfa-add" {
+				persons = []kitsu.Person{{ID: "person-japanese", FullName: "日本語ユーザー", Email: "japanese@synthetic.invalid", Active: true, Role: "artist"}}
+			}
 			_ = json.NewEncoder(w).Encode(persons)
 		case "/api/data/projects/reviewer-production/team":
 			switch scenario.Load().(string) {
+			case "japanese-wfa-add":
+				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-japanese", FullName: "日本語ユーザー", Email: "japanese@synthetic.invalid", Active: true, Role: "artist"}})
+			case "sparse-production":
+				_ = json.NewEncoder(w).Encode([]kitsu.Person{{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"}})
 			case "team-failure":
 				http.Error(w, "synthetic team failure", http.StatusForbidden)
 			case "empty-team":
@@ -130,7 +145,13 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(reviewerBrowserTeam())
 			}
 		case "/api/data/projects/reviewer-production/task-types":
-			_, _ = io.WriteString(w, `[{"id":"task-comp","name":"Compositing","department_id":"dept-comp","department_name":"Compositing","active":true},{"id":"task-animation","name":"Animation","department_id":"dept-animation","department_name":"Animation","active":true},{"id":"task-unassigned","name":"Unassigned","active":true}]`)
+			if scenario.Load().(string) == "japanese-wfa-add" {
+				_, _ = io.WriteString(w, `[{"id":"task-storyboard","name":"Storyboard","active":true}]`)
+			} else {
+				_, _ = io.WriteString(w, `[{"id":"task-comp","name":"Compositing","department_id":"dept-comp","department_name":"Compositing","active":true},{"id":"task-animation","name":"Animation","department_id":"dept-animation","department_name":"Animation","active":true},{"id":"task-unassigned","name":"Unassigned","active":true},{"id":"task-concept","name":"Concept","active":true},{"id":"task-modeling","name":"Modeling","active":true}]`)
+			}
+		case "/api/data/projects/reviewer-unconnected/task-types":
+			_, _ = io.WriteString(w, `[{"id":"task-live","name":"Live Task Type","active":true}]`)
 		default:
 			if strings.HasPrefix(r.URL.Path, "/api/data/persons/") {
 				personID := strings.TrimPrefix(r.URL.Path, "/api/data/persons/")
@@ -158,19 +179,29 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := setRuntimeDiscordBotToken(db, reviewerBrowserBot); err != nil {
 		t.Fatal("store synthetic Discord token")
 	}
-	project := model.Project{KitsuProjectID: "reviewer-production", Name: "Synthetic Review Production", DiscordGuildID: reviewerBrowserGuild, StorageURL: "https://storage.synthetic.invalid"}
+	project := model.Project{KitsuProjectID: "reviewer-production", Name: "Synthetic Review Production", DiscordGuildID: reviewerBrowserGuild, DiscordCategoryID: reviewerBrowserCategory, StorageURL: "https://storage.synthetic.invalid"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.synthetic.invalid/webhook", "channel-comp"); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.com/api/webhooks/44444444444444441/synthetic-compositing-token", "55555555555555551"); err != nil {
 		t.Fatal("seed synthetic routing destination")
 	}
-	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "animation", "animation", "https://discord.com/api/webhooks/44444444444444442/synthetic-animation-token", "55555555555555552"); err != nil {
+		t.Fatal("seed second synthetic routing destination")
+	}
+	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	if len(webhooks) != 2 {
+		t.Fatal("expected two synthetic routing destinations")
+	}
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID},
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", DestinationWebhookID: webhooks[1].ID},
+	}); err != nil {
 		t.Fatal("seed synthetic notification route")
 	}
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now()})
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: "other-production", ProjectName: project.Name, EntityName: "Must not leak", Success: true, CreatedAt: time.Now()})
+	model.RecordNotificationRoutingDiagnosis(db, model.NotificationRoutingDiagnosis{ProductionID: project.KitsuProjectID, Reason: "synthetic route check", Detail: "Synthetic route needs review", CreatedAt: time.Now()})
 	seedBrowserMonitoringCycles := func() {
 		cycleAt := time.Now().Truncate(time.Millisecond)
 		Stats.mu.Lock()
@@ -189,11 +220,41 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			t.Fatal("seed disposable global User Linking")
 		}
 	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "22222222222222234"); err != nil {
+		t.Fatal("seed synthetic additional WFA user")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "22222222222222225"); err != nil {
+		t.Fatal("seed synthetic linked User for effective-recipient summary")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetRole, "33333333333333331"); err != nil {
+		t.Fatal("seed synthetic Role for effective-recipient summary")
+	}
+	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-animation", "Animation", model.ReviewerTargetRole, "33333333333333331"); err != nil {
+		t.Fatal("seed synthetic additional WFA role")
+	}
 
 	unexpectedDiscord := make(chan string, 16)
 	oldTransport := http.DefaultTransport
-	http.DefaultTransport = reviewerBrowserDiscordTransport{scenario: &scenario, unexpected: unexpectedDiscord}
+	http.DefaultTransport = reviewerBrowserDiscordTransport{
+		scenario:      &scenario,
+		unexpected:    unexpectedDiscord,
+		kitsuHost:     strings.TrimPrefix(kitsuFixture.URL, "http://"),
+		expectedGuild: reviewerBrowserGuild,
+		baseTransport: oldTransport,
+	}
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	scenario.Store("japanese-wfa-add")
+	preflight := checkDiscordStatus(reviewerBrowserBot, reviewerBrowserGuild)
+	if !routingDiscordStatusReady(preflight) {
+		t.Fatalf("Japanese WFA synthetic Bot cannot validate the already-configured destination: bot=%t guild=%t manage_channels=%t manage_webhooks=%t", preflight.BotValid, preflight.GuildValid, preflight.Permissions.ManageChannels, preflight.Permissions.ManageWebhooks)
+	}
+	if _, _, err := currentRoutingInspectWebhook(webhooks[0].WebhookURL); err != nil {
+		t.Fatalf("Japanese WFA synthetic webhook inspection failed: %v", err)
+	}
+	if repairs, err := validateCurrentRoutingDestinations(project, model.ListProductionNotificationRoutes(db, project.KitsuProjectID), db); err != nil || len(repairs) != 0 {
+		t.Fatalf("Japanese WFA synthetic routes are not verified and reusable: repairs=%d error=%v", len(repairs), err)
+	}
+	scenario.Store("ready")
 
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -202,6 +263,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	appURL := "http://" + listener.Addr().String()
 	mux := http.NewServeMux()
 	mux.Handle("GET /favicon.ico", FaviconHandler())
+	mux.Handle("GET /kitsusync.svg", KitsuSyncIconHandler())
 	login := LoginRateLimit(http.HandlerFunc(LoginHandlerWithTrustedAuthority(func() KitsuLoginAuthority {
 		return KitsuLoginAuthority{RuntimeHost: kitsuFixture.URL, Source: "explicit"}
 	}, nil, nil)))
@@ -209,7 +271,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	ready := func() bool { return true }
 	mux.HandleFunc("/bot/admin", RequireSession(AdminIndexWithRuntime(db, ready)))
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
+	mux.Handle("/bot/admin/bot", RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true })))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
+	mux.HandleFunc("/bot/admin/audit", RequireSession(AuditLogHandler(db)))
 	health := HealthHandler(db)
 	mux.HandleFunc("/bot/admin/health", RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The browser suite visits several pages before System Status; reseed
@@ -222,7 +286,52 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "discord-failure", "stale-membership":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production":
+			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "japanese-wfa-add":
+			webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+			if len(webhooks) == 0 {
+				http.Error(w, "Japanese WFA fixture has no routing webhook", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Model(&project).Updates(map[string]interface{}{"name": "aa"}).Error; err != nil {
+				http.Error(w, "could not rename synthetic Production", http.StatusInternalServerError)
+				return
+			}
+			project.Name = "aa"
+			if err := db.Model(&model.ProjectWebhook{}).Where("id = ?", webhooks[0].ID).Updates(map[string]interface{}{"channel_name": "storyboard", "task_type": "Storyboard"}).Error; err != nil {
+				http.Error(w, "could not rename synthetic routing destination", http.StatusInternalServerError)
+				return
+			}
+			if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: "aa", Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-storyboard", TaskTypeName: "Storyboard", DestinationWebhookID: webhooks[0].ID}}); err != nil {
+				http.Error(w, "could not configure Japanese WFA route", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("project_id = ?", project.ID).Delete(&model.ProjectReviewerTarget{}).Error; err != nil {
+				http.Error(w, "could not reset Japanese WFA targets", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "sparse-production":
+			webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+			if len(webhooks) == 0 || model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID}}) != nil {
+				http.Error(w, "could not configure sparse Production fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("project_id = ?", project.ID).Delete(&model.ProjectReviewerTarget{}).Error; err != nil {
+				http.Error(w, "could not clear sparse Reviewer fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("project_id = ?", project.KitsuProjectID).Delete(&model.AuditLog{}).Error; err != nil {
+				http.Error(w, "could not clear sparse activity fixture", http.StatusInternalServerError)
+				return
+			}
+			if err := db.Where("production_id = ?", project.KitsuProjectID).Delete(&model.NotificationRoutingDiagnosis{}).Error; err != nil {
+				http.Error(w, "could not clear sparse issue fixture", http.StatusInternalServerError)
+				return
+			}
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -246,7 +355,19 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		safeOutput = strings.ReplaceAll(safeOutput, sensitive, "[redacted]")
 	}
 	if err != nil {
+		if scenario.Load().(string) == "japanese-wfa-add" {
+			routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
+			_, destinationErr := validateCurrentRoutingDestinations(project, routes, db)
+			t.Fatalf("isolated Chromium acceptance failed: %s; Japanese WFA destination preflight: %v", safeOutput, destinationErr)
+		}
 		t.Fatalf("isolated Chromium acceptance failed: %s", safeOutput)
+	}
+	var japaneseTargets []model.ProjectReviewerTarget
+	if err := db.Where("project_id = ? AND task_type_id = ?", project.ID, "task-storyboard").Order("target_kind asc, discord_id asc").Find(&japaneseTargets).Error; err != nil {
+		t.Fatal("read back persisted Japanese WFA targets")
+	}
+	if len(japaneseTargets) != 2 || japaneseTargets[0].TargetKind != model.ReviewerTargetRole || japaneseTargets[0].DiscordID != "33333333333333331" || japaneseTargets[1].TargetKind != model.ReviewerTargetUser || japaneseTargets[1].DiscordID != "22222222222222238" {
+		t.Fatalf("Japanese Storyboard recipient flow did not persist the exact User/Role IDs: %#v", japaneseTargets)
 	}
 	if len(unexpectedDiscord) != 0 {
 		t.Fatalf("synthetic Discord fixture blocked an unexpected route: %s", <-unexpectedDiscord)
@@ -255,7 +376,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 
 func reviewerBrowserTeam() []kitsu.Person {
 	return []kitsu.Person{
-		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor"},
+		{ID: "person-promotion", FullName: "Project Supervisor", Email: "promotion@synthetic.invalid", Active: true, Role: "artist", ProjectRole: "supervisor", Departments: []string{"dept-comp"}},
 		{ID: "person-no-department", FullName: "Departmentless Supervisor", Email: "no-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-wrong-department", FullName: "Wrong Department Supervisor", Email: "wrong-dept@synthetic.invalid", Active: true, Role: "supervisor"},
 		{ID: "person-artist", FullName: "Synthetic Artist", Email: "artist@synthetic.invalid", Active: true, Role: "artist"},
@@ -281,6 +402,9 @@ func reviewerBrowserPeople() []kitsu.Person {
 }
 
 func reviewerBrowserPersonDetail(personID string) (kitsu.Person, bool) {
+	if personID == "person-japanese" {
+		return kitsu.Person{ID: "person-japanese", FullName: "日本語ユーザー", Email: "japanese@synthetic.invalid", Active: true, Role: "artist"}, true
+	}
 	departments := map[string][]string{
 		"person-promotion":        {"dept-comp"},
 		"person-no-department":    {},
@@ -323,16 +447,39 @@ func reviewerBrowserUserMaps() []model.UserMap {
 		{KitsuID: "person-override", KitsuName: "Override Candidate", KitsuEmail: "override@synthetic.invalid", DiscordID: "22222222222222234", DiscordDisplayName: "Override Global"},
 		{KitsuID: "person-global-name", KitsuName: "Global Name Supervisor", KitsuEmail: "global-name@synthetic.invalid", DiscordID: "22222222222222236", DiscordDisplayName: "Global Name Fallback"},
 		{KitsuID: "person-username", KitsuName: "Username Supervisor", KitsuEmail: "username@synthetic.invalid", DiscordID: "22222222222222237", DiscordDisplayName: "Username Fallback"},
+		{KitsuID: "person-japanese", KitsuName: "日本語ユーザー", KitsuEmail: "japanese@synthetic.invalid", DiscordID: "22222222222222238", DiscordDisplayName: "日本語表示名"},
 	}
 	return users
 }
 
 type reviewerBrowserDiscordTransport struct {
-	scenario   *atomic.Value
-	unexpected chan<- string
+	scenario      *atomic.Value
+	unexpected    chan<- string
+	kitsuHost     string
+	expectedGuild string
+	baseTransport http.RoundTripper
 }
 
 func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && r.URL.Path == "/api/" && r.URL.RawQuery == "" {
+		return d.baseTransport.RoundTrip(r)
+	}
+	if r.URL.Scheme == "https" && r.URL.Host == "discord.com" && r.Method == http.MethodGet && r.Header.Get("Authorization") == "" {
+		var body string
+		switch r.URL.Path {
+		case "/api/webhooks/44444444444444441/synthetic-compositing-token":
+			body = `{"id":"44444444444444441","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555551","user":{"id":"11111111111111113"}}`
+		case "/api/webhooks/44444444444444442/synthetic-animation-token":
+			body = `{"id":"44444444444444442","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555552","user":{"id":"11111111111111113"}}`
+		default:
+			select {
+			case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
+			default:
+			}
+			return nil, fmt.Errorf("blocked unowned synthetic webhook inspection")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	}
 	if r.URL.Host != "discord.com" || r.Header.Get("Authorization") != "Bot "+reviewerBrowserBot {
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
@@ -344,20 +491,56 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 	switch {
 	case r.URL.Path == "/api/v10/users/@me":
 		body = `{"id":"11111111111111113","username":"Synthetic KitsuSync Bot"}`
+	case r.URL.Path == "/api/v10/guilds/"+d.expectedGuild:
+		body = `{"id":"` + d.expectedGuild + `","name":"Synthetic Discord"}`
+	case r.URL.Path == "/api/v10/webhooks/44444444444444441":
+		body = `{"id":"44444444444444441","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555551","user":{"id":"11111111111111113"}}`
+	case r.URL.Path == "/api/v10/webhooks/44444444444444442":
+		body = `{"id":"44444444444444442","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555552","user":{"id":"11111111111111113"}}`
 	case r.URL.Path == "/api/v10/users/@me/guilds":
 		body = `[{"id":"11111111111111111","name":"Synthetic Discord"},{"id":"11111111111111112","name":"Other Synthetic Discord"}]`
+	case r.URL.Path == "/api/v10/guilds/"+d.expectedGuild+"/members/11111111111111113":
+		botRoles := `[]`
+		if d.scenario.Load().(string) == "japanese-wfa-add" {
+			botRoles = ` ["33333333333333334"]`
+		}
+		body = `{"user":{"id":"11111111111111113"},"roles":` + strings.TrimSpace(botRoles) + `}`
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/members"):
 		if d.scenario.Load().(string) == "discord-failure" {
 			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`
 		} else {
 			body = `[{"user":{"id":"22222222222222222","username":"project-supervisor","global_name":"Global Supervisor Name"},"nick":"Guild Nick Supervisor"},{"user":{"id":"22222222222222223","username":"departmentless","global_name":"Departmentless Global"}},{"user":{"id":"22222222222222224","username":"wrong-department","global_name":"Wrong Department Global"}},{"user":{"id":"22222222222222225","username":"artist","global_name":"Artist Global"}},{"user":{"id":"22222222222222226","username":"manager","global_name":"Manager Global"}},{"user":{"id":"22222222222222227","username":"admin","global_name":"Admin Global"}},{"user":{"id":"22222222222222228","username":"demoted","global_name":"Demoted Global"}},{"user":{"id":"22222222222222229","username":"project-manager","global_name":"Project Manager Global"}},{"user":{"id":"22222222222222230","username":"position-only"}},{"user":{"id":"22222222222222231","username":"inactive"}},{"user":{"id":"22222222222222232","username":"kitsu-bot","bot":true}},{"user":{"id":"22222222222222234","username":"override-candidate","global_name":"Override Global"},"nick":"Guild Nick Override"},{"user":{"id":"22222222222222236","username":"global-name-fallback","global_name":"Global Name Fallback"}},{"user":{"id":"22222222222222237","username":"username-fallback"}}]`
+			if d.scenario.Load().(string) == "japanese-wfa-add" {
+				body = strings.TrimSuffix(body, "]") + `,{"user":{"id":"22222222222222238","username":"nihongo-user","global_name":"日本語表示名"},"nick":"日本語ユーザー"}]`
+			}
 		}
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/roles"):
-		if d.scenario.Load().(string) == "no-roles" {
-			body = `[]`
-		} else {
-			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false}]`
+		if r.URL.Path != "/api/v10/guilds/"+d.expectedGuild+"/roles" {
+			select {
+			case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
+			default:
+			}
+			return nil, fmt.Errorf("blocked synthetic Discord role lookup outside the configured Production Guild")
 		}
+		switch d.scenario.Load().(string) {
+		case "no-roles":
+			body = `[]`
+		case "non-mentionable-roles":
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"3072"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"}]`
+		case "bot-can-mention-roles":
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"134144"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"}]`
+		case "roles-forbidden":
+			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`
+		case "roles-rate-limited":
+			status, body = http.StatusTooManyRequests, `{"message":"synthetic failure"}`
+		default:
+			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"3072"},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true,"permissions":"0"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"},{"id":"33333333333333333","name":"Review Leads","position":6,"mentionable":true,"permissions":"0"}]`
+			if d.scenario.Load().(string) == "japanese-wfa-add" {
+				body = strings.TrimSuffix(body, `]`) + `,{"id":"33333333333333334","name":"KitsuSync Bot","position":10,"mentionable":false,"permissions":"536874000"}]`
+			}
+		}
+	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
+		body = `[{"id":"55555555555555551","guild_id":"` + d.expectedGuild + `","type":0,"parent_id":"` + reviewerBrowserCategory + `","permission_overwrites":[]},{"id":"55555555555555552","guild_id":"` + d.expectedGuild + `","type":0,"parent_id":"` + reviewerBrowserCategory + `","permission_overwrites":[]}]`
 	default:
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
@@ -365,5 +548,9 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 		}
 		return nil, fmt.Errorf("blocked unexpected synthetic Discord request")
 	}
-	return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
+	header := http.Header{"Content-Type": []string{"application/json"}}
+	if status == http.StatusTooManyRequests {
+		header.Set("Retry-After", "0.001")
+	}
+	return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 }

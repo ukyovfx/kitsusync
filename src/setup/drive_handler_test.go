@@ -173,7 +173,7 @@ func TestDriveStorageSuccessFeedbackIsStyledInRenderedDocument(t *testing.T) {
 			t.Fatalf("rendered document is missing canonical success-notice CSS %q", css)
 		}
 	}
-	for _, marker := range []string{`class="notice notice-success"`, `class="production-context"`, `class="section-nav production-tabs"`, `class="form-stack drive-storage-form"`} {
+	for _, marker := range []string{`class="notice notice-success"`, `class="production-context"`, `class="section-nav production-tabs"`, `class="form-stack drive-storage-form production-storage-form"`} {
 		if !strings.Contains(html, marker) {
 			t.Fatalf("rendered Storage Settings document is missing %q", marker)
 		}
@@ -181,7 +181,7 @@ func TestDriveStorageSuccessFeedbackIsStyledInRenderedDocument(t *testing.T) {
 	noticeAt := strings.Index(html, `class="notice notice-success"`)
 	headerAt := strings.Index(html, `class="production-context"`)
 	tabsAt := strings.Index(html, `class="section-nav production-tabs"`)
-	formAt := strings.Index(html, `class="form-stack drive-storage-form"`)
+	formAt := strings.Index(html, `class="form-stack drive-storage-form production-storage-form"`)
 	if !(noticeAt < headerAt && headerAt < tabsAt && tabsAt < formAt) {
 		t.Fatalf("Storage Settings DOM order is wrong: notice=%d header=%d tabs=%d form=%d", noticeAt, headerAt, tabsAt, formAt)
 	}

@@ -260,7 +260,7 @@ func AdminIndexWithRuntime(db *gorm.DB, runtimeHealthy func() bool) http.Handler
 					esc(t(lang, "\u5931\u6557\u6570:", "failures:")),
 					entry.FailureCount,
 					withLang("/bot/admin/health", r),
-					esc(t(lang, "\u518d\u63a5\u7d9a", "Reconnect")),
+					esc(t(lang, "\u8a73\u7d30", "Details")),
 				))
 			}
 			warns.WriteString(`</div></div>`)
@@ -440,7 +440,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		if handleCurrentProductionUserMutation(w, r, db, botToken) {
 			return
 		}
-		if handleCurrentIARoutingMutation(w, r, lang, db) {
+		if handleCurrentIARoutingMutation(w, r, lang, db, botToken) {
 			return
 		}
 		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
@@ -548,11 +548,7 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=error", http.StatusSeeOther)
 					return
 				}
-				if remaining := len(model.ListProjectWebhooks(db, projectID)); remaining != 0 {
-					http.Redirect(w, r, redirectURL+"&msg=error", http.StatusSeeOther)
-					return
-				}
-				if err := DeleteProjectConnectionOnly(projectID, db); err == nil {
+				if err := deleteProjectConnectionOnlyIfNoWebhooks(projectID, db); err == nil {
 					http.Redirect(w, r, withLang("/bot/admin/projects", r)+"&msg=saved", http.StatusSeeOther)
 					return
 				}
@@ -1680,12 +1676,112 @@ func safeDeleteOperationMessage(lang, stage string, err error) string {
 var (
 	strongDeleteValidateCandidates = validateConnectedProductionChannelCandidates
 	strongDeleteChannelDelete      = DeleteChannel
-	strongDeleteConnectionCleanup  = DeleteProjectConnectionOnly
+	strongDeleteConnectionCleanup  = deleteProjectConnectionOnlyForMutation
+	strongDeleteInspectWebhook     = currentRoutingInspectWebhook
+	strongDeleteInspectChannel     = inspectManagedDiscordChannel
 )
 
+type managedDiscordChannelIdentity struct {
+	ID      string `json:"id"`
+	GuildID string `json:"guild_id"`
+	Type    int    `json:"type"`
+}
+
+func inspectManagedDiscordChannel(channelID, token string) (managedDiscordChannelIdentity, int, error) {
+	var identity managedDiscordChannelIdentity
+	body, status, err := botDo(http.MethodGet, discordAPI+"/channels/"+strings.TrimSpace(channelID), nil, token)
+	if err != nil {
+		return identity, status, err
+	}
+	if status == http.StatusNotFound {
+		return identity, status, nil
+	}
+	if status != http.StatusOK {
+		return identity, status, fmt.Errorf("Discord channel read failed")
+	}
+	if err := json.Unmarshal(body, &identity); err != nil || strings.TrimSpace(identity.ID) != strings.TrimSpace(channelID) {
+		return managedDiscordChannelIdentity{}, status, fmt.Errorf("Discord channel response was invalid")
+	}
+	return identity, status, nil
+}
+
+func listStrongDeleteWebhookInventory(db *gorm.DB, productionID string) ([]model.ProjectWebhook, []model.ProjectWebhook, error) {
+	if db == nil || strings.TrimSpace(productionID) == "" {
+		return nil, nil, gorm.ErrInvalidData
+	}
+	var all []model.ProjectWebhook
+	if err := db.Order("kitsu_project_id asc, id asc").Find(&all).Error; err != nil {
+		return nil, nil, err
+	}
+	var production []model.ProjectWebhook
+	if err := db.Where("kitsu_project_id = ?", productionID).Order("id asc").Find(&production).Error; err != nil {
+		return nil, nil, err
+	}
+	return all, production, nil
+}
+
+func recoverableStrongDeleteTargets(db *gorm.DB, project model.Project, channelID string, webhooks []model.ProjectWebhook, allWebhooks []model.ProjectWebhook, token string) ([]model.ManagedChannelDeletionTarget, bool) {
+	targets := make([]model.ManagedChannelDeletionTarget, 0)
+	rows := make([]model.ProjectWebhook, 0)
+	for _, webhook := range webhooks {
+		if strings.TrimSpace(webhook.DiscordChannelID) == strings.TrimSpace(channelID) {
+			rows = append(rows, webhook)
+		}
+	}
+	if len(rows) == 0 {
+		return nil, false
+	}
+	for _, webhook := range allWebhooks {
+		if strings.TrimSpace(webhook.DiscordChannelID) == strings.TrimSpace(channelID) && strings.TrimSpace(webhook.KitsuProjectID) != project.KitsuProjectID {
+			return nil, false
+		}
+	}
+	for _, webhook := range rows {
+		tombstone, err := model.FindManagedChannelDeletion(db, webhook.ID)
+		webhookID, idErr := discordWebhookID(webhook.WebhookURL)
+		if err != nil || idErr != nil || tombstone == nil || tombstone.Disposition == model.ChannelDeletionComplete ||
+			tombstone.ProductionID != project.KitsuProjectID || tombstone.GuildID != project.DiscordGuildID ||
+			tombstone.ChannelID != channelID || tombstone.DiscordWebhookID != webhookID {
+			return nil, false
+		}
+		targets = append(targets, model.ManagedChannelDeletionTarget{WebhookRowID: webhook.ID, GuildID: tombstone.GuildID, ChannelID: tombstone.ChannelID, DiscordWebhookID: tombstone.DiscordWebhookID})
+	}
+	_, status, err := strongDeleteInspectChannel(channelID, token)
+	if err != nil || status != http.StatusNotFound {
+		return nil, false
+	}
+	return targets, true
+}
+
 func executeConnectedProductionStrongDelete(lang string, project model.Project, effectiveGuildID, botToken string, db *gorm.DB) connectedProductionChannelDeleteExecution {
-	allWebhooks := model.ListAllProjectWebhooks(db)
-	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
+	unlockApply := lockProductionNotificationApply(project.KitsuProjectID)
+	defer unlockApply()
+	currentProject := model.FindProjectByKitsuID(db, project.KitsuProjectID)
+	if currentProject == nil {
+		return connectedProductionChannelDeleteExecution{ConnectionError: t(lang, "連携先が更新されたため削除を中止しました。再読み込みしてください。", "The Production connection changed. Reload and retry.")}
+	}
+	project = *currentProject
+	mutationToken, mutationErr := model.BeginProductionDeletionMutation(db, project.KitsuProjectID)
+	if mutationErr != nil {
+		return connectedProductionChannelDeleteExecution{ConnectionError: safeDeleteOperationMessage(lang, "database_cleanup", mutationErr)}
+	}
+	finishFailedMutation := func(result *connectedProductionChannelDeleteExecution) {
+		if result.ConnectionDeleted {
+			return
+		}
+		if err := model.FinishProductionDeletionMutation(db, project.KitsuProjectID, mutationToken, true); err != nil {
+			result.ConnectionError = t(lang, "削除の復旧状態を保存できません。現在の状態を確認してください。", "Deletion recovery state could not be persisted. Inspect the current state before retrying.")
+		}
+	}
+	if strings.TrimSpace(project.DiscordGuildID) != "" {
+		effectiveGuildID = strings.TrimSpace(project.DiscordGuildID)
+	}
+	allWebhooks, webhooks, inventoryErr := listStrongDeleteWebhookInventory(db, project.KitsuProjectID)
+	if inventoryErr != nil {
+		result := connectedProductionChannelDeleteExecution{ConnectionError: safeDeleteOperationMessage(lang, "database_cleanup", inventoryErr)}
+		finishFailedMutation(&result)
+		return result
+	}
 	candidates := buildConnectedProductionChannelCandidates(webhooks)
 	deletable, skipped, summary, checks := strongDeleteValidateCandidates(lang, project, effectiveGuildID, botToken, allWebhooks, candidates)
 	result := connectedProductionChannelDeleteExecution{
@@ -1693,29 +1789,107 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 		Checks:            checks,
 		Skipped:           skipped,
 	}
+	webhookTargetsByChannel := make(map[string][]model.ManagedChannelDeletionTarget)
+	verifiedDeletable := make([]connectedProductionChannelValidationResult, 0, len(deletable))
+	recoveredDeletable := make([]connectedProductionChannelValidationResult, 0)
+	for i := 0; i < len(skipped); {
+		candidate := skipped[i]
+		if targets, ok := recoverableStrongDeleteTargets(db, project, candidate.ChannelID, webhooks, allWebhooks, botToken); ok {
+			webhookTargetsByChannel[candidate.ChannelID] = targets
+			recoveredDeletable = append(recoveredDeletable, candidate)
+			skipped = append(skipped[:i], skipped[i+1:]...)
+			continue
+		}
+		i++
+	}
+	result.Skipped = skipped
+	for _, candidate := range deletable {
+		rows := make([]model.ProjectWebhook, 0)
+		for _, webhook := range webhooks {
+			if strings.TrimSpace(webhook.DiscordChannelID) == strings.TrimSpace(candidate.ChannelID) {
+				rows = append(rows, webhook)
+			}
+		}
+		if len(rows) == 0 {
+			candidate.Reason = t(lang, "保存済みWebhookを確認できません。", "Stored webhook identity could not be verified.")
+			result.Skipped = append(result.Skipped, candidate)
+			continue
+		}
+		verified := make([]model.ManagedChannelDeletionTarget, 0, len(rows))
+		valid := true
+		for _, webhook := range rows {
+			webhookID, parseErr := discordWebhookID(webhook.WebhookURL)
+			if parseErr != nil {
+				valid = false
+				break
+			}
+			identity, missing, inspectErr := strongDeleteInspectWebhook(webhook.WebhookURL)
+			if inspectErr != nil || missing || !routingWebhookMatches(identity, webhookID, project.DiscordGuildID, candidate.ChannelID) {
+				valid = false
+				break
+			}
+			verified = append(verified, model.ManagedChannelDeletionTarget{WebhookRowID: webhook.ID, GuildID: project.DiscordGuildID, ChannelID: candidate.ChannelID, DiscordWebhookID: webhookID})
+		}
+		if !valid {
+			candidate.Reason = t(lang, "Discord Webhookの所有先を確認できません。", "Discord webhook ownership could not be verified.")
+			result.Skipped = append(result.Skipped, candidate)
+			continue
+		}
+		webhookTargetsByChannel[candidate.ChannelID] = verified
+		verifiedDeletable = append(verifiedDeletable, candidate)
+	}
+	verifiedDeletable = append(verifiedDeletable, recoveredDeletable...)
+	deletable = verifiedDeletable
+	var deletionTargets []model.ManagedChannelDeletionTarget
+	for _, candidate := range deletable {
+		deletionTargets = append(deletionTargets, webhookTargetsByChannel[candidate.ChannelID]...)
+	}
+	if len(deletionTargets) > 0 {
+		allowLastRoute := len(result.Skipped) == 0 && len(deletable) == len(candidates)
+		if err := model.BeginManagedChannelDeletionBatchForProductionTeardown(db, project.KitsuProjectID, deletionTargets, time.Now().UTC(), allowLastRoute, mutationToken); err != nil {
+			for _, candidate := range deletable {
+				candidate.Reason = safeDeleteOperationMessage(lang, "database_cleanup", err)
+				result.Failed = append(result.Failed, candidate)
+			}
+			deletable = nil
+		}
+	}
 	for _, candidate := range deletable {
 		if err := strongDeleteChannelDelete(candidate.ChannelID, botToken); err != nil {
 			failed := candidate
 			failed.Reason = safeDeleteOperationMessage(lang, "channel_delete", err)
+			for _, target := range webhookTargetsByChannel[candidate.ChannelID] {
+				if stateErr := model.RecordManagedChannelDeletionFailure(db, target.WebhookRowID, "discord_channel_delete_failed"); stateErr != nil {
+					failed.Reason = t(lang, "削除状態の復旧情報を保存できません。", "Deletion recovery state could not be persisted.")
+				}
+			}
 			result.Failed = append(result.Failed, failed)
 			continue
 		}
-		result.Deleted = append(result.Deleted, candidate)
-		var candidateWebhookCount int64
-		_ = db.Model(&model.ProjectWebhook{}).Where("kitsu_project_id = ? AND discord_channel_id = ?", project.KitsuProjectID, candidate.ChannelID).Count(&candidateWebhookCount)
-		if err := db.Where("kitsu_project_id = ? AND discord_channel_id = ?", project.KitsuProjectID, candidate.ChannelID).Delete(&model.ProjectWebhook{}).Error; err != nil {
+		finalized := true
+		for _, target := range webhookTargetsByChannel[candidate.ChannelID] {
+			if err := model.FinalizeManagedChannelDeletionForProductionTeardown(db, target.WebhookRowID, time.Now().UTC(), mutationToken); err != nil {
+				finalized = false
+				break
+			}
+		}
+		if !finalized {
 			warn := candidate
-			warn.Reason = safeDeleteOperationMessage(lang, "database_cleanup", err)
+			warn.Reason = t(lang, "Discord削除後のデータベース整理に失敗しました。", "Database finalization failed after Discord deletion.")
 			result.CleanupWarnings = append(result.CleanupWarnings, warn)
 			continue
 		}
-		result.DeletedWebhookCount += int(candidateWebhookCount)
+		result.Deleted = append(result.Deleted, candidate)
+		result.DeletedWebhookCount += len(webhookTargetsByChannel[candidate.ChannelID])
 	}
 
 	categoryID := strings.TrimSpace(project.DiscordCategoryID)
 	result.CategoryDeleted = categoryID == ""
-	canRemoveConnection := true
-	if categoryID != "" {
+	canRemoveConnection := len(result.Failed) == 0 && len(result.Skipped) == 0 && len(result.CleanupWarnings) == 0
+	if categoryID != "" && !canRemoveConnection {
+		result.CategoryError = t(lang, "管理対象チャンネルの削除が未完了のため、カテゴリ削除を保留しました。", "Category deletion was deferred because managed channel cleanup is incomplete.")
+	}
+	if canRemoveConnection && categoryID != "" {
 		if err := strongDeleteChannelDelete(categoryID, botToken); err != nil {
 			if isDiscordNotFoundDeleteError(err) {
 				result.CategoryDeleted = true
@@ -1727,8 +1901,8 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 			result.CategoryDeleted = true
 		}
 	}
-	if canRemoveConnection {
-		if err := strongDeleteConnectionCleanup(project.KitsuProjectID, db); err != nil {
+	if canRemoveConnection && result.CategoryDeleted {
+		if err := strongDeleteConnectionCleanup(project.KitsuProjectID, db, mutationToken); err != nil {
 			result.ConnectionError = safeDeleteOperationMessage(lang, "database_cleanup", err)
 		} else {
 			result.ConnectionDeleted = true
@@ -1736,7 +1910,15 @@ func executeConnectedProductionStrongDelete(lang string, project model.Project, 
 	} else if result.CategoryError != "" {
 		result.ConnectionError = t(lang, "Discord 側の削除が完了していないため、連携情報の削除は止めました。", "Connection cleanup was skipped because Discord deletion did not complete.")
 	}
-	result.RemainingWebhooks = len(model.ListProjectWebhooks(db, project.KitsuProjectID))
+	_, remaining, remainingErr := listStrongDeleteWebhookInventory(db, project.KitsuProjectID)
+	if remainingErr != nil {
+		if result.ConnectionError == "" {
+			result.ConnectionError = safeDeleteOperationMessage(lang, "database_cleanup", remainingErr)
+		}
+	} else {
+		result.RemainingWebhooks = len(remaining)
+	}
+	finishFailedMutation(&result)
 	return result
 }
 
@@ -2042,7 +2224,7 @@ func compactSortedStrings(values []string) []string {
 // Level 1 (default): overall status + last sync.
 // Level 2 (details accordion): polling, sends, webhook table, resource usage.
 // Broken webhooks auto-expand the details accordion.
-// POST action=reconnect_webhook&webhook_id=N — recreates the Discord webhook for that channel.
+// Legacy POST action=reconnect_webhook is rejected so repairs stay inside Notifications Apply.
 func HealthHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -2054,27 +2236,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 
 		// Handle reconnect action
 		if r.Method == http.MethodPost && r.FormValue("action") == "reconnect_webhook" {
-			webhookID := parseUint(r.FormValue("webhook_id"))
-			wh := model.FindProjectWebhookByID(db, webhookID)
-			if wh == nil || wh.DiscordChannelID == "" {
-				http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_fail", http.StatusSeeOther)
-				return
-			}
-			botToken := storedRuntimeDiscordBotToken(db)
-			newURL, err := CreateWebhook(wh.DiscordChannelID, wh.ChannelName, botToken)
-			if err != nil {
-				slog.Warn("Webhook reconnect failed", "channelID", wh.DiscordChannelID, "err", err)
-				http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_fail", http.StatusSeeOther)
-				return
-			}
-			if err := model.UpdateProjectWebhookURL(db, wh.ID, newURL); err != nil {
-				http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_fail", http.StatusSeeOther)
-				return
-			}
-			// Clear failure counters for the old URL so health shows clean immediately
-			Stats.RecordSend(1, 0, newURL, "")
-			slog.Info("Webhook reconnected", "channelName", wh.ChannelName, "secret_rotated", true)
-			http.Redirect(w, r, withLang("/bot/admin/health", r)+"&msg=reconnect_ok", http.StatusSeeOther)
+			http.Error(w, t(lang, "通知先の修復は Production の Notifications Apply から実行してください。", "Repair this destination through the Production Notifications Apply flow."), http.StatusConflict)
 			return
 		}
 
@@ -2181,8 +2343,6 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			failedURLs[e.URL] = e
 		}
 
-		reconnectMsg := r.URL.Query().Get("msg")
-
 		var webhookRows strings.Builder
 		healthyWebhookCount := 0
 		warnWebhookCount := 0
@@ -2207,10 +2367,10 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 				if entry.LastError != "" {
 					statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + html.EscapeString(entry.LastError) + `</div>`
 				}
-				// Reconnect button \u2014 only if channel ID exists (channel not deleted)
+				// Webhook repair is only available from the unified Production Apply flow.
 				if wh.DiscordChannelID != "" {
-					actionCell = fmt.Sprintf(`<form method="POST"><input type="hidden" name="action" value="reconnect_webhook"><input type="hidden" name="webhook_id" value="%d"><button class="btn-sm" type="submit">%s</button></form>`,
-						wh.ID, esc(t(lang, "\u518d\u63a5\u7d9a", "Reconnect")))
+					values := url.Values{"project": {wh.KitsuProjectID}, "tab": {"notifications"}, "edit_routing": {"1"}}
+					actionCell = `<a class="btn-sm" href="` + esc(withLang("/bot/admin/projects?"+values.Encode(), r)) + `">` + esc(t(lang, "\u901a\u77e5\u8a2d\u5b9a\u3092\u958b\u304f", "Open Notifications")) + `</a>`
 				}
 			} else if Stats.WebhookInactive(wh.WebhookURL, 7*24*time.Hour) {
 				warnWebhookCount++
@@ -2243,13 +2403,8 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 				`</tr></thead><tbody>` + webhookRows.String() + `</tbody></table></div>`
 			if hasBrokenWebhook {
 				webhookTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">` +
-					esc(t(lang, "\u5931\u6557\u4e2d\u306eWebhook\u304c\u3042\u308a\u307e\u3059\u3002\u30c1\u30e3\u30f3\u30cd\u30eb\u304c\u5b58\u5728\u3059\u308b\u5834\u5408\u306f\u300c\u518d\u63a5\u7d9a\u300d\u3067\u4fee\u5fa9\u3067\u304d\u307e\u3059\u3002",
-						"Some webhooks are failing. If the channel still exists, use Reconnect to repair.")) + `</p>`
-			}
-			if reconnectMsg == "reconnect_ok" {
-				webhookTableHTML += `<p class="hint" style="color:#8ecf8b;margin-top:10px">✓ ` + esc(t(lang, "Webhook\u3092\u518d\u63a5\u7d9a\u3057\u307e\u3057\u305f\u3002", "Webhook reconnected successfully.")) + `</p>`
-			} else if reconnectMsg == "reconnect_fail" {
-				webhookTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">✗ ` + esc(t(lang, "\u518d\u63a5\u7d9a\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002\u30c1\u30e3\u30f3\u30cd\u30eb\u304c\u524a\u9664\u3055\u308c\u3066\u3044\u308b\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002", "Reconnect failed. The channel may have been deleted.")) + `</p>`
+					esc(t(lang, "\u5931\u6557\u4e2d\u306eWebhook\u304c\u3042\u308a\u307e\u3059\u3002Production\u306eNotifications\u3067\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066Apply\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
+						"Some webhooks are failing. Review the route in Production Notifications and use Apply to repair it.")) + `</p>`
 			}
 		}
 
@@ -2346,7 +2501,10 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			id := parseUint(r.FormValue("user_id"))
 			action := r.FormValue("action")
 			saved := false
+			redirectURL := withLang("/bot/admin/users?msg=error", r)
+			selectedGuildID := ""
 			if action == "remove_global_link" && id > 0 {
+				selectedGuildID = userLinkingGuildForRedirect(db, r)
 				if user := model.FindUserMapByID(db, id); user != nil {
 					model.UpdateUserMap(db, id, user.KitsuName, user.KitsuEmail, "")
 					model.UpdateUserMapDisplayName(db, id, "")
@@ -2354,31 +2512,25 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 					saved = true
 				}
 			} else if action == "save_global_link" {
-				selectedID := strings.TrimSpace(r.FormValue("discord_user_id"))
-				directory, err := loadGlobalDiscordDirectory(storedRuntimeDiscordBotToken(db), r.FormValue("discord_guild_id"))
-				if err == nil && directory.SelectedGuild.ID != "" && selectedID != "" {
-					for _, option := range directory.Options {
-						if option.ID != selectedID {
-							continue
-						}
-						if id > 0 {
-							if user := model.FindUserMapByID(db, id); user != nil {
-								model.UpsertUserMapWithIdentity(db, r.FormValue("kitsu_id"), user.KitsuName, user.KitsuEmail, directory.SelectedGuild.ID, option.ID, option.Name)
-								saved = true
-							}
-						} else {
-							model.UpsertUserMapWithIdentity(db, r.FormValue("kitsu_id"), r.FormValue("kitsu_name"), r.FormValue("kitsu_email"), directory.SelectedGuild.ID, option.ID, option.Name)
-							saved = true
-						}
-						break
-					}
-				}
+				saved, redirectURL = saveGlobalUserLink(db, r)
 			}
 			msg := "error"
 			if saved {
 				msg = "saved"
 			}
-			http.Redirect(w, r, withLang("/bot/admin/users?msg="+msg, r), http.StatusSeeOther)
+			if action == "remove_global_link" {
+				redirectURL = globalUserLinkingURL(r, selectedGuildID, msg)
+			} else if action == "save_global_link" && !saved && redirectURL != "" {
+				separator := "?"
+				if strings.Contains(redirectURL, "?") {
+					separator = "&"
+				}
+				redirectURL += separator + "msg=error"
+			}
+			if redirectURL == "" {
+				redirectURL = withLang("/bot/admin/users?msg=error", r)
+			}
+			http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("project") == "" {
@@ -2962,12 +3114,12 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 			return ` external-kitsu-url-error`
 		}
 		return ""
-	}() + `">` + checkLink + `</div><p id="external-kitsu-url-help" class="field-help">` + esc(t(lang, "空欄で保存すると通常のKitsu URLを使用します。確認リンクは現在保存済みのURLを開きます。", "Saving an empty value uses the normal Kitsu URL. Check link opens the currently saved URL.")) + `</p>` + func() string {
+	}() + `">` + checkLink + `<button id="save-external-kitsu-url" type="submit" class="btn"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div><p id="external-kitsu-url-help" class="field-help">` + esc(t(lang, "空欄で保存すると通常のKitsu URLを使用します。確認リンクは現在保存済みのURLを開きます。", "Saving an empty value uses the normal Kitsu URL. Check link opens the currently saved URL.")) + `</p>` + func() string {
 		if externalURLSaveError == "" {
 			return ""
 		}
 		return `<p id="external-kitsu-url-error" class="field-help" style="color:var(--danger)" role="alert">` + esc(externalURLSaveError) + `</p>`
-	}() + `</div><div class="button-row connections-actions"><button id="save-external-kitsu-url" type="submit" class="btn"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
+	}() + `</div></form>`
 	expertOpen := ""
 	if apiBaseURL != "" {
 		expertOpen = " open"

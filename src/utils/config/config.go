@@ -47,7 +47,8 @@ type MentionConfig struct {
 
 // NotificationConfig は通知機能の設定
 type NotificationConfig struct {
-	NotifyOnAssign bool `toml:"notifyOnAssign"` // true なら TODO（新規アサイン）ステータスの変化も通知する
+	NotifyOnAssign               bool `toml:"notifyOnAssign"` // true なら TODO（新規アサイン）ステータスの変化も通知する
+	DeliveryPayloadRetentionDays int  `toml:"deliveryPayloadRetentionDays"`
 }
 
 type Config struct {
@@ -83,9 +84,11 @@ type Config struct {
 }
 
 const (
-	minPollIntervalSeconds     = 5
-	maxPollIntervalSeconds     = 60
-	defaultPollIntervalSeconds = 10
+	minPollIntervalSeconds              = 5
+	maxPollIntervalSeconds              = 60
+	defaultPollIntervalSeconds          = 10
+	defaultDeliveryPayloadRetentionDays = 30
+	maxDeliveryPayloadRetentionDays     = 3650
 )
 
 // PollInterval returns the configured polling cadence. The explicit seconds
@@ -145,7 +148,7 @@ func ReadFromPath(path string) (Config, error) {
 
 	expanded := expandEnvBraces(string(raw))
 
-	var config Config
+	config := Config{Notification: NotificationConfig{DeliveryPayloadRetentionDays: defaultDeliveryPayloadRetentionDays}}
 	if err := toml.NewDecoder(strings.NewReader(expanded)).Decode(&config); err != nil {
 		return Config{}, fmt.Errorf("parse conf.toml: %w", err)
 	}
@@ -166,6 +169,9 @@ func (c *Config) Validate() []string {
 	}
 	if c.Kitsu.PollIntervalSeconds != 0 && (c.Kitsu.PollIntervalSeconds < minPollIntervalSeconds || c.Kitsu.PollIntervalSeconds > maxPollIntervalSeconds) {
 		issues = append(issues, fmt.Sprintf("[FATAL] kitsu.pollIntervalSeconds must be between %d and %d", minPollIntervalSeconds, maxPollIntervalSeconds))
+	}
+	if c.Notification.DeliveryPayloadRetentionDays < 0 || c.Notification.DeliveryPayloadRetentionDays > maxDeliveryPayloadRetentionDays {
+		issues = append(issues, fmt.Sprintf("[FATAL] notification.deliveryPayloadRetentionDays must be between 0 and %d", maxDeliveryPayloadRetentionDays))
 	}
 
 	// --- 必須フィールド ---
