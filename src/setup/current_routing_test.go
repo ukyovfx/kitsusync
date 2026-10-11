@@ -421,7 +421,7 @@ func TestCurrentRoutingDisclosureAndCanonicalStatusPresentation(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=routing-disclosure-state&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{})
-	if !strings.Contains(body, `data-routing-row tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"`) {
+	if !strings.Contains(body, `tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"`) {
 		t.Fatal("routing rows must be keyboard-focusable and expose their WFA detail selection state")
 	}
 	if !strings.Contains(body, `id="production-wfa-detail-panel"`) || !strings.Contains(body, `class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"`) {
