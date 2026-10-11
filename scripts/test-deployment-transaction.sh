@@ -12,7 +12,8 @@ runtime=/home/ukyo_vfx/kitsusync
 protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime")
 tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
-       /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state)
+       /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state
+       /usr/local/libexec/kitsusync-preflight-collect)
 for path in "${protected[@]}" "${tools[@]}"; do
   sudo test ! -e "$path" && sudo test ! -L "$path" || { printf 'refusing existing fixture path: %s\n' "$path" >&2; exit 1; }
 done

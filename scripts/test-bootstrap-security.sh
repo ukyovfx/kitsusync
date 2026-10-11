@@ -7,6 +7,7 @@ inspect="${root}/deploy/kitsusync-inspect"
 bootstrap="${root}/deploy/kitsusync-bootstrap"
 backup="${root}/deploy/kitsusync-sqlite-backup"
 identity="${root}/deploy/kitsusync-image-identity"
+preflight="${root}/deploy/kitsusync-preflight-collect"
 bundle="${root}/scripts/build-deployment-bundle.sh"
 tmp="$(mktemp -d)"
 python_bin="${PYTHON_BIN:-python3}"
@@ -15,6 +16,7 @@ trap 'rm -rf "${tmp}"' EXIT
 for script in "${deploy}" "${inspect}" "${bootstrap}" "${bundle}"; do bash -n "${script}"; done
 "${python_bin}" -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "${backup}"
 "${python_bin}" -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "${identity}"
+"${python_bin}" -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' "${preflight}"
 
 require() { grep -Fq -- "$1" "$2" || { printf 'missing bootstrap security contract: %s (%s)\n' "$1" "$2" >&2; exit 1; }; }
 for script in "${deploy}" "${inspect}" "${bootstrap}"; do
@@ -60,6 +62,10 @@ require 'kitsusync-runtime-state' "${bootstrap}"
 require 'kitsusync-restore-state' "${bootstrap}"
 require 'RUNTIME_STATE_TOOL_SHA256' "${bundle}"
 require 'RESTORE_STATE_TOOL_SHA256' "${bundle}"
+require '/usr/local/libexec/kitsusync-preflight-collect' "${inspect}"
+require 'kitsusync-preflight-collect' "${bootstrap}"
+require 'PREFLIGHT_COLLECTOR_TOOL_SHA256' "${bundle}"
+require 'preflight_evidence_json=' "${inspect}"
 
 for script in "${deploy}" "${inspect}" "${bootstrap}"; do
   if "${script}" unexpected >/dev/null 2>"${tmp}/error"; then

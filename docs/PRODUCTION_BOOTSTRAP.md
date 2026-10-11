@@ -41,6 +41,7 @@ tool and fresh-seed digests before installing:
 - `/usr/local/sbin/kitsusync-inspect` (`root:root`, `0700`)
 - `/usr/local/libexec/kitsusync-sqlite-backup` (`root:root`, `0700`)
 - `/usr/local/libexec/kitsusync-image-identity` (`root:root`, `0700`)
+- `/usr/local/libexec/kitsusync-preflight-collect` (`root:root`, `0700`)
 - `/etc/kitsusync-deploy/` (`root:root`, `0700`)
 - `/var/lib/kitsusync-deploy/` (`root:root`, `0700`)
 - `/var/backups/kitsusync-deploy/` (`root:root`, `0700`)
@@ -60,6 +61,20 @@ Inspection is read-only. It prints approved identity/status fields and
 environment variable names only. It never prints environment values. If an
 entrypoint or command contains a credential-like argument name, the entire
 command field is redacted.
+
+The final `preflight_evidence_json=` line is a sanitized schema-version-1
+summary for the local preflight evaluator. It contains no paths, hashes,
+settings, or database values. If required evidence cannot be established, the
+affected field is omitted or reported negative so the evaluator cannot return
+PASS.
+
+The collector invokes the already-installed `kitsusync-restore-state verify`
+only after checking the fixed backup inventory. That verifier's `verify` mode
+does not restore or write files. The collector does not create backups or
+change Docker state. Its current schema cannot express separate free-space
+requirements for the runtime, backup, and Docker filesystems; capacity evidence
+is therefore omitted and the evaluator returns BLOCKED until a reviewed
+per-filesystem capacity contract is added.
 
 ## Normal deployment
 

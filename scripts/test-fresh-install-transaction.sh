@@ -12,7 +12,8 @@ source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
 protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime" /root/kitsusync-release-stage)
 tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
-       /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state)
+       /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state
+       /usr/local/libexec/kitsusync-preflight-collect)
 proxy_container=kitsusync-fresh-proxy-fixture
 zou_container=kitsusync-fresh-zou-fixture
 host_self_test_rule=false

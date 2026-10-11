@@ -9,7 +9,7 @@ $repo = 'ukyovfx/kitsusync'
 $artifactName = "kitsusync-deployment-$CommitSha"
 $expectedFiles = @(
     'deployment-mode', 'docker-compose.yml', 'kitsusync-bootstrap', 'kitsusync-deploy',
-    'kitsusync-image-identity', 'kitsusync-image.tar', 'kitsusync-inspect', 'kitsusync-restore-state',
+    'kitsusync-image-identity', 'kitsusync-image.tar', 'kitsusync-inspect', 'kitsusync-preflight-collect', 'kitsusync-restore-state',
     'kitsusync-runtime-state', 'kitsusync-sqlite-backup', 'provenance.txt'
 )
 $expectedArchiveEntries = @('provenance.txt') + @($expectedFiles | ForEach-Object { "deployment-bundle/$_" })
@@ -23,6 +23,7 @@ $digestMap = @{
     'kitsusync-image-identity' = 'image_identity_tool_sha256'
     'kitsusync-runtime-state' = 'runtime_state_tool_sha256'
     'kitsusync-restore-state' = 'restore_state_tool_sha256'
+    'kitsusync-preflight-collect' = 'preflight_collector_tool_sha256'
 }
 
 function Invoke-GhJson([string]$Endpoint) {

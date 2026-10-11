@@ -135,6 +135,7 @@ jobs:
           python3 scripts/test-staging-kitsu-hostname-source.py
           bash scripts/test-production-path-contract.sh
           bash scripts/test-bootstrap-security.sh
+          python3 -m unittest scripts.test_preflight_collector -v
           bash scripts/test-deploy-legacy-detection.sh
           bash scripts/test-fresh-install-contract.sh
 
