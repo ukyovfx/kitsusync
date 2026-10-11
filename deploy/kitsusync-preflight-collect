@@ -132,8 +132,13 @@ def inspect_database(path: Path, expected_uid: int) -> dict:
             # A normal read-only SQLite connection may update shared-memory
             # coordination state. Do not open a live WAL database from inspect.
             return {"size_bytes": metadata.st_size, "integrity": "unknown"}
-        # Without WAL sidecars, immutable mode prevents journal creation.
-        uri = path.resolve().as_uri() + "?immutable=1&mode=ro"
+        # Without WAL sidecars, immutable mode prevents journal creation. On
+        # Linux, pin SQLite to the inode already checked above: reopening the
+        # path after validation would allow the runtime UID to substitute it.
+        if sys.platform == "linux":
+            uri = f"file:/proc/self/fd/{fd}?immutable=1&mode=ro"
+        else:
+            uri = path.resolve().as_uri() + "?immutable=1&mode=ro"
         with closing(sqlite3.connect(uri, uri=True)) as db:
             ok = db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         current = path.lstat()

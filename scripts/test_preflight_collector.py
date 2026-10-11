@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from types import SimpleNamespace
-from unittest import SkipTest
+from unittest import SkipTest, mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +48,23 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(result, {"size_bytes": len(before), "integrity": "ok"})
         self.assertEqual(self.db.read_bytes(), before)
         self.assertNotIn("private-marker", repr(result))
+
+    def test_database_integrity_opens_the_validated_file_descriptor(self):
+        opened_uris = []
+        fake_db = mock.MagicMock()
+        fake_db.execute.return_value.fetchall.return_value = [("ok",)]
+
+        def record_uri(database_uri, **kwargs):
+            opened_uris.append(database_uri)
+            return fake_db
+
+        with (mock.patch.object(collector.sys, "platform", "linux"),
+              mock.patch.object(collector.sqlite3, "connect", side_effect=record_uri)):
+            result = collector.inspect_database(self.db, expected_uid=TEST_UID)
+
+        self.assertEqual(result["integrity"], "ok")
+        self.assertEqual(len(opened_uris), 1)
+        self.assertRegex(opened_uris[0], r"^file:/proc/self/fd/[0-9]+\?immutable=1&mode=ro$")
 
     def test_missing_database_is_blocked(self):
         result = collector.inspect_database(self.root / "missing.db", expected_uid=TEST_UID)
