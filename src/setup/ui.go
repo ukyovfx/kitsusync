@@ -905,16 +905,16 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .production-context dialog,.editorial-workbench .production-team-page dialog{color-scheme:dark;border-color:var(--border-default);border-radius:var(--radius-md);background:var(--surface-overlay);color:var(--text)}
   .editorial-workbench .production-context dialog select,.editorial-workbench .production-team-page dialog select{color-scheme:dark;background:var(--surface-control);color:var(--text);border-color:var(--border-default)}
   .production-context .production-notification-heading{display:flex;justify-content:flex-end;margin:0 0 var(--space-3,12px)}
-  .production-context .production-notification-actions{display:flex;align-items:center;gap:var(--space-2,8px);min-height:var(--control-height-dense,38px)}
-  .production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:var(--control-height-dense,38px);min-height:var(--control-height-dense,38px);padding-block:0}
-  .production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:var(--control-height-dense,38px);height:var(--control-height-dense,38px);padding:0 10px;border-radius:var(--status-radius);font-size:12px;line-height:1.1}
+  .production-context .production-notification-actions{display:flex;align-items:center;gap:var(--space-2,8px);min-height:32px}
+  .production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:32px;min-height:32px;padding-block:0}
+  .production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:32px;height:32px;padding:0 8px;border-radius:var(--status-radius);font-size:11px;line-height:1.1}
   .production-context .production-routing-editor .routing-select-task{display:inline-flex;align-items:center;gap:var(--space-2,8px);width:100%;min-width:0;padding:6px 8px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--color-content);text-align:left;cursor:pointer}
   .production-context .production-routing-editor .routing-task-type-name{min-width:0;overflow-wrap:anywhere}
   .production-context .production-routing-editor .routing-select-task:hover{background:var(--surface-subtle)}
   .production-context .production-routing-editor .routing-select-task[aria-pressed=true]{color:var(--text);font-weight:650;background:transparent}
   .production-context .production-routing-editor .routing-expand-indicator{width:7px;height:7px;flex:0 0 7px;margin-inline-start:auto;border-right:1px solid var(--color-content-subtle);border-bottom:1px solid var(--color-content-subtle);transform:rotate(45deg);transition:transform .14s ease}
   .production-context .production-routing-editor .routing-select-task[aria-expanded=true] .routing-expand-indicator{transform:rotate(225deg)}
-  .production-context .production-notification-actions .btn-ghost{min-width:84px}
+  .production-context .production-notification-actions .btn-ghost{min-width:0;padding-inline:10px;font-size:12px}
   .production-context .production-routing-editor{gap:var(--space-4,16px)}
   .production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-4,16px);min-width:0}
   .production-context .production-routing-editor .production-routing-editor-actions{margin:0}
@@ -938,6 +938,7 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-context .production-routing-editor .wizard-plan-table th:last-child,.production-context .production-routing-editor .wizard-plan-table td:last-child{width:8%;text-align:right}
   .production-context .production-routing-editor .wizard-plan-table td{padding:8px 6px;vertical-align:middle}
   .production-context .production-routing-editor .routing-select-task{min-height:38px;padding-inline:4px}
+  .production-context .production-routing-editor [data-routing-row][tabindex="0"]:focus-visible{outline:2px solid var(--interaction-focus);outline-offset:-2px}
   .production-context .production-routing-editor .routing-new-task-type,.production-context .production-routing-editor .routing-destination-control{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:center;gap:8px;min-width:0}
   .production-context .production-routing-editor [data-task-selector-wrap][hidden],.production-context .production-routing-editor [data-custom-channel-field][hidden]{display:none!important}
   .production-context .production-routing-editor [data-select-task][hidden]{display:none!important}

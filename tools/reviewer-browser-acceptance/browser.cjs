@@ -693,6 +693,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const recipientChips = await compReadRow.locator('.production-wfa-target-chip,.production-wfa-state-chip,.production-wfa-more-chip').count();
         if (!recipientChips) throw new Error(`Notifications WFA recipients are not rendered as compact chips in ${locale.lang}`);
+        const headerControlHeights = await page.locator('.production-notification-actions').evaluate(node => {
+          const status = node.querySelector('.status-pill').getBoundingClientRect().height;
+          const edit = node.querySelector('.btn-ghost').getBoundingClientRect().height;
+          return { status, edit, statusLabel: node.querySelector('.status-pill').innerText, editLabel: node.querySelector('.btn-ghost').innerText };
+        });
+        if (Math.max(headerControlHeights.status, headerControlHeights.edit) > 33 || Math.abs(headerControlHeights.status - headerControlHeights.edit) > 1) throw new Error(`Notifications status/Edit controls are not compact and aligned in ${locale.lang}/${viewport.name}: ${JSON.stringify(headerControlHeights)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         if ((await compReadRow.innerText()).includes(locale.lang === 'ja' ? '自動' : 'Automatic') || (await compReadRow.innerText()).includes(locale.lang === 'ja' ? '追加' : 'Additional')) throw new Error(`read mode exposes internal WFA provenance labels in ${locale.lang}`);
@@ -741,8 +747,31 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (restoredIDs[0] !== 'task-comp' || restoredIDs[1] !== 'task-animation' || !(await editForm.locator('[data-apply-submit]').isDisabled())) throw new Error(`route order did not return to its clean state in ${locale.lang}/${viewport.name}: ${JSON.stringify(restoredIDs)}`);
         const automaticPanel = panel.locator('[data-wfa-automatic]');
         const selectedRouteForWFA = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
-        await selectedRouteForWFA.locator('[data-select-task]').click();
+        if (await selectedRouteForWFA.getAttribute('aria-selected') !== 'false' || await panel.isVisible()) throw new Error(`routing editor should begin with no row selected in ${locale.lang}/${viewport.name}`);
+        const channelCell = selectedRouteForWFA.locator('td').nth(1);
+        const channelCellBox = await channelCell.boundingBox();
+        if (!channelCellBox || channelCellBox.width < 12) throw new Error(`channel cell has no non-interactive hit area in ${locale.lang}/${viewport.name}`);
+        await channelCell.click({ position: { x: channelCellBox.width - 4, y: channelCellBox.height / 2 } });
         if (!(await panel.isVisible()) || await panel.locator('[data-wfa-title]').innerText() !== 'Compositing') throw new Error(`Task Type row click did not open the bottom WFA detail panel in ${locale.lang}`);
+        if (await selectedRouteForWFA.getAttribute('aria-selected') !== 'true' || await selectedRouteForWFA.getAttribute('aria-expanded') !== 'true') throw new Error(`clicking the non-interactive channel cell did not expose selected/expanded state in ${locale.lang}`);
+        const animationRowForKeyboard = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
+        await animationRowForKeyboard.focus();
+        await page.keyboard.press('Enter');
+        if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Animation') || await animationRowForKeyboard.getAttribute('aria-selected') !== 'true') throw new Error(`Enter did not select the focused routing row in ${locale.lang}`);
+        await selectedRouteForWFA.locator('[data-select-task]').click();
+        const animationActionCell = animationRowForKeyboard.locator('td').last();
+        const animationActionBox = await animationActionCell.boundingBox();
+        if (!animationActionBox || animationActionBox.width < 8) throw new Error(`route action cell has no empty row surface in ${locale.lang}/${viewport.name}`);
+        await animationActionCell.click({ position: { x: 2, y: animationActionBox.height / 2 } });
+        if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Animation')) throw new Error(`blank route action cell did not select its WFA detail in ${locale.lang}`);
+        await selectedRouteForWFA.locator('[data-destination-control]').click();
+        if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Animation')) throw new Error(`native channel select click changed routing row selection in ${locale.lang}`);
+        await page.keyboard.press('Escape');
+        await selectedRouteForWFA.locator('[data-select-task]').click();
+        if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Compositing')) throw new Error(`Task Type selection button stopped selecting its own route in ${locale.lang}`);
+        await selectedRouteForWFA.focus();
+        await page.keyboard.press(' ');
+        if (await selectedRouteForWFA.getAttribute('aria-selected') !== 'true') throw new Error(`Space did not select the focused routing row in ${locale.lang}`);
         const selectedRouteStyle = await selectedRouteForWFA.evaluate(node => ({
           rowBoxShadow: getComputedStyle(node).boxShadow,
           cellBackground: getComputedStyle(node.children[0]).backgroundColor,

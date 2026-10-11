@@ -343,7 +343,7 @@ func TestProductionTeamStatusActionsStayAlignedAndDangerDisclosureUsesSemanticRe
 }
 
 func TestProductionNotificationHeaderActionsShareDenseControlHeight(t *testing.T) {
-	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:var(--control-height-dense,38px);min-height:var(--control-height-dense,38px);padding-block:0}`) {
+	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:32px;min-height:32px;padding-block:0}`) {
 		t.Fatal("Notifications status and Edit controls must share the same visible height rhythm")
 	}
 	if !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);`) {

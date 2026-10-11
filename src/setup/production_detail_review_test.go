@@ -70,7 +70,7 @@ func TestProductionDetailReviewControlsUseVisibleAlignedGroups(t *testing.T) {
 
 func TestProductionReviewControlsUseSharedSpacingAndControlTokens(t *testing.T) {
 	for _, rule := range []string{
-		`.production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:var(--control-height-dense,38px);`,
+		`.production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:32px;min-height:32px;padding-block:0}`,
 		`.production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-4,16px);`,
 		`.production-context .production-routing-editor .production-routing-editor-footer{margin:0;padding-top:var(--space-4,16px)`,
 		`.editorial-workbench .production-context .production-wfa-edit-panel{display:grid;gap:var(--space-4,16px);padding:var(--space-4,16px) 18px;border:0;border-top:1px solid var(--divider-color);border-radius:0;background:var(--surface-subtle);box-shadow:none}`,

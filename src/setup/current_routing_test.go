@@ -14,6 +14,28 @@ import (
 	"app/src/model"
 )
 
+func TestRoutingRowSelectionSupportsWholeRowAndKeyboardWithoutCapturingControls(t *testing.T) {
+	template := renderCurrentRoutingRowTemplate("ja", []kitsu.TaskType{{ID: "task-storyboard", Name: "Storyboard"}}, nil)
+	for _, marker := range []string{`data-routing-row`, `tabindex="0"`, `aria-controls="production-wfa-detail-panel"`, `aria-selected="false"`, `aria-expanded="false"`} {
+		if !strings.Contains(template, marker) {
+			t.Errorf("routing row template is missing accessible selection marker %q", marker)
+		}
+	}
+	for _, marker := range []string{
+		`target.closest('button,a,label,input,select,textarea,details,summary,[role="button"],[role="combobox"],[role="option"],[role="menuitem"],[role="tab"],[contenteditable="true"]')`,
+		`selectRow(row)})`,
+		`event.target!==row||!['Enter',' '].includes(event.key)`,
+		`item.setAttribute('aria-expanded',String(selected));item.setAttribute('aria-selected',String(selected))`,
+	} {
+		if !strings.Contains(currentRoutingEditorScript(), marker) {
+			t.Errorf("routing row selection script is missing interaction marker %q", marker)
+		}
+	}
+	if !strings.Contains(adminThemeCSS, `.production-context .production-routing-editor [data-routing-row][tabindex="0"]:focus-visible`) {
+		t.Fatal("keyboard-focused routing rows need a visible scoped focus indicator")
+	}
+}
+
 func TestCurrentRoutingDraftTemplateSupportsInlineDestinationModesAndRepeatedAdds(t *testing.T) {
 	template := renderCurrentRoutingRowTemplate("en", []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}, []model.ProjectWebhook{{ID: 7, ChannelName: "comp-review"}})
 	for _, marker := range []string{`data-task-type-select`, `value="task-comp"`, `data-default-channel-name="compositing"`, `data-destination-control`, `value="7">#comp-review`, `value="__auto__"`, `value="__custom__"`, `data-custom-channel-field hidden`, `data-new-channel-name`} {
@@ -246,7 +268,7 @@ func TestCurrentRoutingEditorStartsWithRowsAndWFAHiddenBelowList(t *testing.T) {
 	if strings.HasPrefix(afterRoute, `<tr class="routing-inline-editor-row"`) {
 		t.Fatal("WFA detail must not be inserted between route rows")
 	}
-	if !strings.Contains(body, `<div data-editor-parking><section class="production-wfa-edit-panel" data-wfa-detail-panel aria-live="polite" hidden>`) {
+	if !strings.Contains(body, `<div data-editor-parking><section id="production-wfa-detail-panel" class="production-wfa-edit-panel" data-wfa-detail-panel aria-live="polite" hidden>`) {
 		t.Fatal("the WFA-only detail panel must start hidden below the route list")
 	}
 	if !strings.Contains(body, `</section></div><div data-apply-message role="status" aria-live="polite"></div>`) {
@@ -399,14 +421,26 @@ func TestCurrentRoutingDisclosureAndCanonicalStatusPresentation(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=routing-disclosure-state&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{})
-	if !strings.Contains(body, `class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"`) {
-		t.Fatal("Task Type row control must expose its collapsed state")
+	if !strings.Contains(body, `data-routing-row tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"`) {
+		t.Fatal("routing rows must be keyboard-focusable and expose their WFA detail selection state")
 	}
-	if !strings.Contains(currentRoutingEditorScript(), `setAttribute('aria-expanded',String(selected))`) {
-		t.Fatal("Task Type inline expansion state must be announced to assistive technology")
+	if !strings.Contains(body, `id="production-wfa-detail-panel"`) || !strings.Contains(body, `class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"`) {
+		t.Fatal("routing rows must control the WFA detail panel and retain the Task Type selection button")
 	}
-	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:var(--control-height-dense,38px);height:var(--control-height-dense,38px);padding:0 10px;border-radius:var(--status-radius);`) {
+	if !strings.Contains(currentRoutingEditorScript(), `row.addEventListener('click',function(event){var target=event.target;if(target&&target.closest&&target.closest('button,a,label,input,select,textarea,details,summary,[role="button"],[role="combobox"],[role="option"],[role="menuitem"],[role="tab"],[contenteditable="true"]'))return;selectRow(row)})`) {
+		t.Fatal("only non-interactive routing-row surfaces should select the WFA detail")
+	}
+	if !strings.Contains(currentRoutingEditorScript(), `row.addEventListener('keydown',function(event){if(event.target!==row||!['Enter',' '].includes(event.key))return;event.preventDefault();selectRow(row)})`) {
+		t.Fatal("routing rows must support Enter/Space selection without intercepting descendant controls")
+	}
+	if !strings.Contains(currentRoutingEditorScript(), `item.setAttribute('aria-expanded',String(selected));item.setAttribute('aria-selected',String(selected))`) {
+		t.Fatal("routing row selection state must be announced to assistive technology")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:32px;height:32px;padding:0 8px;border-radius:var(--status-radius);font-size:11px;`) {
 		t.Fatal("Healthy and Edit must share the compact control-height rhythm while retaining the semantic status-pill shape")
+	}
+	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .btn-ghost{min-width:0;padding-inline:10px;font-size:12px}`) {
+		t.Fatal("Notifications Edit must use compact local button sizing without changing global buttons")
 	}
 	if !strings.Contains(adminThemeCSS, `.production-settings-disclosure-row.danger-zone>summary{color:var(--color-status-danger)}`) {
 		t.Fatal("Danger Zone must use the canonical semantic danger color")
