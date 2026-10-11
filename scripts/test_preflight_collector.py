@@ -120,6 +120,7 @@ class CollectorTests(unittest.TestCase):
             lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {name}")
         (backup / "persistent-state.sha256").write_text("\n".join(lines) + "\n")
         os.chmod(backup / "persistent-state.sha256", 0o600)
+        os.chmod(backup, 0o700)
         return backup
 
     def test_complete_backup_passes_read_only_validation(self):
