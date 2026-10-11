@@ -363,6 +363,28 @@ func TestProductionNotificationReadSummaryShowsOnlyEffectiveRecipients(t *testin
 	}
 }
 
+func TestRoutingEditorEncodesMissingWFARecipientsAsEmptyArray(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{KitsuProjectID: "routing-empty-recipients", Name: "Empty WFA Recipients"}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "storyboard", "Storyboard", "synthetic-webhook", "channel-storyboard"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-storyboard", TaskTypeName: "Storyboard", DestinationWebhookID: webhook.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?tab=notifications&edit_routing=1", nil), project, "en", "", productionNotificationReviewerView{TaskTypes: []kitsu.TaskType{{ID: "task-storyboard", Name: "Storyboard"}}})
+	if !strings.Contains(body, `data-task-type="task-storyboard"`) || !strings.Contains(body, `data-existing-targets="W10="`) {
+		t.Fatal("a routed Task Type with no persisted WFA targets must render an empty JSON array for browser .filter/.some operations, not JSON null")
+	}
+	if strings.Contains(body, `data-existing-targets="bnVsbA=="`) {
+		t.Fatal("nil WFA target data must not be serialized as JSON null")
+	}
+}
+
 func TestCurrentRoutingDisclosureAndCanonicalStatusPresentation(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "routing-disclosure-state", Name: "Routing Disclosure State"}
@@ -416,9 +438,9 @@ func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *
 		t.Fatal(err)
 	}
 	roleID := "123456789012345680"
-	for _, tc := range []struct{ lang, user, role, empty string }{
-		{"ja", "ユーザー", "ロール", "このDiscordサーバーにカスタムロールはありません。"},
-		{"en", "Users", "Roles", "No custom Discord roles are configured."},
+	for _, tc := range []struct{ lang, user, role, empty, routeRequired, targetRequired string }{
+		{"ja", "ユーザー", "ロール", "このDiscordサーバーにカスタムロールはありません。", "先にTask Typeを選択してください。", "追加するDiscordユーザーまたはロールを選択してください。"},
+		{"en", "Users", "Roles", "No custom Discord roles are configured.", "Select a Task Type before adding a recipient.", "Select a Discord user or role to add."},
 	} {
 		body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{
 			Team:        []kitsu.Person{{ID: "person-linked", FullName: "Linked User", Active: true}},
@@ -436,6 +458,11 @@ func TestCurrentRoutingRecipientDialogUsesExplicitUserRoleModesAndEmptyState(t *
 		}
 		if strings.Count(body, `data-wfa-user-combobox`) != 1 || strings.Count(body, `data-wfa-role-combobox`) != 1 {
 			t.Errorf("%s recipient picker should expose one combobox for each explicit mode", tc.lang)
+		}
+		for _, localized := range []string{`data-route-required-label="` + tc.routeRequired + `"`, `data-target-required-label="` + tc.targetRequired + `"`} {
+			if !strings.Contains(body, localized) {
+				t.Errorf("%s recipient Add validation is missing localized feedback %q", tc.lang, localized)
+			}
 		}
 		emptyBody := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?lang="+tc.lang, nil), project, tc.lang, "", productionNotificationReviewerView{BotToken: "configured", RolesReady: true})
 		if !strings.Contains(emptyBody, tc.empty) {

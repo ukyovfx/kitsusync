@@ -446,6 +446,12 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: false });
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(base).origin });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      window.addEventListener('unhandledrejection', event => {
+        const reason = event.reason;
+        console.error(`Unhandled promise rejection: ${reason && reason.message ? reason.message : String(reason)}`);
+      });
+    });
     let expectedStaleApply = null;
     let expectedChannelCreateFailure = null;
     page.on('pageerror', error => errors.push(error.message));
@@ -869,9 +875,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const stagedRoleApplyDisabled = await editForm.locator('[data-apply-submit]').isDisabled();
         if (!stagedRoleStatus.includes(stagedInstruction) || stagedRoleApplyDisabled) throw new Error(`modal Add did not clearly stage the Role and enable the single Apply save in ${locale.lang}: status=${stagedRoleStatus} disabled=${stagedRoleApplyDisabled}`);
         await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.locator('#wfa-user-tab').click();
         await addModal.locator('[data-wfa-user-combobox]').focus();
         await page.keyboard.press('Space');
-        if (!(await userListbox.isVisible())) throw new Error('Keyboard activation did not open the Add recipient listbox');
+        if (!(await userListbox.isVisible())) throw new Error(`Keyboard activation did not open the Add recipient listbox: expanded=${await addModal.locator('[data-wfa-user-combobox]').getAttribute('aria-expanded')} mode=${await addModal.getAttribute('data-recipient-mode')} userPanelHidden=${await addModal.locator('[data-recipient-panel="user"]').getAttribute('hidden')} active=${await page.evaluate(() => document.activeElement?.outerHTML?.slice(0,180))}`);
         await page.keyboard.press('Escape');
         if (await userListbox.isVisible() || await addModal.locator('[data-wfa-user-combobox]').getAttribute('aria-expanded') !== 'false') throw new Error('Escape did not close the Add recipient listbox');
         if (await addModal.isVisible()) await addModal.locator('[data-wfa-add-cancel]').click();
@@ -1696,6 +1703,95 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'sparse Production', 'four vertical Settings sections and readable disclosure rows remain visible');
       }
     }
+
+    await fixture(page, 'japanese-wfa-add');
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    const japaneseLocale = locales.find(locale => locale.lang === 'ja');
+    await gotoProduction(page, japaneseLocale, 'notifications', '&edit_routing=1');
+    const japaneseForm = page.locator('[data-current-routing-form]');
+    const storyboardRow = japaneseForm.locator('[data-routing-row][data-task-type="task-storyboard"]');
+    if (!(await page.locator('.production-identity h1').innerText()).includes('aa') || !(await storyboardRow.innerText()).includes('#storyboard')) {
+      throw new Error('Japanese WFA regression fixture did not render Production aa / Storyboard / #storyboard');
+    }
+    await storyboardRow.locator('[data-select-task]').click();
+    const japanesePanel = japaneseForm.locator('[data-wfa-detail-panel]');
+    await japanesePanel.locator('[data-wfa-add-target]').click();
+    const japaneseDialog = page.locator('[data-wfa-add-modal]');
+    const japaneseAdd = japaneseDialog.locator('[data-wfa-add-confirm]');
+    await japaneseAdd.click();
+    const noSelection = japaneseDialog.locator('[data-wfa-add-message]');
+    if (!(await noSelection.isVisible()) || !(await noSelection.innerText()).includes('選択')) {
+      throw new Error('Add without a selected WFA target must provide actionable Japanese feedback');
+    }
+    if (!(await japaneseDialog.isVisible()) || await japaneseForm.locator('[data-apply-submit]').isEnabled()) {
+      throw new Error('an incomplete User Add must keep the modal open and leave Apply disabled');
+    }
+    const japaneseUserID = '22222222222222238';
+    const userCombo = japaneseDialog.locator('[data-wfa-user-combobox]');
+    await userCombo.click();
+    await japaneseDialog.locator(`[data-wfa-user-listbox] [data-wfa-option-value="${japaneseUserID}"]`).click();
+    if (await japaneseDialog.locator('[data-wfa-user-id]').inputValue() !== japaneseUserID || !(await userCombo.innerText()).includes('日本語ユーザー')) {
+      throw new Error('Japanese User selection did not synchronize the visible combobox and hidden Discord ID');
+    }
+    await japaneseAdd.click();
+    const japaneseUserTarget = japanesePanel.locator(`[data-wfa-target-list] li[data-kind="user"][data-id="${japaneseUserID}"]`);
+    const japaneseTargetVisible = await japaneseUserTarget.isVisible();
+    const japaneseTargetText = japaneseTargetVisible ? await japaneseUserTarget.innerText() : '';
+    const japaneseDialogStillOpen = await japaneseDialog.isVisible();
+    if (!japaneseTargetVisible || !japaneseTargetText.includes('日本語ユーザー') || japaneseDialogStillOpen) {
+      throw new Error(`User Add did not close the dialog and render the Japanese target under Additional recipients: targetVisible=${japaneseTargetVisible} targetText=${japaneseTargetText} dialogOpen=${japaneseDialogStillOpen} modalOpen=${await japaneseDialog.evaluate(node => node.open)} mode=${await japaneseDialog.getAttribute('data-recipient-mode')} confirmDisabled=${await japaneseAdd.isDisabled()} selection=${await japaneseDialog.locator('[data-wfa-user-id]').inputValue()} routePressed=${await storyboardRow.locator('[data-select-task]').getAttribute('aria-pressed')} addMessage=${await japaneseDialog.locator('[data-wfa-add-message]').innerText()} pending=${await japaneseForm.locator('[data-pending-status]').innerText()} applyDisabled=${await japaneseForm.locator('[data-apply-submit]').isDisabled()} errors=${errors.slice(-5).join(' | ')}`);
+    }
+    const userPending = (await japaneseForm.locator('[data-pending-status]').innerText()).trim();
+    if (!/^1\s/.test(userPending) || await japaneseForm.locator('[data-apply-submit]').isDisabled()) {
+      throw new Error(`Japanese User Add did not stage one pending change and enable Apply: ${userPending}`);
+    }
+
+    await japanesePanel.locator('[data-wfa-add-target]').click();
+    await japaneseDialog.locator('#wfa-role-tab').click();
+    await japaneseDialog.locator('[data-wfa-role-combobox]').click();
+    await japaneseDialog.locator('[data-wfa-role-listbox] [data-wfa-option-value="33333333333333331"]').click();
+    await japaneseAdd.click();
+    const japaneseRoleTarget = japanesePanel.locator('[data-wfa-target-list] li[data-kind="role"][data-id="33333333333333331"]');
+    if (!(await japaneseRoleTarget.isVisible()) || await japaneseForm.locator('[data-apply-submit]').isDisabled()) {
+      throw new Error('Role tab selection did not stage the selected Role target');
+    }
+
+    await japanesePanel.locator('[data-wfa-add-target]').click();
+    await japaneseDialog.locator('#wfa-role-tab').click();
+    await japaneseDialog.locator('#wfa-user-tab').click();
+    await japaneseDialog.locator('[data-wfa-user-combobox]').focus();
+    await page.keyboard.press('Enter');
+    if (!(await japaneseDialog.locator('[data-wfa-user-listbox]').isVisible())) throw new Error('keyboard could not reopen Japanese User choices after switching recipient tabs');
+    await page.keyboard.press('Enter');
+    if (await japaneseDialog.locator('[data-wfa-user-id]').inputValue() !== japaneseUserID) throw new Error('keyboard selection did not update the hidden Discord User ID');
+    await japaneseAdd.click();
+    if (await japanesePanel.locator(`[data-wfa-target-list] li[data-kind="user"][data-id="${japaneseUserID}"]`).count() !== 1 || !(await japaneseForm.locator('[data-pending-status]').innerText()).trim().startsWith('2 ')) {
+      throw new Error('duplicate User Add must not duplicate the staged target or pending count');
+    }
+
+    let japaneseApplyPayload = null;
+    const japaneseApplyCount = { value: 0 };
+    const japaneseApplyEndpoint = new URL('/bot/admin/projects?apply_notifications=1', base).href;
+    await page.route(japaneseApplyEndpoint, async route => {
+      japaneseApplyCount.value++;
+      japaneseApplyPayload = route.request().postDataJSON();
+      await route.continue();
+    });
+    const japaneseApplyResponse = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+    await japaneseForm.locator('[data-apply-submit]').click();
+    const japaneseApplyResult = await japaneseApplyResponse;
+    const japaneseApplyError = japaneseApplyResult.ok() ? null : await japaneseApplyResult.json().catch(() => ({}));
+    const storyboardDelta = japaneseApplyPayload?.reviewer_changes?.find(change => change.task_type_id === 'task-storyboard');
+    if (japaneseApplyResult.status() !== 200 || japaneseApplyCount.value !== 1 || !storyboardDelta?.add_user_ids?.includes(japaneseUserID) || !storyboardDelta?.add_role_ids?.includes('33333333333333331')) {
+      throw new Error(`Japanese Storyboard Apply did not submit exact User/Role IDs once: status=${japaneseApplyResult.status()} error=${japaneseApplyError?.error || 'none'} payload=${JSON.stringify(japaneseApplyPayload)}`);
+    }
+    await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
+    await page.unroute(japaneseApplyEndpoint);
+    const savedJapaneseRow = page.locator('.production-notification-table tbody tr[data-task-type-id="task-storyboard"]');
+    if (!(await savedJapaneseRow.innerText()).includes('日本語ユーザー') || !(await savedJapaneseRow.innerText()).includes('Reviewers')) {
+      throw new Error('successful Japanese User/Role Apply did not refresh the Storyboard row with persisted recipients');
+    }
+    records.push({ route: '/bot/admin/projects?project=reviewer-production&tab=notifications', locale: 'ja', viewport: 'desktop', state: 'Production aa / Storyboard WFA recipient add', detail: 'empty Add feedback, Japanese User mouse selection, Role tab change, keyboard reopen, duplicate suppression, one exact-ID Apply, and refreshed persisted summary' });
 
     if (errors.length) throw new Error(`browser console/runtime or external-origin errors (${errors.length}): ${errors.slice(0, 12).join(' | ')}`);
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };

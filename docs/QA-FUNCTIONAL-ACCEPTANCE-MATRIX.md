@@ -1,0 +1,38 @@
+# Functional Acceptance Matrix
+
+This matrix maps high-value KitsuSync user workflows to existing executable tests and the evidence still required outside synthetic CI. It is a gate and a coverage map, not a claim that every workflow has passed in a live installation.
+
+## Result vocabulary
+
+- **PASS** — the named test or check ran against the recorded candidate and verified the stated behavior.
+- **FAIL** — an executed check found a regression or unmet acceptance condition.
+- **BLOCKED** — the check could not safely run because an explicit prerequisite or authorization is unavailable.
+- **NOT TESTED** — no qualifying evidence exists. A render assertion, compile, or synthetic test must not be substituted for a live check.
+
+Record status with the exact commit SHA, command or CI run, and environment. Report synthetic service/database evidence separately from real Staging and real Discord evidence.
+
+## Critical workflow map
+
+| Workflow | Executable behavior gate | Negative / recovery coverage | Persistence / refreshed-state evidence | Live gate |
+|---|---|---|---|---|
+| Login, logout, session, step-up | `src/setup/reviewer_browser_acceptance_test.go`: `TestReviewerBrowserAcceptance`; `src/setup/bot_recent_auth_test.go`; `src/setup/accessibility_markup_test.go` | Invalid/absent and expired sessions, step-up return route, safe login errors | Session routes exercised in normal-handler browser flow; auth-sensitive mutations have handler tests | Authenticated Staging navigation and expiry/step-up: report separately |
+| Dashboard, navigation, Production selection | `TestReviewerBrowserAcceptance`; Production summary and list tests in `src/setup` | Empty/unconnected Production and unavailable Kitsu states covered by named browser scenarios | Read model is synthetic in browser tests; selected Production route is checked | Current live Kitsu data: Staging only, read-only unless separately authorized |
+| User Linking | `TestReviewerBrowserAcceptance`; `src/setup/pr199_user_linking_render.go` tests and relevant handlers | Kitsu/Discord lookup failures, unavailable member, duplicate names, validation and safe errors | Synthetic link/save/unlink requests and refresh are exercised where recorded by the browser scenario; handler tests cover persistence | Human acceptance of the current Guild mapping is separate; no live mapping changes without authorization |
+| Production Team and Reviewer eligibility | `TestReviewerBrowserAcceptance`; `src/model/supervisor_reviewer_resolution_test.go`; relevant UserMap / ProjectReviewerTarget model tests | Team lookup failure, unlinked/out-of-Guild users, role/department/team mismatches, stale targets | SQLite model and handler tests; browser checks for read-only Team and recipient presentation | Live Team/Guild membership is NOT TESTED unless explicitly inspected on exact Staging SHA |
+| Notification routing and WFA recipient edits | `TestReviewerBrowserAcceptance`; `src/setup/current_routing_test.go`; `src/model/production_notification_apply_test.go` | Stale 409 retention, empty selection feedback, duplicate Add, invalid/removed route targets, missing/unavailable destination, creation/reorder failure and recovery paths | Browser captures exact Apply payload; file-backed SQLite read-back verifies committed User/Role IDs; read page refresh verifies displayed recipients | Real Apply and real Discord delivery/resource changes require safe disposable destination and explicit authorization |
+| Connections, setup, external Kitsu URL | `TestReviewerBrowserAcceptance`; `src/setup/bootstrap_test.go`; `src/setup/bot_recent_auth_test.go`; `src/setup/drive_handler_test.go` | Invalid credentials/URL, step-up/expired session, failed save, check-link without persistence | Handler tests read back saved URL and fallback after clear; browser verifies current edit paths | Real service connectivity and credential acceptance are separate Staging checks; secrets are never test output |
+| Settings, System Status, diagnostics, audit | `TestReviewerBrowserAcceptance`; `src/setup` diagnostics/status/audit handler tests; `src/model/audit_health_test.go` | Service/API failures and safe empty/error states where named by test | Read-only handler and model checks; destructive Settings actions are not executed by browser acceptance | Live diagnostic truth must be tied to exact runtime SHA; Danger Zone destructive actions remain NOT TESTED |
+| Dialogs, custom comboboxes, menus, tabs, forms and buttons | `TestReviewerBrowserAcceptance`; `src/setup/current_routing_test.go`; accessible markup/render tests | Keyboard/mouse operation, cancellation, duplicate actions, hidden select synchronization, stale conflicts, unexpected console errors and unhandled rejections | Apply payload plus SQLite read-back for WFA edits; other forms use their owning handler tests | Real browser only for the human-authenticated visible result; synthetic Chromium is not a substitute |
+| JP/EN and desktop/mobile | `TestReviewerBrowserAcceptance` in CI runs the repository Chromium acceptance matrix and checks overflow, copy, console/runtime errors and key page states | Localized empty/error messages and mobile layout are included in applicable browser cases | State-specific UI is checked in each synthetic locale/viewport scenario | Real authenticated Staging screenshots/state checks remain separate |
+
+## Required pull-request gate
+
+For UI or interaction changes, CI must run the dedicated `reviewer-browser-acceptance` job against the exact PR head. It starts the normal application handlers with disposable SQLite, loopback synthetic Kitsu/Discord, and Chromium; there is no real-service call or test-only authentication bypass. Unexpected console errors, page exceptions, and unhandled Promise rejections fail the job.
+
+Run focused tests for the changed interaction, then the repository Go tests and vet. Use the repository Compose validation where the change affects runtime configuration. Do not mark an unavailable dependency or skipped mandatory CI job successful. Exact-head CI, Security Audit, and applicable CodeQL results are separate required evidence.
+
+## Current PR #230 WFA Add regression
+
+The browser scenario named `japanese-wfa-add` exercises the reported Production `aa`, Task Type `Storyboard`, destination `#storyboard` with Japanese Discord display data. It drives the actual rendered dialog and route editor, verifies empty Add feedback, mouse and keyboard User selection, User/Role tab switching, duplicate suppression, pending status and Apply enablement, exact User/Role IDs in one Apply request, the refreshed read view, and persisted targets in the test's file-backed SQLite database. It performs no real Discord send or live Production mutation.
+
+This scenario verifies the synthetic candidate end-to-end. The operator's authenticated Staging sequence remains **NOT TESTED** until the operator verifies the Add result on the exact deployed SHA. A real Apply remains prohibited unless the destination is affirmatively verified as disposable and the action is authorized.
