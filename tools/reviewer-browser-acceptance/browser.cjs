@@ -852,6 +852,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await userListbox.locator('[data-wfa-option-value="22222222222222225"]').click();
         if (await candidateUsers.inputValue() !== '22222222222222225' || await recipientUserCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Choosing a linked User did not update the preserved recipient value control');
         await addModal.locator('[data-wfa-add-confirm]').click();
+        const stagedInstruction = locale.lang === 'ja' ? '追加はまだ保存されていません' : 'Added locally; click Apply below to save.';
+        if (!(await editForm.locator('[data-pending-status]').innerText()).includes(stagedInstruction) || await editForm.locator('[data-apply-submit]').isDisabled()) throw new Error(`modal Add did not clearly stage the User and enable the single Apply save in ${locale.lang}`);
         await editForm.locator('[data-wfa-add-target]').click();
         await addModal.locator('#wfa-role-tab').click();
         if (!(await addModal.locator('[data-wfa-role-combobox]').isVisible())) throw new Error('explicit Roles mode did not reveal the eligible Discord Role picker');
@@ -861,6 +863,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await addModal.locator('[data-wfa-role-listbox] [data-wfa-option-value="33333333333333331"]').click();
         if (await candidateRoles.inputValue() !== '33333333333333331') throw new Error('Choosing a mentionable Role did not update the preserved recipient value control');
         await addModal.locator('[data-wfa-add-confirm]').click();
+        if (!(await editForm.locator('[data-pending-status]').innerText()).includes(stagedInstruction) || await editForm.locator('[data-apply-submit]').isDisabled()) throw new Error(`modal Add did not clearly stage the Role and enable the single Apply save in ${locale.lang}`);
         await editForm.locator('[data-wfa-add-target]').click();
         await addModal.locator('[data-wfa-user-combobox]').focus();
         await page.keyboard.press('Space');
@@ -965,6 +968,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-animation')) {
           throw new Error('Apply sent a reviewer delta for a persisted route pending removal');
+        }
+        const compReviewerDelta = submittedApply.reviewer_changes.find(change => change.task_type_id === 'task-comp');
+        if (!compReviewerDelta || !compReviewerDelta.add_user_ids.includes('22222222222222225') || !compReviewerDelta.add_role_ids.includes('33333333333333331')) {
+          throw new Error('the single Apply request did not include the staged User and Role additions for Compositing');
         }
         const staleMessage = locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved';
         await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent.includes(expected), {
