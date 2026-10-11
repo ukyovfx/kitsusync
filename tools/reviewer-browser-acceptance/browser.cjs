@@ -1751,6 +1751,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       throw new Error('Japanese WFA regression fixture did not render Production aa / Storyboard / #storyboard');
     }
     await storyboardRow.locator('[data-select-task]').click();
+    const japaneseOriginalDestination = await storyboardRow.getAttribute('data-original-destination');
     const japanesePanel = japaneseForm.locator('[data-wfa-detail-panel]');
     // Older or malformed rendered rows may still carry JSON null. Exercise the
     // client-side normalization independently from the server's [] encoding.
@@ -1831,7 +1832,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       JSON.stringify(storyboardDelta.remove_role_ids) === JSON.stringify([]);
     const exactRoute = japaneseApplyPayload?.routes?.length === 1 &&
       japaneseApplyPayload.routes[0]?.task_type_id === 'task-storyboard' &&
-      Number(japaneseApplyPayload.routes[0]?.destination_webhook_id) === Number(await storyboardRow.getAttribute('data-original-destination'));
+      Number(japaneseApplyPayload.routes[0]?.destination_webhook_id) === Number(japaneseOriginalDestination);
     if (japaneseApplyResult.status() !== 200 || japaneseApplyCount.value !== 1 ||
       japaneseApplyPayload?.project_id !== 'reviewer-production' ||
       !japaneseApplyPayload?.expected_revision || !exactRoute || !exactReviewerDelta) {
