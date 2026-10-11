@@ -170,6 +170,7 @@ jobs:
           MERGE_TEST_COMMIT: ${{ steps.identity.outputs.merge_test_commit }}
           RELEASE_COMMIT: ${{ steps.identity.outputs.release_commit }}
           RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+          RELEASE_TAG: ${{ steps.identity.outputs.release_tag }}
         run: |
           set -euo pipefail
           image_ref="kitsusync:${KITSUSYNC_IMAGE_TAG}"
@@ -199,7 +200,7 @@ jobs:
           MERGE_TEST_COMMIT: ${{ steps.identity.outputs.merge_test_commit }}
           RELEASE_COMMIT: ${{ steps.identity.outputs.release_commit }}
           RELEASE_VERSION: ${{ steps.identity.outputs.version }}
-          RELEASE_TAG: ${{ steps.identity.outputs.artifact_kind == 'release' && format('v{0}', steps.identity.outputs.version) || '' }}
+          RELEASE_TAG: ${{ steps.identity.outputs.release_tag }}
         run: |
           set -euo pipefail
           image_ref="kitsusync:${KITSUSYNC_IMAGE_TAG}"

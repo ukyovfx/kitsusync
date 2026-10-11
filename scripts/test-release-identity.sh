@@ -4,6 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 resolver="${root}/scripts/resolve-release-identity.sh"
 generator="${root}/scripts/generate-provenance.sh"
+workflow="${root}/.github/workflows/build.yml"
 version="$(tr -d '\r\n' < "${root}/VERSION")"
 release_tag="v${version}"
 tmp="$(mktemp -d)"
@@ -20,15 +21,32 @@ grep -Fxq 'artifact_kind=candidate' "${tmp}/pr"
 grep -Fxq "merge_test_commit=${a}" "${tmp}/pr"
 grep -Fxq "source_commit=${b}" "${tmp}/pr"
 grep -Fxq "version=${version}" "${tmp}/pr"
+grep -Fxq 'release_tag=' "${tmp}/pr"
 
 GITHUB_EVENT_NAME=push GITHUB_REF=refs/heads/master GITHUB_SHA="${a}" GITHUB_OUTPUT="${tmp}/master" bash "${resolver}"
 grep -Fxq 'artifact_kind=nonrelease' "${tmp}/master"
 grep -Fxq 'release_commit=' "${tmp}/master"
+grep -Fxq 'release_tag=' "${tmp}/master"
 ! grep -Fq 'version=master' "${tmp}/master"
 
 GITHUB_EVENT_NAME=push GITHUB_REF="refs/tags/${release_tag}" GITHUB_SHA="${a}" GITHUB_OUTPUT="${tmp}/release" bash "${resolver}"
 grep -Fxq 'artifact_kind=release' "${tmp}/release"
 grep -Fxq "release_commit=${a}" "${tmp}/release"
+grep -Fxq "release_tag=${release_tag}" "${tmp}/release"
+
+require_release_tag_binding() {
+  local step_name="$1"
+  grep -F -B 20 -- 'RELEASE_TAG: ${{ steps.identity.outputs.release_tag }}' "${workflow}" \
+    | grep -Fq -- "- name: ${step_name}" || {
+    printf 'release tag is not passed to workflow step: %s\n' "${step_name}" >&2
+    exit 1
+  }
+}
+
+# Both release provenance generation and bundle creation must consume the tag
+# validated by resolve-release-identity.sh, not independently infer or omit it.
+require_release_tag_binding 'Verify source-build-image provenance'
+require_release_tag_binding 'Build and load-back deployment bundle'
 
 if GITHUB_EVENT_NAME=pull_request GITHUB_REF=refs/pull/159/merge GITHUB_SHA="${a}" PR_HEAD_SHA="${b}" EXPECTED_SOURCE_COMMIT="${a}" GITHUB_OUTPUT="${tmp}/bad" bash "${resolver}" >/dev/null 2>&1; then
   printf 'expected source mismatch was accepted\n' >&2
@@ -51,5 +69,10 @@ grep -Fxq "image_config_digest=${portable}" "${tmp}/release-manifest"
 grep -Fxq "image_manifest_digest=${portable}" "${tmp}/release-manifest"
 grep -Fxq "image_content_digest=${portable}" "${tmp}/release-manifest"
 grep -Fxq "image_identity_tool_sha256=${digest}" "${tmp}/release-manifest"
+
+if ARTIFACT_KIND=release SOURCE_COMMIT="${a}" SOURCE_ID="${a}" RELEASE_COMMIT="${a}" RELEASE_VERSION="${version}" RELEASE_TAG="v${version}-wrong" IMAGE_ID="${image}" PROVENANCE_OUTPUT="${tmp}/mismatched-release-manifest" bash "${generator}" >/dev/null 2>&1; then
+  printf 'release provenance accepted a mismatched tag\n' >&2
+  exit 1
+fi
 
 printf 'release-identity-tests=PASS\n'
