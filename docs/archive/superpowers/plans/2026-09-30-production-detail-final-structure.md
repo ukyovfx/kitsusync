@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go `net/http`, server-rendered HTML/CSS/JavaScript, GORM, SQLite, existing Kitsu and Discord clients, repository Chromium/Playwright browser acceptance.
 
-**Spec:** `docs/superpowers/specs/2026-09-30-production-detail-final-structure-design.md`
+**Spec:** `docs/archive/superpowers/specs/2026-09-30-production-detail-final-structure-design.md`
 
 ## Global Constraints
 

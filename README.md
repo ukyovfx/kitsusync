@@ -93,7 +93,7 @@ If you need these capabilities, keep them in roadmap planning as explicit scoped
 - `/bot/admin` — operational dashboard: system health, active projects, warnings
 - `/bot/admin/users` — map Kitsu users to Discord IDs for @mentions
 
-Screenshot placeholders live in `screenshots/README.md`. Capture guidance lives in `screenshots/CAPTURE_GUIDE.md`.
+No public screenshot assets are committed. Legacy capture guidance is preserved in [`docs/archive/screenshots/`](docs/archive/screenshots/).
 
 ## Getting Started
 
@@ -362,7 +362,7 @@ User documentation is maintained at https://rigoo.jp/.
 - Dev vs production environment setup: `docs/ENVIRONMENTS.md`
 - First-time studio setup walkthrough: `docs/SETUP_FOR_STUDIOS.md`
 - Error messages and System Status troubleshooting: `docs/TROUBLESHOOTING.md`
-- Authenticated release E2E: `docs/V044-AUTHENTICATED-E2E.md`
+- Historical v0.4.4 authenticated E2E procedure: [`docs/archive/releases/V044-AUTHENTICATED-E2E.md`](docs/archive/releases/V044-AUTHENTICATED-E2E.md)
 
 ## Contributing and Security
 
@@ -370,7 +370,7 @@ User documentation is maintained at https://rigoo.jp/.
 - Security reporting: `SECURITY.md`
 - Changelog: `CHANGELOG.md`
 - Latest published release notes: [GitHub Releases](https://github.com/ukyovfx/kitsusync/releases/latest)
-- Screenshot guidance: `screenshots/CAPTURE_GUIDE.md`
+- Historical screenshot guidance: [`docs/archive/screenshots/CAPTURE_GUIDE.md`](docs/archive/screenshots/CAPTURE_GUIDE.md)
 - Future per-version release notes: GitHub Releases
 
 ## License

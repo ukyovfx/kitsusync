@@ -29,7 +29,7 @@ An authorized operator must stage the verified bundle, inspect the target runtim
 - Upstream `master` CI reports successful `build`, `bundle`, and `deployment-transaction` jobs for `cc9dea2`.
 - The retained upstream bundle is `kitsusync-v0.4.6-deployment`; it is not a GitHub Release asset and has not been downloaded or deployed here.
 - Local Gitleaks scans pass for the working tree and staged content.
-- Local staged and tracked-tree privacy scans pass after removing the user-specific Docker path from `scripts/validate-v045-rc.ps1`.
+- Local staged and tracked-tree privacy scans pass after removing the user-specific Docker path from `scripts/archive/validate-v045-rc.ps1`.
 - `go vet ./src/...` passes.
 - Go tests cannot run successfully in this environment: CGO-off runs fail on the SQLite stub, and CGO-on runs cannot find `gcc`.
 - Docker/WSL is unavailable, so local Compose validation, image build/load-back, bundle reconstruction, and Docker deployment transaction tests remain unrun locally.

@@ -23,7 +23,7 @@ Go server-rendered HTML, embedded/shared CSS in `src/setup/ui.go`, Go `httptest`
 
 ## Spec
 
-- Approved reusable design: `docs/superpowers/specs/2026-09-29-kitsu-ui-baseline-design.md`
+- Approved reusable design: `docs/archive/superpowers/specs/2026-09-29-kitsu-ui-baseline-design.md`
 - Screen semantics and behavior: `docs/CURRENT-IA-UI-SPEC.md`
 - Browser checklist: `docs/CURRENT-IA-UI-ACCEPTANCE.md`
 - Target: Production detail only, at PR #229 head `16aa38af765e90c18f743a9702aa084eea88c208` when this plan was prepared.
