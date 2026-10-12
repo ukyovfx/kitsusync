@@ -243,6 +243,25 @@ class RuntimeStateTests(unittest.TestCase):
             IPAddress="172.20.0.3/16", MacAddress="02:42:ac:14:00:03")
         runtime.compare(plan, restored)
 
+    def test_unrequested_engine_generated_mac_may_change_on_restore(self):
+        source = fixture()
+        source["NetworkSettings"]["Networks"]["ks-net"]["IPAMConfig"] = {}
+        plan = runtime.make_plan(source)
+        restored = copy.deepcopy(source)
+        restored["NetworkSettings"]["Networks"]["ks-net"].update(
+            IPAddress="172.20.0.3", MacAddress="8a:7b:6c:5d:4e:3f")
+        runtime.compare(plan, restored)
+
+    def test_explicit_mac_remains_strict_on_restore(self):
+        source = fixture()
+        source["NetworkSettings"]["Networks"]["ks-net"].update(
+            IPAMConfig={}, MacAddress="02:11:22:33:44:55")
+        plan = runtime.make_plan(source)
+        restored = copy.deepcopy(source)
+        restored["NetworkSettings"]["Networks"]["ks-net"]["MacAddress"] = "8a:7b:6c:5d:4e:3f"
+        with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.MacAddress"):
+            runtime.compare(plan, restored)
+
     def test_custom_mac_without_static_ip_remains_strict(self):
         source = fixture()
         endpoint = source["NetworkSettings"]["Networks"]["ks-net"]

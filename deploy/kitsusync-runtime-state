@@ -315,6 +315,12 @@ def compare(plan, value, name=None):
         require(bool(NAME.fullmatch(name)), "container name invalid")
         expected["name"] = name
     actual = runtime_state(value)
+    # If the plan deliberately left endpoint MAC unpinned, Docker may assign a
+    # different generated value during recreation. Only explicitly preserved
+    # MAC identities are part of the rollback equivalence check.
+    for network_name, network in expected["networks"].items():
+        if not network["MacAddress"] and network_name in actual["networks"]:
+            actual["networks"][network_name]["MacAddress"] = ""
     require(actual == expected, "recreated runtime differs at " + difference_path(expected, actual))
 
 

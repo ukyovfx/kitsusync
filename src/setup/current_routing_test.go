@@ -561,6 +561,7 @@ func TestCurrentRecipientListboxEscapesDialogClippingWithOpaqueSurface(t *testin
 		`list.scrollHeight||options().length*36+8`,
 		`list.style.maxHeight=height+'px'`,
 		`list.style.width=width+'px'`,
+		`target.focus({preventScroll:true})`,
 	} {
 		if !strings.Contains(currentRecipientComboboxScript(), fragment) {
 			t.Errorf("recipient listbox must stay clickable within its native dialog bounds; missing %q", fragment)
