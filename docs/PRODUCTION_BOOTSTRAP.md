@@ -94,10 +94,21 @@ space. If any requirement or filesystem measurement is unknown, the legacy
 `capacity` field is omitted so the existing evaluator remains BLOCKED rather
 than interpreting unknown as zero. Current rollback snapshots can include
 secret-bearing Docker inspection state; the collector does not read those
-values to estimate backup size. Until a safe, verified upper bound for that
-backup is available, capacity cannot pass. A read-only backup integrity check
-also proves only the captured snapshot, not that it includes database changes
-since it was created.
+values to estimate backup size. The wrapper's backup filesystem writes include
+the live SQLite backup, a second quiesced backup temporary, copied operator
+environment/config/templates/runtime-secret state, and runtime reconstruction
+files (`runtime-env`, raw `inspect.json`, and the derived runtime plan and
+metadata). Recovery paths can retain additional probe, failed-container, or
+restored-container inspection snapshots. The runtime database/WAL and Docker
+image extraction may be on separate filesystems; roles sharing a filesystem
+must be summed at their simultaneous peak. These runtime-dependent writes are
+not bounded by the current read-only metadata contract. An older protected
+backup and current free-space value cannot prove the next wrapper invocation's
+peak, and reading or emitting secret-bearing inspection/environment values to
+estimate it is not acceptable. Until a sanitized, verified upper bound for
+the complete backup set is available, capacity cannot pass. A read-only backup
+integrity check also proves only the captured snapshot, not that it includes
+database changes since its capture.
 
 ## Inspector maintenance artifact
 
@@ -191,8 +202,18 @@ snapshot, or deploy the application. Those are distinct administrator actions
 requiring explicit approval. Because the current inspection deliberately does
 not read secret-bearing Docker snapshot data, backup-filesystem peak capacity
 is unresolved; this checklist therefore remains BLOCKED until a safe bound is
-provided and verified. Do not treat a clean collector exit as a deployment
-approval.
+provided and verified. There is no existing supported command that produces a
+sanitized upper bound for the complete wrapper backup inventory. The one-time
+administrator action required to close this item is to authorize a bounded,
+read-only capacity attestation for the exact installed wrapper and current
+runtime. Its output must contain only per-filesystem available/required byte
+counts and status, account for the complete simultaneous backup inventory,
+and never print or persist environment/inspect payload values. If the bound
+cannot be established, provision or resize the relevant filesystem and repeat
+the attestation; do not substitute a prior backup size, a guessed reserve, or
+free-space alone. The attestation must be performed close enough to the
+separately authorized update that its filesystem measurements remain valid.
+Do not treat a clean collector exit as a deployment approval.
 
 If the approved wrapper reports a failure, use only the wrapper's documented
 rollback path and verify the restored immutable image, runtime state,
