@@ -43,8 +43,12 @@ def require(condition, message):
 
 
 def read_json(path):
-    with open(path, "rb") as stream:
+    stream = sys.stdin.buffer if path == "-" else open(path, "rb")
+    try:
         data = stream.read(MAX_JSON + 1)
+    finally:
+        if path != "-":
+            stream.close()
     require(len(data) <= MAX_JSON, "runtime metadata exceeds limit")
     return json.loads(data)
 

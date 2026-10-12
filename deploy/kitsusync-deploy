@@ -25,6 +25,7 @@ SQLITE_BACKUP=/usr/local/libexec/kitsusync-sqlite-backup
 IMAGE_IDENTITY=/usr/local/libexec/kitsusync-image-identity
 RUNTIME_STATE=/usr/local/libexec/kitsusync-runtime-state
 RESTORE_STATE=/usr/local/libexec/kitsusync-restore-state
+MAINTENANCE_IDENTITY=${CONTROL_DIR}/deployment-maintenance.json
 PROJECT_NAME=kitsusync
 SERVICE=app
 EXPECTED_CONTAINER_NAME=/kitsusync-app-1
@@ -267,6 +268,55 @@ validate_legacy_runtime() {
   validate_runtime "$1" legacy "${previous_image_id}" '' ''
 }
 
+maintenance_identity_allows() {
+  local tool="$1" declared="$2" actual="$3"
+  [[ "${declared}" != "${actual}" ]] || return 0
+  [[ -f "${MAINTENANCE_IDENTITY}" && ! -L "${MAINTENANCE_IDENTITY}" \
+    && "$(/usr/bin/stat -c '%u:%g:%a' "${MAINTENANCE_IDENTITY}")" == 0:0:600 ]] || return 1
+  /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 - "${MAINTENANCE_IDENTITY}" "${PROVENANCE_FILE}" "${tool}" "${declared}" "${actual}" <<'PY'
+import hashlib, json, pathlib, re, stat, sys
+record_path, provenance_path = map(pathlib.Path, sys.argv[1:3])
+tool, declared, actual = sys.argv[3:]
+try:
+    info = record_path.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o600):
+        raise ValueError
+    record_bytes = record_path.read_bytes()
+    record = json.loads(record_bytes.decode("ascii"))
+    provenance_bytes = provenance_path.read_bytes()
+    provenance = {}
+    for line in provenance_bytes.decode("ascii").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in provenance:
+            raise ValueError
+        provenance[key] = value
+    base = "f8a32bbba94d84068d9e96c18554ac4ab7b24540"
+    fields = {"deployment_tool_sha256": "deployment_tool_sha256",
+              "runtime_state_tool_sha256": "runtime_state_tool_sha256"}
+    targets = {"deployment_tool_sha256": "target_deployment_tool_sha256",
+               "runtime_state_tool_sha256": "target_runtime_state_tool_sha256"}
+    if (tool not in fields or type(record) is not dict or record.get("schema_version") != 1
+            or record.get("baseline_release") != "v0.5.1"
+            or record.get("baseline_source_commit") != base
+            or provenance.get("release_tag") != "v0.5.1"
+            or provenance.get("version") != "0.5.1"
+            or provenance.get("source_commit") != base or provenance.get("release_commit") != base
+            or record.get("previous_provenance_sha256") != hashlib.sha256(provenance_bytes).hexdigest()
+            or provenance.get(fields[tool]) != declared
+            or record.get("baseline_" + tool) != declared
+            or record.get(targets[tool]) != actual
+            or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", record.get("artifact_manifest_sha256", ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", declared)
+            or not re.fullmatch(r"[0-9a-f]{64}", actual)):
+        raise ValueError
+except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+}
+
 if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
   [[ "${EUID}" -ne 0 ]] || die "test mode is forbidden for root"
   DOCKER_BIN="${KITSUSYNC_DEPLOY_TEST_DOCKER_BIN:-$(command -v docker)}"
@@ -277,6 +327,11 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
     legacy-contract) [[ "$#" -eq 4 ]]; legacy_status_allows "$1" "$2" "$3" "$4" ;;
     backup-contract) [[ "$#" -eq 1 ]]; backup_is_complete "$1" ;;
     snapshot) [[ "$#" -eq 2 ]]; snapshot_runtime_state "$1" "$2" ;;
+    maintenance-identity)
+      [[ "$#" -eq 3 ]] || die "invalid maintenance identity test arguments"
+      MAINTENANCE_IDENTITY="${KITSUSYNC_DEPLOY_TEST_MAINTENANCE_IDENTITY:?test identity record required}"
+      PROVENANCE_FILE="${KITSUSYNC_DEPLOY_TEST_PROVENANCE:?test provenance required}"
+      maintenance_identity_allows "$1" "$2" "$3" ;;
     compare) [[ "$#" -eq 6 ]]; compare_runtime_state "$1" "$2" "$3" "$4" "$5" "$6" ;;
     image-id) [[ "$#" -eq 3 ]]; archive_image_id_allows "$1" "$2" "$3" ;;
     runtime|legacy-runtime)
@@ -315,6 +370,7 @@ secure_dir "${CONTROL_DIR}" 700; secure_dir "${STATE_DIR}" 700; secure_dir "${BA
 # Serialize the entire backup/deploy/recovery transaction, including preflight.
 exec 9>"${STATE_DIR}/deploy.lock"
 /usr/bin/flock -n 9 || die "another deployment transaction is active"
+[[ ! -e "${STATE_DIR}/deployment-maintenance.pending" && ! -L "${STATE_DIR}/deployment-maintenance.pending" ]] || die "deployment helper maintenance recovery is pending"
 for file in "${COMPOSE_FILE}" "${ENV_FILE}" "${PROVENANCE_FILE}" "${MODE_FILE}" "${IMAGE_ARCHIVE}"; do secure_file "${file}" 600; done
 reject_env_controls "${ENV_FILE}"
 [[ -d "${RUNTIME_ROOT}" && ! -L "${RUNTIME_ROOT}" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}")" == 0:0:755 ]] || die "runtime root is replaceable or unsafe"
@@ -342,12 +398,19 @@ artifact_kind="$(field artifact_kind)"; source_commit="$(field source_commit)"; 
 [[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${approved_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${approved_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${approved_content_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
 [[ "$(/usr/bin/sha256sum "${IMAGE_ARCHIVE}" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "approved image archive digest mismatch"
 [[ "$(/usr/bin/sha256sum "${COMPOSE_FILE}" | /usr/bin/cut -d' ' -f1)" == "${compose_sha}" ]] || die "production Compose digest mismatch"
-[[ "$(/usr/bin/sha256sum /usr/local/sbin/kitsusync-deploy | /usr/bin/cut -d' ' -f1)" == "${deploy_sha}" ]] || die "installed deployment tool identity mismatch"
+installed_deploy_sha="$(/usr/bin/sha256sum /usr/local/sbin/kitsusync-deploy | /usr/bin/cut -d' ' -f1)"
+maintenance_identity_allows deployment_tool_sha256 "${deploy_sha}" "${installed_deploy_sha}" || die "installed deployment tool identity mismatch"
 [[ "$(/usr/bin/sha256sum "${IMAGE_IDENTITY}" | /usr/bin/cut -d' ' -f1)" == "${identity_sha}" ]] || die "installed image identity tool mismatch"
 for helper in runtime_state restore_state; do
   helper_sha="$(field "${helper}_tool_sha256")"
   helper_path="${RUNTIME_STATE}"; [[ "${helper}" == restore_state ]] && helper_path="${RESTORE_STATE}"
-  [[ "${helper_sha}" =~ ^[0-9a-f]{64}$ && "$(/usr/bin/sha256sum "${helper_path}" | /usr/bin/cut -d' ' -f1)" == "${helper_sha}" ]] || die "installed recovery helper identity mismatch"
+  installed_helper_sha="$(/usr/bin/sha256sum "${helper_path}" | /usr/bin/cut -d' ' -f1)"
+  [[ "${helper_sha}" =~ ^[0-9a-f]{64}$ ]] || die "installed recovery helper identity mismatch"
+  if [[ "${helper}" == runtime_state ]]; then
+    maintenance_identity_allows runtime_state_tool_sha256 "${helper_sha}" "${installed_helper_sha}" || die "installed recovery helper identity mismatch"
+  else
+    [[ "${installed_helper_sha}" == "${helper_sha}" ]] || die "installed recovery helper identity mismatch"
+  fi
 done
 archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" archive "${IMAGE_ARCHIVE}" "${image}")" || die "approved image archive identity cannot be verified"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_config_digest=//p')" == "${approved_config_digest}" ]] || die "approved image config digest mismatch"
@@ -509,19 +572,94 @@ network_name="$(${DOCKER_BIN} inspect --format '{{range $name, $_ := .NetworkSet
 network_data="$(${DOCKER_BIN} network inspect "${network_name}" --format '{{with index .IPAM.Config 0}}{{.Gateway}} {{.Subnet}}{{end}}')"; read -r gateway subnet <<<"${network_data}"
 [[ "${gateway}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "${subnet}" == */* ]] || die "Docker bridge identity is unavailable"
 
-backup_dir="${BACKUP_ROOT}/$(date -u +%Y%m%dT%H%M%SZ)-${container_id:0:12}"; /usr/bin/install -d -o root -g root -m 0700 "${backup_dir}"
+# Load and validate the immutable target while the prior runtime remains active.
+# A Docker data-root capacity failure cannot strand a stopped service.
+${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null || die "approved image load failed before maintenance window"
+loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"
+archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || die "loaded image ID is not an approved archive content identity"
+loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || die "loaded image content identity cannot be verified"
+[[ "${loaded_content_digest}" == "${approved_content_digest}" ]] || die "loaded image content identity does not match approved provenance"
+[[ "$("${DOCKER_BIN}" image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${source_commit}" ]] || die "image revision label mismatch"
+[[ "$("${DOCKER_BIN}" image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${image}")" == "${source_id}" ]] || die "image source label mismatch"
+[[ "$("${DOCKER_BIN}" image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")" == "${version}" ]] || die "image version label mismatch"
+
+backup_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+backup_dir="$(/usr/bin/mktemp -d "${BACKUP_ROOT}/${backup_stamp}-${container_id:0:12}-XXXXXXXX")"
+transaction_phase=preflight
+probe_id=
+container_name="$("${DOCKER_BIN}" inspect --format '{{.Name}}' "${container_id}")"; container_name="${container_name#/}"
+rollback() {
+  log "rollback started previous_image_id=${previous_image_id}"
+  /usr/bin/sha256sum -c "${backup_dir}/compose.sha256" >/dev/null 2>&1 || return 1
+  /usr/bin/sha256sum -c "${backup_dir}/env.sha256" >/dev/null 2>&1 || return 1
+  /usr/bin/sha256sum -c "${backup_dir}/runtime-state.sha256" >/dev/null 2>&1 || return 1
+  backup_is_complete "${backup_dir}" || return 1
+  runtime_state validate "${backup_dir}/runtime/plan.json" || return 1
+  local active_id active_status
+  active_id="$(${DOCKER_BIN} ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT_NAME}" --filter "label=com.docker.compose.service=${SERVICE}")" || return 1
+  if [[ -n "${active_id}" ]]; then
+    [[ "${active_id}" =~ ^[0-9a-f]{64}$ ]] || return 1
+    ${DOCKER_BIN} stop "${active_id}" >/dev/null 2>&1 || return 1
+    active_status="$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${active_id}")" || return 1
+    [[ "${active_status}" == false ]] || return 1
+    ${DOCKER_BIN} rm "${active_id}" >/dev/null || return 1
+  fi
+  restore_persistent_state || return 1
+  rollback_id="$(runtime_state create "${backup_dir}/runtime/plan.json")" || return 1
+  [[ "${rollback_id}" =~ ^[0-9a-f]{64}$ ]] || return 1
+  ${DOCKER_BIN} inspect "${rollback_id}" | runtime_state compare "${backup_dir}/runtime/plan.json" - || return 1
+  ${DOCKER_BIN} start "${rollback_id}" >/dev/null || return 1
+  if ! ${DOCKER_BIN} inspect "${rollback_id}" | runtime_state compare "${backup_dir}/runtime/plan.json" -; then
+    ${DOCKER_BIN} stop "${rollback_id}" >/dev/null 2>&1 || return 1
+    [[ "$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${rollback_id}")" == false ]] || return 1
+    return 1
+  fi
+  if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${rollback_id}" || return 1; else validate_runtime "${rollback_id}" "$(restored_validation_mode "${prior_validation}")" "${previous_revision}" "${previous_source_id}" "${previous_version}" || return 1; fi
+  printf 'rollback=verified\n'
+}
+finish_transaction() {
+  local result=$? recovery_result=0
+  trap - EXIT INT TERM
+  set +e
+  if [[ -n "${probe_id}" ]]; then ${DOCKER_BIN} rm "${probe_id}" >/dev/null 2>&1; fi
+  case "${transaction_phase}" in
+    quiescing|quiesced)
+      if [[ "$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${container_id}" 2>/dev/null)" != true ]]; then
+        ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || recovery_result=1
+      fi
+      if [[ "${recovery_result}" == 0 ]]; then
+        if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${container_id}" || recovery_result=1
+        else validate_runtime "${container_id}" "$(restored_validation_mode "${prior_validation}")" "${previous_revision}" "${previous_source_id}" "${previous_version}" || recovery_result=1; fi
+      fi ;;
+    replacing) rollback || recovery_result=1 ;;
+  esac
+  if [[ "${recovery_result}" != 0 ]]; then
+    printf 'ERROR: automatic recovery incomplete; protected backup=%s; manual recovery required\n' "${backup_dir}" >&2
+    result=1
+  elif [[ ! -e "${backup_dir}/backup-complete" ]]; then
+    # This directory was created by this invocation and has not yet become
+    # rollback evidence. Remove only this exact incomplete transaction.
+    if [[ -d "${backup_dir}" && ! -L "${backup_dir}" && "$(/usr/bin/stat -c '%u:%g:%a' "${backup_dir}" 2>/dev/null)" == 0:0:700 ]]; then
+      /usr/bin/rm -rf -- "${backup_dir}" || { printf 'WARNING: incomplete backup cleanup failed; evidence retained\n' >&2; result=1; }
+    fi
+  fi
+  /usr/bin/rm -rf -- "${run_dir}"
+  exit "${result}"
+}
+trap finish_transaction EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 printf '%s\n' "${container_id}" >"${backup_dir}/container-id"; printf '%s\n' "${current_image}" >"${backup_dir}/previous-image"; printf '%s\n' "${previous_image_id}" >"${backup_dir}/previous-image-id"; printf '%s\n' "${previous_revision}" >"${backup_dir}/previous-revision"; printf '%s\n' "${previous_source_id}" >"${backup_dir}/previous-source-id"; printf '%s\n' "${previous_version}" >"${backup_dir}/previous-version"; printf '%s\n' "${prior_validation}" >"${backup_dir}/prior-validation"; printf '%s %s\n' "${gateway}" "${subnet}" >"${backup_dir}/network"
 /usr/bin/install -o root -g root -m 0600 "${ENV_FILE}" "${backup_dir}/operator.env"; /usr/bin/install -o root -g root -m 0600 "${RUNTIME_ROOT}/conf.toml" "${backup_dir}/conf.toml"; /usr/bin/tar --create --file "${backup_dir}/templates.tar" --directory "${RUNTIME_ROOT}" --numeric-owner tpl
 if [[ -f "${RUNTIME_ROOT}/data/runtime-secret.key" && ! -L "${RUNTIME_ROOT}/data/runtime-secret.key" ]]; then /usr/bin/install -o root -g root -m 0600 "${RUNTIME_ROOT}/data/runtime-secret.key" "${backup_dir}/runtime-secret.key"; else : >"${backup_dir}/runtime-secret.absent"; fi
-sqlite_backup "${RUNTIME_ROOT}/data/sqlite.db" "${backup_dir}/sqlite.db"
 write_persistent_manifest() {
   local secret_state="${backup_dir}/runtime-secret.absent"
   [[ -f "${backup_dir}/runtime-secret.key" ]] && secret_state="${backup_dir}/runtime-secret.key"
   /usr/bin/sha256sum "${backup_dir}/sqlite.db" "${backup_dir}/conf.toml" "${backup_dir}/templates.tar" "${backup_dir}/operator.env" "${secret_state}" >"${backup_dir}/persistent-state.sha256"
 }
-snapshot_runtime_state "${container_id}" "${backup_dir}/runtime"
-${DOCKER_BIN} inspect "${container_id}" >"${backup_dir}/runtime/inspect.json"
-runtime_state plan "${backup_dir}/runtime/inspect.json" "${backup_dir}/runtime/plan.json"
+/usr/bin/install -d -o root -g root -m 0700 "${backup_dir}/runtime"
+${DOCKER_BIN} inspect "${container_id}" | runtime_state plan - "${backup_dir}/runtime/plan.json"
 runtime_state validate "${backup_dir}/runtime/plan.json"
 /usr/bin/install -o root -g root -m 0600 "${PROVENANCE_FILE}" "${backup_dir}/target-provenance"
 /usr/bin/install -o root -g root -m 0600 "${COMPOSE_FILE}" "${backup_dir}/production-compose.yml"
@@ -558,92 +696,23 @@ if (mounts != expected or len(app.get("volumes", [])) != 3 or len(ports) != 1
         or app.get("image") != image or app.get("build") or app.get("env_file")):
     raise SystemExit("effective production Compose contract is incomplete")
 PY
-write_persistent_manifest
 /usr/bin/find "${backup_dir}/runtime" -type f -exec /usr/bin/sha256sum {} + >"${backup_dir}/runtime-state.sha256"
 /usr/bin/sha256sum "${override}" "${backup_dir}/target-compose.json" "${backup_dir}/previous-image-id" "${backup_dir}/previous-revision" "${backup_dir}/previous-source-id" "${backup_dir}/previous-version" "${backup_dir}/prior-validation" >>"${backup_dir}/runtime-state.sha256"
-: >"${backup_dir}/backup-complete"
-backup_is_complete "${backup_dir}" || die "complete rollback backup was not created"
-/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${RESTORE_STATE}" verify "${backup_dir}"
+# Only the reconstruction plan remains in the protected backup. The transient
+# raw inspect input is removed before shutdown; normalized copies would duplicate
+# environment and runtime metadata already contained in the plan.
 
 restore_persistent_state() {
   backup_is_complete "${backup_dir}" || return 1
   /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${RESTORE_STATE}" "${backup_dir}" "${RUNTIME_ROOT}" || return 1
 }
 
-transaction_phase=preflight
-probe_id=
-container_name="$(${DOCKER_BIN} inspect --format '{{.Name}}' "${container_id}")"; container_name="${container_name#/}"
-rollback() {
-  log "rollback started previous_image_id=${previous_image_id}"
-  /usr/bin/sha256sum -c "${backup_dir}/compose.sha256" >/dev/null 2>&1 || return 1
-  /usr/bin/sha256sum -c "${backup_dir}/env.sha256" >/dev/null 2>&1 || return 1
-  /usr/bin/sha256sum -c "${backup_dir}/runtime-state.sha256" >/dev/null 2>&1 || return 1
-  backup_is_complete "${backup_dir}" || return 1
-  runtime_state validate "${backup_dir}/runtime/plan.json" || return 1
-  local active_id active_status
-  active_id="$(${DOCKER_BIN} ps -aq --no-trunc --filter "label=com.docker.compose.project=${PROJECT_NAME}" --filter "label=com.docker.compose.service=${SERVICE}")" || return 1
-  if [[ -n "${active_id}" ]]; then
-    [[ "${active_id}" =~ ^[0-9a-f]{64}$ ]] || return 1
-    ${DOCKER_BIN} stop "${active_id}" >/dev/null 2>&1 || return 1
-    active_status="$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${active_id}")" || return 1
-    [[ "${active_status}" == false ]] || return 1
-    # Preserve protected metadata, then remove only this stopped container (no
-    # force/no volume deletion). Retaining its Compose labels would break retry.
-    ${DOCKER_BIN} inspect "${active_id}" >"${backup_dir}/failed-container-inspect.json" || return 1
-    printf '%s\n' "${active_id}" >"${backup_dir}/failed-container-id" || return 1
-    ${DOCKER_BIN} rm "${active_id}" >/dev/null || return 1
-  fi
-  # Data must never be restored while a writer is running. All operations here
-  # are checked explicitly: Bash disables errexit inside an `if rollback` call.
-  restore_persistent_state || return 1
-  rollback_id="$(runtime_state create "${backup_dir}/runtime/plan.json")" || return 1
-  [[ "${rollback_id}" =~ ^[0-9a-f]{64}$ ]] || return 1
-  printf '%s\n' "${rollback_id}" >"${backup_dir}/restored-container" || return 1
-  ${DOCKER_BIN} inspect "${rollback_id}" >"${backup_dir}/restored-inspect.json" || return 1
-  runtime_state compare "${backup_dir}/runtime/plan.json" "${backup_dir}/restored-inspect.json" || return 1
-  ${DOCKER_BIN} start "${rollback_id}" >/dev/null || return 1
-  if ! compare_runtime_state "${rollback_id}" "${backup_dir}/runtime" "${previous_image_id}" "${previous_revision}" "${previous_source_id}" "${previous_version}" \
-    || ! ${DOCKER_BIN} inspect "${rollback_id}" >"${backup_dir}/restored-inspect.json" \
-    || ! runtime_state compare "${backup_dir}/runtime/plan.json" "${backup_dir}/restored-inspect.json"; then
-    ${DOCKER_BIN} stop "${rollback_id}" >/dev/null 2>&1 || return 1
-    [[ "$(${DOCKER_BIN} inspect --format '{{.State.Running}}' "${rollback_id}")" == false ]] || return 1
-    return 1
-  fi
-  if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${rollback_id}" || return 1; else validate_runtime "${rollback_id}" "$(restored_validation_mode "${prior_validation}")" "${previous_revision}" "${previous_source_id}" "${previous_version}" || return 1; fi
-  printf 'rollback=verified\n'
-}
-
-finish_transaction() {
-  local result=$? recovery_result=0
-  trap - EXIT INT TERM
-  set +e
-  if [[ -n "${probe_id}" ]]; then ${DOCKER_BIN} rm "${probe_id}" >/dev/null 2>&1; fi
-  case "${transaction_phase}" in
-    quiescing|quiesced)
-      ${DOCKER_BIN} start "${container_id}" >/dev/null 2>&1 || recovery_result=1
-      if [[ "${recovery_result}" == 0 ]]; then
-        if [[ "${prior_validation}" == legacy ]]; then validate_legacy_runtime "${container_id}" || recovery_result=1
-        else validate_runtime "${container_id}" "$(restored_validation_mode "${prior_validation}")" "${previous_revision}" "${previous_source_id}" "${previous_version}" || recovery_result=1; fi
-      fi ;;
-    replacing) rollback || recovery_result=1 ;;
-  esac
-  if [[ "${recovery_result}" != 0 ]]; then
-    printf 'ERROR: automatic recovery incomplete; protected backup=%s; manual recovery required\n' "${backup_dir}" >&2
-    result=1
-  fi
-  /usr/bin/rm -rf "${run_dir}"
-  exit "${result}"
-}
-trap finish_transaction EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # Prove that the same daemon accepts the captured reconstruction plan before
 # stopping the prior runtime. This stopped probe never binds ports or runs code.
 probe_id="$(runtime_state create "${backup_dir}/runtime/plan.json" "${container_name}-restore-probe-$$")"
 [[ "${probe_id}" =~ ^[0-9a-f]{64}$ ]] || die "rollback reconstruction probe failed"
-${DOCKER_BIN} inspect "${probe_id}" >"${backup_dir}/probe-inspect.json"
-runtime_state compare "${backup_dir}/runtime/plan.json" "${backup_dir}/probe-inspect.json" "${container_name}-restore-probe-$$"
+${DOCKER_BIN} inspect "${probe_id}" | runtime_state compare "${backup_dir}/runtime/plan.json" - "${container_name}-restore-probe-$$"
 ${DOCKER_BIN} rm "${probe_id}" >/dev/null
 probe_id=
 rollback_image_ref="kitsusync:rollback-$(basename "${backup_dir}")"
@@ -660,7 +729,8 @@ sqlite_backup "${RUNTIME_ROOT}/data/sqlite.db" "${quiesced_db}" >/dev/null || di
 /usr/bin/rm -f "${backup_dir}/runtime-secret.key" "${backup_dir}/runtime-secret.absent"
 if [[ -f "${RUNTIME_ROOT}/data/runtime-secret.key" && ! -L "${RUNTIME_ROOT}/data/runtime-secret.key" ]]; then /usr/bin/install -o root -g root -m 0600 "${RUNTIME_ROOT}/data/runtime-secret.key" "${backup_dir}/runtime-secret.key"; else : >"${backup_dir}/runtime-secret.absent"; fi
 write_persistent_manifest
-restart_prior_and_die() { die "$1"; }
+: >"${backup_dir}/backup-complete"
+backup_is_complete "${backup_dir}" || die "complete rollback backup was not created"
 /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${RESTORE_STATE}" verify "${backup_dir}"
 if [[ "${legacy_direct_fallback}" == true ]]; then
   # Compose cannot replace a recovered container that lacks its config-hash.
@@ -669,11 +739,6 @@ if [[ "${legacy_direct_fallback}" == true ]]; then
   transaction_phase=replacing
   ${DOCKER_BIN} rm "${container_id}" >/dev/null || die "recovered legacy container could not be removed after backup"
 fi
-if ! ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null; then restart_prior_and_die "approved image load failed"; fi
-loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"; archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || restart_prior_and_die "loaded image ID is not an approved archive content identity"
-loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || restart_prior_and_die "loaded image content identity cannot be verified"
-[[ "${loaded_content_digest}" == "${approved_content_digest}" ]] || restart_prior_and_die "loaded image content identity does not match approved provenance"
-[[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${source_commit}" ]] || restart_prior_and_die "image revision label mismatch"; [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${image}")" == "${source_id}" ]] || restart_prior_and_die "image source label mismatch"; [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")" == "${version}" ]] || restart_prior_and_die "image version label mismatch"
 transaction_phase=replacing
 if ! compose_override up -d --no-deps --force-recreate "${SERVICE}" >/dev/null; then die "deployment failed; automatic recovery follows"; fi
 new_id="$(compose_override ps -q "${SERVICE}")"

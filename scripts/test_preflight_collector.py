@@ -213,6 +213,7 @@ class CollectorTests(unittest.TestCase):
         self.assertFalse(collector.rollback_image_retained(ref, image_id, missing))
         self.assertFalse(collector.rollback_image_retained(ref, image_id, wrong))
         self.assertTrue(collector.rollback_image_retained(ref, image_id, present))
+        self.assertTrue(collector.rollback_image_retained(ref + "-AbC123x9", image_id, present))
 
     def test_complete_rollback_unit_and_tampering(self):
         backup = self.paths.backup_root / "20261012T000000Z-abcdef012345"
@@ -241,6 +242,14 @@ class CollectorTests(unittest.TestCase):
                 os.chmod(path, 0o600)
         os.chmod(runtime, 0o700)
         os.chmod(backup, 0o700)
+        self.assertTrue(collector.validate_rollback_unit(backup, TEST_UID))
+        # New wrappers persist only the reconstruction plan. It is sufficient
+        # for rollback and avoids a second copy of secret-bearing inspect data.
+        (runtime / "inspect.json").unlink()
+        lines = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path}"
+                 for path in [runtime / "plan.json"]
+                 + [backup / name for name in collector.RUNTIME_HASHED_ROOT_FILES]]
+        (backup / "runtime-state.sha256").write_text("\n".join(lines) + "\n")
         self.assertTrue(collector.validate_rollback_unit(backup, TEST_UID))
         (runtime / "plan.json").write_text("substituted")
         self.assertFalse(collector.validate_rollback_unit(backup, TEST_UID))

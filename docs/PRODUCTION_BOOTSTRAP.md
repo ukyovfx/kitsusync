@@ -92,23 +92,28 @@ required space across filesystems: this is conservative and may block a valid
 layout, but a passing scalar proves every represented filesystem has enough
 space. If any requirement or filesystem measurement is unknown, the legacy
 `capacity` field is omitted so the existing evaluator remains BLOCKED rather
-than interpreting unknown as zero. Current rollback snapshots can include
-secret-bearing Docker inspection state; the collector does not read those
-values to estimate backup size. The wrapper's backup filesystem writes include
-the live SQLite backup, a second quiesced backup temporary, copied operator
-environment/config/templates/runtime-secret state, and runtime reconstruction
-files (`runtime-env`, raw `inspect.json`, and the derived runtime plan and
-metadata). Recovery paths can retain additional probe, failed-container, or
-restored-container inspection snapshots. The runtime database/WAL and Docker
-image extraction may be on separate filesystems; roles sharing a filesystem
-must be summed at their simultaneous peak. These runtime-dependent writes are
-not bounded by the current read-only metadata contract. An older protected
-backup and current free-space value cannot prove the next wrapper invocation's
-peak, and reading or emitting secret-bearing inspection/environment values to
-estimate it is not acceptable. Until a sanitized, verified upper bound for
-the complete backup set is available, capacity cannot pass. A read-only backup
-integrity check also proves only the captured snapshot, not that it includes
-database changes since its capture.
+than interpreting unknown as zero. The updated wrapper loads and verifies the
+target image while the prior runtime is still running. It writes other
+rollback metadata before stopping the writer, then takes one SQLite online
+backup from the quiesced database. Raw Docker inspect JSON is streamed through
+the bounded verifier rather than written as a temporary file; the protected
+backup retains only the verified reconstruction plan, not an additional raw
+inspect or normalized environment copy. A failed quiesced backup restarts and
+validates the same prior container, then removes only that invocation's
+incomplete backup directory. If restart or validation fails, partial evidence
+is retained and the wrapper stops with an explicit recovery error. No
+unverified backup is accepted as rollback evidence.
+
+These controls make backup ENOSPC a fail-safe abort while the original
+database remains in place; they do not prove an arbitrary finite capacity
+bound or guarantee recovery if Docker's filesystem becomes unavailable while
+replacement/rollback container metadata is created. The runtime database/WAL,
+backup directory, release stage and Docker image store may be on different
+filesystems. The collector therefore continues to report backup capacity as
+unknown/BLOCKED rather than infer a PASS from free space or an older backup.
+Runtime metadata may contain sensitive configuration, so no payload is read or
+emitted to estimate it. A verified rollback backup also proves only its
+captured snapshot, not that it includes writes made after capture.
 
 ## Inspector maintenance artifact
 
@@ -167,6 +172,59 @@ does not match, the operation fails closed and preserves evidence for manual
 administrator recovery. No root maintenance action has been performed by this
 PR work.
 
+## Deployment-helper maintenance artifact
+
+The accepted-master CI workflow builds a separate
+`kitsusync-deployment-maintenance-<source-sha>` artifact. It is not part of the
+v0.5.1 application Release Bundle and cannot deploy the application. It
+contains the fixed deploy wrapper, runtime-state helper, narrowly scoped
+installer/rollback implementation, and a complete SHA-256 manifest bound to
+the source commit and exact v0.5.1 predecessor tool blobs. The workflow retains
+the artifact for 90 days. PR CI verifies inventory, modes, hashes, and
+predecessor identities; it does not publish a root-installable artifact.
+
+Installing it requires a separate one-time administrator action after the
+change is accepted on `master`. Obtain the artifact from the successful
+exact-master run, verify the GitHub artifact digest and inner archive SHA-256,
+then stage exactly these seven files under
+`/root/kitsusync-deployment-maintenance`: `INSTALL.txt`,
+`install-deployment`, `rollback-deployment`, `deployment_maintenance.py`,
+`kitsusync-deploy`, `kitsusync-runtime-state`, and `manifest.json`. The stage
+directory must be `root:root` mode `0700`; payloads and manifest must be
+regular root-owned files mode `0600`, except the two fixed entry points at
+`0700`. The installer checks exact inventory, source, file hashes, immutable
+v0.5.1 predecessors, ownership, modes, symlink/hardlink state, and fixed paths
+before changing installed files.
+
+The only install command is:
+
+```bash
+/root/kitsusync-deployment-maintenance/install-deployment
+```
+
+It accepts no arguments, runs only as root, serializes against the deploy
+wrapper through `/var/lib/kitsusync-deploy/deploy.lock`, and atomically
+replaces only `/usr/local/sbin/kitsusync-deploy` and
+`/usr/local/libexec/kitsusync-runtime-state`. It never rewrites the protected
+v0.5.1 provenance, invokes arbitrary commands, or adds sudoers rules, services,
+daemons, or listeners. A root-owned identity record binds the new helper
+hashes to the exact prior provenance digest; the wrapper permits a legacy
+digest mismatch only while that record and unchanged v0.5.1 provenance agree.
+If interrupted, the next fixed maintenance invocation restores the saved
+predecessors, clears the journal, reports recovery, and exits without retrying
+installation. Inspect state before a deliberate retry.
+
+The fixed rollback command is:
+
+```bash
+/root/kitsusync-deployment-maintenance/rollback-deployment
+```
+
+It restores only the recorded v0.5.1 predecessor pair and prior identity, and
+only while installed files and provenance still match the maintenance record.
+No helper update, root action, application deployment, or Production change
+has been performed by this PR work.
+
 ## Production update approval checklist
 
 The read-only preflight is evidence gathering, not authorization to deploy.
@@ -176,9 +234,9 @@ items below against the same candidate source SHA and the live host:
 - [ ] The released v0.5.1 candidate has successful exact-source CI, Security,
   CodeQL, normal release bundle provenance, and immutable image identity.
 - [ ] The installed deploy wrapper and inspection helpers have approved owner,
-  mode, source digest, and recorded provenance. Any inspector maintenance is
-  completed only through its dedicated artifact and separately approved
-  one-time administrator action.
+  mode, source digest, and recorded provenance. Any deploy-wrapper or
+  inspector maintenance is completed only through its dedicated immutable
+  artifact and separately approved one-time administrator action.
 - [ ] Runtime image, source revision, Compose identity, and rollback image all
   match the recorded immutable identities. The existing rollback unit and old
   image remain available.
@@ -191,29 +249,24 @@ items below against the same candidate source SHA and the live host:
   operator understands that this verifies the captured backup only; it does
   not prove that it contains writes made after its capture.
 - [ ] Peak space is known and sufficient for every filesystem role, including
-  the SQLite backup and rollback snapshot. An omitted or `unknown` capacity
-  requirement is BLOCKED, even if the other filesystems have ample space.
+  the single quiesced SQLite backup, runtime state, and Docker image/container
+  storage. An omitted or `unknown` capacity requirement is BLOCKED, even though
+  backup ENOSPC is designed to restart the prior runtime safely.
 - [ ] The normal `kitsusync-deploy` wrapper is the only deployment path and its
   automatic rollback evidence is available. Direct Production Compose is
   prohibited.
 
-This PR does not perform the helper maintenance, create a fresh SQLite
-snapshot, or deploy the application. Those are distinct administrator actions
-requiring explicit approval. Because the current inspection deliberately does
-not read secret-bearing Docker snapshot data, backup-filesystem peak capacity
-is unresolved; this checklist therefore remains BLOCKED until a safe bound is
-provided and verified. There is no existing supported command that produces a
-sanitized upper bound for the complete wrapper backup inventory. The one-time
-administrator action required to close this item is to authorize a bounded,
-read-only capacity attestation for the exact installed wrapper and current
-runtime. Its output must contain only per-filesystem available/required byte
-counts and status, account for the complete simultaneous backup inventory,
-and never print or persist environment/inspect payload values. If the bound
-cannot be established, provision or resize the relevant filesystem and repeat
-the attestation; do not substitute a prior backup size, a guessed reserve, or
-free-space alone. The attestation must be performed close enough to the
-separately authorized update that its filesystem measurements remain valid.
-Do not treat a clean collector exit as a deployment approval.
+This PR does not perform helper maintenance, create a fresh SQLite snapshot,
+or deploy the application. Those are distinct administrator actions requiring
+explicit approval. Backup capacity remains unresolved: the collector does not
+claim an arbitrary finite upper bound for the runtime-dependent writes. A
+sanitized, filesystem-specific capacity attestation for the exact installed
+wrapper and current runtime is still required. Its output must contain only
+per-filesystem available/required byte counts and status, and must not print or
+persist environment/inspect payload values. If it cannot prove sufficiency,
+provision or resize the relevant filesystem and repeat the attestation. Do not
+substitute a guessed reserve, prior backup size, or free space alone, and do
+not treat a clean collector exit as deployment approval.
 
 If the approved wrapper reports a failure, use only the wrapper's documented
 rollback path and verify the restored immutable image, runtime state,
@@ -228,10 +281,12 @@ sudo /usr/local/sbin/kitsusync-deploy
 ```
 
 The deploy command accepts no arguments. It uses fixed root-owned inputs and
-Compose project `kitsusync`, creates and verifies an online SQLite backup plus
-the complete compatible runtime state before the first Docker mutation, then
-loads and verifies the approved immutable image. A normal deployment passes
-only when `/ready` reports `ready`.
+Compose project `kitsusync`. It loads and verifies the approved immutable image
+while the prior runtime is still active, captures and validates the runtime
+reconstruction plan, and creates a stopped rollback probe before quiescing the
+writer. It takes one final SQLite online backup while the app is stopped, then
+marks the rollback unit complete before removing or replacing the active
+container. A normal deployment passes only when `/ready` reports `ready`.
 
 The v0.4.6 bundle carries the explicit one-time `legacy-migration` policy for
 the already-approved runtime that predates `/ready`. Bootstrap records that

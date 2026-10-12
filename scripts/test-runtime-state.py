@@ -2,6 +2,7 @@
 """Snapshot reconstruction regressions; optional real stopped-create roundtrip."""
 
 import copy
+import io
 import importlib.machinery
 import importlib.util
 import json
@@ -43,6 +44,12 @@ def fixture():
 
 
 class RuntimeStateTests(unittest.TestCase):
+    def test_bounded_stdin_inspect_input(self):
+        raw = json.dumps(fixture()).encode("utf-8")
+        stdin = type("Input", (), {"buffer": io.BytesIO(raw)})()
+        with mock.patch.object(runtime.sys, "stdin", stdin):
+            self.assertEqual(runtime.read_json("-"), fixture())
+
     def test_full_config_round_trip_plan(self):
         original = fixture()
         plan = runtime.make_plan(original)
