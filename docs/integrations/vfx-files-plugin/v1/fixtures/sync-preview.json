@@ -1,0 +1,34 @@
+{
+  "contract_version": "1.0",
+  "preview_id": "30000000-0000-4000-8000-000000000001",
+  "production_id": "10000000-0000-4000-8000-000000000001",
+  "config_revision": 4,
+  "root_id": "fake-root-01",
+  "state": "preview_ready",
+  "summary": {
+    "existing": 12,
+    "create": 3,
+    "link": 4,
+    "excluded": 1,
+    "warnings": 0
+  },
+  "changes": [
+    {
+      "action": "existing",
+      "object_type": "shot",
+      "object_id": "40000000-0000-4000-8000-000000000001",
+      "display_name": "sc01_sh005",
+      "parent_id": "40000000-0000-4000-8000-000000000002",
+      "reason": "stable ID already bound"
+    },
+    {
+      "action": "create",
+      "object_type": "task",
+      "object_id": "50000000-0000-4000-8000-000000000001",
+      "display_name": "Layout",
+      "parent_id": "40000000-0000-4000-8000-000000000001",
+      "reason": "included by current scope"
+    }
+  ],
+  "expires_at": "2026-10-12T12:30:00Z"
+}

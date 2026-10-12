@@ -1,0 +1,42 @@
+{
+  "contract_version": "1.0",
+  "events": [
+    {
+      "contract_version": "1.0",
+      "producer_id": "vfx-files-plugin",
+      "event_id": "60000000-0000-4000-8000-000000000006",
+      "event_type": "output_package.ready",
+      "occurred_at": "2026-10-12T15:10:00Z",
+      "production_id": "10000000-0000-4000-8000-000000000001",
+      "source": {
+        "task_id": "50000000-0000-4000-8000-000000000002",
+        "task_type_id": "50000000-0000-4000-8000-000000000010",
+        "task_type_name": "Compositing"
+      },
+      "sender_person_id": "80000000-0000-4000-8000-000000000001",
+      "output_package": {
+        "id": "90000000-0000-4000-8000-000000000001",
+        "version": 3,
+        "classification": "Low-Res EXR Sequence",
+        "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "manifest_ref": "manifest:90000000-0000-4000-8000-000000000001",
+        "objects": [
+          {
+            "drive_file_id": "fake-file-fx-01",
+            "classification": "frame_sequence",
+            "size_bytes": 123456,
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "frame_range": {
+          "start": 1001,
+          "end": 1100,
+          "step": 1,
+          "rate_num": 24,
+          "rate_den": 1
+        }
+      },
+      "activation_epoch": 1
+    }
+  ]
+}

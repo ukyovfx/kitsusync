@@ -1,0 +1,269 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KitsuSync Files Plugin event intake",
+    "version": "1.0.0",
+    "description": "Plugin-to-KitsuSync signed event endpoint. HTTP acceptance means durable intake only, not Discord delivery or recipient receipt."
+  },
+  "servers": [
+    {
+      "url": "https://kitsusync.example.invalid/api/integrations/vfx-files/v1"
+    }
+  ],
+  "paths": {
+    "/events": {
+      "post": {
+        "operationId": "ingestFilesPluginEvents",
+        "summary": "Durably accept or quarantine Plugin business events",
+        "security": [
+          {
+            "PluginHmacSignature": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "X-VFX-Key-Id",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 80
+            }
+          },
+          {
+            "name": "X-VFX-Timestamp",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "X-VFX-Nonce",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-VFX-Content-SHA256",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          {
+            "name": "X-VFX-Signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^sha256=[a-f0-9]{64}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "schemas/event-batch.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/Accepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "PluginHmacSignature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-VFX-Signature",
+        "description": "HMAC-SHA256 over timestamp + LF + nonce + LF + lowercase raw-body SHA-256 + LF + Idempotency-Key. The key ID selects a producer-bound integration key. Verify in constant time, enforce a short timestamp window, and persist nonce and event identity before acknowledging."
+      }
+    },
+    "responses": {
+      "Accepted": {
+        "description": "Every event was durably accepted, recognized as identical duplicate, or quarantined",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AcceptedBatch"
+            }
+          }
+        }
+      },
+      "Error": {
+        "description": "Sanitized error; no raw provider response or event payload is echoed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "AcceptedBatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "results"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventResult"
+            }
+          }
+        }
+      },
+      "EventResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_id",
+          "outcome",
+          "code"
+        ],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "outcome": {
+            "enum": [
+              "accepted",
+              "duplicate",
+              "quarantined"
+            ]
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "code",
+          "request_id",
+          "retryable"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "unsupported_contract_version",
+              "unauthorized_service",
+              "production_access_denied",
+              "invalid_scope",
+              "connection_not_found",
+              "connection_not_ready",
+              "root_unverified",
+              "drive_permission_denied",
+              "stale_config",
+              "stale_source_snapshot",
+              "preview_expired",
+              "preview_mismatch",
+              "idempotency_conflict",
+              "replay_detected",
+              "invalid_event",
+              "unknown_event_type",
+              "duplicate_event_conflict",
+              "no_notification_route",
+              "reconcile_required",
+              "rate_limited",
+              "provider_unavailable",
+              "internal_error"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "retry_after_seconds": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expected_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "actual_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

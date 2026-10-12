@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kitsusync.invalid/contracts/vfx-files/v1/folder-event.schema.json",
+  "title": "Completed folder provisioning event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "producer_id",
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "production_id",
+    "activation_epoch",
+    "folder"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "1.0"
+    },
+    "producer_id": {
+      "const": "vfx-files-plugin"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "const": "folder.provisioning.completed"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "production_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "activation_epoch": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "folder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "object_type",
+        "object_id",
+        "drive_file_id",
+        "binding_state"
+      ],
+      "properties": {
+        "object_type": {
+          "enum": [
+            "production",
+            "episode",
+            "sequence",
+            "shot",
+            "asset",
+            "task"
+          ]
+        },
+        "object_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "drive_file_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_-]{1,200}$"
+        },
+        "binding_state": {
+          "const": "ready"
+        }
+      }
+    }
+  }
+}
