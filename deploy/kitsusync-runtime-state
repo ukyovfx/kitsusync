@@ -109,13 +109,12 @@ def endpoints(value, container_id, name):
                                   if alias not in (container_id, container_id[:12], name))
         entry["Links"] = entry["Links"] or []
         require(not entry["Links"], "linked container endpoints are unsupported")
-        # A dynamic bridge MAC exactly derived from its assigned IPv4 address
-        # is not a stable identity; Docker regenerates it when that address
-        # changes. Keep explicit IPAM and all non-derived/custom MACs strict.
+        # A bridge MAC exactly derived from the assigned IPv4 address is not
+        # independent identity. Docker may regenerate it when restoring an
+        # endpoint. IPAMConfig remains strictly compared, so explicit address
+        # intent is still protected; custom MACs remain strict as well.
         entry["MacAddress"] = entry["MacAddress"] or ""
-        ipam = entry["IPAMConfig"] if isinstance(entry["IPAMConfig"], dict) else {}
-        explicit_ip = any(str(ipam.get(key) or "").strip() for key in ("IPv4Address", "IPv6Address"))
-        if not explicit_ip and is_docker_generated_ipv4_mac(settings.get("IPAddress"), entry["MacAddress"]):
+        if is_docker_generated_ipv4_mac(settings.get("IPAddress"), entry["MacAddress"]):
             entry["MacAddress"] = ""
         entry["GwPriority"] = entry["GwPriority"] or 0
         result[network] = entry

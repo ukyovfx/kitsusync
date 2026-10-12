@@ -224,13 +224,12 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual(message, "state.host_config.SecretSetting")
         self.assertNotIn("private-value", message)
 
-    def test_duplicate_config_mac_is_normalized_but_endpoint_mac_is_preserved(self):
+    def test_duplicate_config_and_derived_endpoint_macs_are_normalized(self):
         source = fixture()
-        endpoint_mac = source["NetworkSettings"]["Networks"]["ks-net"]["MacAddress"]
         source["Config"]["MacAddress"] = "02:42:ac:11:00:02"
         state = runtime.runtime_state(source)
         self.assertEqual(state["config"]["MacAddress"], "")
-        self.assertEqual(state["networks"]["ks-net"]["MacAddress"], endpoint_mac)
+        self.assertEqual(state["networks"]["ks-net"]["MacAddress"], "")
         self.assertEqual(runtime.make_plan(source)["request"]["MacAddress"], "")
 
     def test_generated_endpoint_mac_tracks_dynamic_ipv4_assignment(self):
@@ -255,17 +254,17 @@ class RuntimeStateTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.MacAddress"):
             runtime.compare(plan, restored)
 
-    def test_explicit_ipam_and_endpoint_mac_are_both_strict(self):
+    def test_explicit_ipam_remains_strict_when_mac_is_derived(self):
         source = fixture()
         endpoint = source["NetworkSettings"]["Networks"]["ks-net"]
         endpoint["IPAMConfig"] = {"IPv4Address": "172.20.0.2"}
         plan = runtime.make_plan(source)
-        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "02:42:ac:14:00:02")
+        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "")
         restored = copy.deepcopy(source)
         restored["NetworkSettings"]["Networks"]["ks-net"].update(
             IPAddress="172.20.0.3", IPAMConfig={"IPv4Address": "172.20.0.3"},
             MacAddress="02:42:ac:14:00:03")
-        with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.IPAMConfig|state.networks.ks-net.MacAddress"):
+        with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.IPAMConfig"):
             runtime.compare(plan, restored)
 
     def test_unset_oom_kill_policy_matches_docker_false_default(self):

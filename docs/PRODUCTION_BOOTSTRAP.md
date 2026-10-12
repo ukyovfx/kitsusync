@@ -105,8 +105,9 @@ is retained and the wrapper stops with an explicit recovery error. No
 unverified backup is accepted as rollback evidence.
 
 Runtime reconstruction preserves and strictly compares custom endpoint MACs
-and MACs with explicit IPAM addresses. It normalizes only Docker's derived
-`02:42:<IPv4>` MAC when that IPv4 was dynamically allocated. Additional
+and all `IPAMConfig` address intent. It normalizes only a `02:42:<IPv4>` MAC
+that exactly matches Docker's derived MAC for the inspected endpoint address.
+Additional
 endpoints are attached after container creation with their saved identity.
 Docker documents that `POST /networks/{id}/connect` only began applying the
 endpoint `MacAddress` field in Engine API v1.54. A runtime with secondary
