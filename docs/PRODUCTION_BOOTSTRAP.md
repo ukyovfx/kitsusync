@@ -104,12 +104,12 @@ incomplete backup directory. If restart or validation fails, partial evidence
 is retained and the wrapper stops with an explicit recovery error. No
 unverified backup is accepted as rollback evidence.
 
-Runtime reconstruction preserves custom endpoint MAC addresses and MACs tied
-to explicit IPAM addresses. It normalizes only Docker's generated
-`02:42:<IPv4>` endpoint MAC when no static endpoint address was requested,
-because Docker regenerates that value if rollback assigns a different dynamic
-IPv4 address. Network identity, aliases, IPAM requests, driver options, and all
-other runtime fields remain strictly compared.
+Runtime reconstruction preserves custom endpoint MAC addresses. Docker's
+generated `02:42:<IPv4>` endpoint MAC is normalized because it is derivable
+from the strictly compared endpoint address/IPAM state and changes when
+rollback assigns another IPv4 address. Network identity, aliases, IPAM
+requests, driver options, and all other runtime fields remain strictly
+compared.
 
 These controls make backup ENOSPC a fail-safe abort while the original
 database remains in place; they do not prove an arbitrary finite capacity

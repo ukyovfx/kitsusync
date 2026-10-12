@@ -109,14 +109,12 @@ def endpoints(value, container_id, name):
                                   if alias not in (container_id, container_id[:12], name))
         entry["Links"] = entry["Links"] or []
         require(not entry["Links"], "linked container endpoints are unsupported")
-        # A dynamic IPv4 endpoint gets Docker's deterministic 02:42:<IPv4>
-        # address, which changes when Docker assigns another free IP during
-        # rollback. It is not an operator-specified identity. Keep custom MACs
-        # and MACs attached to explicit IPAM addresses in the strict plan.
+        # Docker's deterministic 02:42:<IPv4> MAC is derivable from the
+        # strictly compared endpoint address/IPAM state. Normalize that
+        # duplicate generated value because rollback can receive another
+        # dynamic address; retain every non-derived custom MAC.
         entry["MacAddress"] = entry["MacAddress"] or ""
-        ipam = entry["IPAMConfig"] if isinstance(entry["IPAMConfig"], dict) else {}
-        explicit_ip = any(str(ipam.get(key) or "").strip() for key in ("IPv4Address", "IPv6Address"))
-        if not explicit_ip and is_docker_generated_ipv4_mac(settings.get("IPAddress"), entry["MacAddress"]):
+        if is_docker_generated_ipv4_mac(settings.get("IPAddress"), entry["MacAddress"]):
             entry["MacAddress"] = ""
         entry["GwPriority"] = entry["GwPriority"] or 0
         result[network] = entry

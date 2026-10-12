@@ -12,11 +12,12 @@ expected = {"INSTALL.txt", "install-deployment", "rollback-deployment", "deploym
             "kitsusync-deploy", "kitsusync-runtime-state", "manifest.json"}
 with tarfile.open(archive, "r:gz") as bundle:
     members = bundle.getmembers()
-    names = [m.name[2:] if m.name.startswith("./") else m.name for m in members]
+    names = ["" if m.name in ("", ".", "./") else m.name[2:] if m.name.startswith("./") else m.name
+             for m in members]
     files = [m for m in members if m.isfile()]
     dirs = [m for m in members if m.isdir()]
     if (len(files) != len(expected) or set(names) != expected | {""}
-            or len(dirs) != 1 or names[members.index(dirs[0])] not in {"", "."}):
+            or len(dirs) != 1 or names[members.index(dirs[0])] != ""):
         raise SystemExit("deployment maintenance artifact inventory mismatch")
     by_name = {name: member for name, member in zip(names, members) if member.isfile()}
     manifest = json.load(bundle.extractfile(by_name["manifest.json"]))
