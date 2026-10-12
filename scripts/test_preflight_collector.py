@@ -1,6 +1,8 @@
 import importlib.util
 import hashlib
 from importlib.machinery import SourceFileLoader
+import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -36,6 +38,9 @@ class CollectorTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as db:
             db.execute("CREATE TABLE fixture (value TEXT)")
             db.execute("INSERT INTO fixture VALUES ('private-marker')")
+            for table, columns in collector.V049_REQUIRED_COLUMNS.items():
+                declaration = ", ".join(f'"{name}" TEXT' for name in sorted(columns))
+                db.execute(f'CREATE TABLE "{table}" ({declaration})')
             db.commit()
         os.chmod(self.db, 0o600)
 
@@ -45,7 +50,8 @@ class CollectorTests(unittest.TestCase):
     def test_valid_runtime_database_is_read_only_and_secret_safe(self):
         before = self.db.read_bytes()
         result = collector.inspect_database(self.db, expected_uid=TEST_UID)
-        self.assertEqual(result, {"size_bytes": len(before), "integrity": "ok"})
+        self.assertEqual(result, {"size_bytes": len(before), "integrity": "ok",
+                                  "migration_compatibility": "v0.4.9_to_v0.5.1"})
         self.assertEqual(self.db.read_bytes(), before)
         self.assertNotIn("private-marker", repr(result))
 
@@ -104,6 +110,21 @@ class CollectorTests(unittest.TestCase):
         result = collector.inspect_database(self.db, expected_uid=TEST_UID)
         self.assertEqual(result["integrity"], "unknown")
         self.assertEqual(before, {suffix: Path(str(self.db) + suffix).read_bytes() for suffix in ("-wal", "-shm")})
+
+    def test_live_sqlite_wal_is_left_untouched_and_not_claimed_as_integral(self):
+        connection = sqlite3.connect(self.db)
+        try:
+            self.assertEqual(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower(), "wal")
+            connection.execute("INSERT INTO fixture VALUES ('wal-only-row')")
+            connection.commit()
+            sidecars = [Path(str(self.db) + suffix) for suffix in ("-wal", "-shm")]
+            self.assertTrue(all(path.exists() for path in sidecars))
+            before = {path.name: path.read_bytes() for path in sidecars}
+            result = collector.inspect_database(self.db, expected_uid=TEST_UID)
+            self.assertEqual(result["integrity"], "unknown")
+            self.assertEqual(before, {path.name: path.read_bytes() for path in sidecars})
+        finally:
+            connection.close()
 
     def test_backup_validation_failure_does_not_echo_file_content(self):
         backup = self.paths.backup_root / "20261012T000000Z-abcdef012345"
@@ -309,6 +330,146 @@ class CollectorTests(unittest.TestCase):
     def test_capacity_shortfall_is_reported_without_raw_paths(self):
         result = collector.peak_capacity(99, 100)
         self.assertEqual(result, {"available_bytes": 99, "required_bytes": 100})
+
+    def test_capacity_contract_reports_each_filesystem_and_legacy_safe_bound(self):
+        roots = {
+            "runtime": self.paths.runtime_data,
+            "backup": self.paths.backup_root,
+            "release_stage": self.paths.release_stage,
+            "docker": self.paths.docker_root,
+        }
+        available = {"data": 2_000, "backups": 900, "release-stage": 700, "docker": 4_000}
+
+        def fake_statvfs(path):
+            return SimpleNamespace(f_bavail=available[path.name], f_frsize=1)
+
+        result = collector.capacity_by_filesystem(
+            {"runtime": 1_000, "backup": 800, "release_stage": 0, "docker": 2_000},
+            roots,
+            statvfs=fake_statvfs,
+            device_id=lambda path: {"data": 1, "backups": 2, "release-stage": 3, "docker": 4}[path.name],
+        )
+        self.assertEqual(result["filesystems"], [
+            {"roles": ["backup"], "available_bytes": 900, "required_bytes": 800},
+            {"roles": ["docker"], "available_bytes": 4_000, "required_bytes": 2_000},
+            {"roles": ["release_stage"], "available_bytes": 700, "required_bytes": 0},
+            {"roles": ["runtime"], "available_bytes": 2_000, "required_bytes": 1_000},
+        ])
+        self.assertEqual(result["legacy"], {"available_bytes": 700, "required_bytes": 2_000})
+        self.assertNotIn(str(self.root), repr(result))
+
+    def test_capacity_aggregates_roles_on_same_device_and_fails_closed_on_unknown(self):
+        roots = {"runtime": self.paths.runtime_data, "backup": self.paths.backup_root}
+
+        def same_device(_path):
+            return SimpleNamespace(f_bavail=3_000, f_frsize=1)
+
+        result = collector.capacity_by_filesystem(
+            {"runtime": 1_000, "backup": 1_500}, roots, statvfs=same_device,
+            device_id=lambda _path: 7)
+        self.assertEqual(result["filesystems"], [
+            {"roles": ["backup", "runtime"], "available_bytes": 3_000, "required_bytes": 2_500}
+        ])
+        self.assertEqual(result["legacy"], {"available_bytes": 3_000, "required_bytes": 2_500})
+        self.assertEqual(collector.capacity_by_filesystem(
+            {"runtime": None, "backup": 1}, roots, statvfs=same_device, device_id=lambda _path: 7), {
+                "filesystems": [{"roles": ["backup", "runtime"], "available_bytes": 3_000,
+                                 "required_bytes": 1, "status": "unknown"}]
+            })
+
+    def test_capacity_shortfall_on_one_filesystem_remains_visible(self):
+        roots = {"runtime": self.paths.runtime_data, "backup": self.paths.backup_root}
+        available = {"data": 5_000, "backups": 500}
+        result = collector.capacity_by_filesystem(
+            {"runtime": 1_000, "backup": 800}, roots,
+            statvfs=lambda path: SimpleNamespace(f_bavail=available[path.name], f_frsize=1),
+            device_id=lambda path: 1 if path.name == "data" else 2)
+        self.assertEqual(result["filesystems"], [
+            {"roles": ["backup"], "available_bytes": 500, "required_bytes": 800},
+            {"roles": ["runtime"], "available_bytes": 5_000, "required_bytes": 1_000},
+        ])
+        self.assertEqual(result["legacy"], {"available_bytes": 500, "required_bytes": 1_000})
+
+    def test_image_layer_capacity_uses_only_verified_v051_layer_members(self):
+        archive_path = self.root / "kitsusync-image.tar"
+        layer = b"synthetic docker layer bytes"
+        with tarfile.open(archive_path, "w:") as archive:
+            manifest = json.dumps([{"RepoTags": ["kitsusync:v0.5.1"], "Layers": ["abc/layer.tar"]}]).encode()
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(manifest)
+            archive.addfile(info, io.BytesIO(manifest))
+            info = tarfile.TarInfo("abc/layer.tar")
+            info.size = len(layer)
+            archive.addfile(info, io.BytesIO(layer))
+        os.chmod(archive_path, 0o600)
+        self.assertEqual(collector.image_layer_bytes(archive_path, TEST_UID), len(layer))
+
+        with tarfile.open(archive_path, "w:") as archive:
+            manifest = json.dumps([{"RepoTags": ["kitsusync:v0.5.1"], "Layers": ["../escape.tar"]}]).encode()
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(manifest)
+            archive.addfile(info, io.BytesIO(manifest))
+            info = tarfile.TarInfo("escape.tar")
+            info.size = len(layer)
+            archive.addfile(info, io.BytesIO(layer))
+        os.chmod(archive_path, 0o600)
+        self.assertIsNone(collector.image_layer_bytes(archive_path, TEST_UID))
+
+    def test_database_is_not_identified_without_verified_production_mount(self):
+        self.assertFalse(collector.production_database_mount_verified(
+            self.paths.runtime_data,
+            runner=lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="")))
+
+    def test_database_mount_check_requires_exact_unique_writable_bind(self):
+        mounts = [{"Type": "bind", "Source": str(self.paths.runtime_data.resolve()),
+                   "Destination": "/app/data", "RW": True}]
+        def runner(args, **kwargs):
+            if args[1] == "ps":
+                return SimpleNamespace(returncode=0, stdout="a" * 64 + "\n")
+            return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(mounts))
+        self.assertTrue(collector.production_database_mount_verified(self.paths.runtime_data, runner=runner))
+        mounts[0]["Source"] = str(self.root / "other")
+        self.assertFalse(collector.production_database_mount_verified(self.paths.runtime_data, runner=runner))
+        mounts[0]["Source"] = str(self.paths.runtime_data.resolve())
+        mounts.append(dict(mounts[0]))
+        self.assertFalse(collector.production_database_mount_verified(self.paths.runtime_data, runner=runner))
+
+    def test_maintenance_provenance_accepts_only_matching_inspector_and_collector(self):
+        old_inspect = self.root / "old-inspect"
+        current_inspect = self.root / "current-inspect"
+        current_collector = self.root / "current-collector"
+        deploy_tool = self.root / "deploy-tool"
+        provenance = self.root / "provenance"
+        identity = self.root / "inspection-maintenance.json"
+        old_inspect.write_bytes(b"v0.5.1 inspector")
+        current_inspect.write_bytes(b"maintained inspector")
+        current_collector.write_bytes(b"maintained collector")
+        deploy_tool.write_bytes(b"approved deploy tool")
+        for path in (old_inspect, current_inspect, current_collector, deploy_tool):
+            os.chmod(path, 0o600)
+        provenance.write_text(
+            f"deployment_tool_sha256={hashlib.sha256(deploy_tool.read_bytes()).hexdigest()}\n"
+            f"inspection_tool_sha256={hashlib.sha256(old_inspect.read_bytes()).hexdigest()}\n",
+            encoding="ascii")
+        os.chmod(provenance, 0o600)
+        record = {"schema_version": 1, "baseline_release": "v0.5.1", "source_commit": "a" * 40,
+                  "inspection_tool_sha256": hashlib.sha256(current_inspect.read_bytes()).hexdigest(),
+                  "preflight_collector_tool_sha256": hashlib.sha256(current_collector.read_bytes()).hexdigest()}
+        identity.write_text(json.dumps(record), encoding="ascii")
+        os.chmod(identity, 0o600)
+        result = collector.inspect_tools(
+            provenance, {"deployment_tool_sha256": deploy_tool,
+                         "inspection_tool_sha256": current_inspect}, TEST_UID,
+            identity, current_collector)
+        self.assertTrue(result["wrapper_matches_baseline"])
+        self.assertTrue(result["helpers_match_baseline"])
+        self.assertEqual(result["inspection_maintenance"], "verified")
+        record["preflight_collector_tool_sha256"] = "0" * 64
+        identity.write_text(json.dumps(record), encoding="ascii")
+        self.assertFalse(collector.inspect_tools(
+            provenance, {"deployment_tool_sha256": deploy_tool,
+                         "inspection_tool_sha256": current_inspect}, TEST_UID,
+            identity, current_collector)["helpers_match_baseline"])
 
 
 if __name__ == "__main__":

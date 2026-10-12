@@ -1,0 +1,468 @@
+#!/usr/bin/python3
+"""One-shot, fixed-path maintenance for the installed read-only inspector pair.
+
+This program has no network, command execution, sudoers, or caller-selected path
+surface. Administrators stage and verify the dedicated artifact, then run its
+fixed install or rollback entry point once as root.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import sys
+
+
+class MaintenanceError(Exception):
+    pass
+
+
+FILES = ("kitsusync-inspect", "kitsusync-preflight-collect")
+MAX_MANIFEST = 64 * 1024
+
+
+class Paths:
+    def __init__(self, stage: Path, state: Path, backups: Path,
+                 inspect: Path, collector: Path):
+        self.stage, self.state, self.backups = stage, state, backups
+        self.install = {FILES[0]: inspect, FILES[1]: collector}
+        self.pending = state / "inspector-maintenance.pending"
+        self.identity = state / "inspection-maintenance.json"
+
+    @classmethod
+    def production(cls):
+        return cls(Path("/root/kitsusync-inspection-maintenance"),
+                   Path("/var/lib/kitsusync-deploy"),
+                   Path("/var/backups/kitsusync-deploy"),
+                   Path("/usr/local/sbin/kitsusync-inspect"),
+                   Path("/usr/local/libexec/kitsusync-preflight-collect"))
+
+
+def _check_dir(path: Path, uid: int, mode: int | None = None) -> None:
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid or info.st_gid != uid
+            or (os.name != "nt" and mode is not None and stat.S_IMODE(info.st_mode) != mode)
+            or (os.name != "nt" and mode is None and info.st_mode & 0o022)
+            or path.resolve(strict=True) != path):
+        raise MaintenanceError("protected directory check failed")
+
+
+def _read_regular(path: Path, uid: int, mode: int, limit: int | None = None) -> bytes:
+    before = path.lstat()
+    if (not stat.S_ISREG(before.st_mode) or before.st_uid != uid or before.st_gid != uid
+            or (os.name != "nt" and stat.S_IMODE(before.st_mode) != mode)
+            or (limit is not None and before.st_size > limit)):
+        raise MaintenanceError("protected regular file check failed")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    try:
+        after = os.fstat(fd)
+        current = path.lstat()
+        if (not stat.S_ISREG(after.st_mode) or after.st_dev != before.st_dev
+                or after.st_ino != before.st_ino or current.st_dev != after.st_dev
+                or current.st_ino != after.st_ino):
+            raise MaintenanceError("file changed during verification")
+        chunks = []
+        total = 0
+        while True:
+            block = os.read(fd, 1024 * 1024)
+            if not block:
+                break
+            total += len(block)
+            if limit is not None and total > limit:
+                raise MaintenanceError("file exceeds inspection limit")
+            chunks.append(block)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _remove_pending(paths: Paths, uid: int) -> None:
+    _read_regular(paths.pending, uid, 0o600, MAX_MANIFEST)
+    if os.name == "nt":
+        paths.pending.unlink()
+        return
+    directory_fd = os.open(paths.state, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                            | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.unlink(paths.pending.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _remove_state_file(path: Path, uid: int, mode: int, expected_sha: str) -> None:
+    if not os.path.lexists(path):
+        return
+    current = _read_regular(path, uid, mode, MAX_MANIFEST)
+    if _sha(current) != expected_sha:
+        raise MaintenanceError("maintenance identity changed; removal refused")
+    if os.name == "nt":
+        path.unlink()
+        return
+    directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                            | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.unlink(path.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _identity_bytes(manifest: dict) -> bytes:
+    record = {"schema_version": 1, "baseline_release": "v0.5.1",
+              "source_commit": manifest["source_commit"],
+              "inspection_tool_sha256": manifest["files"][FILES[0]],
+              "preflight_collector_tool_sha256": manifest["files"][FILES[1]]}
+    return json.dumps(record, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+
+
+def _manifest(paths: Paths, uid: int) -> tuple[dict, dict[str, bytes]]:
+    _check_dir(paths.stage, uid, 0o700)
+    expected_names = {"manifest.json", "INSTALL.txt", "install-inspection", "rollback-inspection",
+                      "kitsusync-inspect", "kitsusync-preflight-collect"}
+    if {item.name for item in paths.stage.iterdir()} != expected_names:
+        raise MaintenanceError("maintenance artifact inventory mismatch")
+    raw = _read_regular(paths.stage / "manifest.json", uid, 0o600, MAX_MANIFEST)
+    manifest = json.loads(raw)
+    if (type(manifest) is not dict or manifest.get("schema_version") != 1
+            or manifest.get("baseline_release") != "v0.5.1"
+            or not re.fullmatch(r"[0-9a-f]{40}", manifest.get("source_commit", ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", manifest.get("expected_previous_inspect_sha256", ""))
+            or manifest.get("expected_previous_collector") != "absent"
+            or type(manifest.get("files")) is not dict
+            or set(manifest["files"]) != expected_names - {"manifest.json"}):
+        raise MaintenanceError("maintenance manifest is invalid")
+    data = {}
+    modes = {"INSTALL.txt": 0o600, "install-inspection": 0o700, "rollback-inspection": 0o700,
+             FILES[0]: 0o600, FILES[1]: 0o600}
+    for name, mode in modes.items():
+        payload = _read_regular(paths.stage / name, uid, mode, 32 * 1024 * 1024)
+        if manifest["files"].get(name) != _sha(payload):
+            raise MaintenanceError("maintenance file digest mismatch")
+        data[name] = payload
+    return manifest, data
+
+
+def _write_atomic(directory: Path, name: str, data: bytes, uid: int,
+                  mode: int = 0o600) -> None:
+    _check_dir(directory, uid)
+    temp = f".{name}.{secrets.token_hex(12)}.tmp"
+    dir_fd = None
+    temp_path = directory / temp
+    fd = None
+    try:
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_BINARY", 0))
+        if os.name == "nt":
+            fd = os.open(temp_path, flags, mode)
+        else:
+            dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            dir_fd = os.open(directory, dir_flags)
+            fd = os.open(temp, flags, mode, dir_fd=dir_fd)
+        if hasattr(os, "fchown"):
+            os.fchown(fd, uid, uid)
+        os.fchmod(fd, mode)
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        if os.name == "nt":
+            os.replace(temp_path, directory / name)
+        else:
+            os.replace(temp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            os.fsync(dir_fd)
+    except Exception:
+        try:
+            if os.name == "nt":
+                temp_path.unlink(missing_ok=True)
+            elif dir_fd is not None:
+                os.unlink(temp, dir_fd=dir_fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if dir_fd is not None:
+            os.close(dir_fd)
+
+
+def _installed(path: Path, uid: int) -> bytes | None:
+    if not os.path.lexists(path):
+        return None
+    return _read_regular(path, uid, 0o700, 32 * 1024 * 1024)
+
+
+def _remove_installed(path: Path, uid: int, expected_sha: str) -> None:
+    current = _installed(path, uid)
+    if current is None:
+        return
+    if _sha(current) != expected_sha:
+        raise MaintenanceError("installed helper identity changed; removal refused")
+    if os.name == "nt":
+        path.unlink()
+        return
+    directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                            | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.unlink(path.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _save_rollback(paths: Paths, manifest: dict, prior: dict[str, bytes | None],
+                   prior_identity: bytes | None, target_identity: bytes, uid: int) -> Path:
+    name = "inspector-maintenance-" + manifest["source_commit"]
+    destination = paths.backups / name
+    record = {"schema_version": 1, "source_commit": manifest["source_commit"],
+              "target_files": manifest["files"],
+              "prior_inspect_sha256": _sha(prior[FILES[0]]),
+              "prior_collector": "absent" if prior[FILES[1]] is None else _sha(prior[FILES[1]]),
+              "prior_identity": "absent" if prior_identity is None else _sha(prior_identity),
+              "target_identity_sha256": _sha(target_identity)}
+    if os.path.lexists(destination):
+        _check_dir(destination, uid, 0o700)
+        expected_backup_files = {FILES[0], "rollback.json"}
+        if prior[FILES[1]] is not None:
+            expected_backup_files.add(FILES[1])
+        if prior_identity is not None:
+            expected_backup_files.add("inspection-maintenance.json")
+        if {item.name for item in destination.iterdir()} != expected_backup_files:
+            raise MaintenanceError("existing rollback evidence inventory mismatch")
+        existing = json.loads(_read_regular(destination / "rollback.json", uid, 0o600, MAX_MANIFEST))
+        if existing != record:
+            raise MaintenanceError("existing rollback evidence conflicts with this update")
+        saved_inspect = _read_regular(destination / FILES[0], uid, 0o700, 32 * 1024 * 1024)
+        if _sha(saved_inspect) != record["prior_inspect_sha256"]:
+            raise MaintenanceError("existing rollback inspector evidence is invalid")
+        if prior[FILES[1]] is not None:
+            saved_collector = _read_regular(destination / FILES[1], uid, 0o700, 32 * 1024 * 1024)
+            if _sha(saved_collector) != record["prior_collector"]:
+                raise MaintenanceError("existing rollback collector evidence is invalid")
+        if prior_identity is not None:
+            saved_identity = _read_regular(destination / "inspection-maintenance.json", uid, 0o600, MAX_MANIFEST)
+            if _sha(saved_identity) != record["prior_identity"]:
+                raise MaintenanceError("existing rollback maintenance identity is invalid")
+        return destination
+    temporary = paths.backups / ("." + name + "." + secrets.token_hex(12) + ".pending")
+    temporary.mkdir(mode=0o700)
+    if hasattr(os, "chown"):
+        os.chown(temporary, uid, uid)
+    try:
+        if prior[FILES[0]] is None:
+            raise MaintenanceError("installed inspector is missing")
+        _write_atomic(temporary, FILES[0], prior[FILES[0]], uid, 0o700)
+        if prior[FILES[1]] is not None:
+            _write_atomic(temporary, FILES[1], prior[FILES[1]], uid, 0o700)
+        if prior_identity is not None:
+            _write_atomic(temporary, "inspection-maintenance.json", prior_identity, uid, 0o600)
+        _write_atomic(temporary, "rollback.json", json.dumps(record, sort_keys=True,
+                      separators=(",", ":")).encode("ascii") + b"\n", uid, 0o600)
+        os.rename(temporary, destination)
+        if os.name != "nt":
+            directory_fd = os.open(paths.backups, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        return destination
+    except Exception:
+        # Keep incomplete evidence for manual inspection; never recursively erase it.
+        raise
+
+
+def _restore(paths: Paths, backup: Path, record: dict, uid: int,
+             targets: dict[str, str] | None = None) -> None:
+    _check_dir(backup, uid, 0o700)
+    prior_inspect = _read_regular(backup / FILES[0], uid, 0o700, 32 * 1024 * 1024)
+    if _sha(prior_inspect) != record.get("prior_inspect_sha256"):
+        raise MaintenanceError("rollback inspector digest mismatch")
+    target_files = targets or record.get("target_files")
+    if (type(target_files) is not dict or set(target_files) != set(FILES)
+            or any(not re.fullmatch(r"[0-9a-f]{64}", target_files.get(name, "")) for name in FILES)):
+        raise MaintenanceError("rollback target identity is invalid")
+    current_inspect = _installed(paths.install[FILES[0]], uid)
+    if (current_inspect is None
+            or _sha(current_inspect) not in {record.get("prior_inspect_sha256"), target_files[FILES[0]]}):
+        raise MaintenanceError("inspector identity changed; rollback refused")
+    prior_collector = record.get("prior_collector")
+    current_collector = _installed(paths.install[FILES[1]], uid)
+    if prior_collector == "absent":
+        if current_collector is not None and _sha(current_collector) != target_files[FILES[1]]:
+            raise MaintenanceError("collector identity changed; rollback refused")
+        prior_collector_bytes = None
+    elif isinstance(prior_collector, str) and re.fullmatch(r"[0-9a-f]{64}", prior_collector):
+        prior_collector_bytes = _read_regular(backup / FILES[1], uid, 0o700, 32 * 1024 * 1024)
+        if _sha(prior_collector_bytes) != prior_collector:
+            raise MaintenanceError("rollback collector digest mismatch")
+        if (current_collector is not None
+                and _sha(current_collector) not in {prior_collector, target_files[FILES[1]]}):
+            raise MaintenanceError("collector identity changed; rollback refused")
+    else:
+        raise MaintenanceError("rollback collector state is invalid")
+    prior_identity = record.get("prior_identity")
+    current_identity = None
+    if os.path.lexists(paths.identity):
+        current_identity = _read_regular(paths.identity, uid, 0o600, MAX_MANIFEST)
+    target_identity = record.get("target_identity_sha256")
+    if not isinstance(target_identity, str) or not re.fullmatch(r"[0-9a-f]{64}", target_identity):
+        raise MaintenanceError("rollback maintenance target identity is invalid")
+    if prior_identity == "absent":
+        if current_identity is not None and _sha(current_identity) != target_identity:
+            raise MaintenanceError("maintenance identity changed; rollback refused")
+        prior_identity_bytes = None
+    elif isinstance(prior_identity, str) and re.fullmatch(r"[0-9a-f]{64}", prior_identity):
+        prior_identity_bytes = _read_regular(backup / "inspection-maintenance.json", uid, 0o600, MAX_MANIFEST)
+        if _sha(prior_identity_bytes) != prior_identity:
+            raise MaintenanceError("rollback maintenance identity digest mismatch")
+        if (current_identity is not None
+                and _sha(current_identity) not in {prior_identity, target_identity}):
+            raise MaintenanceError("maintenance identity changed; rollback refused")
+    else:
+        raise MaintenanceError("rollback maintenance identity state is invalid")
+
+    _write_atomic(paths.install[FILES[0]].parent, paths.install[FILES[0]].name,
+                  prior_inspect, uid, 0o700)
+    if prior_collector == "absent":
+        _remove_installed(paths.install[FILES[1]], uid, target_files[FILES[1]])
+    else:
+        _write_atomic(paths.install[FILES[1]].parent, paths.install[FILES[1]].name,
+                      prior_collector_bytes, uid, 0o700)
+    if prior_identity == "absent":
+        _remove_state_file(paths.identity, uid, 0o600, target_identity)
+    else:
+        _write_atomic(paths.state, paths.identity.name, prior_identity_bytes, uid, 0o600)
+
+
+def _recover_interrupted(paths: Paths, uid: int) -> None:
+    if not os.path.lexists(paths.pending):
+        return
+    pending = json.loads(_read_regular(paths.pending, uid, 0o600, MAX_MANIFEST))
+    source = pending.get("source_commit", "") if type(pending) is dict else ""
+    if not re.fullmatch(r"[0-9a-f]{40}", source):
+        raise MaintenanceError("interrupted update journal is invalid")
+    backup = paths.backups / ("inspector-maintenance-" + source)
+    record = json.loads(_read_regular(backup / "rollback.json", uid, 0o600, MAX_MANIFEST))
+    _restore(paths, backup, record, uid, pending.get("target_files"))
+    _remove_pending(paths, uid)
+    raise MaintenanceError("interrupted helper update was rolled back; rerun after review")
+
+
+def install(paths: Paths, uid: int = 0, fault_hook=None) -> str:
+    _check_dir(paths.state, uid, 0o700)
+    _check_dir(paths.backups, uid, 0o700)
+    _recover_interrupted(paths, uid)
+    manifest, payloads = _manifest(paths, uid)
+    prior = {name: _installed(paths.install[name], uid) for name in FILES}
+    if (prior[FILES[0]] is not None and prior[FILES[1]] is not None
+            and all(_sha(prior[name]) == manifest["files"][name] for name in FILES)):
+        if (not os.path.lexists(paths.identity)
+                or _read_regular(paths.identity, uid, 0o600, MAX_MANIFEST) != _identity_bytes(manifest)):
+            raise MaintenanceError("installed helper identity record is missing or mismatched")
+        return "already-installed"
+    if (prior[FILES[0]] is None or _sha(prior[FILES[0]]) != manifest["expected_previous_inspect_sha256"]
+            or prior[FILES[1]] is not None or os.path.lexists(paths.identity)):
+        raise MaintenanceError("installed helper identity differs from approved predecessor")
+    target_identity = _identity_bytes(manifest)
+    backup = _save_rollback(paths, manifest, prior, None, target_identity, uid)
+    pending = {"schema_version": 1, "source_commit": manifest["source_commit"],
+               "target_files": {name: manifest["files"][name] for name in FILES}}
+    _write_atomic(paths.state, paths.pending.name,
+                  json.dumps(pending, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n",
+                  uid, 0o600)
+    try:
+        for index, name in enumerate((FILES[1], FILES[0])):
+            _write_atomic(paths.install[name].parent, paths.install[name].name, payloads[name], uid, 0o700)
+            if fault_hook is not None:
+                fault_hook(index, name)
+        _write_atomic(paths.state, paths.identity.name, target_identity, uid, 0o600)
+        if fault_hook is not None:
+            fault_hook(len(FILES), paths.identity.name)
+        for name in FILES:
+            if _sha(_installed(paths.install[name], uid) or b"") != manifest["files"][name]:
+                raise MaintenanceError("installed helper verification failed")
+        if _read_regular(paths.identity, uid, 0o600, MAX_MANIFEST) != target_identity:
+            raise MaintenanceError("installed maintenance identity verification failed")
+        _remove_pending(paths, uid)
+        return "installed"
+    except Exception:
+        record = json.loads(_read_regular(backup / "rollback.json", uid, 0o600, MAX_MANIFEST))
+        _restore(paths, backup, record, uid, {name: manifest["files"][name] for name in FILES})
+        if os.path.lexists(paths.pending):
+            _remove_pending(paths, uid)
+        raise
+
+
+def rollback(paths: Paths, uid: int = 0) -> str:
+    _check_dir(paths.state, uid, 0o700)
+    _check_dir(paths.backups, uid, 0o700)
+    _recover_interrupted(paths, uid)
+    manifest, _payloads = _manifest(paths, uid)
+    backup = paths.backups / ("inspector-maintenance-" + manifest["source_commit"])
+    record = json.loads(_read_regular(backup / "rollback.json", uid, 0o600, MAX_MANIFEST))
+    if record.get("target_files") != manifest["files"]:
+        raise MaintenanceError("rollback artifact does not match installed maintenance artifact")
+    current = {name: _installed(paths.install[name], uid) for name in FILES}
+    if any(current[name] is None or _sha(current[name]) != manifest["files"][name] for name in FILES):
+        raise MaintenanceError("installed helper changed; rollback refused")
+    target_identity = _identity_bytes(manifest)
+    if _read_regular(paths.identity, uid, 0o600, MAX_MANIFEST) != target_identity:
+        raise MaintenanceError("installed maintenance identity changed; rollback refused")
+    pending = {"schema_version": 1, "operation": "rollback",
+               "source_commit": manifest["source_commit"],
+               "target_files": {name: manifest["files"][name] for name in FILES}}
+    _write_atomic(paths.state, paths.pending.name,
+                  json.dumps(pending, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n",
+                  uid, 0o600)
+    _restore(paths, backup, record, uid, {name: manifest["files"][name] for name in FILES})
+    restored_inspector = _installed(paths.install[FILES[0]], uid)
+    restored_collector = _installed(paths.install[FILES[1]], uid)
+    if (_sha(restored_inspector or b"") != record.get("prior_inspect_sha256")
+            or (record.get("prior_collector") == "absent" and restored_collector is not None)
+            or (record.get("prior_collector") != "absent"
+                and _sha(restored_collector or b"") != record.get("prior_collector"))):
+        raise MaintenanceError("rollback verification failed; recovery journal retained")
+    prior_identity = record.get("prior_identity")
+    if prior_identity == "absent":
+        if os.path.lexists(paths.identity):
+            raise MaintenanceError("rollback maintenance identity remains; recovery journal retained")
+    elif not os.path.lexists(paths.identity) or _sha(
+            _read_regular(paths.identity, uid, 0o600, MAX_MANIFEST)) != prior_identity:
+        raise MaintenanceError("rollback maintenance identity verification failed; journal retained")
+    _remove_pending(paths, uid)
+    return "rolled-back"
+
+
+def main() -> int:
+    if len(sys.argv) != 1 or os.geteuid() != 0:
+        return 2
+    paths = Paths.production()
+    try:
+        if Path(sys.argv[0]).name == "rollback-inspection":
+            result = rollback(paths)
+        elif Path(sys.argv[0]).name == "install-inspection":
+            result = install(paths)
+        else:
+            raise MaintenanceError("fixed maintenance entry point required")
+        print(f"inspector-maintenance={result}")
+        return 0
+    except Exception:
+        print("inspector-maintenance=FAILED; evidence preserved for administrator recovery")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

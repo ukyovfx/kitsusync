@@ -16,6 +16,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import shutil
 import tarfile
 from contextlib import closing
 import urllib.error
@@ -56,6 +57,23 @@ class Paths:
 BACKUP_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\Z")
 PERSISTENT_FILES = {"sqlite.db", "conf.toml", "templates.tar", "operator.env",
                     "runtime-secret.key", "runtime-secret.absent"}
+V049_REQUIRED_COLUMNS = {
+    "tasks": {"id", "task_id", "task_status"},
+    "projects": {"id", "kitsu_project_id"},
+    "project_webhooks": {"id", "kitsu_project_id", "webhook_url"},
+    "production_channel_mappings": {"id", "production_id", "task_type_id"},
+    "production_notification_configs": {"id", "production_id"},
+    "production_notification_routes": {"id", "production_id", "task_type_id"},
+    "notification_routing_diagnoses": {"id", "production_id"},
+    "user_maps": {"id", "kitsu_id", "discord_id"},
+    "checker_maps": {"id", "task_type", "discord_id"},
+    "settings": {"key", "value"},
+    "admin_sessions": {"id", "token_hash", "expiry"},
+    "audit_logs": {"id", "action"},
+    "project_user_maps": {"id", "project_id", "kitsu_email"},
+    "project_checker_maps": {"id", "project_id", "task_type", "override_discord_id"},
+    "project_settings": {"id", "project_id", "key", "value"},
+}
 RUNTIME_ROOT_FILES = {
     "container-id", "previous-image", "previous-image-id", "previous-revision",
     "previous-source-id", "previous-version", "prior-validation", "network",
@@ -141,15 +159,26 @@ def inspect_database(path: Path, expected_uid: int) -> dict:
             uri = path.resolve().as_uri() + "?immutable=1&mode=ro"
         with closing(sqlite3.connect(uri, uri=True)) as db:
             ok = db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+            tables = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            compatibility = "v0.4.9_to_v0.5.1" if set(V049_REQUIRED_COLUMNS) <= tables else "incompatible"
+            if compatibility != "incompatible":
+                for table, required_columns in V049_REQUIRED_COLUMNS.items():
+                    columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")').fetchall()}
+                    if not required_columns <= columns:
+                        compatibility = "incompatible"
+                        break
         current = path.lstat()
         if (current.st_ino != metadata.st_ino or current.st_dev != metadata.st_dev
                 or current.st_size != metadata.st_size or current.st_mtime_ns != metadata.st_mtime_ns):
-            return {"size_bytes": metadata.st_size, "integrity": "unknown"}
-        return {"size_bytes": metadata.st_size, "integrity": "ok" if ok else "failed"}
+            return {"size_bytes": metadata.st_size, "integrity": "unknown",
+                    "migration_compatibility": "unknown"}
+        return {"size_bytes": metadata.st_size, "integrity": "ok" if ok else "failed",
+                "migration_compatibility": compatibility}
     except (OSError, EvidenceError):
-        return {"integrity": "unknown"}
+        return {"integrity": "unknown", "migration_compatibility": "unknown"}
     except sqlite3.Error:
-        return {"integrity": "failed"}
+        return {"integrity": "failed", "migration_compatibility": "unknown"}
     finally:
         if fd is not None:
             os.close(fd)
@@ -376,7 +405,32 @@ def newest_backup(root: Path, expected_uid: int) -> Path | None:
         return None
 
 
-def inspect_tools(provenance: Path, installed: dict[str, Path], expected_uid: int) -> dict:
+def inspection_maintenance_matches(identity: Path, inspector: Path, collector: Path,
+                                   expected_uid: int) -> bool | None:
+    if not os.path.lexists(identity):
+        return None
+    try:
+        record = json.loads(_read_limited(identity, expected_uid, 64 * 1024).decode("ascii"))
+        expected_keys = {"schema_version", "baseline_release", "source_commit",
+                         "inspection_tool_sha256", "preflight_collector_tool_sha256"}
+        if (type(record) is not dict or set(record) != expected_keys
+                or record.get("schema_version") != 1 or record.get("baseline_release") != "v0.5.1"
+                or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", ""))):
+            return False
+        inspect_sha = record.get("inspection_tool_sha256", "")
+        collector_sha = record.get("preflight_collector_tool_sha256", "")
+        if not (re.fullmatch(r"[0-9a-f]{64}", inspect_sha)
+                and re.fullmatch(r"[0-9a-f]{64}", collector_sha)):
+            return False
+        return (_hash_file(inspector, expected_uid) == inspect_sha
+                and _hash_file(collector, expected_uid) == collector_sha)
+    except (OSError, UnicodeError, ValueError, EvidenceError):
+        return False
+
+
+def inspect_tools(provenance: Path, installed: dict[str, Path], expected_uid: int,
+                  maintenance_identity: Path | None = None,
+                  preflight_collector: Path | None = None) -> dict:
     try:
         if _regular(provenance, expected_uid).st_size > 64 * 1024:
             return {"wrapper_matches_baseline": False, "helpers_match_baseline": False}
@@ -391,10 +445,19 @@ def inspect_tools(provenance: Path, installed: dict[str, Path], expected_uid: in
         matches = {key: bool(re.fullmatch(r"[0-9a-f]{64}", values.get(key, ""))
                              and _hash_file(path, expected_uid) == values[key])
                    for key, path in installed.items()}
+        maintenance_verified = (inspection_maintenance_matches(
+            maintenance_identity, installed["inspection_tool_sha256"], preflight_collector, expected_uid)
+            if (maintenance_identity is not None and preflight_collector is not None
+                and "inspection_tool_sha256" in installed)
+            else None)
+        if maintenance_verified and "inspection_tool_sha256" in matches:
+            matches["inspection_tool_sha256"] = True
         return {
             "wrapper_matches_baseline": matches.get("deployment_tool_sha256", False),
             "helpers_match_baseline": set(matches) == set(installed)
             and all(value for key, value in matches.items() if key != "deployment_tool_sha256"),
+            "inspection_maintenance": ("verified" if maintenance_verified is True else
+                                       "mismatch" if maintenance_verified is False else "absent"),
         }
     except (OSError, UnicodeError, EvidenceError):
         return {"wrapper_matches_baseline": False, "helpers_match_baseline": False}
@@ -438,6 +501,179 @@ def peak_capacity(available_bytes: int | None, required_bytes: int | None) -> di
     return {"available_bytes": available_bytes, "required_bytes": required_bytes}
 
 
+def _available_bytes(path: Path) -> int:
+    if hasattr(os, "statvfs"):
+        disk = os.statvfs(path)
+        return disk.f_bavail * disk.f_frsize
+    return shutil.disk_usage(path).free
+
+
+def capacity_by_filesystem(requirements: dict[str, int | None], locations: dict[str, Path],
+                           statvfs=None, device_id=None) -> dict:
+    """Return per-filesystem peak capacity and a conservative schema-v1 bound.
+
+    A filesystem shared by multiple operation roles must accommodate their
+    simultaneous peak, so its requirements are summed. The legacy scalar uses
+    the minimum available space and maximum required space; passing that bound
+    implies every individual filesystem passes, though it may conservatively
+    block some valid layouts.
+    """
+    if not requirements or set(requirements) != set(locations):
+        return {}
+    grouped: dict[int, dict] = {}
+    try:
+        for role in sorted(requirements):
+            required = requirements[role]
+            if required is not None and (type(required) is not int or required < 0):
+                return {}
+            path = locations[role]
+            metadata = path.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or path.resolve(strict=True) != path:
+                return {}
+            if statvfs is None:
+                available = _available_bytes(path)
+            else:
+                disk = statvfs(path)
+                available = disk.f_bavail * disk.f_frsize
+            if available < 0:
+                return {}
+            device = metadata.st_dev if device_id is None else device_id(path)
+            group = grouped.setdefault(device, {"roles": [], "available_bytes": available,
+                                                           "required_bytes": 0, "status": "known"})
+            group["roles"].append(role)
+            group["available_bytes"] = min(group["available_bytes"], available)
+            if required is None:
+                group["status"] = "unknown"
+            else:
+                group["required_bytes"] += required
+    except (OSError, ValueError, AttributeError):
+        return {}
+    filesystems = sorted(grouped.values(), key=lambda row: row["roles"])
+    if not filesystems:
+        return {}
+    result = {"filesystems": filesystems}
+    if all(row["status"] == "known" for row in filesystems):
+        for row in filesystems:
+            row.pop("status")
+        result["legacy"] = {
+            "available_bytes": min(row["available_bytes"] for row in filesystems),
+            "required_bytes": max(row["required_bytes"] for row in filesystems),
+        }
+    return result
+
+
+def production_database_mount_verified(runtime_data: Path, runner=subprocess.run) -> bool:
+    """Bind the fixed host SQLite path to the sole running KitsuSync data mount."""
+    try:
+        metadata = runtime_data.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or runtime_data.resolve(strict=True) != runtime_data:
+            return False
+        listed = runner(
+            ["/usr/bin/docker", "ps", "-q", "--no-trunc", "--filter",
+             "label=com.docker.compose.project=kitsusync", "--filter",
+             "label=com.docker.compose.service=app", "--filter", "status=running"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False, env={"PATH": "/usr/bin:/bin"}, text=True)
+        containers = listed.stdout.splitlines() if listed.returncode == 0 else []
+        if len(containers) != 1 or not re.fullmatch(r"[0-9a-f]{64}", containers[0]):
+            return False
+        inspected = runner(
+            ["/usr/bin/docker", "inspect", "--format", "{{json .Mounts}}", containers[0]],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False, env={"PATH": "/usr/bin:/bin"}, text=True)
+        if inspected.returncode != 0:
+            return False
+        mounts = json.loads(inspected.stdout)
+        data_mounts = [mount for mount in mounts if type(mount) is dict
+                       and mount.get("Destination") == "/app/data"]
+        return (len(data_mounts) == 1
+                and data_mounts[0].get("Type") == "bind"
+                and data_mounts[0].get("Source") == str(runtime_data)
+                and data_mounts[0].get("RW") is True)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def image_layer_bytes(archive: Path, expected_uid: int) -> int | None:
+    """Bound Docker's image-layer unpack requirement from the verified archive."""
+    try:
+        _regular(archive, expected_uid)
+        with tarfile.open(archive, "r:") as bundle:
+            members = bundle.getmembers()
+            if len(members) > 50_000:
+                return None
+            by_name = {}
+            for member in members:
+                name = PurePosixPath(member.name)
+                if name.is_absolute() or ".." in name.parts or not name.parts or member.name in by_name:
+                    return None
+                if not member.isfile() and not member.isdir():
+                    return None
+                by_name[member.name] = member
+            manifest_member = by_name.get("manifest.json")
+            if manifest_member is None or not manifest_member.isfile() or manifest_member.size > 1024 * 1024:
+                return None
+            manifests = json.load(bundle.extractfile(manifest_member))
+            if type(manifests) is not list or len(manifests) != 1 or type(manifests[0]) is not dict:
+                return None
+            image = manifests[0]
+            if image.get("RepoTags") != ["kitsusync:v0.5.1"]:
+                return None
+            layers = image.get("Layers")
+            if type(layers) is not list or not layers or len(layers) > 1000:
+                return None
+            total = 0
+            for layer in layers:
+                if type(layer) is not str or PurePosixPath(layer).is_absolute() or ".." in PurePosixPath(layer).parts:
+                    return None
+                member = by_name.get(layer)
+                if member is None or not member.isfile():
+                    return None
+                total += member.size
+            return total
+    except (OSError, ValueError, UnicodeError, tarfile.TarError, TypeError, KeyError):
+        return None
+
+
+def production_capacity_requirements(paths: Paths, bundle: dict | None) -> tuple[dict, dict]:
+    """Compute safe peak bounds without reading credential-bearing Docker config."""
+    locations = {
+        "runtime": paths.runtime_data,
+        "backup": paths.backup_root,
+        "release_stage": paths.release_stage,
+        "state": paths.state_root,
+        "docker": paths.docker_root,
+    }
+    try:
+        db = paths.runtime_data / "sqlite.db"
+        db_size = _regular(db, 10001).st_size
+        sidecar_size = 0
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(db) + suffix)
+            if os.path.lexists(sidecar):
+                sidecar_size += _regular(sidecar, 10001).st_size
+        # AutoMigrate can rebuild a table while the prior SQLite pages remain
+        # available for rollback; reserve two full logical DB copies plus a
+        # fixed SQLite/header/journal allowance.
+        runtime_required = 2 * (db_size + sidecar_size) + 64 * 1024 * 1024
+    except (OSError, EvidenceError):
+        runtime_required = None
+    layer_size = image_layer_bytes(paths.release_stage / "kitsusync-image.tar", 0) if bundle and bundle.get("provenance_verified") else None
+    docker_required = layer_size + 64 * 1024 * 1024 if layer_size is not None else None
+    # The deployment rollback snapshot contains Docker inspect environment
+    # values. Do not read secret-bearing runtime configuration for a capacity
+    # estimate; leave this role UNKNOWN until a separately approved snapshot
+    # supplies a measurable, verified upper bound.
+    requirements = {
+        "runtime": runtime_required,
+        "backup": None,
+        "release_stage": 0,
+        "state": 0,
+        "docker": docker_required,
+    }
+    return requirements, locations
+
+
 def rollback_image_retained(ref: str, expected_image_id: str, runner=subprocess.run) -> bool:
     if (not re.fullmatch(r"kitsusync:rollback-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}", ref)
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_id)):
@@ -453,7 +689,8 @@ def rollback_image_retained(ref: str, expected_image_id: str, runner=subprocess.
         return False
 
 
-def collect(paths: Paths, expected_uid: int = 0) -> dict:
+def collect(paths: Paths, expected_uid: int = 0, docker_runner=subprocess.run,
+            capacity_statvfs=None) -> dict:
     evidence = {"schema_version": 1}
     identity_runner = (trusted_identity_runner(paths.control_root, expected_uid)
                        if expected_uid == 0 else None)
@@ -463,6 +700,13 @@ def collect(paths: Paths, expected_uid: int = 0) -> dict:
     evidence["runtime"] = inspect_runtime() if expected_uid == 0 else {
         "health": "unknown", "readiness": "unknown"}
     db = inspect_database(paths.runtime_data / "sqlite.db", 10001 if expected_uid == 0 else expected_uid)
+    if expected_uid == 0:
+        mount_verified = production_database_mount_verified(paths.runtime_data, runner=docker_runner)
+        db["runtime_mount_verified"] = mount_verified
+        db["identity"] = "verified" if mount_verified else "unknown"
+        if not mount_verified:
+            db["integrity"] = "unknown"
+            db["migration_compatibility"] = "unknown"
     evidence["database"] = db
     backup = newest_backup(paths.backup_root, expected_uid)
     verified = bool(backup and validate_backup_directory(
@@ -482,7 +726,10 @@ def collect(paths: Paths, expected_uid: int = 0) -> dict:
     evidence["rollback"] = {"backup_verified": verified,
                             "unit_complete": unit_complete,
                             "old_image_retained": image_retained}
-    tool_evidence = inspect_tools(paths.control_root / "provenance", INSTALLED, expected_uid)
+    preflight_collector = Path("/usr/local/libexec/kitsusync-preflight-collect")
+    tool_evidence = inspect_tools(paths.control_root / "provenance", INSTALLED, expected_uid,
+                                  paths.state_root / "inspection-maintenance.json",
+                                  preflight_collector)
     staged_preflight_digest = bundle.get("_preflight_collector_digest", "") if bundle else ""
     try:
         installed_preflight_matches = (
@@ -491,16 +738,19 @@ def collect(paths: Paths, expected_uid: int = 0) -> dict:
             == staged_preflight_digest)
     except (OSError, EvidenceError):
         installed_preflight_matches = False
+    if tool_evidence.get("inspection_maintenance") == "verified":
+        installed_preflight_matches = True
     tool_evidence["helpers_match_baseline"] = (
         tool_evidence["helpers_match_baseline"] and installed_preflight_matches)
     evidence["deployment_tools"] = tool_evidence
     if bundle is not None:
         bundle.pop("_preflight_collector_digest", None)
-    # Capacity remains omitted until per-filesystem peak requirements can be
-    # computed from the exact staged bundle and Docker storage accounting.
-    capacity = peak_capacity(None, None)
-    if capacity:
-        evidence["capacity"] = capacity
+    requirements, locations = production_capacity_requirements(paths, bundle) if expected_uid == 0 else ({}, {})
+    capacities = capacity_by_filesystem(requirements, locations, statvfs=capacity_statvfs)
+    if capacities:
+        evidence["capacity_filesystems"] = capacities["filesystems"]
+        if "legacy" in capacities:
+            evidence["capacity"] = capacities["legacy"]
     return evidence
 
 
