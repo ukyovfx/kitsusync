@@ -155,19 +155,25 @@ func TestOpenAPIContractHasBothTrustDirectionsAndCriticalOperations(t *testing.T
 	}
 	for path, methods := range pluginPaths {
 		for method, rawOperation := range methods.(map[string]any) {
+			operation := rawOperation.(map[string]any)
+			if !parametersContainHeader(operation["parameters"], "X-KitsuSync-Actor-ID") {
+				t.Errorf("Plugin operation %s %s must carry the server-derived actor identity", method, path)
+			}
 			if method != "post" && method != "put" && method != "patch" && method != "delete" {
 				continue
 			}
-			operation := rawOperation.(map[string]any)
 			if path == "/productions/{production_id}/sync-previews" {
 				continue // preview is read-only and creates no durable provider operation
 			}
 			if !parametersContainHeader(operation["parameters"], "Idempotency-Key") {
 				t.Errorf("mutating Plugin operation %s %s must require Idempotency-Key", method, path)
 			}
-			if !parametersContainHeader(operation["parameters"], "X-KitsuSync-Actor-ID") {
-				t.Errorf("mutating Plugin operation %s %s must carry the server-derived actor identity", method, path)
-			}
+		}
+	}
+	for _, path := range []string{"/drive-connections", "/drive-connections/{connection_id}", "/drive-connections/{connection_id}/roots"} {
+		operation := pluginPaths[path].(map[string]any)["get"].(map[string]any)
+		if !parametersContainQuery(operation["parameters"], "production_id") {
+			t.Errorf("%s must scope connection/root reads to a Production", path)
 		}
 	}
 }
@@ -222,6 +228,20 @@ func parametersContainHeader(value any, wanted string) bool {
 	for _, raw := range items {
 		parameter, ok := raw.(map[string]any)
 		if ok && parameter["in"] == "header" && parameter["name"] == wanted && parameter["required"] == true {
+			return true
+		}
+	}
+	return false
+}
+
+func parametersContainQuery(value any, wanted string) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range items {
+		parameter, ok := raw.(map[string]any)
+		if ok && parameter["in"] == "query" && parameter["name"] == wanted && parameter["required"] == true {
 			return true
 		}
 	}

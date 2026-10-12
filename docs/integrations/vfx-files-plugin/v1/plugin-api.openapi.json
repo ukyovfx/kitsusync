@@ -20,6 +20,21 @@
       "get": {
         "operationId": "listDriveConnections",
         "summary": "List non-secret Drive connection identities and states",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string", "format": "uuid"}
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
+          }
+        ],
         "responses": {
           "200": {
             "description": "Connection list",
@@ -103,6 +118,19 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "production_id",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string", "format": "uuid"}
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
           }
         ],
         "responses": {
@@ -214,6 +242,13 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
           }
         ],
         "responses": {
@@ -311,6 +346,13 @@
                 "task"
               ]
             }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
           }
         ],
         "responses": {
@@ -343,6 +385,13 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
           }
         ],
         "responses": {
@@ -659,6 +708,13 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
           }
         ],
         "responses": {
