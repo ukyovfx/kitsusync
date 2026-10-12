@@ -232,6 +232,10 @@ sudo install -o root -g root -m 0700 "$work/bundle/kitsusync-sqlite-backup" /usr
 # If injected ENOSPC is followed by a failed old-runtime health validation,
 # retain the partial backup and report that recovery is incomplete.
 stage=quiesced-backup-enospc-recovery-validation-failure
+sed "s/^sqlite_backup_tool_sha256=.*/sqlite_backup_tool_sha256=${fake_backup_sha}/" \
+  "$work/bundle/provenance.txt" >"$work/enospc-provenance"
+sudo install -o root -g root -m 0600 "$work/enospc-provenance" /etc/kitsusync-deploy/provenance
+sudo install -o root -g root -m 0700 "$work/enospc-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
 sudo touch "$runtime/data/fail-health-on-start"
 backup_count_before="$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d | wc -l)"
 if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$work/enospc-recovery-failed.log" 2>&1; then

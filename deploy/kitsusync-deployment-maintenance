@@ -354,10 +354,10 @@ def _recover(paths: Paths, uid: int):
     raise MaintenanceError("interrupted maintenance was recovered; inspect state before retry")
 
 
-def _lock(paths: Paths):
+def _lock(paths: Paths, uid: int = 0):
     fd = os.open(paths.lock, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or not _uid_ok(info, 0) or (os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o600):
+    if not stat.S_ISREG(info.st_mode) or not _uid_ok(info, uid) or (os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o600):
         os.close(fd)
         raise MaintenanceError("deployment lock is unsafe")
     if fcntl is not None:
@@ -373,7 +373,7 @@ def install(paths: Paths, uid: int = 0, fault_hook=None) -> str:
     _check_dir(paths.state, uid, 0o700)
     _check_dir(paths.backups, uid, 0o700)
     _check_dir(paths.provenance.parent, uid, 0o700)
-    lock = _lock(paths)
+    lock = _lock(paths, uid)
     try:
         manifest, payloads = _manifest(paths, uid)
         _recover(paths, uid)
@@ -417,7 +417,7 @@ def install(paths: Paths, uid: int = 0, fault_hook=None) -> str:
 def rollback(paths: Paths, uid: int = 0) -> str:
     _check_dir(paths.state, uid, 0o700)
     _check_dir(paths.backups, uid, 0o700)
-    lock = _lock(paths)
+    lock = _lock(paths, uid)
     try:
         manifest, _ = _manifest(paths, uid)
         _recover(paths, uid)
