@@ -253,6 +253,8 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prior_id")" == healthy ]]
+sudo install -o root -g root -m 0600 "$work/bundle/provenance.txt" /etc/kitsusync-deploy/provenance
+sudo install -o root -g root -m 0700 "$work/bundle/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
 
 sudo touch "$runtime/data/fail-target"
 stage=failed-target-deploy
