@@ -52,7 +52,14 @@ class Paths:
 
 
 def _uid_ok(info, uid):
-    return os.name == "nt" or (info.st_uid, info.st_gid) == (uid, uid)
+    # Production always calls the fixed entry points as uid 0, where both
+    # owner and group must be root. Non-root tests model ownership without
+    # assuming that a runner's primary group ID equals its user ID.
+    return os.name == "nt" or (info.st_uid == uid and (uid != 0 or info.st_gid == 0))
+
+
+def _gid_for(uid):
+    return 0 if uid == 0 else os.getgid()
 
 
 def _check_dir(path: Path, uid: int, mode: int | None = None) -> None:
@@ -112,7 +119,7 @@ def _atomic(directory: Path, name: str, data: bytes, uid: int, mode: int) -> Non
         else:
             fd = os.open(temp, flags, mode, dir_fd=dfd)
         if hasattr(os, "fchown"):
-            os.fchown(fd, uid, uid)
+            os.fchown(fd, uid, _gid_for(uid))
         os.fchmod(fd, mode)
         view = memoryview(data)
         while view:
@@ -256,7 +263,7 @@ def _backup(paths: Paths, source: str, prior: dict, prior_identity: bytes | None
             _atomic(root, "rollback.json", marker_bytes, uid, 0o600)
         return root
     root.mkdir(mode=0o700)
-    os.chown(root, uid, uid) if hasattr(os, "chown") else None
+    os.chown(root, uid, _gid_for(uid)) if hasattr(os, "chown") else None
     for name, data in prior.items():
         _atomic(root, name, data, uid, 0o700)
     if prior_identity is not None:

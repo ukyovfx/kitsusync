@@ -29,13 +29,15 @@ extra_network="kitsusync-fixture-extra-$$"
 source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
 stage=fixture-setup
 cleanup() {
-  local ids result=$?
+  local result="$1" failed_command="$2" ids
   if [[ "$result" -ne 0 ]]; then
     printf 'deployment-transaction-failed-stage=%s\n' "$stage" >&2
+    printf 'deployment-transaction-failed-command=%s\n' "$failed_command" >&2
     for report in "$work/failed-deploy.log" "$work/successful-deploy.log" \
                   "$work/setup-required-deploy.log" "$work/enospc-deploy.log" \
                   "$work/enospc-recovery-failed.log"; do
-      [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|rollback=)' "$report" >&2 || true
+      [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|rollback=)' "$report" \
+        | sed "s#^#$(basename "$report"): #" >&2 || true
     done
   fi
   ids="$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)"
@@ -47,7 +49,7 @@ cleanup() {
   sudo rm -f -- "${tools[@]}"
   rm -rf -- "$work"
 }
-trap cleanup EXIT
+trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
 cat >"$work/fixture.py" <<'PY'
 import http.server, json, os, pathlib, sqlite3, sys, time
