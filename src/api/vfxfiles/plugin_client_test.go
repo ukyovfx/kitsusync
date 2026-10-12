@@ -53,6 +53,34 @@ func TestPluginClientAddsBoundServiceTokenAndActorHeaders(t *testing.T) {
 	}
 }
 
+func TestPluginTemplateCatalogUsesContractGlobalReadShapeWithBoundActorToken(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotPath, gotQuery, gotActor string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery, gotActor = r.URL.Path, r.URL.RawQuery, r.Header.Get("X-KitsuSync-Actor-ID")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	base := server.URL + ServiceAudienceSuffix
+	client, err := NewPluginClient(base, server.Client(), ServiceTokenConfig{Issuer: "https://sync.example.test", Audience: base, Subject: "sync", ClientID: "instance", KeyID: "k1", PrivateKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionID := "123e4567-e89b-42d3-a456-426614174001"
+	authorizer := testProductionAdminAuthorizer{actorID: "123e4567-e89b-42d3-a456-426614174000", allowed: true}
+	response, err := client.Do(context.Background(), PluginRequest{Method: http.MethodGet, Path: "/templates", Query: map[string][]string{"scope": {"shot"}}, ProductionID: productionID, Authorizer: authorizer, Scope: "vfx.templates.read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || gotPath != ServiceAudienceSuffix+"/templates" || gotQuery != "scope=shot" || gotActor != authorizer.actorID {
+		t.Fatalf("template list did not follow the contract global read shape: status=%d path=%q query=%q actor=%q", response.StatusCode, gotPath, gotQuery, gotActor)
+	}
+}
+
 func TestPluginClientRequiresIdempotencyForMutationsAndNeverFollowsRedirects(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

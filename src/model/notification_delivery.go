@@ -55,6 +55,8 @@ type NotificationDeliveryEvent struct {
 	ProductionID           string `gorm:"not null;index"`
 	TaskTypeID             string `gorm:"not null"`
 	TaskStatus             string `gorm:"not null"`
+	DeliverySource         string `gorm:"not null;default:'kitsu';index"`
+	SourceEventID          string `gorm:"size:64;index"`
 	TaskUpdatedAt          string
 	CommentID              string
 	CommentUpdatedAt       string
@@ -360,6 +362,8 @@ type NotificationDeliveryIntent struct {
 	ProductionID         string
 	TaskTypeID           string
 	TaskStatus           string
+	DeliverySource       string
+	SourceEventID        string
 	TaskUpdatedAt        string
 	CommentID            string
 	CommentUpdatedAt     string
@@ -398,6 +402,11 @@ type NotificationDestinationIdentity struct {
 }
 
 func NotificationEventIdentity(intent NotificationDeliveryIntent) string {
+	if intent.DeliverySource == "vfx_files" && strings.TrimSpace(intent.SourceEventID) != "" {
+		data, _ := json.Marshal([]string{"vfx_files", strings.TrimSpace(intent.SourceEventID)})
+		sum := sha256.Sum256(data)
+		return hex.EncodeToString(sum[:])
+	}
 	data, _ := json.Marshal([]string{
 		strings.TrimSpace(intent.ProductionID), strings.TrimSpace(intent.TaskID), strings.TrimSpace(intent.TaskTypeID),
 		strings.ToUpper(strings.TrimSpace(intent.TaskStatus)), strings.TrimSpace(intent.TaskUpdatedAt), strings.TrimSpace(intent.CommentID),
@@ -436,7 +445,7 @@ func supersedeKnownRejectedNotificationEvents(tx *gorm.DB, intent NotificationDe
 		return 0, gorm.ErrInvalidData
 	}
 	observedAt, ok := notificationEventTime(intent.TaskUpdatedAt, intent.CommentUpdatedAt)
-	if !ok {
+	if !ok || intent.DeliverySource != "" && intent.DeliverySource != "kitsu" {
 		return 0, nil
 	}
 	newEventID := NotificationEventIdentity(intent)
@@ -645,9 +654,17 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 	}
 	eventID := NotificationEventIdentity(intent)
 	payloadSum := sha256.Sum256(intent.Payload)
+	source := strings.TrimSpace(intent.DeliverySource)
+	if source == "" {
+		source = "kitsu"
+	}
+	if source != "kitsu" && source != "vfx_files" || source == "vfx_files" && (strings.TrimSpace(intent.SourceEventID) == "" || !vfxFilesUUIDRE.MatchString(intent.SourceEventID)) {
+		return nil, gorm.ErrInvalidData
+	}
 	row := NotificationDeliveryEvent{
 		EventID: eventID, TaskID: strings.TrimSpace(intent.TaskID), ProductionID: strings.TrimSpace(intent.ProductionID),
 		TaskTypeID: strings.TrimSpace(intent.TaskTypeID), TaskStatus: strings.TrimSpace(intent.TaskStatus),
+		DeliverySource: source, SourceEventID: strings.TrimSpace(intent.SourceEventID),
 		TaskUpdatedAt: intent.TaskUpdatedAt, CommentID: intent.CommentID, CommentUpdatedAt: intent.CommentUpdatedAt,
 		IsAssignNotification: intent.IsAssignNotification, PayloadJSON: string(intent.Payload), PayloadSHA256: hex.EncodeToString(payloadSum[:]),
 		WebhookRowID: intent.WebhookRowID, DestinationGuildID: strings.TrimSpace(intent.GuildID),
@@ -776,6 +793,32 @@ func beginNotificationDelivery(db *gorm.DB, eventID string, expected *Notificati
 		if err := EnsureProductionNotificationMutationIdle(tx, row.ProductionID, ""); err != nil {
 			return err
 		}
+		if row.DeliverySource == "vfx_files" {
+			var routing ProductionNotificationConfig
+			if err := tx.Where("production_id = ? AND enabled = ?", row.ProductionID, true).First(&routing).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					unavailable = true
+					return nil
+				}
+				return err
+			}
+			var integration VFXFilesProductionConfig
+			if err := tx.Where("production_id = ?", row.ProductionID).First(&integration).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					unavailable = true
+					return nil
+				}
+				return err
+			}
+			var inbox VFXFilesEventInbox
+			if err := tx.Where("producer_id = ? AND event_id = ?", "vfx-files-plugin", row.SourceEventID).First(&inbox).Error; err != nil {
+				return err
+			}
+			if !integration.Activated || integration.ActivationEpoch == 0 || inbox.ActivationEpoch != integration.ActivationEpoch || inbox.Outcome != VFXFilesEventAccepted || inbox.ProcessedAt != nil {
+				unavailable = true
+				return nil
+			}
+		}
 		if row.Disposition == DeliveryInFlight {
 			if row.AttemptStartedAt == nil || now.Sub(*row.AttemptStartedAt) > 2*time.Minute {
 				if err := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ?", row.ID, DeliveryInFlight).Updates(map[string]any{"disposition": DeliveryUnknown, "failure_class": "expired_in_flight"}).Error; err != nil {
@@ -901,6 +944,9 @@ func CompleteNotificationDelivery(db *gorm.DB, attempt DeliveryAttempt, messageI
 		}
 		if result.RowsAffected != 1 {
 			return ErrDeliveryAttemptConflict
+		}
+		if attempt.Event.DeliverySource == "vfx_files" {
+			return nil
 		}
 		return updateTaskDeliveryCheckpoint(tx, attempt.Event, messageID, threadID)
 	})

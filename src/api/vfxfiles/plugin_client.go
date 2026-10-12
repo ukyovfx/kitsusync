@@ -13,9 +13,21 @@ import (
 )
 
 const (
+	contractVersion         = "1.0"
 	pluginRequestBodyLimit  = 1 << 20
 	pluginResponseBodyLimit = 4 << 20
 )
+
+func validID(value string) bool { return serviceUUIDPattern.MatchString(strings.TrimSpace(value)) }
+
+// ValidID reports whether a contract resource identifier is a canonical UUID.
+func ValidID(value string) bool { return validID(value) }
+
+// IsTrustedAuthorizationURL accepts only the Plugin's fixed Google OAuth URL.
+func IsTrustedAuthorizationURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && strings.EqualFold(parsed.Hostname(), "accounts.google.com") && parsed.Port() == "" && parsed.User == nil && parsed.Path == "/o/oauth2/v2/auth" && parsed.Fragment == ""
+}
 
 var ErrPluginRequestRejected = errors.New("vfx files Plugin request rejected")
 
@@ -71,20 +83,31 @@ var pluginOperations = []pluginOperation{
 // NewPluginClient accepts only the exact Zou plugin route base. The HTTP client
 // never follows redirects, which prevents bearer credentials crossing origin.
 func NewPluginClient(baseURL string, httpClient *http.Client, tokenConfig ServiceTokenConfig) (*PluginClient, error) {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" || parsed.Path != ServiceAudienceSuffix {
+	parsed, err := parsePluginAudience(baseURL)
+	if err != nil {
 		return nil, ErrPluginRequestRejected
 	}
 	if err := validateServiceTokenConfig(tokenConfig); err != nil || tokenConfig.Audience != parsed.String() {
 		return nil, ErrPluginRequestRejected
 	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient, err = defaultPluginHTTPClient(parsed.String())
+		if err != nil {
+			return nil, err
+		}
 	}
 	clientCopy := *httpClient
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	clientCopy.Timeout = 15 * time.Second
 	return &PluginClient{baseURL: parsed, http: &clientCopy, token: tokenConfig}, nil
+}
+
+func parsePluginAudience(baseURL string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" || parsed.Path != ServiceAudienceSuffix || parsed.Opaque != "" {
+		return nil, ErrPluginRequestRejected
+	}
+	return parsed, nil
 }
 
 // Do sends one contract-declared management API operation. Scope is derived
@@ -195,8 +218,14 @@ func requestProductionMatches(path string, query url.Values, body []byte, produc
 		}
 		bound = bound || found
 	}
-	if strings.HasPrefix(path, "/drive-connections") || path == "/templates" {
+	if strings.HasPrefix(path, "/drive-connections") {
 		return bound
+	}
+	// The v1 template catalog is actor-authorized and has a global route shape.
+	// The short-lived bearer still carries the one Production whose live admin
+	// permission was checked by AuthorizeProductionActor.
+	if path == "/templates" {
+		return true
 	}
 	// Job and snapshot identifiers are resolved server-side under the signed
 	// one-Production token. The Plugin must still enforce that binding in storage.

@@ -48,6 +48,9 @@ func TestProductionStorageSaveSharesDesktopFieldRow(t *testing.T) {
 			t.Errorf("Storage input/Save row is missing %q: %s", marker, body)
 		}
 	}
+	if !strings.Contains(body, `Drive / Files Plugin settings`) || !strings.Contains(body, `/bot/admin/vfx-files?lang=ja&amp;production=storage-row`) {
+		t.Fatalf("Production Storage settings do not link to the scoped Files integration page: %s", body)
+	}
 }
 
 func TestProductionDetailReviewControlsUseVisibleAlignedGroups(t *testing.T) {

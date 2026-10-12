@@ -107,7 +107,7 @@ func TestMigrateApplicationSchemaRehearsesSyntheticV049UpgradeToV051(t *testing.
 	if err := migrateApplicationSchema(db); err != nil {
 		t.Fatalf("v0.4.9 -> v0.5.1 migration failed: %v", err)
 	}
-	for _, table := range []any{&model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProductionNotificationWriteLock{}} {
+	for _, table := range []any{&model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProductionNotificationWriteLock{}, &model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("upgrade omitted v0.5.1 additive table %T", table)
 		}
