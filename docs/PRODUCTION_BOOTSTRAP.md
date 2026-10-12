@@ -104,13 +104,10 @@ incomplete backup directory. If restart or validation fails, partial evidence
 is retained and the wrapper stops with an explicit recovery error. No
 unverified backup is accepted as rollback evidence.
 
-Runtime reconstruction preserves and strictly compares each endpoint MAC,
-including daemon-assigned values. The primary endpoint is supplied during
-container creation; additional endpoints are attached afterward with their
-saved endpoint settings so Docker can restore the saved MAC identity. Network
-identity, aliases, IPAM requests, driver options, and all other runtime fields
-remain strictly compared. If the Engine cannot restore the requested endpoint
-state, reconstruction fails and rollback evidence remains available.
+Runtime reconstruction preserves and strictly compares custom endpoint MACs
+and MACs with explicit IPAM addresses. It normalizes only Docker's derived
+`02:42:<IPv4>` MAC when that IPv4 was dynamically allocated. Additional
+endpoints are attached after container creation with their saved identity.
 Docker documents that `POST /networks/{id}/connect` only began applying the
 endpoint `MacAddress` field in Engine API v1.54. A runtime with secondary
 networks on an older API is therefore rejected by the reconstruction probe

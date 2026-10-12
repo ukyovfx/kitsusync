@@ -233,17 +233,16 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual(state["networks"]["ks-net"]["MacAddress"], endpoint_mac)
         self.assertEqual(runtime.make_plan(source)["request"]["MacAddress"], "")
 
-    def test_generated_looking_endpoint_mac_remains_strict_on_address_change(self):
+    def test_generated_endpoint_mac_tracks_dynamic_ipv4_assignment(self):
         source = fixture()
         endpoint = source["NetworkSettings"]["Networks"]["ks-net"]
         endpoint["IPAMConfig"] = {}
         plan = runtime.make_plan(source)
-        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "02:42:ac:14:00:02")
+        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "")
         restored = copy.deepcopy(source)
         restored["NetworkSettings"]["Networks"]["ks-net"].update(
             IPAddress="172.20.0.3", MacAddress="02:42:ac:14:00:03")
-        with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.MacAddress"):
-            runtime.compare(plan, restored)
+        runtime.compare(plan, restored)
 
     def test_custom_mac_without_static_ip_remains_strict(self):
         source = fixture()
