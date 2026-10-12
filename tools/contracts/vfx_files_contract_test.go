@@ -178,6 +178,76 @@ func TestOpenAPIContractHasBothTrustDirectionsAndCriticalOperations(t *testing.T
 	}
 }
 
+func TestOpenAPIRequiredMembersAreStringsBackedByProperties(t *testing.T) {
+	plugin := readJSON(t, "plugin-api.openapi.json")
+	components := plugin["components"].(map[string]any)
+	schemas := components["schemas"].(map[string]any)
+	for name, raw := range schemas {
+		schema := raw.(map[string]any)
+		required, ok := schema["required"].([]any)
+		if !ok {
+			continue
+		}
+		properties, _ := schema["properties"].(map[string]any)
+		for _, value := range required {
+			field, ok := value.(string)
+			if !ok || field == "" {
+				t.Errorf("schema %s has a non-string/empty required member: %#v", name, value)
+				continue
+			}
+			if _, exists := properties[field]; !exists {
+				t.Errorf("schema %s requires %q but does not define it in properties", name, field)
+			}
+		}
+	}
+	operatorCommand := schemas["OperatorCommand"].(map[string]any)
+	if !stringSliceContains(operatorCommand["required"], "contract_version") || len(operatorCommand["required"].([]any)) != 1 {
+		t.Fatalf("OperatorCommand must require only its defined contract_version field: %#v", operatorCommand["required"])
+	}
+}
+
+func TestServiceBearerProfileAndZouRouteMappingAreExplicit(t *testing.T) {
+	plugin := readJSON(t, "plugin-api.openapi.json")
+	profile := plugin["x-service-bearer-profile"].(map[string]any)
+	if profile["standard"] != "RFC 9068 JWT access token profile" || profile["type"] != "at+JWT" || profile["algorithm"] != "RS256" {
+		t.Fatalf("unexpected service-bearer standard: %#v", profile)
+	}
+	serverURL := plugin["servers"].([]any)[0].(map[string]any)["url"].(string)
+	if !strings.HasSuffix(serverURL, "/api/plugins/vfx_files/integrations/v1") || strings.Contains(serverURL, "/api/integrations/v1") {
+		t.Fatalf("management API must use Zou's official vfx_files plugin route prefix: %s", serverURL)
+	}
+	permitted, ok := profile["permitted_scopes"].([]any)
+	if !ok || len(permitted) == 0 {
+		t.Fatal("service bearer profile must publish its allowed operation scopes")
+	}
+	allowed := make(map[string]bool, len(permitted))
+	for _, raw := range permitted {
+		name, ok := raw.(string)
+		if !ok || name == "" || allowed[name] {
+			t.Fatalf("invalid or duplicate allowed scope: %#v", raw)
+		}
+		allowed[name] = true
+	}
+	paths := plugin["paths"].(map[string]any)
+	for path, rawMethods := range paths {
+		for method, rawOperation := range rawMethods.(map[string]any) {
+			operation := rawOperation.(map[string]any)
+			scope, ok := operation["x-required-scope"].(string)
+			if !ok || !allowed[scope] {
+				t.Errorf("operation %s %s must declare an allowed required service scope", method, path)
+			}
+		}
+	}
+	if profile["maximum_lifetime_seconds"] != float64(300) || profile["clock_skew_seconds"] != float64(30) || profile["key_discovery_path"] != "/.well-known/vfx-files-jwks.json" {
+		t.Fatalf("service token expiry or key-discovery policy is incomplete: %#v", profile)
+	}
+	events := readJSON(t, "kitsusync-events.openapi.json")
+	eventServer := events["servers"].([]any)[0].(map[string]any)["url"].(string)
+	if !strings.Contains(eventServer, "/api/integrations/vfx-files/v1") || strings.Contains(eventServer, "/api/plugins/") {
+		t.Fatalf("Plugin signed event intake must remain a separate KitsuSync service route: %s", eventServer)
+	}
+}
+
 func TestDriveFolderURLCandidateIsStrictlyAllowlisted(t *testing.T) {
 	plugin := readJSON(t, "plugin-api.openapi.json")
 	request := plugin["components"].(map[string]any)["schemas"].(map[string]any)["RootVerificationRequest"].(map[string]any)

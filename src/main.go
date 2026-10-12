@@ -3,6 +3,7 @@ package main
 import (
 	"app/src/api/discord"
 	"app/src/api/kitsu"
+	"app/src/api/vfxfiles"
 	"app/src/model"
 	"app/src/setup"
 	"app/src/utils/config"
@@ -1032,6 +1033,11 @@ func main() {
 		return sqlDB.PingContext(ctx)
 	}))
 	mux.HandleFunc("/ready", readinessHandler(runtime))
+	// Only public RS256 verification keys are exposed here. There is no token
+	// issuance or Plugin management API alias at the KitsuSync origin.
+	mux.Handle(vfxfiles.ServiceJWKSPath, vfxfiles.JWKSHandler(func() ([]vfxfiles.VerificationKey, error) {
+		return vfxfiles.LoadServiceVerificationKeys(strings.TrimSpace(os.Getenv("KITSUSYNC_VFX_FILES_JWKS_DIR")))
+	}))
 
 	onRuntimeConfigured := func() {
 		slog.Debug("Kitsu reconnect attempted", "attempted", true)
