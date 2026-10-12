@@ -15,6 +15,143 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+func StoreVFXFilesSyncPreview(db *gorm.DB, productionID, snapshotID string, configRevision uint64, preview []byte) error {
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(snapshotID)) || configRevision == 0 || len(preview) == 0 || len(preview) > 512<<10 {
+		return ErrVFXFilesInvalidBatch
+	}
+	var value struct {
+		ContractVersion string `json:"contract_version"`
+		PreviewID       string `json:"preview_id"`
+		ProductionID    string `json:"production_id"`
+		ConfigRevision  uint64 `json:"config_revision"`
+		State           string `json:"state"`
+		ExpiresAt       string `json:"expires_at"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(preview)))
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF || value.ContractVersion != "1.0" || !vfxFilesUUIDRE.MatchString(value.PreviewID) || !strings.EqualFold(value.ProductionID, productionID) || value.ConfigRevision != configRevision || value.State != "preview_ready" {
+		return ErrVFXFilesInvalidBatch
+	}
+	expires, err := time.Parse(time.RFC3339, value.ExpiresAt)
+	if err != nil || !expires.After(time.Now().UTC()) {
+		return ErrVFXFilesInvalidBatch
+	}
+	row := VFXFilesSyncOperation{ProductionID: strings.ToLower(productionID), ConfigRevision: configRevision, SnapshotID: strings.ToLower(snapshotID), PreviewID: strings.ToLower(value.PreviewID), PreviewJSON: string(preview), PreviewExpiresAt: &expires, JobID: "", JobJSON: "", ApplyIdempotency: "", RetryIdempotency: "", ReconcileIdempotency: "", UpdatedAt: time.Now().UTC()}
+	return db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "production_id"}}, DoUpdates: clause.AssignmentColumns([]string{"config_revision", "snapshot_id", "preview_id", "preview_json", "preview_expires_at", "job_id", "job_json", "apply_idempotency", "retry_idempotency", "reconcile_idempotency", "updated_at"})}).Create(&row).Error
+}
+
+func FindVFXFilesSyncOperation(db *gorm.DB, productionID string) (VFXFilesSyncOperation, error) {
+	var row VFXFilesSyncOperation
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) {
+		return row, ErrVFXFilesInvalidBatch
+	}
+	err := db.Where("production_id = ?", strings.ToLower(strings.TrimSpace(productionID))).First(&row).Error
+	return row, err
+}
+
+func PrepareVFXFilesSyncCommand(db *gorm.DB, productionID, command, idempotency string) (VFXFilesSyncOperation, error) {
+	var row VFXFilesSyncOperation
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) || len(idempotency) < 16 || len(idempotency) > 128 {
+		return row, ErrVFXFilesInvalidBatch
+	}
+	column := ""
+	switch command {
+	case "apply":
+		column = "apply_idempotency"
+	case "retry":
+		column = "retry_idempotency"
+	case "reconcile":
+		column = "reconcile_idempotency"
+	default:
+		return row, ErrVFXFilesInvalidBatch
+	}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("production_id = ?", strings.ToLower(strings.TrimSpace(productionID))).First(&row).Error; err != nil {
+			return err
+		}
+		current := ""
+		switch command {
+		case "apply":
+			current = row.ApplyIdempotency
+		case "retry":
+			current = row.RetryIdempotency
+		case "reconcile":
+			current = row.ReconcileIdempotency
+		}
+		if current == "" {
+			result := tx.Model(&row).Update(column, idempotency)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrVFXFilesConfigConflict
+			}
+			switch command {
+			case "apply":
+				row.ApplyIdempotency = idempotency
+			case "retry":
+				row.RetryIdempotency = idempotency
+			case "reconcile":
+				row.ReconcileIdempotency = idempotency
+			}
+		}
+		return nil
+	})
+	return row, err
+}
+
+func StoreVFXFilesSyncJob(db *gorm.DB, productionID string, job []byte) error {
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) || len(job) == 0 || len(job) > 64<<10 {
+		return ErrVFXFilesInvalidBatch
+	}
+	var value struct {
+		ContractVersion string `json:"contract_version"`
+		ID              string `json:"id"`
+		ProductionID    string `json:"production_id"`
+		ConfigRevision  uint64 `json:"config_revision"`
+		State           string `json:"state"`
+		Progress        struct {
+			Completed int `json:"completed"`
+			Total     int `json:"total"`
+		} `json:"progress"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(job)))
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF || value.ContractVersion != "1.0" || !vfxFilesUUIDRE.MatchString(value.ID) || !strings.EqualFold(value.ProductionID, productionID) || value.ConfigRevision == 0 || value.Progress.Completed < 0 || value.Progress.Total < value.Progress.Completed {
+		return ErrVFXFilesInvalidBatch
+	}
+	switch value.State {
+	case "queued", "running", "completed", "failed", "reconcile_required", "cancelled":
+	default:
+		return ErrVFXFilesInvalidBatch
+	}
+	var previous VFXFilesSyncOperation
+	if err := db.Where("production_id = ? AND config_revision = ?", strings.ToLower(productionID), value.ConfigRevision).First(&previous).Error; err != nil {
+		return err
+	}
+	var previousPayload struct {
+		State     string `json:"state"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	_ = json.Unmarshal([]byte(previous.JobJSON), &previousPayload)
+	var nextPayload struct {
+		State     string `json:"state"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	_ = json.Unmarshal(job, &nextPayload)
+	updates := map[string]any{"job_id": strings.ToLower(value.ID), "job_json": string(job), "updated_at": time.Now().UTC()}
+	if previousPayload.State != "" && (previousPayload.State != nextPayload.State || previousPayload.UpdatedAt != nextPayload.UpdatedAt) {
+		updates["retry_idempotency"] = ""
+		updates["reconcile_idempotency"] = ""
+	}
+	result := db.Model(&VFXFilesSyncOperation{}).Where("production_id = ? AND config_revision = ?", strings.ToLower(productionID), value.ConfigRevision).Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrVFXFilesConfigConflict
+	}
+	return nil
+}
+
 const (
 	VFXFilesEventAccepted    = "accepted"
 	VFXFilesEventDuplicate   = "duplicate"
@@ -191,6 +328,27 @@ type VFXFilesProductionConfig struct {
 }
 
 func (VFXFilesProductionConfig) TableName() string { return "vfx_files_production_configs" }
+
+// VFXFilesSyncOperation stores only the latest bounded preview and sync job
+// reference for one Production. It contains no Drive credentials or raw
+// Kitsu token; the Plugin remains authoritative for jobs and provider state.
+type VFXFilesSyncOperation struct {
+	ID                   uint   `gorm:"primaryKey"`
+	ProductionID         string `gorm:"not null;uniqueIndex;size:64"`
+	ConfigRevision       uint64 `gorm:"not null;default:0"`
+	SnapshotID           string `gorm:"size:64"`
+	PreviewID            string `gorm:"size:64"`
+	PreviewJSON          string `gorm:"type:text"`
+	PreviewExpiresAt     *time.Time
+	JobID                string `gorm:"size:64"`
+	JobJSON              string `gorm:"type:text"`
+	ApplyIdempotency     string `gorm:"size:128"`
+	RetryIdempotency     string `gorm:"size:128"`
+	ReconcileIdempotency string `gorm:"size:128"`
+	UpdatedAt            time.Time
+}
+
+func (VFXFilesSyncOperation) TableName() string { return "vfx_files_sync_operations" }
 
 // VFXFilesEventInbox durably records raw contract events before HTTP 202.
 // PayloadJSON contains only the bounded Plugin business payload (never tokens);

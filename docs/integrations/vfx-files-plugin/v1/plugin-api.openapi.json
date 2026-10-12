@@ -449,7 +449,8 @@
       "put": {
         "operationId": "applyDesiredConfigMirror",
           "x-required-scope": "vfx.config.write",
-        "summary": "Apply exact versioned desired configuration mirror",
+        "summary": "Create or conditionally update the exact versioned desired configuration mirror",
+        "description": "For first creation send If-None-Match: *; for existing mirrors send exactly one strong If-Match. Sending both, neither, or an unsupported precondition must fail closed.",
         "parameters": [
           {
             "name": "production_id",
@@ -473,11 +474,19 @@
           {
             "name": "If-Match",
             "in": "header",
-            "required": true,
+            "required": false,
+            "description": "Required only when updating an existing mirror; mutually exclusive with If-None-Match.",
             "schema": {
               "type": "string",
               "pattern": "^\"[1-9][0-9]*\"$"
             }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Send exactly If-None-Match: * to create the first mirror. Mutually exclusive with If-Match.",
+            "schema": {"type": "string", "const": "*"}
           },
           {
             "name": "X-KitsuSync-Actor-ID",
@@ -502,7 +511,7 @@
         },
         "responses": {
           "200": {
-            "description": "Accepted mirror revision",
+            "description": "Accepted update to an existing mirror",
             "headers": {
               "ETag": {
                 "schema": {
@@ -518,8 +527,17 @@
               }
             }
           },
+          "201": {
+            "description": "First desired-state mirror created conditionally",
+            "headers": {"ETag": {"schema": {"type": "string"}}},
+            "content": {"application/json": {"schema": {"$ref": "schemas/desired-production-config.schema.json"}}}
+          },
           "409": {
             "$ref": "#/components/responses/StaleConfig"
+          },
+          "412": {
+            "description": "If-None-Match precondition failed because a mirror already exists",
+            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1522,9 +1540,11 @@
         "required": [
           "contract_version",
           "connection_id",
+          "account_mode",
           "root_id",
           "state",
-          "capabilities"
+          "capabilities",
+          "owner_subject"
         ],
         "properties": {
           "contract_version": {
@@ -1534,8 +1554,14 @@
             "type": "string",
             "format": "uuid"
           },
+          "account_mode": {"enum": ["my_drive", "shared_drive"]},
           "root_id": {
             "type": "string"
+          },
+          "owner_subject": {
+            "type": ["string", "null"],
+            "minLength": 1,
+            "description": "For My Drive, the opaque Google OpenID Connect subject verified server-side against this connection's authenticated account; never supplied by KitsuSync. Null for Shared Drive. This is an identity reference, not a credential."
           },
           "drive_id": {
             "type": [
@@ -1568,7 +1594,11 @@
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {"if": {"properties": {"account_mode": {"const": "my_drive"}}}, "then": {"properties": {"owner_subject": {"type": "string", "minLength": 1}}}},
+          {"if": {"properties": {"account_mode": {"const": "shared_drive"}}}, "then": {"properties": {"owner_subject": {"type": "null"}}}}
+        ]
       },
       "TemplateList": {
         "type": "object",
@@ -1796,7 +1826,8 @@
           "source_etag": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 200
+            "maxLength": 200,
+            "description": "Content-derived SHA-256 fingerprint of the exact KitsuSync snapshot when Kitsu does not supply a collection ETag; not an upstream HTTP validator."
           },
           "page_count": {
             "type": "integer",

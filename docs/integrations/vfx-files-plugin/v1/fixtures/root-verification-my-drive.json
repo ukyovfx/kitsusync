@@ -1,0 +1,13 @@
+{
+  "contract_version": "1.0",
+  "connection_id": "20000000-0000-4000-8000-000000000001",
+  "account_mode": "my_drive",
+  "root_id": "synthetic-root-01",
+  "drive_id": null,
+  "owner_subject": "synthetic-oidc-subject-01",
+  "state": "verified",
+  "capabilities": {
+    "can_read": true,
+    "can_add_children": true
+  }
+}

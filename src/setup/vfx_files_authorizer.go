@@ -110,8 +110,15 @@ func (liveVFXFilesKitsuIdentitySource) ProductionTeam(ctx context.Context, conne
 }
 
 func fetchVFXFilesKitsuJSON(ctx context.Context, connection KitsuURLModel, token, relativePath string, out any) error {
+	return fetchVFXFilesKitsuJSONQuery(ctx, connection, token, relativePath, nil, out)
+}
+
+func fetchVFXFilesKitsuJSONQuery(ctx context.Context, connection KitsuURLModel, token, relativePath string, query url.Values, out any) error {
 	if ctx == nil || strings.TrimSpace(token) == "" || len(connection.VerifiedIPs) == 0 {
 		return errors.New("Kitsu connection is not verified")
+	}
+	if !strings.HasPrefix(relativePath, "/data/") || strings.Contains(relativePath, "..") || strings.ContainsAny(relativePath, "?#\\") {
+		return errors.New("Kitsu API resource path is invalid")
 	}
 	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(connection.ResolvedAPIBaseURL), "/"))
 	if err != nil || (base.Scheme != "https" && base.Scheme != "http") || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
@@ -119,6 +126,9 @@ func fetchVFXFilesKitsuJSON(ctx context.Context, connection KitsuURLModel, token
 	}
 	base.Path += relativePath
 	base.RawPath = ""
+	if len(query) > 0 {
+		base.RawQuery = query.Encode()
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
 	if err != nil {
 		return errors.New("Kitsu request is invalid")
@@ -133,7 +143,11 @@ func fetchVFXFilesKitsuJSON(ctx context.Context, connection KitsuURLModel, token
 	if response.StatusCode != http.StatusOK {
 		return errors.New("Kitsu API rejected the authorization check")
 	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 4<<20))
+	data, err := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
+	if err != nil || len(data) > 4<<20 {
+		return errors.New("Kitsu API response exceeds the safe read limit")
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	if err := decoder.Decode(out); err != nil {
 		return errors.New("Kitsu API response is invalid")
 	}

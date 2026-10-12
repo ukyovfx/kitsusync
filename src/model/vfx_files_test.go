@@ -183,6 +183,67 @@ func TestStoreVFXFilesDesiredConfigMirrorIsMonotoneAndRejectsSecrets(t *testing.
 	}
 }
 
+func TestVFXFilesSyncCommandIdempotencySurvivesSQLiteRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vfx-sync-operations.db")
+	open := func() *gorm.DB {
+		db, err := gorm.Open(sqlite.Open(path+"?_busy_timeout=10000&_journal_mode=WAL"), &gorm.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.AutoMigrate(&VFXFilesSyncOperation{}); err != nil {
+			t.Fatal(err)
+		}
+		return db
+	}
+	preview := []byte(`{"contract_version":"1.0","preview_id":"70000000-0000-4000-8000-000000000001","production_id":"` + vfxProductionID + `","config_revision":4,"state":"preview_ready","expires_at":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `"}`)
+	db := open()
+	if err := StoreVFXFilesSyncPreview(db, vfxProductionID, "80000000-0000-4000-8000-000000000001", 4, preview); err != nil {
+		t.Fatal(err)
+	}
+	first, err := PrepareVFXFilesSyncCommand(db, vfxProductionID, "apply", "first-apply-key-0001")
+	if err != nil || first.ApplyIdempotency != "first-apply-key-0001" {
+		t.Fatalf("first Apply key=%q err=%v", first.ApplyIdempotency, err)
+	}
+	if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := open()
+	defer func() {
+		if sqlDB, err := reopened.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	retried, err := PrepareVFXFilesSyncCommand(reopened, vfxProductionID, "apply", "different-retry-key-02")
+	if err != nil || retried.ApplyIdempotency != first.ApplyIdempotency {
+		t.Fatalf("restart changed uncertain Apply identity: got=%q want=%q err=%v", retried.ApplyIdempotency, first.ApplyIdempotency, err)
+	}
+	job := func(state, updatedAt string) []byte {
+		return []byte(`{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000001","production_id":"` + vfxProductionID + `","config_revision":4,"state":"` + state + `","progress":{"completed":0,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updatedAt + `"}`)
+	}
+	if err := StoreVFXFilesSyncJob(reopened, vfxProductionID, job("queued", "2026-10-13T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesSyncJob(reopened, vfxProductionID, job("failed", "2026-10-13T00:01:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := PrepareVFXFilesSyncCommand(reopened, vfxProductionID, "retry", "first-retry-key-0001")
+	if err != nil || retry.RetryIdempotency != "first-retry-key-0001" {
+		t.Fatalf("retry command key=%q err=%v", retry.RetryIdempotency, err)
+	}
+	repeated, err := PrepareVFXFilesSyncCommand(reopened, vfxProductionID, "retry", "different-retry-key-02")
+	if err != nil || repeated.RetryIdempotency != retry.RetryIdempotency {
+		t.Fatalf("retry command key changed: got=%q want=%q err=%v", repeated.RetryIdempotency, retry.RetryIdempotency, err)
+	}
+}
+
 func TestDisableVFXFilesEventIntakePausesBeforeRemoteDeactivation(t *testing.T) {
 	db := vfxEventTestDB(t)
 	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ConfigRevision: 3, ActivationEpoch: 7, Activated: true}).Error; err != nil {

@@ -141,6 +141,9 @@ func (c *PluginClient) Do(ctx context.Context, request PluginRequest) (*http.Res
 	if request.Method == http.MethodPost && request.Body == nil {
 		return nil, ErrPluginRequestRejected
 	}
+	if !validConditionalHeaders(request) {
+		return nil, ErrPluginRequestRejected
+	}
 	// Re-authorize on every call so revoked Production access does not survive a
 	// previously created API client or in-memory actor record.
 	actor, err := AuthorizeProductionActor(ctx, request.Authorizer, request.ProductionID)
@@ -326,9 +329,48 @@ func safeIdempotencyKey(value string) bool {
 
 func allowedPluginRequestHeader(name string) bool {
 	switch http.CanonicalHeaderKey(name) {
-	case "If-Match":
+	case "If-Match", "If-None-Match":
 		return true
 	default:
 		return false
 	}
+}
+
+func validConditionalHeaders(request PluginRequest) bool {
+	if request.Method == http.MethodPut && strings.HasPrefix(request.Path, "/productions/") && strings.HasSuffix(request.Path, "/desired-config") {
+		ifMatch := request.Headers.Values("If-Match")
+		ifNoneMatch := request.Headers.Values("If-None-Match")
+		if len(ifMatch)+len(ifNoneMatch) != 1 {
+			return false
+		}
+		if len(ifNoneMatch) == 1 {
+			return ifNoneMatch[0] == "*"
+		}
+		return validConfigETag(ifMatch[0])
+	}
+	if request.Method == http.MethodPost && (strings.HasSuffix(request.Path, "/activation") || strings.HasSuffix(request.Path, "/deactivation")) {
+		ifMatch := request.Headers.Values("If-Match")
+		return len(ifMatch) == 1 && len(request.Headers.Values("If-None-Match")) == 0 && validConfigETag(ifMatch[0])
+	}
+	if len(request.Headers.Values("If-None-Match")) != 0 {
+		return false
+	}
+	for _, value := range request.Headers.Values("If-Match") {
+		if !validConfigETag(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func validConfigETag(value string) bool {
+	if len(value) < 3 || value[0] != '"' || value[len(value)-1] != '"' {
+		return false
+	}
+	for _, char := range value[1 : len(value)-1] {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return value != `"0"`
 }

@@ -822,6 +822,7 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.NotificationDeliveryEvent{},
 		&model.ManagedChannelDeletion{},
 		&model.VFXFilesProductionConfig{},
+		&model.VFXFilesSyncOperation{},
 		&model.VFXFilesEventInbox{},
 		&model.VFXFilesEventNonce{},
 		&model.VFXFilesEventConflict{},

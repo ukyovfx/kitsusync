@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"app/src/api/vfxfiles"
 	"app/src/model"
@@ -32,6 +34,48 @@ type vfxFilesAdminPageState struct {
 	etag             string
 	desiredReady     bool
 	connectionsOK    bool
+	syncOperation    *model.VFXFilesSyncOperation
+	preview          *vfxFilesSyncPreview
+	job              *vfxFilesSyncJob
+}
+
+type vfxFilesSyncPreview struct {
+	ContractVersion string `json:"contract_version"`
+	PreviewID       string `json:"preview_id"`
+	ProductionID    string `json:"production_id"`
+	ConfigRevision  uint64 `json:"config_revision"`
+	RootID          string `json:"root_id"`
+	State           string `json:"state"`
+	Summary         struct {
+		Existing int `json:"existing"`
+		Create   int `json:"create"`
+		Link     int `json:"link"`
+		Excluded int `json:"excluded"`
+		Warnings int `json:"warnings"`
+	} `json:"summary"`
+	Changes []struct {
+		Action      string `json:"action"`
+		ObjectType  string `json:"object_type"`
+		ObjectID    string `json:"object_id"`
+		DisplayName string `json:"display_name"`
+		Reason      string `json:"reason"`
+	} `json:"changes"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+type vfxFilesSyncJob struct {
+	ContractVersion string `json:"contract_version"`
+	ID              string `json:"id"`
+	ProductionID    string `json:"production_id"`
+	ConfigRevision  uint64 `json:"config_revision"`
+	State           string `json:"state"`
+	Progress        struct {
+		Completed int `json:"completed"`
+		Total     int `json:"total"`
+	} `json:"progress"`
+	FailureCode *string `json:"failure_code"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 type vfxFilesAdminConnection struct {
@@ -58,6 +102,42 @@ type vfxFilesAdminTemplate struct {
 	Label    string   `json:"label"`
 	Pattern  string   `json:"pattern"`
 	Tokens   []string `json:"available_tokens"`
+}
+
+type vfxFilesRootCapabilities struct {
+	CanRead        bool `json:"can_read"`
+	CanAddChildren bool `json:"can_add_children"`
+}
+
+type vfxFilesRootVerification struct {
+	ContractVersion string                   `json:"contract_version"`
+	ConnectionID    string                   `json:"connection_id"`
+	AccountMode     string                   `json:"account_mode"`
+	RootID          string                   `json:"root_id"`
+	DriveID         *string                  `json:"drive_id"`
+	OwnerSubject    string                   `json:"owner_subject"`
+	State           string                   `json:"state"`
+	Capabilities    vfxFilesRootCapabilities `json:"capabilities"`
+}
+
+// verifiedVFXFilesRootIdentity accepts identity only from the authenticated
+// Plugin verification response, bound to the exact connection/root/mode that
+// KitsuSync just checked. Browser form values are never an identity source.
+func verifiedVFXFilesRootIdentity(result vfxFilesRootVerification, connectionID, accountMode, rootID, expectedDriveID string) (ownerSubject, driveID string, err error) {
+	if result.ContractVersion != "1.0" || result.ConnectionID != connectionID || result.AccountMode != accountMode || result.RootID != rootID || result.State != "verified" || !result.Capabilities.CanRead || !result.Capabilities.CanAddChildren {
+		return "", "", errors.New("root verification binding invalid")
+	}
+	if accountMode == "my_drive" {
+		owner := strings.TrimSpace(result.OwnerSubject)
+		if owner == "" || len(owner) > 255 || strings.ContainsAny(owner, "\x00\r\n") || result.DriveID != nil && strings.TrimSpace(*result.DriveID) != "" {
+			return "", "", errors.New("verified My Drive subject invalid")
+		}
+		return owner, "", nil
+	}
+	if accountMode != "shared_drive" || strings.TrimSpace(result.OwnerSubject) != "" || result.DriveID == nil || strings.TrimSpace(*result.DriveID) == "" || strings.TrimSpace(*result.DriveID) != strings.TrimSpace(expectedDriveID) {
+		return "", "", errors.New("verified Shared Drive identity invalid")
+	}
+	return "", strings.TrimSpace(*result.DriveID), nil
 }
 
 var candidateDriveURLRE = regexp.MustCompile(`^https://drive\.google\.com/drive/(u/[0-9]+/)?folders/[A-Za-z0-9_-]+([?#][A-Za-z0-9_=&%-]*)?$`)
@@ -219,6 +299,24 @@ func loadVFXFilesAdminState(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 		return
 	}
 	state.desired, state.etag, state.desiredReady = desired, config.Header.Get("ETag"), true
+	operation, operationErr := model.FindVFXFilesSyncOperation(db, productionID)
+	if operationErr == nil && operation.ConfigRevision == uint64FromJSON(desired["config_revision"]) {
+		state.syncOperation = &operation
+		if operation.PreviewJSON != "" && operation.PreviewExpiresAt != nil && operation.PreviewExpiresAt.After(time.Now().UTC()) {
+			var preview vfxFilesSyncPreview
+			if json.Unmarshal([]byte(operation.PreviewJSON), &preview) == nil && preview.PreviewID == operation.PreviewID && preview.ProductionID == productionID && preview.ConfigRevision == operation.ConfigRevision && preview.State == "preview_ready" {
+				state.preview = &preview
+			}
+		}
+		if operation.JobJSON != "" {
+			var job vfxFilesSyncJob
+			if json.Unmarshal([]byte(operation.JobJSON), &job) == nil && job.ID == operation.JobID && job.ProductionID == productionID && job.ConfigRevision == operation.ConfigRevision {
+				state.job = &job
+			}
+		}
+	} else if operationErr != nil && !errors.Is(operationErr, gorm.ErrRecordNotFound) && state.message == "" {
+		state.message = t(lang, "Filesの同期状態を安全に読み取れません。", "The Files sync state could not be read safely.")
+	}
 }
 
 func runVFXFilesAdminAction(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, project *model.Project, r *http.Request, lang string) (message, redirect string, completed bool) {
@@ -231,6 +329,16 @@ func runVFXFilesAdminAction(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 		return t(lang, "操作識別子の有効期限が切れました。画面を再読み込みしてください。", "The action token expired. Reload the page and try again."), "", false
 	}
 	switch r.Form.Get("action") {
+	case "save_config":
+		return saveVFXFilesDesiredConfig(ctx, db, runtime, authorizer, productionID, r, lang, key)
+	case "preview_sync":
+		return previewVFXFilesSync(ctx, db, runtime, authorizer, project, key, lang)
+	case "apply_sync":
+		return applyVFXFilesSync(ctx, db, runtime, authorizer, productionID, key, lang)
+	case "refresh_sync_job":
+		return refreshVFXFilesSyncJob(ctx, db, runtime, authorizer, productionID, lang)
+	case "retry_sync_job", "reconcile_sync_job":
+		return commandVFXFilesSyncJob(ctx, db, runtime, authorizer, productionID, r.Form.Get("action"), key, lang)
 	case "verify_root":
 		connectionID := strings.TrimSpace(r.Form.Get("connection_id"))
 		rootID := strings.TrimSpace(r.Form.Get("root_id"))
@@ -291,17 +399,26 @@ func runVFXFilesAdminAction(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 		if err != nil || verified.StatusCode != http.StatusOK {
 			return t(lang, "Driveルートを検証できませんでした。URLの保存やフォルダ変更は行われていません。", "The Drive root could not be verified. No URL was saved and no folder was changed."), "", false
 		}
-		var result struct {
-			ContractVersion string `json:"contract_version"`
-			ConnectionID    string `json:"connection_id"`
-			RootID          string `json:"root_id"`
-			State           string `json:"state"`
-			Capabilities    struct {
-				CanRead        bool `json:"can_read"`
-				CanAddChildren bool `json:"can_add_children"`
-			} `json:"capabilities"`
+		var result vfxFilesRootVerification
+		expectedRootID := rootID
+		if expectedRootID == "" {
+			parsed, _ := url.Parse(candidateURL)
+			segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+			if len(segments) > 0 {
+				expectedRootID = segments[len(segments)-1]
+			}
 		}
-		if json.Unmarshal(verified.Body, &result) != nil || result.ContractVersion != "1.0" || result.ConnectionID != connectionID || result.RootID == "" || result.State != "verified" || !result.Capabilities.CanRead || !result.Capabilities.CanAddChildren {
+		expectedDriveID := ""
+		if selected.DriveID != nil {
+			expectedDriveID = *selected.DriveID
+		}
+		if candidateDrive, ok := requestBody["drive_id"].(string); ok {
+			expectedDriveID = candidateDrive
+		}
+		if json.Unmarshal(verified.Body, &result) != nil {
+			return t(lang, "Driveルートの読み取り・作成権限を確認できません。", "Drive root read and child-creation permissions could not be verified."), "", false
+		}
+		if _, _, identityErr := verifiedVFXFilesRootIdentity(result, connectionID, selected.AccountMode, expectedRootID, expectedDriveID); identityErr != nil {
 			return t(lang, "Driveルートの読み取り・作成権限を確認できません。", "Drive root read and child-creation permissions could not be verified."), "", false
 		}
 		return t(lang, "Driveルートを確認しました。設定保存や同期、フォルダ作成は行っていません。", "Drive root verified. No configuration was saved, sync was started, or folder created."), "", true
@@ -383,10 +500,146 @@ func runVFXFilesAdminAction(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 	}
 }
 
+func uint64FromJSON(value any) uint64 {
+	number, ok := value.(float64)
+	if !ok || number < 1 || number > 9e15 || number != float64(uint64(number)) {
+		return 0
+	}
+	return uint64(number)
+}
+
+func readVFXFilesDesiredConfig(ctx context.Context, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID string) (model.VFXFilesDesiredConfigMirror, string, error) {
+	var config model.VFXFilesDesiredConfigMirror
+	response, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/productions/"+productionID+"/desired-config", nil, nil, "vfx.config.read", false, "", "")
+	if err != nil || response.StatusCode != http.StatusOK || strings.TrimSpace(response.Header.Get("ETag")) == "" || len(response.Body) == 0 || len(response.Body) > 256<<10 {
+		return config, "", errors.New("desired Files configuration is unavailable")
+	}
+	if err := json.Unmarshal(response.Body, &config); err != nil || config.ContractVersion != "1.0" || !strings.EqualFold(config.ProductionID, productionID) || config.ConfigRevision == 0 || config.Drive.RootState != "verified" {
+		return config, "", errors.New("desired Files configuration is invalid")
+	}
+	return config, response.Header.Get("ETag"), nil
+}
+
+func previewVFXFilesSync(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, project *model.Project, idempotency, lang string) (string, string, bool) {
+	productionID := project.KitsuProjectID
+	if db == nil {
+		return t(lang, "同期状態を保存できません。", "Sync state storage is unavailable."), "", false
+	}
+	config, _, err := readVFXFilesDesiredConfig(ctx, runtime, authorizer, productionID)
+	if err != nil {
+		return t(lang, "Files設定を再確認できません。", "Files configuration could not be reverified."), "", false
+	}
+	reader, ok := authorizer.(vfxFilesKitsuSnapshotReader)
+	if !ok {
+		return t(lang, "Kitsu Snapshotの読み取りが利用できません。", "The verified Kitsu snapshot reader is unavailable."), "", false
+	}
+	scope := vfxFilesSnapshotScope{Mode: config.SyncPolicy.Mode, Episodes: config.SyncPolicy.Scope.Episodes, Sequences: config.SyncPolicy.Scope.Sequences, Shots: config.SyncPolicy.Scope.Shots, Assets: config.SyncPolicy.Scope.Assets, Tasks: config.SyncPolicy.Scope.Tasks, TaskTypes: config.SyncPolicy.Scope.TaskTypeIDs, IncludeIDs: config.SyncPolicy.Scope.IncludeIDs, ExcludeIDs: config.SyncPolicy.Scope.ExcludeIDs}
+	objects, sourceETag, err := reader.BuildVFXFilesSnapshot(ctx, productionID, scope)
+	if err != nil {
+		return t(lang, "Kitsuの読み取り専用Snapshotを作成できません。変更は行われていません。", "A complete read-only Kitsu snapshot could not be created. No changes were made."), "", false
+	}
+	snapshotID, err := uploadVFXFilesSnapshot(ctx, runtime, authorizer, productionID, config.ConfigRevision, sourceETag, objects, idempotency)
+	if err != nil {
+		return t(lang, "Kitsu Snapshotを安全にアップロードできません。同期は開始されていません。", "The Kitsu snapshot could not be safely uploaded. Sync has not started."), "", false
+	}
+	previewBody, _ := json.Marshal(map[string]any{"contract_version": "1.0", "config_revision": config.ConfigRevision, "snapshot_id": snapshotID})
+	previewResponse, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodPost, "/productions/"+productionID+"/sync-previews", nil, previewBody, "vfx.sync.preview", false, "", "")
+	if err != nil || previewResponse.StatusCode != http.StatusOK {
+		return t(lang, "差分Previewを確認できません。同期は開始されていません。", "The sync preview could not be verified. Sync has not started."), "", false
+	}
+	var preview vfxFilesSyncPreview
+	if json.Unmarshal(previewResponse.Body, &preview) != nil || preview.ContractVersion != "1.0" || !vfxfiles.ValidID(preview.PreviewID) || preview.ProductionID != productionID || preview.ConfigRevision != config.ConfigRevision || preview.RootID != config.Drive.RootID || preview.State != "preview_ready" || len(preview.Changes) > 500 {
+		return t(lang, "PluginのPreview応答が契約と一致しません。同期は開始されていません。", "The Plugin preview response did not match the contract. Sync has not started."), "", false
+	}
+	if err := model.StoreVFXFilesSyncPreview(db, productionID, snapshotID, config.ConfigRevision, previewResponse.Body); err != nil {
+		return t(lang, "Previewは作成されましたが、確認状態を保存できません。Applyは無効です。", "A preview was created but could not be stored safely. Apply remains unavailable."), "", false
+	}
+	return t(lang, "差分Previewを作成しました。内容を確認してから明示的にApplyしてください。", "A diff preview is ready. Review it before explicitly applying sync."), "", true
+}
+
+func applyVFXFilesSync(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID, idempotency, lang string) (string, string, bool) {
+	operation, err := model.FindVFXFilesSyncOperation(db, productionID)
+	if err != nil || operation.PreviewID == "" || operation.PreviewExpiresAt == nil || !operation.PreviewExpiresAt.After(time.Now().UTC()) {
+		return t(lang, "有効なPreviewがありません。再作成してください。", "There is no current preview. Create a new preview."), "", false
+	}
+	config, _, err := readVFXFilesDesiredConfig(ctx, runtime, authorizer, productionID)
+	if err != nil || config.ConfigRevision != operation.ConfigRevision {
+		return t(lang, "Preview後にFiles設定が変更されました。新しいPreviewを作成してください。", "Files configuration changed after preview. Create a new preview."), "", false
+	}
+	previewJSON := []byte(operation.PreviewJSON)
+	var preview vfxFilesSyncPreview
+	if json.Unmarshal(previewJSON, &preview) != nil || preview.State != "preview_ready" || preview.PreviewID != operation.PreviewID || preview.ProductionID != productionID || preview.ConfigRevision != config.ConfigRevision {
+		return t(lang, "Previewの保存状態を確認できません。", "The saved preview could not be verified."), "", false
+	}
+	operation, err = model.PrepareVFXFilesSyncCommand(db, productionID, "apply", vfxFilesActionKey(idempotency, "sync-apply"))
+	if err != nil {
+		return t(lang, "Apply識別子を安全に保存できません。", "The Apply idempotency record could not be stored safely."), "", false
+	}
+	body, _ := json.Marshal(map[string]any{"contract_version": "1.0", "preview_id": operation.PreviewID, "config_revision": operation.ConfigRevision})
+	response, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodPost, "/productions/"+productionID+"/sync-jobs", nil, body, "vfx.sync.apply", true, operation.ApplyIdempotency, "")
+	if err != nil || response.StatusCode != http.StatusAccepted || model.StoreVFXFilesSyncJob(db, productionID, response.Body) != nil {
+		return t(lang, "Applyの受付状態を確認できません。保存済み識別子で再確認してください。", "The Apply outcome could not be confirmed. Retry with the stored idempotency record or reconcile with the Plugin."), "", false
+	}
+	return t(lang, "同期ジョブを受け付けました。完了状態はジョブで確認してください。", "The sync job was accepted. Check its job status for completion."), "", true
+}
+
+func refreshVFXFilesSyncJob(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID, lang string) (string, string, bool) {
+	operation, err := model.FindVFXFilesSyncOperation(db, productionID)
+	if err != nil || !vfxfiles.ValidID(operation.JobID) {
+		return t(lang, "同期ジョブがありません。", "No sync job is available."), "", false
+	}
+	response, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/sync-jobs/"+operation.JobID, nil, nil, "vfx.sync.read", false, "", "")
+	if err != nil || response.StatusCode != http.StatusOK || model.StoreVFXFilesSyncJob(db, productionID, response.Body) != nil {
+		return t(lang, "最新のジョブ状態を確認できません。以前の状態は保持されています。", "The latest job state could not be confirmed. The last verified state is retained."), "", false
+	}
+	return t(lang, "ジョブ状態を更新しました。", "Job status was refreshed."), "", true
+}
+
+func commandVFXFilesSyncJob(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID, action, idempotency, lang string) (string, string, bool) {
+	operation, err := model.FindVFXFilesSyncOperation(db, productionID)
+	if err != nil || !vfxfiles.ValidID(operation.JobID) || operation.JobJSON == "" {
+		return t(lang, "同期ジョブを確認できません。", "The sync job could not be verified."), "", false
+	}
+	var current vfxFilesSyncJob
+	if json.Unmarshal([]byte(operation.JobJSON), &current) != nil {
+		return t(lang, "保存済みジョブ状態が不正です。", "The saved sync job state is invalid."), "", false
+	}
+	command, path, scope := "", "", ""
+	if action == "retry_sync_job" {
+		if current.State != "failed" {
+			return t(lang, "失敗状態のジョブのみ再試行できます。", "Only a failed job can be retried."), "", false
+		}
+		command, path, scope = "retry", "/sync-jobs/"+operation.JobID+"/retry", "vfx.sync.retry"
+	} else {
+		if current.State != "reconcile_required" {
+			return t(lang, "照合が必要なジョブのみ再照合できます。", "Only a job requiring reconciliation can be reconciled."), "", false
+		}
+		command, path, scope = "reconcile", "/sync-jobs/"+operation.JobID+"/reconcile", "vfx.sync.reconcile"
+	}
+	operation, err = model.PrepareVFXFilesSyncCommand(db, productionID, command, vfxFilesActionKey(idempotency, "sync-"+command))
+	if err != nil {
+		return t(lang, "操作識別子を安全に保存できません。", "The command idempotency record could not be stored safely."), "", false
+	}
+	body, _ := json.Marshal(map[string]string{"contract_version": "1.0", "reason_code": "operator_requested"})
+	idempotencyKey := operation.RetryIdempotency
+	if command == "reconcile" {
+		idempotencyKey = operation.ReconcileIdempotency
+	}
+	response, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodPost, path, nil, body, scope, true, idempotencyKey, "")
+	if err != nil || response.StatusCode != http.StatusAccepted || model.StoreVFXFilesSyncJob(db, productionID, response.Body) != nil {
+		return t(lang, "ジョブ操作の受付状態を確認できません。", "The job command outcome could not be confirmed."), "", false
+	}
+	return t(lang, "ジョブ操作を受け付けました。状態を再確認してください。", "The job command was accepted. Refresh its status."), "", true
+}
+
 func vfxFilesPluginCall(ctx context.Context, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID, method, path string, query url.Values, body []byte, scope string, mutating bool, idempotency, etag string) (*vfxFilesAdminPluginResponse, error) {
 	headers := make(http.Header)
 	if etag != "" {
-		headers.Set("If-Match", etag)
+		if etag == "*" {
+			headers.Set("If-None-Match", "*")
+		} else {
+			headers.Set("If-Match", etag)
+		}
 	}
 	response, err := runtime.Client.Do(ctx, vfxfiles.PluginRequest{
 		Method: method, Path: path, Query: query, Headers: headers, Body: body, ProductionID: productionID,
@@ -401,6 +654,140 @@ func vfxFilesPluginCall(ctx context.Context, runtime *vfxfiles.RuntimeConfig, au
 		return nil, errors.New("Plugin response is too large or unreadable")
 	}
 	return &vfxFilesAdminPluginResponse{StatusCode: response.StatusCode, Header: response.Header.Clone(), Body: responseBody}, nil
+}
+
+func saveVFXFilesDesiredConfig(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID string, r *http.Request, lang, idempotency string) (string, string, bool) {
+	connectionID := strings.TrimSpace(r.Form.Get("connection_id"))
+	rootID := strings.TrimSpace(r.Form.Get("root_id"))
+	mode := strings.TrimSpace(r.Form.Get("sync_mode"))
+	if !vfxfiles.ValidID(connectionID) || !regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`).MatchString(rootID) || mode != "new_production" && mode != "adopt_existing" && mode != "future_only" {
+		return t(lang, "接続、ルート、同期方式を確認してください。", "Check the Drive connection, root, and sync mode."), "", false
+	}
+	connections, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/drive-connections", url.Values{"production_id": {productionID}}, nil, "vfx.connections.read", false, "", "")
+	var available []vfxFilesAdminConnection
+	if err != nil || connections.StatusCode != http.StatusOK || decodeVFXFilesConnections(connections.Body, &available) != nil {
+		return t(lang, "Drive接続を再確認できません。", "Drive connection could not be reverified."), "", false
+	}
+	var selected *vfxFilesAdminConnection
+	for index := range available {
+		if available[index].ID == connectionID && available[index].State == "connected" {
+			selected = &available[index]
+			break
+		}
+	}
+	if selected == nil || selected.AccountMode != "my_drive" && selected.AccountMode != "shared_drive" {
+		return t(lang, "接続済みDriveアカウントを再確認できません。", "The connected Drive account could not be reverified."), "", false
+	}
+	rootsResponse, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/drive-connections/"+connectionID+"/roots", url.Values{"production_id": {productionID}}, nil, "vfx.roots.read", false, "", "")
+	var roots []vfxFilesAdminRoot
+	if err != nil || rootsResponse.StatusCode != http.StatusOK || decodeVFXFilesRoots(rootsResponse.Body, &roots) != nil {
+		return t(lang, "Driveルート候補を再確認できません。", "Drive roots could not be reverified."), "", false
+	}
+	var selectedRoot *vfxFilesAdminRoot
+	for index := range roots {
+		if roots[index].ID == rootID && roots[index].AccountMode == selected.AccountMode {
+			selectedRoot = &roots[index]
+			break
+		}
+	}
+	if selectedRoot == nil {
+		return t(lang, "Driveルート候補を一覧から再選択してください。", "Select a current Drive root from the list."), "", false
+	}
+	verifyBody := map[string]any{"contract_version": "1.0", "production_id": productionID, "account_mode": selected.AccountMode, "root_id": rootID}
+	expectedDriveID := ""
+	if selectedRoot.DriveID != nil {
+		expectedDriveID = strings.TrimSpace(*selectedRoot.DriveID)
+	}
+	if selected.AccountMode == "shared_drive" {
+		if selected.DriveID == nil || strings.TrimSpace(*selected.DriveID) == "" || expectedDriveID != "" && expectedDriveID != strings.TrimSpace(*selected.DriveID) {
+			return t(lang, "共有ドライブを検証できません。", "The Shared Drive identity could not be verified."), "", false
+		}
+		expectedDriveID = strings.TrimSpace(*selected.DriveID)
+		verifyBody["drive_id"] = expectedDriveID
+	}
+	verifyJSON, _ := json.Marshal(verifyBody)
+	verified, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodPost, "/drive-connections/"+connectionID+"/roots", url.Values{"production_id": {productionID}}, verifyJSON, "vfx.roots.verify", true, vfxFilesActionKey(idempotency, "verify-config-root"), "")
+	var proof vfxFilesRootVerification
+	if err != nil || verified.StatusCode != http.StatusOK || json.Unmarshal(verified.Body, &proof) != nil {
+		return t(lang, "Driveルートの検証に失敗しました。設定は保存されていません。", "Drive root verification failed. No configuration was saved."), "", false
+	}
+	ownerSubject, verifiedDriveID, err := verifiedVFXFilesRootIdentity(proof, connectionID, selected.AccountMode, rootID, expectedDriveID)
+	if err != nil {
+		return t(lang, "Driveアカウントの本人性を検証できません。設定は保存されていません。", "The Drive account identity could not be verified. No configuration was saved."), "", false
+	}
+	selections := make([]map[string]any, 0, 5)
+	for _, scope := range []string{"production", "asset", "sequence", "shot", "task"} {
+		templateID := strings.TrimSpace(r.Form.Get("template_" + scope))
+		if templateID == "" {
+			if scope == "production" {
+				return t(lang, "Productionテンプレートを選択してください。", "Choose a Production template."), "", false
+			}
+			continue
+		}
+		catalog, callErr := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/templates", url.Values{"scope": {scope}}, nil, "vfx.templates.read", false, "", "")
+		var templates []vfxFilesAdminTemplate
+		if callErr != nil || catalog.StatusCode != http.StatusOK || decodeVFXFilesTemplates(catalog.Body, scope, &templates) != nil {
+			return t(lang, "テンプレート一覧を再確認できません。", "The template catalog could not be reverified."), "", false
+		}
+		var chosen *vfxFilesAdminTemplate
+		for index := range templates {
+			if templates[index].ID == templateID {
+				chosen = &templates[index]
+				break
+			}
+		}
+		if chosen == nil || chosen.Revision == 0 {
+			return t(lang, "テンプレートを一覧から再選択してください。", "Select a current template from the catalog."), "", false
+		}
+		selections = append(selections, map[string]any{"scope": scope, "template_id": chosen.ID, "revision": chosen.Revision, "overrides": map[string]string{}})
+	}
+	taskTypeIDs := make([]string, 0)
+	for _, id := range r.Form["task_type_id"] {
+		id = strings.TrimSpace(id)
+		if !vfxfiles.ValidID(id) {
+			return t(lang, "Task Typeの選択が不正です。", "A selected Task Type is invalid."), "", false
+		}
+		taskTypeIDs = append(taskTypeIDs, id)
+	}
+	sort.Strings(taskTypeIDs)
+	for i := 1; i < len(taskTypeIDs); i++ {
+		if taskTypeIDs[i] == taskTypeIDs[i-1] {
+			return t(lang, "Task Typeが重複しています。", "A Task Type was selected more than once."), "", false
+		}
+	}
+	syncPolicy := map[string]any{"mode": mode, "scope": map[string]any{
+		"episodes": r.Form.Get("scope_episodes") == "on", "sequences": r.Form.Get("scope_sequences") == "on", "shots": r.Form.Get("scope_shots") == "on", "assets": r.Form.Get("scope_assets") == "on", "tasks": r.Form.Get("scope_tasks") == "on", "task_type_ids": taskTypeIDs,
+	}, "notify_new_deliveries": false}
+	drive := map[string]any{"account_mode": selected.AccountMode, "root_id": rootID, "root_state": "verified"}
+	if selected.AccountMode == "my_drive" {
+		drive["owner_subject"] = ownerSubject
+	} else {
+		drive["drive_id"] = verifiedDriveID
+		drive["owner_subject"] = nil
+	}
+	body, err := json.Marshal(map[string]any{"contract_version": "1.0", "connection_id": connectionID, "drive": drive, "template_selection": map[string]any{"selections": selections}, "sync_policy": syncPolicy})
+	if err != nil {
+		return t(lang, "設定を作成できません。", "Configuration could not be created."), "", false
+	}
+	current, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/productions/"+productionID+"/desired-config", nil, nil, "vfx.config.read", false, "", "")
+	if err != nil || current.StatusCode != http.StatusOK && current.StatusCode != http.StatusNotFound {
+		return t(lang, "現在のFiles設定を再確認できません。", "The current Files configuration could not be reverified."), "", false
+	}
+	precondition := "*"
+	if current.StatusCode == http.StatusOK {
+		precondition = strings.TrimSpace(current.Header.Get("ETag"))
+		if !regexp.MustCompile(`^"[1-9][0-9]*"$`).MatchString(precondition) {
+			return t(lang, "設定の版を確認できません。再読み込みしてください。", "The configuration revision could not be verified. Reload and try again."), "", false
+		}
+	}
+	saved, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodPut, "/productions/"+productionID+"/desired-config", nil, body, "vfx.config.write", true, vfxFilesActionKey(idempotency, "save-config"), precondition)
+	if err != nil || saved.StatusCode != http.StatusOK && saved.StatusCode != http.StatusCreated || strings.TrimSpace(saved.Header.Get("ETag")) == "" {
+		return t(lang, "Files設定を保存できませんでした。競合する場合は再読み込みしてください。", "Files configuration was not saved. Reload if another administrator changed it."), "", false
+	}
+	if err := model.StoreVFXFilesDesiredConfigMirror(db, productionID, saved.Body); err != nil {
+		return t(lang, "Files Pluginの設定は更新されましたが、安全状態を同期できません。通知と同期は停止しています。管理者に確認してください。", "The Plugin configuration changed, but KitsuSync could not synchronize its safety state. Notifications and sync remain blocked; contact an administrator."), "", false
+	}
+	return t(lang, "Files設定を保存しました。同期はまだ開始されていません。差分Previewで確認してください。", "Files configuration saved. Sync has not started; review the diff preview before applying."), "", true
 }
 
 func decodeVFXFilesConnections(body []byte, destination *[]vfxFilesAdminConnection) error {
@@ -576,6 +963,32 @@ func renderVFXFilesAdminPage(r *http.Request, project *model.Project, production
 	body += `</section><section class="production-detail-surface"><h3>` + esc(t(lang, "Files設定と通知", "Files configuration and notifications")) + `</h3>`
 	if !state.desiredReady {
 		body += `<p class="status-row">` + esc(t(lang, "有効なDriveルートと同期設定はまだ確認できません。同期Applyと通知有効化は停止しています。", "A verified Drive root and desired sync configuration are not available. Sync Apply and notification activation are blocked.")) + `</p>`
+		if state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && connectedOptions != "" && len(state.roots) > 0 && len(state.templates["production"]) > 0 {
+			body += `<details class="settings-disclosure"><summary>` + esc(t(lang, "初回Files設定", "Initial Files configuration")) + `</summary><form method="post" class="form-stack"><input type="hidden" name="action" value="save_config"><input type="hidden" name="connection_id" value="` + esc(state.selectedID) + `"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "save-config")) + `"><label>` + esc(t(lang, "検証するDriveルート", "Drive root to verify")) + `<select name="root_id" required>` + rootOptions + `</select></label>`
+			for _, scope := range []string{"production", "asset", "sequence", "shot", "task"} {
+				if len(state.templates[scope]) == 0 {
+					continue
+				}
+				body += `<label>` + esc(t(lang, "テンプレート", "Template")) + ` · ` + esc(scope) + `<select name="template_` + esc(scope) + `"` + func() string {
+					if scope == "production" {
+						return ` required`
+					}
+					return ""
+				}() + `>`
+				if scope != "production" {
+					body += `<option value="">` + esc(t(lang, "選択しない", "Not selected")) + `</option>`
+				}
+				for _, template := range state.templates[scope] {
+					body += `<option value="` + esc(template.ID) + `">` + esc(template.Label) + ` · v` + fmt.Sprint(template.Revision) + `</option>`
+				}
+				body += `</select></label>`
+			}
+			body += `<label>` + esc(t(lang, "初回同期の扱い", "Initial sync mode")) + `<select name="sync_mode"><option value="future_only">` + esc(t(lang, "今後作成される項目のみ", "Future items only")) + `</option><option value="adopt_existing">` + esc(t(lang, "既存Productionを導入", "Adopt existing Production")) + `</option><option value="new_production">` + esc(t(lang, "新規Production", "New Production")) + `</option></select></label><fieldset><legend>` + esc(t(lang, "Preview対象", "Preview scope")) + `</legend>`
+			for _, scope := range []string{"episodes", "sequences", "shots", "assets", "tasks"} {
+				body += `<label><input type="checkbox" name="scope_` + scope + `">` + esc(strings.Title(scope)) + `</label>`
+			}
+			body += `</fieldset><p class="field-help">` + esc(t(lang, "保存後も同期・フォルダー作成・通知は開始されません。次の差分Previewと明示Applyが必要です。", "Saving does not start sync, create folders, or enable notifications. A diff preview and separate explicit Apply are required.")) + `</p><button class="btn" type="submit">` + esc(t(lang, "設定を保存してPreviewへ", "Save configuration and continue to preview")) + `</button></form></details>`
+		}
 	} else {
 		activation, _ := state.desired["activation"].(map[string]any)
 		active, _ := activation["enabled"].(bool)
@@ -585,6 +998,35 @@ func renderVFXFilesAdminPage(r *http.Request, project *model.Project, production
 			status = t(lang, "有効", "Enabled")
 		}
 		body += `<p class="status-row">` + esc(t(lang, "通知状態", "Notification state")) + `: <strong>` + esc(status) + `</strong> · ` + esc(t(lang, "設定リビジョン", "Config revision")) + ` ` + esc(fmt.Sprint(state.desired["config_revision"])) + `</p>`
+		if state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
+			body += `<form method="post" class="button-row"><input type="hidden" name="action" value="preview_sync"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-preview")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "Kitsuを読み取り、差分Previewを作成", "Read Kitsu and create a diff preview")) + `</button></form>`
+		}
+		if state.preview != nil {
+			body += `<section class="settings-disclosure" aria-labelledby="vfx-files-preview-title"><h4 id="vfx-files-preview-title">` + esc(t(lang, "同期Preview", "Sync preview")) + `</h4><p class="status-row">` + esc(t(lang, "既存", "Existing")) + ` ` + fmt.Sprint(state.preview.Summary.Existing) + ` · ` + esc(t(lang, "作成", "Create")) + ` ` + fmt.Sprint(state.preview.Summary.Create) + ` · ` + esc(t(lang, "リンク", "Link")) + ` ` + fmt.Sprint(state.preview.Summary.Link) + ` · ` + esc(t(lang, "除外", "Excluded")) + ` ` + fmt.Sprint(state.preview.Summary.Excluded) + ` · ` + esc(t(lang, "警告", "Warnings")) + ` ` + fmt.Sprint(state.preview.Summary.Warnings) + `</p>`
+			if len(state.preview.Changes) > 0 {
+				body += `<ul class="status-list">`
+				for _, change := range state.preview.Changes {
+					body += `<li class="status-row"><strong>` + esc(change.Action) + `</strong> · ` + esc(change.ObjectType) + ` · ` + esc(change.DisplayName) + `</li>`
+				}
+				body += `</ul>`
+			}
+			if state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
+				body += `<form method="post" class="button-row"><input type="hidden" name="action" value="apply_sync"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-apply")) + `"><button class="btn" type="submit">` + esc(t(lang, "このPreviewを明示的にApply", "Explicitly apply this preview")) + `</button></form>`
+			}
+			body += `</section>`
+		}
+		if state.job != nil {
+			body += `<section class="settings-disclosure" aria-labelledby="vfx-files-job-title"><h4 id="vfx-files-job-title">` + esc(t(lang, "同期ジョブ", "Sync job")) + `</h4><p class="status-row">` + esc(localizedVFXFilesSyncJobState(state.job.State, lang)) + ` · ` + fmt.Sprint(state.job.Progress.Completed) + ` / ` + fmt.Sprint(state.job.Progress.Total) + `</p>`
+			if state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
+				body += `<form method="post" class="button-row"><input type="hidden" name="action" value="refresh_sync_job"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-refresh")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "状態を更新", "Refresh status")) + `</button></form>`
+				if state.job.State == "failed" {
+					body += `<form method="post" class="button-row"><input type="hidden" name="action" value="retry_sync_job"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-retry")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "失敗ジョブを安全に再試行", "Retry failed job safely")) + `</button></form>`
+				} else if state.job.State == "reconcile_required" {
+					body += `<form method="post" class="button-row"><input type="hidden" name="action" value="reconcile_sync_job"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-reconcile")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "ジョブ結果を再照合", "Reconcile job outcome")) + `</button></form>`
+				}
+			}
+			body += `</section>`
+		}
 		if state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
 			action := "activate"
 			label := t(lang, "通知を有効にする", "Enable notifications")
@@ -601,8 +1043,27 @@ func renderVFXFilesAdminPage(r *http.Request, project *model.Project, production
 	} else {
 		body += `<p role="status">` + esc(t(lang, "イベント診断を確認できません。状態を空として扱わず、操作前にデータベースを確認してください。", "Event diagnostics are unavailable. Do not treat this as an empty state; check the database before taking action.")) + `</p>`
 	}
-	body += `</section><p class="field-help">` + esc(t(lang, "初回同期・差分Preview・Job管理はKitsuの読み取り専用Snapshot生成を接続するまで無効です。", "Initial sync, diff preview, and job management remain disabled until read-only Kitsu snapshot generation is connected.")) + `</p><p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=settings", r)) + `">` + esc(t(lang, "Production設定へ戻る", "Back to Production settings")) + `</a></p></section>`
+	body += `</section><p class="field-help">` + esc(t(lang, "同期開始は別の明示Apply操作です。通知有効化も独立した管理者操作であり、Google認証や設定保存だけでは開始されません。", "Starting sync requires a separate explicit Apply. Notification activation is also a distinct administrator action; Google authorization or saving configuration never starts either.")) + `</p><p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=settings", r)) + `">` + esc(t(lang, "Production設定へ戻る", "Back to Production settings")) + `</a></p></section>`
 	return body
+}
+
+func localizedVFXFilesSyncJobState(state, lang string) string {
+	switch state {
+	case "queued":
+		return t(lang, "待機中", "Queued")
+	case "running":
+		return t(lang, "実行中", "Running")
+	case "completed":
+		return t(lang, "完了", "Completed")
+	case "failed":
+		return t(lang, "失敗", "Failed")
+	case "reconcile_required":
+		return t(lang, "結果の再照合が必要", "Reconciliation required")
+	case "cancelled":
+		return t(lang, "キャンセル", "Cancelled")
+	default:
+		return t(lang, "不明", "Unknown")
+	}
 }
 
 func safeSubmittedIdempotencyKey(value string) string {

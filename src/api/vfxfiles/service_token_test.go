@@ -107,6 +107,21 @@ func TestIssueServiceTokenFailsClosedForUnverifiedActorScopeOrAudience(t *testin
 	}
 }
 
+func TestIssueServiceTokenAllowsCanonicalSnapshotScopeOnlyFromAllowlist(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := ServiceTokenConfig{Issuer: "https://sync.example.test", Audience: "https://zou.example.test/api/plugins/vfx_files/integrations/v1", Subject: "sync", ClientID: "instance", KeyID: "k1", PrivateKey: key}
+	actor := mustAuthorizeTestActor(t, "123e4567-e89b-42d3-a456-426614174001")
+	if _, err := IssueServiceToken(config, actor, []string{"vfx.sync.snapshot.write"}, time.Now()); err != nil {
+		t.Fatalf("canonical snapshot scope was rejected: %v", err)
+	}
+	if _, err := IssueServiceToken(config, actor, []string{"vfx.sync.snapshot.delete"}, time.Now()); err == nil {
+		t.Fatal("unlisted four-component scope was accepted")
+	}
+}
+
 type testProductionAdminAuthorizer struct {
 	actorID string
 	allowed bool

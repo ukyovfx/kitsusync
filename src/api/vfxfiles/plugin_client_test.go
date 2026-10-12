@@ -53,6 +53,60 @@ func TestPluginClientAddsBoundServiceTokenAndActorHeaders(t *testing.T) {
 	}
 }
 
+func TestPluginClientAllowsOnlyWildcardConditionalCreateHeader(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotNoneMatch string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotNoneMatch = r.Header.Get("If-None-Match")
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+	base := server.URL + ServiceAudienceSuffix
+	client, err := NewPluginClient(base, server.Client(), ServiceTokenConfig{Issuer: "https://sync.example.test", Audience: base, Subject: "sync", ClientID: "instance", KeyID: "k1", PrivateKey: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	productionID := "123e4567-e89b-42d3-a456-426614174001"
+	request := PluginRequest{Method: http.MethodPut, Path: "/productions/" + productionID + "/desired-config", Headers: http.Header{"If-None-Match": {"*"}}, Body: []byte(`{"contract_version":"1.0","connection_id":"123e4567-e89b-42d3-a456-426614174002","drive":{"account_mode":"shared_drive","root_id":"root","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"p","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false},"notify_new_deliveries":false}}`), ProductionID: productionID, Authorizer: testProductionAdminAuthorizer{actorID: "123e4567-e89b-42d3-a456-426614174000", allowed: true}, Scope: "vfx.config.write", IdempotencyKey: "create-configuration-1", Mutating: true}
+	response, err := client.Do(context.Background(), request)
+	if err != nil {
+		t.Fatalf("conditional create was rejected: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated || gotNoneMatch != "*" {
+		t.Fatalf("conditional create header/status = %q/%d", gotNoneMatch, response.StatusCode)
+	}
+	request.Headers = http.Header{"If-None-Match": {"\"4\""}}
+	if _, err := client.Do(context.Background(), request); err == nil {
+		t.Fatal("non-wildcard If-None-Match was allowed")
+	}
+}
+
+func TestActivationAndDeactivationRequireStrongConfigPrecondition(t *testing.T) {
+	for _, path := range []string{"/productions/123e4567-e89b-42d3-a456-426614174001/activation", "/productions/123e4567-e89b-42d3-a456-426614174001/deactivation"} {
+		for _, tc := range []struct {
+			name    string
+			headers http.Header
+			valid   bool
+		}{
+			{"missing", http.Header{}, false},
+			{"weak", http.Header{"If-Match": {`W/"2"`}}, false},
+			{"strong", http.Header{"If-Match": {`"2"`}}, true},
+			{"conflicting", http.Header{"If-Match": {`"2"`}, "If-None-Match": {"*"}}, false},
+		} {
+			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				request := PluginRequest{Method: http.MethodPost, Path: path, Headers: tc.headers}
+				if got := validConditionalHeaders(request); got != tc.valid {
+					t.Fatalf("validConditionalHeaders = %v, want %v", got, tc.valid)
+				}
+			})
+		}
+	}
+}
+
 func TestPluginTemplateCatalogUsesContractGlobalReadShapeWithBoundActorToken(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -105,13 +159,13 @@ func TestPluginClientRequiresIdempotencyForMutationsAndNeverFollowsRedirects(t *
 	}
 	productionID := "123e4567-e89b-42d3-a456-426614174001"
 	authorizer := testProductionAdminAuthorizer{actorID: "123e4567-e89b-42d3-a456-426614174000", allowed: true}
-	_, err = client.Do(context.Background(), PluginRequest{Method: http.MethodPost, Path: "/productions/" + productionID + "/activation", ProductionID: productionID, Authorizer: authorizer, Scope: "vfx.activation.write"})
+	_, err = client.Do(context.Background(), PluginRequest{Method: http.MethodPost, Path: "/productions/" + productionID + "/activation", Headers: http.Header{"If-Match": {`"1"`}}, ProductionID: productionID, Authorizer: authorizer, Scope: "vfx.activation.write"})
 	if err == nil {
 		t.Fatal("mutation without Idempotency-Key was accepted")
 	}
 	response, err := client.Do(context.Background(), PluginRequest{
 		Method: http.MethodPost, Path: "/productions/" + productionID + "/activation", ProductionID: productionID, Authorizer: authorizer,
-		Scope: "vfx.activation.write", IdempotencyKey: "request-01", Mutating: true, Body: []byte(`{"contract_version":"1.0"}`),
+		Headers: http.Header{"If-Match": {`"1"`}}, Scope: "vfx.activation.write", IdempotencyKey: "request-01", Mutating: true, Body: []byte(`{"contract_version":"1.0"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
