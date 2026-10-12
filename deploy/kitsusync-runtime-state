@@ -87,8 +87,8 @@ def normalized_host_config(value):
 
 def is_docker_generated_ipv4_mac(address, mac):
     try:
-        octets = ipaddress.IPv4Address(address).packed
-    except (ipaddress.AddressValueError, TypeError):
+        octets = ipaddress.IPv4Interface(address).ip.packed
+    except (ipaddress.AddressValueError, ipaddress.NetmaskValueError, TypeError):
         return False
     expected = "02:42:" + ":".join("%02x" % octet for octet in octets)
     return str(mac or "").lower() == expected

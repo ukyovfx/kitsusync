@@ -240,7 +240,7 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "")
         restored = copy.deepcopy(source)
         restored["NetworkSettings"]["Networks"]["ks-net"].update(
-            IPAddress="172.20.0.3", MacAddress="02:42:ac:14:00:03")
+            IPAddress="172.20.0.3/16", MacAddress="02:42:ac:14:00:03")
         runtime.compare(plan, restored)
 
     def test_custom_mac_without_static_ip_remains_strict(self):
