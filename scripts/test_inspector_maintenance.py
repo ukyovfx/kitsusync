@@ -160,14 +160,7 @@ class InspectorMaintenanceTests(unittest.TestCase):
 
     def test_crash_during_explicit_rollback_is_recovered_before_retry(self):
         self.assertEqual(maintenance.install(self.paths, TEST_UID), "installed")
-        prior_unlink = Path.unlink
-
-        def interrupt_collector_unlink(path, *args, **kwargs):
-            if path == self.paths.install[maintenance.FILES[1]]:
-                raise KeyboardInterrupt()
-            return prior_unlink(path, *args, **kwargs)
-
-        with mock.patch.object(Path, "unlink", interrupt_collector_unlink):
+        with mock.patch.object(maintenance, "_remove_installed", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 maintenance.rollback(self.paths, TEST_UID)
         self.assertTrue(self.paths.pending.exists())
