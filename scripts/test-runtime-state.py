@@ -316,7 +316,7 @@ class RuntimeStateTests(unittest.TestCase):
             "Container": "1" * 64,
             "EndpointConfig": {
                 key: value for key, value in plan["request"]["NetworkingConfig"]["EndpointsConfig"]["ks-extra"].items()
-                if key != "NetworkID"
+                if key in runtime.ENDPOINT_INPUTS or key == "NetworkID"
             },
         })])
 
@@ -386,7 +386,13 @@ class DockerRoundTripTests(unittest.TestCase):
                 identity = runtime.create(plan, engine, restored)
                 created = json.loads(docker("inspect", identity))[0]
                 self.assertEqual(created["State"]["Status"], "created")
-                runtime.compare(plan, created, restored)
+                try:
+                    runtime.compare(plan, created, restored)
+                except runtime.StateError:
+                    for name, endpoint in sorted(created.get("NetworkSettings", {}).get("Networks", {}).items()):
+                        print("roundtrip-endpoint=%s network-id-present=%s mac-present=%s" %
+                              (name, bool(endpoint.get("NetworkID")), bool(endpoint.get("MacAddress"))))
+                    raise
                 docker("stop", original)
                 docker("start", restored)
                 runtime.compare(plan, json.loads(docker("inspect", restored))[0], restored)

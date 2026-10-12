@@ -284,7 +284,7 @@ def create(plan, engine, name=None):
             endpoint = secondary_networks[network_name]
             network_id = plan["state"]["networks"][network_name]["NetworkID"]
             endpoint_config = {key: copy.deepcopy(value) for key, value in endpoint.items()
-                               if key in ENDPOINT_INPUTS}
+                               if key in ENDPOINT_INPUTS or key == "NetworkID"}
             engine.request("POST", "/networks/" + urllib.parse.quote(network_id, safe="") + "/connect",
                            {"Container": container_id, "EndpointConfig": endpoint_config})
     except Exception:
