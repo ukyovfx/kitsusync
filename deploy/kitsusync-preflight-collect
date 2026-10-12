@@ -1,0 +1,833 @@
+#!/usr/bin/python3
+"""Read-only KitsuSync deployment evidence collector.
+
+Production invocation takes no arguments and uses only the fixed paths below.
+It prints sanitized evidence matching the vfxstudio-server evaluator's v1
+section names; unavailable proof is omitted so the evaluator returns BLOCKED.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import sqlite3
+import stat
+import subprocess
+import sys
+import shutil
+import tarfile
+from contextlib import closing
+import urllib.error
+import urllib.request
+
+
+class EvidenceError(Exception):
+    pass
+
+
+class Paths:
+    """Fixed production locations; for_fixture exists only for unit tests."""
+
+    def __init__(self, runtime_data: Path, backup_root: Path, state_root: Path,
+                 control_root: Path, release_stage: Path, docker_root: Path):
+        self.runtime_data = runtime_data
+        self.backup_root = backup_root
+        self.state_root = state_root
+        self.control_root = control_root
+        self.release_stage = release_stage
+        self.docker_root = docker_root
+
+    @classmethod
+    def production(cls):
+        return cls(Path("/home/ukyo_vfx/kitsusync/data"),
+                   Path("/var/backups/kitsusync-deploy"),
+                   Path("/var/lib/kitsusync-deploy"),
+                   Path("/etc/kitsusync-deploy"),
+                   Path("/root/kitsusync-release-stage"),
+                   Path("/var/lib/docker"))
+
+    @classmethod
+    def for_fixture(cls, root: Path):
+        return cls(root / "runtime/data", root / "backups", root / "state",
+                   root / "control", root / "release-stage", root / "docker")
+
+
+BACKUP_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\Z")
+PERSISTENT_FILES = {"sqlite.db", "conf.toml", "templates.tar", "operator.env",
+                    "runtime-secret.key", "runtime-secret.absent"}
+V049_REQUIRED_COLUMNS = {
+    "tasks": {"id", "task_id", "task_status"},
+    "projects": {"id", "kitsu_project_id"},
+    "project_webhooks": {"id", "kitsu_project_id", "webhook_url"},
+    "production_channel_mappings": {"id", "production_id", "task_type_id"},
+    "production_notification_configs": {"id", "production_id"},
+    "production_notification_routes": {"id", "production_id", "task_type_id"},
+    "notification_routing_diagnoses": {"id", "production_id"},
+    "user_maps": {"id", "kitsu_id", "discord_id"},
+    "checker_maps": {"id", "task_type", "discord_id"},
+    "settings": {"key", "value"},
+    "admin_sessions": {"id", "token_hash", "expiry"},
+    "audit_logs": {"id", "action"},
+    "project_user_maps": {"id", "project_id", "kitsu_email"},
+    "project_checker_maps": {"id", "project_id", "task_type", "override_discord_id"},
+    "project_settings": {"id", "project_id", "key", "value"},
+}
+RUNTIME_ROOT_FILES = {
+    "container-id", "previous-image", "previous-image-id", "previous-revision",
+    "previous-source-id", "previous-version", "prior-validation", "network",
+    "target-provenance", "production-compose.yml", "compose.sha256", "env.sha256",
+    "target.override.yml", "target-compose.json", "runtime-state.sha256",
+    "backup-complete", "persistent-state.sha256", "rollback-image-ref",
+}
+RUNTIME_HASHED_ROOT_FILES = {
+    "target.override.yml", "target-compose.json", "previous-image-id",
+    "previous-revision", "previous-source-id", "previous-version", "prior-validation",
+}
+PROVENANCE_DIGESTS = {
+    "image_archive_sha256": "kitsusync-image.tar",
+    "compose_sha256": "docker-compose.yml",
+    "deployment_tool_sha256": "kitsusync-deploy",
+    "inspection_tool_sha256": "kitsusync-inspect",
+    "sqlite_backup_tool_sha256": "kitsusync-sqlite-backup",
+    "bootstrap_tool_sha256": "kitsusync-bootstrap",
+    "image_identity_tool_sha256": "kitsusync-image-identity",
+    "runtime_state_tool_sha256": "kitsusync-runtime-state",
+    "restore_state_tool_sha256": "kitsusync-restore-state",
+    "preflight_collector_tool_sha256": "kitsusync-preflight-collect",
+}
+STAGED_FILES = set(PROVENANCE_DIGESTS.values()) | {"deployment-mode", "provenance.txt"}
+INSTALLED = {
+    "deployment_tool_sha256": Path("/usr/local/sbin/kitsusync-deploy"),
+    "inspection_tool_sha256": Path("/usr/local/sbin/kitsusync-inspect"),
+    "sqlite_backup_tool_sha256": Path("/usr/local/libexec/kitsusync-sqlite-backup"),
+    "image_identity_tool_sha256": Path("/usr/local/libexec/kitsusync-image-identity"),
+    "runtime_state_tool_sha256": Path("/usr/local/libexec/kitsusync-runtime-state"),
+    "restore_state_tool_sha256": Path("/usr/local/libexec/kitsusync-restore-state"),
+}
+
+
+def _regular(path: Path, expected_uid: int) -> os.stat_result:
+    before = path.lstat()
+    if (not stat.S_ISREG(before.st_mode) or before.st_uid != expected_uid or before.st_gid != expected_uid
+            or (os.name != "nt" and before.st_mode & 0o077)):
+        raise EvidenceError("protected regular file check failed")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    try:
+        after = os.fstat(fd)
+        current = path.lstat()
+        if (not stat.S_ISREG(after.st_mode) or after.st_ino != before.st_ino
+                or after.st_dev != before.st_dev or current.st_ino != after.st_ino
+                or current.st_dev != after.st_dev):
+            raise EvidenceError("protected file changed during inspection")
+        return after
+    finally:
+        os.close(fd)
+
+
+def inspect_database(path: Path, expected_uid: int) -> dict:
+    fd = None
+    try:
+        before = path.lstat()
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != expected_uid or before.st_gid != expected_uid
+                or (os.name != "nt" and before.st_mode & 0o077)):
+            raise EvidenceError("database is not protected")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        fd = os.open(path, flags)
+        metadata = os.fstat(fd)
+        current = path.lstat()
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_ino != before.st_ino
+                or metadata.st_dev != before.st_dev or current.st_ino != metadata.st_ino
+                or current.st_dev != metadata.st_dev):
+            raise EvidenceError("database changed during inspection")
+        if metadata.st_size <= 0:
+            return {"size_bytes": 0, "integrity": "failed"}
+        wal_path, shm_path = Path(str(path) + "-wal"), Path(str(path) + "-shm")
+        wal_exists, shm_exists = os.path.lexists(wal_path), os.path.lexists(shm_path)
+        if wal_exists or shm_exists:
+            # A normal read-only SQLite connection may update shared-memory
+            # coordination state. Do not open a live WAL database from inspect.
+            return {"size_bytes": metadata.st_size, "integrity": "unknown"}
+        # Without WAL sidecars, immutable mode prevents journal creation. On
+        # Linux, pin SQLite to the inode already checked above: reopening the
+        # path after validation would allow the runtime UID to substitute it.
+        if sys.platform == "linux":
+            uri = f"file:/proc/self/fd/{fd}?immutable=1&mode=ro"
+        else:
+            uri = path.resolve().as_uri() + "?immutable=1&mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as db:
+            ok = db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+            tables = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            compatibility = "v0.4.9_to_v0.5.1" if set(V049_REQUIRED_COLUMNS) <= tables else "incompatible"
+            if compatibility != "incompatible":
+                for table, required_columns in V049_REQUIRED_COLUMNS.items():
+                    columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")').fetchall()}
+                    if not required_columns <= columns:
+                        compatibility = "incompatible"
+                        break
+        current = path.lstat()
+        if (current.st_ino != metadata.st_ino or current.st_dev != metadata.st_dev
+                or current.st_size != metadata.st_size or current.st_mtime_ns != metadata.st_mtime_ns):
+            return {"size_bytes": metadata.st_size, "integrity": "unknown",
+                    "migration_compatibility": "unknown"}
+        return {"size_bytes": metadata.st_size, "integrity": "ok" if ok else "failed",
+                "migration_compatibility": compatibility}
+    except (OSError, EvidenceError):
+        return {"integrity": "unknown", "migration_compatibility": "unknown"}
+    except sqlite3.Error:
+        return {"integrity": "failed", "migration_compatibility": "unknown"}
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _hash_file(path: Path, expected_uid: int) -> str:
+    _regular(path, expected_uid)
+    value = hashlib.sha256()
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb", closefd=True) as stream:
+        while block := stream.read(1024 * 1024):
+            value.update(block)
+    return value.hexdigest()
+
+
+def _read_limited(path: Path, expected_uid: int, limit: int) -> bytes:
+    metadata = _regular(path, expected_uid)
+    if metadata.st_size > limit:
+        raise EvidenceError("protected file exceeds inspection limit")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, "rb", closefd=True) as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise EvidenceError("protected file exceeds inspection limit")
+    return data
+
+
+def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None) -> dict | None:
+    try:
+        metadata = stage.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != expected_uid
+                or metadata.st_gid != expected_uid
+                or (os.name != "nt" and metadata.st_mode & 0o077)):
+            return None
+        if set(path.name for path in stage.iterdir()) != STAGED_FILES:
+            return None
+        for name in STAGED_FILES:
+            _regular(stage / name, expected_uid)
+        mode = _read_limited(stage / "deployment-mode", expected_uid, 32).decode("ascii").strip()
+        raw = _read_limited(stage / "provenance.txt", expected_uid, 64 * 1024).decode("ascii")
+        values = {}
+        for line in raw.splitlines():
+            match = re.fullmatch(r"([a-z0-9_]+)=([^\r\n]*)", line)
+            if not match or match[1] in values:
+                return None
+            values[match[1]] = match[2]
+        digest_verified = True
+        for key, filename in PROVENANCE_DIGESTS.items():
+            digest = values.get(key, "")
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                digest_verified = False
+                continue
+            if _hash_file(stage / filename, expected_uid) != digest:
+                digest_verified = False
+        portable_identity_verified = False
+        if digest_verified and identity_runner is not None:
+            try:
+                result = identity_runner(stage / "kitsusync-image.tar")
+                identity = dict(line.split("=", 1) for line in result.stdout.splitlines()
+                                if re.fullmatch(r"[a-z0-9_]+=[^\r\n]*", line))
+                portable_identity_verified = (
+                    result.returncode == 0
+                    and identity.get("image_config_digest") == values.get("image_config_digest")
+                    and identity.get("image_manifest_digest") == values.get("image_manifest_digest")
+                    and identity.get("image_content_digest") == values.get("image_content_digest")
+                )
+            except (OSError, subprocess.SubprocessError, ValueError):
+                portable_identity_verified = False
+        source_matches = (
+            values.get("artifact_kind") == "release"
+            and values.get("version") == "0.5.1"
+            and values.get("release_tag") == "v0.5.1"
+            and values.get("source_commit") == "f8a32bbba94d84068d9e96c18554ac4ab7b24540"
+            and values.get("release_commit") == values.get("source_commit")
+            and values.get("source_id") == values.get("source_commit")
+        )
+        provenance_verified = (source_matches and digest_verified and portable_identity_verified
+                              and values.get("image_ref") == "kitsusync:v0.5.1"
+                              and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", values.get("image_config_digest", "")))
+                              and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", values.get("image_manifest_digest", "")))
+                              and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", values.get("image_content_digest", ""))))
+        if mode not in {"normal", "recovery"}:
+            return None
+        return {"mode": mode, "source_matches_release": source_matches,
+                "digest_verified": digest_verified,
+                "provenance_verified": provenance_verified,
+                "_preflight_collector_digest": values.get("preflight_collector_tool_sha256", "")}
+    except (OSError, UnicodeError, EvidenceError):
+        return None
+
+
+def inspect_runtime() -> dict:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    health = "unknown"
+    readiness = "unknown"
+    try:
+        with opener.open("http://127.0.0.1:8090/health", timeout=5) as response:
+            health = "healthy" if response.status == 200 else "unhealthy"
+    except urllib.error.HTTPError as error:
+        health = "unhealthy" if error.code else "unknown"
+    except (OSError, urllib.error.URLError, TimeoutError):
+        pass
+    try:
+        request = urllib.request.Request("http://127.0.0.1:8090/ready",
+                                        headers={"Accept": "application/json"})
+        try:
+            response = opener.open(request, timeout=5)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            payload = response.read(16 * 1024 + 1)
+            if len(payload) <= 16 * 1024:
+                document = json.loads(payload)
+                state = document.get("status") if type(document) is dict else None
+                if state in {"ready", "setup_required", "degraded"}:
+                    readiness = state
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError, UnicodeError):
+        pass
+    return {"health": health, "readiness": readiness}
+
+
+def _official_restore_verify(backup: Path) -> bool:
+    try:
+        result = subprocess.run(
+            ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "/usr/bin/python3",
+             "/usr/local/libexec/kitsusync-restore-state", "verify", str(backup)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=120, check=False, env={"PATH": "/usr/bin:/bin"}, text=True,
+        )
+        return result.returncode == 0 and result.stdout == "persistent-state=verified\n"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def validate_backup_directory(backup: Path, expected_uid: int,
+                              verifier=None) -> bool:
+    """Validate persistent state using the same read-only checks as restore-state."""
+    try:
+        if verifier is not None and not verifier(backup):
+            return False
+        meta = backup.lstat()
+        if (not stat.S_ISDIR(meta.st_mode) or meta.st_uid != expected_uid or meta.st_gid != expected_uid
+                or (os.name != "nt" and meta.st_mode & 0o077) or backup.resolve() != backup):
+            return False
+        marker = backup / "backup-complete"
+        manifest = backup / "persistent-state.sha256"
+        _regular(marker, expected_uid)
+        _regular(manifest, expected_uid)
+        secret_files = [name for name in ("runtime-secret.key", "runtime-secret.absent")
+                        if os.path.lexists(backup / name)]
+        if len(secret_files) != 1:
+            return False
+        required = {"sqlite.db", "conf.toml", "templates.tar", "operator.env", secret_files[0]}
+        hashes: dict[str, str] = {}
+        text = _read_limited(manifest, expected_uid, 64 * 1024).decode("ascii")
+        for line in text.splitlines():
+            match = re.fullmatch(r"([0-9a-f]{64})  ([^/\\]+)", line)
+            if not match or match[2] not in required or match[2] in hashes:
+                return False
+            hashes[match[2]] = match[1]
+        if set(hashes) != required:
+            return False
+        for name, expected in hashes.items():
+            path = backup / name
+            _regular(path, expected_uid)
+            if _hash_file(path, expected_uid) != expected:
+                return False
+        db_path = backup / "sqlite.db"
+        if db_path.stat().st_size <= 0:
+            return False
+        if secret_files[0] == "runtime-secret.absent" and (backup / secret_files[0]).stat().st_size:
+            return False
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + "?immutable=1&mode=ro", uri=True)) as db:
+            if db.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+                return False
+        tar_path = backup / "templates.tar"
+        if tar_path.stat().st_size > 256 * 1024 * 1024:
+            return False
+        with tarfile.open(tar_path, "r:") as archive:
+            members = archive.getmembers()
+            if len(members) > 10000:
+                return False
+            names = set()
+            for item in members:
+                name = PurePosixPath(item.name)
+                if (name.is_absolute() or ".." in name.parts or not name.parts
+                        or name.parts[0] != "tpl" or str(name) in names
+                        or not (item.isdir() or item.isfile()) or item.mode & 0o7022):
+                    return False
+                names.add(str(name))
+            if not any(item.name.rstrip("/") == "tpl" and item.isdir() for item in members):
+                return False
+            for item in members:
+                for parent in PurePosixPath(item.name).parents:
+                    if str(parent) == ".":
+                        break
+                    if not any(PurePosixPath(candidate.name) == parent and candidate.isdir()
+                               for candidate in members):
+                        return False
+        return True
+    except (OSError, UnicodeError, ValueError, sqlite3.Error, tarfile.TarError, EvidenceError):
+        return False
+
+
+def _fixed_children(directory: Path, expected_uid: int) -> list[Path]:
+    metadata = directory.lstat()
+    if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != expected_uid or metadata.st_gid != expected_uid
+            or (os.name != "nt" and metadata.st_mode & 0o077)):
+        raise EvidenceError("protected directory check failed")
+    items = list(directory.iterdir())
+    if len(items) > 1000:
+        raise EvidenceError("inventory limit exceeded")
+    return items
+
+
+def newest_backup(root: Path, expected_uid: int) -> Path | None:
+    try:
+        candidates = [path for path in _fixed_children(root, expected_uid)
+                      if BACKUP_NAME.fullmatch(path.name) and path.is_dir() and not path.is_symlink()]
+        return max(candidates, key=lambda path: path.name) if candidates else None
+    except (OSError, EvidenceError):
+        return None
+
+
+def inspection_maintenance_matches(identity: Path, inspector: Path, collector: Path,
+                                   expected_uid: int) -> bool | None:
+    if not os.path.lexists(identity):
+        return None
+    try:
+        record = json.loads(_read_limited(identity, expected_uid, 64 * 1024).decode("ascii"))
+        expected_keys = {"schema_version", "baseline_release", "source_commit",
+                         "inspection_tool_sha256", "preflight_collector_tool_sha256"}
+        if (type(record) is not dict or set(record) != expected_keys
+                or record.get("schema_version") != 1 or record.get("baseline_release") != "v0.5.1"
+                or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", ""))):
+            return False
+        inspect_sha = record.get("inspection_tool_sha256", "")
+        collector_sha = record.get("preflight_collector_tool_sha256", "")
+        if not (re.fullmatch(r"[0-9a-f]{64}", inspect_sha)
+                and re.fullmatch(r"[0-9a-f]{64}", collector_sha)):
+            return False
+        return (_hash_file(inspector, expected_uid) == inspect_sha
+                and _hash_file(collector, expected_uid) == collector_sha)
+    except (OSError, UnicodeError, ValueError, EvidenceError):
+        return False
+
+
+def inspect_tools(provenance: Path, installed: dict[str, Path], expected_uid: int,
+                  maintenance_identity: Path | None = None,
+                  preflight_collector: Path | None = None) -> dict:
+    try:
+        if _regular(provenance, expected_uid).st_size > 64 * 1024:
+            return {"wrapper_matches_baseline": False, "helpers_match_baseline": False}
+        values = {}
+        for line in provenance.read_text(encoding="ascii").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                if key in PROVENANCE_DIGESTS:
+                    if key in values:
+                        return {"wrapper_matches_baseline": False, "helpers_match_baseline": False}
+                    values[key] = value
+        matches = {key: bool(re.fullmatch(r"[0-9a-f]{64}", values.get(key, ""))
+                             and _hash_file(path, expected_uid) == values[key])
+                   for key, path in installed.items()}
+        maintenance_verified = (inspection_maintenance_matches(
+            maintenance_identity, installed["inspection_tool_sha256"], preflight_collector, expected_uid)
+            if (maintenance_identity is not None and preflight_collector is not None
+                and "inspection_tool_sha256" in installed)
+            else None)
+        if maintenance_verified and "inspection_tool_sha256" in matches:
+            matches["inspection_tool_sha256"] = True
+        return {
+            "wrapper_matches_baseline": matches.get("deployment_tool_sha256", False),
+            "helpers_match_baseline": set(matches) == set(installed)
+            and all(value for key, value in matches.items() if key != "deployment_tool_sha256"),
+            "inspection_maintenance": ("verified" if maintenance_verified is True else
+                                       "mismatch" if maintenance_verified is False else "absent"),
+        }
+    except (OSError, UnicodeError, EvidenceError):
+        return {"wrapper_matches_baseline": False, "helpers_match_baseline": False}
+
+
+def trusted_identity_runner(control_root: Path, expected_uid: int):
+    """Return a runner for the installed identity parser only when its baseline matches."""
+    try:
+        provenance = control_root / "provenance"
+        raw = _read_limited(provenance, expected_uid, 64 * 1024).decode("ascii")
+        values = {}
+        for line in raw.splitlines():
+            match = re.fullmatch(r"([a-z0-9_]+)=([^\r\n]*)", line)
+            if not match or match[1] in values:
+                return None
+            values[match[1]] = match[2]
+        expected = values.get("image_identity_tool_sha256", "")
+        installed = INSTALLED["image_identity_tool_sha256"]
+        if (not re.fullmatch(r"[0-9a-f]{64}", expected)
+                or _hash_file(installed, expected_uid) != expected):
+            return None
+    except (OSError, UnicodeError, EvidenceError):
+        return None
+
+    def run(image_archive: Path):
+        return subprocess.run(
+            ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "/usr/bin/python3",
+             str(installed), "archive", str(image_archive), "kitsusync:v0.5.1"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=30, check=False, env={"PATH": "/usr/bin:/bin"}, text=True,
+        )
+    return run
+
+
+def peak_capacity(available_bytes: int | None, required_bytes: int | None) -> dict:
+    # v1 is a scalar, but rollback backup, runtime and Docker image storage may
+    # reside on different filesystems. Never collapse their peaks into a false PASS.
+    if (available_bytes is None or required_bytes is None or required_bytes <= 0
+            or available_bytes < 0):
+        return {}
+    return {"available_bytes": available_bytes, "required_bytes": required_bytes}
+
+
+def _available_bytes(path: Path) -> int:
+    if hasattr(os, "statvfs"):
+        disk = os.statvfs(path)
+        return disk.f_bavail * disk.f_frsize
+    return shutil.disk_usage(path).free
+
+
+def capacity_by_filesystem(requirements: dict[str, int | None], locations: dict[str, Path],
+                           statvfs=None, device_id=None) -> dict:
+    """Return per-filesystem peak capacity and a conservative schema-v1 bound.
+
+    A filesystem shared by multiple operation roles must accommodate their
+    simultaneous peak, so its requirements are summed. The legacy scalar uses
+    the minimum available space and maximum required space; passing that bound
+    implies every individual filesystem passes, though it may conservatively
+    block some valid layouts.
+    """
+    if not requirements or set(requirements) != set(locations):
+        return {}
+    grouped: dict[int, dict] = {}
+    try:
+        for role in sorted(requirements):
+            required = requirements[role]
+            if required is not None and (type(required) is not int or required < 0):
+                return {}
+            path = locations[role]
+            metadata = path.lstat()
+            if not stat.S_ISDIR(metadata.st_mode) or path.resolve(strict=True) != path:
+                return {}
+            if statvfs is None:
+                available = _available_bytes(path)
+            else:
+                disk = statvfs(path)
+                available = disk.f_bavail * disk.f_frsize
+            if available < 0:
+                return {}
+            device = metadata.st_dev if device_id is None else device_id(path)
+            group = grouped.setdefault(device, {"roles": [], "available_bytes": available,
+                                                           "required_bytes": 0, "status": "known"})
+            group["roles"].append(role)
+            group["available_bytes"] = min(group["available_bytes"], available)
+            if required is None:
+                group["status"] = "unknown"
+            else:
+                group["required_bytes"] += required
+    except (OSError, ValueError, AttributeError):
+        return {}
+    filesystems = sorted(grouped.values(), key=lambda row: row["roles"])
+    if not filesystems:
+        return {}
+    result = {"filesystems": filesystems}
+    if all(row["status"] == "known" for row in filesystems):
+        for row in filesystems:
+            row.pop("status")
+        result["legacy"] = {
+            "available_bytes": min(row["available_bytes"] for row in filesystems),
+            "required_bytes": max(row["required_bytes"] for row in filesystems),
+        }
+    return result
+
+
+def production_database_mount_verified(runtime_data: Path, runner=subprocess.run) -> bool:
+    """Bind the fixed host SQLite path to the sole running KitsuSync data mount."""
+    try:
+        metadata = runtime_data.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or runtime_data.resolve(strict=True) != runtime_data:
+            return False
+        listed = runner(
+            ["/usr/bin/docker", "ps", "-q", "--no-trunc", "--filter",
+             "label=com.docker.compose.project=kitsusync", "--filter",
+             "label=com.docker.compose.service=app", "--filter", "status=running"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False, env={"PATH": "/usr/bin:/bin"}, text=True)
+        containers = listed.stdout.splitlines() if listed.returncode == 0 else []
+        if len(containers) != 1 or not re.fullmatch(r"[0-9a-f]{64}", containers[0]):
+            return False
+        inspected = runner(
+            ["/usr/bin/docker", "inspect", "--format", "{{json .Mounts}}", containers[0]],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False, env={"PATH": "/usr/bin:/bin"}, text=True)
+        if inspected.returncode != 0:
+            return False
+        mounts = json.loads(inspected.stdout)
+        data_mounts = [mount for mount in mounts if type(mount) is dict
+                       and mount.get("Destination") == "/app/data"]
+        return (len(data_mounts) == 1
+                and data_mounts[0].get("Type") == "bind"
+                and data_mounts[0].get("Source") == str(runtime_data)
+                and data_mounts[0].get("RW") is True)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def image_layer_bytes(archive: Path, expected_uid: int) -> int | None:
+    """Bound Docker's image-layer unpack requirement from the verified archive."""
+    try:
+        _regular(archive, expected_uid)
+        with tarfile.open(archive, "r:") as bundle:
+            members = bundle.getmembers()
+            if len(members) > 50_000:
+                return None
+            by_name = {}
+            for member in members:
+                name = PurePosixPath(member.name)
+                if name.is_absolute() or ".." in name.parts or not name.parts or member.name in by_name:
+                    return None
+                if not member.isfile() and not member.isdir():
+                    return None
+                by_name[member.name] = member
+            manifest_member = by_name.get("manifest.json")
+            if manifest_member is None or not manifest_member.isfile() or manifest_member.size > 1024 * 1024:
+                return None
+            manifests = json.load(bundle.extractfile(manifest_member))
+            if type(manifests) is not list or len(manifests) != 1 or type(manifests[0]) is not dict:
+                return None
+            image = manifests[0]
+            if image.get("RepoTags") != ["kitsusync:v0.5.1"]:
+                return None
+            layers = image.get("Layers")
+            if type(layers) is not list or not layers or len(layers) > 1000:
+                return None
+            total = 0
+            for layer in layers:
+                if type(layer) is not str or PurePosixPath(layer).is_absolute() or ".." in PurePosixPath(layer).parts:
+                    return None
+                member = by_name.get(layer)
+                if member is None or not member.isfile():
+                    return None
+                total += member.size
+            return total
+    except (OSError, ValueError, UnicodeError, tarfile.TarError, TypeError, KeyError):
+        return None
+
+
+def production_capacity_requirements(paths: Paths, bundle: dict | None) -> tuple[dict, dict]:
+    """Compute safe peak bounds without reading credential-bearing Docker config."""
+    locations = {
+        "runtime": paths.runtime_data,
+        "backup": paths.backup_root,
+        "release_stage": paths.release_stage,
+        "state": paths.state_root,
+        "docker": paths.docker_root,
+    }
+    try:
+        db = paths.runtime_data / "sqlite.db"
+        db_size = _regular(db, 10001).st_size
+        sidecar_size = 0
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(db) + suffix)
+            if os.path.lexists(sidecar):
+                sidecar_size += _regular(sidecar, 10001).st_size
+        # AutoMigrate can rebuild a table while the prior SQLite pages remain
+        # available for rollback; reserve two full logical DB copies plus a
+        # fixed SQLite/header/journal allowance.
+        runtime_required = 2 * (db_size + sidecar_size) + 64 * 1024 * 1024
+    except (OSError, EvidenceError):
+        runtime_required = None
+    layer_size = image_layer_bytes(paths.release_stage / "kitsusync-image.tar", 0) if bundle and bundle.get("provenance_verified") else None
+    docker_required = layer_size + 64 * 1024 * 1024 if layer_size is not None else None
+    # The deployment rollback snapshot contains Docker inspect environment
+    # values. Do not read secret-bearing runtime configuration for a capacity
+    # estimate; leave this role UNKNOWN until a separately approved snapshot
+    # supplies a measurable, verified upper bound.
+    requirements = {
+        "runtime": runtime_required,
+        "backup": None,
+        "release_stage": 0,
+        "state": 0,
+        "docker": docker_required,
+    }
+    return requirements, locations
+
+
+def rollback_image_retained(ref: str, expected_image_id: str, runner=subprocess.run) -> bool:
+    if (not re.fullmatch(r"kitsusync:rollback-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}", ref)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_id)):
+        return False
+    try:
+        result = runner(
+            ["/usr/bin/docker", "image", "inspect", "--format", "{{.Id}}", ref],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=10, check=False, env={"PATH": "/usr/bin:/bin"}, text=True,
+        )
+        return result.returncode == 0 and result.stdout.strip() == expected_image_id
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def collect(paths: Paths, expected_uid: int = 0, docker_runner=subprocess.run,
+            capacity_statvfs=None) -> dict:
+    evidence = {"schema_version": 1}
+    identity_runner = (trusted_identity_runner(paths.control_root, expected_uid)
+                       if expected_uid == 0 else None)
+    bundle = inspect_bundle(paths.release_stage, expected_uid, identity_runner=identity_runner)
+    if bundle is not None:
+        evidence["bundle"] = bundle
+    evidence["runtime"] = inspect_runtime() if expected_uid == 0 else {
+        "health": "unknown", "readiness": "unknown"}
+    db = inspect_database(paths.runtime_data / "sqlite.db", 10001 if expected_uid == 0 else expected_uid)
+    if expected_uid == 0:
+        mount_verified = production_database_mount_verified(paths.runtime_data, runner=docker_runner)
+        db["runtime_mount_verified"] = mount_verified
+        db["identity"] = "verified" if mount_verified else "unknown"
+        if not mount_verified:
+            db["integrity"] = "unknown"
+            db["migration_compatibility"] = "unknown"
+    evidence["database"] = db
+    backup = newest_backup(paths.backup_root, expected_uid)
+    verified = bool(backup and validate_backup_directory(
+        backup, expected_uid, verifier=_official_restore_verify if expected_uid == 0 else None))
+    unit_complete = False
+    image_retained = False
+    if verified and backup:
+        unit_complete = validate_rollback_unit(backup, expected_uid)
+        rollback_ref_path = backup / "rollback-image-ref"
+        if unit_complete and rollback_ref_path.is_file():
+            try:
+                ref = rollback_ref_path.read_text(encoding="ascii").strip()
+                previous_id = (backup / "previous-image-id").read_text(encoding="ascii").strip()
+                image_retained = rollback_image_retained(ref, previous_id)
+            except (OSError, subprocess.SubprocessError, UnicodeError):
+                image_retained = False
+    evidence["rollback"] = {"backup_verified": verified,
+                            "unit_complete": unit_complete,
+                            "old_image_retained": image_retained}
+    preflight_collector = Path("/usr/local/libexec/kitsusync-preflight-collect")
+    tool_evidence = inspect_tools(paths.control_root / "provenance", INSTALLED, expected_uid,
+                                  paths.state_root / "inspection-maintenance.json",
+                                  preflight_collector)
+    staged_preflight_digest = bundle.get("_preflight_collector_digest", "") if bundle else ""
+    try:
+        installed_preflight_matches = (
+            bool(re.fullmatch(r"[0-9a-f]{64}", staged_preflight_digest))
+            and _hash_file(Path("/usr/local/libexec/kitsusync-preflight-collect"), expected_uid)
+            == staged_preflight_digest)
+    except (OSError, EvidenceError):
+        installed_preflight_matches = False
+    if tool_evidence.get("inspection_maintenance") == "verified":
+        installed_preflight_matches = True
+    tool_evidence["helpers_match_baseline"] = (
+        tool_evidence["helpers_match_baseline"] and installed_preflight_matches)
+    evidence["deployment_tools"] = tool_evidence
+    if bundle is not None:
+        bundle.pop("_preflight_collector_digest", None)
+    requirements, locations = production_capacity_requirements(paths, bundle) if expected_uid == 0 else ({}, {})
+    capacities = capacity_by_filesystem(requirements, locations, statvfs=capacity_statvfs)
+    if capacities:
+        evidence["capacity_filesystems"] = capacities["filesystems"]
+        if "legacy" in capacities:
+            evidence["capacity"] = capacities["legacy"]
+    return evidence
+
+
+def validate_rollback_unit(backup: Path, expected_uid: int) -> bool:
+    """Validate bounded restore inputs and the wrapper's rollback hash manifest."""
+    try:
+        runtime = backup / "runtime"
+        metadata = runtime.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != expected_uid or metadata.st_gid != expected_uid
+                or (os.name != "nt" and metadata.st_mode & 0o077)):
+            return False
+        for name in RUNTIME_ROOT_FILES:
+            _regular(backup / name, expected_uid)
+        for manifest_name, file_name in (("compose.sha256", "production-compose.yml"),
+                                         ("env.sha256", "operator.env")):
+            line = (backup / manifest_name).read_text(encoding="ascii").strip()
+            match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+            if not match or Path(match[2]).name != file_name:
+                return False
+            if _hash_file(backup / file_name, expected_uid) != match[1]:
+                return False
+        entries = []
+        for current, dirs, files in os.walk(runtime, followlinks=False):
+            current_path = Path(current)
+            if len(entries) + len(dirs) + len(files) > 1000 or len(current_path.relative_to(runtime).parts) > 8:
+                return False
+            for name in dirs:
+                directory = current_path / name
+                info = directory.lstat()
+                if (not stat.S_ISDIR(info.st_mode) or info.st_uid != expected_uid
+                        or info.st_gid != expected_uid
+                        or (os.name != "nt" and info.st_mode & 0o022)):
+                    return False
+            for name in files:
+                path = current_path / name
+                _regular(path, expected_uid)
+                entries.append(path)
+        required_runtime = {runtime / "inspect.json", runtime / "plan.json"}
+        if not required_runtime.issubset(set(entries)):
+            return False
+        manifest = backup / "runtime-state.sha256"
+        listed = set()
+        for line in _read_limited(manifest, expected_uid, 256 * 1024).decode("ascii").splitlines():
+            match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+            if not match:
+                return False
+            candidate = Path(match[2])
+            if not candidate.is_absolute() or candidate != candidate.resolve():
+                return False
+            try:
+                candidate.relative_to(backup)
+            except ValueError:
+                return False
+            if candidate in listed or not candidate.is_file() or candidate.is_symlink():
+                return False
+            _regular(candidate, expected_uid)
+            if _hash_file(candidate, expected_uid) != match[1]:
+                return False
+            listed.add(candidate)
+        expected = set(entries) | {backup / name for name in RUNTIME_HASHED_ROOT_FILES}
+        return listed == expected
+    except (OSError, UnicodeError, ValueError, EvidenceError):
+        return False
+
+
+def main() -> int:
+    if len(sys.argv) != 1 or os.geteuid() != 0:
+        return 2
+    try:
+        evidence = collect(Paths.production())
+        sys.stdout.write(json.dumps(evidence, separators=(",", ":"), sort_keys=True) + "\n")
+        return 0
+    except Exception:
+        # Failure output is deliberately content-free.
+        sys.stdout.write('{"schema_version":1}\n')
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

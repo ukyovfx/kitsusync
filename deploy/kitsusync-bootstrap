@@ -36,7 +36,7 @@ secure_source() {
 
 [[ -d "${STAGE}" && ! -L "${STAGE}" ]] || die "fixed release stage is unavailable"
 [[ "$(/usr/bin/stat -c '%u:%g:%a' "${STAGE}")" == 0:0:700 ]] || die "release stage must be root-owned mode 0700"
-for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity kitsusync-runtime-state kitsusync-restore-state; do
+for file in docker-compose.yml provenance.txt kitsusync-image.tar deployment-mode kitsusync-deploy kitsusync-inspect kitsusync-sqlite-backup kitsusync-bootstrap kitsusync-image-identity kitsusync-runtime-state kitsusync-restore-state kitsusync-preflight-collect; do
   secure_source "${STAGE}/${file}" 600
 done
 mode="$(/usr/bin/tr -d '\r\n' <"${STAGE}/deployment-mode")"
@@ -55,6 +55,7 @@ inspect_sha="$(field inspection_tool_sha256)"
 backup_sha="$(field sqlite_backup_tool_sha256)"
 bootstrap_sha="$(field bootstrap_tool_sha256)"
 identity_sha="$(field image_identity_tool_sha256)"
+preflight_sha="$(field preflight_collector_tool_sha256)"
 image_config_digest="$(field image_config_digest)"
 image_manifest_digest="$(field image_manifest_digest)"
 image_content_digest="$(field image_content_digest)"
@@ -62,7 +63,7 @@ fresh_conf_sha="$(field fresh_conf_sha256)"
 fresh_env_sha="$(field fresh_env_sha256)"
 fresh_templates_sha="$(field fresh_templates_sha256)"
 fresh_templates_manifest_sha="$(field fresh_templates_manifest_sha256)"
-[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
+[[ "${archive_sha}" =~ ^[0-9a-f]{64}$ && "${compose_sha}" =~ ^[0-9a-f]{64}$ && "${deploy_sha}" =~ ^[0-9a-f]{64}$ && "${inspect_sha}" =~ ^[0-9a-f]{64}$ && "${backup_sha}" =~ ^[0-9a-f]{64}$ && "${bootstrap_sha}" =~ ^[0-9a-f]{64}$ && "${identity_sha}" =~ ^[0-9a-f]{64}$ && "${preflight_sha}" =~ ^[0-9a-f]{64}$ ]] || die "bundle provenance is incomplete"
 [[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "portable image provenance is incomplete"
 [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-image.tar" | /usr/bin/cut -d' ' -f1)" == "${archive_sha}" ]] || die "staged image archive digest mismatch"
 [[ "$(/usr/bin/sha256sum "${STAGE}/docker-compose.yml" | /usr/bin/cut -d' ' -f1)" == "${compose_sha}" ]] || die "staged Compose digest mismatch"
@@ -75,6 +76,7 @@ for helper in runtime-state restore-state; do
   helper_sha="$(field "${helper//-/_}_tool_sha256")"
   [[ "${helper_sha}" =~ ^[0-9a-f]{64}$ && "$(/usr/bin/sha256sum "${STAGE}/kitsusync-${helper}" | /usr/bin/cut -d' ' -f1)" == "${helper_sha}" ]] || die "staged recovery helper digest mismatch"
 done
+[[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-preflight-collect" | /usr/bin/cut -d' ' -f1)" == "${preflight_sha}" ]] || die "staged preflight collector digest mismatch"
 if [[ "${mode}" == fresh-install ]]; then
   [[ "${fresh_conf_sha}" =~ ^[0-9a-f]{64}$ && "${fresh_env_sha}" =~ ^[0-9a-f]{64}$ && "${fresh_templates_sha}" =~ ^[0-9a-f]{64}$ && "${fresh_templates_manifest_sha}" =~ ^[0-9a-f]{64}$ ]] || die "fresh runtime seed provenance is incomplete"
   [[ "$(/usr/bin/sha256sum "${STAGE}/fresh-conf.toml" | /usr/bin/cut -d' ' -f1)" == "${fresh_conf_sha}" ]] || die "fresh configuration seed digest mismatch"
@@ -188,6 +190,7 @@ fi
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-image-identity" /usr/local/libexec/kitsusync-image-identity
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-runtime-state" /usr/local/libexec/kitsusync-runtime-state
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-restore-state" /usr/local/libexec/kitsusync-restore-state
+/usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-preflight-collect" /usr/local/libexec/kitsusync-preflight-collect
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/docker-compose.yml" "${CONTROL}/docker-compose.yml"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"

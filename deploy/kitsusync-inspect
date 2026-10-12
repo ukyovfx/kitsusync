@@ -102,3 +102,10 @@ ready_response="$(/usr/bin/curl --silent --show-error --max-time 10 --write-out 
 ready_code="$(printf '%s\n' "${ready_response}" | /usr/bin/tail -n 1)"
 ready_state="$(printf '%s\n' "${ready_response}" | /usr/bin/sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | /usr/bin/head -n 1)"
 printf 'health_http=%s\nreadiness_http=%s\nreadiness_state=%s\n' "${health_code}" "${ready_code}" "${ready_state:-unknown}"
+
+preflight_collector=/usr/local/libexec/kitsusync-preflight-collect
+[[ -f "${preflight_collector}" && ! -L "${preflight_collector}" ]] || die "preflight collector is unavailable"
+[[ "$(/usr/bin/stat -c '%u:%g:%a' "${preflight_collector}")" == 0:0:700 ]] || die "preflight collector permissions are unsafe"
+preflight_evidence="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${preflight_collector}")" || die "preflight evidence collection is incomplete"
+[[ "${#preflight_evidence}" -le 65536 && "${preflight_evidence}" =~ ^\{.*\}$ ]] || die "preflight evidence output is invalid"
+printf 'preflight_evidence_json=%s\n' "${preflight_evidence}"

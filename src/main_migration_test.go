@@ -61,6 +61,78 @@ func TestMigrateApplicationSchemaUpgradesLegacyV043DatabaseForSessions(t *testin
 	}
 }
 
+func TestMigrateApplicationSchemaRehearsesSyntheticV049UpgradeToV051(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "synthetic-v049.db")
+	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	// Table names and the legacy fields below are from tag v0.4.9
+	// (90a09084bf24f67ead35614cf7c54af00b0c3149). The fixture intentionally
+	// omits v0.5.0-v0.5.1 delivery-journal and mutation-barrier tables.
+	legacyTables := []string{
+		"CREATE TABLE `tasks` (id integer primary key, task_id text, task_status text)",
+		"CREATE TABLE `projects` (id integer primary key, kitsu_project_id text, name text)",
+		"CREATE TABLE `project_webhooks` (id integer primary key, kitsu_project_id text, webhook_url text)",
+		// Match SQLite's quoted table-name form emitted by the v0.4.9 GORM
+		// migrator; the pinned SQLite driver uses that form when rebuilding a
+		// legacy table to add current columns.
+		"CREATE TABLE `production_channel_mappings` (id integer primary key, production_id text, task_type_id text)",
+		"CREATE TABLE `production_notification_configs` (id integer primary key, production_id text)",
+		"CREATE TABLE `production_notification_routes` (id integer primary key, production_id text, task_type_id text)",
+		"CREATE TABLE `notification_routing_diagnoses` (id integer primary key, production_id text)",
+		"CREATE TABLE `user_maps` (id integer primary key, kitsu_id text, discord_id text)",
+		"CREATE TABLE `checker_maps` (id integer primary key, task_type text, discord_id text)",
+		"CREATE TABLE `settings` (key text primary key, value text)",
+		"CREATE TABLE `admin_sessions` (id integer primary key, token_hash text, expiry datetime)",
+		"CREATE TABLE `audit_logs` (id integer primary key, action text)",
+		"CREATE TABLE `project_user_maps` (id integer primary key, project_id integer, kitsu_email text)",
+		"CREATE TABLE `project_checker_maps` (id integer primary key, project_id integer not null, task_type text not null, kitsu_name text, kitsu_email text, discord_user_id text, override_discord_id text, created_at datetime)",
+		`CREATE UNIQUE INDEX idx_projcheckermap ON project_checker_maps(project_id, task_type)`,
+		"CREATE TABLE `project_settings` (id integer primary key, project_id integer, key text, value text)",
+		`INSERT INTO projects(id,kitsu_project_id,name) VALUES (7,'kitsu-production-7','Synthetic v0.4.9')`,
+		`INSERT INTO project_checker_maps(id,project_id,task_type,override_discord_id) VALUES (9,7,'Animation','discord-user-legacy')`,
+		`INSERT INTO user_maps(id,kitsu_id,discord_id) VALUES (11,'kitsu-person-11','discord-user-11')`,
+	}
+	for _, statement := range legacyTables {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatalf("create v0.4.9 fixture: %v\nSQL: %s", err, statement)
+		}
+	}
+	if err := migrateApplicationSchema(db); err != nil {
+		t.Fatalf("v0.4.9 -> v0.5.1 migration failed: %v", err)
+	}
+	for _, table := range []any{&model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProductionNotificationWriteLock{}} {
+		if !db.Migrator().HasTable(table) {
+			t.Fatalf("upgrade omitted v0.5.1 additive table %T", table)
+		}
+	}
+	var project model.Project
+	if err := db.First(&project, 7).Error; err != nil || project.KitsuProjectID != "kitsu-production-7" {
+		t.Fatalf("existing Production identity changed during upgrade: %+v err=%v", project, err)
+	}
+	var reviewer model.ProjectCheckerMap
+	if err := db.First(&reviewer, 9).Error; err != nil || reviewer.OverrideDiscordID != "discord-user-legacy" || reviewer.TaskType != "Animation" {
+		t.Fatalf("legacy Reviewer mapping changed during upgrade: %+v err=%v", reviewer, err)
+	}
+	var linked model.UserMap
+	if err := db.First(&linked, 11).Error; err != nil || linked.DiscordID != "discord-user-11" {
+		t.Fatalf("global User Linking row changed during upgrade: %+v err=%v", linked, err)
+	}
+	if err := migrateApplicationSchema(db); err != nil {
+		t.Fatalf("repeat v0.5.1 startup migration failed: %v", err)
+	}
+	var count int64
+	if err := db.Model(&model.ProjectCheckerMap{}).Where("id = ?", 9).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("repeat startup migration duplicated/lost legacy rows: count=%d err=%v", count, err)
+	}
+}
+
 func TestMigrateApplicationSchemaAddsNullableCheckerTaskTypeIDs(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "legacy-checker-maps.db")), &gorm.Config{})
 	if err != nil {
