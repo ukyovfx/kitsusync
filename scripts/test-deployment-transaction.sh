@@ -144,8 +144,11 @@ docker network create \
   --label com.docker.compose.network=default \
   --label com.docker.compose.project=kitsusync \
   kitsusync_default >/dev/null
+# Pin the fixture endpoint MAC so the transaction test exercises exact
+# rollback identity rather than a daemon-generated address that varies by engine.
 prior_id="$(docker run -d --name kitsusync-app-1 \
   --network kitsusync_default --network-alias kitsusync-app \
+  --mac-address 02:11:22:33:44:55 \
   --restart on-failure:3 \
   --env APP_ENV=production --env OLD_ONLY=preserved \
   --label com.docker.compose.project=kitsusync \
