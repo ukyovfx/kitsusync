@@ -79,7 +79,10 @@ func TestMigrateApplicationSchemaRehearsesSyntheticV049UpgradeToV051(t *testing.
 		`CREATE TABLE tasks (id integer primary key, task_id text, task_status text)`,
 		`CREATE TABLE projects (id integer primary key, kitsu_project_id text, name text)`,
 		`CREATE TABLE project_webhooks (id integer primary key, kitsu_project_id text, webhook_url text)`,
-		`CREATE TABLE production_channel_mappings (id integer primary key, production_id text, task_type_id text)`,
+		// Match SQLite's quoted table-name form emitted by the v0.4.9 GORM
+		// migrator; the pinned SQLite driver uses that form when rebuilding a
+		// legacy table to add current columns.
+		"CREATE TABLE `production_channel_mappings` (id integer primary key, production_id text, task_type_id text)",
 		`CREATE TABLE production_notification_configs (id integer primary key, production_id text)`,
 		`CREATE TABLE production_notification_routes (id integer primary key, production_id text, task_type_id text)`,
 		`CREATE TABLE notification_routing_diagnoses (id integer primary key, production_id text)`,
