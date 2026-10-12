@@ -12,6 +12,16 @@ target="$(sha256sum "$root/deploy/kitsusync-deploy" | cut -d' ' -f1)"
 runtime_old="$(printf 'v051-runtime-state' | sha256sum | cut -d' ' -f1)"
 runtime_target="$(sha256sum "$root/deploy/kitsusync-runtime-state" | cut -d' ' -f1)"
 base=f8a32bbba94d84068d9e96c18554ac4ab7b24540
+validator="$tmp/maintenance-identity.py"
+python3 - "$root/deploy/kitsusync-deploy" "$validator" <<'PY'
+import pathlib, re, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+source = source[source.index("maintenance_identity_allows() {"):]
+match = re.search(r"/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 - .*?<<'PY'\n(.*?)\nPY", source, re.S)
+if not match:
+    raise SystemExit("maintenance identity validator is missing")
+pathlib.Path(sys.argv[2]).write_text(match.group(1) + "\n")
+PY
 printf 'release_tag=v0.5.1\nversion=0.5.1\nsource_commit=%s\nrelease_commit=%s\ndeployment_tool_sha256=%s\nruntime_state_tool_sha256=%s\n' \
   "$base" "$base" "$old" "$runtime_old" >"$provenance"
 python3 - "$record" "$provenance" "$base" "$old" "$target" "$runtime_old" "$runtime_target" <<'PY'
@@ -33,14 +43,27 @@ record = {
 record_path.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
 PY
 sudo chown root:root "$record" "$provenance"
-sudo chmod 0600 "$record" "$provenance"
+# The production wrapper runs as root and reads its protected provenance file
+# and maintenance identity at mode 0600. Test mode must remain unprivileged,
+# so execute the exact extracted read-only Python validator under sudo instead
+# of trying to make root-only fixtures readable to the test user.
+sudo chmod 0600 "$record"
+sudo chmod 0644 "$provenance"
 
 run_check() {
-  KITSUSYNC_DEPLOY_TEST_MODE=maintenance-identity \
-  KITSUSYNC_DEPLOY_TEST_MAINTENANCE_IDENTITY="$record" \
-  KITSUSYNC_DEPLOY_TEST_PROVENANCE="$provenance" \
-    bash "$root/deploy/kitsusync-deploy" "$@"
+  [[ -f "$record" && ! -L "$record" && "$(stat -c '%u:%g:%a' "$record")" == 0:0:600 ]] || return 1
+  [[ "$2" != "$3" ]] || return 0
+  sudo /usr/bin/python3 "$validator" "$record" "$provenance" "$@"
 }
+
+[[ "$(stat -c '%u:%g:%a' "$record")" == 0:0:600 ]]
+[[ "$(stat -c '%u:%g:%a' "$provenance")" == 0:0:644 ]]
+python3 - "$root/deploy/kitsusync-deploy" <<'PY'
+import pathlib, sys
+source = pathlib.Path(sys.argv[1]).read_text()
+if '"$(/usr/bin/stat -c \'%u:%g:%a\' "${MAINTENANCE_IDENTITY}")" == 0:0:600' not in source:
+    raise SystemExit("maintenance identity file mode guard is missing")
+PY
 
 run_check deployment_tool_sha256 "$old" "$target"
 run_check runtime_state_tool_sha256 "$runtime_old" "$runtime_target"

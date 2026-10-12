@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import copy
 import http.client
+import ipaddress
 import json
 import os
 import re
@@ -84,6 +85,15 @@ def normalized_host_config(value):
     return host
 
 
+def is_docker_generated_ipv4_mac(address, mac):
+    try:
+        octets = ipaddress.IPv4Address(address).packed
+    except (ipaddress.AddressValueError, TypeError):
+        return False
+    expected = "02:42:" + ":".join("%02x" % octet for octet in octets)
+    return str(mac or "").lower() == expected
+
+
 def endpoints(value, container_id, name):
     result = {}
     require(isinstance(value, dict) and bool(value), "runtime networks missing")
@@ -99,9 +109,15 @@ def endpoints(value, container_id, name):
                                   if alias not in (container_id, container_id[:12], name))
         entry["Links"] = entry["Links"] or []
         require(not entry["Links"], "linked container endpoints are unsupported")
-        # Preserve observed MAC: inspect cannot distinguish requested/generated
-        # MAC, so dropping it could silently discard explicitly configured state.
+        # A dynamic IPv4 endpoint gets Docker's deterministic 02:42:<IPv4>
+        # address, which changes when Docker assigns another free IP during
+        # rollback. It is not an operator-specified identity. Keep custom MACs
+        # and MACs attached to explicit IPAM addresses in the strict plan.
         entry["MacAddress"] = entry["MacAddress"] or ""
+        ipam = entry["IPAMConfig"] if isinstance(entry["IPAMConfig"], dict) else {}
+        explicit_ip = any(str(ipam.get(key) or "").strip() for key in ("IPv4Address", "IPv6Address"))
+        if not explicit_ip and is_docker_generated_ipv4_mac(settings.get("IPAddress"), entry["MacAddress"]):
+            entry["MacAddress"] = ""
         entry["GwPriority"] = entry["GwPriority"] or 0
         result[network] = entry
     return result
