@@ -25,7 +25,6 @@ if docker image inspect kitsusync:v0.4.6 >/dev/null 2>&1; then
 fi
 work="$(mktemp -d)"
 legacy_ref="kitsusync:fixture-legacy-$$"
-extra_network="kitsusync-fixture-extra-$$"
 source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
 stage=fixture-setup
 cleanup() {
@@ -42,7 +41,7 @@ cleanup() {
   fi
   ids="$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)"
   if [[ -n "$ids" ]]; then docker rm -f $ids >/dev/null 2>&1 || true; fi
-  docker network rm kitsusync_default "$extra_network" >/dev/null 2>&1 || true
+  docker network rm kitsusync_default >/dev/null 2>&1 || true
   docker image rm kitsusync:v0.4.6 "$legacy_ref" >/dev/null 2>&1 || true
   # All fixed paths were proven absent before this disposable fixture created them.
   sudo rm -rf -- "${protected[@]}"
@@ -137,7 +136,6 @@ mkdir "$work/extra"
 chmod 0755 "$work" "$work/extra"
 cp "$root/docker-compose.yml" "$work/compose.yml"
 cp "$work/operator.env" "$work/.env.local"
-docker network create "$extra_network" >/dev/null
 # Reproduce the recovered legacy runtime precisely: it carries the KitsuSync
 # project/service labels but not Compose's config bookkeeping.
 # Give the disposable network the metadata Compose expects while keeping the
@@ -161,7 +159,6 @@ prior_id="$(docker run -d --name kitsusync-app-1 \
   --health-cmd 'curl -fsS http://localhost:8090/health' \
   --health-interval 1s --health-timeout 1s --health-start-period 1s --health-retries 5 \
   "$legacy_ref" python /fixture.py --legacy)"
-docker network connect --alias second-alias "$extra_network" "$prior_id"
 [[ -z "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$prior_id")" ]]
 compose_discovery="$(KITSUSYNC_APP_VERSION=0.4.6 KITSUSYNC_IMAGE_TAG=v0.4.6 KITSUSYNC_COMMIT_SHA="$source_commit" KITSUSYNC_BUILD_SOURCE_ID="$source_commit" KITSUSYNC_IMAGE_REVISION="$source_commit" KITSUSYNC_WORKTREE_DIRTY=false docker compose -p kitsusync --env-file "$work/operator.env" -f "$work/compose.yml" ps -q app)"
 [[ -z "${compose_discovery}" ]]

@@ -205,6 +205,7 @@ class Engine:
         version = self.call("GET", "/version")["ApiVersion"]
         require(bool(re.fullmatch(r"1\.[0-9]+", version)) and int(version.split(".")[1]) >= 44,
                 "runtime reconstruction requires Docker Engine API 1.44 or later")
+        self.api_minor = int(version.split(".")[1])
         self.prefix = "/v" + version
 
     def call(self, method, path, body=None):
@@ -273,6 +274,8 @@ def create(plan, engine, name=None):
     name = name or plan["state"]["name"]
     require(bool(NAME.fullmatch(name)), "container name invalid")
     request, secondary_networks = create_network_request(plan["request"], plan["state"])
+    require(not secondary_networks or getattr(engine, "api_minor", 0) >= 54,
+            "Docker Engine API 1.54 or later required to restore secondary endpoint MAC identity")
     result = engine.request("POST", "/containers/create?name=" + urllib.parse.quote(name, safe=""), request)
     require(bool(ID.fullmatch(result.get("Id", ""))), "created container ID invalid")
     container_id = result["Id"]

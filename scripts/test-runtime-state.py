@@ -287,6 +287,8 @@ class RuntimeStateTests(unittest.TestCase):
         plan = runtime.make_plan(source)
 
         class FakeEngine:
+            api_minor = 54
+
             def __init__(self):
                 self.calls = []
 
@@ -331,6 +333,8 @@ class RuntimeStateTests(unittest.TestCase):
         plan = runtime.make_plan(source)
 
         class FakeEngine:
+            api_minor = 54
+
             def __init__(self):
                 self.calls = []
 
@@ -355,6 +359,40 @@ class RuntimeStateTests(unittest.TestCase):
             with self.assertRaisesRegex(runtime.StateError, "connect failed"):
                 runtime.create(plan, engine, "restored")
         self.assertIn(("DELETE", "/containers/" + "1" * 64 + "?force=false&v=false"), engine.calls)
+
+    def test_old_engine_rejects_multinetwork_restore_before_container_create(self):
+        source = fixture()
+        source["NetworkSettings"]["Networks"]["ks-extra"] = {
+            "NetworkID": "e" * 64, "EndpointID": "f" * 64, "IPAddress": "172.21.0.2",
+            "Gateway": "172.21.0.1", "IPPrefixLen": 16, "Aliases": ["extra"],
+            "IPAMConfig": {}, "DriverOpts": {}, "MacAddress": "02:42:ac:15:00:02",
+            "Links": None, "GwPriority": 0,
+        }
+        plan = runtime.make_plan(source)
+
+        class FakeEngine:
+            api_minor = 51
+
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, path, body=None):
+                self.calls.append((method, path))
+                if method == "GET" and path.startswith("/images/"):
+                    return {"Id": plan["state"]["image_id"]}
+                if method == "GET" and path.startswith("/networks/"):
+                    network_id = path.rsplit("/", 1)[-1]
+                    name = next(k for k, v in plan["state"]["networks"].items()
+                                if v["NetworkID"] == network_id)
+                    return {"Id": network_id, "Name": name}
+                return {}
+
+        engine = FakeEngine()
+        with mock.patch.object(runtime.os.path, "exists", return_value=True), \
+                mock.patch.object(runtime.os.path, "realpath", side_effect=lambda path: path):
+            with self.assertRaisesRegex(runtime.StateError, "API 1.54"):
+                runtime.create(plan, engine, "restored")
+        self.assertFalse(any(method == "POST" for method, _ in engine.calls))
 
 
 @unittest.skipUnless(os.environ.get("KITSUSYNC_RUNTIME_DOCKER_TEST") == "1", "Docker integration not requested")
@@ -383,6 +421,15 @@ class DockerRoundTripTests(unittest.TestCase):
                 plan = runtime.make_plan(source)
                 self.assertEqual(set(plan["state"]["networks"]), {network, extra_network})
                 engine = runtime.Engine()
+                if engine.api_minor < 54:
+                    with self.assertRaisesRegex(runtime.StateError, "API 1.54"):
+                        runtime.create(plan, engine, restored)
+                    self.assertNotEqual(subprocess.run(["docker", "inspect", restored],
+                                                       stdout=subprocess.DEVNULL,
+                                                       stderr=subprocess.DEVNULL).returncode, 0)
+                    print("runtime-state=PASS (secondary-network restore blocked before create on API 1.%d)"
+                          % engine.api_minor)
+                    return
                 identity = runtime.create(plan, engine, restored)
                 created = json.loads(docker("inspect", identity))[0]
                 self.assertEqual(created["State"]["Status"], "created")

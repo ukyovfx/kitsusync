@@ -111,6 +111,11 @@ saved endpoint settings so Docker can restore the saved MAC identity. Network
 identity, aliases, IPAM requests, driver options, and all other runtime fields
 remain strictly compared. If the Engine cannot restore the requested endpoint
 state, reconstruction fails and rollback evidence remains available.
+Docker documents that `POST /networks/{id}/connect` only began applying the
+endpoint `MacAddress` field in Engine API v1.54. A runtime with secondary
+networks on an older API is therefore rejected by the reconstruction probe
+before the prior container is stopped. See the [Docker Engine API version
+history](https://docs.docker.com/reference/api/engine/version-history/).
 
 These controls make backup ENOSPC a fail-safe abort while the original
 database remains in place; they do not prove an arbitrary finite capacity
