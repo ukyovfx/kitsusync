@@ -78,10 +78,16 @@ for script in "${deploy}" "${inspect}" "${bootstrap}"; do
   grep -Fq 'inherited Docker/Compose control variables are not accepted' "${tmp}/error"
 done
 
-backup_line="$(grep -n ': >"${backup_dir}/backup-complete"' "${deploy}" | cut -d: -f1)"
 stop_line="$(grep -n '^${DOCKER_BIN} stop "${container_id}"' "${deploy}" | cut -d: -f1)"
-load_line="$(grep -n '${DOCKER_BIN} load' "${deploy}" | cut -d: -f1 | tail -n 1)"
-[[ -n "${backup_line}" && "${backup_line}" -lt "${stop_line}" && "${stop_line}" -lt "${load_line}" ]] || { printf 'backup/mutation ordering is unsafe\n' >&2; exit 1; }
+load_line="$(grep -n '${DOCKER_BIN} load' "${deploy}" | cut -d: -f1 | head -n 1)"
+sqlite_line="$(grep -n 'sqlite_backup "${RUNTIME_ROOT}/data/sqlite.db"' "${deploy}" | cut -d: -f1)"
+backup_line="$(grep -n ': >"${backup_dir}/backup-complete"' "${deploy}" | cut -d: -f1)"
+replacement_line="$(grep -n 'if ! compose_override up -d --no-deps --force-recreate' "${deploy}" | cut -d: -f1)"
+[[ -n "${load_line}" && -n "${stop_line}" && -n "${sqlite_line}" && -n "${backup_line}" && -n "${replacement_line}" \
+  && "${load_line}" -lt "${stop_line}" && "${stop_line}" -lt "${sqlite_line}" \
+  && "${sqlite_line}" -lt "${backup_line}" && "${backup_line}" -lt "${replacement_line}" ]] || {
+  printf 'deployment recovery ordering is unsafe\n' >&2; exit 1;
+}
 
 "${python_bin}" - "${tmp}/live.db" <<'PY'
 import sqlite3, sys

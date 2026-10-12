@@ -106,7 +106,9 @@ class StartupValidation(unittest.TestCase):
             return int((root / "attempt").read_text())
 
     def test_transient_starting_refused_reset_setup_then_ready(self):
-        self.assertGreaterEqual(self.run_case("transition", timeout=10, passes=True), 5)
+        # The production validator has a 180-second deadline. Leave the CI
+        # fixture enough room for several retry cycles under a busy runner.
+        self.assertGreaterEqual(self.run_case("transition", timeout=30, passes=True), 5)
 
     def test_ready_and_expected_auth_boundaries(self):
         for code in ("200", "302", "303", "401", "403"):

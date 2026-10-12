@@ -1142,10 +1142,20 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const failedCreateURL = page.url();
         await failedCreateForm.locator('[data-apply-submit]').click();
         const failedCreateResponse = await failedCreateResponsePromise;
+        await page.waitForFunction(() => {
+          const message = document.querySelector('[data-current-routing-form] [data-apply-message]');
+          return !!message && message.textContent.trim().length > 0;
+        }, null, { timeout: 5000 });
         const failedCreateMessage = (await failedCreateForm.locator('[data-apply-message]').textContent() || '').trim();
         const createFailure = expectedChannelCreateFailure;
         expectedChannelCreateFailure.active = false;
-        if (failedCreateResponse.status() !== 502 || createFailure.responseCount !== 1 || createFailure.responseStatus !== 502 || page.url() !== failedCreateURL || !(await failedCreateRow.locator('input[data-new-channel-name]').isVisible()) || await failedCreateRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned-failure' || !failedCreateMessage || !(await failedCreateRow.isVisible()) || createFailure.console502Messages.length > 1) throw new Error('failed new-channel Apply must retain the staged value and show an inline error without claiming success');
+        const failedCreateInputVisible = await failedCreateRow.locator('input[data-new-channel-name]').isVisible();
+        const failedCreateInputValue = failedCreateInputVisible ? await failedCreateRow.locator('input[data-new-channel-name]').inputValue() : '';
+        const failedCreateRowVisible = await failedCreateRow.isVisible();
+        if (failedCreateResponse.status() !== 502 || createFailure.responseCount !== 1 || createFailure.responseStatus !== 502 || page.url() !== failedCreateURL || !failedCreateInputVisible || failedCreateInputValue !== 'unassigned-failure' || !failedCreateMessage || !failedCreateRowVisible || createFailure.console502Messages.length > 1) {
+          await page.screenshot({ path: path.join(output, `production-notifications-new-channel-failure-${locale.lang}-${viewport.name}.png`), fullPage: true });
+          throw new Error(`failed new-channel Apply state mismatch: http=${failedCreateResponse.status()} tracked=${createFailure.responseCount}/${createFailure.responseStatus} urlUnchanged=${page.url() === failedCreateURL} inputVisible=${failedCreateInputVisible} inputValue=${failedCreateInputValue} message=${Boolean(failedCreateMessage)} rowVisible=${failedCreateRowVisible} console502=${createFailure.console502Messages.length}`);
+        }
         await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'channel creation failure', 'exact expected 502 retained browser-pending channel choice; no other error was ignored');
         await page.unroute(applyEndpoint);
 

@@ -137,7 +137,10 @@ jobs:
           bash scripts/test-bootstrap-security.sh
           python3 -m unittest scripts.test_preflight_collector -v
           python3 -m unittest scripts.test_inspector_maintenance -v
+          python3 -m unittest scripts.test_deployment_maintenance -v
+          bash scripts/test-deployment-maintenance-identity.sh
           bash scripts/test-inspector-maintenance.sh
+          bash scripts/test-deployment-maintenance-artifact.sh
           bash scripts/test-deploy-legacy-detection.sh
           bash scripts/test-fresh-install-contract.sh
 
@@ -153,6 +156,21 @@ jobs:
         with:
           name: kitsusync-inspector-maintenance-${{ steps.identity.outputs.source_commit }}
           path: ${{ runner.temp }}/kitsusync-inspector-maintenance-${{ steps.identity.outputs.source_commit }}.tar.gz
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Build dedicated deployment-maintenance artifact for accepted master
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          SOURCE_COMMIT: ${{ steps.identity.outputs.source_commit }}
+        run: bash scripts/build-deployment-maintenance-artifact.sh "${RUNNER_TEMP}/kitsusync-deployment-maintenance-${SOURCE_COMMIT}"
+
+      - name: Upload dedicated deployment-maintenance artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kitsusync-deployment-maintenance-${{ steps.identity.outputs.source_commit }}
+          path: ${{ runner.temp }}/kitsusync-deployment-maintenance-${{ steps.identity.outputs.source_commit }}.tar.gz
           if-no-files-found: error
           retention-days: 90
 

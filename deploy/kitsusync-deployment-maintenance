@@ -1,0 +1,465 @@
+#!/usr/bin/python3
+"""Fixed-path one-shot maintenance for the v0.5.1 deployment wrapper pair."""
+from __future__ import annotations
+
+try:
+    import fcntl
+except ImportError:  # Windows unit-test hosts do not install production helpers.
+    fcntl = None
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import sys
+
+
+class MaintenanceError(Exception):
+    pass
+
+
+TOOL_FILES = ("kitsusync-deploy", "kitsusync-runtime-state")
+PROVENANCE_TOOL_FIELDS = {"deployment_tool_sha256": TOOL_FILES[0],
+                          "runtime_state_tool_sha256": TOOL_FILES[1]}
+BASELINE_SOURCE = "f8a32bbba94d84068d9e96c18554ac4ab7b24540"
+BASELINE_PROVENANCE = {"release_tag": "v0.5.1", "version": "0.5.1",
+                       "source_commit": BASELINE_SOURCE, "release_commit": BASELINE_SOURCE}
+MAX_FILE = 32 * 1024 * 1024
+MAX_MANIFEST = 64 * 1024
+ARTIFACT_FILES = {"INSTALL.txt", "install-deployment", "rollback-deployment", "deployment_maintenance.py",
+                  *TOOL_FILES}
+
+
+class Paths:
+    def __init__(self, stage: Path, provenance: Path, identity: Path, state: Path,
+                 backups: Path, deploy: Path, runtime_state: Path):
+        self.stage, self.provenance, self.identity = stage, provenance, identity
+        self.state, self.backups = state, backups
+        self.installed = {TOOL_FILES[0]: deploy, TOOL_FILES[1]: runtime_state}
+        self.pending = state / "deployment-maintenance.pending"
+        self.lock = state / "deploy.lock"
+
+    @classmethod
+    def production(cls):
+        control = Path("/etc/kitsusync-deploy")
+        libexec = Path("/usr/local/libexec")
+        return cls(Path("/root/kitsusync-deployment-maintenance"),
+                   control / "provenance", control / "deployment-maintenance.json",
+                   Path("/var/lib/kitsusync-deploy"), Path("/var/backups/kitsusync-deploy"),
+                   Path("/usr/local/sbin/kitsusync-deploy"), libexec / TOOL_FILES[1])
+
+
+def _uid_ok(info, uid):
+    # Production always calls the fixed entry points as uid 0, where both
+    # owner and group must be root. Non-root tests model ownership without
+    # assuming that a runner's primary group ID equals its user ID.
+    return os.name == "nt" or (info.st_uid == uid and (uid != 0 or info.st_gid == 0))
+
+
+def _gid_for(uid):
+    return 0 if uid == 0 else os.getgid()
+
+
+def _check_dir(path: Path, uid: int, mode: int | None = None) -> None:
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or not _uid_ok(info, uid)
+            or (os.name != "nt" and mode is not None and stat.S_IMODE(info.st_mode) != mode)
+            or (os.name != "nt" and mode is None and info.st_mode & 0o022)
+            or path.resolve(strict=True) != path):
+        raise MaintenanceError("protected directory check failed")
+
+
+def _read_regular(path: Path, uid: int, mode: int, limit: int = MAX_FILE) -> bytes:
+    before = path.lstat()
+    if (not stat.S_ISREG(before.st_mode) or not _uid_ok(before, uid)
+            or (os.name != "nt" and stat.S_IMODE(before.st_mode) != mode)
+            or before.st_size > limit or before.st_nlink != 1):
+        raise MaintenanceError("protected regular file check failed")
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_BINARY", 0))
+    fd = os.open(path, flags)
+    try:
+        after = os.fstat(fd)
+        current = path.lstat()
+        if (not stat.S_ISREG(after.st_mode) or after.st_dev != before.st_dev
+                or after.st_ino != before.st_ino or current.st_dev != after.st_dev
+                or current.st_ino != after.st_ino):
+            raise MaintenanceError("file changed during verification")
+        chunks, total = [], 0
+        while True:
+            block = os.read(fd, 1024 * 1024)
+            if not block:
+                break
+            total += len(block)
+            if total > limit:
+                raise MaintenanceError("file exceeds maintenance limit")
+            chunks.append(block)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _atomic(directory: Path, name: str, data: bytes, uid: int, mode: int) -> None:
+    _check_dir(directory, uid)
+    temp = "." + name + "." + secrets.token_hex(12) + ".tmp"
+    dfd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                  | getattr(os, "O_NOFOLLOW", 0)) if os.name != "nt" else None
+    fd = None
+    try:
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_BINARY", 0))
+        if dfd is None:
+            fd = os.open(directory / temp, flags, mode)
+        else:
+            fd = os.open(temp, flags, mode, dir_fd=dfd)
+        if hasattr(os, "fchown"):
+            os.fchown(fd, uid, _gid_for(uid))
+        os.fchmod(fd, mode)
+        view = memoryview(data)
+        while view:
+            count = os.write(fd, view)
+            if count <= 0:
+                raise OSError("short write")
+            view = view[count:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        if dfd is None:
+            os.replace(directory / temp, directory / name)
+        else:
+            os.replace(temp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            os.fsync(dfd)
+    except Exception:
+        try:
+            if dfd is None:
+                (directory / temp).unlink(missing_ok=True)
+            else:
+                os.unlink(temp, dir_fd=dfd)
+        except OSError:
+            pass
+        raise
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if dfd is not None:
+            os.close(dfd)
+
+
+def _entrypoint_bytes(mode: str) -> bytes:
+    return ("#!/usr/bin/python3\nimport runpy\n"
+            f"maintenance = runpy.run_path('/root/kitsusync-deployment-maintenance/deployment_maintenance.py', run_name='kitsusync_maintenance')\n"
+            f"raise SystemExit(maintenance['fixed_main']('{mode}'))\n").encode("ascii")
+
+
+def _parse_provenance(data: bytes) -> dict[str, str]:
+    result = {}
+    for line in data.decode("ascii").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in result:
+            raise MaintenanceError("release provenance contains duplicate keys")
+        result[key] = value
+    return result
+
+
+def _manifest(paths: Paths, uid: int):
+    _check_dir(paths.stage, uid, 0o700)
+    if {p.name for p in paths.stage.iterdir()} != ARTIFACT_FILES | {"manifest.json"}:
+        raise MaintenanceError("maintenance artifact inventory mismatch")
+    raw = _read_regular(paths.stage / "manifest.json", uid, 0o600, MAX_MANIFEST)
+    manifest = json.loads(raw)
+    if (type(manifest) is not dict or manifest.get("schema_version") != 1
+            or manifest.get("baseline_release") != "v0.5.1"
+            or manifest.get("baseline_source_commit") != BASELINE_SOURCE
+            or not re.fullmatch(r"[0-9a-f]{40}", manifest.get("source_commit", ""))
+            or type(manifest.get("baseline_tools")) is not dict
+            or set(manifest["baseline_tools"]) != set(TOOL_FILES)
+            or type(manifest.get("files")) is not dict
+            or set(manifest["files"]) != ARTIFACT_FILES):
+        raise MaintenanceError("maintenance manifest is invalid")
+    data = {}
+    for name in sorted(ARTIFACT_FILES):
+        mode = 0o700 if name.startswith(("install-", "rollback-")) else 0o600
+        payload = _read_regular(paths.stage / name, uid, mode)
+        if manifest["files"].get(name) != _sha(payload):
+            raise MaintenanceError("maintenance artifact digest mismatch: " + name)
+        data[name] = payload
+    if data["install-deployment"] != _entrypoint_bytes("install") or data["rollback-deployment"] != _entrypoint_bytes("rollback"):
+        raise MaintenanceError("fixed maintenance entry point mismatch")
+    return manifest, data
+
+
+def _check_predecessor(paths: Paths, manifest: dict, uid: int):
+    provenance = _parse_provenance(_read_regular(paths.provenance, uid, 0o600))
+    if any(provenance.get(key) != value for key, value in BASELINE_PROVENANCE.items()):
+        raise MaintenanceError("installed release provenance is not the approved v0.5.1 baseline")
+    prior = {}
+    for name in TOOL_FILES:
+        path = paths.installed[name]
+        data = _read_regular(path, uid, 0o700)
+        if (manifest["baseline_tools"].get(name) != _sha(data)
+                or provenance.get(next(k for k, v in PROVENANCE_TOOL_FIELDS.items() if v == name)) != _sha(data)):
+            raise MaintenanceError("installed deployment helper differs from approved predecessor")
+        prior[name] = data
+    return prior, _read_regular(paths.identity, uid, 0o600) if os.path.lexists(paths.identity) else None
+
+
+def _identity(manifest: dict, provenance_bytes: bytes) -> bytes:
+    provenance = _parse_provenance(provenance_bytes)
+    if any(provenance.get(key) != value for key, value in BASELINE_PROVENANCE.items()):
+        raise MaintenanceError("protected v0.5.1 provenance changed")
+    record = {"schema_version": 1, "baseline_release": "v0.5.1",
+              "baseline_source_commit": BASELINE_SOURCE,
+              "source_commit": manifest["source_commit"],
+              "previous_provenance_sha256": _sha(provenance_bytes),
+              "artifact_manifest_sha256": _sha(json.dumps(manifest, sort_keys=True,
+                  separators=(",", ":")).encode("ascii") + b"\n"),
+              "baseline_deployment_tool_sha256": provenance["deployment_tool_sha256"],
+              "baseline_runtime_state_tool_sha256": provenance["runtime_state_tool_sha256"],
+              "target_deployment_tool_sha256": manifest["files"][TOOL_FILES[0]],
+              "target_runtime_state_tool_sha256": manifest["files"][TOOL_FILES[1]]}
+    return json.dumps(record, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+
+
+def _backup(paths: Paths, source: str, prior: dict, prior_identity: bytes | None, uid: int) -> Path:
+    root = paths.backups / ("deployment-maintenance-" + source)
+    _check_dir(paths.backups, uid, 0o700)
+    marker = {"source_commit": source,
+              "prior_tools": {name: _sha(data) for name, data in prior.items()},
+              "prior_identity": "absent" if prior_identity is None else _sha(prior_identity)}
+    marker_bytes = json.dumps(marker, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
+    if os.path.lexists(root):
+        _check_dir(root, uid, 0o700)
+        expected_names = set(prior) | {"rollback.json"}
+        if prior_identity is not None:
+            expected_names.add("deployment-maintenance.json")
+        if not {entry.name for entry in root.iterdir()} <= expected_names:
+            raise MaintenanceError("existing rollback helper evidence contains unexpected entries")
+        for name, data in prior.items():
+            if os.path.lexists(root / name):
+                if _read_regular(root / name, uid, 0o700) != data:
+                    raise MaintenanceError("existing rollback helper evidence mismatch")
+            else:
+                _atomic(root, name, data, uid, 0o700)
+        if prior_identity is None:
+            if os.path.lexists(root / "deployment-maintenance.json"):
+                raise MaintenanceError("unexpected prior maintenance identity backup")
+        elif os.path.lexists(root / "deployment-maintenance.json"):
+            if _read_regular(root / "deployment-maintenance.json", uid, 0o600) != prior_identity:
+                raise MaintenanceError("prior maintenance identity backup mismatch")
+        else:
+            _atomic(root, "deployment-maintenance.json", prior_identity, uid, 0o600)
+        if os.path.lexists(root / "rollback.json"):
+            if _read_regular(root / "rollback.json", uid, 0o600, MAX_MANIFEST) != marker_bytes:
+                raise MaintenanceError("existing rollback helper manifest mismatch")
+        else:
+            _atomic(root, "rollback.json", marker_bytes, uid, 0o600)
+        return root
+    root.mkdir(mode=0o700)
+    os.chown(root, uid, _gid_for(uid)) if hasattr(os, "chown") else None
+    for name, data in prior.items():
+        _atomic(root, name, data, uid, 0o700)
+    if prior_identity is not None:
+        _atomic(root, "deployment-maintenance.json", prior_identity, uid, 0o600)
+    _atomic(root, "rollback.json", marker_bytes, uid, 0o600)
+    return root
+
+
+def _restore(paths: Paths, backup: Path, uid: int, identity_bytes: bytes | None,
+             allowed_current_tools: dict[str, set[str]], expected_current_identity: set[str]):
+    marker = json.loads(_read_regular(backup / "rollback.json", uid, 0o600, MAX_MANIFEST))
+    prior_hashes = marker.get("prior_tools")
+    if type(prior_hashes) is not dict or set(prior_hashes) != set(TOOL_FILES):
+        raise MaintenanceError("rollback helper inventory is invalid")
+    for name in TOOL_FILES:
+        data = _read_regular(backup / name, uid, 0o700)
+        if _sha(data) != prior_hashes.get(name):
+            raise MaintenanceError("rollback helper digest mismatch")
+        current_path = paths.installed[name]
+        if os.path.lexists(current_path):
+            current_sha = _sha(_read_regular(current_path, uid, 0o700))
+            if current_sha not in ({prior_hashes[name]} | allowed_current_tools.get(name, set())):
+                raise MaintenanceError("installed deployment helper changed; rollback refused")
+    current_identity = None
+    if os.path.lexists(paths.identity):
+        current_identity = _sha(_read_regular(paths.identity, uid, 0o600, MAX_MANIFEST))
+        prior_identity_hash = marker.get("prior_identity")
+        allowed_identity = set(expected_current_identity)
+        if prior_identity_hash != "absent":
+            allowed_identity.add(prior_identity_hash)
+        if current_identity not in allowed_identity:
+            raise MaintenanceError("deployment maintenance identity changed; rollback refused")
+    for name in TOOL_FILES:
+        _atomic(paths.installed[name].parent, paths.installed[name].name,
+                _read_regular(backup / name, uid, 0o700), uid, 0o700)
+    if identity_bytes is None:
+        if os.path.lexists(paths.identity):
+            paths.identity.unlink()
+    else:
+        _atomic(paths.identity.parent, paths.identity.name, identity_bytes, uid, 0o600)
+
+
+def _remove_pending(path: Path, uid: int):
+    if os.path.lexists(path):
+        _read_regular(path, uid, 0o600, MAX_MANIFEST)
+        path.unlink()
+
+
+def _recover(paths: Paths, uid: int):
+    if not os.path.lexists(paths.pending):
+        return
+    journal = json.loads(_read_regular(paths.pending, uid, 0o600, MAX_MANIFEST))
+    if (type(journal) is not dict or journal.get("schema_version") != 1
+            or journal.get("operation") not in {"install", "rollback"}):
+        raise MaintenanceError("interrupted maintenance journal is invalid")
+    source = journal.get("source_commit", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", source):
+        raise MaintenanceError("interrupted maintenance identity is invalid")
+    backup = paths.backups / ("deployment-maintenance-" + source)
+    _check_dir(backup, uid, 0o700)
+    if journal.get("operation") == "install":
+        identity = None if journal.get("prior_identity") == "absent" else _read_regular(backup / "deployment-maintenance.json", uid, 0o600)
+        targets = journal.get("target_files")
+        if type(targets) is not dict or set(targets) != set(TOOL_FILES):
+            raise MaintenanceError("interrupted installation target is invalid")
+        allowed = {name: {targets[name]} for name in TOOL_FILES}
+        _restore(paths, backup, uid, identity, allowed,
+                 {journal.get("target_identity_sha256", "")})
+    else:
+        backup_record = json.loads(_read_regular(backup / "rollback.json", uid, 0o600, MAX_MANIFEST))
+        targets = journal.get("target_files")
+        current_files = journal.get("current_files")
+        if (type(targets) is not dict or set(targets) != set(TOOL_FILES)
+                or type(current_files) is not dict or set(current_files) != set(TOOL_FILES)):
+            raise MaintenanceError("interrupted rollback target is invalid")
+        for name in TOOL_FILES:
+            if targets[name] != backup_record["prior_tools"].get(name):
+                raise MaintenanceError("interrupted rollback evidence changed")
+            current_sha = _sha(_read_regular(paths.installed[name], uid, 0o700))
+            if current_sha not in {current_files[name], targets[name]}:
+                raise MaintenanceError("interrupted rollback helper identity changed")
+        prior_identity = None if backup_record.get("prior_identity") == "absent" else _read_regular(
+            backup / "deployment-maintenance.json", uid, 0o600, MAX_MANIFEST)
+        _restore(paths, backup, uid, prior_identity,
+                 {name: {current_files[name]} for name in TOOL_FILES},
+                 {journal.get("current_identity_sha256", "")})
+    _remove_pending(paths.pending, uid)
+    raise MaintenanceError("interrupted maintenance was recovered; inspect state before retry")
+
+
+def _lock(paths: Paths, uid: int = 0):
+    fd = os.open(paths.lock, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or not _uid_ok(info, uid) or (os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o600):
+        os.close(fd)
+        raise MaintenanceError("deployment lock is unsafe")
+    if fcntl is not None:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise MaintenanceError("deployment transaction is active") from None
+    return fd
+
+
+def install(paths: Paths, uid: int = 0, fault_hook=None) -> str:
+    _check_dir(paths.state, uid, 0o700)
+    _check_dir(paths.backups, uid, 0o700)
+    _check_dir(paths.provenance.parent, uid, 0o700)
+    lock = _lock(paths, uid)
+    try:
+        manifest, payloads = _manifest(paths, uid)
+        _recover(paths, uid)
+        if os.path.lexists(paths.identity):
+            current = _read_regular(paths.identity, uid, 0o600, MAX_MANIFEST)
+            expected = _identity(manifest, _read_regular(paths.provenance, uid, 0o600))
+            if current != expected:
+                raise MaintenanceError("existing deployment maintenance identity conflicts")
+            if all(_sha(_read_regular(paths.installed[name], uid, 0o700)) == manifest["files"][name] for name in TOOL_FILES):
+                return "already-installed"
+        prior, prior_identity = _check_predecessor(paths, manifest, uid)
+        backup = _backup(paths, manifest["source_commit"], prior, prior_identity, uid)
+        provenance = _parse_provenance(_read_regular(paths.provenance, uid, 0o600))
+        target_identity = _identity(manifest, _read_regular(paths.provenance, uid, 0o600))
+        journal = {"schema_version": 1, "operation": "install", "source_commit": manifest["source_commit"],
+                   "prior_identity": "absent" if prior_identity is None else _sha(prior_identity),
+                   "target_files": {name: manifest["files"][name] for name in TOOL_FILES},
+                   "target_identity_sha256": _sha(target_identity)}
+        _atomic(paths.state, paths.pending.name, json.dumps(journal, sort_keys=True,
+                separators=(",", ":")).encode("ascii") + b"\n", uid, 0o600)
+        try:
+            _atomic(paths.identity.parent, paths.identity.name, target_identity, uid, 0o600)
+            for index, name in enumerate((TOOL_FILES[1], TOOL_FILES[0])):
+                _atomic(paths.installed[name].parent, paths.installed[name].name, payloads[name], uid, 0o700)
+                if fault_hook is not None:
+                    fault_hook(index, name)
+            if any(_sha(_read_regular(paths.installed[name], uid, 0o700)) != manifest["files"][name] for name in TOOL_FILES):
+                raise MaintenanceError("installed helper verification failed")
+            _remove_pending(paths.pending, uid)
+            return "installed"
+        except Exception:
+            _restore(paths, backup, uid, prior_identity,
+                     {name: {manifest["files"][name]} for name in TOOL_FILES},
+                     {_sha(target_identity)})
+            _remove_pending(paths.pending, uid)
+            raise
+    finally:
+        os.close(lock)
+
+
+def rollback(paths: Paths, uid: int = 0) -> str:
+    _check_dir(paths.state, uid, 0o700)
+    _check_dir(paths.backups, uid, 0o700)
+    lock = _lock(paths, uid)
+    try:
+        manifest, _ = _manifest(paths, uid)
+        _recover(paths, uid)
+        backup = paths.backups / ("deployment-maintenance-" + manifest["source_commit"])
+        _check_dir(backup, uid, 0o700)
+        current_identity = _read_regular(paths.identity, uid, 0o600, MAX_MANIFEST)
+        if current_identity != _identity(manifest, _read_regular(paths.provenance, uid, 0o600)):
+            raise MaintenanceError("installed maintenance identity changed; rollback refused")
+        for name in TOOL_FILES:
+            if _sha(_read_regular(paths.installed[name], uid, 0o700)) != manifest["files"][name]:
+                raise MaintenanceError("installed helper changed; rollback refused")
+        marker = json.loads(_read_regular(backup / "rollback.json", uid, 0o600, MAX_MANIFEST))
+        prior_identity = None if marker.get("prior_identity") == "absent" else _read_regular(backup / "deployment-maintenance.json", uid, 0o600)
+        journal = {"schema_version": 1, "operation": "rollback", "source_commit": manifest["source_commit"],
+                   "target_files": {name: _sha(_read_regular(backup / name, uid, 0o700)) for name in TOOL_FILES},
+                   "current_files": {name: manifest["files"][name] for name in TOOL_FILES},
+                   "current_identity_sha256": _sha(current_identity)}
+        _atomic(paths.state, paths.pending.name, json.dumps(journal, sort_keys=True,
+                separators=(",", ":")).encode("ascii") + b"\n", uid, 0o600)
+        _restore(paths, backup, uid, prior_identity,
+                 {name: {manifest["files"][name]} for name in TOOL_FILES},
+                 {_sha(current_identity)})
+        _remove_pending(paths.pending, uid)
+        return "rolled-back"
+    finally:
+        os.close(lock)
+
+
+def fixed_main(operation: str) -> int:
+    if os.geteuid() != 0:
+        return 2
+    paths = Paths.production()
+    try:
+        result = install(paths) if operation == "install" else rollback(paths)
+        print("deployment-maintenance=" + result)
+        return 0
+    except Exception:
+        print("deployment-maintenance=FAILED; recovery evidence retained for administrator review")
+        return 1
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 1 or Path(sys.argv[0]).name not in {"install-deployment", "rollback-deployment"}:
+        raise SystemExit(2)
+    raise SystemExit(fixed_main("rollback" if Path(sys.argv[0]).name == "rollback-deployment" else "install"))

@@ -25,36 +25,49 @@ if docker image inspect kitsusync:v0.4.6 >/dev/null 2>&1; then
 fi
 work="$(mktemp -d)"
 legacy_ref="kitsusync:fixture-legacy-$$"
-extra_network="kitsusync-fixture-extra-$$"
 source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
 stage=fixture-setup
 cleanup() {
-  local ids result=$?
+  local result="$1" failed_command="$2" ids
   if [[ "$result" -ne 0 ]]; then
     printf 'deployment-transaction-failed-stage=%s\n' "$stage" >&2
-    for report in "$work/failed-deploy.log" "$work/successful-deploy.log" "$work/setup-required-deploy.log"; do
-      [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|rollback=)' "$report" >&2 || true
+    printf 'deployment-transaction-failed-command=%s\n' "$failed_command" >&2
+    for report in "$work/failed-deploy.log" "$work/successful-deploy.log" \
+                  "$work/setup-required-deploy.log" "$work/enospc-deploy.log" \
+                  "$work/enospc-recovery-failed.log"; do
+      [[ ! -f "$report" ]] || grep -E '^(ERROR:|runtime validation failed:|rollback=)' "$report" \
+        | sed "s#^#$(basename "$report"): #" >&2 || true
     done
   fi
   ids="$(docker ps -aq --filter label=com.docker.compose.project=kitsusync)"
   if [[ -n "$ids" ]]; then docker rm -f $ids >/dev/null 2>&1 || true; fi
-  docker network rm kitsusync_default "$extra_network" >/dev/null 2>&1 || true
+  docker network rm kitsusync_default >/dev/null 2>&1 || true
   docker image rm kitsusync:v0.4.6 "$legacy_ref" >/dev/null 2>&1 || true
   # All fixed paths were proven absent before this disposable fixture created them.
   sudo rm -rf -- "${protected[@]}"
   sudo rm -f -- "${tools[@]}"
   rm -rf -- "$work"
 }
-trap cleanup EXIT
+trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
 cat >"$work/fixture.py" <<'PY'
 import http.server, json, os, pathlib, sqlite3, sys, time
 legacy = '--legacy' in sys.argv
 data = pathlib.Path('/app/data')
+fail_health_at_start = (data / 'fail-health-on-start').exists()
+if fail_health_at_start:
+    (data / 'fail-health-on-start').unlink()
 assert pathlib.Path('/app/conf.toml').read_text() == 'fixture-conf\n'
 assert pathlib.Path('/app/tpl/marker').read_text() == 'fixture-template\n'
 assert os.getuid() == 10001 and os.getgid() == 10001
 assert os.environ['APP_ENV'] == 'production'
+# Keep an uncheckpointed committed WAL frame alive until Docker stops this
+# process. The deploy backup must use SQLite's online backup API, not copy files.
+wal_db = sqlite3.connect(data / 'sqlite.db')
+wal_db.execute('PRAGMA journal_mode=WAL')
+wal_db.execute('PRAGMA wal_autocheckpoint=0')
+wal_db.execute("UPDATE evidence SET value='original'")
+wal_db.commit()
 failed_target = not legacy and (data / 'fail-target').exists()
 setup_required_after_restart = not legacy and not failed_target and (data / 'setup-required-after-restart').exists()
 if failed_target:
@@ -66,7 +79,7 @@ started = time.monotonic()
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/health':
-            code, body = 200, {'status':'ok'}
+            code, body = (503, {'status':'injected_failure'}) if fail_health_at_start else (200, {'status':'ok'})
         elif self.path == '/ready':
             if legacy: code, body = 404, {}
             else:
@@ -123,7 +136,6 @@ mkdir "$work/extra"
 chmod 0755 "$work" "$work/extra"
 cp "$root/docker-compose.yml" "$work/compose.yml"
 cp "$work/operator.env" "$work/.env.local"
-docker network create "$extra_network" >/dev/null
 # Reproduce the recovered legacy runtime precisely: it carries the KitsuSync
 # project/service labels but not Compose's config bookkeeping.
 # Give the disposable network the metadata Compose expects while keeping the
@@ -132,8 +144,11 @@ docker network create \
   --label com.docker.compose.network=default \
   --label com.docker.compose.project=kitsusync \
   kitsusync_default >/dev/null
+# Pin the fixture endpoint MAC so the transaction test exercises exact
+# rollback identity rather than a daemon-generated address that varies by engine.
 prior_id="$(docker run -d --name kitsusync-app-1 \
   --network kitsusync_default --network-alias kitsusync-app \
+  --mac-address 02:11:22:33:44:55 \
   --restart on-failure:3 \
   --env APP_ENV=production --env OLD_ONLY=preserved \
   --label com.docker.compose.project=kitsusync \
@@ -147,7 +162,6 @@ prior_id="$(docker run -d --name kitsusync-app-1 \
   --health-cmd 'curl -fsS http://localhost:8090/health' \
   --health-interval 1s --health-timeout 1s --health-start-period 1s --health-retries 5 \
   "$legacy_ref" python /fixture.py --legacy)"
-docker network connect --alias second-alias "$extra_network" "$prior_id"
 [[ -z "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$prior_id")" ]]
 compose_discovery="$(KITSUSYNC_APP_VERSION=0.4.6 KITSUSYNC_IMAGE_TAG=v0.4.6 KITSUSYNC_COMMIT_SHA="$source_commit" KITSUSYNC_BUILD_SOURCE_ID="$source_commit" KITSUSYNC_IMAGE_REVISION="$source_commit" KITSUSYNC_WORKTREE_DIRTY=false docker compose -p kitsusync --env-file "$work/operator.env" -f "$work/compose.yml" ps -q app)"
 [[ -z "${compose_discovery}" ]]
@@ -176,6 +190,71 @@ sudo install -o root -g root -m 0600 "$work/bundle/deployment-mode" /etc/kitsusy
 sudo install -o root -g root -m 0600 "$work/bundle/kitsusync-image.tar" /var/lib/kitsusync-deploy/kitsusync-image.tar
 sudo install -d -o root -g root -m 0755 /usr/local/libexec
 for path in "${tools[@]}"; do sudo install -o root -g root -m 0700 "$work/bundle/$(basename "$path")" "$path"; done
+
+# Inject ENOSPC after the prior container is stopped but before any runtime
+# or database mutation. The live SQLite file must remain untouched, the same
+# prior container must be restartable, and only this invocation's incomplete
+# backup directory may be removed.
+stage=quiesced-backup-enospc
+cat >"$work/enospc-sqlite-backup" <<'PY'
+import errno, os, sys
+try:
+    fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(fd, b"partial snapshot")
+    os.close(fd)
+    raise OSError(errno.ENOSPC, "injected backup filesystem exhaustion")
+except OSError:
+    print("ERROR: SQLite online backup failed", file=sys.stderr)
+    raise SystemExit(1)
+PY
+chmod 0600 "$work/enospc-sqlite-backup"
+fake_backup_sha="$(sha256sum "$work/enospc-sqlite-backup" | cut -d' ' -f1)"
+sed "s/^sqlite_backup_tool_sha256=.*/sqlite_backup_tool_sha256=${fake_backup_sha}/" \
+  "$work/bundle/provenance.txt" >"$work/enospc-provenance"
+sudo install -o root -g root -m 0600 "$work/enospc-provenance" /etc/kitsusync-deploy/provenance
+sudo install -o root -g root -m 0700 "$work/enospc-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
+backup_count_before="$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d | wc -l)"
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$work/enospc-deploy.log" 2>&1; then
+  printf 'quiesced backup ENOSPC incorrectly proceeded\n' >&2; exit 1
+fi
+grep -Fq 'quiesced SQLite backup failed' "$work/enospc-deploy.log"
+[[ "$(docker inspect -f '{{.State.Running}}' "$prior_id")" == true ]]
+[[ "$(sudo python3 - "$runtime/data/sqlite.db" <<'PYDB'
+import sqlite3, sys
+with sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True) as db:
+ print(db.execute('SELECT value FROM evidence').fetchone()[0])
+PYDB
+)" == original ]]
+[[ "$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d | wc -l)" == "$backup_count_before" ]]
+sudo install -o root -g root -m 0600 "$work/bundle/provenance.txt" /etc/kitsusync-deploy/provenance
+sudo install -o root -g root -m 0700 "$work/bundle/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
+
+# If injected ENOSPC is followed by a failed old-runtime health validation,
+# retain the partial backup and report that recovery is incomplete.
+stage=quiesced-backup-enospc-recovery-validation-failure
+sed "s/^sqlite_backup_tool_sha256=.*/sqlite_backup_tool_sha256=${fake_backup_sha}/" \
+  "$work/bundle/provenance.txt" >"$work/enospc-provenance"
+sudo install -o root -g root -m 0600 "$work/enospc-provenance" /etc/kitsusync-deploy/provenance
+sudo install -o root -g root -m 0700 "$work/enospc-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
+sudo touch "$runtime/data/fail-health-on-start"
+backup_count_before="$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d | wc -l)"
+if sudo /usr/bin/env -i PATH=/usr/bin:/bin /usr/local/sbin/kitsusync-deploy >"$work/enospc-recovery-failed.log" 2>&1; then
+  printf 'failed old-runtime validation after backup ENOSPC incorrectly passed\n' >&2; exit 1
+fi
+grep -Fq 'automatic recovery incomplete; protected backup=' "$work/enospc-recovery-failed.log"
+[[ "$(docker inspect -f '{{.State.Running}}' "$prior_id")" == true ]]
+[[ "$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d | wc -l)" == "$((backup_count_before + 1))" ]]
+retained_partial="$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d -name '*-*' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+sudo test -s "$retained_partial/sqlite.quiesced.db"
+sudo test ! -e "$retained_partial/backup-complete"
+docker restart "$prior_id" >/dev/null
+for attempt in $(seq 1 30); do
+  [[ "$(docker inspect -f '{{.State.Health.Status}}' "$prior_id")" == healthy ]] && break
+  sleep 1
+done
+[[ "$(docker inspect -f '{{.State.Health.Status}}' "$prior_id")" == healthy ]]
+sudo install -o root -g root -m 0600 "$work/bundle/provenance.txt" /etc/kitsusync-deploy/provenance
+sudo install -o root -g root -m 0700 "$work/bundle/kitsusync-sqlite-backup" /usr/local/libexec/kitsusync-sqlite-backup
 
 sudo touch "$runtime/data/fail-target"
 stage=failed-target-deploy
@@ -257,7 +336,16 @@ stage=setup-required-backup
 latest_backup="$(sudo find /var/backups/kitsusync-deploy -mindepth 1 -maxdepth 1 -type d -name '*-*' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
 [[ -n "$latest_backup" ]]
 sudo test -f "$latest_backup/backup-complete"
-sudo test -f "$latest_backup/restored-container"
-sudo test -f "$latest_backup/restored-inspect.json"
+[[ "$(sudo find "$latest_backup/runtime" -mindepth 1 -maxdepth 1 -type f -printf '%f\n')" == plan.json ]]
+sudo python3 - "$latest_backup/sqlite.db" <<'PY'
+import sqlite3, sys
+with sqlite3.connect('file:'+sys.argv[1]+'?immutable=1&mode=ro',uri=True) as db:
+    assert db.execute('PRAGMA integrity_check').fetchall() == [('ok',)]
+    assert db.execute('SELECT value FROM evidence').fetchall() == [('original',)]
+PY
+sudo test ! -e "$latest_backup/restored-container"
+sudo test ! -e "$latest_backup/restored-inspect.json"
+sudo test ! -e "$latest_backup/failed-container-inspect.json"
+sudo test ! -e "$latest_backup/probe-inspect.json"
 sudo test -f "$latest_backup/rollback-image-ref"
 printf 'deployment-transaction-tests=PASS (real wrapper failure/rollback and subsequent deployment)\n'

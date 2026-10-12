@@ -554,8 +554,18 @@ func TestCurrentRecipientListboxEscapesDialogClippingWithOpaqueSurface(t *testin
 	if !strings.Contains(adminThemeCSS, `.production-context dialog[data-wfa-add-modal]{overflow:visible}`) {
 		t.Fatal("recipient listbox must remain visible outside the modal content box")
 	}
-	if !strings.Contains(currentRecipientComboboxScript(), `innerHeight-menu.height-8`) || !strings.Contains(currentRecipientComboboxScript(), `list.style.width=width+'px'`) {
-		t.Fatal("recipient listbox must stay aligned to its combobox and inside the viewport")
+	for _, fragment := range []string{
+		`bounds.bottom-anchor.bottom-8`,
+		`anchor.top-bounds.top-8`,
+		`bounds.right-width-8`,
+		`list.scrollHeight||options().length*36+8`,
+		`list.style.maxHeight=height+'px'`,
+		`list.style.width=width+'px'`,
+		`target.focus({preventScroll:true})`,
+	} {
+		if !strings.Contains(currentRecipientComboboxScript(), fragment) {
+			t.Errorf("recipient listbox must stay clickable within its native dialog bounds; missing %q", fragment)
+		}
 	}
 }
 

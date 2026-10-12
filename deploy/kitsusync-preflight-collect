@@ -675,7 +675,7 @@ def production_capacity_requirements(paths: Paths, bundle: dict | None) -> tuple
 
 
 def rollback_image_retained(ref: str, expected_image_id: str, runner=subprocess.run) -> bool:
-    if (not re.fullmatch(r"kitsusync:rollback-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}", ref)
+    if (not re.fullmatch(r"kitsusync:rollback-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}(?:-[A-Za-z0-9]{8})?", ref)
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_id)):
         return False
     try:
@@ -788,8 +788,14 @@ def validate_rollback_unit(backup: Path, expected_uid: int) -> bool:
                 path = current_path / name
                 _regular(path, expected_uid)
                 entries.append(path)
-        required_runtime = {runtime / "inspect.json", runtime / "plan.json"}
-        if not required_runtime.issubset(set(entries)):
+        # New deploy wrappers retain only the validated reconstruction plan.
+        # Older rollback units may also have an inspect copy and normalized
+        # comparison files; accept those known legacy names but no unknown data.
+        allowed_runtime_names = {"plan.json", "inspect.json", "runtime-config", "runtime-env",
+                                 "runtime-labels", "runtime-host-config", "runtime-mounts",
+                                 "runtime-networks", "runtime-network-aliases"}
+        if (runtime / "plan.json" not in set(entries)
+                or any(path.parent != runtime or path.name not in allowed_runtime_names for path in entries)):
             return False
         manifest = backup / "runtime-state.sha256"
         listed = set()
