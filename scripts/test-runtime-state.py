@@ -224,24 +224,26 @@ class RuntimeStateTests(unittest.TestCase):
         self.assertEqual(message, "state.host_config.SecretSetting")
         self.assertNotIn("private-value", message)
 
-    def test_duplicate_and_generated_endpoint_macs_are_normalized(self):
+    def test_duplicate_config_mac_is_normalized_but_endpoint_mac_is_preserved(self):
         source = fixture()
+        endpoint_mac = source["NetworkSettings"]["Networks"]["ks-net"]["MacAddress"]
         source["Config"]["MacAddress"] = "02:42:ac:11:00:02"
         state = runtime.runtime_state(source)
         self.assertEqual(state["config"]["MacAddress"], "")
-        self.assertEqual(state["networks"]["ks-net"]["MacAddress"], "")
+        self.assertEqual(state["networks"]["ks-net"]["MacAddress"], endpoint_mac)
         self.assertEqual(runtime.make_plan(source)["request"]["MacAddress"], "")
 
-    def test_dynamic_docker_mac_may_change_when_rollback_reassigns_ipv4(self):
+    def test_generated_looking_endpoint_mac_remains_strict_on_address_change(self):
         source = fixture()
         endpoint = source["NetworkSettings"]["Networks"]["ks-net"]
         endpoint["IPAMConfig"] = {}
         plan = runtime.make_plan(source)
-        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "")
+        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "02:42:ac:14:00:02")
         restored = copy.deepcopy(source)
         restored["NetworkSettings"]["Networks"]["ks-net"].update(
             IPAddress="172.20.0.3", MacAddress="02:42:ac:14:00:03")
-        runtime.compare(plan, restored)
+        with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.MacAddress"):
+            runtime.compare(plan, restored)
 
     def test_custom_mac_without_static_ip_remains_strict(self):
         source = fixture()
@@ -254,17 +256,17 @@ class RuntimeStateTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.MacAddress"):
             runtime.compare(plan, restored)
 
-    def test_generated_mac_is_derived_from_strict_explicit_ipam_state(self):
+    def test_explicit_ipam_and_endpoint_mac_are_both_strict(self):
         source = fixture()
         endpoint = source["NetworkSettings"]["Networks"]["ks-net"]
         endpoint["IPAMConfig"] = {"IPv4Address": "172.20.0.2"}
         plan = runtime.make_plan(source)
-        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "")
+        self.assertEqual(plan["state"]["networks"]["ks-net"]["MacAddress"], "02:42:ac:14:00:02")
         restored = copy.deepcopy(source)
         restored["NetworkSettings"]["Networks"]["ks-net"].update(
             IPAddress="172.20.0.3", IPAMConfig={"IPv4Address": "172.20.0.3"},
             MacAddress="02:42:ac:14:00:03")
-        with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.IPAMConfig"):
+        with self.assertRaisesRegex(runtime.StateError, "state.networks.ks-net.IPAMConfig|state.networks.ks-net.MacAddress"):
             runtime.compare(plan, restored)
 
     def test_unset_oom_kill_policy_matches_docker_false_default(self):
@@ -274,13 +276,94 @@ class RuntimeStateTests(unittest.TestCase):
         source["HostConfig"]["OomKillDisable"] = False
         self.assertEqual(runtime.runtime_state(source), expected)
 
+    def test_create_attaches_secondary_networks_with_saved_endpoint_identity(self):
+        source = fixture()
+        source["NetworkSettings"]["Networks"]["ks-extra"] = {
+            "NetworkID": "e" * 64, "EndpointID": "f" * 64, "IPAddress": "172.21.0.2",
+            "Gateway": "172.21.0.1", "IPPrefixLen": 16, "Aliases": ["extra"],
+            "IPAMConfig": {}, "DriverOpts": {}, "MacAddress": "02:42:ac:15:00:02",
+            "Links": None, "GwPriority": 0,
+        }
+        plan = runtime.make_plan(source)
+
+        class FakeEngine:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, path, body=None):
+                self.calls.append((method, path, copy.deepcopy(body)))
+                if method == "GET" and path.startswith("/images/"):
+                    return {"Id": plan["state"]["image_id"]}
+                if method == "GET" and path.startswith("/networks/"):
+                    network_id = path.rsplit("/", 1)[-1]
+                    name = next(k for k, v in plan["state"]["networks"].items()
+                                if v["NetworkID"] == network_id)
+                    return {"Id": network_id, "Name": name}
+                if method == "POST" and path.startswith("/containers/create?"):
+                    return {"Id": "1" * 64}
+                return {}
+
+        engine = FakeEngine()
+        with mock.patch.object(runtime.os.path, "exists", return_value=True), \
+                mock.patch.object(runtime.os.path, "realpath", side_effect=lambda path: path):
+            runtime.create(plan, engine, "restored")
+
+        creates = [call for call in engine.calls if call[1].startswith("/containers/create?")]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(set(creates[0][2]["NetworkingConfig"]["EndpointsConfig"]), {"ks-net"})
+        attach = [call for call in engine.calls if call[1].endswith("/connect")]
+        self.assertEqual(attach, [("POST", "/networks/" + "e" * 64 + "/connect", {
+            "Container": "1" * 64,
+            "EndpointConfig": {
+                key: value for key, value in plan["request"]["NetworkingConfig"]["EndpointsConfig"]["ks-extra"].items()
+                if key != "NetworkID"
+            },
+        })])
+
+    def test_create_removes_exact_stopped_container_when_secondary_connect_fails(self):
+        source = fixture()
+        source["NetworkSettings"]["Networks"]["ks-extra"] = {
+            "NetworkID": "e" * 64, "EndpointID": "f" * 64, "IPAddress": "172.21.0.2",
+            "Gateway": "172.21.0.1", "IPPrefixLen": 16, "Aliases": ["extra"],
+            "IPAMConfig": {}, "DriverOpts": {}, "MacAddress": "02:42:ac:15:00:02",
+            "Links": None, "GwPriority": 0,
+        }
+        plan = runtime.make_plan(source)
+
+        class FakeEngine:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, path, body=None):
+                self.calls.append((method, path))
+                if method == "GET" and path.startswith("/images/"):
+                    return {"Id": plan["state"]["image_id"]}
+                if method == "GET" and path.startswith("/networks/"):
+                    network_id = path.rsplit("/", 1)[-1]
+                    name = next(k for k, v in plan["state"]["networks"].items()
+                                if v["NetworkID"] == network_id)
+                    return {"Id": network_id, "Name": name}
+                if method == "POST" and path.startswith("/containers/create?"):
+                    return {"Id": "1" * 64}
+                if method == "POST" and path.endswith("/connect"):
+                    raise runtime.StateError("connect failed")
+                return {}
+
+        engine = FakeEngine()
+        with mock.patch.object(runtime.os.path, "exists", return_value=True), \
+                mock.patch.object(runtime.os.path, "realpath", side_effect=lambda path: path):
+            with self.assertRaisesRegex(runtime.StateError, "connect failed"):
+                runtime.create(plan, engine, "restored")
+        self.assertIn(("DELETE", "/containers/" + "1" * 64 + "?force=false&v=false"), engine.calls)
+
 
 @unittest.skipUnless(os.environ.get("KITSUSYNC_RUNTIME_DOCKER_TEST") == "1", "Docker integration not requested")
 class DockerRoundTripTests(unittest.TestCase):
     def test_real_create_retains_prior_runtime_shape(self):
         image = "kitsusync:" + os.environ["KITSUSYNC_IMAGE_TAG"]
         suffix = str(os.getpid())
-        original, restored, network = "ks-roundtrip-" + suffix, "ks-probe-" + suffix, "ks-network-" + suffix
+        original, restored = "ks-roundtrip-" + suffix, "ks-probe-" + suffix
+        network, extra_network = "ks-network-" + suffix, "ks-extra-" + suffix
         def docker(*args):
             return subprocess.check_output(["docker", *args], text=True).strip()
         with tempfile.TemporaryDirectory() as directory:
@@ -288,14 +371,17 @@ class DockerRoundTripTests(unittest.TestCase):
             config.write_text("# nonsecret test fixture\n")
             try:
                 docker("network", "create", network)
+                docker("network", "create", extra_network)
                 docker("run", "-d", "--name", original, "--network", network, "--network-alias", "app",
                        "--user", "10001:10001", "--restart", "unless-stopped", "--memory", "128m",
                        "--security-opt", "no-new-privileges:true", "--env", "APP_ENV=production",
                        "--mount", f"type=bind,src={config},dst=/app/conf.toml,readonly",
                        "--mount", f"type=bind,src={directory},dst=/app/data",
                        "--entrypoint", "/bin/sh", image, "-c", "sleep 300")
+                docker("network", "connect", "--alias", "secondary", extra_network, original)
                 source = json.loads(docker("inspect", original))[0]
                 plan = runtime.make_plan(source)
+                self.assertEqual(set(plan["state"]["networks"]), {network, extra_network})
                 engine = runtime.Engine()
                 identity = runtime.create(plan, engine, restored)
                 created = json.loads(docker("inspect", identity))[0]
@@ -306,7 +392,7 @@ class DockerRoundTripTests(unittest.TestCase):
                 runtime.compare(plan, json.loads(docker("inspect", restored))[0], restored)
             finally:
                 subprocess.run(["docker", "rm", "-f", original, restored], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["docker", "network", "rm", network], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["docker", "network", "rm", network, extra_network], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 if __name__ == "__main__":

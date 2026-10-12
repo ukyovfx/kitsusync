@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import copy
 import http.client
-import ipaddress
 import json
 import os
 import re
@@ -85,15 +84,6 @@ def normalized_host_config(value):
     return host
 
 
-def is_docker_generated_ipv4_mac(address, mac):
-    try:
-        octets = ipaddress.IPv4Address(address).packed
-    except (ipaddress.AddressValueError, TypeError):
-        return False
-    expected = "02:42:" + ":".join("%02x" % octet for octet in octets)
-    return str(mac or "").lower() == expected
-
-
 def endpoints(value, container_id, name):
     result = {}
     require(isinstance(value, dict) and bool(value), "runtime networks missing")
@@ -109,13 +99,10 @@ def endpoints(value, container_id, name):
                                   if alias not in (container_id, container_id[:12], name))
         entry["Links"] = entry["Links"] or []
         require(not entry["Links"], "linked container endpoints are unsupported")
-        # Docker's deterministic 02:42:<IPv4> MAC is derivable from the
-        # strictly compared endpoint address/IPAM state. Normalize that
-        # duplicate generated value because rollback can receive another
-        # dynamic address; retain every non-derived custom MAC.
+        # Endpoint MAC is part of network identity, including daemon-assigned
+        # values. Preserve it exactly and restore secondary endpoints through
+        # NetworkConnect, which honors EndpointConfig.MacAddress.
         entry["MacAddress"] = entry["MacAddress"] or ""
-        if is_docker_generated_ipv4_mac(settings.get("IPAddress"), entry["MacAddress"]):
-            entry["MacAddress"] = ""
         entry["GwPriority"] = entry["GwPriority"] or 0
         result[network] = entry
     return result
@@ -256,21 +243,54 @@ def validate_dependencies(plan, engine):
                     and actual.get("Mountpoint") == mount["Source"], "prior volume identity changed")
 
 
+def remove_created(engine, container_id):
+    try:
+        # Address only the exact new stopped container. Never remove volumes.
+        engine.request("DELETE", "/containers/" + container_id + "?force=false&v=false")
+    except (StateError, OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
+        raise CleanupError(container_id) from None
+
+
+def create_network_request(request, state):
+    endpoints_config = request.get("NetworkingConfig", {}).get("EndpointsConfig", {})
+    if len(endpoints_config) <= 1:
+        return request, {}
+    network_mode = request.get("HostConfig", {}).get("NetworkMode", "")
+    require(network_mode in endpoints_config,
+            "multiple prior networks without a verifiable primary network")
+    primary = copy.deepcopy(request)
+    primary["NetworkingConfig"]["EndpointsConfig"] = {
+        network_mode: copy.deepcopy(endpoints_config[network_mode])}
+    secondary = {name: copy.deepcopy(endpoint) for name, endpoint in endpoints_config.items()
+                 if name != network_mode}
+    require(set(secondary) == set(state["networks"]) - {network_mode},
+            "prior secondary network plan mismatch")
+    return primary, secondary
+
+
 def create(plan, engine, name=None):
     validate_dependencies(plan, engine)
     name = name or plan["state"]["name"]
     require(bool(NAME.fullmatch(name)), "container name invalid")
-    result = engine.request("POST", "/containers/create?name=" + urllib.parse.quote(name, safe=""), plan["request"])
+    request, secondary_networks = create_network_request(plan["request"], plan["state"])
+    result = engine.request("POST", "/containers/create?name=" + urllib.parse.quote(name, safe=""), request)
     require(bool(ID.fullmatch(result.get("Id", ""))), "created container ID invalid")
+    container_id = result["Id"]
     if result.get("Warnings"):
-        try:
-            # Non-force deletion refuses a running container. Never delete any
-            # volume, and never address a name that could identify another object.
-            engine.request("DELETE", "/containers/" + result["Id"] + "?force=false&v=false")
-        except (StateError, OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
-            raise CleanupError(result["Id"]) from None
+        remove_created(engine, container_id)
         raise StateError("reconstruction warnings; created container removed")
-    return result["Id"]
+    try:
+        for network_name in sorted(secondary_networks):
+            endpoint = secondary_networks[network_name]
+            network_id = plan["state"]["networks"][network_name]["NetworkID"]
+            endpoint_config = {key: copy.deepcopy(value) for key, value in endpoint.items()
+                               if key in ENDPOINT_INPUTS}
+            engine.request("POST", "/networks/" + urllib.parse.quote(network_id, safe="") + "/connect",
+                           {"Container": container_id, "EndpointConfig": endpoint_config})
+    except Exception:
+        remove_created(engine, container_id)
+        raise
+    return container_id
 
 
 def compare(plan, value, name=None):
