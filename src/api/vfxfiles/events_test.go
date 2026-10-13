@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -87,6 +88,112 @@ func TestPluginEventHandlerVerifiesAndDurablyAcceptsContractFixture(t *testing.T
 	handler(response, signedEventRequest(t, body, key, "synthetic-nonce-0000001", "synthetic-idempotency-0001", clock))
 	if response.Code != http.StatusConflict {
 		t.Fatalf("replayed nonce status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestSignedNonDeliveryLifecycleEventsAreDurableButNeverPendingDiscord(t *testing.T) {
+	db := eventHandlerTestDB(t)
+	key := "synthetic-event-signing-key-material-0001"
+	clock := time.Date(2026, 10, 12, 16, 0, 0, 0, time.UTC)
+	handler := EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })
+	fixtures := []struct {
+		name      string
+		eventType string
+	}{
+		{name: "folder-provisioning-completed.json", eventType: "folder.provisioning.completed"},
+		{name: "output-package-created.json", eventType: "output_package.created"},
+		{name: "output-package-ready.json", eventType: "output_package.ready"},
+	}
+	for i, fixture := range fixtures {
+		t.Run(fixture.eventType, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", fixture.name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := signedEventRequest(t, body, key, fmt.Sprintf("non-delivery-nonce-%04d", i), fmt.Sprintf("non-delivery-idemp-%04d", i), clock)
+			response := httptest.NewRecorder()
+			handler(response, request)
+			if response.Code != http.StatusAccepted {
+				t.Fatalf("signed %s event status=%d body=%s", fixture.eventType, response.Code, response.Body.String())
+			}
+			var accepted struct {
+				Results []model.VFXFilesEventResult `json:"results"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil || len(accepted.Results) != 1 || accepted.Results[0].Outcome != model.VFXFilesEventAccepted {
+				t.Fatalf("signed %s event result=%+v err=%v", fixture.eventType, accepted.Results, err)
+			}
+			var stored model.VFXFilesEventInbox
+			if err := db.Where("event_id = ?", accepted.Results[0].EventID).First(&stored).Error; err != nil || stored.EventType != fixture.eventType || stored.Outcome != model.VFXFilesEventAccepted || stored.PayloadJSON == "" {
+				t.Fatalf("event was not durably journaled: row=%+v err=%v", stored, err)
+			}
+			replay := httptest.NewRecorder()
+			replayBody := signedEventRequest(t, body, key, fmt.Sprintf("non-delivery-replay-%04d", i), fmt.Sprintf("non-delivery-replay-key-%04d", i), clock)
+			handler(replay, replayBody)
+			var replayed struct {
+				Results []model.VFXFilesEventResult `json:"results"`
+			}
+			if replay.Code != http.StatusAccepted || json.Unmarshal(replay.Body.Bytes(), &replayed) != nil || len(replayed.Results) != 1 || replayed.Results[0].Outcome != model.VFXFilesEventDuplicate {
+				t.Fatalf("identical event retry was not acknowledged idempotently: status=%d body=%s", replay.Code, replay.Body.String())
+			}
+			var eventCount int64
+			if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_id = ?", stored.EventID).Count(&eventCount).Error; err != nil || eventCount != 1 {
+				t.Fatalf("event retry created duplicate durable rows: count=%d err=%v", eventCount, err)
+			}
+		})
+	}
+	rows, err := model.PendingVFXFilesDeliveryEvents(db, 100)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("non-delivery lifecycle events entered Discord delivery queue: rows=%+v err=%v", rows, err)
+	}
+	diagnostics, err := model.ReadVFXFilesEventDiagnostics(db, "10000000-0000-4000-8000-000000000001")
+	if err != nil || diagnostics.PendingDelivery != 0 {
+		t.Fatalf("non-delivery lifecycle events counted as pending Discord deliveries: diagnostics=%+v err=%v", diagnostics, err)
+	}
+}
+
+func TestSignedEventHandlerQuarantinesWrongProductionStaleEpochAndDisabledIntegration(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "folder-provisioning-completed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "synthetic-event-signing-key-material-0001"
+	clock := time.Date(2026, 10, 12, 16, 30, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		mutateBody func([]byte) []byte
+		deactivate bool
+	}{
+		{name: "wrong production", mutateBody: func(body []byte) []byte {
+			return []byte(strings.Replace(string(body), "10000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000099", 1))
+		}},
+		{name: "stale activation epoch", mutateBody: func(body []byte) []byte {
+			return []byte(strings.Replace(string(body), `"activation_epoch": 1`, `"activation_epoch": 2`, 1))
+		}},
+		{name: "disabled integration", mutateBody: func(body []byte) []byte { return body }, deactivate: true},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := eventHandlerTestDB(t)
+			if tc.deactivate {
+				if err := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Update("activated", false).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			body := tc.mutateBody(fixture)
+			handler := EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })
+			response := httptest.NewRecorder()
+			handler(response, signedEventRequest(t, body, key, fmt.Sprintf("quarantine-nonce-%04d", i), fmt.Sprintf("quarantine-idemp-%04d", i), clock))
+			var result struct {
+				Results []model.VFXFilesEventResult `json:"results"`
+			}
+			if response.Code != http.StatusAccepted || json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.Results) != 1 || result.Results[0].Outcome != model.VFXFilesEventQuarantined || result.Results[0].Code != "activation_epoch_mismatch" {
+				t.Fatalf("unsafe-scope event was not durably quarantined: status=%d body=%s", response.Code, response.Body.String())
+			}
+			var eventCount int64
+			if err := db.Model(&model.VFXFilesEventInbox{}).Where("outcome = ? AND diagnostic_code = ?", model.VFXFilesEventQuarantined, "activation_epoch_mismatch").Count(&eventCount).Error; err != nil || eventCount != 1 {
+				t.Fatalf("quarantine was not durable: count=%d err=%v", eventCount, err)
+			}
+		})
 	}
 }
 

@@ -508,7 +508,7 @@ func TestFixturesHaveSafeStateAndContainNoCredentialFields(t *testing.T) {
 	if activation["enabled"] != false || activation["notification_epoch"] != float64(0) {
 		t.Fatal("fake desired config must start inactive and suppress bootstrap notifications")
 	}
-	for _, name := range []string{"delivery-created-multi-target.json", "delivery-needs-fix.json", "delivery-revised.json", "folder-provisioning-completed.json", "output-package-ready.json"} {
+	for _, name := range []string{"delivery-created-multi-target.json", "delivery-needs-fix.json", "delivery-revised.json", "folder-provisioning-completed.json", "output-package-created.json", "output-package-ready.json"} {
 		fixture := readJSON(t, "fixtures/"+name)
 		if containsForbiddenKey(fixture) {
 			t.Errorf("fixture %s contains a credential or live endpoint field", name)
