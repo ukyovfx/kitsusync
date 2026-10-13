@@ -630,6 +630,12 @@ func runVFXFilesAdminAction(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 		if err != nil || desired.StatusCode != http.StatusOK || strings.TrimSpace(desired.Header.Get("ETag")) == "" {
 			return t(lang, "有効なFiles設定を確認できません。先に設定を完了してください。", "A valid Files configuration could not be verified. Complete configuration first."), "", false
 		}
+		if r.Form.Get("action") == "activate" {
+			var config model.VFXFilesDesiredConfigMirror
+			if json.Unmarshal(desired.Body, &config) != nil || config.SyncPolicy.Mode != "new_production" {
+				return t(lang, "この同期方式はまだ有効化できません。安全な同期方式を選び直してください。", "This synchronization mode cannot be activated yet. Choose a supported sync mode."), "", false
+			}
+		}
 		if err := model.StoreVFXFilesDesiredConfigMirror(db, productionID, desired.Body); err != nil {
 			return t(lang, "Files設定の安全状態を保存できません。操作を中止しました。", "The Files safety state could not be stored; the action was stopped."), "", false
 		}
@@ -693,6 +699,9 @@ func previewVFXFilesSync(ctx context.Context, db *gorm.DB, runtime *vfxfiles.Run
 	if err != nil {
 		return t(lang, "Files設定を再確認できません。", "Files configuration could not be reverified."), "", false
 	}
+	if config.SyncPolicy.Mode != "new_production" {
+		return t(lang, "この同期方式はまだPreviewに対応していません。", "This synchronization mode is not yet supported for Preview."), "", false
+	}
 	reader, ok := authorizer.(vfxFilesKitsuSnapshotReader)
 	if !ok {
 		return t(lang, "Kitsu Snapshotの読み取りが利用できません。", "The verified Kitsu snapshot reader is unavailable."), "", false
@@ -729,6 +738,9 @@ func applyVFXFilesSync(ctx context.Context, db *gorm.DB, runtime *vfxfiles.Runti
 	config, _, err := readVFXFilesDesiredConfig(ctx, runtime, authorizer, productionID)
 	if err != nil || config.ConfigRevision != operation.ConfigRevision {
 		return t(lang, "Preview後にFiles設定が変更されました。新しいPreviewを作成してください。", "Files configuration changed after preview. Create a new preview."), "", false
+	}
+	if config.SyncPolicy.Mode != "new_production" {
+		return t(lang, "この同期方式はまだApplyに対応していません。", "This synchronization mode is not yet supported for Apply."), "", false
 	}
 	if !config.Activation.Enabled || config.Activation.NotificationEpoch == 0 {
 		return t(lang, "同期と通知を開始するには、管理者が先に明示的に有効化してください。Previewは引き続き読み取り専用です。", "An administrator must explicitly enable sync and notifications before Apply. Preview remains read-only."), "", false
@@ -1187,7 +1199,13 @@ func renderVFXFilesAdminPage(r *http.Request, project *model.Project, production
 			status = t(lang, "有効", "Enabled")
 		}
 		body += `<p class="status-row">` + esc(t(lang, "同期と通知", "Sync and notifications")) + `: <strong>` + esc(status) + `</strong> · ` + esc(t(lang, "設定リビジョン", "Config revision")) + ` ` + esc(fmt.Sprint(state.desired["config_revision"])) + `</p>`
-		if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
+		policy, _ := state.desired["sync_policy"].(map[string]any)
+		mode, _ := policy["mode"].(string)
+		modeSupported := mode == "new_production"
+		if !modeSupported {
+			body += `<p role="status" class="field-help">` + esc(t(lang, "この同期方式は現在利用できません。Preview・Apply・有効化は停止しています。既存の有効状態は無効化できます。", "This synchronization mode is not supported yet. Preview, Apply, and activation are paused. Existing activation can still be disabled.")) + `</p>`
+		}
+		if modeSupported && state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
 			body += `<form method="post" class="button-row"><input type="hidden" name="action" value="preview_sync"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-preview")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "Kitsuを読み取り、差分Previewを作成", "Read Kitsu and create a diff preview")) + `</button></form>`
 		}
 		if state.preview != nil {
@@ -1205,7 +1223,7 @@ func renderVFXFilesAdminPage(r *http.Request, project *model.Project, production
 				body += `<p class="field-help" role="status">` + esc(t(lang, "設定または有効状態がPreview後に変わりました。現在の状態を再Previewしてください。", "The configuration or activation changed after this preview. Create a new preview for the current state.")) + `</p>`
 			} else if !active || epoch == 0 {
 				body += `<p class="field-help" role="status">` + esc(t(lang, "Previewは読み取り専用です。同期と通知を有効化した後、新しいPreviewを作成してApplyしてください。", "Preview is read-only. After enabling sync and notifications, create a new preview before Apply.")) + `</p>`
-			} else if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
+			} else if modeSupported && state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
 				body += `<form method="post" class="button-row"><input type="hidden" name="action" value="apply_sync"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-apply")) + `"><button class="btn" type="submit">` + esc(t(lang, "このPreviewを明示的にApply", "Explicitly apply this preview")) + `</button></form>`
 			}
 			body += `</section>`
@@ -1222,7 +1240,7 @@ func renderVFXFilesAdminPage(r *http.Request, project *model.Project, production
 			}
 			body += `</section>`
 		}
-		if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
+		if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && (modeSupported || (active && epoch > 0)) {
 			action := "activate"
 			label := t(lang, "同期と通知を有効にする", "Enable sync and notifications")
 			if active && epoch > 0 {

@@ -380,7 +380,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 				activation = "true"
 				activatedAt = `"2026-10-13T00:00:00Z"`
 			}
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"tpl","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"tpl","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activation"):
 			activationEnabled = true
 			activationEpoch = 1
@@ -691,7 +691,7 @@ func TestVFXFilesActivationAndPreviewApplyLabelsAreLocalizedAndRevisionAware(t *
 		integrationReady: true,
 		actionKey:        "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef",
 		desiredReady:     true,
-		desired:          map[string]any{"config_revision": float64(3), "activation": map[string]any{"enabled": false, "notification_epoch": float64(0)}},
+		desired:          map[string]any{"config_revision": float64(3), "sync_policy": map[string]any{"mode": "new_production"}, "activation": map[string]any{"enabled": false, "notification_epoch": float64(0)}},
 		preview:          preview,
 	}
 	for _, tc := range []struct{ lang, activation, stale string }{
@@ -708,7 +708,7 @@ func TestVFXFilesActivationAndPreviewApplyLabelsAreLocalizedAndRevisionAware(t *
 			t.Errorf("%s UI offered Apply before activation and a fresh preview", tc.lang)
 		}
 	}
-	state.desired = map[string]any{"config_revision": float64(4), "activation": map[string]any{"enabled": true, "notification_epoch": float64(2)}}
+	state.desired = map[string]any{"config_revision": float64(4), "sync_policy": map[string]any{"mode": "new_production"}, "activation": map[string]any{"enabled": true, "notification_epoch": float64(2)}}
 	page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
 	if !strings.Contains(page, "Create a new preview for the current state") || strings.Contains(page, `name="action" value="apply_sync"`) {
 		t.Fatal("stale pre-activation preview was rendered as applicable")
@@ -717,6 +717,40 @@ func TestVFXFilesActivationAndPreviewApplyLabelsAreLocalizedAndRevisionAware(t *
 	page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
 	if !strings.Contains(page, `name="action" value="apply_sync"`) || strings.Contains(page, "Enable notifications") {
 		t.Fatal("current post-activation preview did not offer Apply with sync+notification terminology")
+	}
+}
+
+func TestVFXFilesUnsupportedSavedModeHidesUnsafeActionsButCanDisable(t *testing.T) {
+	state := vfxFilesAdminPageState{
+		pluginVerified:   true,
+		integrationReady: true,
+		actionKey:        "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef",
+		desiredReady:     true,
+		desired: map[string]any{
+			"config_revision": float64(4),
+			"sync_policy":     map[string]any{"mode": "future_only"},
+			"activation":      map[string]any{"enabled": false, "notification_epoch": float64(0)},
+		},
+		preview: &vfxFilesSyncPreview{ConfigRevision: 4},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=en", nil)
+	project := &model.Project{Name: "Synthetic Production"}
+	page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
+	for _, action := range []string{"preview_sync", "apply_sync", "activate"} {
+		if strings.Contains(page, `name="action" value="`+action+`"`) {
+			t.Fatalf("unsupported saved mode advertised unsafe %q action", action)
+		}
+	}
+	if !strings.Contains(page, "This synchronization mode is not supported yet") {
+		t.Fatal("unsupported saved mode did not give a recovery explanation")
+	}
+	state.desired["activation"] = map[string]any{"enabled": true, "notification_epoch": float64(3)}
+	page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
+	if !strings.Contains(page, `name="action" value="deactivate"`) {
+		t.Fatal("unsupported active configuration must retain explicit deactivation")
+	}
+	if strings.Contains(page, `name="action" value="apply_sync"`) {
+		t.Fatal("unsupported active configuration must not offer Apply")
 	}
 }
 
