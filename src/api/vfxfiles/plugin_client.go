@@ -70,7 +70,9 @@ var pluginOperations = []pluginOperation{
 	{http.MethodPut, "/productions/{production_id}/desired-config", "vfx.config.write", true},
 	{http.MethodPost, "/productions/{production_id}/activation", "vfx.activation.write", true},
 	{http.MethodPost, "/productions/{production_id}/deactivation", "vfx.activation.write", true},
-	{http.MethodPost, "/productions/{production_id}/sync-previews", "vfx.sync.preview", false},
+	// Preview creates an expiring provider record even though it never mutates
+	// Drive. The contract requires a key so a retry reuses that exact record.
+	{http.MethodPost, "/productions/{production_id}/sync-previews", "vfx.sync.preview", true},
 	{http.MethodPost, "/productions/{production_id}/sync-jobs", "vfx.sync.apply", true},
 	{http.MethodGet, "/sync-jobs/{job_id}", "vfx.sync.read", false},
 	{http.MethodPost, "/sync-jobs/{job_id}/retry", "vfx.sync.retry", true},
@@ -111,8 +113,9 @@ func parsePluginAudience(baseURL string) (*url.URL, error) {
 }
 
 // Do sends one contract-declared management API operation. Scope is derived
-// from the operation table, not from caller input. All writes except the
-// explicitly read-only preview require a caller-provided idempotency key.
+// from the operation table, not from caller input. Operations that create or
+// change provider-side state, including expiring read-only Preview records,
+// require a caller-provided idempotency key.
 func (c *PluginClient) Do(ctx context.Context, request PluginRequest) (*http.Response, error) {
 	if c == nil || c.baseURL == nil || c.http == nil || ctx == nil || len(request.Body) > pluginRequestBodyLimit {
 		return nil, ErrPluginRequestRejected

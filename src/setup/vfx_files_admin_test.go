@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +54,7 @@ func TestVFXFilesAuthorizationActionRedirectsOnlyToGoogleAndScopesProduction(t *
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var scoped, signed bool
+			authorizationExpiry := time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				var decoded map[string]any
@@ -60,8 +62,8 @@ func TestVFXFilesAuthorizationActionRedirectsOnlyToGoogleAndScopesProduction(t *
 				scoped = decoded["production_id"] == vfxTestProductionID && r.Header.Get("X-KitsuSync-Actor-ID") == vfxTestActorID && r.Header.Get("Idempotency-Key") != ""
 				signed = strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") && r.Method == http.MethodPost && r.URL.Path == vfxfiles.ServiceAudienceSuffix+"/drive-connections/authorizations"
 				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusAccepted)
-				_, _ = w.Write([]byte(`{"contract_version":"1.0","authorization_id":"30000000-0000-4000-8000-000000000001","authorization_url":"` + tc.responseURL + `"}`))
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"contract_version":"1.0","authorization_id":"30000000-0000-4000-8000-000000000001","authorization_url":"` + tc.responseURL + `","expires_at":"` + authorizationExpiry + `"}`))
 			}))
 			defer server.Close()
 			key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -77,11 +79,18 @@ func TestVFXFilesAuthorizationActionRedirectsOnlyToGoogleAndScopesProduction(t *
 				t.Fatal(err)
 			}
 			runtime := &vfxfiles.RuntimeConfig{Client: client}
+			db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.AutoMigrate(&model.VFXFilesAuthorizationIntent{}); err != nil {
+				t.Fatal(err)
+			}
 			project := &model.Project{KitsuProjectID: vfxTestProductionID}
 			form := url.Values{"action": {"authorize"}, "account_mode": {"shared_drive"}, "idempotency_key": {"ks-files-0123456789abcdef"}}
 			req := httptest.NewRequest(http.MethodPost, "/bot/admin/vfx-files?production="+project.KitsuProjectID, strings.NewReader(form.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			message, redirect, completed := runVFXFilesAdminAction(context.Background(), nil, runtime, vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: true}, project, req, "en")
+			message, redirect, completed := runVFXFilesAdminAction(context.Background(), db, runtime, vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: true}, project, req, "en")
 			if !scoped || !signed {
 				t.Fatal("Plugin authorization request was not signed and bound to the live actor/Production")
 			}
@@ -90,6 +99,12 @@ func TestVFXFilesAuthorizationActionRedirectsOnlyToGoogleAndScopesProduction(t *
 			}
 			if !tc.wantRedirect && !strings.Contains(message, "unsupported authorization destination") {
 				t.Fatalf("unsafe redirect error is not actionable: %q", message)
+			}
+			if tc.wantRedirect {
+				intent, err := model.FindVFXFilesAuthorizationIntent(db, "30000000-0000-4000-8000-000000000001", time.Now().UTC())
+				if err != nil || intent.ProductionID != vfxTestProductionID || intent.ActorID != vfxTestActorID {
+					t.Fatalf("OAuth return context was not durably bound to session actor/Production: %+v err=%v", intent, err)
+				}
 			}
 		})
 	}
@@ -112,8 +127,64 @@ func TestVFXFilesAuthorizationActionFailsClosedWithoutProductionGrant(t *testing
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/vfx-files?production="+project.KitsuProjectID, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	message, redirect, completed := runVFXFilesAdminAction(context.Background(), nil, &vfxfiles.RuntimeConfig{Client: client}, vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: false}, project, req, "en")
-	if redirect != "" || completed || !strings.Contains(message, "unavailable") {
+	if redirect != "" || completed || !strings.Contains(message, "administrator starting authorization could not be verified") {
 		t.Fatalf("unauthorized action result redirect=%q completed=%v message=%q", redirect, completed, message)
+	}
+}
+
+func TestVFXFilesOAuthReturnRestoresOnlyStoredAuthorizedProductionContext(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.VFXFilesAuthorizationIntent{}); err != nil {
+		t.Fatal(err)
+	}
+	intent := model.VFXFilesAuthorizationIntent{
+		AuthorizationID: "30000000-0000-4000-8000-000000000001",
+		ProductionID:    vfxTestProductionID,
+		ActorID:         vfxTestActorID,
+		ExpiresAt:       time.Now().UTC().Add(5 * time.Minute),
+	}
+	if err := model.StoreVFXFilesAuthorizationIntent(db, intent); err != nil {
+		t.Fatal(err)
+	}
+	resetSessions()
+	t.Cleanup(resetSessions)
+	token := newSessionToken("manager@example.test", "session-token", "manager", "")
+	handler := vfxFilesOAuthReturnHandler(db, func(context.Context) (KitsuURLModel, error) { return KitsuURLModel{}, nil }, func(KitsuURLModel, string, string, string) vfxfiles.ProductionAdminAuthorizer {
+		return vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: true}
+	})
+	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files/oauth-return?authorization_id="+intent.AuthorizationID, nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	wrongActorHandler := vfxFilesOAuthReturnHandler(db, func(context.Context) (KitsuURLModel, error) { return KitsuURLModel{}, nil }, func(KitsuURLModel, string, string, string) vfxfiles.ProductionAdminAuthorizer {
+		return vfxAdminAuthorizer{actorID: "20000000-0000-4000-8000-000000000002", allowed: true}
+	})
+	wrongActor := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files/oauth-return?authorization_id="+intent.AuthorizationID, nil)
+	wrongActor.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	denied := httptest.NewRecorder()
+	wrongActorHandler.ServeHTTP(denied, wrongActor)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("different actor reused OAuth context: status=%d", denied.Code)
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/bot/admin/vfx-files?lang=ja&production="+vfxTestProductionID {
+		t.Fatalf("callback did not restore stored Production context: status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	replay := httptest.NewRecorder()
+	handler.ServeHTTP(replay, request)
+	if replay.Code != http.StatusBadRequest {
+		t.Fatalf("OAuth return intent was not single-use: status=%d", replay.Code)
+	}
+
+	credentialCallback := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files/oauth-return?authorization_id="+intent.AuthorizationID+"&code=must-not-be-accepted", nil)
+	credentialCallback.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	credentialResponse := httptest.NewRecorder()
+	handler.ServeHTTP(credentialResponse, credentialCallback)
+	if credentialResponse.Code != http.StatusBadRequest {
+		t.Fatalf("KitsuSync accepted an OAuth credential query: status=%d", credentialResponse.Code)
 	}
 }
 
@@ -227,9 +298,16 @@ func TestVFXFilesInitialConfigUsesConditionalCreateAndServerVerifiedOwner(t *tes
 func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testing.T) {
 	var snapshotID, previewID, jobID string
 	jobState := "failed"
+	activationEnabled := false
+	activationEpoch := uint64(0)
+	configRevision := uint64(1)
+	var previewKeys []string
+	previewIDsByKey := make(map[string]string)
+	var previewCreates int
+	var syncJobCalls int
 	var calls []string
 	makeJob := func(state string, updated string) string {
-		return `{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000001","production_id":"` + vfxTestProductionID + `","config_revision":1,"state":"` + state + `","progress":{"completed":1,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updated + `"}`
+		return `{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000001","production_id":"` + vfxTestProductionID + `","config_revision":` + fmt.Sprint(configRevision) + `,"state":"` + state + `","progress":{"completed":1,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updated + `"}`
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
@@ -239,14 +317,25 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 		}
 		switch {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/desired-config"):
-			w.Header().Set("ETag", `"1"`)
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":1,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"tpl","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":false,"activated_at":null,"notification_epoch":0}}`)
+			w.Header().Set("ETag", `"`+fmt.Sprint(configRevision)+`"`)
+			activation := "false"
+			activatedAt := "null"
+			if activationEnabled {
+				activation = "true"
+				activatedAt = `"2026-10-13T00:00:00Z"`
+			}
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"tpl","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activation"):
+			activationEnabled = true
+			activationEpoch = 1
+			configRevision = 2
+			_, _ = io.WriteString(w, `{"contract_version":"1.0"}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/sync-snapshots"):
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			snapshotID, _ = body["snapshot_id"].(string)
 			w.WriteHeader(http.StatusCreated)
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","id":"`+snapshotID+`","production_id":"`+vfxTestProductionID+`","config_revision":1,"state":"uploading","page_count":1,"received_pages":0,"object_count":1,"expires_at":"2026-10-13T01:00:00Z"}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","id":"`+snapshotID+`","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"state":"uploading","page_count":1,"received_pages":0,"object_count":1,"expires_at":"2026-10-13T01:00:00Z"}`)
 		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/pages/"):
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -254,19 +343,33 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 				t.Error("snapshot page lacks index or digest")
 			}
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","id":"`+snapshotID+`","production_id":"`+vfxTestProductionID+`","config_revision":1,"state":"uploading","page_count":1,"received_pages":1,"object_count":1,"expires_at":"2026-10-13T01:00:00Z"}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","id":"`+snapshotID+`","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"state":"uploading","page_count":1,"received_pages":1,"object_count":1,"expires_at":"2026-10-13T01:00:00Z"}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/complete"):
 			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","id":"`+snapshotID+`","production_id":"`+vfxTestProductionID+`","config_revision":1,"state":"complete","page_count":1,"received_pages":1,"object_count":1,"expires_at":"2026-10-13T01:00:00Z"}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","id":"`+snapshotID+`","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"state":"complete","page_count":1,"received_pages":1,"object_count":1,"expires_at":"2026-10-13T01:00:00Z"}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/sync-previews"):
+			idempotencyKey := r.Header.Get("Idempotency-Key")
+			previewKeys = append(previewKeys, idempotencyKey)
+			if idempotencyKey == "" {
+				t.Error("sync preview request did not carry the contract-required Idempotency-Key")
+			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["snapshot_id"] != snapshotID || body["config_revision"] != float64(1) {
+			if body["snapshot_id"] != snapshotID || body["config_revision"] != float64(configRevision) {
 				t.Error("preview did not use uploaded snapshot/config revision")
 			}
-			previewID = "70000000-0000-4000-8000-000000000001"
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","preview_id":"`+previewID+`","production_id":"`+vfxTestProductionID+`","config_revision":1,"root_id":"root-1","state":"preview_ready","summary":{"existing":1,"create":0,"link":0,"excluded":0,"warnings":0},"changes":[],"expires_at":"2026-10-14T00:00:00Z"}`)
+			previewID = previewIDsByKey[idempotencyKey]
+			if previewID == "" {
+				previewID = "70000000-0000-4000-8000-000000000001"
+				previewIDsByKey[idempotencyKey] = previewID
+				previewCreates++
+			}
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","preview_id":"`+previewID+`","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"root_id":"root-1","state":"preview_ready","summary":{"existing":1,"create":0,"link":0,"excluded":0,"warnings":0},"changes":[],"expires_at":"2026-10-14T00:00:00Z"}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/sync-jobs"):
+			syncJobCalls++
+			if !activationEnabled {
+				t.Error("Plugin received Apply before activation")
+			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			if body["preview_id"] != previewID {
@@ -303,7 +406,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.VFXFilesSyncOperation{}); err != nil {
+	if err := db.AutoMigrate(&model.VFXFilesSyncOperation{}, &model.VFXFilesProductionConfig{}); err != nil {
 		t.Fatal(err)
 	}
 	runtime := &vfxfiles.RuntimeConfig{Client: client}
@@ -316,23 +419,51 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 		message, _, complete := runVFXFilesAdminAction(context.Background(), db, runtime, authorizer, project, req, "en")
 		return message, complete
 	}
-	if message, complete := run("preview_sync", "ks-files-0123456789abcdef"); !complete || !strings.Contains(message, "preview") {
+	firstPreviewActionKey := "ks-files-0123456789abcdef:sync-preview"
+	if message, complete := run("preview_sync", firstPreviewActionKey); !complete || !strings.Contains(message, "preview") {
 		t.Fatalf("preview: complete=%v message=%q calls=%v", complete, message, calls)
+	}
+	if _, complete := run("preview_sync", firstPreviewActionKey); !complete {
+		t.Fatal("retrying the same preview action should be accepted")
+	}
+	if len(previewKeys) != 2 || previewKeys[0] != firstPreviewActionKey+":provider-preview" || previewKeys[0] != previewKeys[1] {
+		t.Fatalf("same preview retry must reuse one stable idempotency key, got %q", previewKeys)
+	}
+	if previewCreates != 1 {
+		t.Fatalf("same-key retry created %d provider preview records, want one", previewCreates)
 	}
 	stored, err := model.FindVFXFilesSyncOperation(db, vfxTestProductionID)
 	if err != nil || stored.PreviewID != previewID || stored.SnapshotID != snapshotID {
 		t.Fatalf("preview not stored: %+v err=%v", stored, err)
 	}
-	if message, complete := run("apply_sync", "ks-files-1123456789abcdef"); !complete || !strings.Contains(message, "accepted") {
-		t.Fatalf("apply: complete=%v message=%q", complete, message)
+	if message, complete := run("apply_sync", "ks-files-1123456789abcdef"); complete || !strings.Contains(message, "explicitly enable") {
+		t.Fatalf("Apply before explicit activation should be rejected: complete=%v message=%q", complete, message)
 	}
-	if message, complete := run("refresh_sync_job", "ks-files-2123456789abcdef"); !complete || !strings.Contains(message, "refreshed") {
+	if syncJobCalls != 0 {
+		t.Fatalf("Apply before activation must not call sync-jobs, calls=%d", syncJobCalls)
+	}
+	if message, complete := run("activate", "ks-files-2123456789abcdef"); !complete || !strings.Contains(message, "activated") {
+		t.Fatalf("activation: complete=%v message=%q", complete, message)
+	}
+	if message, complete := run("apply_sync", "ks-files-3123456789abcdef"); complete || !strings.Contains(message, "changed after preview") {
+		t.Fatalf("activation must invalidate pre-activation preview: complete=%v message=%q", complete, message)
+	}
+	if syncJobCalls != 0 {
+		t.Fatalf("stale pre-activation preview must not create a job, calls=%d", syncJobCalls)
+	}
+	if message, complete := run("preview_sync", "ks-files-7123456789abcdef:sync-preview"); !complete || !strings.Contains(message, "preview") {
+		t.Fatalf("post-activation preview: complete=%v message=%q", complete, message)
+	}
+	if message, complete := run("apply_sync", "ks-files-8123456789abcdef"); !complete || !strings.Contains(message, "accepted") {
+		t.Fatalf("apply after activation: complete=%v message=%q", complete, message)
+	}
+	if message, complete := run("refresh_sync_job", "ks-files-4123456789abcdef"); !complete || !strings.Contains(message, "refreshed") {
 		t.Fatalf("job refresh: complete=%v message=%q", complete, message)
 	}
-	if message, complete := run("retry_sync_job", "ks-files-3123456789abcdef"); !complete || !strings.Contains(message, "accepted") {
+	if message, complete := run("retry_sync_job", "ks-files-5123456789abcdef"); !complete || !strings.Contains(message, "accepted") {
 		t.Fatalf("job retry: complete=%v message=%q", complete, message)
 	}
-	if message, complete := run("reconcile_sync_job", "ks-files-4123456789abcdef"); !complete || !strings.Contains(message, "accepted") {
+	if message, complete := run("reconcile_sync_job", "ks-files-6123456789abcdef"); !complete || !strings.Contains(message, "accepted") {
 		t.Fatalf("job reconcile: complete=%v message=%q", complete, message)
 	}
 	for _, path := range []string{"/sync-snapshots", "/pages/0", "/complete", "/sync-previews", "/sync-jobs"} {
@@ -471,6 +602,7 @@ func TestVFXFilesRootCandidateURLRejectsUntrustedFormsBeforePluginAccess(t *test
 func TestVFXFilesAdminRootAndTemplateViewIsLocalizedAndValidationOnlyReadOnly(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=ja", nil)
 	state := vfxFilesAdminPageState{
+		pluginVerified:   true,
 		integrationReady: true,
 		actionKey:        "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef",
 		selectedID:       "30000000-0000-4000-8000-000000000001",
@@ -494,6 +626,44 @@ func TestVFXFilesAdminRootAndTemplateViewIsLocalizedAndValidationOnlyReadOnly(t 
 	}
 }
 
+func TestVFXFilesActivationAndPreviewApplyLabelsAreLocalizedAndRevisionAware(t *testing.T) {
+	project := &model.Project{Name: "Synthetic Production"}
+	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files", nil)
+	preview := &vfxFilesSyncPreview{ConfigRevision: 3}
+	state := vfxFilesAdminPageState{
+		pluginVerified:   true,
+		integrationReady: true,
+		actionKey:        "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef",
+		desiredReady:     true,
+		desired:          map[string]any{"config_revision": float64(3), "activation": map[string]any{"enabled": false, "notification_epoch": float64(0)}},
+		preview:          preview,
+	}
+	for _, tc := range []struct{ lang, activation, stale string }{
+		{"ja", "同期と通知を有効にする", "同期と通知を有効化した後"},
+		{"en", "Enable sync and notifications", "After enabling sync and notifications"},
+	} {
+		page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, tc.lang, state)
+		for _, marker := range []string{tc.activation, tc.stale} {
+			if !strings.Contains(page, marker) {
+				t.Errorf("%s UI missing %q", tc.lang, marker)
+			}
+		}
+		if strings.Contains(page, `name="action" value="apply_sync"`) {
+			t.Errorf("%s UI offered Apply before activation and a fresh preview", tc.lang)
+		}
+	}
+	state.desired = map[string]any{"config_revision": float64(4), "activation": map[string]any{"enabled": true, "notification_epoch": float64(2)}}
+	page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
+	if !strings.Contains(page, "Create a new preview for the current state") || strings.Contains(page, `name="action" value="apply_sync"`) {
+		t.Fatal("stale pre-activation preview was rendered as applicable")
+	}
+	state.preview.ConfigRevision = 4
+	page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
+	if !strings.Contains(page, `name="action" value="apply_sync"`) || strings.Contains(page, "Enable notifications") {
+		t.Fatal("current post-activation preview did not offer Apply with sync+notification terminology")
+	}
+}
+
 func TestVFXFilesAdminDoesNotRenderMutatingControlsWhenPluginIsUnavailable(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=en", nil)
 	state := vfxFilesAdminPageState{
@@ -514,6 +684,104 @@ func TestVFXFilesAdminDoesNotRenderMutatingControlsWhenPluginIsUnavailable(t *te
 	}
 	if !strings.Contains(page, "Google Drive / Files Plugin") {
 		t.Fatal("read-only integration status page was not rendered")
+	}
+}
+
+func TestVFXFilesManagementReusesVerifiedConnectionAndDoesNotRenderOutageAsEmpty(t *testing.T) {
+	connectionID := "30000000-0000-4000-8000-000000000001"
+	for _, tc := range []struct {
+		name               string
+		statusCode         int
+		templateFailScope  string
+		templateFailStatus int
+		wantReuse          bool
+	}{
+		{name: "verified connection reused", statusCode: http.StatusOK, wantReuse: true},
+		{name: "temporary provider outage", statusCode: http.StatusServiceUnavailable},
+		{name: "partial template capability outage", statusCode: http.StatusOK, templateFailScope: "shot", templateFailStatus: http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == vfxfiles.ServiceAudienceSuffix+"/drive-connections" {
+					if tc.statusCode != http.StatusOK {
+						w.WriteHeader(tc.statusCode)
+						return
+					}
+					_, _ = io.WriteString(w, `{"contract_version":"1.0","connections":[{"contract_version":"1.0","id":"`+connectionID+`","account_mode":"my_drive","state":"connected"}]}`)
+					return
+				}
+				if r.URL.Path == vfxfiles.ServiceAudienceSuffix+"/templates" {
+					scope := r.URL.Query().Get("scope")
+					if scope == tc.templateFailScope && tc.templateFailStatus != 0 {
+						w.WriteHeader(tc.templateFailStatus)
+						return
+					}
+					_, _ = io.WriteString(w, `{"contract_version":"1.0","templates":[{"id":"`+scope+`-template","revision":1,"scope":"`+scope+`","label":"Default","pattern":"{production}"}]}`)
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/desired-config") {
+					if tc.wantReuse {
+						w.Header().Set("ETag", `"1"`)
+						_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":1,"connection_id":"`+connectionID+`","drive":{"account_mode":"my_drive","root_id":"root-1","root_state":"verified","owner_subject":"opaque-subject"},"template_selection":{"selections":[{"scope":"production","template_id":"production-template","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":false,"activated_at":null,"notification_epoch":0}}`)
+					} else {
+						w.WriteHeader(http.StatusNotFound)
+					}
+					return
+				}
+				if strings.HasSuffix(r.URL.Path, "/roots") {
+					_, _ = io.WriteString(w, `{"contract_version":"1.0","roots":[{"id":"root-1","name":"Project root","account_mode":"my_drive"}]}`)
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+			key, err := rsa.GenerateKey(rand.Reader, 2048)
+			if err != nil {
+				t.Fatal(err)
+			}
+			baseURL := server.URL + vfxfiles.ServiceAudienceSuffix
+			client, err := vfxfiles.NewPluginClient(baseURL, server.Client(), vfxfiles.ServiceTokenConfig{
+				Issuer: "https://kitsusync.example", Audience: baseURL, Subject: "kitsusync", ClientID: "kitsusync", KeyID: "test-key", PrivateKey: key,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}); err != nil {
+				t.Fatal(err)
+			}
+			state := vfxFilesAdminPageState{integrationReady: true, actionKey: "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef"}
+			loadVFXFilesAdminState(context.Background(), db, &vfxfiles.RuntimeConfig{Client: client}, vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: true}, vfxTestProductionID, "", &state, "en")
+			page := renderVFXFilesAdminPage(httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=en", nil), &model.Project{Name: "Test Production"}, vfxTestProductionID, "en", state)
+			if tc.wantReuse {
+				if state.pluginState != "available" || !state.pluginVerified || state.selectedID != connectionID || !strings.Contains(page, connectionID) {
+					t.Fatalf("verified connection was not reused after reload: state=%+v", state)
+				}
+				if strings.Contains(page, `name="action" value="authorize"`) || strings.Contains(page, "Connect Google Drive") {
+					t.Fatal("valid persisted connection incorrectly prompted for Google OAuth again")
+				}
+			} else if tc.templateFailScope != "" {
+				if state.pluginState != "unavailable" || state.pluginVerified {
+					t.Fatalf("partial Plugin capability outage was treated as verified: %+v", state)
+				}
+				for _, action := range []string{"authorize", "verify_root", "activate", "preview_sync"} {
+					if strings.Contains(page, `name="action" value="`+action+`"`) {
+						t.Errorf("partial capability outage rendered action %q", action)
+					}
+				}
+			} else {
+				if state.pluginState != "unavailable" || state.connectionsOK || state.pluginVerified {
+					t.Fatalf("provider outage was treated as verified: %+v", state)
+				}
+				if strings.Contains(page, "No Drive connections are available.") || strings.Contains(page, `name="action" value="authorize"`) {
+					t.Fatal("provider outage was presented as empty state or allowed OAuth action")
+				}
+			}
+		})
 	}
 }
 

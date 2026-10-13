@@ -32,11 +32,51 @@ func vfxEventTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}); err != nil {
+	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesAuthorizationIntent{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
+}
+
+func TestVFXFilesAuthorizationIntentIsProductionActorBoundAndExpires(t *testing.T) {
+	db := vfxEventTestDB(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	intent := VFXFilesAuthorizationIntent{
+		AuthorizationID: "30000000-0000-4000-8000-000000000001",
+		ProductionID:    vfxProductionID,
+		ActorID:         "20000000-0000-4000-8000-000000000001",
+		ExpiresAt:       now.Add(5 * time.Minute),
+	}
+	if err := StoreVFXFilesAuthorizationIntent(db, intent); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesAuthorizationIntent(db, intent); err != nil {
+		t.Fatalf("identical retry should remain idempotent: %v", err)
+	}
+	if _, err := FindVFXFilesAuthorizationIntent(db, intent.AuthorizationID, now); err != nil {
+		t.Fatalf("live intent was not found: %v", err)
+	}
+	if err := ConsumeVFXFilesAuthorizationIntent(db, intent.AuthorizationID, intent.ProductionID, "20000000-0000-4000-8000-000000000002", now); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("intent was consumed by a different actor: %v", err)
+	}
+	if err := ConsumeVFXFilesAuthorizationIntent(db, intent.AuthorizationID, intent.ProductionID, intent.ActorID, now); err != nil {
+		t.Fatalf("authorized intent was not consumed: %v", err)
+	}
+	if err := ConsumeVFXFilesAuthorizationIntent(db, intent.AuthorizationID, intent.ProductionID, intent.ActorID, now); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("consumed intent was reusable: %v", err)
+	}
+	if err := StoreVFXFilesAuthorizationIntent(db, VFXFilesAuthorizationIntent{
+		AuthorizationID: intent.AuthorizationID,
+		ProductionID:    "10000000-0000-4000-8000-000000000002",
+		ActorID:         intent.ActorID,
+		ExpiresAt:       intent.ExpiresAt,
+	}); !errors.Is(err, ErrVFXFilesAuthorizationIntentConflict) {
+		t.Fatalf("intent ID was rebound to another Production: %v", err)
+	}
+	if _, err := FindVFXFilesAuthorizationIntent(db, intent.AuthorizationID, intent.ExpiresAt); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expired intent remained usable: %v", err)
+	}
 }
 
 func vfxInput(id, delivery string, revision, epoch uint64, payload string) VFXFilesEventInput {

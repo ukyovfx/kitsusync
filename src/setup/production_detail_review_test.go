@@ -35,6 +35,7 @@ func TestUnconfiguredProductionSharesConfiguredDetailShell(t *testing.T) {
 }
 
 func TestProductionStorageSaveSharesDesktopFieldRow(t *testing.T) {
+	t.Setenv("KITSUSYNC_VFX_FILES_API_URL", "https://files.example.invalid/api/plugins/vfx_files/integrations/v1")
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=storage-row", nil)
 	body := renderCurrentProductionStorage(request, model.Project{KitsuProjectID: "storage-row", StorageURL: "https://drive.example.invalid/project"}, "en")
 	for _, marker := range []string{
@@ -50,6 +51,15 @@ func TestProductionStorageSaveSharesDesktopFieldRow(t *testing.T) {
 	}
 	if !strings.Contains(body, `Drive / Files Plugin settings`) || !strings.Contains(body, `/bot/admin/vfx-files?lang=ja&amp;production=storage-row`) {
 		t.Fatalf("Production Storage settings do not link to the scoped Files integration page: %s", body)
+	}
+}
+
+func TestProductionStorageHidesFilesEntryWhenPluginIsNotConfigured(t *testing.T) {
+	t.Setenv("KITSUSYNC_VFX_FILES_API_URL", "")
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=storage-row", nil)
+	body := renderCurrentProductionStorage(request, model.Project{KitsuProjectID: "storage-row", StorageURL: "https://drive.example.invalid/project"}, "en")
+	if strings.Contains(body, "/bot/admin/vfx-files") || strings.Contains(body, "Files Plugin settings") {
+		t.Fatalf("Files integration entry was visible while the Plugin is not configured: %s", body)
 	}
 }
 

@@ -159,9 +159,10 @@ const (
 )
 
 var (
-	ErrVFXFilesEventConflict  = errors.New("VFX Files event identity conflict")
-	ErrVFXFilesInvalidBatch   = errors.New("VFX Files event batch is invalid")
-	ErrVFXFilesConfigConflict = errors.New("VFX Files desired config revision conflict")
+	ErrVFXFilesEventConflict               = errors.New("VFX Files event identity conflict")
+	ErrVFXFilesInvalidBatch                = errors.New("VFX Files event batch is invalid")
+	ErrVFXFilesConfigConflict              = errors.New("VFX Files desired config revision conflict")
+	ErrVFXFilesAuthorizationIntentConflict = errors.New("VFX Files authorization intent identity conflict")
 )
 
 var vfxFilesUUIDRE = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -328,6 +329,92 @@ type VFXFilesProductionConfig struct {
 }
 
 func (VFXFilesProductionConfig) TableName() string { return "vfx_files_production_configs" }
+
+// VFXFilesAuthorizationIntent binds the Plugin-owned OAuth return to the
+// initiating KitsuSync actor and Production. It stores only opaque identity
+// and expiry metadata; OAuth codes and tokens never pass through this table.
+type VFXFilesAuthorizationIntent struct {
+	ID              uint      `gorm:"primaryKey"`
+	AuthorizationID string    `gorm:"not null;uniqueIndex;size:64"`
+	ProductionID    string    `gorm:"not null;index;size:64"`
+	ActorID         string    `gorm:"not null;size:64"`
+	ExpiresAt       time.Time `gorm:"not null;index"`
+	ConsumedAt      *time.Time
+	CreatedAt       time.Time
+}
+
+func (VFXFilesAuthorizationIntent) TableName() string { return "vfx_files_authorization_intents" }
+
+// StoreVFXFilesAuthorizationIntent is idempotent for the same intent and
+// refuses to rebind an opaque authorization ID to another actor or Production.
+func StoreVFXFilesAuthorizationIntent(db *gorm.DB, intent VFXFilesAuthorizationIntent) error {
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(intent.AuthorizationID)) || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(intent.ProductionID)) || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(intent.ActorID)) || !intent.ExpiresAt.After(time.Now().UTC()) {
+		return ErrVFXFilesInvalidBatch
+	}
+	intent.AuthorizationID = strings.ToLower(strings.TrimSpace(intent.AuthorizationID))
+	intent.ProductionID = strings.ToLower(strings.TrimSpace(intent.ProductionID))
+	intent.ActorID = strings.ToLower(strings.TrimSpace(intent.ActorID))
+	if intent.CreatedAt.IsZero() {
+		intent.CreatedAt = time.Now().UTC()
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var expiredIDs []uint
+		if err := tx.Model(&VFXFilesAuthorizationIntent{}).Where("expires_at <= ?", time.Now().UTC()).Order("id").Limit(100).Pluck("id", &expiredIDs).Error; err != nil {
+			return err
+		}
+		if len(expiredIDs) > 0 {
+			if err := tx.Where("id IN ?", expiredIDs).Delete(&VFXFilesAuthorizationIntent{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "authorization_id"}}, DoNothing: true}).Create(&intent).Error; err != nil {
+			return err
+		}
+		var stored VFXFilesAuthorizationIntent
+		if err := tx.Where("authorization_id = ?", intent.AuthorizationID).Take(&stored).Error; err != nil {
+			return err
+		}
+		if stored.ProductionID != intent.ProductionID || stored.ActorID != intent.ActorID || !stored.ExpiresAt.Equal(intent.ExpiresAt) {
+			return ErrVFXFilesAuthorizationIntentConflict
+		}
+		return nil
+	})
+}
+
+func FindVFXFilesAuthorizationIntent(db *gorm.DB, authorizationID string, now time.Time) (VFXFilesAuthorizationIntent, error) {
+	var intent VFXFilesAuthorizationIntent
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(authorizationID)) {
+		return intent, ErrVFXFilesInvalidBatch
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	err := db.Where("authorization_id = ? AND expires_at > ? AND consumed_at IS NULL", strings.ToLower(strings.TrimSpace(authorizationID)), now.UTC()).Take(&intent).Error
+	return intent, err
+}
+
+// ConsumeVFXFilesAuthorizationIntent atomically makes a successful OAuth
+// return single-use while retaining the identity binding against later reuse.
+func ConsumeVFXFilesAuthorizationIntent(db *gorm.DB, authorizationID, productionID, actorID string, now time.Time) error {
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(authorizationID)) || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(actorID)) {
+		return ErrVFXFilesInvalidBatch
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	result := db.Model(&VFXFilesAuthorizationIntent{}).Where("authorization_id = ? AND production_id = ? AND actor_id = ? AND expires_at > ? AND consumed_at IS NULL",
+		strings.ToLower(strings.TrimSpace(authorizationID)),
+		strings.ToLower(strings.TrimSpace(productionID)),
+		strings.ToLower(strings.TrimSpace(actorID)), now.UTC()).
+		Update("consumed_at", now.UTC())
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
 
 // VFXFilesSyncOperation stores only the latest bounded preview and sync job
 // reference for one Production. It contains no Drive credentials or raw

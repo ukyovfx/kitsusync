@@ -2,6 +2,7 @@ package setup
 
 import (
 	"app/src/api/kitsu"
+	"app/src/api/vfxfiles"
 	"app/src/model"
 	"errors"
 	"fmt"
@@ -842,7 +843,10 @@ func renderCurrentProductionStorage(r *http.Request, p model.Project, lang strin
 	} else {
 		storageBody += `<form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack drive-storage-form production-storage-form"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label class="production-storage-field" for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><div class="production-storage-control-row"><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row production-storage-actions"><button class="btn" type="submit" data-drive-save disabled>` + esc(t(lang, "保存", "Save")) + `</button></div></div></form><script>(function(){var form=document.querySelector('.drive-storage-form'),input=form&&form.querySelector('#storage-url'),button=form&&form.querySelector('[data-drive-save]');if(!form||!input||!button)return;var original=input.value;var sync=function(){button.disabled=input.value===original};input.addEventListener('input',sync);input.addEventListener('change',sync);sync();form.addEventListener('submit',function(){button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='` + esc(t(lang, "保存中...", "Saving...")) + `';});}());</script>`
 	}
-	driveSettings := `<p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/vfx-files?production="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "Drive / Files Plugin設定", "Drive / Files Plugin settings")) + `</a></p>`
+	driveSettings := ""
+	if vfxfiles.ManagementConfigured() {
+		driveSettings = `<p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/vfx-files?production="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "Drive / Files Plugin設定", "Drive / Files Plugin settings")) + `</a></p>`
+	}
 	return `<section id="storage" tabindex="-1" class="production-settings-section production-detail-surface"><h2 class="production-detail-section-title">` + esc(t(lang, "Storage", "Storage")) + `</h2>` + storageBody + driveSettings + `</section>`
 }
 

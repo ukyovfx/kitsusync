@@ -822,6 +822,7 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.NotificationDeliveryEvent{},
 		&model.ManagedChannelDeletion{},
 		&model.VFXFilesProductionConfig{},
+		&model.VFXFilesAuthorizationIntent{},
 		&model.VFXFilesSyncOperation{},
 		&model.VFXFilesEventInbox{},
 		&model.VFXFilesEventNonce{},
@@ -1146,6 +1147,7 @@ func main() {
 			return setup.ResolveKitsuConnection(ctx, hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
 		}
 		mux.HandleFunc(prefix+"/admin/vfx-files", setup.RequireSession(setup.VFXFilesAdminHandler(db, vfxRuntimeConfig, resolveKitsuForVFXFiles)))
+		mux.HandleFunc(prefix+"/admin/vfx-files/oauth-return", setup.RequireSession(setup.VFXFilesOAuthReturnHandler(db, resolveKitsuForVFXFiles)))
 		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)

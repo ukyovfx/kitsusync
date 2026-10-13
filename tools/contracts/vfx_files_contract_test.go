@@ -54,6 +54,25 @@ func TestVFXFilesContractDocumentsAreValidAndReferencesResolve(t *testing.T) {
 	}
 }
 
+func TestVFXFilesOAuthReturnAndPreviewRetrySemanticsAreDocumented(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join(contractDir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"/bot/admin/vfx-files/oauth-return",
+		"only `authorization_id` as a query parameter",
+		"same logged-in actor",
+		"stable `Idempotency-Key`",
+		"the existing Preview resource",
+		"explicit activation",
+	} {
+		if !strings.Contains(string(readme), required) {
+			t.Errorf("VFX Files contract documentation missing %q", required)
+		}
+	}
+}
+
 func checkRefs(t *testing.T, base string, value any) {
 	t.Helper()
 	switch typed := value.(type) {
@@ -192,11 +211,8 @@ func TestOpenAPIContractHasBothTrustDirectionsAndCriticalOperations(t *testing.T
 			if method != "post" && method != "put" && method != "patch" && method != "delete" {
 				continue
 			}
-			if path == "/productions/{production_id}/sync-previews" {
-				continue // preview is read-only and creates no durable provider operation
-			}
 			if !parametersContainHeader(operation["parameters"], "Idempotency-Key") {
-				t.Errorf("mutating Plugin operation %s %s must require Idempotency-Key", method, path)
+				t.Errorf("stateful Plugin operation %s %s must require Idempotency-Key", method, path)
 			}
 		}
 	}

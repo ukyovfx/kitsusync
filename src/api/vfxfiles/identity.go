@@ -92,6 +92,13 @@ func LoadRuntimeConfig(getenv func(string) string, httpClient *http.Client) (*Ru
 	return &RuntimeConfig{Client: client, Token: token, VerificationKeys: verificationKeys, VerificationKeyDir: verificationDir, EventKeys: eventKeys}, nil
 }
 
+// ManagementConfigured reports whether the server-side Plugin API has been
+// configured. The application validates the complete identity/key set during
+// startup; this is only a presentation gate and never represents Plugin health.
+func ManagementConfigured() bool {
+	return strings.TrimSpace(os.Getenv(apiBaseURLEnv)) != ""
+}
+
 func verificationKeyMatches(keys []VerificationKey, keyID string, publicKey *rsa.PublicKey) bool {
 	if publicKey == nil {
 		return false
