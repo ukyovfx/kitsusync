@@ -733,24 +733,107 @@ func TestVFXFilesUnsupportedSavedModeHidesUnsafeActionsButCanDisable(t *testing.
 		},
 		preview: &vfxFilesSyncPreview{ConfigRevision: 4},
 	}
-	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=en", nil)
 	project := &model.Project{Name: "Synthetic Production"}
-	page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
-	for _, action := range []string{"preview_sync", "apply_sync", "activate"} {
-		if strings.Contains(page, `name="action" value="`+action+`"`) {
-			t.Fatalf("unsupported saved mode advertised unsafe %q action", action)
+	for _, tc := range []struct{ lang, warning string }{
+		{"ja", "この同期方式は現在利用できません"},
+		{"en", "This synchronization mode is not supported yet"},
+	} {
+		state.desired["activation"] = map[string]any{"enabled": false, "notification_epoch": float64(0)}
+		request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang="+tc.lang, nil)
+		page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, tc.lang, state)
+		for _, action := range []string{"preview_sync", "apply_sync", "activate"} {
+			if strings.Contains(page, `name="action" value="`+action+`"`) {
+				t.Errorf("%s unsupported saved mode advertised unsafe %q action", tc.lang, action)
+			}
+		}
+		if !strings.Contains(page, tc.warning) {
+			t.Errorf("%s unsupported saved mode did not give a recovery explanation", tc.lang)
+		}
+		state.desired["activation"] = map[string]any{"enabled": true, "notification_epoch": float64(3)}
+		page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, tc.lang, state)
+		if !strings.Contains(page, `name="action" value="deactivate"`) {
+			t.Errorf("%s unsupported active configuration must retain explicit deactivation", tc.lang)
+		}
+		if strings.Contains(page, `name="action" value="apply_sync"`) {
+			t.Errorf("%s unsupported active configuration must not offer Apply", tc.lang)
 		}
 	}
-	if !strings.Contains(page, "This synchronization mode is not supported yet") {
-		t.Fatal("unsupported saved mode did not give a recovery explanation")
+}
+
+type vfxAdminAuthorizerSnapshotCounter struct {
+	vfxAdminAuthorizer
+	snapshotCalls int
+}
+
+func (a *vfxAdminAuthorizerSnapshotCounter) BuildVFXFilesSnapshot(context.Context, string, vfxFilesSnapshotScope) ([]vfxFilesSnapshotObject, string, error) {
+	a.snapshotCalls++
+	return nil, "", errors.New("snapshot should not be requested for an unsupported mode")
+}
+
+func TestVFXFilesUnsupportedSavedModeRejectsDirectPreviewApplyAndActivation(t *testing.T) {
+	var desiredReads int
+	var unexpectedRequests []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/desired-config") {
+			desiredReads++
+			w.Header().Set("ETag", `"4"`)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":4,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"tpl","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":true,"activated_at":"2026-10-13T00:00:00Z","notification_epoch":3}}`)
+			return
+		}
+		unexpectedRequests = append(unexpectedRequests, r.Method+" "+r.URL.Path)
+		http.Error(w, "unexpected provider operation", http.StatusNotFound)
+	}))
+	defer server.Close()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
 	}
-	state.desired["activation"] = map[string]any{"enabled": true, "notification_epoch": float64(3)}
-	page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
-	if !strings.Contains(page, `name="action" value="deactivate"`) {
-		t.Fatal("unsupported active configuration must retain explicit deactivation")
+	baseURL := server.URL + vfxfiles.ServiceAudienceSuffix
+	client, err := vfxfiles.NewPluginClient(baseURL, server.Client(), vfxfiles.ServiceTokenConfig{
+		Issuer: "https://kitsusync.example", Audience: baseURL, Subject: "kitsusync",
+		ClientID: "kitsusync", KeyID: "test-key", PrivateKey: key,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(page, `name="action" value="apply_sync"`) {
-		t.Fatal("unsupported active configuration must not offer Apply")
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}, &model.VFXFilesSyncOperation{}); err != nil {
+		t.Fatal(err)
+	}
+	expires := time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)
+	preview := []byte(`{"contract_version":"1.0","preview_id":"40000000-0000-4000-8000-000000000001","production_id":"` + vfxTestProductionID + `","config_revision":4,"root_id":"root-1","state":"preview_ready","expires_at":"` + expires + `","changes":[]}`)
+	if err := model.StoreVFXFilesSyncPreview(db, vfxTestProductionID, "50000000-0000-4000-8000-000000000001", 4, preview); err != nil {
+		t.Fatal(err)
+	}
+	authorizer := &vfxAdminAuthorizerSnapshotCounter{vfxAdminAuthorizer: vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: true}}
+	runtime := &vfxfiles.RuntimeConfig{Client: client}
+	project := &model.Project{KitsuProjectID: vfxTestProductionID}
+	for _, locale := range []struct{ lang, preview, apply, activate string }{
+		{"en", "not yet supported for Preview", "not yet supported for Apply", "cannot be activated yet"},
+		{"ja", "まだPreviewに対応していません", "まだApplyに対応していません", "まだ有効化できません"},
+	} {
+		for _, tc := range []struct{ action, key, want string }{
+			{"preview_sync", "ks-files-0123456789abcdef", locale.preview},
+			{"apply_sync", "ks-files-1123456789abcdef", locale.apply},
+			{"activate", "ks-files-2123456789abcdef", locale.activate},
+		} {
+			t.Run(locale.lang+"/"+tc.action, func(t *testing.T) {
+				form := url.Values{"action": {tc.action}, "idempotency_key": {tc.key}}
+				req := httptest.NewRequest(http.MethodPost, "/bot/admin/vfx-files", strings.NewReader(form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				message, redirect, completed := runVFXFilesAdminAction(context.Background(), db, runtime, authorizer, project, req, locale.lang)
+				if completed || redirect != "" || !strings.Contains(message, tc.want) {
+					t.Fatalf("%s unsupported saved mode action %q was not rejected clearly: message=%q redirect=%q completed=%v", locale.lang, tc.action, message, redirect, completed)
+				}
+			})
+		}
+	}
+	if desiredReads != 6 || len(unexpectedRequests) != 0 || authorizer.snapshotCalls != 0 {
+		t.Fatalf("unsupported mode reached work/provider mutation: desired reads=%d unexpected=%v snapshot calls=%d", desiredReads, unexpectedRequests, authorizer.snapshotCalls)
 	}
 }
 
