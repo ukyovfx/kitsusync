@@ -256,7 +256,7 @@ func TestVFXFilesInitialConfigUsesConditionalCreateAndServerVerifiedOwner(t *tes
 			w.Header().Set("ETag", `"1"`)
 			w.WriteHeader(http.StatusCreated)
 			created = true
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"10000000-0000-4000-8000-000000000001","config_revision":1,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"verified-plugin-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"production-template","revision":2,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":false,"activated_at":null,"notification_epoch":0}}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"10000000-0000-4000-8000-000000000001","config_revision":1,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"verified-plugin-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"production-template","revision":2,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":false,"activated_at":null,"notification_epoch":0}}`)
 		default:
 			http.Error(w, "unexpected fake operation", http.StatusNotFound)
 		}
@@ -278,7 +278,7 @@ func TestVFXFilesInitialConfigUsesConditionalCreateAndServerVerifiedOwner(t *tes
 	if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}); err != nil {
 		t.Fatal(err)
 	}
-	form := url.Values{"action": {"save_config"}, "connection_id": {"30000000-0000-4000-8000-000000000001"}, "root_id": {"root-1"}, "sync_mode": {"future_only"}, "template_production": {"production-template"}, "owner_subject": {"attacker-controlled-subject"}, "idempotency_key": {"ks-files-0123456789abcdef:save"}}
+	form := url.Values{"action": {"save_config"}, "connection_id": {"30000000-0000-4000-8000-000000000001"}, "root_id": {"root-1"}, "sync_mode": {"new_production"}, "template_production": {"production-template"}, "owner_subject": {"attacker-controlled-subject"}, "idempotency_key": {"ks-files-0123456789abcdef:save"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/vfx-files?production="+vfxTestProductionID, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	message, redirect, completed := runVFXFilesAdminAction(context.Background(), db, &vfxfiles.RuntimeConfig{Client: client}, vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: true}, &model.Project{KitsuProjectID: vfxTestProductionID}, req, "en")
@@ -292,6 +292,62 @@ func TestVFXFilesInitialConfigUsesConditionalCreateAndServerVerifiedOwner(t *tes
 	var stored model.VFXFilesProductionConfig
 	if err := db.Where("production_id = ?", vfxTestProductionID).First(&stored).Error; err != nil || stored.ConfigRevision != 1 {
 		t.Fatalf("created config mirror was not persisted: row=%+v err=%v", stored, err)
+	}
+}
+
+func TestVFXFilesUnsupportedSyncModesRejectBeforeProviderCall(t *testing.T) {
+	for _, mode := range []string{"future_only", "adopt_existing", "", "unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			form := url.Values{"sync_mode": {mode}, "connection_id": {"30000000-0000-4000-8000-000000000001"}, "root_id": {"root-1"}}
+			req := httptest.NewRequest(http.MethodPost, "/bot/admin/vfx-files", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if err := req.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			message, redirect, completed := saveVFXFilesDesiredConfig(
+				context.Background(), nil, nil, nil, vfxTestProductionID, req, "en", "synthetic",
+			)
+			if completed || redirect != "" || !strings.Contains(message, "not yet supported") {
+				t.Fatalf("unsupported %q was accepted or silently retried: message=%q redirect=%q completed=%v", mode, message, redirect, completed)
+			}
+		})
+	}
+}
+
+func TestVFXFilesInitialUIOffersOnlySupportedSyncMode(t *testing.T) {
+	state := vfxFilesAdminPageState{
+		pluginVerified:   true,
+		integrationReady: true,
+		actionKey:        "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef",
+		selectedID:       "30000000-0000-4000-8000-000000000001",
+		connections: []vfxFilesAdminConnection{{
+			ContractVersion: "1.0", ID: "30000000-0000-4000-8000-000000000001",
+			State: "connected", AccountMode: "my_drive",
+		}},
+		roots: []vfxFilesAdminRoot{{ID: "fake-root", Name: "Synthetic Root", AccountMode: "my_drive"}},
+		templates: map[string][]vfxFilesAdminTemplate{
+			"production": {{ID: "vfx-files.production.default", Revision: 1, Scope: "production", Label: "Default", Pattern: "{production}"}},
+		},
+	}
+	for _, tc := range []struct{ lang, message string }{
+		{"en", "Adopt existing and Future items only are unavailable"},
+		{"ja", "既存Productionの取り込みと今後の項目のみの同期"},
+	} {
+		page := renderVFXFilesAdminPage(
+			httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang="+tc.lang, nil),
+			&model.Project{Name: "Synthetic Production"}, vfxTestProductionID, tc.lang, state,
+		)
+		if !strings.Contains(page, `name="sync_mode"><option value="new_production"`) {
+			t.Fatalf("%s omitted supported mode selector", tc.lang)
+		}
+		for _, unsupported := range []string{`option value="future_only"`, `option value="adopt_existing"`} {
+			if strings.Contains(page, unsupported) {
+				t.Fatalf("%s advertised unimplemented sync mode %q", tc.lang, unsupported)
+			}
+		}
+		if !strings.Contains(page, tc.message) {
+			t.Fatalf("%s did not explain currently unavailable modes", tc.lang)
+		}
 	}
 }
 

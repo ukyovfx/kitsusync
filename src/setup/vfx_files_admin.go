@@ -827,7 +827,13 @@ func saveVFXFilesDesiredConfig(ctx context.Context, db *gorm.DB, runtime *vfxfil
 	connectionID := strings.TrimSpace(r.Form.Get("connection_id"))
 	rootID := strings.TrimSpace(r.Form.Get("root_id"))
 	mode := strings.TrimSpace(r.Form.Get("sync_mode"))
-	if !vfxfiles.ValidID(connectionID) || !regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`).MatchString(rootID) || mode != "new_production" && mode != "adopt_existing" && mode != "future_only" {
+	// Future-only needs a durable creation watermark; existing-tree adoption
+	// needs provider-verified identity proof. The current Plugin does neither.
+	// Reject unsupported modes before any provider call or configuration write.
+	if mode != "new_production" {
+		return t(lang, "この同期方式はまだ利用できません。新規Productionを選択してください。", "This sync mode is not yet supported. Choose New Production."), "", false
+	}
+	if !vfxfiles.ValidID(connectionID) || !regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`).MatchString(rootID) {
 		return t(lang, "接続、ルート、同期方式を確認してください。", "Check the Drive connection, root, and sync mode."), "", false
 	}
 	connections, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/drive-connections", url.Values{"production_id": {productionID}}, nil, "vfx.connections.read", false, "", "")
@@ -1166,7 +1172,7 @@ func renderVFXFilesAdminPage(r *http.Request, project *model.Project, production
 				}
 				body += `</select></label>`
 			}
-			body += `<label>` + esc(t(lang, "初回同期の扱い", "Initial sync mode")) + `<select name="sync_mode"><option value="future_only">` + esc(t(lang, "今後作成される項目のみ", "Future items only")) + `</option><option value="adopt_existing">` + esc(t(lang, "既存Productionを導入", "Adopt existing Production")) + `</option><option value="new_production">` + esc(t(lang, "新規Production", "New Production")) + `</option></select></label><fieldset><legend>` + esc(t(lang, "Preview対象", "Preview scope")) + `</legend>`
+			body += `<label>` + esc(t(lang, "初回同期の扱い", "Initial sync mode")) + `<select name="sync_mode"><option value="new_production">` + esc(t(lang, "新規Production", "New Production")) + `</option></select></label><p class="field-help" role="status">` + esc(t(lang, "既存Productionの取り込みと今後の項目のみの同期は、安全な動作が検証されるまで利用できません。新規ProductionでもPluginの階層テンプレート連携が完了するまでは同期を開始できません。", "Adopt existing and Future items only are unavailable until their safety is verified. New Production sync also requires the Plugin hierarchy-template integration to be completed.")) + `</p><fieldset><legend>` + esc(t(lang, "Preview対象", "Preview scope")) + `</legend>`
 			for _, scope := range []string{"episodes", "sequences", "shots", "assets", "tasks"} {
 				body += `<label><input type="checkbox" name="scope_` + scope + `">` + esc(strings.Title(scope)) + `</label>`
 			}
