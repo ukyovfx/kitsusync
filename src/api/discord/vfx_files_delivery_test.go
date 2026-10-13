@@ -45,6 +45,14 @@ func TestVFXFilesEventUsesProductionTaskTypeRouteAndDurableJournal(t *testing.T)
 		}
 		if strings.Contains(r.URL.Path, "/webhooks/12345/fake-token") && r.Method == http.MethodPost {
 			posts++
+			if posts == 1 {
+				// A long Retry-After is a definitive, retryable rejection. SendMessage
+				// leaves the durable notification intent retryable without sleeping,
+				// so the next event-processing pass must resume it safely.
+				w.Header().Set("Retry-After", "31")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
 			var payload Payload
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Errorf("decode synthetic Discord payload: %v", err)
@@ -64,7 +72,8 @@ func TestVFXFilesEventUsesProductionTaskTypeRouteAndDurableJournal(t *testing.T)
 	}))
 	defer server.Close()
 
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "files-delivery.db")+"?_busy_timeout=10000&_journal_mode=WAL"), &gorm.Config{})
+	dbPath := filepath.Join(t.TempDir(), "files-delivery.db")
+	db, err := gorm.Open(sqlite.Open(dbPath+"?_busy_timeout=10000&_journal_mode=WAL"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +82,7 @@ func TestVFXFilesEventUsesProductionTaskTypeRouteAndDurableJournal(t *testing.T)
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	defer sqlDB.Close()
+	defer func() { _ = sqlDB.Close() }()
 	if err := db.AutoMigrate(
 		&model.Project{}, &model.ProjectWebhook{}, &model.ProductionNotificationRoute{},
 		&model.ProductionNotificationConfig{}, &model.ProjectReviewerTarget{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{},
@@ -110,15 +119,41 @@ func TestVFXFilesEventUsesProductionTaskTypeRouteAndDurableJournal(t *testing.T)
 		t.Fatalf("synthetic event acceptance=%+v err=%v", results, err)
 	}
 	processed, deferred, err := ProcessVFXFilesDeliveryEvents(db, 10)
-	if err != nil || processed != 1 || deferred != 0 || posts != 1 {
+	if err != nil || processed != 0 || deferred != 1 || posts != 1 {
 		t.Fatalf("delivery pass processed=%d deferred=%d posts=%d err=%v", processed, deferred, posts, err)
 	}
 	var journal model.NotificationDeliveryEvent
+	if err := db.Where("source_event_id = ? AND delivery_source = ?", eventID, "vfx_files").First(&journal).Error; err != nil || journal.Disposition != model.DeliveryRetryable || journal.FailureClass != "rate_limited" || journal.DiscordMessageID != "" {
+		t.Fatalf("retryable notification journal=%+v err=%v", journal, err)
+	}
+	var inbox model.VFXFilesEventInbox
+	if err := db.Where("event_id = ?", eventID).First(&inbox).Error; err != nil || inbox.ProcessedAt != nil {
+		t.Fatalf("rate-limited inbox event must remain pending: %+v err=%v", inbox, err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close SQLite before retry recovery: %v", err)
+	}
+	db, err = gorm.Open(sqlite.Open(dbPath+"?_busy_timeout=10000&_journal_mode=WAL"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("reopen durable SQLite state before retry: %v", err)
+	}
+	sqlDB, err = db.DB()
+	if err != nil {
+		t.Fatalf("reopen SQLite pool before retry: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	processed, deferred, err = ProcessVFXFilesDeliveryEvents(db, 10)
+	if err != nil || processed != 1 || deferred != 0 || posts != 2 {
+		t.Fatalf("retry pass processed=%d deferred=%d posts=%d err=%v", processed, deferred, posts, err)
+	}
 	if err := db.Where("source_event_id = ? AND delivery_source = ?", eventID, "vfx_files").First(&journal).Error; err != nil || journal.Disposition != model.DeliveryDelivered || journal.DiscordMessageID != "112233445566778899" {
 		t.Fatalf("durable notification journal=%+v err=%v", journal, err)
 	}
+	if err := db.Where("event_id = ?", eventID).First(&inbox).Error; err != nil || inbox.ProcessedAt == nil {
+		t.Fatalf("successful retry must mark inbox event processed: %+v err=%v", inbox, err)
+	}
 	processed, deferred, err = ProcessVFXFilesDeliveryEvents(db, 10)
-	if err != nil || processed != 0 || deferred != 0 || posts != 1 {
+	if err != nil || processed != 0 || deferred != 0 || posts != 2 {
 		t.Fatalf("second pass duplicated delivery processed=%d deferred=%d posts=%d err=%v", processed, deferred, posts, err)
 	}
 }
