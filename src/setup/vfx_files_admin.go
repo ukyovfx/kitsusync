@@ -99,12 +99,17 @@ type vfxFilesAdminRoot struct {
 }
 
 type vfxFilesAdminTemplate struct {
-	ID       string   `json:"id"`
-	Revision uint64   `json:"revision"`
-	Scope    string   `json:"scope"`
-	Label    string   `json:"label"`
-	Pattern  string   `json:"pattern"`
-	Tokens   []string `json:"available_tokens"`
+	ID              string   `json:"id"`
+	Revision        uint64   `json:"revision"`
+	Scope           string   `json:"scope"`
+	Label           string   `json:"label"`
+	Pattern         string   `json:"pattern"`
+	Tokens          []string `json:"available_tokens"`
+	Materialization struct {
+		SchemaRevision     int      `json:"schema_revision"`
+		RootBinding        string   `json:"root_binding"`
+		AvailableOverrides []string `json:"available_overrides"`
+	} `json:"materialization"`
 }
 
 type vfxFilesRootCapabilities struct {
@@ -1035,8 +1040,15 @@ func decodeVFXFilesTemplates(body []byte, scope string, destination *[]vfxFilesA
 		return errors.New("invalid Plugin template catalog")
 	}
 	for _, template := range result.Templates {
-		if template.Scope != scope || len(template.ID) == 0 || len(template.ID) > 160 || template.Revision == 0 || len([]rune(template.Label)) == 0 || len([]rune(template.Label)) > 160 || len([]rune(template.Pattern)) == 0 || len([]rune(template.Pattern)) > 240 || len(template.Tokens) > 64 {
+		if template.Scope != scope || len(template.ID) == 0 || len(template.ID) > 160 || template.Revision == 0 || len([]rune(template.Label)) == 0 || len([]rune(template.Label)) > 160 || len([]rune(template.Pattern)) == 0 || len([]rune(template.Pattern)) > 240 || len(template.Tokens) > 64 || template.Materialization.SchemaRevision != 1 || template.Materialization.RootBinding != "verified_root_is_production_root" || len(template.Materialization.AvailableOverrides) > 16 {
 			return errors.New("invalid Plugin template")
+		}
+		seenOverrides := map[string]bool{}
+		for _, override := range template.Materialization.AvailableOverrides {
+			if len(override) == 0 || len(override) > 80 || strings.ContainsAny(override, "\r\n") || seenOverrides[override] {
+				return errors.New("invalid Plugin template materialization")
+			}
+			seenOverrides[override] = true
 		}
 		for _, token := range template.Tokens {
 			if len(token) == 0 || len(token) > 100 || strings.ContainsAny(token, "\r\n") {

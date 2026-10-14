@@ -21,6 +21,23 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestDecodeVFXFilesTemplatesRequiresExplicitMaterializationContract(t *testing.T) {
+	valid := []byte(`{"contract_version":"1.0","templates":[{"id":"vfx-files.shot.default","revision":1,"scope":"shot","label":"Shot","pattern":"{shot}","materialization":{"schema_revision":1,"root_binding":"verified_root_is_production_root","available_overrides":["shot.folder"]}}]}`)
+	var decoded []vfxFilesAdminTemplate
+	if err := decodeVFXFilesTemplates(valid, "shot", &decoded); err != nil || len(decoded) != 1 {
+		t.Fatalf("valid materialization contract rejected: templates=%+v err=%v", decoded, err)
+	}
+
+	for _, body := range [][]byte{
+		[]byte(`{"contract_version":"1.0","templates":[{"id":"vfx-files.shot.default","revision":1,"scope":"shot","label":"Shot","pattern":"{shot}"}]}`),
+		[]byte(`{"contract_version":"1.0","templates":[{"id":"vfx-files.shot.default","revision":1,"scope":"shot","label":"Shot","pattern":"{shot}","materialization":{"schema_revision":1,"root_binding":"root_is_parent_of_production","available_overrides":[]}}]}`),
+	} {
+		if err := decodeVFXFilesTemplates(body, "shot", &decoded); err == nil {
+			t.Fatal("catalog without the explicit v1 root and materialization semantics was accepted")
+		}
+	}
+}
+
 const (
 	vfxTestProductionID = "10000000-0000-4000-8000-000000000001"
 	vfxTestActorID      = "20000000-0000-4000-8000-000000000001"
@@ -245,7 +262,7 @@ func TestVFXFilesInitialConfigUsesConditionalCreateAndServerVerifiedOwner(t *tes
 			}
 			_, _ = io.WriteString(w, `{"contract_version":"1.0","connection_id":"30000000-0000-4000-8000-000000000001","account_mode":"my_drive","root_id":"root-1","drive_id":null,"owner_subject":"verified-plugin-subject","state":"verified","capabilities":{"can_read":true,"can_add_children":true}}`)
 		case r.Method == http.MethodGet && r.URL.Path == vfxfiles.ServiceAudienceSuffix+"/templates":
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","templates":[{"id":"production-template","revision":2,"scope":"production","label":"Default","pattern":"{production}"}]}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","templates":[{"id":"production-template","revision":2,"scope":"production","label":"Default","pattern":"{production}","materialization":{"schema_revision":1,"root_binding":"verified_root_is_production_root","available_overrides":[]}}]}`)
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/desired-config"):
 			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/desired-config"):
@@ -362,6 +379,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 	var previewCreates int
 	var syncJobCalls int
 	var calls []string
+	previewExpiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	makeJob := func(state string, updated string) string {
 		return `{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000001","production_id":"` + vfxTestProductionID + `","config_revision":` + fmt.Sprint(configRevision) + `,"state":"` + state + `","progress":{"completed":1,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updated + `"}`
 	}
@@ -380,7 +398,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 				activation = "true"
 				activatedAt = `"2026-10-13T00:00:00Z"`
 			}
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"tpl","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"vfx-files.production.default","revision":1,"overrides":{}},{"scope":"shot","template_id":"vfx-files.shot.default","revision":1,"overrides":{}},{"scope":"task","template_id":"vfx-files.task.default","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":true,"assets":false,"tasks":true,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activation"):
 			activationEnabled = true
 			activationEpoch = 1
@@ -420,7 +438,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 				previewIDsByKey[idempotencyKey] = previewID
 				previewCreates++
 			}
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","preview_id":"`+previewID+`","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"root_id":"root-1","state":"preview_ready","summary":{"existing":1,"create":0,"link":0,"excluded":0,"warnings":0},"changes":[],"expires_at":"2026-10-14T00:00:00Z"}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","preview_id":"`+previewID+`","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"root_id":"root-1","state":"preview_ready","summary":{"existing":1,"create":0,"link":0,"excluded":0,"warnings":0},"changes":[],"expires_at":"`+previewExpiresAt+`"}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/sync-jobs"):
 			syncJobCalls++
 			if !activationEnabled {
@@ -890,7 +908,7 @@ func TestVFXFilesManagementReusesVerifiedConnectionAndDoesNotRenderOutageAsEmpty
 						w.WriteHeader(tc.templateFailStatus)
 						return
 					}
-					_, _ = io.WriteString(w, `{"contract_version":"1.0","templates":[{"id":"`+scope+`-template","revision":1,"scope":"`+scope+`","label":"Default","pattern":"{production}"}]}`)
+					_, _ = io.WriteString(w, `{"contract_version":"1.0","templates":[{"id":"`+scope+`-template","revision":1,"scope":"`+scope+`","label":"Default","pattern":"{production}","materialization":{"schema_revision":1,"root_binding":"verified_root_is_production_root","available_overrides":[]}}]}`)
 					return
 				}
 				if strings.HasSuffix(r.URL.Path, "/desired-config") {
