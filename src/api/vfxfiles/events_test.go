@@ -28,7 +28,7 @@ func eventHandlerTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB, _ := db.DB()
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}); err != nil {
+	if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}, &model.NotificationDeliveryEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.VFXFilesProductionConfig{ProductionID: "10000000-0000-4000-8000-000000000001", ActivationEpoch: 1, Activated: true}).Error; err != nil {
@@ -126,6 +126,8 @@ func TestSignedNonDeliveryLifecycleEventsAreDurableButNeverPendingDiscord(t *tes
 			if err := db.Where("event_id = ?", accepted.Results[0].EventID).First(&stored).Error; err != nil || stored.EventType != fixture.eventType || stored.Outcome != model.VFXFilesEventAccepted || stored.PayloadJSON == "" {
 				t.Fatalf("event was not durably journaled: row=%+v err=%v", stored, err)
 			}
+			// Simulate a lost first 202: the Provider retries the exact same
+			// Event ID and body with a fresh request nonce.
 			replay := httptest.NewRecorder()
 			replayBody := signedEventRequest(t, body, key, fmt.Sprintf("non-delivery-replay-%04d", i), fmt.Sprintf("non-delivery-replay-key-%04d", i), clock)
 			handler(replay, replayBody)
@@ -213,7 +215,11 @@ func TestSignedEventDuringActivationMirrorGapIsRetryableWithFreshNonce(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	validNextEpoch := []byte(strings.Replace(string(fixture), `"activation_epoch": 1`, `"activation_epoch": 2`, 1))
+	var fixtureBatch eventBatch
+	if err := json.Unmarshal(fixture, &fixtureBatch); err != nil || fixtureBatch.ContractVersion != contractVersion || len(fixtureBatch.Events) != 1 {
+		t.Fatalf("invalid folder event fixture: contract=%q events=%d err=%v", fixtureBatch.ContractVersion, len(fixtureBatch.Events), err)
+	}
+	validNextEpoch := json.RawMessage(strings.Replace(string(fixtureBatch.Events[0]), `"activation_epoch": 1`, `"activation_epoch": 2`, 1))
 	var pendingEvent map[string]any
 	if err := json.Unmarshal(validNextEpoch, &pendingEvent); err != nil {
 		t.Fatal(err)
@@ -247,8 +253,9 @@ func TestSignedEventDuringActivationMirrorGapIsRetryableWithFreshNonce(t *testin
 	if err := db.Where("event_id = ?", "60000000-0000-4000-8000-000000000099").First(&quarantined).Error; err != nil || quarantined.Outcome != model.VFXFilesEventQuarantined {
 		t.Fatalf("unknown Production was not durably quarantined while the valid next epoch retried: %+v err=%v", quarantined, err)
 	}
+	pendingEventID := pendingEvent["event_id"].(string)
 	var pendingCount int64
-	if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_id = ?", "60000000-0000-4000-8000-000000000001").Count(&pendingCount).Error; err != nil || pendingCount != 0 {
+	if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_id = ?", pendingEventID).Count(&pendingCount).Error; err != nil || pendingCount != 0 {
 		t.Fatalf("pending next-epoch event was persisted during activation: count=%d err=%v", pendingCount, err)
 	}
 
