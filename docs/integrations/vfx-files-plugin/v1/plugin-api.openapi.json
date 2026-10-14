@@ -1550,7 +1550,8 @@
                 "revision",
                 "scope",
                 "label",
-                "pattern"
+                "pattern",
+                "materialization"
               ],
               "properties": {
                 "id": {
@@ -1561,37 +1562,72 @@
                   "minimum": 1
                 },
                 "scope": {
-                  "type": "string"
+                  "type": "string",
+                  "enum": [
+                    "production",
+                    "asset",
+                    "sequence",
+                    "shot",
+                    "task"
+                  ]
                 },
                 "label": {
                   "type": "string"
                 },
                 "pattern": {
-                  "type": "string"
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240,
+                  "description": "Catalog display pattern. For scope production it describes the Production anchor and does not create a child folder; static folders are children of the verified Production root. Other patterns are relative folder templates; resolved output segments must reject absolute paths, dot/dot-dot, backslashes and control characters."
                 },
                 "available_tokens": {
                   "type": "array",
                   "items": {
                     "type": "string"
                   }
+                },
+                "materialization": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "schema_revision",
+                    "root_binding",
+                    "available_overrides"
+                  ],
+                  "properties": {
+                    "schema_revision": {
+                      "const": 1
+                    },
+                    "root_binding": {
+                      "const": "verified_root_is_production_root"
+                    },
+                    "available_overrides": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "production.00_production",
+                          "production.shared_assets",
+                          "production.shots",
+                          "production.editorial",
+                          "production.delivery",
+                          "asset.folder",
+                          "sequence.episode",
+                          "sequence.folder",
+                          "shot.folder",
+                          "task.folder",
+                          "task.working",
+                          "task.publish",
+                          "task.shared_outputs",
+                          "task.delivery"
+                        ]
+                      }
+                    }
+                  }
                 }
               },
-              "additionalProperties": false,
-              "scope": {
-                "enum": [
-                  "production",
-                  "asset",
-                  "sequence",
-                  "shot",
-                  "task"
-                ]
-              },
-              "pattern": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 240,
-                "description": "Relative folder template; resolved output segments must reject absolute paths, dot/dot-dot, backslashes and control characters."
-              }
+              "additionalProperties": false
             }
           }
         }

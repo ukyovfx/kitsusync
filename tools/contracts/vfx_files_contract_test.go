@@ -178,6 +178,33 @@ func TestOpenAPIContractHasBothTrustDirectionsAndCriticalOperations(t *testing.T
 	}
 }
 
+func TestTemplateCatalogMakesProductionRootAndFolderMaterializationExplicit(t *testing.T) {
+	plugin := readJSON(t, "plugin-api.openapi.json")
+	schemas := plugin["components"].(map[string]any)["schemas"].(map[string]any)
+	list := schemas["TemplateList"].(map[string]any)
+	item := list["properties"].(map[string]any)["templates"].(map[string]any)["items"].(map[string]any)
+	if !stringSliceContains(item["required"], "materialization") {
+		t.Fatal("every catalog selection must state how the Plugin materializes it")
+	}
+	materialization := item["properties"].(map[string]any)["materialization"].(map[string]any)
+	if !stringSliceContains(materialization["required"], "schema_revision") ||
+		!stringSliceContains(materialization["required"], "root_binding") ||
+		!stringSliceContains(materialization["required"], "available_overrides") {
+		t.Fatal("materialization must declare schema revision, root interpretation and allowed override keys")
+	}
+	properties := materialization["properties"].(map[string]any)
+	if properties["schema_revision"].(map[string]any)["const"] != float64(1) {
+		t.Fatal("only the reviewed materialization schema revision is accepted")
+	}
+	if properties["root_binding"].(map[string]any)["const"] != "verified_root_is_production_root" {
+		t.Fatal("the v1 selected-root interpretation must be explicit")
+	}
+	patternDescription := item["properties"].(map[string]any)["pattern"].(map[string]any)["description"].(string)
+	if !strings.Contains(patternDescription, "does not create a child folder") {
+		t.Fatal("Production catalog pattern must not imply creating a duplicate named Production folder")
+	}
+}
+
 func TestDriveFolderURLCandidateIsStrictlyAllowlisted(t *testing.T) {
 	plugin := readJSON(t, "plugin-api.openapi.json")
 	request := plugin["components"].(map[string]any)["schemas"].(map[string]any)["RootVerificationRequest"].(map[string]any)
