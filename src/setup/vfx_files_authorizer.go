@@ -14,8 +14,7 @@ import (
 )
 
 type vfxFilesKitsuIdentitySource interface {
-	VerifySession(context.Context, KitsuURLModel, string) error
-	Persons(context.Context, KitsuURLModel, string) ([]kitsu.Person, error)
+	AuthenticatedPerson(context.Context, KitsuURLModel, string) (kitsu.Person, error)
 	ProductionTeam(context.Context, KitsuURLModel, string, string) ([]kitsu.Person, error)
 }
 
@@ -47,24 +46,11 @@ func (a vfxFilesKitsuSessionAuthorizer) AuthorizeProductionAdmin(ctx context.Con
 	if ctx == nil || !vfxfiles.ValidID(strings.TrimSpace(productionID)) || a.email == "" || a.token == "" || !isStudioManagerOrHigher(a.role) || a.source == nil {
 		return "", false, errors.New("Kitsu Production authorization unavailable")
 	}
-	if err := a.source.VerifySession(ctx, a.connection, a.token); err != nil {
-		return "", false, errors.New("Kitsu session is no longer valid")
-	}
-	persons, err := a.source.Persons(ctx, a.connection, a.token)
+	actor, err := a.source.AuthenticatedPerson(ctx, a.connection, a.token)
 	if err != nil {
 		return "", false, errors.New("Kitsu actor identity could not be verified")
 	}
-	var actor *kitsu.Person
-	for index := range persons {
-		if !strings.EqualFold(strings.TrimSpace(persons[index].Email), a.email) {
-			continue
-		}
-		if actor != nil {
-			return "", false, errors.New("Kitsu actor identity is ambiguous")
-		}
-		actor = &persons[index]
-	}
-	if actor == nil || !vfxfiles.ValidID(actor.ID) || !actor.Active || actor.Archived || actor.IsBot || !isStudioManagerOrHigher(actor.Role) {
+	if !strings.EqualFold(strings.TrimSpace(actor.Email), a.email) || !vfxfiles.ValidID(actor.ID) || !actor.Active || actor.Archived || actor.IsBot || !isStudioManagerOrHigher(actor.Role) {
 		return "", false, errors.New("Kitsu actor is unavailable or not an administrator")
 	}
 	team, err := a.source.ProductionTeam(ctx, a.connection, a.token, productionID)
@@ -86,16 +72,47 @@ func (a vfxFilesKitsuSessionAuthorizer) AuthorizeProductionAdmin(ctx context.Con
 	return strings.ToLower(actor.ID), true, nil
 }
 
-func (liveVFXFilesKitsuIdentitySource) VerifySession(ctx context.Context, connection KitsuURLModel, token string) error {
-	return VerifyKitsuToken(ctx, connection, token)
-}
-
-func (liveVFXFilesKitsuIdentitySource) Persons(ctx context.Context, connection KitsuURLModel, token string) ([]kitsu.Person, error) {
-	var persons []kitsu.Person
-	if err := fetchVFXFilesKitsuJSON(ctx, connection, token, "/data/persons/", &persons); err != nil {
-		return nil, err
+func (liveVFXFilesKitsuIdentitySource) AuthenticatedPerson(ctx context.Context, connection KitsuURLModel, token string) (kitsu.Person, error) {
+	var actor kitsu.Person
+	if ctx == nil || strings.TrimSpace(token) == "" || len(connection.VerifiedIPs) == 0 {
+		return actor, errors.New("Kitsu connection is not verified")
 	}
-	return persons, nil
+	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(connection.ResolvedAPIBaseURL), "/"))
+	if err != nil || (base.Scheme != "https" && base.Scheme != "http") || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+		return actor, errors.New("Kitsu API base is invalid")
+	}
+	base.Path += "/auth/authenticated"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
+	if err != nil {
+		return actor, errors.New("Kitsu request is invalid")
+	}
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	request.Header.Set("Accept", "application/json")
+	response, err := safeKitsuClient(connection, connection.VerifiedIPs).Do(request)
+	if err != nil {
+		return actor, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return actor, errors.New("Kitsu API rejected the authenticated identity check")
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
+	if err != nil || len(data) > 4<<20 {
+		return actor, errors.New("Kitsu API response exceeds the safe read limit")
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	var result struct {
+		Authenticated bool         `json:"authenticated"`
+		User          kitsu.Person `json:"user"`
+	}
+	if err := decoder.Decode(&result); err != nil || !result.Authenticated {
+		return actor, errors.New("Kitsu API authenticated identity response is invalid")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return actor, errors.New("Kitsu API response contains trailing data")
+	}
+	return result.User, nil
 }
 
 func (liveVFXFilesKitsuIdentitySource) ProductionTeam(ctx context.Context, connection KitsuURLModel, token, productionID string) ([]kitsu.Person, error) {
