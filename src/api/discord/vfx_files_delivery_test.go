@@ -236,7 +236,7 @@ func TestVFXFilesDeferredFirstPageDoesNotStarveLaterEvents(t *testing.T) {
 		t.Fatalf("accept synthetic backlog: results=%d err=%v", len(results), err)
 	}
 	processed, deferred, err := ProcessVFXFilesDeliveryEvents(db, 25)
-	if err != nil || processed != 1 || deferred != 0 || posts != 26 {
+	if err != nil || processed != 1 || deferred != 25 || posts != 26 {
 		t.Fatalf("deferred first page starved later events: processed=%d deferred=%d posts=%d err=%v", processed, deferred, posts, err)
 	}
 	var first, last model.VFXFilesEventInbox

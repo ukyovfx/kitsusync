@@ -222,6 +222,13 @@ func TestRetryableDeliveryUsesOnlyFreshRenderedIntent(t *testing.T) {
 			t.Fatalf("first deterministic rejection was not recorded: result=%+v", first)
 		}
 		db = reopenRetryFileSQLite(t, db, dbPath)
+		var retryEvent model.NotificationDeliveryEvent
+		if err := db.Where("task_id = ?", "task-1").First(&retryEvent).Error; err != nil || retryEvent.Disposition != model.DeliveryRetryable || retryEvent.RetryAfterAt == nil {
+			t.Fatalf("first rejection did not persist its retry deadline: event=%+v err=%v", retryEvent, err)
+		}
+		if err := db.Model(&model.NotificationDeliveryEvent{}).Where("id = ?", retryEvent.ID).Update("retry_after_at", time.Now().UTC().Add(-time.Second)).Error; err != nil {
+			t.Fatal(err)
+		}
 		second := sendDurableNotification(db, elem, payload, server.URL+"/api/webhooks/webhook-1/synthetic-token", "", revision)
 		if second.MessageID != "message-accepted" || !second.Durable || len(retryWebhookBodies(recorder)) != 2 {
 			t.Fatalf("freshly re-rendered identical intent should replay safely: result=%+v posts=%d", second, len(retryWebhookBodies(recorder)))
