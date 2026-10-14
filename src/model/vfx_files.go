@@ -683,10 +683,7 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 		if ordered[i].DeliveryID != ordered[j].DeliveryID {
 			return ordered[i].DeliveryID < ordered[j].DeliveryID
 		}
-		if ordered[i].DeliveryRevision != ordered[j].DeliveryRevision {
-			return ordered[i].DeliveryRevision < ordered[j].DeliveryRevision
-		}
-		return ordered[i].EventID < ordered[j].EventID
+		return ordered[i].DeliveryRevision < ordered[j].DeliveryRevision
 	})
 	byEventID := make(map[string]VFXFilesEventResult, len(events))
 	activationPending := make(map[string]struct{})
@@ -762,14 +759,19 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 			} else if configErr != nil {
 				return configErr
 			}
-			if input.DeliveryID != "" && input.DeliveryRevision > 0 {
+			if outcome == VFXFilesEventAccepted && input.DeliveryID != "" && input.DeliveryRevision > 0 {
 				var latest VFXFilesEventInbox
-				readErr := tx.Where("production_id = ? AND delivery_id = ?", input.ProductionID, input.DeliveryID).Order("delivery_revision desc").First(&latest).Error
+				readErr := tx.Where("production_id = ? AND delivery_id = ? AND outcome = ?", input.ProductionID, input.DeliveryID, VFXFilesEventAccepted).
+					Order("delivery_revision desc").Order("id desc").First(&latest).Error
 				if readErr != nil && !errors.Is(readErr, gorm.ErrRecordNotFound) {
 					return readErr
 				}
-				if readErr == nil && input.DeliveryRevision <= latest.DeliveryRevision {
-					outcome, code = VFXFilesEventQuarantined, "stale_delivery_revision"
+				var previous *VFXFilesEventInbox
+				if readErr == nil {
+					previous = &latest
+				}
+				if diagnostic := validateVFXFilesDeliveryTransition(previous, input); diagnostic != "" {
+					outcome, code = VFXFilesEventQuarantined, diagnostic
 				}
 			}
 			stored := VFXFilesEventInbox{ProducerID: input.ProducerID, EventID: input.EventID, PayloadSHA256: payloadHash, PayloadJSON: string(input.Payload), EventType: input.EventType, ProductionID: input.ProductionID, ActivationEpoch: input.ActivationEpoch, DeliveryID: input.DeliveryID, DeliveryRevision: input.DeliveryRevision, RecipientTaskID: input.RecipientTaskID, RecipientTaskTypeID: input.RecipientTaskTypeID, Outcome: outcome, DiagnosticCode: code, CreatedAt: now}
@@ -790,6 +792,62 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 		results = append(results, byEventID[input.EventID])
 	}
 	return results, nil
+}
+
+// validateVFXFilesDeliveryTransition treats delivery_revision as the
+// Output Package revision. Status transitions may share that revision; only
+// a replacement-package `revised` event advances it.
+func validateVFXFilesDeliveryTransition(previous *VFXFilesEventInbox, incoming VFXFilesEventInput) string {
+	status, ok := vfxFilesDeliveryStatus(incoming.EventType)
+	if !ok {
+		return "invalid_delivery_transition"
+	}
+	if previous == nil {
+		if incoming.DeliveryRevision == 1 && (status == "created" || status == "ready") {
+			return ""
+		}
+		return "delivery_revision_gap"
+	}
+	previousStatus, ok := vfxFilesDeliveryStatus(previous.EventType)
+	if !ok {
+		return "invalid_delivery_transition"
+	}
+	if incoming.DeliveryRevision < previous.DeliveryRevision {
+		return "stale_delivery_revision"
+	}
+	if incoming.DeliveryRevision == previous.DeliveryRevision {
+		valid := false
+		switch previousStatus {
+		case "created":
+			valid = status == "ready" || status == "accepted" || status == "needs_fix"
+		case "ready", "revised":
+			valid = status == "accepted" || status == "needs_fix"
+		}
+		if valid {
+			return ""
+		}
+		return "invalid_delivery_transition"
+	}
+	if incoming.DeliveryRevision != previous.DeliveryRevision+1 {
+		return "delivery_revision_gap"
+	}
+	if status == "revised" && (previousStatus == "needs_fix" || previousStatus == "accepted") {
+		return ""
+	}
+	return "invalid_delivery_transition"
+}
+
+func vfxFilesDeliveryStatus(eventType string) (string, bool) {
+	if !strings.HasPrefix(eventType, "file_delivery.") {
+		return "", false
+	}
+	status := strings.TrimPrefix(eventType, "file_delivery.")
+	switch status {
+	case "created", "ready", "accepted", "needs_fix", "revised":
+		return status, true
+	default:
+		return "", false
+	}
 }
 
 func PruneVFXFilesEventNonces(db *gorm.DB, now time.Time, limit int) (int64, error) {

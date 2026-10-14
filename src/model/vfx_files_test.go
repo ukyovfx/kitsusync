@@ -104,10 +104,10 @@ func TestAcceptVFXFilesEventsPersistsDeduplicationConflictAndActivationQuarantin
 	if err != nil || conflicted[0].Outcome != VFXFilesEventQuarantined || conflicted[0].Code != "event_identity_conflict" {
 		t.Fatalf("conflict=%#v err=%v", conflicted, err)
 	}
-	stale := vfxInput(vfxEventID2, input.DeliveryID, 1, 4, `{"body":"older or equal revision"}`)
+	stale := vfxInput(vfxEventID2, input.DeliveryID, 1, 4, `{"body":"same revision and state"}`)
 	staleResult, err := AcceptVFXFilesEvents(db, "key-a", "nonce-000000000000004", []VFXFilesEventInput{stale}, now.Add(3*time.Second))
-	if err != nil || staleResult[0].Code != "stale_delivery_revision" {
-		t.Fatalf("stale revision=%#v err=%v", staleResult, err)
+	if err != nil || staleResult[0].Code != "invalid_delivery_transition" {
+		t.Fatalf("same-revision repeated state=%#v err=%v", staleResult, err)
 	}
 	wrongEpoch := vfxInput("60000000-0000-4000-8000-000000000003", "90000000-0000-4000-8000-000000000002", 1, 3, `{"body":"old epoch"}`)
 	wrongResult, err := AcceptVFXFilesEvents(db, "key-a", "nonce-000000000000005", []VFXFilesEventInput{wrongEpoch}, now.Add(4*time.Second))
@@ -121,6 +121,127 @@ func TestAcceptVFXFilesEventsPersistsDeduplicationConflictAndActivationQuarantin
 	var conflictCount int64
 	if err := db.Model(&VFXFilesEventConflict{}).Count(&conflictCount).Error; err != nil || conflictCount != 1 {
 		t.Fatalf("conflict diagnostics=%d err=%v", conflictCount, err)
+	}
+}
+
+func TestAcceptVFXFilesDeliveryStateTransitionsWithinPackageRevision(t *testing.T) {
+	db := vfxEventTestDB(t)
+	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 4, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	deliveryID := "90000000-0000-4000-8000-000000000021"
+	events := []VFXFilesEventInput{
+		vfxInput("60000000-0000-4000-8000-000000000021", deliveryID, 1, 4, `{"status":"created"}`),
+		vfxInput("60000000-0000-4000-8000-000000000022", deliveryID, 1, 4, `{"status":"needs_fix"}`),
+		vfxInput("60000000-0000-4000-8000-000000000023", deliveryID, 2, 4, `{"status":"revised"}`),
+		vfxInput("60000000-0000-4000-8000-000000000024", deliveryID, 2, 4, `{"status":"accepted"}`),
+	}
+	events[0].EventType = "file_delivery.created"
+	events[1].EventType = "file_delivery.needs_fix"
+	events[2].EventType = "file_delivery.revised"
+	events[3].EventType = "file_delivery.accepted"
+	for i, event := range events {
+		results, err := AcceptVFXFilesEvents(db, "key-a", fmt.Sprintf("state-transition-nonce-%04d", i), []VFXFilesEventInput{event}, now.Add(time.Duration(i)*time.Second))
+		if err != nil || len(results) != 1 || results[0].Outcome != VFXFilesEventAccepted {
+			t.Fatalf("transition %s revision=%d result=%#v err=%v", event.EventType, event.DeliveryRevision, results, err)
+		}
+		if i == 1 {
+			retry, retryErr := AcceptVFXFilesEvents(db, "key-a", "state-transition-retry-nonce", []VFXFilesEventInput{event}, now.Add(1500*time.Millisecond))
+			if retryErr != nil || len(retry) != 1 || retry[0].Outcome != VFXFilesEventDuplicate {
+				t.Fatalf("fresh-nonce retry of the same state event=%#v err=%v", retry, retryErr)
+			}
+		}
+	}
+	var accepted int64
+	if err := db.Model(&VFXFilesEventInbox{}).Where("delivery_id = ? AND outcome = ?", deliveryID, VFXFilesEventAccepted).Count(&accepted).Error; err != nil || accepted != int64(len(events)) {
+		t.Fatalf("accepted transition count=%d err=%v", accepted, err)
+	}
+}
+
+func TestAcceptVFXFilesDeliveryRejectsRevisionRegressionAndOutOfOrderTransition(t *testing.T) {
+	db := vfxEventTestDB(t)
+	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 4, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 14, 2, 0, 0, 0, time.UTC)
+	deliveryID := "90000000-0000-4000-8000-000000000022"
+	created := vfxInput("60000000-0000-4000-8000-000000000031", deliveryID, 1, 4, `{"status":"created"}`)
+	created.EventType = "file_delivery.created"
+	needsFix := vfxInput("60000000-0000-4000-8000-000000000032", deliveryID, 1, 4, `{"status":"needs_fix"}`)
+	needsFix.EventType = "file_delivery.needs_fix"
+	for i, event := range []VFXFilesEventInput{created, needsFix} {
+		if result, err := AcceptVFXFilesEvents(db, "key-a", fmt.Sprintf("revision-seed-nonce-%04d", i), []VFXFilesEventInput{event}, now.Add(time.Duration(i)*time.Second)); err != nil || result[0].Outcome != VFXFilesEventAccepted {
+			t.Fatalf("seed %s result=%#v err=%v", event.EventType, result, err)
+		}
+	}
+	// An accepted response at the old package revision cannot skip the
+	// required revised event that advances the revision.
+	outOfOrder := vfxInput("60000000-0000-4000-8000-000000000033", deliveryID, 2, 4, `{"status":"accepted"}`)
+	outOfOrder.EventType = "file_delivery.accepted"
+	accepted, err := AcceptVFXFilesEvents(db, "key-a", "revision-order-nonce-001", []VFXFilesEventInput{outOfOrder}, now.Add(3*time.Second))
+	if err != nil || accepted[0].Outcome != VFXFilesEventQuarantined || accepted[0].Code != "invalid_delivery_transition" {
+		t.Fatalf("out-of-order state=%#v err=%v", accepted, err)
+	}
+	revised := vfxInput("60000000-0000-4000-8000-000000000034", deliveryID, 2, 4, `{"status":"revised"}`)
+	revised.EventType = "file_delivery.revised"
+	if result, err := AcceptVFXFilesEvents(db, "key-a", "revision-revised-nonce-01", []VFXFilesEventInput{revised}, now.Add(4*time.Second)); err != nil || result[0].Outcome != VFXFilesEventAccepted {
+		t.Fatalf("revised transition=%#v err=%v", result, err)
+	}
+	oldRevision := vfxInput("60000000-0000-4000-8000-000000000034", deliveryID, 1, 4, `{"status":"accepted"}`)
+	oldRevision.EventID = "60000000-0000-4000-8000-000000000036"
+	oldRevision.EventType = "file_delivery.accepted"
+	stale, err := AcceptVFXFilesEvents(db, "key-a", "revision-regression-nonce-001", []VFXFilesEventInput{oldRevision}, now.Add(5*time.Second))
+	if err != nil || stale[0].Outcome != VFXFilesEventQuarantined || stale[0].Code != "stale_delivery_revision" {
+		t.Fatalf("revision regression=%#v err=%v", stale, err)
+	}
+}
+
+func TestAcceptVFXFilesDeliveryBatchPreservesSameRevisionTransitionOrder(t *testing.T) {
+	db := vfxEventTestDB(t)
+	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 4, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	deliveryID := "90000000-0000-4000-8000-000000000023"
+	created := vfxInput("60000000-0000-4000-8000-000000000099", deliveryID, 1, 4, `{"status":"created"}`)
+	created.EventType = "file_delivery.created"
+	needsFix := vfxInput("60000000-0000-4000-8000-000000000001", deliveryID, 1, 4, `{"status":"needs_fix"}`)
+	needsFix.EventType = "file_delivery.needs_fix"
+	results, err := AcceptVFXFilesEvents(db, "key-a", "same-revision-batch-nonce-01", []VFXFilesEventInput{created, needsFix}, time.Now().UTC())
+	if err != nil || len(results) != 2 || results[0].EventID != created.EventID || results[0].Outcome != VFXFilesEventAccepted || results[1].EventID != needsFix.EventID || results[1].Outcome != VFXFilesEventAccepted {
+		t.Fatalf("ordered same-revision batch=%#v err=%v", results, err)
+	}
+}
+
+func TestValidateVFXFilesDeliveryTransitionSeparatesRevisionAndStatus(t *testing.T) {
+	previous := func(status string, revision uint64) *VFXFilesEventInbox {
+		return &VFXFilesEventInbox{EventType: "file_delivery." + status, DeliveryRevision: revision}
+	}
+	cases := []struct {
+		name     string
+		previous *VFXFilesEventInbox
+		status   string
+		revision uint64
+		wantCode string
+	}{
+		{name: "initial created", status: "created", revision: 1},
+		{name: "initial ready", status: "ready", revision: 1},
+		{name: "created to needs fix without revision bump", previous: previous("created", 1), status: "needs_fix", revision: 1},
+		{name: "needs fix to revised advances package revision", previous: previous("needs_fix", 1), status: "revised", revision: 2},
+		{name: "revised to accepted keeps package revision", previous: previous("revised", 2), status: "accepted", revision: 2},
+		{name: "lower revision is stale", previous: previous("revised", 2), status: "accepted", revision: 1, wantCode: "stale_delivery_revision"},
+		{name: "revision gap is rejected", previous: previous("needs_fix", 1), status: "revised", revision: 3, wantCode: "delivery_revision_gap"},
+		{name: "response cannot skip revised package", previous: previous("needs_fix", 1), status: "accepted", revision: 2, wantCode: "invalid_delivery_transition"},
+		{name: "duplicate state with a new event is rejected", previous: previous("created", 1), status: "created", revision: 1, wantCode: "invalid_delivery_transition"},
+		{name: "unknown event state is rejected", previous: previous("created", 1), status: "deleted", revision: 1, wantCode: "invalid_delivery_transition"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			input := VFXFilesEventInput{EventType: "file_delivery." + test.status, DeliveryRevision: test.revision}
+			if got := validateVFXFilesDeliveryTransition(test.previous, input); got != test.wantCode {
+				t.Fatalf("transition diagnostic=%q want %q", got, test.wantCode)
+			}
+		})
 	}
 }
 
