@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -246,21 +247,29 @@ func StoreVFXFilesDesiredConfigMirror(db *gorm.DB, productionID string, body []b
 	if config.Activation.Enabled && (config.Activation.ActivatedAt == nil || !boundedVFXText(*config.Activation.ActivatedAt, 50)) {
 		return ErrVFXFilesInvalidBatch
 	}
-	err := db.Transaction(func(tx *gorm.DB) error {
+	canonicalBody, err := canonicalVFXFilesJSON(body)
+	if err != nil {
+		return ErrVFXFilesInvalidBatch
+	}
+	err = db.Transaction(func(tx *gorm.DB) error {
 		var existing VFXFilesProductionConfig
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("production_id = ?", productionID).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			row := VFXFilesProductionConfig{ProductionID: productionID, DesiredConfigJSON: string(body), ConfigRevision: config.ConfigRevision, ActivationEpoch: config.Activation.NotificationEpoch, Activated: config.Activation.Enabled, UpdatedAt: time.Now().UTC()}
+			row := VFXFilesProductionConfig{ProductionID: productionID, DesiredConfigJSON: string(canonicalBody), ConfigRevision: config.ConfigRevision, ActivationEpoch: config.Activation.NotificationEpoch, Activated: config.Activation.Enabled, UpdatedAt: time.Now().UTC()}
 			return tx.Create(&row).Error
 		}
 		if err != nil {
 			return err
 		}
-		if config.ConfigRevision < existing.ConfigRevision || config.ConfigRevision == existing.ConfigRevision && (existing.DesiredConfigJSON != string(body) || existing.ActivationEpoch != config.Activation.NotificationEpoch || existing.Activated != config.Activation.Enabled) {
+		existingCanonical, err := canonicalVFXFilesJSON([]byte(existing.DesiredConfigJSON))
+		if err != nil {
+			return ErrVFXFilesInvalidBatch
+		}
+		if config.ConfigRevision < existing.ConfigRevision || config.ConfigRevision == existing.ConfigRevision && (!bytes.Equal(existingCanonical, canonicalBody) || existing.ActivationEpoch != config.Activation.NotificationEpoch || existing.Activated != config.Activation.Enabled) {
 			return ErrVFXFilesConfigConflict
 		}
 		result := tx.Model(&VFXFilesProductionConfig{}).Where("id = ? AND config_revision <= ?", existing.ID, config.ConfigRevision).Updates(map[string]any{
-			"desired_config_json": string(body), "config_revision": config.ConfigRevision, "activation_epoch": config.Activation.NotificationEpoch,
+			"desired_config_json": string(canonicalBody), "config_revision": config.ConfigRevision, "activation_epoch": config.Activation.NotificationEpoch,
 			"activated": config.Activation.Enabled, "updated_at": time.Now().UTC(),
 		})
 		if result.Error != nil {
@@ -272,6 +281,19 @@ func StoreVFXFilesDesiredConfigMirror(db *gorm.DB, productionID string, body []b
 		return nil
 	})
 	return err
+}
+
+func canonicalVFXFilesJSON(body []byte) ([]byte, error) {
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, ErrVFXFilesInvalidBatch
+	}
+	return json.Marshal(value)
 }
 
 // DisableVFXFilesEventIntake pauses local event acceptance and delivery before

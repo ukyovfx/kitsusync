@@ -223,6 +223,44 @@ func TestStoreVFXFilesDesiredConfigMirrorIsMonotoneAndRejectsSecrets(t *testing.
 	}
 }
 
+func TestStoreVFXFilesDesiredConfigMirrorAcceptsEquivalentJSONKeyOrder(t *testing.T) {
+	db := vfxEventTestDB(t)
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "desired-config-adopt-existing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, vfxProductionID, fixture); err != nil {
+		t.Fatalf("store initial response: %v", err)
+	}
+	var reordered map[string]any
+	if err := json.Unmarshal(fixture, &reordered); err != nil {
+		t.Fatal(err)
+	}
+	reorderedBody, err := json.Marshal(reordered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fixture) == string(reorderedBody) {
+		t.Fatal("test did not produce a different JSON key order")
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, vfxProductionID, reorderedBody); err != nil {
+		t.Fatalf("equivalent response with reordered object keys must be idempotent: %v", err)
+	}
+	var changed map[string]any
+	if err := json.Unmarshal(reorderedBody, &changed); err != nil {
+		t.Fatal(err)
+	}
+	policy := changed["sync_policy"].(map[string]any)
+	policy["notify_new_deliveries"] = false
+	changedBody, err := json.Marshal(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, vfxProductionID, changedBody); !errors.Is(err, ErrVFXFilesConfigConflict) {
+		t.Fatalf("same revision with changed desired behavior must conflict, got %v", err)
+	}
+}
+
 func TestVFXFilesSyncCommandIdempotencySurvivesSQLiteRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "vfx-sync-operations.db")
 	open := func() *gorm.DB {
