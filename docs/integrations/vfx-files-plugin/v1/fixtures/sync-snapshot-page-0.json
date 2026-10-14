@@ -1,0 +1,46 @@
+{
+  "contract_version": "1.0",
+  "page_index": 0,
+  "page_sha256": "87f3531099ec79709c5d0bb1e6dc9e288495219f43b29260bb316df642af8e58",
+  "objects": [
+    {
+      "object_type": "production",
+      "id": "10000000-0000-4000-8000-000000000001",
+      "parent_id": null,
+      "name": "Synthetic Production",
+      "code": "SYN",
+      "included_in_sync": true
+    },
+    {
+      "object_type": "sequence",
+      "id": "30000000-0000-4000-8000-000000000001",
+      "parent_id": "10000000-0000-4000-8000-000000000001",
+      "name": "sc01",
+      "code": "sc01",
+      "included_in_sync": true
+    },
+    {
+      "object_type": "shot",
+      "id": "40000000-0000-4000-8000-000000000001",
+      "parent_id": "30000000-0000-4000-8000-000000000001",
+      "name": "sc01_sh005",
+      "code": "sc01_sh005",
+      "included_in_sync": true
+    },
+    {
+      "object_type": "task",
+      "id": "50000000-0000-4000-8000-000000000002",
+      "parent_id": "40000000-0000-4000-8000-000000000001",
+      "name": "Compositing",
+      "task_type_id": "50000000-0000-4000-8000-000000000010",
+      "included_in_sync": true
+    },
+    {
+      "object_type": "task_type",
+      "id": "50000000-0000-4000-8000-000000000010",
+      "parent_id": null,
+      "name": "Compositing",
+      "included_in_sync": false
+    }
+  ]
+}

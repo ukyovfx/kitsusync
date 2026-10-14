@@ -1,0 +1,9 @@
+{
+  "contract_version": "1.0",
+  "snapshot_id": "b0000000-0000-4000-8000-000000000001",
+  "config_revision": 4,
+  "source_etag": "fake-kitsu-etag-4",
+  "page_count": 1,
+  "object_count": 5,
+  "snapshot_sha256": "87f3531099ec79709c5d0bb1e6dc9e288495219f43b29260bb316df642af8e58"
+}

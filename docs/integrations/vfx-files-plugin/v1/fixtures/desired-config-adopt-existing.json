@@ -1,0 +1,62 @@
+{
+  "contract_version": "1.0",
+  "production_id": "10000000-0000-4000-8000-000000000001",
+  "config_revision": 4,
+  "connection_id": "20000000-0000-4000-8000-000000000001",
+  "drive": {
+    "account_mode": "shared_drive",
+    "drive_id": "fake-drive-01",
+    "owner_subject": null,
+    "root_id": "fake-root-01",
+    "root_state": "verified"
+  },
+  "template_selection": {
+    "selections": [
+      {
+        "scope": "production",
+        "template_id": "studio-vfx-v1",
+        "revision": 2,
+        "overrides": {
+          "production": "{production}"
+        }
+      },
+      {
+        "scope": "shot",
+        "template_id": "studio-shot-v1",
+        "revision": 1,
+        "overrides": {
+          "shot": "{sequence}/{shot}"
+        }
+      },
+      {
+        "scope": "asset",
+        "template_id": "studio-asset-v1",
+        "revision": 1,
+        "overrides": {
+          "asset": "Assets/{asset}"
+        }
+      }
+    ]
+  },
+  "sync_policy": {
+    "mode": "adopt_existing",
+    "scope": {
+      "episodes": true,
+      "sequences": true,
+      "shots": true,
+      "assets": true,
+      "tasks": true,
+      "task_type_ids": [
+        "50000000-0000-4000-8000-000000000010"
+      ],
+      "include_ids": [],
+      "exclude_ids": []
+    },
+    "notify_new_deliveries": true
+  },
+  "activation": {
+    "enabled": false,
+    "activated_at": null,
+    "notification_epoch": 0
+  }
+}

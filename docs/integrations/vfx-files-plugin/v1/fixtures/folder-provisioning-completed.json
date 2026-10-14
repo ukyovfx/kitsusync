@@ -1,0 +1,20 @@
+{
+  "contract_version": "1.0",
+  "events": [
+    {
+      "contract_version": "1.0",
+      "producer_id": "vfx-files-plugin",
+      "event_id": "60000000-0000-4000-8000-000000000005",
+      "event_type": "folder.provisioning.completed",
+      "occurred_at": "2026-10-12T15:00:00Z",
+      "production_id": "10000000-0000-4000-8000-000000000001",
+      "folder": {
+        "object_type": "shot",
+        "object_id": "40000000-0000-4000-8000-000000000001",
+        "drive_file_id": "fake-folder-shot-01",
+        "binding_state": "ready"
+      },
+      "activation_epoch": 1
+    }
+  ]
+}

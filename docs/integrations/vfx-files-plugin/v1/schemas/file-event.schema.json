@@ -1,0 +1,328 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kitsusync.invalid/contracts/vfx-files/v1/file-event.schema.json",
+  "title": "Plugin-to-KitsuSync business event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "producer_id",
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "production_id",
+    "activation_epoch",
+    "entity",
+    "source",
+    "output_package",
+    "delivery",
+    "sender"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "1.0"
+    },
+    "producer_id": {
+      "const": "vfx-files-plugin"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_type": {
+      "enum": [
+        "file_delivery.created",
+        "file_delivery.ready",
+        "file_delivery.accepted",
+        "file_delivery.needs_fix",
+        "file_delivery.revised"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "production_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "activation_epoch": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "production_name": {
+      "type": "string",
+      "maxLength": 240
+    },
+    "episode_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uuid"
+    },
+    "episode_name": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 240
+    },
+    "entity": {
+      "$ref": "#/$defs/entity"
+    },
+    "source": {
+      "$ref": "#/$defs/task"
+    },
+    "sender": {
+      "$ref": "#/$defs/person"
+    },
+    "output_package": {
+      "$ref": "#/$defs/outputPackage"
+    },
+    "delivery": {
+      "$ref": "#/$defs/delivery"
+    }
+  },
+  "$defs": {
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "name"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "sequence",
+            "shot",
+            "asset"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 120
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "task_type_id",
+        "task_type_name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "task_type_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "task_type_name": {
+          "type": "string",
+          "maxLength": 160
+        }
+      }
+    },
+    "person": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "display_name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "display_name": {
+          "type": "string",
+          "maxLength": 160
+        }
+      }
+    },
+    "outputPackage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "classification",
+        "manifest_sha256",
+        "objects"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "classification": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "manifest_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 200,
+          "pattern": "^manifest:[0-9a-fA-F-]{36}$"
+        },
+        "frame_range": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/frameRange"
+            }
+          ]
+        },
+        "objects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/driveObject"
+          },
+          "maxItems": 100
+        }
+      }
+    },
+    "frameRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end",
+        "step",
+        "rate_num",
+        "rate_den"
+      ],
+      "properties": {
+        "start": {
+          "type": "integer"
+        },
+        "end": {
+          "type": "integer"
+        },
+        "step": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rate_num": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rate_den": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "driveObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "drive_file_id",
+        "classification",
+        "size_bytes",
+        "sha256"
+      ],
+      "properties": {
+        "drive_file_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "^[A-Za-z0-9_-]{1,200}$"
+        },
+        "classification": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "status",
+        "recipient_task_id",
+        "recipient_task_type_id",
+        "recipient_task_type_name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "status": {
+          "enum": [
+            "created",
+            "ready",
+            "accepted",
+            "needs_fix",
+            "revised"
+          ]
+        },
+        "recipient_task_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "recipient_task_type_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "recipient_task_type_name": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "feedback_code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 80
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,119 @@
+{
+  "contract_version": "1.0",
+  "events": [
+    {
+      "contract_version": "1.0",
+      "producer_id": "vfx-files-plugin",
+      "event_id": "60000000-0000-4000-8000-000000000001",
+      "event_type": "file_delivery.created",
+      "occurred_at": "2026-10-12T12:00:00Z",
+      "production_id": "10000000-0000-4000-8000-000000000001",
+      "production_name": "Synthetic Production",
+      "episode_id": "70000000-0000-4000-8000-000000000001",
+      "episode_name": "ep01",
+      "entity": {
+        "type": "shot",
+        "id": "40000000-0000-4000-8000-000000000001",
+        "name": "sc01_sh005",
+        "code": "sc01_sh005"
+      },
+      "source": {
+        "id": "50000000-0000-4000-8000-000000000002",
+        "task_type_id": "50000000-0000-4000-8000-000000000010",
+        "task_type_name": "Compositing"
+      },
+      "sender": {
+        "id": "80000000-0000-4000-8000-000000000001",
+        "display_name": "Synthetic Artist"
+      },
+      "output_package": {
+        "id": "90000000-0000-4000-8000-000000000001",
+        "version": 3,
+        "classification": "Low-Res EXR Sequence",
+        "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "manifest_ref": "manifest:90000000-0000-4000-8000-000000000001",
+        "frame_range": {
+          "start": 1001,
+          "end": 1100,
+          "step": 1,
+          "rate_num": 24,
+          "rate_den": 1
+        },
+        "objects": [
+          {
+            "drive_file_id": "fake-file-fx-01",
+            "classification": "frame_sequence",
+            "size_bytes": 123456,
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ]
+      },
+      "delivery": {
+        "id": "a0000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "status": "created",
+        "recipient_task_id": "50000000-0000-4000-8000-000000000020",
+        "recipient_task_type_id": "50000000-0000-4000-8000-000000000021",
+        "recipient_task_type_name": "FX"
+      },
+      "activation_epoch": 1
+    },
+    {
+      "contract_version": "1.0",
+      "producer_id": "vfx-files-plugin",
+      "event_id": "60000000-0000-4000-8000-000000000002",
+      "event_type": "file_delivery.created",
+      "occurred_at": "2026-10-12T12:00:01Z",
+      "production_id": "10000000-0000-4000-8000-000000000001",
+      "production_name": "Synthetic Production",
+      "episode_id": "70000000-0000-4000-8000-000000000001",
+      "episode_name": "ep01",
+      "entity": {
+        "type": "shot",
+        "id": "40000000-0000-4000-8000-000000000001",
+        "name": "sc01_sh005",
+        "code": "sc01_sh005"
+      },
+      "source": {
+        "id": "50000000-0000-4000-8000-000000000002",
+        "task_type_id": "50000000-0000-4000-8000-000000000010",
+        "task_type_name": "Compositing"
+      },
+      "sender": {
+        "id": "80000000-0000-4000-8000-000000000001",
+        "display_name": "Synthetic Artist"
+      },
+      "output_package": {
+        "id": "90000000-0000-4000-8000-000000000001",
+        "version": 3,
+        "classification": "Low-Res EXR Sequence",
+        "manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "manifest_ref": "manifest:90000000-0000-4000-8000-000000000001",
+        "frame_range": {
+          "start": 1001,
+          "end": 1100,
+          "step": 1,
+          "rate_num": 24,
+          "rate_den": 1
+        },
+        "objects": [
+          {
+            "drive_file_id": "fake-file-layout-01",
+            "classification": "frame_sequence",
+            "size_bytes": 123456,
+            "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ]
+      },
+      "delivery": {
+        "id": "a0000000-0000-4000-8000-000000000002",
+        "revision": 1,
+        "status": "created",
+        "recipient_task_id": "50000000-0000-4000-8000-000000000030",
+        "recipient_task_type_id": "50000000-0000-4000-8000-000000000031",
+        "recipient_task_type_name": "Layout"
+      },
+      "activation_epoch": 1
+    }
+  ]
+}

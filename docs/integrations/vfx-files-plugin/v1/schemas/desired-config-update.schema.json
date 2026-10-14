@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kitsusync.invalid/contracts/vfx-files/v1/desired-config-update.schema.json",
+  "title": "KitsuSync desired Files configuration update (activation excluded)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "connection_id",
+    "drive",
+    "template_selection",
+    "sync_policy"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "1.0"
+    },
+    "connection_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "drive": {
+      "$ref": "desired-production-config.schema.json#/properties/drive"
+    },
+    "template_selection": {
+      "$ref": "desired-production-config.schema.json#/properties/template_selection"
+    },
+    "sync_policy": {
+      "$ref": "desired-production-config.schema.json#/properties/sync_policy"
+    }
+  }
+}

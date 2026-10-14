@@ -1,0 +1,49 @@
+{
+  "contract_version": "1.0",
+  "events": [
+    {
+      "contract_version": "1.0",
+      "producer_id": "vfx-files-plugin",
+      "event_id": "60000000-0000-4000-8000-000000000004",
+      "event_type": "file_delivery.revised",
+      "occurred_at": "2026-10-12T14:00:00Z",
+      "production_id": "10000000-0000-4000-8000-000000000001",
+      "production_name": "Synthetic Production",
+      "episode_id": "70000000-0000-4000-8000-000000000001",
+      "episode_name": "ep01",
+      "entity": {
+        "type": "shot",
+        "id": "40000000-0000-4000-8000-000000000001",
+        "name": "sc01_sh005",
+        "code": "sc01_sh005"
+      },
+      "source": {
+        "id": "50000000-0000-4000-8000-000000000002",
+        "task_type_id": "50000000-0000-4000-8000-000000000010",
+        "task_type_name": "Compositing"
+      },
+      "sender": {
+        "id": "80000000-0000-4000-8000-000000000003",
+        "display_name": "Synthetic Compositor"
+      },
+      "output_package": {
+        "id": "90000000-0000-4000-8000-000000000001",
+        "version": 4,
+        "classification": "Low-Res EXR Sequence",
+        "manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "manifest_ref": "manifest:90000000-0000-4000-8000-000000000001",
+        "frame_range": null,
+        "objects": []
+      },
+      "delivery": {
+        "id": "a0000000-0000-4000-8000-000000000001",
+        "revision": 5,
+        "status": "revised",
+        "recipient_task_id": "50000000-0000-4000-8000-000000000020",
+        "recipient_task_type_id": "50000000-0000-4000-8000-000000000021",
+        "recipient_task_type_name": "FX"
+      },
+      "activation_epoch": 1
+    }
+  ]
+}

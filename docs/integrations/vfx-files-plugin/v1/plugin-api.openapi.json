@@ -1,0 +1,1997 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "VFX Files Plugin management API",
+    "version": "1.0.0",
+    "description": "Server-to-server management API called only by the authenticated KitsuSync backend. Never call these operations directly from browser JavaScript."
+  },
+  "servers": [
+    {
+      "url": "https://vfx-files.example.invalid/api/integrations/v1"
+    }
+  ],
+  "security": [
+    {
+      "KitsuSyncService": []
+    }
+  ],
+  "paths": {
+    "/drive-connections": {
+      "get": {
+        "operationId": "listDriveConnections",
+        "summary": "List non-secret Drive connection identities and states",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string", "format": "uuid"}
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/drive-connections/authorizations": {
+      "post": {
+        "operationId": "startDriveAuthorization",
+        "summary": "Create an OAuth intent; KitsuSync server redirects, URL is not exposed to page JavaScript",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Authorization intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationIntent"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/drive-connections/{connection_id}": {
+      "get": {
+        "operationId": "getDriveConnection",
+        "summary": "Get non-secret connection state",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "production_id",
+            "in": "query",
+            "required": true,
+            "schema": {"type": "string", "format": "uuid"}
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Credential reference is never returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveConnection"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/drive-connections/{connection_id}/revoke": {
+      "post": {
+        "operationId": "revokeDriveConnection",
+        "summary": "Revoke the provider grant and disconnect it from future operations",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Revocation queued; state remains revoking until provider and local cleanup converge",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DriveConnection"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/drive-connections/{connection_id}/roots": {
+      "get": {
+        "operationId": "listDriveRootCandidates",
+        "summary": "List read-only folders visible to this connection",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page_token",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "production_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Read-only candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RootList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "verifyDriveRoot",
+        "summary": "Verify a root without creating, moving, or sharing resources",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RootVerificationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Read-only root verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RootVerification"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/templates": {
+      "get": {
+        "operationId": "listTemplates",
+        "summary": "List versioned templates and allowed tokens",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "production",
+                "asset",
+                "sequence",
+                "shot",
+                "task"
+              ]
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Template catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateList"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/productions/{production_id}/desired-config": {
+      "get": {
+        "operationId": "getDesiredConfigMirror",
+        "summary": "Read Plugin mirror of KitsuSync-owned desired configuration",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Desired-state mirror",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "schemas/desired-production-config.schema.json"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "operationId": "applyDesiredConfigMirror",
+        "summary": "Apply exact versioned desired configuration mirror",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[1-9][0-9]*\"$"
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "schemas/desired-config-update.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted mirror revision",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "schemas/desired-production-config.schema.json"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/StaleConfig"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/productions/{production_id}/activation": {
+      "post": {
+        "operationId": "activateProductionIntegration",
+        "summary": "Explicitly enable post-activation synchronization and event notifications",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[1-9][0-9]*\"$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Activation committed with a new notification epoch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "schemas/desired-production-config.schema.json"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/StaleConfig"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/productions/{production_id}/sync-previews": {
+      "post": {
+        "operationId": "previewInitialSync",
+        "summary": "Create a read-only expiring diff",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Preview result; never creates resources",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "schemas/sync-preview.schema.json"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/productions/{production_id}/sync-jobs": {
+      "post": {
+        "operationId": "applySyncPreview",
+        "summary": "Queue explicitly approved sync from a current preview",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Durably queued; not completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sync-jobs/{job_id}": {
+      "get": {
+        "operationId": "getSyncJob",
+        "summary": "Read durable progress",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {"type": "string", "format": "uuid"}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current job state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sync-jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "retrySyncJob",
+        "summary": "Retry only after safe-state validation",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Retry queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sync-jobs/{job_id}/reconcile": {
+      "post": {
+        "operationId": "reconcileSyncJob",
+        "summary": "Reconcile an ambiguous outcome; never blindly replay",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Reconciliation queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncJob"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/productions/{production_id}/sync-snapshots": {
+      "post": {
+        "operationId": "startSyncSnapshot",
+        "summary": "Register a bounded, read-only KitsuSync snapshot before Drive preview",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncSnapshotStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Snapshot upload session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sync-snapshots/{snapshot_id}/pages/{page_index}": {
+      "put": {
+        "operationId": "putSyncSnapshotPage",
+        "summary": "Idempotently upload one bounded page of Kitsu/Zou identity snapshots",
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "page_index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncSnapshotPage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Page stored identically or newly stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncSnapshot"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/StaleConfig"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sync-snapshots/{snapshot_id}/complete": {
+      "post": {
+        "operationId": "completeSyncSnapshot",
+        "summary": "Seal the snapshot after every expected page and digest has been verified",
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "description": "UUID of the authenticated KitsuSync administrator, derived by the KitsuSync server; never copied from an untrusted browser field.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncSnapshotCompleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Immutable complete snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncSnapshot"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/productions/{production_id}/deactivation": {
+      "post": {
+        "operationId": "deactivateProductionIntegration",
+        "summary": "Explicitly stop new sync and notification work and advance the notification epoch",
+        "parameters": [
+          {
+            "name": "production_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[1-9][0-9]*\"$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "X-KitsuSync-Actor-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Inactive config committed with an advanced notification epoch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "schemas/desired-production-config.schema.json"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/StaleConfig"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "KitsuSyncService": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "server credential with validated audience and operation scope",
+        "description": "Service identity with a validated audience and operation scope. Every mutating call also carries X-KitsuSync-Actor-ID, which only KitsuSync may derive from its authenticated administrator session."
+      }
+    },
+    "parameters": {},
+    "responses": {
+      "Error": {
+        "description": "Sanitized stable error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "StaleConfig": {
+        "description": "Expected revision mismatch; reread and reconcile",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "code",
+          "request_id",
+          "retryable"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "unsupported_contract_version",
+              "unauthorized_service",
+              "production_access_denied",
+              "invalid_scope",
+              "connection_not_found",
+              "connection_not_ready",
+              "root_unverified",
+              "drive_permission_denied",
+              "stale_config",
+              "stale_source_snapshot",
+              "preview_expired",
+              "preview_mismatch",
+              "idempotency_conflict",
+              "replay_detected",
+              "invalid_event",
+              "unknown_event_type",
+              "duplicate_event_conflict",
+              "no_notification_route",
+              "reconcile_required",
+              "rate_limited",
+              "provider_unavailable",
+              "internal_error"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "field": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "retry_after_seconds": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expected_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "actual_revision": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "operation_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        }
+      },
+      "AuthorizationStart": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "production_id",
+          "account_mode"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "account_mode": {
+            "enum": [
+              "my_drive",
+              "shared_drive"
+            ]
+          },
+          "connection_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "production_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AuthorizationIntent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "authorization_id",
+          "authorization_url",
+          "expires_at"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "authorization_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "authorization_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DriveConnection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "id",
+          "account_mode",
+          "state"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_mode": {
+            "enum": [
+              "my_drive",
+              "shared_drive"
+            ]
+          },
+          "owner_label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drive_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "enum": [
+              "not_configured",
+              "authorizing",
+              "connected",
+              "permission_denied",
+              "expired",
+              "revoking",
+              "revoke_pending",
+              "error"
+            ]
+          },
+          "granted_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ConnectionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "connections"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "connections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DriveConnection"
+            }
+          }
+        }
+      },
+      "RootList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "roots"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "roots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "name",
+                "account_mode"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "drive_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "account_mode": {
+                  "enum": [
+                    "my_drive",
+                    "shared_drive"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "RootVerificationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "account_mode",
+          "production_id"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "root_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "account_mode": {
+            "enum": [
+              "my_drive",
+              "shared_drive"
+            ]
+          },
+          "drive_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "production_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "candidate_url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "^https://drive\\.google\\.com/drive/(u/[0-9]+/)?folders/[A-Za-z0-9_-]+([?#][A-Za-z0-9_=&%-]*)?$"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "root_id"
+            ],
+            "not": {
+              "required": [
+                "candidate_url"
+              ]
+            }
+          },
+          {
+            "required": [
+              "candidate_url"
+            ],
+            "not": {
+              "required": [
+                "root_id"
+              ]
+            }
+          }
+        ]
+      },
+      "RootVerification": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "connection_id",
+          "root_id",
+          "state",
+          "capabilities"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "root_id": {
+            "type": "string"
+          },
+          "drive_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "enum": [
+              "verified",
+              "permission_denied",
+              "not_found",
+              "wrong_drive",
+              "error"
+            ]
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "can_read",
+              "can_add_children"
+            ],
+            "properties": {
+              "can_read": {
+                "type": "boolean"
+              },
+              "can_add_children": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "TemplateList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "templates"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "revision",
+                "scope",
+                "label",
+                "pattern",
+                "materialization"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "production",
+                    "asset",
+                    "sequence",
+                    "shot",
+                    "task"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "pattern": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240,
+                  "description": "Catalog display pattern. For scope production it describes the Production anchor and does not create a child folder; static folders are children of the verified Production root. Other patterns are relative folder templates; resolved output segments must reject absolute paths, dot/dot-dot, backslashes and control characters."
+                },
+                "available_tokens": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "materialization": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "schema_revision",
+                    "root_binding",
+                    "available_overrides"
+                  ],
+                  "properties": {
+                    "schema_revision": {
+                      "const": 1
+                    },
+                    "root_binding": {
+                      "const": "verified_root_is_production_root"
+                    },
+                    "available_overrides": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "production.00_production",
+                          "production.shared_assets",
+                          "production.shots",
+                          "production.editorial",
+                          "production.delivery",
+                          "asset.folder",
+                          "sequence.episode",
+                          "sequence.folder",
+                          "shot.folder",
+                          "task.folder",
+                          "task.working",
+                          "task.publish",
+                          "task.shared_outputs",
+                          "task.delivery"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      },
+      "SyncPreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "config_revision",
+          "snapshot_id"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "config_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "snapshot_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SyncApplyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "preview_id",
+          "config_revision"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "preview_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "config_revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "OperatorCommand": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          null
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "reason_code": {
+            "type": "string",
+            "maxLength": 80
+          }
+        }
+      },
+      "SyncJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "id",
+          "production_id",
+          "config_revision",
+          "state",
+          "progress",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "production_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "config_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "reconcile_required",
+              "cancelled"
+            ]
+          },
+          "progress": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "completed",
+              "total"
+            ],
+            "properties": {
+              "completed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "failure_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SyncSnapshotStart": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "snapshot_id",
+          "config_revision",
+          "source_etag",
+          "page_count",
+          "object_count",
+          "snapshot_sha256"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "config_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source_etag": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "page_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "object_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500000
+          },
+          "snapshot_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "SyncSnapshotPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "page_index",
+          "page_sha256",
+          "objects"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "page_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "page_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "objects": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "$ref": "#/components/schemas/KitsuObjectSnapshot"
+            }
+          }
+        }
+      },
+      "KitsuObjectSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object_type",
+          "id",
+          "parent_id",
+          "name",
+          "included_in_sync"
+        ],
+        "properties": {
+          "object_type": {
+            "enum": [
+              "production",
+              "episode",
+              "sequence",
+              "shot",
+              "asset",
+              "task",
+              "task_type"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 120
+          },
+          "task_type_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "included_in_sync": {
+            "type": "boolean",
+            "description": "False for ancestor context included only to resolve hierarchy; true only if selected by the requested sync scope."
+          }
+        }
+      },
+      "SyncSnapshotCompleteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "page_count",
+          "object_count",
+          "snapshot_sha256"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "page_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "object_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500000
+          },
+          "snapshot_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "SyncSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contract_version",
+          "id",
+          "production_id",
+          "config_revision",
+          "state",
+          "page_count",
+          "received_pages",
+          "object_count",
+          "expires_at"
+        ],
+        "properties": {
+          "contract_version": {
+            "const": "1.0"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "production_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "config_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "state": {
+            "enum": [
+              "uploading",
+              "complete",
+              "expired",
+              "rejected"
+            ]
+          },
+          "page_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "received_pages": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "object_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

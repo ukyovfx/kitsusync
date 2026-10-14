@@ -104,6 +104,9 @@ jobs:
       - name: go test
         run: CGO_ENABLED=1 go test ./src/... -count=1 -timeout=240s
 
+      - name: integration contract fixtures
+        run: go test ./tools/contracts -count=1
+
       - name: Prepare CI env.local
         run: |
           cp .env.example .env.local

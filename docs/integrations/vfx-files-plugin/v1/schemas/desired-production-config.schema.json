@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kitsusync.invalid/contracts/vfx-files/v1/desired-production-config.schema.json",
+  "title": "KitsuSync desired Files configuration for one Production",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "production_id",
+    "config_revision",
+    "connection_id",
+    "drive",
+    "template_selection",
+    "sync_policy",
+    "activation"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "1.0"
+    },
+    "production_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "config_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "connection_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "drive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "account_mode",
+        "root_id",
+        "root_state"
+      ],
+      "properties": {
+        "account_mode": {
+          "enum": [
+            "my_drive",
+            "shared_drive"
+          ]
+        },
+        "drive_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner_subject": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "root_state": {
+          "const": "verified"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "account_mode": {
+                "const": "shared_drive"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "drive_id": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "account_mode": {
+                "const": "my_drive"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "owner_subject": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "template_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selections"
+      ],
+      "properties": {
+        "selections": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scope",
+              "template_id",
+              "revision",
+              "overrides"
+            ],
+            "properties": {
+              "scope": {
+                "enum": [
+                  "production",
+                  "asset",
+                  "sequence",
+                  "shot",
+                  "task"
+                ]
+              },
+              "template_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "overrides": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 240
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "sync_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "scope",
+        "notify_new_deliveries"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "new_production",
+            "adopt_existing",
+            "future_only"
+          ]
+        },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "episodes",
+            "sequences",
+            "shots",
+            "assets",
+            "tasks"
+          ],
+          "properties": {
+            "episodes": {
+              "type": "boolean"
+            },
+            "sequences": {
+              "type": "boolean"
+            },
+            "shots": {
+              "type": "boolean"
+            },
+            "assets": {
+              "type": "boolean"
+            },
+            "tasks": {
+              "type": "boolean"
+            },
+            "task_type_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "uniqueItems": true
+            },
+            "include_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "uniqueItems": true
+            },
+            "exclude_ids": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "notify_new_deliveries": {
+          "type": "boolean"
+        }
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "activated_at",
+        "notification_epoch"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "activated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "notification_epoch": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "activation": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "activation": {
+            "properties": {
+              "activated_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "notification_epoch": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
