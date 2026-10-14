@@ -333,10 +333,14 @@ func TestPluginEventHandlerFailsClosedOnSignatureTimestampAndMalformedPayload(t 
 	}
 }
 
-func TestDecodeFileDeliveryNotificationRequiresContractValidTaskTypeAndOmitsDriveReferences(t *testing.T) {
+func TestDecodeFileDeliveryNotificationValidatesTaskTypeSeparatesRevisionAndOmitsDriveReferences(t *testing.T) {
 	body := []byte(`{"contract_version":"1.0","producer_id":"vfx-files-plugin","event_id":"60000000-0000-4000-8000-000000000001","event_type":"file_delivery.ready","occurred_at":"2026-10-12T12:00:00Z","production_id":"10000000-0000-4000-8000-000000000001","activation_epoch":1,"production_name":"Synthetic","entity":{"type":"shot","id":"30000000-0000-4000-8000-000000000001","name":"sh010"},"source":{"id":"50000000-0000-4000-8000-000000000001","task_type_id":"50000000-0000-4000-8000-000000000010","task_type_name":"Compositing"},"sender":{"id":"40000000-0000-4000-8000-000000000001","display_name":"Synthetic Artist"},"output_package":{"id":"70000000-0000-4000-8000-000000000001","version":3,"classification":"Low-res EXR","manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","objects":[{"drive_file_id":"fake-drive-file-01","classification":"EXR","size_bytes":10,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]},"delivery":{"id":"90000000-0000-4000-8000-000000000001","revision":1,"status":"ready","recipient_task_id":"50000000-0000-4000-8000-000000000002","recipient_task_type_id":"50000000-0000-4000-8000-000000000011","recipient_task_type_name":"FX"}}`)
+	input, err := parsePluginEvent(body)
+	if err != nil || input.DeliveryID != "90000000-0000-4000-8000-000000000001" || input.DeliveryRevision != 1 {
+		t.Fatalf("parse delivery stream=%s revision=%d err=%v", input.DeliveryID, input.DeliveryRevision, err)
+	}
 	decoded, err := DecodeFileDeliveryNotification(body)
-	if err != nil || decoded.EventID != "60000000-0000-4000-8000-000000000001" || decoded.DeliveryID != "90000000-0000-4000-8000-000000000001" || decoded.RecipientTaskTypeName != "FX" || decoded.OutputVersion != 3 {
+	if err != nil || decoded.EventID != "60000000-0000-4000-8000-000000000001" || decoded.DeliveryID != input.DeliveryID || decoded.RecipientTaskTypeName != "FX" || decoded.OutputVersion != 3 || int(input.DeliveryRevision) == decoded.OutputVersion {
 		t.Fatalf("decode=%+v err=%v", decoded, err)
 	}
 	if strings.Contains(strings.Join([]string{decoded.EventID, decoded.EntityName, decoded.OutputClassification}, " "), "fake-drive-file-01") {
