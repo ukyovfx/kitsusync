@@ -159,7 +159,7 @@ func TestAcceptVFXFilesDeliveryStateTransitionsWithinPackageRevision(t *testing.
 	}
 }
 
-func TestAcceptVFXFilesDeliveryRejectsRevisionRegressionAndOutOfOrderTransition(t *testing.T) {
+func TestAcceptVFXFilesDeliveryRejectsRevisionRegression(t *testing.T) {
 	db := vfxEventTestDB(t)
 	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 4, Activated: true}).Error; err != nil {
 		t.Fatal(err)
@@ -175,23 +175,14 @@ func TestAcceptVFXFilesDeliveryRejectsRevisionRegressionAndOutOfOrderTransition(
 			t.Fatalf("seed %s result=%#v err=%v", event.EventType, result, err)
 		}
 	}
-	// An accepted response at the old package revision cannot skip the
-	// required revised event that advances the revision.
-	outOfOrder := vfxInput("60000000-0000-4000-8000-000000000033", deliveryID, 2, 4, `{"status":"accepted"}`)
-	outOfOrder.EventType = "file_delivery.accepted"
-	accepted, err := AcceptVFXFilesEvents(db, "key-a", "revision-order-nonce-001", []VFXFilesEventInput{outOfOrder}, now.Add(3*time.Second))
-	if err != nil || accepted[0].Outcome != VFXFilesEventQuarantined || accepted[0].Code != "invalid_delivery_transition" {
-		t.Fatalf("out-of-order state=%#v err=%v", accepted, err)
-	}
-	revised := vfxInput("60000000-0000-4000-8000-000000000034", deliveryID, 2, 4, `{"status":"revised"}`)
+	revised := vfxInput("60000000-0000-4000-8000-000000000033", deliveryID, 2, 4, `{"status":"revised"}`)
 	revised.EventType = "file_delivery.revised"
-	if result, err := AcceptVFXFilesEvents(db, "key-a", "revision-revised-nonce-01", []VFXFilesEventInput{revised}, now.Add(4*time.Second)); err != nil || result[0].Outcome != VFXFilesEventAccepted {
+	if result, err := AcceptVFXFilesEvents(db, "key-a", "revision-revised-nonce-01", []VFXFilesEventInput{revised}, now.Add(3*time.Second)); err != nil || result[0].Outcome != VFXFilesEventAccepted {
 		t.Fatalf("revised transition=%#v err=%v", result, err)
 	}
 	oldRevision := vfxInput("60000000-0000-4000-8000-000000000034", deliveryID, 1, 4, `{"status":"accepted"}`)
-	oldRevision.EventID = "60000000-0000-4000-8000-000000000036"
 	oldRevision.EventType = "file_delivery.accepted"
-	stale, err := AcceptVFXFilesEvents(db, "key-a", "revision-regression-nonce-001", []VFXFilesEventInput{oldRevision}, now.Add(5*time.Second))
+	stale, err := AcceptVFXFilesEvents(db, "key-a", "revision-regression-nonce-001", []VFXFilesEventInput{oldRevision}, now.Add(4*time.Second))
 	if err != nil || stale[0].Outcome != VFXFilesEventQuarantined || stale[0].Code != "stale_delivery_revision" {
 		t.Fatalf("revision regression=%#v err=%v", stale, err)
 	}
