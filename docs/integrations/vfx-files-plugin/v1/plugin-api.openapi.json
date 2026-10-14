@@ -7,9 +7,30 @@
   },
   "servers": [
     {
-      "url": "https://vfx-files.example.invalid/api/integrations/v1"
+      "url": "https://vfx-files.example.invalid/api/plugins/vfx_files/integrations/v1"
     }
   ],
+  "x-service-bearer-profile": {
+    "name": "kitsusync-vfx-files-access-token-v1",
+    "standard": "RFC 9068 JWT access token profile",
+    "type": "at+JWT",
+    "algorithm": "RS256",
+    "issuer": "Exact operator-configured canonical HTTPS KitsuSync origin",
+    "audience": "Exact OpenAPI server URL above, configured identically in KitsuSync and the Plugin",
+    "subject": "KitsuSync service identity",
+    "client_id": "KitsuSync installation identifier",
+    "required_claims": ["iss", "aud", "sub", "client_id", "iat", "nbf", "exp", "jti", "scope", "production_id", "actor_id", "actor_role"],
+    "actor_role": "production_admin",
+    "maximum_lifetime_seconds": 300,
+    "clock_skew_seconds": 30,
+    "key_discovery_path": "/.well-known/vfx-files-jwks.json",
+    "key_rotation": "kid-addressed RS256 keys; publish a new key before signing with it; retain the previous public key for at least 330 seconds after its last token issuance; unknown kid triggers one bounded JWKS refresh, then fails closed",
+    "scope_claim": "space-delimited exact scope names; each operation declares x-required-scope",
+    "permitted_scopes": ["vfx.connections.read", "vfx.connections.authorize", "vfx.connections.revoke", "vfx.roots.read", "vfx.roots.verify", "vfx.templates.read", "vfx.config.read", "vfx.config.write", "vfx.activation.write", "vfx.sync.preview", "vfx.sync.apply", "vfx.sync.read", "vfx.sync.retry", "vfx.sync.reconcile", "vfx.sync.snapshot.write"],
+    "production_binding": "Every token is limited to exactly one UUID production_id; the API verifies the request Production and all referenced resources against it",
+    "actor_binding": "actor_id is derived from the authenticated KitsuSync session after Production-admin authorization; X-KitsuSync-Actor-ID must exactly match the signed actor_id claim",
+    "failure_behavior": "Missing or invalid token, signature, algorithm, issuer, audience, key id, time claims, jti, actor binding, or claim format returns 401; valid identity with insufficient scope, role, or Production binding returns 403; never fall back to cookies, query tokens, unsigned headers, or a route alias"
+  },
   "security": [
     {
       "KitsuSyncService": []
@@ -19,6 +40,7 @@
     "/drive-connections": {
       "get": {
         "operationId": "listDriveConnections",
+        "x-required-scope": "vfx.connections.read",
         "summary": "List non-secret Drive connection identities and states",
         "parameters": [
           {
@@ -55,6 +77,7 @@
     "/drive-connections/authorizations": {
       "post": {
         "operationId": "startDriveAuthorization",
+          "x-required-scope": "vfx.connections.authorize",
         "summary": "Create an OAuth intent; KitsuSync server redirects, URL is not exposed to page JavaScript",
         "parameters": [
           {
@@ -108,6 +131,7 @@
     "/drive-connections/{connection_id}": {
       "get": {
         "operationId": "getDriveConnection",
+          "x-required-scope": "vfx.connections.read",
         "summary": "Get non-secret connection state",
         "parameters": [
           {
@@ -153,6 +177,7 @@
     "/drive-connections/{connection_id}/revoke": {
       "post": {
         "operationId": "revokeDriveConnection",
+          "x-required-scope": "vfx.connections.revoke",
         "summary": "Revoke the provider grant and disconnect it from future operations",
         "parameters": [
           {
@@ -215,6 +240,7 @@
     "/drive-connections/{connection_id}/roots": {
       "get": {
         "operationId": "listDriveRootCandidates",
+          "x-required-scope": "vfx.roots.read",
         "summary": "List read-only folders visible to this connection",
         "parameters": [
           {
@@ -269,6 +295,7 @@
       },
       "post": {
         "operationId": "verifyDriveRoot",
+          "x-required-scope": "vfx.roots.verify",
         "summary": "Verify a root without creating, moving, or sharing resources",
         "parameters": [
           {
@@ -331,6 +358,7 @@
     "/templates": {
       "get": {
         "operationId": "listTemplates",
+          "x-required-scope": "vfx.templates.read",
         "summary": "List versioned templates and allowed tokens",
         "parameters": [
           {
@@ -375,6 +403,7 @@
     "/productions/{production_id}/desired-config": {
       "get": {
         "operationId": "getDesiredConfigMirror",
+          "x-required-scope": "vfx.config.read",
         "summary": "Read Plugin mirror of KitsuSync-owned desired configuration",
         "parameters": [
           {
@@ -419,6 +448,7 @@
       },
       "put": {
         "operationId": "applyDesiredConfigMirror",
+          "x-required-scope": "vfx.config.write",
         "summary": "Apply exact versioned desired configuration mirror",
         "parameters": [
           {
@@ -500,6 +530,7 @@
     "/productions/{production_id}/activation": {
       "post": {
         "operationId": "activateProductionIntegration",
+          "x-required-scope": "vfx.activation.write",
         "summary": "Explicitly enable post-activation synchronization and event notifications",
         "parameters": [
           {
@@ -574,6 +605,7 @@
     "/productions/{production_id}/sync-previews": {
       "post": {
         "operationId": "previewInitialSync",
+          "x-required-scope": "vfx.sync.preview",
         "summary": "Create a read-only expiring diff",
         "parameters": [
           {
@@ -636,6 +668,7 @@
     "/productions/{production_id}/sync-jobs": {
       "post": {
         "operationId": "applySyncPreview",
+          "x-required-scope": "vfx.sync.apply",
         "summary": "Queue explicitly approved sync from a current preview",
         "parameters": [
           {
@@ -698,6 +731,7 @@
     "/sync-jobs/{job_id}": {
       "get": {
         "operationId": "getSyncJob",
+          "x-required-scope": "vfx.sync.read",
         "summary": "Read durable progress",
         "parameters": [
           {
@@ -737,6 +771,7 @@
     "/sync-jobs/{job_id}/retry": {
       "post": {
         "operationId": "retrySyncJob",
+          "x-required-scope": "vfx.sync.retry",
         "summary": "Retry only after safe-state validation",
         "parameters": [
           {
@@ -799,6 +834,7 @@
     "/sync-jobs/{job_id}/reconcile": {
       "post": {
         "operationId": "reconcileSyncJob",
+          "x-required-scope": "vfx.sync.reconcile",
         "summary": "Reconcile an ambiguous outcome; never blindly replay",
         "parameters": [
           {
@@ -861,6 +897,7 @@
     "/productions/{production_id}/sync-snapshots": {
       "post": {
         "operationId": "startSyncSnapshot",
+          "x-required-scope": "vfx.sync.snapshot.write",
         "summary": "Register a bounded, read-only KitsuSync snapshot before Drive preview",
         "parameters": [
           {
@@ -923,6 +960,7 @@
     "/sync-snapshots/{snapshot_id}/pages/{page_index}": {
       "put": {
         "operationId": "putSyncSnapshotPage",
+          "x-required-scope": "vfx.sync.snapshot.write",
         "summary": "Idempotently upload one bounded page of Kitsu/Zou identity snapshots",
         "parameters": [
           {
@@ -997,6 +1035,7 @@
     "/sync-snapshots/{snapshot_id}/complete": {
       "post": {
         "operationId": "completeSyncSnapshot",
+          "x-required-scope": "vfx.sync.snapshot.write",
         "summary": "Seal the snapshot after every expected page and digest has been verified",
         "parameters": [
           {
@@ -1059,6 +1098,7 @@
     "/productions/{production_id}/deactivation": {
       "post": {
         "operationId": "deactivateProductionIntegration",
+          "x-required-scope": "vfx.activation.write",
         "summary": "Explicitly stop new sync and notification work and advance the notification epoch",
         "parameters": [
           {
@@ -1136,7 +1176,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "server credential with validated audience and operation scope",
-        "description": "Service identity with a validated audience and operation scope. Every mutating call also carries X-KitsuSync-Actor-ID, which only KitsuSync may derive from its authenticated administrator session."
+        "description": "RFC 9068 at+JWT access token using RS256 and the x-service-bearer-profile at document root. Operation scope, one-Production binding, and the signed actor claim are mandatory."
       }
     },
     "parameters": {},
@@ -1680,8 +1720,7 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "contract_version",
-          null
+          "contract_version"
         ],
         "properties": {
           "contract_version": {
