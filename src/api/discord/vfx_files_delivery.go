@@ -45,7 +45,7 @@ func ProcessVFXFilesDeliveryEvents(db *gorm.DB, limit int) (processed, deferred 
 
 func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) string {
 	event, err := vfxfiles.DecodeFileDeliveryNotification([]byte(row.PayloadJSON))
-	if err != nil || event.EventID != row.EventID || event.ProductionID != row.ProductionID || event.RecipientTaskID != row.RecipientTaskID || event.RecipientTaskTypeID != row.RecipientTaskTypeID {
+	if err != nil || event.EventID != row.EventID || !strings.EqualFold(event.ProductionID, row.ProductionID) || event.RecipientTaskID != row.RecipientTaskID || event.RecipientTaskTypeID != row.RecipientTaskTypeID {
 		_ = model.QuarantineVFXFilesEvent(db, row.EventID, "invalid_delivery_payload", time.Now().UTC())
 		return "processed"
 	}

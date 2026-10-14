@@ -16,7 +16,8 @@ import (
 )
 
 func StoreVFXFilesSyncPreview(db *gorm.DB, productionID, snapshotID string, configRevision uint64, preview []byte) error {
-	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(snapshotID)) || configRevision == 0 || len(preview) == 0 || len(preview) > 512<<10 {
+	productionID = strings.ToLower(strings.TrimSpace(productionID))
+	if db == nil || !vfxFilesUUIDRE.MatchString(productionID) || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(snapshotID)) || configRevision == 0 || len(preview) == 0 || len(preview) > 512<<10 {
 		return ErrVFXFilesInvalidBatch
 	}
 	var value struct {
@@ -35,8 +36,40 @@ func StoreVFXFilesSyncPreview(db *gorm.DB, productionID, snapshotID string, conf
 	if err != nil || !expires.After(time.Now().UTC()) {
 		return ErrVFXFilesInvalidBatch
 	}
-	row := VFXFilesSyncOperation{ProductionID: strings.ToLower(productionID), ConfigRevision: configRevision, SnapshotID: strings.ToLower(snapshotID), PreviewID: strings.ToLower(value.PreviewID), PreviewJSON: string(preview), PreviewExpiresAt: &expires, JobID: "", JobJSON: "", ApplyIdempotency: "", RetryIdempotency: "", ReconcileIdempotency: "", UpdatedAt: time.Now().UTC()}
-	return db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "production_id"}}, DoUpdates: clause.AssignmentColumns([]string{"config_revision", "snapshot_id", "preview_id", "preview_json", "preview_expires_at", "job_id", "job_json", "apply_idempotency", "retry_idempotency", "reconcile_idempotency", "updated_at"})}).Create(&row).Error
+	row := VFXFilesSyncOperation{ProductionID: productionID, ConfigRevision: configRevision, SnapshotID: strings.ToLower(strings.TrimSpace(snapshotID)), PreviewID: strings.ToLower(value.PreviewID), PreviewJSON: string(preview), PreviewExpiresAt: &expires, JobID: "", JobJSON: "", ApplyIdempotency: "", RetryIdempotency: "", ReconcileIdempotency: "", UpdatedAt: time.Now().UTC()}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var existing VFXFilesSyncOperation
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("production_id = ?", productionID).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return tx.Create(&row).Error
+		}
+		if err != nil {
+			return err
+		}
+		if existing.JobID != "" || existing.JobJSON != "" {
+			var job struct {
+				State string `json:"state"`
+			}
+			if existing.JobID == "" || existing.JobJSON == "" || json.Unmarshal([]byte(existing.JobJSON), &job) != nil || (job.State != "completed" && job.State != "cancelled") {
+				return ErrVFXFilesSyncJobUnresolved
+			}
+		}
+		result := tx.Model(&VFXFilesSyncOperation{}).
+			Where("id = ? AND job_id = ? AND job_json = ?", existing.ID, existing.JobID, existing.JobJSON).
+			Updates(map[string]any{
+				"config_revision": row.ConfigRevision, "snapshot_id": row.SnapshotID, "preview_id": row.PreviewID,
+				"preview_json": row.PreviewJSON, "preview_expires_at": row.PreviewExpiresAt,
+				"job_id": "", "job_json": "", "apply_idempotency": "", "retry_idempotency": "",
+				"reconcile_idempotency": "", "updated_at": row.UpdatedAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrVFXFilesConfigConflict
+		}
+		return nil
+	})
 }
 
 func FindVFXFilesSyncOperation(db *gorm.DB, productionID string) (VFXFilesSyncOperation, error) {
@@ -78,7 +111,7 @@ func PrepareVFXFilesSyncCommand(db *gorm.DB, productionID, command, idempotency 
 			current = row.ReconcileIdempotency
 		}
 		if current == "" {
-			result := tx.Model(&row).Update(column, idempotency)
+			result := tx.Model(&row).Where("production_id = ? AND "+column+" = ?", row.ProductionID, "").Update(column, idempotency)
 			if result.Error != nil {
 				return result.Error
 			}
@@ -113,9 +146,14 @@ func StoreVFXFilesSyncJob(db *gorm.DB, productionID string, job []byte) error {
 			Completed int `json:"completed"`
 			Total     int `json:"total"`
 		} `json:"progress"`
+		UpdatedAt string `json:"updated_at"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(job)))
 	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF || value.ContractVersion != "1.0" || !vfxFilesUUIDRE.MatchString(value.ID) || !strings.EqualFold(value.ProductionID, productionID) || value.ConfigRevision == 0 || value.Progress.Completed < 0 || value.Progress.Total < value.Progress.Completed {
+		return ErrVFXFilesInvalidBatch
+	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, value.UpdatedAt)
+	if err != nil {
 		return ErrVFXFilesInvalidBatch
 	}
 	switch value.State {
@@ -128,10 +166,20 @@ func StoreVFXFilesSyncJob(db *gorm.DB, productionID string, job []byte) error {
 		return err
 	}
 	var previousPayload struct {
+		ID        string `json:"id"`
 		State     string `json:"state"`
 		UpdatedAt string `json:"updated_at"`
 	}
-	_ = json.Unmarshal([]byte(previous.JobJSON), &previousPayload)
+	var previousUpdatedAt time.Time
+	if previous.JobID != "" || previous.JobJSON != "" {
+		if previous.JobID == "" || previous.JobJSON == "" || json.Unmarshal([]byte(previous.JobJSON), &previousPayload) != nil || !strings.EqualFold(previousPayload.ID, previous.JobID) || previousPayload.State == "" {
+			return ErrVFXFilesConfigConflict
+		}
+		previousUpdatedAt, err = time.Parse(time.RFC3339Nano, previousPayload.UpdatedAt)
+		if err != nil || !strings.EqualFold(previous.JobID, value.ID) || updatedAt.Before(previousUpdatedAt) || updatedAt.Equal(previousUpdatedAt) && value.State != previousPayload.State || previousPayload.State == "completed" && value.State != "completed" || previousPayload.State == "cancelled" && value.State != "cancelled" {
+			return ErrVFXFilesConfigConflict
+		}
+	}
 	var nextPayload struct {
 		State     string `json:"state"`
 		UpdatedAt string `json:"updated_at"`
@@ -142,7 +190,9 @@ func StoreVFXFilesSyncJob(db *gorm.DB, productionID string, job []byte) error {
 		updates["retry_idempotency"] = ""
 		updates["reconcile_idempotency"] = ""
 	}
-	result := db.Model(&VFXFilesSyncOperation{}).Where("production_id = ? AND config_revision = ?", strings.ToLower(productionID), value.ConfigRevision).Updates(updates)
+	result := db.Model(&VFXFilesSyncOperation{}).
+		Where("production_id = ? AND config_revision = ? AND job_id = ? AND job_json = ?", strings.ToLower(productionID), value.ConfigRevision, previous.JobID, previous.JobJSON).
+		Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -163,6 +213,7 @@ var (
 	ErrVFXFilesActivationPending           = errors.New("VFX Files activation mirror is pending")
 	ErrVFXFilesInvalidBatch                = errors.New("VFX Files event batch is invalid")
 	ErrVFXFilesConfigConflict              = errors.New("VFX Files desired config revision conflict")
+	ErrVFXFilesSyncJobUnresolved           = errors.New("VFX Files sync job is unresolved")
 	ErrVFXFilesAuthorizationIntentConflict = errors.New("VFX Files authorization intent identity conflict")
 )
 
@@ -213,7 +264,7 @@ type VFXFilesDesiredConfigMirror struct {
 // Plugin response. Revision equality is idempotent only when its exact body
 // matches; older responses cannot roll local event eligibility backward.
 func StoreVFXFilesDesiredConfigMirror(db *gorm.DB, productionID string, body []byte) error {
-	productionID = strings.TrimSpace(productionID)
+	productionID = strings.ToLower(strings.TrimSpace(productionID))
 	if db == nil || !vfxFilesUUIDRE.MatchString(productionID) || len(body) == 0 || len(body) > 256<<10 {
 		return ErrVFXFilesInvalidBatch
 	}
@@ -265,7 +316,7 @@ func StoreVFXFilesDesiredConfigMirror(db *gorm.DB, productionID string, body []b
 		if err != nil {
 			return ErrVFXFilesInvalidBatch
 		}
-		if config.ConfigRevision < existing.ConfigRevision || config.ConfigRevision == existing.ConfigRevision && (!bytes.Equal(existingCanonical, canonicalBody) || existing.ActivationEpoch != config.Activation.NotificationEpoch || existing.Activated != config.Activation.Enabled) {
+		if config.Activation.NotificationEpoch < existing.ActivationEpoch || config.ConfigRevision < existing.ConfigRevision || config.ConfigRevision == existing.ConfigRevision && (!bytes.Equal(existingCanonical, canonicalBody) || existing.ActivationEpoch != config.Activation.NotificationEpoch || existing.Activated != config.Activation.Enabled) {
 			return ErrVFXFilesConfigConflict
 		}
 		updates := map[string]any{
@@ -304,7 +355,7 @@ func canonicalVFXFilesJSON(body []byte) ([]byte, error) {
 // an external deactivation request. If that request has an unknown outcome,
 // KitsuSync remains fail-closed until the desired-config mirror is reconciled.
 func DisableVFXFilesEventIntake(db *gorm.DB, productionID string) error {
-	productionID = strings.TrimSpace(productionID)
+	productionID = strings.ToLower(strings.TrimSpace(productionID))
 	if db == nil || !vfxFilesUUIDRE.MatchString(productionID) {
 		return ErrVFXFilesInvalidBatch
 	}
@@ -613,6 +664,7 @@ func pendingVFXFilesDeliveryEventsQuery(db *gorm.DB, now time.Time) *gorm.DB {
 // external activation request. Only events for this explicitly initiated,
 // single-step transition may receive a transient retry response.
 func BeginVFXFilesActivationMirror(db *gorm.DB, productionID string) error {
+	productionID = strings.ToLower(strings.TrimSpace(productionID))
 	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) {
 		return ErrVFXFilesInvalidBatch
 	}
@@ -639,6 +691,7 @@ func BeginVFXFilesActivationMirror(db *gorm.DB, productionID string) error {
 }
 
 func CancelVFXFilesActivationMirror(db *gorm.DB, productionID string) error {
+	productionID = strings.ToLower(strings.TrimSpace(productionID))
 	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) {
 		return ErrVFXFilesInvalidBatch
 	}
@@ -674,7 +727,9 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 	// hide an out-of-order status stream and could make stale state look valid.
 	ordered := append([]VFXFilesEventInput(nil), events...)
 	seenEventIDs := make(map[string]struct{}, len(ordered))
-	for _, event := range ordered {
+	for index := range ordered {
+		ordered[index].ProductionID = strings.ToLower(strings.TrimSpace(ordered[index].ProductionID))
+		event := ordered[index]
 		if _, exists := seenEventIDs[event.EventID]; exists {
 			return nil, ErrVFXFilesInvalidBatch
 		}
@@ -805,8 +860,9 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 }
 
 // validateVFXFilesDeliveryTransition treats delivery_revision as the
-// Output Package revision. Status transitions may share that revision; only
-// a replacement-package `revised` event advances it.
+// recipient Delivery stream sequence, independent of output_package.version.
+// Status transitions may share a Delivery revision; only a replacement
+// Package's `revised` event advances the recipient stream sequence.
 func validateVFXFilesDeliveryTransition(previous *VFXFilesEventInbox, incoming VFXFilesEventInput) string {
 	status, ok := vfxFilesDeliveryStatus(incoming.EventType)
 	if !ok {

@@ -384,7 +384,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 	var db *gorm.DB
 	previewExpiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	makeJob := func(state string, updated string) string {
-		return `{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000001","production_id":"` + vfxTestProductionID + `","config_revision":` + fmt.Sprint(configRevision) + `,"state":"` + state + `","progress":{"completed":1,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updated + `"}`
+		return `{"contract_version":"1.0","id":"` + strings.ToUpper("60000000-0000-4000-8000-000000000001") + `","production_id":"` + strings.ToUpper(vfxTestProductionID) + `","config_revision":` + fmt.Sprint(configRevision) + `,"state":"` + state + `","progress":{"completed":1,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updated + `"}`
 	}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
@@ -401,7 +401,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 				activation = "true"
 				activatedAt = `"2026-10-13T00:00:00Z"`
 			}
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"vfx-files.production.default","revision":1,"overrides":{}},{"scope":"shot","template_id":"vfx-files.shot.default","revision":1,"overrides":{}},{"scope":"task","template_id":"vfx-files.task.default","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":true,"assets":false,"tasks":true,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+strings.ToUpper(vfxTestProductionID)+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"vfx-files.production.default","revision":1,"overrides":{}},{"scope":"shot","template_id":"vfx-files.shot.default","revision":1,"overrides":{}},{"scope":"task","template_id":"vfx-files.task.default","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":true,"assets":false,"tasks":true,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activation"):
 			var localMirror model.VFXFilesProductionConfig
 			if err := db.Where("production_id = ?", vfxTestProductionID).First(&localMirror).Error; err != nil {
@@ -447,11 +447,11 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 			}
 			previewID = previewIDsByKey[idempotencyKey]
 			if previewID == "" {
-				previewID = "70000000-0000-4000-8000-000000000001"
+				previewID = strings.ToUpper("70000000-0000-4000-8000-000000000001")
 				previewIDsByKey[idempotencyKey] = previewID
 				previewCreates++
 			}
-			_, _ = io.WriteString(w, `{"contract_version":"1.0","preview_id":"`+previewID+`","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"root_id":"root-1","state":"preview_ready","summary":{"existing":1,"create":0,"link":0,"excluded":0,"warnings":0},"changes":[],"expires_at":"`+previewExpiresAt+`"}`)
+			_, _ = io.WriteString(w, `{"contract_version":"1.0","preview_id":"`+previewID+`","production_id":"`+strings.ToUpper(vfxTestProductionID)+`","config_revision":`+fmt.Sprint(configRevision)+`,"root_id":"root-1","state":"preview_ready","summary":{"existing":1,"create":0,"link":0,"excluded":0,"warnings":0},"changes":[],"expires_at":"`+previewExpiresAt+`"}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/sync-jobs"):
 			syncJobCalls++
 			if !activationEnabled {
@@ -459,7 +459,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["preview_id"] != previewID {
+			if providerPreviewID, ok := body["preview_id"].(string); !ok || !strings.EqualFold(providerPreviewID, previewID) {
 				t.Error("Apply used a different preview")
 			}
 			jobID = "60000000-0000-4000-8000-000000000001"
@@ -520,7 +520,7 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 		t.Fatalf("same-key retry created %d provider preview records, want one", previewCreates)
 	}
 	stored, err := model.FindVFXFilesSyncOperation(db, vfxTestProductionID)
-	if err != nil || stored.PreviewID != previewID || stored.SnapshotID != snapshotID {
+	if err != nil || !strings.EqualFold(stored.PreviewID, previewID) || stored.SnapshotID != snapshotID {
 		t.Fatalf("preview not stored: %+v err=%v", stored, err)
 	}
 	if message, complete := run("apply_sync", "ks-files-1123456789abcdef"); complete || !strings.Contains(message, "explicitly enable") {

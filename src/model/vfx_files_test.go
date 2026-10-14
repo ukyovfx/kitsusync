@@ -32,7 +32,25 @@ func vfxEventTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesAuthorizationIntent{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}); err != nil {
+	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesAuthorizationIntent{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}, &VFXFilesSyncOperation{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	return db
+}
+
+func vfxEventConcurrentTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "vfx-events-concurrent.db")+"?_busy_timeout=10000&_journal_mode=WAL"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(4)
+	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}, &VFXFilesSyncOperation{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
@@ -124,7 +142,7 @@ func TestAcceptVFXFilesEventsPersistsDeduplicationConflictAndActivationQuarantin
 	}
 }
 
-func TestAcceptVFXFilesDeliveryStateTransitionsWithinPackageRevision(t *testing.T) {
+func TestAcceptVFXFilesDeliveryStateTransitionsWithinDeliveryRevision(t *testing.T) {
 	db := vfxEventTestDB(t)
 	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 4, Activated: true}).Error; err != nil {
 		t.Fatal(err)
@@ -254,8 +272,8 @@ func TestValidateVFXFilesDeliveryTransitionSeparatesRevisionAndStatus(t *testing
 		{name: "initial created", status: "created", revision: 1},
 		{name: "initial ready", status: "ready", revision: 1},
 		{name: "created to needs fix without revision bump", previous: previous("created", 1), status: "needs_fix", revision: 1},
-		{name: "needs fix to revised advances package revision", previous: previous("needs_fix", 1), status: "revised", revision: 2},
-		{name: "revised to accepted keeps package revision", previous: previous("revised", 2), status: "accepted", revision: 2},
+		{name: "needs fix to revised advances delivery revision", previous: previous("needs_fix", 1), status: "revised", revision: 2},
+		{name: "revised to accepted keeps delivery revision", previous: previous("revised", 2), status: "accepted", revision: 2},
 		{name: "lower revision is stale", previous: previous("revised", 2), status: "accepted", revision: 1, wantCode: "stale_delivery_revision"},
 		{name: "revision gap is rejected", previous: previous("needs_fix", 1), status: "revised", revision: 3, wantCode: "delivery_revision_gap"},
 		{name: "response cannot skip revised package", previous: previous("needs_fix", 1), status: "accepted", revision: 2, wantCode: "invalid_delivery_transition"},
@@ -331,6 +349,162 @@ func TestAcceptVFXFilesEventsConcurrentDuplicatesAreDurableOnce(t *testing.T) {
 	}
 }
 
+func TestAcceptVFXFilesEventsCanonicalizesUUIDProductionCase(t *testing.T) {
+	db := vfxEventTestDB(t)
+	productionID := "a0000000-0000-4000-8000-000000000141"
+	if err := db.Create(&VFXFilesProductionConfig{ProductionID: productionID, ActivationEpoch: 1, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	input := vfxInput("60000000-0000-4000-8000-000000000141", "90000000-0000-4000-8000-000000000141", 1, 1, `{"production_id":"`+productionID+`"}`)
+	input.ProductionID = strings.ToUpper(productionID)
+	result, err := AcceptVFXFilesEvents(db, "key-a", "uppercase-production-nonce-01", []VFXFilesEventInput{input}, time.Now().UTC())
+	if err != nil || len(result) != 1 || result[0].Outcome != VFXFilesEventAccepted {
+		t.Fatalf("uppercase UUID Production should resolve to the canonical row: result=%+v err=%v", result, err)
+	}
+	var rows int64
+	if err := db.Model(&VFXFilesEventInbox{}).Where("event_id = ? AND production_id = ?", input.EventID, productionID).Count(&rows).Error; err != nil || rows != 1 {
+		t.Fatalf("event Production identity was not canonicalized: rows=%d err=%v", rows, err)
+	}
+}
+
+func TestAcceptVFXFilesConcurrentConflictingTransitionsRemainSerializedBySQLite(t *testing.T) {
+	db := vfxEventConcurrentTestDB(t)
+	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 1, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	deliveryID := "90000000-0000-4000-8000-000000000031"
+	seed := vfxInput("60000000-0000-4000-8000-000000000131", deliveryID, 1, 1, `{"status":"ready"}`)
+	seed.EventType = "file_delivery.ready"
+	if result, err := AcceptVFXFilesEvents(db, "key-a", "conflict-seed-nonce-0001", []VFXFilesEventInput{seed}, time.Now().UTC()); err != nil || result[0].Outcome != VFXFilesEventAccepted {
+		t.Fatalf("seed ready event=%+v err=%v", result, err)
+	}
+	candidates := []VFXFilesEventInput{
+		vfxInput("60000000-0000-4000-8000-000000000132", deliveryID, 1, 1, `{"status":"accepted"}`),
+		vfxInput("60000000-0000-4000-8000-000000000133", deliveryID, 1, 1, `{"status":"needs_fix"}`),
+	}
+	candidates[0].EventType = "file_delivery.accepted"
+	candidates[1].EventType = "file_delivery.needs_fix"
+	type callResult struct {
+		input  VFXFilesEventInput
+		result []VFXFilesEventResult
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan callResult, len(candidates))
+	var wg sync.WaitGroup
+	for index, input := range candidates {
+		wg.Add(1)
+		go func(index int, input VFXFilesEventInput) {
+			defer wg.Done()
+			<-start
+			result, err := AcceptVFXFilesEvents(db, "key-a", fmt.Sprintf("conflict-race-nonce-%04d", index), []VFXFilesEventInput{input}, time.Now().UTC())
+			results <- callResult{input: input, result: result, err: err}
+		}(index, input)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	accepted, quarantined := 0, 0
+	var retryInputs []VFXFilesEventInput
+	for result := range results {
+		if result.err != nil {
+			message := strings.ToLower(result.err.Error())
+			if !strings.Contains(message, "locked") && !strings.Contains(message, "busy") {
+				t.Fatalf("concurrent SQLite acceptance failed for a non-lock reason: %v", result.err)
+			}
+			retryInputs = append(retryInputs, result.input)
+			continue // SQLite may fail a read-to-write upgrade; the caller retries safely.
+		}
+		if len(result.result) != 1 {
+			t.Fatalf("unexpected concurrent result: %+v", result)
+		}
+		switch result.result[0].Outcome {
+		case VFXFilesEventAccepted:
+			accepted++
+		case VFXFilesEventQuarantined:
+			quarantined++
+		default:
+			t.Fatalf("unexpected outcome: %+v", result.result[0])
+		}
+	}
+	for index, input := range retryInputs {
+		var result []VFXFilesEventResult
+		var err error
+		for attempt := 0; attempt < 5; attempt++ {
+			result, err = AcceptVFXFilesEvents(db, "key-a", fmt.Sprintf("conflict-retry-%04d-%04d", index, attempt), []VFXFilesEventInput{input}, time.Now().UTC())
+			if err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err != nil || len(result) != 1 || result[0].Outcome != VFXFilesEventQuarantined {
+			t.Fatalf("retry must observe the winning terminal state and quarantine the conflicting transition: result=%+v err=%v", result, err)
+		}
+		quarantined++
+	}
+	if accepted != 1 || quarantined != 1 {
+		t.Fatalf("conflicting terminal transitions were not serialized: accepted=%d quarantined=%d", accepted, quarantined)
+	}
+	var storedAccepted int64
+	if err := db.Model(&VFXFilesEventInbox{}).Where("delivery_id = ? AND outcome = ? AND event_type IN ?", deliveryID, VFXFilesEventAccepted, []string{"file_delivery.accepted", "file_delivery.needs_fix"}).Count(&storedAccepted).Error; err != nil || storedAccepted != 1 {
+		t.Fatalf("conflicting terminal accepted rows=%d err=%v", storedAccepted, err)
+	}
+}
+
+func TestPrepareVFXFilesSyncCommandConcurrentSQLiteCallersShareOneIdempotencyKey(t *testing.T) {
+	db := vfxEventConcurrentTestDB(t)
+	preview := []byte(`{"contract_version":"1.0","preview_id":"70000000-0000-4000-8000-000000000041","production_id":"` + vfxProductionID + `","config_revision":4,"state":"preview_ready","expires_at":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `"}`)
+	if err := StoreVFXFilesSyncPreview(db, vfxProductionID, "80000000-0000-4000-8000-000000000041", 4, preview); err != nil {
+		t.Fatal(err)
+	}
+	const callers = 12
+	start := make(chan struct{})
+	results := make(chan VFXFilesSyncOperation, callers)
+	errorsCh := make(chan error, callers)
+	var wg sync.WaitGroup
+	for index := 0; index < callers; index++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			row, err := PrepareVFXFilesSyncCommand(db, vfxProductionID, "apply", fmt.Sprintf("parallel-apply-key-%04d", index))
+			if err != nil {
+				errorsCh <- err
+				return
+			}
+			results <- row
+		}(index)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errorsCh)
+	var storedKey string
+	for row := range results {
+		if storedKey == "" {
+			storedKey = row.ApplyIdempotency
+		} else if row.ApplyIdempotency != storedKey {
+			t.Fatalf("callers observed different persisted idempotency keys: %q and %q", storedKey, row.ApplyIdempotency)
+		}
+	}
+	var failures int
+	for err := range errorsCh {
+		message := strings.ToLower(err.Error())
+		if !strings.Contains(message, "locked") && !strings.Contains(message, "busy") {
+			t.Fatalf("concurrent SQLite idempotency call failed for a non-lock reason: %v", err)
+		}
+		failures++ // Failed SQLite lock upgrades are safe: the request must not reach the Plugin.
+	}
+	if storedKey == "" || failures > callers-1 {
+		t.Fatalf("no stable idempotency winner: stored=%q failures=%d", storedKey, failures)
+	}
+	row, err := PrepareVFXFilesSyncCommand(db, vfxProductionID, "apply", "post-race-apply-key-01")
+	if err != nil || row.ApplyIdempotency != storedKey {
+		t.Fatalf("later retry did not reuse the durable idempotency key: got=%q want=%q err=%v", row.ApplyIdempotency, storedKey, err)
+	}
+}
+
 func TestStoreVFXFilesDesiredConfigMirrorIsMonotoneAndRejectsSecrets(t *testing.T) {
 	db := vfxEventTestDB(t)
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "desired-config-adopt-existing.json"))
@@ -368,6 +542,67 @@ func TestStoreVFXFilesDesiredConfigMirrorIsMonotoneAndRejectsSecrets(t *testing.
 	var unchanged VFXFilesProductionConfig
 	if err := db.Where("production_id = ?", vfxProductionID).First(&unchanged).Error; err != nil || unchanged.ConfigRevision != 4 || strings.Contains(unchanged.DesiredConfigJSON, "must-not-persist") {
 		t.Fatalf("rejected config changed persisted mirror: %+v err=%v", unchanged, err)
+	}
+}
+
+func TestStoreVFXFilesDesiredConfigMirrorRejectsActivationEpochRegression(t *testing.T) {
+	db := vfxEventTestDB(t)
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "desired-config-adopt-existing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initial map[string]any
+	if err := json.Unmarshal(fixture, &initial); err != nil {
+		t.Fatal(err)
+	}
+	initial["config_revision"] = float64(10)
+	activation := initial["activation"].(map[string]any)
+	activation["enabled"] = true
+	activation["notification_epoch"] = float64(4)
+	activation["activated_at"] = "2026-10-14T10:00:00Z"
+	active, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, vfxProductionID, active); err != nil {
+		t.Fatalf("store initial active mirror: %v", err)
+	}
+	initial["config_revision"] = float64(11)
+	activation["notification_epoch"] = float64(3)
+	regressed, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, vfxProductionID, regressed); !errors.Is(err, ErrVFXFilesConfigConflict) {
+		t.Fatalf("higher config revision must not permit Activation Epoch regression: %v", err)
+	}
+}
+
+func TestStoreVFXFilesDesiredConfigMirrorUsesCanonicalProductionID(t *testing.T) {
+	db := vfxEventTestDB(t)
+	productionID := "a0000000-0000-4000-8000-000000000151"
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "desired-config-adopt-existing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(fixture, &config); err != nil {
+		t.Fatal(err)
+	}
+	config["production_id"] = productionID
+	body, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, productionID, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, strings.ToUpper(productionID), body); err != nil {
+		t.Fatalf("same UUID with different letter case should be idempotent: %v", err)
+	}
+	var rows int64
+	if err := db.Model(&VFXFilesProductionConfig{}).Count(&rows).Error; err != nil || rows != 1 {
+		t.Fatalf("Production mirror was split by UUID case: rows=%d err=%v", rows, err)
 	}
 }
 
@@ -530,6 +765,79 @@ func TestVFXFilesSyncCommandIdempotencySurvivesSQLiteRestart(t *testing.T) {
 	repeated, err := PrepareVFXFilesSyncCommand(reopened, vfxProductionID, "retry", "different-retry-key-02")
 	if err != nil || repeated.RetryIdempotency != retry.RetryIdempotency {
 		t.Fatalf("retry command key changed: got=%q want=%q err=%v", repeated.RetryIdempotency, retry.RetryIdempotency, err)
+	}
+}
+
+func TestStoreVFXFilesSyncJobRejectsStalePollAndReplacementJob(t *testing.T) {
+	db := vfxEventTestDB(t)
+	preview := []byte(`{"contract_version":"1.0","preview_id":"70000000-0000-4000-8000-000000000051","production_id":"` + vfxProductionID + `","config_revision":4,"state":"preview_ready","expires_at":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `"}`)
+	if err := StoreVFXFilesSyncPreview(db, vfxProductionID, "80000000-0000-4000-8000-000000000051", 4, preview); err != nil {
+		t.Fatal(err)
+	}
+	job := func(id, state, updatedAt string) []byte {
+		return []byte(`{"contract_version":"1.0","id":"` + id + `","production_id":"` + vfxProductionID + `","config_revision":4,"state":"` + state + `","progress":{"completed":0,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updatedAt + `"}`)
+	}
+	jobID := "60000000-0000-4000-8000-000000000051"
+	if err := StoreVFXFilesSyncJob(db, vfxProductionID, job(jobID, "queued", "2026-10-13T00:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesSyncJob(db, vfxProductionID, job(jobID, "running", "2026-10-13T00:01:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesSyncJob(db, vfxProductionID, job(jobID, "queued", "2026-10-13T00:00:30Z")); !errors.Is(err, ErrVFXFilesConfigConflict) {
+		t.Fatalf("older poll response must not roll the job backward: %v", err)
+	}
+	if err := StoreVFXFilesSyncJob(db, vfxProductionID, job("60000000-0000-4000-8000-000000000052", "queued", "2026-10-13T00:02:00Z")); !errors.Is(err, ErrVFXFilesConfigConflict) {
+		t.Fatalf("a different job must not replace the tracked job without a new Preview: %v", err)
+	}
+	stored, err := FindVFXFilesSyncOperation(db, vfxProductionID)
+	if err != nil || stored.JobID != jobID || !strings.Contains(stored.JobJSON, `"state":"running"`) {
+		t.Fatalf("stale poll changed durable job state: id=%q json=%s err=%v", stored.JobID, stored.JobJSON, err)
+	}
+	if err := db.Model(&VFXFilesSyncOperation{}).Where("production_id = ?", vfxProductionID).Update("retry_idempotency", "preserve-retry-key-0001").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesSyncJob(db, vfxProductionID, job(jobID, "queued", "2026-10-13T00:00:30Z")); !errors.Is(err, ErrVFXFilesConfigConflict) {
+		t.Fatalf("repeat stale poll should remain rejected: %v", err)
+	}
+	stored, err = FindVFXFilesSyncOperation(db, vfxProductionID)
+	if err != nil || stored.RetryIdempotency != "preserve-retry-key-0001" {
+		t.Fatalf("stale poll cleared a pending command idempotency key: %+v err=%v", stored, err)
+	}
+}
+
+func TestStoreVFXFilesSyncPreviewDoesNotReplaceUnresolvedJob(t *testing.T) {
+	db := vfxEventTestDB(t)
+	preview := func(id string) []byte {
+		return []byte(`{"contract_version":"1.0","preview_id":"` + id + `","production_id":"` + vfxProductionID + `","config_revision":4,"state":"preview_ready","expires_at":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `"}`)
+	}
+	if err := StoreVFXFilesSyncPreview(db, vfxProductionID, "80000000-0000-4000-8000-000000000061", 4, preview("70000000-0000-4000-8000-000000000061")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PrepareVFXFilesSyncCommand(db, vfxProductionID, "apply", "active-job-apply-key-0001"); err != nil {
+		t.Fatal(err)
+	}
+	job := []byte(`{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000061","production_id":"` + vfxProductionID + `","config_revision":4,"state":"running","progress":{"completed":0,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"2026-10-13T00:01:00Z"}`)
+	if err := StoreVFXFilesSyncJob(db, vfxProductionID, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesSyncPreview(db, vfxProductionID, "80000000-0000-4000-8000-000000000062", 4, preview("70000000-0000-4000-8000-000000000062")); err == nil {
+		t.Fatal("Preview replacement must be refused while a sync job is unresolved")
+	}
+	stored, err := FindVFXFilesSyncOperation(db, vfxProductionID)
+	if err != nil || stored.PreviewID != "70000000-0000-4000-8000-000000000061" || stored.JobID != "60000000-0000-4000-8000-000000000061" || stored.ApplyIdempotency != "active-job-apply-key-0001" {
+		t.Fatalf("rejected Preview replacement changed active operation: %+v err=%v", stored, err)
+	}
+	completed := []byte(`{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000061","production_id":"` + vfxProductionID + `","config_revision":4,"state":"completed","progress":{"completed":1,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"2026-10-13T00:02:00Z"}`)
+	if err := StoreVFXFilesSyncJob(db, vfxProductionID, completed); err != nil {
+		t.Fatalf("terminal completion should be recorded: %v", err)
+	}
+	if err := StoreVFXFilesSyncPreview(db, vfxProductionID, "80000000-0000-4000-8000-000000000063", 4, preview("70000000-0000-4000-8000-000000000063")); err != nil {
+		t.Fatalf("a new Preview should be allowed after the job is terminal: %v", err)
+	}
+	stored, err = FindVFXFilesSyncOperation(db, vfxProductionID)
+	if err != nil || stored.PreviewID != "70000000-0000-4000-8000-000000000063" || stored.JobID != "" || stored.ApplyIdempotency != "" {
+		t.Fatalf("new Preview did not supersede the completed job reference: %+v err=%v", stored, err)
 	}
 }
 

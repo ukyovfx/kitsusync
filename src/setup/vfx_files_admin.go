@@ -421,13 +421,13 @@ func loadVFXFilesAdminState(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 		state.syncOperation = &operation
 		if operation.PreviewJSON != "" && operation.PreviewExpiresAt != nil && operation.PreviewExpiresAt.After(time.Now().UTC()) {
 			var preview vfxFilesSyncPreview
-			if json.Unmarshal([]byte(operation.PreviewJSON), &preview) == nil && preview.PreviewID == operation.PreviewID && preview.ProductionID == productionID && preview.ConfigRevision == operation.ConfigRevision && preview.State == "preview_ready" {
+			if json.Unmarshal([]byte(operation.PreviewJSON), &preview) == nil && strings.EqualFold(preview.PreviewID, operation.PreviewID) && strings.EqualFold(preview.ProductionID, productionID) && preview.ConfigRevision == operation.ConfigRevision && preview.State == "preview_ready" {
 				state.preview = &preview
 			}
 		}
 		if operation.JobJSON != "" {
 			var job vfxFilesSyncJob
-			if json.Unmarshal([]byte(operation.JobJSON), &job) == nil && job.ID == operation.JobID && job.ProductionID == productionID && job.ConfigRevision == operation.ConfigRevision {
+			if json.Unmarshal([]byte(operation.JobJSON), &job) == nil && strings.EqualFold(job.ID, operation.JobID) && strings.EqualFold(job.ProductionID, productionID) && job.ConfigRevision == operation.ConfigRevision {
 				state.job = &job
 			}
 		}
@@ -739,7 +739,7 @@ func previewVFXFilesSync(ctx context.Context, db *gorm.DB, runtime *vfxfiles.Run
 		return t(lang, "差分Previewを確認できません。同期は開始されていません。", "The sync preview could not be verified. Sync has not started."), "", false
 	}
 	var preview vfxFilesSyncPreview
-	if json.Unmarshal(previewResponse.Body, &preview) != nil || preview.ContractVersion != "1.0" || !vfxfiles.ValidID(preview.PreviewID) || preview.ProductionID != productionID || preview.ConfigRevision != config.ConfigRevision || preview.RootID != config.Drive.RootID || preview.State != "preview_ready" || len(preview.Changes) > 500 {
+	if json.Unmarshal(previewResponse.Body, &preview) != nil || preview.ContractVersion != "1.0" || !vfxfiles.ValidID(preview.PreviewID) || !strings.EqualFold(preview.ProductionID, productionID) || preview.ConfigRevision != config.ConfigRevision || preview.RootID != config.Drive.RootID || preview.State != "preview_ready" || len(preview.Changes) > 500 {
 		return t(lang, "PluginのPreview応答が契約と一致しません。同期は開始されていません。", "The Plugin preview response did not match the contract. Sync has not started."), "", false
 	}
 	if err := model.StoreVFXFilesSyncPreview(db, productionID, snapshotID, config.ConfigRevision, previewResponse.Body); err != nil {
@@ -765,7 +765,7 @@ func applyVFXFilesSync(ctx context.Context, db *gorm.DB, runtime *vfxfiles.Runti
 	}
 	previewJSON := []byte(operation.PreviewJSON)
 	var preview vfxFilesSyncPreview
-	if json.Unmarshal(previewJSON, &preview) != nil || preview.State != "preview_ready" || preview.PreviewID != operation.PreviewID || preview.ProductionID != productionID || preview.ConfigRevision != config.ConfigRevision {
+	if json.Unmarshal(previewJSON, &preview) != nil || preview.State != "preview_ready" || !strings.EqualFold(preview.PreviewID, operation.PreviewID) || !strings.EqualFold(preview.ProductionID, productionID) || preview.ConfigRevision != config.ConfigRevision {
 		return t(lang, "Previewの保存状態を確認できません。", "The saved preview could not be verified."), "", false
 	}
 	operation, err = model.PrepareVFXFilesSyncCommand(db, productionID, "apply", vfxFilesActionKey(idempotency, "sync-apply"))
