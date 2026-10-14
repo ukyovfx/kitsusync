@@ -159,9 +159,10 @@ func TestSignedEventHandlerQuarantinesWrongProductionStaleEpochAndDisabledIntegr
 	key := "synthetic-event-signing-key-material-0001"
 	clock := time.Date(2026, 10, 12, 16, 30, 0, 0, time.UTC)
 	cases := []struct {
-		name       string
-		mutateBody func([]byte) []byte
-		deactivate bool
+		name         string
+		mutateBody   func([]byte) []byte
+		deactivate   bool
+		currentEpoch uint64
 	}{
 		{name: "wrong production", mutateBody: func(body []byte) []byte {
 			return []byte(strings.Replace(string(body), "10000000-0000-4000-8000-000000000001", "10000000-0000-4000-8000-000000000099", 1))
@@ -169,11 +170,17 @@ func TestSignedEventHandlerQuarantinesWrongProductionStaleEpochAndDisabledIntegr
 		{name: "stale activation epoch", mutateBody: func(body []byte) []byte {
 			return []byte(strings.Replace(string(body), `"activation_epoch": 1`, `"activation_epoch": 2`, 1))
 		}},
+		{name: "past activation epoch", currentEpoch: 2, mutateBody: func(body []byte) []byte { return body }},
 		{name: "disabled integration", mutateBody: func(body []byte) []byte { return body }, deactivate: true},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			db := eventHandlerTestDB(t)
+			if tc.currentEpoch != 0 {
+				if err := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Update("activation_epoch", tc.currentEpoch).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
 			if tc.deactivate {
 				if err := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Update("activated", false).Error; err != nil {
 					t.Fatal(err)
@@ -194,6 +201,92 @@ func TestSignedEventHandlerQuarantinesWrongProductionStaleEpochAndDisabledIntegr
 				t.Fatalf("quarantine was not durable: count=%d err=%v", eventCount, err)
 			}
 		})
+	}
+}
+
+func TestSignedEventDuringActivationMirrorGapIsRetryableWithFreshNonce(t *testing.T) {
+	db := eventHandlerTestDB(t)
+	if err := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Update("pending_activation_epoch", 2).Error; err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "folder-provisioning-completed.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	validNextEpoch := []byte(strings.Replace(string(fixture), `"activation_epoch": 1`, `"activation_epoch": 2`, 1))
+	var pendingEvent map[string]any
+	if err := json.Unmarshal(validNextEpoch, &pendingEvent); err != nil {
+		t.Fatal(err)
+	}
+	unknownProductionEvent := make(map[string]any, len(pendingEvent))
+	for key, value := range pendingEvent {
+		unknownProductionEvent[key] = value
+	}
+	unknownProductionEvent["event_id"] = "60000000-0000-4000-8000-000000000099"
+	unknownProductionEvent["production_id"] = "10000000-0000-4000-8000-000000000099"
+	batchBody, err := json.Marshal(map[string]any{"contract_version": "1.0", "events": []any{pendingEvent, unknownProductionEvent}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "synthetic-event-signing-key-material-0001"
+	clock := time.Date(2026, 10, 14, 8, 0, 0, 0, time.UTC)
+	handler := EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })
+	first := httptest.NewRecorder()
+	handler(first, signedEventRequest(t, batchBody, key, "activation-gap-nonce-000001", "activation-gap-idempotency-000001", clock))
+	if first.Code != http.StatusServiceUnavailable || first.Header().Get("Retry-After") == "" {
+		t.Fatalf("ahead event during marked activation gap must request retry: status=%d headers=%v body=%s", first.Code, first.Header(), first.Body.String())
+	}
+	var nonceCount, eventCount int64
+	if err := db.Model(&model.VFXFilesEventNonce{}).Count(&nonceCount).Error; err != nil || nonceCount != 1 {
+		t.Fatalf("retryable batch did not durably consume its request nonce: count=%d err=%v", nonceCount, err)
+	}
+	if err := db.Model(&model.VFXFilesEventInbox{}).Count(&eventCount).Error; err != nil || eventCount != 1 {
+		t.Fatalf("retryable batch should persist only its non-pending event: count=%d err=%v", eventCount, err)
+	}
+	var quarantined model.VFXFilesEventInbox
+	if err := db.Where("event_id = ?", "60000000-0000-4000-8000-000000000099").First(&quarantined).Error; err != nil || quarantined.Outcome != model.VFXFilesEventQuarantined {
+		t.Fatalf("unknown Production was not durably quarantined while the valid next epoch retried: %+v err=%v", quarantined, err)
+	}
+	var pendingCount int64
+	if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_id = ?", "60000000-0000-4000-8000-000000000001").Count(&pendingCount).Error; err != nil || pendingCount != 0 {
+		t.Fatalf("pending next-epoch event was persisted during activation: count=%d err=%v", pendingCount, err)
+	}
+
+	if err := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Updates(map[string]any{
+		"activation_epoch": 2, "activated": true, "pending_activation_epoch": 0,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.VFXFilesProductionConfig{ProductionID: "10000000-0000-4000-8000-000000000099", ActivationEpoch: 2, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Provider retries use a fresh nonce while preserving the stable Event ID.
+	second := httptest.NewRecorder()
+	handler(second, signedEventRequest(t, batchBody, key, "activation-gap-nonce-000002", "activation-gap-idempotency-000002", clock))
+	if second.Code != http.StatusAccepted {
+		t.Fatalf("same Event ID with fresh nonce was not durably accepted after mirror convergence: status=%d body=%s", second.Code, second.Body.String())
+	}
+	var accepted int64
+	if err := db.Model(&model.VFXFilesEventInbox{}).Where("outcome = ?", model.VFXFilesEventAccepted).Count(&accepted).Error; err != nil || accepted != 1 {
+		t.Fatalf("activation-gap retry was not accepted exactly once: count=%d err=%v", accepted, err)
+	}
+	if err := db.Where("event_id = ?", "60000000-0000-4000-8000-000000000099").First(&quarantined).Error; err != nil || quarantined.Outcome != model.VFXFilesEventQuarantined {
+		t.Fatalf("previously unknown Production event was silently rebound after retry: %+v err=%v", quarantined, err)
+	}
+
+	// Outside the marked activation transition, disabled and unknown scopes
+	// retain the existing durable quarantine behavior.
+	if err := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Update("activated", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherBody := []byte(strings.Replace(string(validNextEpoch), "60000000-0000-4000-8000-000000000001", "60000000-0000-4000-8000-000000000099", 1))
+	third := httptest.NewRecorder()
+	handler(third, signedEventRequest(t, otherBody, key, "activation-gap-nonce-000003", "activation-gap-idempotency-000003", clock))
+	var quarantineResponse struct {
+		Results []model.VFXFilesEventResult `json:"results"`
+	}
+	if third.Code != http.StatusAccepted || json.Unmarshal(third.Body.Bytes(), &quarantineResponse) != nil || len(quarantineResponse.Results) != 1 || quarantineResponse.Results[0].Outcome != model.VFXFilesEventQuarantined {
+		t.Fatalf("disabled integration did not remain fail-closed: status=%d body=%s", third.Code, third.Body.String())
 	}
 }
 

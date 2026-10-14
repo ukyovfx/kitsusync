@@ -223,6 +223,69 @@ func TestStoreVFXFilesDesiredConfigMirrorIsMonotoneAndRejectsSecrets(t *testing.
 	}
 }
 
+func TestActivationMirrorHoldsOnlyTheExplicitNextEpochAndReleasesAfterReadback(t *testing.T) {
+	db := vfxEventTestDB(t)
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "desired-config-adopt-existing.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, vfxProductionID, fixture); err != nil {
+		t.Fatal(err)
+	}
+	if err := BeginVFXFilesActivationMirror(db, vfxProductionID); err != nil {
+		t.Fatalf("begin authorized activation mirror transition: %v", err)
+	}
+	input := vfxInput(vfxEventID1, "90000000-0000-4000-8000-000000000001", 1, 1, `{"body":"activation race"}`)
+	if _, err := AcceptVFXFilesEvents(db, "key-a", "activation-pending-nonce-0001", []VFXFilesEventInput{input}, time.Now().UTC()); !errors.Is(err, ErrVFXFilesActivationPending) {
+		t.Fatalf("only the exact pending next epoch should be transiently held, got %v", err)
+	}
+	var nonceCount, inboxCount int64
+	if err := db.Model(&VFXFilesEventNonce{}).Count(&nonceCount).Error; err != nil || nonceCount != 1 {
+		t.Fatalf("activation retry did not consume its signed-request nonce: count=%d err=%v", nonceCount, err)
+	}
+	if err := db.Model(&VFXFilesEventInbox{}).Count(&inboxCount).Error; err != nil || inboxCount != 0 {
+		t.Fatalf("held event was stored/quarantined: count=%d err=%v", inboxCount, err)
+	}
+
+	var active map[string]any
+	if err := json.Unmarshal(fixture, &active); err != nil {
+		t.Fatal(err)
+	}
+	active["config_revision"] = float64(5)
+	activation := active["activation"].(map[string]any)
+	activation["enabled"] = true
+	activation["notification_epoch"] = float64(1)
+	activation["activated_at"] = "2026-10-14T08:00:00Z"
+	activeBody, err := json.Marshal(active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := StoreVFXFilesDesiredConfigMirror(db, vfxProductionID, activeBody); err != nil {
+		t.Fatalf("persist Plugin activation readback: %v", err)
+	}
+	var stored VFXFilesProductionConfig
+	if err := db.Where("production_id = ?", vfxProductionID).First(&stored).Error; err != nil || stored.PendingActivationEpoch != 0 || !stored.Activated || stored.ActivationEpoch != 1 {
+		t.Fatalf("activation readback did not clear the transition marker: %+v err=%v", stored, err)
+	}
+	accepted, err := AcceptVFXFilesEvents(db, "key-a", "activation-retry-nonce-0001", []VFXFilesEventInput{input}, time.Now().UTC())
+	if err != nil || len(accepted) != 1 || accepted[0].Outcome != VFXFilesEventAccepted {
+		t.Fatalf("fresh-nonce retry after mirror convergence was not accepted: results=%+v err=%v", accepted, err)
+	}
+
+	// A disabled configuration without an in-flight marker still quarantines
+	// even an otherwise next epoch; old or arbitrary future epochs do likewise.
+	if err := db.Model(&VFXFilesProductionConfig{}).Where("production_id = ?", vfxProductionID).Update("activated", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	for index, epoch := range []uint64{1, 2} {
+		candidate := vfxInput(fmt.Sprintf("60000000-0000-4000-8000-%012d", index+10), fmt.Sprintf("90000000-0000-4000-8000-%012d", index+10), 1, epoch, `{"body":"must quarantine"}`)
+		results, err := AcceptVFXFilesEvents(db, "key-a", fmt.Sprintf("activation-closed-nonce-%04d", index), []VFXFilesEventInput{candidate}, time.Now().UTC())
+		if err != nil || len(results) != 1 || results[0].Outcome != VFXFilesEventQuarantined {
+			t.Fatalf("disabled or unmarked epoch %d was not fail-closed: results=%+v err=%v", epoch, results, err)
+		}
+	}
+}
+
 func TestStoreVFXFilesDesiredConfigMirrorAcceptsEquivalentJSONKeyOrder(t *testing.T) {
 	db := vfxEventTestDB(t)
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "desired-config-adopt-existing.json"))

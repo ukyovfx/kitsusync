@@ -12,20 +12,32 @@ import (
 	"gorm.io/gorm"
 )
 
-// ProcessVFXFilesDeliveryEvents drains a bounded number of durable Plugin
-// events through the existing Production route and delivery journal. It never
-// mentions Discord users/roles and never exposes Plugin Drive references.
+// ProcessVFXFilesDeliveryEvents walks a fixed inbox high-water mark in bounded
+// pages. Deferred rows remain durable but cannot pin the first page ahead of
+// later events. It never mentions Discord users/roles or exposes Drive refs.
 func ProcessVFXFilesDeliveryEvents(db *gorm.DB, limit int) (processed, deferred int, err error) {
-	rows, err := model.PendingVFXFilesDeliveryEvents(db, limit)
+	now := time.Now().UTC()
+	highWatermark, err := model.VFXFilesDeliveryEventHighWatermark(db, now)
 	if err != nil {
 		return 0, 0, err
 	}
-	for _, row := range rows {
-		result := processVFXFilesDeliveryEvent(db, row)
-		if result == "processed" {
-			processed++
-		} else if result == "deferred" {
-			deferred++
+	var afterID uint
+	for afterID < highWatermark {
+		rows, pageErr := model.PendingVFXFilesDeliveryEventsPage(db, afterID, highWatermark, limit, now)
+		if pageErr != nil {
+			return processed, deferred, pageErr
+		}
+		if len(rows) == 0 {
+			break
+		}
+		afterID = rows[len(rows)-1].ID
+		for _, row := range rows {
+			result := processVFXFilesDeliveryEvent(db, row)
+			if result == "processed" {
+				processed++
+			} else if result == "deferred" {
+				deferred++
+			}
 		}
 	}
 	return processed, deferred, nil
@@ -102,7 +114,7 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 	intent := model.NotificationDeliveryIntent{
 		TaskID: journalTaskID, ProductionID: row.ProductionID, TaskTypeID: event.RecipientTaskTypeID,
 		TaskStatus:     "FILE_" + strings.ToUpper(strings.ReplaceAll(strings.TrimPrefix(event.EventType, "file_delivery."), "-", "_")),
-		DeliverySource: "vfx_files", SourceEventID: event.EventID, TaskUpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		DeliverySource: "vfx_files", SourceEventID: event.EventID, TaskUpdatedAt: event.OccurredAt,
 		Payload: encoded, WebhookRowID: destination.WebhookRowID, GuildID: destination.GuildID, ChannelID: destination.ChannelID,
 		DiscordWebhookID: destination.WebhookID, NotificationRevision: revision, ThreadName: "Files · " + sanitizeDiscordText(event.EntityName),
 		PriorMessageID: priorMessageID, PriorThreadID: priorThreadID,

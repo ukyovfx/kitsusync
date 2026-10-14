@@ -644,6 +644,11 @@ func runVFXFilesAdminAction(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 		if err := model.StoreVFXFilesDesiredConfigMirror(db, productionID, desired.Body); err != nil {
 			return t(lang, "Files設定の安全状態を保存できません。操作を中止しました。", "The Files safety state could not be stored; the action was stopped."), "", false
 		}
+		if r.Form.Get("action") == "activate" {
+			if err := model.BeginVFXFilesActivationMirror(db, productionID); err != nil {
+				return t(lang, "有効化状態を再確認中です。画面を再読み込みして状態を確認してください。", "Activation is already being reconciled. Reload and verify its current state."), "", false
+			}
+		}
 		if r.Form.Get("action") == "deactivate" {
 			if err := model.DisableVFXFilesEventIntake(db, productionID); err != nil {
 				return t(lang, "通知を安全に一時停止できません。管理者に確認してください。", "Event delivery could not be paused safely. Contact an administrator."), "", false
@@ -656,9 +661,17 @@ func runVFXFilesAdminAction(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 		body, _ := json.Marshal(map[string]string{"contract_version": "1.0"})
 		response, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodPost, path, nil, body, "vfx.activation.write", true, key, desired.Header.Get("ETag"))
 		if err != nil {
+			if r.Form.Get("action") == "activate" {
+				return t(lang, "Pluginの応答が不明なため有効化状態を保留しています。再読み込みして状態を確認してください。", "The Plugin outcome is unknown, so activation remains pending. Reload to reconcile the state."), "", false
+			}
 			return safeVFXFilesError(err, lang), "", false
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			if r.Form.Get("action") == "activate" && response.StatusCode >= 400 && response.StatusCode < 500 {
+				if cancelErr := model.CancelVFXFilesActivationMirror(db, productionID); cancelErr != nil {
+					return t(lang, "有効化は拒否されましたが、保留状態を解除できません。再読み込みして状態を確認してください。", "Activation was rejected, but its pending marker could not be cleared. Reload and verify the state."), "", false
+				}
+			}
 			return t(lang, "Filesの有効状態を変更できませんでした。必要なら状態を再確認してください。", "Files activation could not be changed. Recheck the remote state before retrying."), "", false
 		}
 		updated, getErr := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/productions/"+productionID+"/desired-config", nil, nil, "vfx.config.read", false, "", "")

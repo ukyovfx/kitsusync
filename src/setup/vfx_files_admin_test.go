@@ -379,6 +379,9 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 	var previewCreates int
 	var syncJobCalls int
 	var calls []string
+	var activationGapErr error
+	var activationGapPendingEpoch uint64
+	var db *gorm.DB
 	previewExpiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	makeJob := func(state string, updated string) string {
 		return `{"contract_version":"1.0","id":"60000000-0000-4000-8000-000000000001","production_id":"` + vfxTestProductionID + `","config_revision":` + fmt.Sprint(configRevision) + `,"state":"` + state + `","progress":{"completed":1,"total":1},"failure_code":null,"created_at":"2026-10-13T00:00:00Z","updated_at":"` + updated + `"}`
@@ -400,6 +403,16 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 			}
 			_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":`+fmt.Sprint(configRevision)+`,"connection_id":"30000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"root-1","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"vfx-files.production.default","revision":1,"overrides":{}},{"scope":"shot","template_id":"vfx-files.shot.default","revision":1,"overrides":{}},{"scope":"task","template_id":"vfx-files.task.default","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":true,"assets":false,"tasks":true,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":`+activation+`,"activated_at":`+activatedAt+`,"notification_epoch":`+fmt.Sprint(activationEpoch)+`}}`)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/activation"):
+			var localMirror model.VFXFilesProductionConfig
+			if err := db.Where("production_id = ?", vfxTestProductionID).First(&localMirror).Error; err != nil {
+				t.Errorf("activation marker was not durable before the Plugin call: %v", err)
+			} else {
+				activationGapPendingEpoch = localMirror.PendingActivationEpoch
+				_, activationGapErr = model.AcceptVFXFilesEvents(db, "activation-test-key", "activation-window-nonce-0001", []model.VFXFilesEventInput{{
+					ProducerID: "vfx-files-plugin", EventID: "60000000-0000-4000-8000-000000000011", EventType: "folder.provisioning.completed",
+					ProductionID: vfxTestProductionID, ActivationEpoch: 1, Payload: []byte(`{"event":"activation-window"}`),
+				}}, time.Now().UTC())
+			}
 			activationEnabled = true
 			activationEpoch = 1
 			configRevision = 2
@@ -476,11 +489,11 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	db, err = gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.VFXFilesSyncOperation{}, &model.VFXFilesProductionConfig{}); err != nil {
+	if err := db.AutoMigrate(&model.VFXFilesSyncOperation{}, &model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}); err != nil {
 		t.Fatal(err)
 	}
 	runtime := &vfxfiles.RuntimeConfig{Client: client}
@@ -518,6 +531,16 @@ func TestVFXFilesMockProviderSnapshotPreviewApplyProgressRetryReconcile(t *testi
 	}
 	if message, complete := run("activate", "ks-files-2123456789abcdef"); !complete || !strings.Contains(message, "activated") {
 		t.Fatalf("activation: complete=%v message=%q", complete, message)
+	}
+	if activationGapPendingEpoch != 1 || !errors.Is(activationGapErr, model.ErrVFXFilesActivationPending) {
+		t.Fatalf("activation did not hold the exact next-epoch event before Plugin readback: pending_epoch=%d event_error=%v", activationGapPendingEpoch, activationGapErr)
+	}
+	var activationGapEvents, activationGapNonces int64
+	if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_id = ?", "60000000-0000-4000-8000-000000000011").Count(&activationGapEvents).Error; err != nil || activationGapEvents != 0 {
+		t.Fatalf("activation-window event was persisted before mirror readback: count=%d err=%v", activationGapEvents, err)
+	}
+	if err := db.Model(&model.VFXFilesEventNonce{}).Where("key_id = ? AND nonce = ?", "activation-test-key", "activation-window-nonce-0001").Count(&activationGapNonces).Error; err != nil || activationGapNonces != 1 {
+		t.Fatalf("activation-window signed request nonce was not durably consumed: count=%d err=%v", activationGapNonces, err)
 	}
 	if message, complete := run("apply_sync", "ks-files-3123456789abcdef"); complete || !strings.Contains(message, "changed after preview") {
 		t.Fatalf("activation must invalidate pre-activation preview: complete=%v message=%q", complete, message)

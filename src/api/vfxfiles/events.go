@@ -102,7 +102,7 @@ type eventFolder struct {
 // existing Discord delivery path. It intentionally excludes Drive URLs and
 // object IDs; the Plugin contract does not grant public sharing access.
 type FileDeliveryNotification struct {
-	EventID, EventType, ProductionID, ProductionName                        string
+	EventID, EventType, ProductionID, ProductionName, OccurredAt            string
 	EntityType, EntityID, EntityName                                        string
 	SourceTaskID, SourceTaskTypeID, SourceTaskTypeName                      string
 	SenderName, OutputClassification                                        string
@@ -122,7 +122,7 @@ func DecodeFileDeliveryNotification(raw []byte) (FileDeliveryNotification, error
 		return FileDeliveryNotification{}, errors.New("invalid file delivery event")
 	}
 	return FileDeliveryNotification{
-		EventID: event.EventID, EventType: event.EventType, ProductionID: event.ProductionID, ProductionName: event.ProductionName,
+		EventID: event.EventID, EventType: event.EventType, ProductionID: event.ProductionID, ProductionName: event.ProductionName, OccurredAt: event.OccurredAt,
 		EntityType: event.Entity.Type, EntityID: event.Entity.ID, EntityName: event.Entity.Name,
 		SourceTaskID: event.Source.ID, SourceTaskTypeID: event.Source.TaskTypeID, SourceTaskTypeName: event.Source.TaskTypeName,
 		SenderName: event.Sender.DisplayName, OutputClassification: event.OutputPackage.Classification, OutputVersion: event.OutputPackage.Version,
@@ -210,6 +210,11 @@ func EventHandler(db *gorm.DB, keys map[string][]byte, now func() time.Time) htt
 		results, err := model.AcceptVFXFilesEvents(db, keyID, nonce, inputs, current)
 		if errors.Is(err, model.ErrVFXFilesEventConflict) {
 			http.Error(w, "event replay or identity conflict", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, model.ErrVFXFilesActivationPending) {
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, "activation state is synchronizing", http.StatusServiceUnavailable)
 			return
 		}
 		if err != nil {

@@ -161,6 +161,7 @@ const (
 
 var (
 	ErrVFXFilesEventConflict               = errors.New("VFX Files event identity conflict")
+	ErrVFXFilesActivationPending           = errors.New("VFX Files activation mirror is pending")
 	ErrVFXFilesInvalidBatch                = errors.New("VFX Files event batch is invalid")
 	ErrVFXFilesConfigConflict              = errors.New("VFX Files desired config revision conflict")
 	ErrVFXFilesAuthorizationIntentConflict = errors.New("VFX Files authorization intent identity conflict")
@@ -268,10 +269,14 @@ func StoreVFXFilesDesiredConfigMirror(db *gorm.DB, productionID string, body []b
 		if config.ConfigRevision < existing.ConfigRevision || config.ConfigRevision == existing.ConfigRevision && (!bytes.Equal(existingCanonical, canonicalBody) || existing.ActivationEpoch != config.Activation.NotificationEpoch || existing.Activated != config.Activation.Enabled) {
 			return ErrVFXFilesConfigConflict
 		}
-		result := tx.Model(&VFXFilesProductionConfig{}).Where("id = ? AND config_revision <= ?", existing.ID, config.ConfigRevision).Updates(map[string]any{
+		updates := map[string]any{
 			"desired_config_json": string(canonicalBody), "config_revision": config.ConfigRevision, "activation_epoch": config.Activation.NotificationEpoch,
 			"activated": config.Activation.Enabled, "updated_at": time.Now().UTC(),
-		})
+		}
+		if existing.PendingActivationEpoch != 0 && config.Activation.NotificationEpoch >= existing.PendingActivationEpoch {
+			updates["pending_activation_epoch"] = 0
+		}
+		result := tx.Model(&VFXFilesProductionConfig{}).Where("id = ? AND config_revision <= ?", existing.ID, config.ConfigRevision).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -304,7 +309,7 @@ func DisableVFXFilesEventIntake(db *gorm.DB, productionID string) error {
 	if db == nil || !vfxFilesUUIDRE.MatchString(productionID) {
 		return ErrVFXFilesInvalidBatch
 	}
-	result := db.Model(&VFXFilesProductionConfig{}).Where("production_id = ?", productionID).Update("activated", false)
+	result := db.Model(&VFXFilesProductionConfig{}).Where("production_id = ?", productionID).Updates(map[string]any{"activated": false, "pending_activation_epoch": 0})
 	return result.Error
 }
 
@@ -341,13 +346,14 @@ func validVFXIDList(values []string, limit int) bool {
 // VFXFilesProductionConfig stores KitsuSync-owned desired integration state;
 // it never contains OAuth credentials or the Plugin's credential reference.
 type VFXFilesProductionConfig struct {
-	ID                uint   `gorm:"primaryKey"`
-	ProductionID      string `gorm:"not null;uniqueIndex;size:64"`
-	DesiredConfigJSON string `gorm:"type:text;not null;default:''"`
-	ConfigRevision    uint64 `gorm:"not null;default:0"`
-	ActivationEpoch   uint64 `gorm:"not null;default:0"`
-	Activated         bool   `gorm:"not null;default:false;index"`
-	UpdatedAt         time.Time
+	ID                     uint   `gorm:"primaryKey"`
+	ProductionID           string `gorm:"not null;uniqueIndex;size:64"`
+	DesiredConfigJSON      string `gorm:"type:text;not null;default:''"`
+	ConfigRevision         uint64 `gorm:"not null;default:0"`
+	ActivationEpoch        uint64 `gorm:"not null;default:0"`
+	PendingActivationEpoch uint64 `gorm:"not null;default:0"`
+	Activated              bool   `gorm:"not null;default:false;index"`
+	UpdatedAt              time.Time
 }
 
 func (VFXFilesProductionConfig) TableName() string { return "vfx_files_production_configs" }
@@ -558,8 +564,86 @@ func PendingVFXFilesDeliveryEvents(db *gorm.DB, limit int) ([]VFXFilesEventInbox
 		limit = 25
 	}
 	var rows []VFXFilesEventInbox
-	err := db.Where("outcome = ? AND processed_at IS NULL AND event_type LIKE ?", VFXFilesEventAccepted, "file_delivery.%").Order("id asc").Limit(limit).Find(&rows).Error
+	err := pendingVFXFilesDeliveryEventsQuery(db, time.Now().UTC()).Order("vfx_files_event_inbox.id asc").Limit(limit).Find(&rows).Error
 	return rows, err
+}
+
+// VFXFilesDeliveryEventHighWatermark snapshots the backlog boundary for one
+// processing pass. New arrivals are left for the next pass.
+func VFXFilesDeliveryEventHighWatermark(db *gorm.DB, now time.Time) (uint, error) {
+	if db == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	var highWatermark uint
+	err := pendingVFXFilesDeliveryEventsQuery(db, now).
+		Select("COALESCE(MAX(id), 0)").Scan(&highWatermark).Error
+	return highWatermark, err
+}
+
+// PendingVFXFilesDeliveryEventsPage keyset-pages every due accepted event up
+// to a caller's fixed high watermark. The only temporary exclusion is an
+// explicit future Retry-After persisted in its delivery journal; there is no
+// age-based expiry, so old rows become eligible again when that deadline ends.
+func PendingVFXFilesDeliveryEventsPage(db *gorm.DB, afterID, highWatermark uint, limit int, now time.Time) ([]VFXFilesEventInbox, error) {
+	if db == nil {
+		return nil, gorm.ErrInvalidDB
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 25
+	}
+	if highWatermark == 0 || afterID >= highWatermark {
+		return []VFXFilesEventInbox{}, nil
+	}
+	var rows []VFXFilesEventInbox
+	err := pendingVFXFilesDeliveryEventsQuery(db, now).
+		Where("vfx_files_event_inbox.id > ? AND vfx_files_event_inbox.id <= ?", afterID, highWatermark).
+		Order("id asc").Limit(limit).Find(&rows).Error
+	return rows, err
+}
+
+func pendingVFXFilesDeliveryEventsQuery(db *gorm.DB, now time.Time) *gorm.DB {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return db.Model(&VFXFilesEventInbox{}).
+		Where("vfx_files_event_inbox.outcome = ? AND vfx_files_event_inbox.processed_at IS NULL AND vfx_files_event_inbox.event_type LIKE ?", VFXFilesEventAccepted, "file_delivery.%").
+		Where("NOT EXISTS (SELECT 1 FROM notification_delivery_events WHERE delivery_source = ? AND source_event_id = vfx_files_event_inbox.event_id AND disposition = ? AND retry_after_at > ?)", "vfx_files", DeliveryRetryable, now.UTC())
+}
+
+// BeginVFXFilesActivationMirror records the exact next epoch before the
+// external activation request. Only events for this explicitly initiated,
+// single-step transition may receive a transient retry response.
+func BeginVFXFilesActivationMirror(db *gorm.DB, productionID string) error {
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) {
+		return ErrVFXFilesInvalidBatch
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		var config VFXFilesProductionConfig
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("production_id = ?", strings.TrimSpace(productionID)).First(&config).Error; err != nil {
+			return err
+		}
+		if config.PendingActivationEpoch != 0 {
+			return ErrVFXFilesActivationPending
+		}
+		if config.ActivationEpoch >= 9_000_000_000_000_000 {
+			return ErrVFXFilesInvalidBatch
+		}
+		result := tx.Model(&VFXFilesProductionConfig{}).Where("id = ? AND pending_activation_epoch = 0", config.ID).Update("pending_activation_epoch", config.ActivationEpoch+1)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrVFXFilesActivationPending
+		}
+		return nil
+	})
+}
+
+func CancelVFXFilesActivationMirror(db *gorm.DB, productionID string) error {
+	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) {
+		return ErrVFXFilesInvalidBatch
+	}
+	return db.Model(&VFXFilesProductionConfig{}).Where("production_id = ?", strings.TrimSpace(productionID)).Update("pending_activation_epoch", 0).Error
 }
 
 func MarkVFXFilesEventProcessed(db *gorm.DB, eventID string, now time.Time) (bool, error) {
@@ -605,7 +689,39 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 		return ordered[i].EventID < ordered[j].EventID
 	})
 	byEventID := make(map[string]VFXFilesEventResult, len(events))
+	activationPending := make(map[string]struct{})
 	err := db.Transaction(func(tx *gorm.DB) error {
+		// Hold only the exact epoch recorded by an in-progress activation.
+		// Other events in the same signed batch still get durable accepted or
+		// quarantined outcomes before the request asks the Plugin to retry.
+		for _, input := range ordered {
+			var nonceCount int64
+			if err := tx.Model(&VFXFilesEventNonce{}).Where("key_id = ? AND nonce = ?", keyID, nonce).Count(&nonceCount).Error; err != nil {
+				return err
+			}
+			if nonceCount != 0 {
+				return ErrVFXFilesEventConflict
+			}
+			var existingCount int64
+			if err := tx.Model(&VFXFilesEventInbox{}).Where("producer_id = ? AND event_id = ?", input.ProducerID, input.EventID).Count(&existingCount).Error; err != nil {
+				return err
+			}
+			if existingCount != 0 {
+				continue
+			}
+			var config VFXFilesProductionConfig
+			err := tx.Where("production_id = ?", input.ProductionID).First(&config).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if config.PendingActivationEpoch != 0 && config.ActivationEpoch < 9_000_000_000_000_000 &&
+				config.PendingActivationEpoch == config.ActivationEpoch+1 && input.ActivationEpoch == config.PendingActivationEpoch {
+				activationPending[input.EventID] = struct{}{}
+			}
+		}
 		row := VFXFilesEventNonce{KeyID: keyID, Nonce: nonce, ExpiresAt: now.Add(10 * time.Minute), CreatedAt: now}
 		if err := tx.Create(&row).Error; err != nil {
 			if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -614,6 +730,9 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 			return err
 		}
 		for _, input := range ordered {
+			if _, pending := activationPending[input.EventID]; pending {
+				continue
+			}
 			if input.ProducerID == "" || input.EventID == "" || input.ProductionID == "" || input.EventType == "" || len(input.Payload) == 0 {
 				return ErrVFXFilesInvalidBatch
 			}
@@ -663,6 +782,9 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 	})
 	if err != nil {
 		return nil, err
+	}
+	if len(activationPending) > 0 {
+		return nil, ErrVFXFilesActivationPending
 	}
 	for _, input := range events {
 		results = append(results, byEventID[input.EventID])

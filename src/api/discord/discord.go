@@ -143,13 +143,14 @@ var KitsuPublicURLResolver func() string
 
 // SendResult は SendMessage / SendMessageBunch の戻り値
 type SendResult struct {
-	MessageID        string // Discord メッセージID
-	ThreadID         string // Discord スレッドID（UseThreads=true 時のみ）
-	FailureCategory  string // safe category for a failed delivery
-	Retryable        bool   // safe to retry automatically on the next poll
-	Unknown          bool   // the request may have been accepted without a response
-	Durable          bool   // Discord acceptance and delivery checkpoint committed atomically
-	AlreadyDelivered bool   // deterministic event already has a committed delivery record
+	MessageID        string    // Discord メッセージID
+	ThreadID         string    // Discord スレッドID（UseThreads=true 時のみ）
+	FailureCategory  string    // safe category for a failed delivery
+	RetryAfterAt     time.Time // persisted lower bound for a definitive Discord 429 retry
+	Retryable        bool      // safe to retry automatically on the next poll
+	Unknown          bool      // the request may have been accepted without a response
+	Durable          bool      // Discord acceptance and delivery checkpoint committed atomically
+	AlreadyDelivered bool      // deterministic event already has a committed delivery record
 }
 
 // containsIgnoreCase reports whether `target` (case-insensitive) is present in `list`.
@@ -745,10 +746,10 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 			if wait < 100*time.Millisecond {
 				wait = 100 * time.Millisecond
 			}
-			if wait > maxRateLimitWait {
-				slog.Warn("SendMessage: rate limit wait exceeds cap; skipping this task until next poll cycle",
+			if wait > maxRateLimitWait || attempt == maxRetries {
+				slog.Warn("SendMessage: persisting rate-limit retry deadline",
 					"retryAfterSec", retryAfterSec, "capSec", maxRateLimitWait.Seconds(), "attempt", attempt+1)
-				return SendResult{FailureCategory: "rate_limited", Retryable: true}
+				return SendResult{FailureCategory: "rate_limited", Retryable: true, RetryAfterAt: time.Now().UTC().Add(wait)}
 			}
 			slog.Warn("SendMessage: rate limited, waiting",
 				"retryAfterSec", retryAfterSec, "attempt", attempt+1)
@@ -945,7 +946,13 @@ func dispatchPreparedNotification(db *gorm.DB, event model.NotificationDeliveryE
 		} else if result.Retryable {
 			disposition = model.DeliveryRetryable
 		}
-		if stateErr := model.SetNotificationDeliveryDisposition(db, *attempt, disposition, result.FailureCategory); stateErr != nil {
+		var stateErr error
+		if disposition == model.DeliveryRetryable && !result.RetryAfterAt.IsZero() {
+			stateErr = model.SetNotificationDeliveryRetryAfter(db, *attempt, result.FailureCategory, result.RetryAfterAt)
+		} else {
+			stateErr = model.SetNotificationDeliveryDisposition(db, *attempt, disposition, result.FailureCategory)
+		}
+		if stateErr != nil {
 			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
 		}
 		return result

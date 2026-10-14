@@ -64,14 +64,15 @@ type NotificationDeliveryEvent struct {
 	PayloadJSON            string `gorm:"type:text;not null"`
 	PayloadSHA256          string `gorm:"not null;size:64"`
 	PayloadRedactedAt      *time.Time
-	WebhookRowID           uint   `gorm:"not null;index"`
-	DestinationGuildID     string `gorm:"not null;index"`
-	DestinationChannelID   string `gorm:"not null;index"`
-	DestinationWebhookID   string `gorm:"not null;index"`
-	DestinationFingerprint string `gorm:"not null;size:64"`
-	NotificationRevision   string `gorm:"size:64"`
-	Disposition            string `gorm:"not null;index"`
-	AttemptID              string `gorm:"size:32"`
+	WebhookRowID           uint       `gorm:"not null;index"`
+	DestinationGuildID     string     `gorm:"not null;index"`
+	DestinationChannelID   string     `gorm:"not null;index"`
+	DestinationWebhookID   string     `gorm:"not null;index"`
+	DestinationFingerprint string     `gorm:"not null;size:64"`
+	NotificationRevision   string     `gorm:"size:64"`
+	Disposition            string     `gorm:"not null;index"`
+	RetryAfterAt           *time.Time `gorm:"index" json:"-"`
+	AttemptID              string     `gorm:"size:32"`
 	AttemptCount           int
 	AttemptStartedAt       *time.Time
 	DeliveredAt            *time.Time
@@ -828,6 +829,10 @@ func beginNotificationDelivery(db *gorm.DB, eventID string, expected *Notificati
 			unavailable = true
 			return nil
 		}
+		if row.Disposition == DeliveryRetryable && row.RetryAfterAt != nil && now.Before(*row.RetryAfterAt) {
+			unavailable = true
+			return nil
+		}
 		if row.Disposition != DeliveryPending && row.Disposition != DeliveryRetryable {
 			unavailable = true
 			return nil
@@ -908,7 +913,7 @@ func beginNotificationDelivery(db *gorm.DB, eventID string, expected *Notificati
 		attempt.Event = row
 		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition IN ?", row.ID, []string{DeliveryPending, DeliveryRetryable}).Updates(map[string]any{
 			"disposition": DeliveryInFlight, "attempt_id": attempt.ID, "attempt_count": row.AttemptCount + 1, "attempt_started_at": now,
-			"failure_class": "",
+			"failure_class": "", "retry_after_at": nil,
 		})
 		if result.Error != nil {
 			return result.Error
@@ -937,7 +942,7 @@ func CompleteNotificationDelivery(db *gorm.DB, attempt DeliveryAttempt, messageI
 		}
 		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{
 			"disposition": DeliveryDelivered, "discord_message_id": messageID, "discord_thread_id": threadID, "delivered_at": now,
-			"prior_cleanup_pending": attempt.Event.PriorMessageID != "",
+			"prior_cleanup_pending": attempt.Event.PriorMessageID != "", "retry_after_at": nil,
 		})
 		if result.Error != nil {
 			return result.Error
@@ -979,11 +984,29 @@ func SetNotificationDeliveryDisposition(db *gorm.DB, attempt DeliveryAttempt, di
 	if db == nil || (disposition != DeliveryRetryable && disposition != DeliveryUnknown && disposition != DeliveryTerminalFailure) {
 		return gorm.ErrInvalidData
 	}
+	return setNotificationDeliveryDisposition(db, attempt, disposition, failureClass, nil)
+}
+
+func SetNotificationDeliveryRetryAfter(db *gorm.DB, attempt DeliveryAttempt, failureClass string, retryAt time.Time) error {
+	if retryAt.IsZero() {
+		return gorm.ErrInvalidData
+	}
+	return setNotificationDeliveryDisposition(db, attempt, DeliveryRetryable, failureClass, &retryAt)
+}
+
+func setNotificationDeliveryDisposition(db *gorm.DB, attempt DeliveryAttempt, disposition, failureClass string, retryAt *time.Time) error {
+	if db == nil || attempt.ID == "" || (disposition != DeliveryRetryable && disposition != DeliveryUnknown && disposition != DeliveryTerminalFailure) {
+		return gorm.ErrInvalidData
+	}
+	updates := map[string]any{"disposition": disposition, "failure_class": failureClass, "retry_after_at": nil}
+	if disposition == DeliveryRetryable && retryAt != nil {
+		updates["retry_after_at"] = retryAt.UTC()
+	}
 	return db.Transaction(func(tx *gorm.DB) error {
 		if err := AcquireProductionNotificationWriteLock(tx, attempt.Event.ProductionID); err != nil {
 			return err
 		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{"disposition": disposition, "failure_class": failureClass})
+		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}

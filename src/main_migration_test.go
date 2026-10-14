@@ -112,6 +112,9 @@ func TestMigrateApplicationSchemaRehearsesSyntheticV049UpgradeToV051(t *testing.
 			t.Fatalf("upgrade omitted v0.5.1 additive table %T", table)
 		}
 	}
+	if !db.Migrator().HasColumn(&model.NotificationDeliveryEvent{}, "RetryAfterAt") || !db.Migrator().HasColumn(&model.VFXFilesProductionConfig{}, "PendingActivationEpoch") {
+		t.Fatal("upgrade omitted additive retry-after or pending-activation recovery columns")
+	}
 	var project model.Project
 	if err := db.First(&project, 7).Error; err != nil || project.KitsuProjectID != "kitsu-production-7" {
 		t.Fatalf("existing Production identity changed during upgrade: %+v err=%v", project, err)

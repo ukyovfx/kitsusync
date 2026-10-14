@@ -14,7 +14,7 @@
     "/events": {
       "post": {
         "operationId": "ingestFilesPluginEvents",
-        "summary": "Durably accept or quarantine Plugin business events",
+        "summary": "Durably accept, quarantine, or defer Plugin business events",
         "security": [
           {
             "PluginHmacSignature": []
@@ -104,6 +104,9 @@
           "413": {
             "$ref": "#/components/responses/Error"
           },
+          "503": {
+            "$ref": "#/components/responses/ActivationSynchronizing"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -137,6 +140,25 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ActivationSynchronizing": {
+        "description": "A Plugin activation completed but its exact next activation epoch is still being mirrored. The exact pending event is not persisted; other events in the signed batch retain their durable accepted/quarantined outcomes and the request nonce is consumed. Retry the batch with a fresh timestamp and nonce while retaining each stable event_id.",
+        "headers": {
+          "Retry-After": {
+            "description": "Minimum delay before retrying this exact event",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
             }
           }
         }
