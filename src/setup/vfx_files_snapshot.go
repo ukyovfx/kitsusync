@@ -117,11 +117,11 @@ func buildVFXFilesSnapshot(productionID string, scope vfxFilesSnapshotScope, sou
 		}
 		var updatedValue *string
 		if updated != "" {
-			parsed, err := time.Parse(time.RFC3339Nano, updated)
+			parsed, err := parseKitsuSnapshotTimestamp(updated)
 			if err != nil {
 				return errors.New("Kitsu snapshot timestamp is invalid")
 			}
-			value := parsed.UTC().Format(time.RFC3339Nano)
+			value := parsed.Format(time.RFC3339Nano)
 			updatedValue = &value
 		}
 		objects[id] = vfxFilesSnapshotObject{ObjectType: kind, ID: id, ParentID: parentID, Name: strings.TrimSpace(name), Code: codeValue, TaskTypeID: taskTypeValue, UpdatedAt: updatedValue, IncludedInSync: selected}
@@ -216,6 +216,22 @@ func buildVFXFilesSnapshot(productionID string, scope vfxFilesSnapshotScope, sou
 	}
 	digest := sha256.Sum256(canonical)
 	return result, "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+func parseKitsuSnapshotTimestamp(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.UTC(), nil
+	}
+	// Zou stores UTC timestamps as naive DateTime values and serializes them
+	// without an offset. Its get_utc_now_datetime() explicitly creates UTC
+	// before removing tzinfo; normalize only that established wire form.
+	for _, layout := range []string{"2006-01-02T15:04:05.999999999", "2006-01-02T15:04:05"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return parsed.UTC(), nil
+		}
+	}
+	return time.Time{}, errors.New("Kitsu timestamp is not RFC3339 or Zou UTC format")
 }
 
 func markRequiredAncestors(objects map[string]vfxFilesSnapshotObject) error {
@@ -355,7 +371,7 @@ func (a vfxFilesKitsuSessionAuthorizer) BuildVFXFilesSnapshot(ctx context.Contex
 			return nil, "", err
 		}
 	}
-	if err := fetchVFXFilesKitsuArrayPages(ctx, a.connection, a.token, base+"/assets", &source.Assets); err != nil {
+	if err := fetchVFXFilesKitsuArray(ctx, a.connection, a.token, base+"/assets", &source.Assets); err != nil {
 		return nil, "", err
 	}
 	if err := fetchVFXFilesKitsuJSON(ctx, a.connection, a.token, base+"/task-types", &source.TaskTypes); err != nil {
@@ -364,42 +380,95 @@ func (a vfxFilesKitsuSessionAuthorizer) BuildVFXFilesSnapshot(ctx context.Contex
 	if err := fetchVFXFilesKitsuTaskPages(ctx, a.connection, a.token, base+"/tasks", &source.Tasks); err != nil {
 		return nil, "", err
 	}
+	if err := fillVFXFilesTaskTypeMetadata(ctx, a.connection, a.token, source.TaskTypes, source.Tasks, &source.TaskTypes); err != nil {
+		return nil, "", err
+	}
 	return buildVFXFilesSnapshot(productionID, scope, source)
 }
 
-// Project asset listings support page/limit but return a bare array rather
-// than pagination metadata. Request every page until an empty page appears;
-// reject repeated IDs so an upstream that ignores page cannot silently yield
-// an incomplete snapshot.
-func fetchVFXFilesKitsuArrayPages(ctx context.Context, connection KitsuURLModel, token, path string, out *[]vfxFilesSnapshotRawObject) error {
-	rows := make([]vfxFilesSnapshotRawObject, 0)
-	seen := make(map[string]struct{})
-	for page := 1; page <= vfxSnapshotMaxPages; page++ {
-		query := url.Values{"page": {fmt.Sprint(page)}, "limit": {fmt.Sprint(vfxSnapshotPageSize)}}
-		var batch []vfxFilesSnapshotRawObject
-		if err := fetchVFXFilesKitsuJSONQuery(ctx, connection, token, path, query, &batch); err != nil {
-			return err
+// Project Task Type settings may omit legacy or otherwise existing Tasks.
+// Resolve only referenced missing IDs from Kitsu's canonical Task Type
+// catalog; unrelated studio Task Types are not copied into the snapshot.
+func fillVFXFilesTaskTypeMetadata(ctx context.Context, connection KitsuURLModel, token string, configured []kitsu.TaskType, tasks []vfxFilesSnapshotRawObject, out *[]kitsu.TaskType) error {
+	present := make(map[string]struct{}, len(configured))
+	needed := make(map[string]struct{})
+	for _, taskType := range configured {
+		id := strings.ToLower(strings.TrimSpace(taskType.ID))
+		if !vfxfiles.ValidID(id) {
+			return errors.New("Kitsu Project Task Type metadata contains an invalid identity")
 		}
-		if len(batch) == 0 {
-			*out = rows
-			return nil
+		if _, duplicate := present[id]; duplicate {
+			return errors.New("Kitsu Project Task Type metadata contains duplicate identities")
 		}
-		if len(batch) > vfxSnapshotPageSize || len(rows)+len(batch) > vfxSnapshotMaxItems {
-			return errors.New("Kitsu asset listing exceeds snapshot bounds")
+		present[id] = struct{}{}
+	}
+	for _, task := range tasks {
+		id := strings.ToLower(strings.TrimSpace(task.TaskTypeID))
+		if id == "" {
+			continue
 		}
-		for _, row := range batch {
-			id := strings.ToLower(strings.TrimSpace(row.ID))
-			if !vfxfiles.ValidID(id) {
-				return errors.New("Kitsu asset page contains an invalid identity")
-			}
-			if _, duplicate := seen[id]; duplicate {
-				return errors.New("Kitsu asset pagination did not advance")
-			}
-			seen[id] = struct{}{}
-			rows = append(rows, row)
+		if !vfxfiles.ValidID(id) {
+			return errors.New("Kitsu Task contains an invalid Task Type identity")
+		}
+		if _, ok := present[id]; !ok {
+			needed[id] = struct{}{}
 		}
 	}
-	return errors.New("Kitsu asset page limit exceeded")
+	if len(needed) == 0 {
+		return nil
+	}
+	var catalog []kitsu.TaskType
+	if err := fetchVFXFilesKitsuJSON(ctx, connection, token, "/data/task-types", &catalog); err != nil {
+		return err
+	}
+	if len(catalog) > vfxSnapshotMaxItems {
+		return errors.New("Kitsu Task Type catalog exceeds snapshot bounds")
+	}
+	resolved := make(map[string]struct{}, len(needed))
+	for _, taskType := range catalog {
+		id := strings.ToLower(strings.TrimSpace(taskType.ID))
+		if _, required := needed[id]; !required {
+			continue
+		}
+		if !vfxfiles.ValidID(id) {
+			return errors.New("Kitsu Task Type catalog contains an invalid identity")
+		}
+		if _, duplicate := resolved[id]; duplicate {
+			return errors.New("Kitsu Task Type catalog contains duplicate referenced identities")
+		}
+		resolved[id] = struct{}{}
+		*out = append(*out, taskType)
+	}
+	if len(resolved) != len(needed) {
+		return errors.New("Kitsu Task Type metadata is unavailable for an existing Task")
+	}
+	return nil
+}
+
+// Project asset listings return a bare, unpaginated array. The page parameter
+// is ignored by Zou's project-assets resource, so fetching subsequent pages
+// would return the same rows and make a valid snapshot fail on duplicate IDs.
+func fetchVFXFilesKitsuArray(ctx context.Context, connection KitsuURLModel, token, path string, out *[]vfxFilesSnapshotRawObject) error {
+	var rows []vfxFilesSnapshotRawObject
+	if err := fetchVFXFilesKitsuJSON(ctx, connection, token, path, &rows); err != nil {
+		return err
+	}
+	if len(rows) > vfxSnapshotMaxItems {
+		return errors.New("Kitsu asset listing exceeds snapshot bounds")
+	}
+	seen := make(map[string]struct{})
+	for _, row := range rows {
+		id := strings.ToLower(strings.TrimSpace(row.ID))
+		if !vfxfiles.ValidID(id) {
+			return errors.New("Kitsu asset listing contains an invalid identity")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return errors.New("Kitsu asset listing contains duplicate identities")
+		}
+		seen[id] = struct{}{}
+	}
+	*out = rows
+	return nil
 }
 
 func fetchVFXFilesKitsuTaskPages(ctx context.Context, connection KitsuURLModel, token, path string, out *[]vfxFilesSnapshotRawObject) error {
