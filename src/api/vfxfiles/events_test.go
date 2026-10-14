@@ -286,7 +286,11 @@ func TestSignedEventDuringActivationMirrorGapIsRetryableWithFreshNonce(t *testin
 	if err := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Update("activated", false).Error; err != nil {
 		t.Fatal(err)
 	}
-	otherBody := []byte(strings.Replace(string(validNextEpoch), "60000000-0000-4000-8000-000000000001", "60000000-0000-4000-8000-000000000099", 1))
+	otherEvent := json.RawMessage(strings.Replace(string(validNextEpoch), pendingEventID, "60000000-0000-4000-8000-000000000099", 1))
+	otherBody, err := json.Marshal(eventBatch{ContractVersion: contractVersion, Events: []json.RawMessage{otherEvent}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	third := httptest.NewRecorder()
 	handler(third, signedEventRequest(t, otherBody, key, "activation-gap-nonce-000003", "activation-gap-idempotency-000003", clock))
 	var quarantineResponse struct {
