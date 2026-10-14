@@ -8,7 +8,6 @@ import (
 	"errors"
 	"io"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -671,6 +670,8 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 		return nil, ErrVFXFilesInvalidBatch
 	}
 	results := make([]VFXFilesEventResult, 0, len(events))
+	// Preserve the Plugin's batch order. Sorting by revision or Event ID would
+	// hide an out-of-order status stream and could make stale state look valid.
 	ordered := append([]VFXFilesEventInput(nil), events...)
 	seenEventIDs := make(map[string]struct{}, len(ordered))
 	for _, event := range ordered {
@@ -679,12 +680,6 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 		}
 		seenEventIDs[event.EventID] = struct{}{}
 	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].DeliveryID != ordered[j].DeliveryID {
-			return ordered[i].DeliveryID < ordered[j].DeliveryID
-		}
-		return ordered[i].DeliveryRevision < ordered[j].DeliveryRevision
-	})
 	byEventID := make(map[string]VFXFilesEventResult, len(events))
 	activationPending := make(map[string]struct{})
 	err := db.Transaction(func(tx *gorm.DB) error {
@@ -760,18 +755,33 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 				return configErr
 			}
 			if outcome == VFXFilesEventAccepted && input.DeliveryID != "" && input.DeliveryRevision > 0 {
-				var latest VFXFilesEventInbox
-				readErr := tx.Where("production_id = ? AND delivery_id = ? AND outcome = ?", input.ProductionID, input.DeliveryID, VFXFilesEventAccepted).
-					Order("delivery_revision desc").Order("id desc").First(&latest).Error
-				if readErr != nil && !errors.Is(readErr, gorm.ErrRecordNotFound) {
-					return readErr
+				// A previously quarantined gap/transition conflict is durable
+				// evidence that this stream arrived out of order. Do not let a later
+				// lower/equal revision advance accepted history past that evidence.
+				var priorOrderingConflict int64
+				if err := tx.Model(&VFXFilesEventInbox{}).
+					Where("production_id = ? AND delivery_id = ? AND activation_epoch = ? AND outcome = ? AND delivery_revision >= ? AND diagnostic_code IN ?",
+						input.ProductionID, input.DeliveryID, input.ActivationEpoch, VFXFilesEventQuarantined, input.DeliveryRevision,
+						[]string{"delivery_revision_gap", "invalid_delivery_transition", "delivery_order_conflict"}).
+					Count(&priorOrderingConflict).Error; err != nil {
+					return err
 				}
-				var previous *VFXFilesEventInbox
-				if readErr == nil {
-					previous = &latest
-				}
-				if diagnostic := validateVFXFilesDeliveryTransition(previous, input); diagnostic != "" {
-					outcome, code = VFXFilesEventQuarantined, diagnostic
+				if priorOrderingConflict > 0 {
+					outcome, code = VFXFilesEventQuarantined, "delivery_order_conflict"
+				} else {
+					var latest VFXFilesEventInbox
+					readErr := tx.Where("production_id = ? AND delivery_id = ? AND outcome = ?", input.ProductionID, input.DeliveryID, VFXFilesEventAccepted).
+						Order("delivery_revision desc").Order("id desc").First(&latest).Error
+					if readErr != nil && !errors.Is(readErr, gorm.ErrRecordNotFound) {
+						return readErr
+					}
+					var previous *VFXFilesEventInbox
+					if readErr == nil {
+						previous = &latest
+					}
+					if diagnostic := validateVFXFilesDeliveryTransition(previous, input); diagnostic != "" {
+						outcome, code = VFXFilesEventQuarantined, diagnostic
+					}
 				}
 			}
 			stored := VFXFilesEventInbox{ProducerID: input.ProducerID, EventID: input.EventID, PayloadSHA256: payloadHash, PayloadJSON: string(input.Payload), EventType: input.EventType, ProductionID: input.ProductionID, ActivationEpoch: input.ActivationEpoch, DeliveryID: input.DeliveryID, DeliveryRevision: input.DeliveryRevision, RecipientTaskID: input.RecipientTaskID, RecipientTaskTypeID: input.RecipientTaskTypeID, Outcome: outcome, DiagnosticCode: code, CreatedAt: now}

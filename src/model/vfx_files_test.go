@@ -213,6 +213,42 @@ func TestAcceptVFXFilesDeliveryBatchPreservesSameRevisionTransitionOrder(t *test
 	}
 }
 
+func TestAcceptVFXFilesDeliveryBatchQuarantinesRevisionOrderInversion(t *testing.T) {
+	db := vfxEventTestDB(t)
+	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 4, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	deliveryID := "90000000-0000-4000-8000-000000000024"
+	revised := vfxInput("60000000-0000-4000-8000-000000000041", deliveryID, 2, 4, `{"status":"revised"}`)
+	revised.EventType = "file_delivery.revised"
+	created := vfxInput("60000000-0000-4000-8000-000000000042", deliveryID, 1, 4, `{"status":"created"}`)
+	created.EventType = "file_delivery.created"
+	results, err := AcceptVFXFilesEvents(db, "key-a", "revision-inversion-batch-nonce", []VFXFilesEventInput{revised, created}, time.Now().UTC())
+	if err != nil || len(results) != 2 || results[0].Outcome != VFXFilesEventQuarantined || results[0].Code != "delivery_revision_gap" || results[1].Outcome != VFXFilesEventQuarantined || results[1].Code != "delivery_order_conflict" {
+		t.Fatalf("inverted revision batch=%#v err=%v", results, err)
+	}
+	var accepted int64
+	if err := db.Model(&VFXFilesEventInbox{}).Where("delivery_id = ? AND outcome = ?", deliveryID, VFXFilesEventAccepted).Count(&accepted).Error; err != nil || accepted != 0 {
+		t.Fatalf("inverted revision batch advanced accepted history: count=%d err=%v", accepted, err)
+	}
+}
+
+func TestAcceptVFXFilesDeliveryBatchQuarantinesSameRevisionOrderInversion(t *testing.T) {
+	db := vfxEventTestDB(t)
+	if err := db.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ActivationEpoch: 4, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	deliveryID := "90000000-0000-4000-8000-000000000025"
+	needsFix := vfxInput("60000000-0000-4000-8000-000000000051", deliveryID, 1, 4, `{"status":"needs_fix"}`)
+	needsFix.EventType = "file_delivery.needs_fix"
+	created := vfxInput("60000000-0000-4000-8000-000000000052", deliveryID, 1, 4, `{"status":"created"}`)
+	created.EventType = "file_delivery.created"
+	results, err := AcceptVFXFilesEvents(db, "key-a", "state-inversion-batch-nonce", []VFXFilesEventInput{needsFix, created}, time.Now().UTC())
+	if err != nil || len(results) != 2 || results[0].Outcome != VFXFilesEventQuarantined || results[0].Code != "delivery_revision_gap" || results[1].Outcome != VFXFilesEventQuarantined || results[1].Code != "delivery_order_conflict" {
+		t.Fatalf("inverted state batch=%#v err=%v", results, err)
+	}
+}
+
 func TestValidateVFXFilesDeliveryTransitionSeparatesRevisionAndStatus(t *testing.T) {
 	previous := func(status string, revision uint64) *VFXFilesEventInbox {
 		return &VFXFilesEventInbox{EventType: "file_delivery." + status, DeliveryRevision: revision}
