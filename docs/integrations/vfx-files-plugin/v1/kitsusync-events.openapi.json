@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "KitsuSync Files Plugin event intake",
-    "version": "1.0.0",
-    "description": "Plugin-to-KitsuSync signed event endpoint. Business events report durable intake, not Discord delivery. A signed authority transition is acknowledged only after KitsuSync durably fences the epoch, resolves old-epoch deliveries, and drains in-flight dispatches."
+    "version": "1.1.0",
+    "description": "Plugin-to-KitsuSync signed event endpoint. Accepts homogeneous contract 1.0 event batches unchanged and strict homogeneous 1.1 file_share.created batches. Responses retain contract_version 1.0. Business events report durable intake, not Discord delivery. Drive-link notification is default-off and requires KitsuSync-owned route consent checked at intake and dispatch. A signed authority transition is acknowledged only after KitsuSync durably fences the epoch, resolves old-epoch deliveries, and drains in-flight dispatches."
   },
   "servers": [
     {
@@ -14,7 +14,7 @@
     "/events": {
       "post": {
         "operationId": "ingestFilesPluginEvents",
-        "summary": "Durably accept, quarantine, or defer Plugin business events",
+        "summary": "Durably accept, quarantine, or defer Plugin business events (contracts 1.0 and 1.1)",
         "security": [
           {
             "PluginHmacSignature": []

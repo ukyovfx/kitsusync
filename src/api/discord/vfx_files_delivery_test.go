@@ -34,6 +34,27 @@ func TestVFXFilesJournalTaskIDIsStableAndSeparateFromKitsuTaskIDs(t *testing.T) 
 	}
 }
 
+func TestFileSharePayloadStatesExistingDriveAccessAndDisablesMentions(t *testing.T) {
+	payload := fileSharePayload(nil, vfxfiles.FileShareNotification{
+		EventID: "60000000-0000-4000-8000-000000000090", ProductionID: "10000000-0000-4000-8000-000000000001",
+		EntityType: "shot", EntityID: "30000000-0000-4000-8000-000000000001", RecipientTaskID: "50000000-0000-4000-8000-000000000002",
+		ObjectID: "opaque-id", ObjectType: "file", URL: "https://drive.google.com/file/d/opaque-id/view", Name: "plates.exr",
+	})
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	for _, expected := range []string{"https://drive.google.com/file/d/opaque-id/view", "existing Google Drive ACLs", "No Drive ACLs were changed", "plates.exr"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("Drive link notification omitted %q: %s", expected, text)
+		}
+	}
+	if payload.AllowedMentions == nil || len(payload.AllowedMentions.Parse) != 0 || len(payload.AllowedMentions.Users) != 0 || len(payload.AllowedMentions.Roles) != 0 {
+		t.Fatalf("share message mentions were not disabled: %+v", payload.AllowedMentions)
+	}
+}
+
 func TestVFXFilesEventUsesProductionTaskTypeRouteAndDurableJournal(t *testing.T) {
 	const (
 		productionID = "10000000-0000-4000-8000-000000000001"

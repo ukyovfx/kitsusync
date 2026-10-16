@@ -546,6 +546,119 @@ type VFXFilesEventInbox struct {
 	ProcessedAt         *time.Time
 }
 
+// VFXFilesDriveLinkDisclosureConsent is an explicit KitsuSync-owned opt-in
+// bound to the exact current Production routing revision. Missing or stale
+// consent is always false.
+type VFXFilesDriveLinkDisclosureConsent struct {
+	ID              uint      `gorm:"primaryKey"`
+	ProductionID    string    `gorm:"not null;uniqueIndex:idx_vfx_drive_link_consent,priority:1;size:64"`
+	TaskTypeID      string    `gorm:"not null;uniqueIndex:idx_vfx_drive_link_consent,priority:2;size:64"`
+	RouteID         uint      `gorm:"not null;default:0"`
+	RoutingRevision string    `gorm:"not null;size:64"`
+	ConfigUpdatedAt time.Time `gorm:"not null"`
+	Enabled         bool      `gorm:"not null;default:false"`
+	ActorEmail      string    `gorm:"not null;size:254"`
+	UpdatedAt       time.Time
+}
+
+func (VFXFilesDriveLinkDisclosureConsent) TableName() string {
+	return "vfx_files_drive_link_disclosure_consents"
+}
+
+type VFXFilesDriveLinkDisclosureAudit struct {
+	ID              uint      `gorm:"primaryKey"`
+	ProductionID    string    `gorm:"not null;index;size:64"`
+	TaskTypeID      string    `gorm:"not null;index;size:64"`
+	RouteID         uint      `gorm:"not null;default:0"`
+	RoutingRevision string    `gorm:"not null;size:64"`
+	ConfigUpdatedAt time.Time `gorm:"not null"`
+	Enabled         bool      `gorm:"not null"`
+	ActorEmail      string    `gorm:"not null;size:254"`
+	CreatedAt       time.Time `gorm:"index"`
+}
+
+func (VFXFilesDriveLinkDisclosureAudit) TableName() string {
+	return "vfx_files_drive_link_disclosure_audits"
+}
+
+func VFXFilesDriveLinkDisclosureAllowed(db *gorm.DB, productionID, taskTypeID string) (bool, error) {
+	if db == nil {
+		return false, gorm.ErrInvalidDB
+	}
+	project := FindProjectByKitsuID(db, productionID)
+	if project == nil {
+		return false, nil
+	}
+	revision, err := ProductionNotificationRevisionWithError(db, project.ID, productionID)
+	if err != nil {
+		return false, err
+	}
+	var notificationConfig ProductionNotificationConfig
+	if err := db.Where("production_id = ? AND enabled = ?", productionID, true).First(&notificationConfig).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	var route ProductionNotificationRoute
+	if err := db.Where("production_id = ? AND task_type_id = ?", productionID, taskTypeID).First(&route).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	var consent VFXFilesDriveLinkDisclosureConsent
+	if err := db.Where("production_id = ? AND task_type_id = ? AND route_id = ? AND routing_revision = ? AND config_updated_at = ? AND enabled = ?", productionID, taskTypeID, route.ID, revision, notificationConfig.UpdatedAt, true).First(&consent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func SetVFXFilesDriveLinkDisclosureConsent(db *gorm.DB, productionID, taskTypeID, expectedRevision, actorEmail string, enabled bool, now time.Time) error {
+	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(taskTypeID) == "" || strings.TrimSpace(expectedRevision) == "" || strings.TrimSpace(actorEmail) == "" {
+		return gorm.ErrInvalidData
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
+			return err
+		}
+		if err := EnsureNoInFlightNotificationDeliveries(tx, productionID); err != nil {
+			return err
+		}
+		project := FindProjectByKitsuID(tx, productionID)
+		if project == nil {
+			return gorm.ErrRecordNotFound
+		}
+		revision, err := ProductionNotificationRevisionWithError(tx, project.ID, productionID)
+		if err != nil {
+			return err
+		}
+		if revision != expectedRevision {
+			return ErrProductionNotificationRevisionConflict
+		}
+		var notificationConfig ProductionNotificationConfig
+		if err := tx.Where("production_id = ? AND enabled = ?", productionID, true).First(&notificationConfig).Error; err != nil {
+			return err
+		}
+		var route ProductionNotificationRoute
+		if err := tx.Where("production_id = ? AND task_type_id = ?", productionID, taskTypeID).First(&route).Error; err != nil {
+			return err
+		}
+		row := VFXFilesDriveLinkDisclosureConsent{ProductionID: productionID, TaskTypeID: taskTypeID, RouteID: route.ID, RoutingRevision: revision, ConfigUpdatedAt: notificationConfig.UpdatedAt, Enabled: enabled, ActorEmail: strings.TrimSpace(actorEmail), UpdatedAt: now.UTC()}
+		var existing VFXFilesDriveLinkDisclosureConsent
+		if err := tx.Where("production_id = ? AND task_type_id = ?", productionID, taskTypeID).First(&existing).Error; err == nil {
+			row.ID = existing.ID
+		}
+		if err := tx.Save(&row).Error; err != nil {
+			return err
+		}
+		return tx.Create(&VFXFilesDriveLinkDisclosureAudit{ProductionID: productionID, TaskTypeID: taskTypeID, RouteID: route.ID, RoutingRevision: revision, ConfigUpdatedAt: notificationConfig.UpdatedAt, Enabled: enabled, ActorEmail: row.ActorEmail, CreatedAt: now.UTC()}).Error
+	})
+}
+
 func (VFXFilesEventInbox) TableName() string { return "vfx_files_event_inbox" }
 
 type VFXFilesEventNonce struct {
@@ -583,6 +696,8 @@ type VFXFilesEventInput struct {
 	DeliveryRevision        uint64
 	RecipientTaskID         string
 	RecipientTaskTypeID     string
+	ShareID                 string
+	ShareTargetID           string
 	Payload                 []byte
 }
 
@@ -677,8 +792,8 @@ func ApplyVFXFilesAuthorityTransition(db *gorm.DB, keyID, nonce string, input VF
 			return ErrVFXFilesAuthorityTransition
 		}
 		oldDeliveryEvents := tx.Model(&VFXFilesEventInbox{}).Select("event_id").Where(
-			"production_id = ? AND event_type LIKE ? AND activation_epoch <> ?",
-			input.ProductionID, "file_delivery.%", input.NewActivationEpoch,
+			"production_id = ? AND (event_type LIKE ? OR event_type = ?) AND activation_epoch <> ?",
+			input.ProductionID, "file_delivery.%", "file_share.created", input.NewActivationEpoch,
 		)
 		var unresolvedDispatches int64
 		if err := tx.Model(&NotificationDeliveryEvent{}).Where(
@@ -705,8 +820,8 @@ func ApplyVFXFilesAuthorityTransition(db *gorm.DB, keyID, nonce string, input VF
 			return err
 		}
 		if err := tx.Model(&VFXFilesEventInbox{}).Where(
-			"production_id = ? AND event_type LIKE ? AND outcome = ? AND processed_at IS NULL AND activation_epoch <> ?",
-			input.ProductionID, "file_delivery.%", VFXFilesEventAccepted, input.NewActivationEpoch,
+			"production_id = ? AND (event_type LIKE ? OR event_type = ?) AND outcome = ? AND processed_at IS NULL AND activation_epoch <> ?",
+			input.ProductionID, "file_delivery.%", "file_share.created", VFXFilesEventAccepted, input.NewActivationEpoch,
 		).Updates(map[string]any{
 			"outcome": VFXFilesEventQuarantined, "diagnostic_code": "activation_epoch_fenced", "processed_at": now,
 		}).Error; err != nil {
@@ -741,7 +856,7 @@ func ReadVFXFilesEventDiagnostics(db *gorm.DB, productionID string) (VFXFilesEve
 	if db == nil || !vfxFilesUUIDRE.MatchString(strings.TrimSpace(productionID)) {
 		return result, gorm.ErrInvalidData
 	}
-	if err := db.Model(&VFXFilesEventInbox{}).Where("production_id = ? AND event_type LIKE ? AND outcome = ? AND processed_at IS NULL", productionID, "file_delivery.%", VFXFilesEventAccepted).Count(&result.PendingDelivery).Error; err != nil {
+	if err := db.Model(&VFXFilesEventInbox{}).Where("production_id = ? AND (event_type LIKE ? OR event_type = ?) AND outcome = ? AND processed_at IS NULL", productionID, "file_delivery.%", "file_share.created", VFXFilesEventAccepted).Count(&result.PendingDelivery).Error; err != nil {
 		return VFXFilesEventDiagnostics{}, err
 	}
 	if err := db.Model(&VFXFilesEventInbox{}).Where("production_id = ? AND outcome = ?", productionID, VFXFilesEventQuarantined).Count(&result.Quarantined).Error; err != nil {
@@ -804,7 +919,7 @@ func pendingVFXFilesDeliveryEventsQuery(db *gorm.DB, now time.Time) *gorm.DB {
 		now = time.Now().UTC()
 	}
 	return db.Model(&VFXFilesEventInbox{}).
-		Where("vfx_files_event_inbox.outcome = ? AND vfx_files_event_inbox.processed_at IS NULL AND vfx_files_event_inbox.event_type LIKE ?", VFXFilesEventAccepted, "file_delivery.%").
+		Where("vfx_files_event_inbox.outcome = ? AND vfx_files_event_inbox.processed_at IS NULL AND (vfx_files_event_inbox.event_type LIKE ? OR vfx_files_event_inbox.event_type = ?)", VFXFilesEventAccepted, "file_delivery.%", "file_share.created").
 		Where("NOT EXISTS (SELECT 1 FROM notification_delivery_events WHERE delivery_source = ? AND source_event_id = vfx_files_event_inbox.event_id AND disposition = ? AND retry_after_at > ?)", "vfx_files", DeliveryRetryable, now.UTC())
 }
 
@@ -978,6 +1093,15 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 				outcome, code = VFXFilesEventQuarantined, "activation_epoch_mismatch"
 			} else if configErr != nil {
 				return configErr
+			}
+			if outcome == VFXFilesEventAccepted && input.EventType == "file_share.created" {
+				allowed, consentErr := VFXFilesDriveLinkDisclosureAllowed(tx, input.ProductionID, input.RecipientTaskTypeID)
+				if consentErr != nil {
+					return consentErr
+				}
+				if !allowed {
+					outcome, code = VFXFilesEventQuarantined, "drive_link_disclosure_consent_missing"
+				}
 			}
 			if outcome == VFXFilesEventAccepted && input.DeliveryID != "" && input.DeliveryRevision > 0 {
 				// A previously quarantined gap/transition conflict is durable

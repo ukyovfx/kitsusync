@@ -109,6 +109,9 @@ func reviewerRoleAvailabilityMessage(lang string, project model.Project, view pr
 }
 
 func handleCurrentIARoutingMutation(w http.ResponseWriter, r *http.Request, lang string, db *gorm.DB, botTokens ...string) bool {
+	if handleVFXFilesDisclosureConsent(w, r, db) {
+		return true
+	}
 	if handleProductionNotificationApply(w, r, lang, db, botTokens...) {
 		return true
 	}
@@ -123,6 +126,37 @@ func handleCurrentIARoutingMutation(w http.ResponseWriter, r *http.Request, lang
 		return false
 	}
 	http.Error(w, "Use the unified Production Notifications Apply request", http.StatusConflict)
+	return true
+}
+
+func handleVFXFilesDisclosureConsent(w http.ResponseWriter, r *http.Request, db *gorm.DB) bool {
+	if r.Method != http.MethodPost || r.URL.Path != "/bot/admin/projects" || r.FormValue("action") != "set_vfx_files_drive_link_consent" {
+		return false
+	}
+	email, _, role, ok := CurrentSessionKitsuAuth(r)
+	if !ok || !isStudioManagerOrHigher(role) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return true
+	}
+	productionID := strings.TrimSpace(r.FormValue("project_id"))
+	taskTypeID := strings.TrimSpace(r.FormValue("task_type_id"))
+	expectedRevision := strings.TrimSpace(r.FormValue("expected_revision"))
+	enabled := r.FormValue("enabled") == "true"
+	project := model.FindProjectByKitsuID(db, productionID)
+	if project == nil || project.ValidationOnly {
+		http.Error(w, "production_not_writable", http.StatusForbidden)
+		return true
+	}
+	err := model.SetVFXFilesDriveLinkDisclosureConsent(db, productionID, taskTypeID, expectedRevision, email, enabled, time.Now().UTC())
+	if errors.Is(err, model.ErrProductionNotificationRevisionConflict) {
+		http.Error(w, "stale_routing_revision", http.StatusConflict)
+		return true
+	}
+	if err != nil {
+		http.Error(w, "disclosure_consent_unavailable", http.StatusServiceUnavailable)
+		return true
+	}
+	http.Redirect(w, r, withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications&edit_routing=1", r), http.StatusSeeOther)
 	return true
 }
 
@@ -425,6 +459,10 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 	formAction := withLang("/bot/admin/projects", r) + "&project=" + url.QueryEscape(p.KitsuProjectID) + "&tab=notifications&edit_routing=1"
 	var rows strings.Builder
 	var deleteDialogs strings.Builder
+	var disclosureControls strings.Builder
+	disclosureRevision := model.ProductionNotificationRevision(db, p.ID, p.KitsuProjectID)
+	_, _, sessionRole, sessionOK := CurrentSessionKitsuAuth(r)
+	canManageDisclosure := sessionOK && isStudioManagerOrHigher(sessionRole)
 	for _, route := range routes {
 		removeLabel := t(lang, "\u901a\u77e5\u5bfe\u8c61\u304b\u3089\u5916\u3059", "Remove from notifications")
 		deleteButton := ""
@@ -480,6 +518,26 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 		}
 		evidenceVerified := evidenceErr == nil && evidence.PermissionsKnown && evidence.OwnershipVerified
 		rows.WriteString(`<tr draggable="true" data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-default-channel-name="` + esc(defaultChannelName) + `" data-existing-targets="` + targetsAttribute + `" data-original-destination="` + strconv.FormatUint(uint64(route.DestinationWebhookID), 10) + `" data-role-sender-verified="` + strconv.FormatBool(evidenceVerified) + `" data-bot-can-mention-roles="` + strconv.FormatBool(evidence.CanMentionRoles) + `" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `" tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"><td><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></td><td><div class="routing-destination-control"><select class="routing-destination-select" name="destination_mode" data-destination-control aria-label="` + esc(channelLabel) + `">` + destinationList(route.DestinationWebhookID) + `</select><label class="routing-custom-channel" data-custom-channel-field hidden><span class="sr-only">` + esc(t(lang, "チャンネル名", "Channel name")) + `</span><input data-new-channel-name maxlength="100" autocomplete="off" disabled>` + `</label></div></td><td><details class="routing-row-menu"><summary aria-label="` + esc(menuLabel) + `">&#8942;</summary><div class="routing-row-menu-panel" role="menu"><button type="button" class="routing-remove" data-routing-remove role="menuitem">` + esc(removeLabel) + `</button>` + deleteButton + `</div></details></td></tr>`)
+		if canManageDisclosure {
+			consentEnabled, consentErr := model.VFXFilesDriveLinkDisclosureAllowed(db, p.KitsuProjectID, route.TaskTypeID)
+			consentLabel := t(lang, "有効", "Enabled")
+			buttonLabel := t(lang, "Driveリンク通知を許可", "Allow Drive link notifications")
+			nextValue := "true"
+			if config := model.FindProductionNotificationConfig(db, p.KitsuProjectID); config == nil || !config.Enabled {
+				consentErr = gorm.ErrRecordNotFound
+			}
+			if consentErr != nil {
+				consentLabel = t(lang, "通知ルーティングが無効または状態を確認できません", "Routing is disabled or status is unavailable")
+				buttonLabel = t(lang, "通知ルーティングを確認", "Check notification routing")
+				nextValue = ""
+			} else if consentEnabled {
+				buttonLabel = t(lang, "Driveリンク通知を取り消す", "Revoke Drive link notifications")
+				nextValue = "false"
+			} else {
+				consentLabel = t(lang, "未許可", "Not allowed")
+			}
+			disclosureControls.WriteString(`<form method="post" action="` + esc(formAction) + `" class="section-card glass vfx-files-disclosure-consent"><input type="hidden" name="action" value="set_vfx_files_drive_link_consent"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(route.TaskTypeID) + `"><input type="hidden" name="expected_revision" value="` + esc(disclosureRevision) + `"><input type="hidden" name="enabled" value="` + esc(nextValue) + `"><strong>` + esc(route.TaskTypeName) + `</strong><span>` + esc(t(lang, "Driveリンク通知", "Drive link disclosure")) + `: ` + esc(consentLabel) + `</span><button class="btn-ghost" type="submit" ` + map[bool]string{true: "disabled"}[consentErr != nil] + `>` + esc(buttonLabel) + `</button></form>`)
+		}
 	}
 	userSelectLabel := t(lang, "選択", "Select")
 	userPicker := userAvailability
@@ -494,6 +552,9 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 	}
 	addModal := `<dialog data-wfa-add-modal data-has-role-options="false" data-role-unverified-label="` + esc(t(lang, "送信先Webhookを確認できません", "Sender webhook could not be verified")) + `" data-role-permission-label="` + esc(t(lang, "メンション不可・Bot権限を確認できません", "Not mentionable; Bot permission is unavailable")) + `" data-route-required-label="` + esc(t(lang, "先にTask Typeを選択してください。", "Select a Task Type before adding a recipient.")) + `" data-target-required-label="` + esc(t(lang, "追加するDiscordユーザーまたはロールを選択してください。", "Select a Discord user or role to add.")) + `" data-recipient-mode="user" aria-labelledby="wfa-add-modal-title"><h4 id="wfa-add-modal-title">` + esc(t(lang, "通知先を追加", "Add recipient")) + `</h4><div class="recipient-mode-tabs" role="tablist" aria-label="` + esc(t(lang, "通知先の種類", "Recipient type")) + `"><button type="button" role="tab" id="wfa-user-tab" aria-selected="true" aria-controls="wfa-user-panel" data-recipient-mode="user">` + esc(t(lang, "ユーザー", "Users")) + `</button><button type="button" role="tab" id="wfa-role-tab" aria-selected="false" aria-controls="wfa-role-panel" tabindex="-1" data-recipient-mode="role">` + esc(t(lang, "ロール", "Roles")) + `</button></div><div id="wfa-user-panel" role="tabpanel" aria-labelledby="wfa-user-tab" data-recipient-panel="user">` + userPicker + `<select data-wfa-user-id data-recipient-select="user" hidden aria-hidden="true" tabindex="-1"><option value=""></option>` + userOptions.String() + `</select></div><div id="wfa-role-panel" role="tabpanel" aria-labelledby="wfa-role-tab" data-recipient-panel="role" hidden>` + rolePicker + `<select data-wfa-role-id data-recipient-select="role" hidden aria-hidden="true" tabindex="-1"><option value=""></option>` + roleOptions.String() + `</select></div><p class="field-help recipient-add-message" data-wfa-add-message role="status" aria-live="polite" hidden></p><div class="button-row"><button type="button" class="btn-ghost" data-wfa-add-cancel>` + esc(t(lang, "キャンセル", "Cancel")) + `</button><button type="button" class="btn" data-wfa-add-confirm>` + esc(t(lang, "追加", "Add")) + `</button></div></dialog>`
 	html := `<section class="production-routing-editor" aria-labelledby="production-routing-editor-title"><div class="page-heading"><div><h3 id="production-routing-editor-title">` + esc(t(lang, "\u901a\u77e5\u30eb\u30fc\u30c6\u30a3\u30f3\u30b0", "Notification routing")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(iaStatusClass(db, p))) + `">` + esc(iaStatusLabel(db, p, lang)) + `</span></div><form method="post" action="` + esc(formAction) + `" data-current-routing-form data-async-notification-apply data-apply-endpoint="/bot/admin/projects?apply_notifications=1" data-project-id="` + esc(p.KitsuProjectID) + `" data-remove-confirm="` + esc(t(lang, "このTask Typeの通知ルートをApply時に解除します。続行しますか？", "Remove this Task Type route?")) + `" data-stale-message="` + esc(t(lang, "別の編集が保存されました。入力内容は保持されています。内容を確認してから、もう一度変更を適用してください。", "Another edit was saved. Your pending changes are preserved. Review them, then Apply again.")) + `" data-error-webhook-repair-required="` + esc(t(lang, "通知先Webhookを確認できないため、受信者だけの変更は保存できません。通知ルートを見直してから再度適用してください。", "The destination webhook could not be verified, so a recipients-only change cannot be saved. Review the routing destination, then Apply again.")) + `" data-error-message="` + esc(t(lang, "変更を適用できませんでした。入力内容は保持されています。", "Changes could not be applied. Your pending edits are preserved.")) + `" data-error-production-not-writable="` + esc(t(lang, "このProductionは読み取り専用のため保存できません。書き込み可能なProductionを選択してください。", "This Production is read-only, so changes were not saved. Select a writable Production.")) + `" data-error-reviewer-target="` + esc(t(lang, "選択したユーザーまたはロールを現在の送信先で確認できません。利用可能な対象を選び直してください。", "The selected User or Role could not be verified for the current destination. Choose an eligible target and try again.")) + `" data-error-reviewer-unavailable="` + esc(t(lang, "チーム所属またはDiscord権限を確認できませんでした。接続状態を確認してから再試行してください。", "Team membership or Discord permissions could not be verified. Check the connections and try again.")) + `" data-error-destination-not-owned="` + esc(t(lang, "選択したDiscord送信先がこのProductionで利用できません。現在の送信先を選び直してください。", "The selected Discord destination is no longer available to this Production. Select a current destination.")) + `" data-error-destination-unavailable="` + esc(t(lang, "Discord送信先を確認できませんでした。接続状態を確認してから再試行してください。", "The Discord destination could not be verified. Check the connection and try again.")) + `" data-error-state-unavailable="` + esc(t(lang, "保存状態を確認できないため適用できませんでした。入力は保持されています。後でもう一度お試しください。", "The saved state could not be verified, so changes were not applied. Your edits are preserved; try again later.")) + `" data-error-discord-unavailable="` + esc(t(lang, "Discord設定を確認できないため適用できませんでした。接続と送信先を確認してください。", "Discord settings could not be verified, so changes were not applied. Check the connection and destination.")) + `" data-error-route-removed="` + esc(t(lang, "削除するルートにWFA通知先の変更が含まれています。ルートを戻すか、対象変更を取り消してください。", "A route marked for removal still has WFA recipient edits. Restore the route or cancel those recipient edits.")) + `" data-error-invalid-route="` + esc(t(lang, "Task TypeとDiscordチャンネルを確認してください。", "Check the Task Type and Discord Channel selection.")) + `" data-error-channel-name="` + esc(t(lang, "チャンネル名を利用できません。別の名前を入力してください。", "That channel name is unavailable. Enter a different name.")) + `" data-pending-instruction="` + esc(t(lang, "変更はまだ保存されていません。下の「変更を適用」を押してください。", "Changes are pending; click Apply below to save.")) + `" data-empty-wfa="` + esc(t(lang, "Supervisorなし", "No Supervisor")) + `" data-draft-label="` + esc(t(lang, "新しい通知ルート", "New notification route")) + `" data-remove-label="` + esc(t(lang, "解除", "Remove")) + `" data-no-pending="` + esc(t(lang, "変更はありません", "No pending changes")) + `" data-pending-one="` + esc(t(lang, "件の未適用の変更", "pending change")) + `" data-pending-many="` + esc(t(lang, "件の未適用の変更", "pending changes")) + `" data-success-url="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="expected_revision" value="` + esc(model.ProductionNotificationRevision(db, p.ID, p.KitsuProjectID)) + `"><div class="table-wrap wizard-plan-table"><table><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th></th></tr></thead><tbody data-current-routing-sort>` + rows.String() + `</tbody></table></div><div class="button-row production-routing-editor-actions"><button type="button" class="btn-ghost" data-routing-add>+ ` + esc(t(lang, "Task Type\u3092追加", "Add Task Type")) + `</button></div><div hidden data-editor-parking><section id="production-wfa-detail-panel" class="production-wfa-edit-panel" data-wfa-detail-panel aria-live="polite" hidden></section></div><div data-apply-message role="status" aria-live="polite"></div><div class="button-row production-routing-editor-footer"><span data-pending-status role="status">` + esc(t(lang, "変更はありません", "No pending changes")) + `</span><button type="submit" class="btn" data-apply-submit disabled>` + esc(t(lang, "\u5909\u66f4\u3092\u9069\u7528", "Apply")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `" data-pending-cancel>` + esc(t(lang, "\u30ad\u30e3\u30f3\u30bb\u30eb", "Cancel")) + `</a></div></form>` + addModal + deleteDialogs.String() + `<div hidden data-wfa-source>` + readTable + `</div><p class="field-help routing-destructive-note">` + esc(t(lang, "\u3053\u3053\u3067\u5916\u3059\u306e\u306fKitsuSync\u306e\u901a\u77e5\u30eb\u30fc\u30c6\u30a3\u30f3\u30b0\u3060\u3051\u3067\u3059\u3002Kitsu Task Type\u3084Discord\u30c1\u30e3\u30f3\u30cd\u30eb\u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002", "Removing a route changes only KitsuSync routing; it never deletes Kitsu Task Types or Discord channels.")) + `</p></section>` + currentRoutingEditorScript() + currentRoutingDeleteScript()
+	if disclosureControls.Len() > 0 {
+		html += `<section class="section-card glass" aria-label="` + esc(t(lang, "Driveリンク通知の許可", "Drive link disclosure consent")) + `"><h4>` + esc(t(lang, "DriveリンクをDiscordで通知", "Disclose Drive links in Discord")) + `</h4><p class="field-help">` + esc(t(lang, "許可すると、該当するTask TypeのDiscordチャンネルにファイル名とDriveリンクを送信します。Google Driveアクセスは受信者の既存権限に従います。Drive権限は変更されません。ルート変更後は再許可が必要です。", "Enabling this sends the filename and Drive link to the configured Discord channel for that Task Type. Google Drive access follows existing recipient permissions. No Drive permissions are changed. A route change requires consent again.")) + `</p>` + disclosureControls.String() + `</section>`
+	}
 	return html
 }
 

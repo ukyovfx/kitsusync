@@ -845,6 +845,19 @@ func beginNotificationDelivery(db *gorm.DB, eventID string, expected *Notificati
 				unavailable = true
 				return nil
 			}
+			if inbox.EventType == "file_share.created" {
+				allowed, consentErr := VFXFilesDriveLinkDisclosureAllowed(tx, row.ProductionID, row.TaskTypeID)
+				if consentErr != nil {
+					return consentErr
+				}
+				if !allowed {
+					unavailable = true
+					if err := tx.Model(&VFXFilesEventInbox{}).Where("id = ? AND outcome = ? AND processed_at IS NULL", inbox.ID, VFXFilesEventAccepted).Updates(map[string]any{"outcome": VFXFilesEventQuarantined, "diagnostic_code": "drive_link_disclosure_consent_revoked", "processed_at": time.Now().UTC()}).Error; err != nil {
+						return err
+					}
+					return tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition IN ?", row.ID, []string{DeliveryPending, DeliveryRetryable}).Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "drive_link_disclosure_consent_revoked"}).Error
+				}
+			}
 		}
 		if row.Disposition == DeliveryInFlight {
 			if row.AttemptStartedAt == nil || now.Sub(*row.AttemptStartedAt) > 2*time.Minute {

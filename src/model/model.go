@@ -715,6 +715,7 @@ func DeleteProductionOperationalState(db *gorm.DB, productionID string) error {
 	}
 	productionID = strings.TrimSpace(productionID)
 	for _, table := range []interface{}{
+		&VFXFilesDriveLinkDisclosureConsent{},
 		&ProductionNotificationRoute{},
 		&ProductionNotificationConfig{},
 		&ProductionChannelMapping{},

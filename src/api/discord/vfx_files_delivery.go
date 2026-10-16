@@ -44,8 +44,21 @@ func ProcessVFXFilesDeliveryEvents(db *gorm.DB, limit int) (processed, deferred 
 }
 
 func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) string {
-	event, err := vfxfiles.DecodeFileDeliveryNotification([]byte(row.PayloadJSON))
-	if err != nil || event.EventID != row.EventID || !strings.EqualFold(event.ProductionID, row.ProductionID) || event.RecipientTaskID != row.RecipientTaskID || event.RecipientTaskTypeID != row.RecipientTaskTypeID {
+	var delivery vfxfiles.FileDeliveryNotification
+	var share vfxfiles.FileShareNotification
+	isShare := row.EventType == "file_share.created"
+	var eventID, productionID, occurredAt, recipientTaskID, recipientTaskTypeID, journalTaskID, entityName string
+	var err error
+	if isShare {
+		share, err = vfxfiles.DecodeFileShareNotification([]byte(row.PayloadJSON))
+		eventID, productionID, occurredAt, recipientTaskID, recipientTaskTypeID = share.EventID, share.ProductionID, share.OccurredAt, share.RecipientTaskID, share.RecipientTaskTypeID
+		journalTaskID, entityName = vfxFilesJournalTaskID("share:"+share.ShareTargetID), share.EntityName
+	} else {
+		delivery, err = vfxfiles.DecodeFileDeliveryNotification([]byte(row.PayloadJSON))
+		eventID, productionID, occurredAt, recipientTaskID, recipientTaskTypeID = delivery.EventID, delivery.ProductionID, delivery.OccurredAt, delivery.RecipientTaskID, delivery.RecipientTaskTypeID
+		journalTaskID, entityName = vfxFilesJournalTaskID(delivery.DeliveryID), delivery.EntityName
+	}
+	if err != nil || eventID != row.EventID || !strings.EqualFold(productionID, row.ProductionID) || recipientTaskID != row.RecipientTaskID || recipientTaskTypeID != row.RecipientTaskTypeID {
 		_ = model.QuarantineVFXFilesEvent(db, row.EventID, "invalid_delivery_payload", time.Now().UTC())
 		return "processed"
 	}
@@ -61,13 +74,23 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 		_ = model.QuarantineVFXFilesEvent(db, row.EventID, "activation_epoch_mismatch", time.Now().UTC())
 		return "processed"
 	}
+	if isShare {
+		allowed, consentErr := model.VFXFilesDriveLinkDisclosureAllowed(db, row.ProductionID, recipientTaskTypeID)
+		if consentErr != nil {
+			return "deferred"
+		}
+		if !allowed {
+			_ = model.QuarantineVFXFilesEvent(db, row.EventID, "drive_link_disclosure_consent_revoked", time.Now().UTC())
+			return "processed"
+		}
+	}
 	project := model.FindProjectByKitsuID(db, row.ProductionID)
 	if project == nil || project.ValidationOnly {
 		_ = model.QuarantineVFXFilesEvent(db, row.EventID, "production_unavailable", time.Now().UTC())
 		return "processed"
 	}
 	var route model.ProductionNotificationRoute
-	if err := db.Where("production_id = ? AND task_type_id = ?", row.ProductionID, event.RecipientTaskTypeID).First(&route).Error; err != nil {
+	if err := db.Where("production_id = ? AND task_type_id = ?", row.ProductionID, recipientTaskTypeID).First(&route).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			_ = model.QuarantineVFXFilesEvent(db, row.EventID, "notification_route_missing", time.Now().UTC())
 			return "processed"
@@ -84,7 +107,7 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 		_ = model.QuarantineVFXFilesEvent(db, row.EventID, "notification_destination_invalid", time.Now().UTC())
 		return "processed"
 	}
-	destination, err := model.ResolveNotificationDestination(db, row.ProductionID, event.RecipientTaskTypeID, webhook.WebhookURL, webhookID)
+	destination, err := model.ResolveNotificationDestination(db, row.ProductionID, recipientTaskTypeID, webhook.WebhookURL, webhookID)
 	if err != nil {
 		if errors.Is(err, model.ErrDeliveryUnavailable) || errors.Is(err, gorm.ErrRecordNotFound) {
 			_ = model.QuarantineVFXFilesEvent(db, row.EventID, "notification_destination_unavailable", time.Now().UTC())
@@ -96,7 +119,6 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 	if err != nil {
 		return "deferred"
 	}
-	journalTaskID := vfxFilesJournalTaskID(event.DeliveryID)
 	previous, err := model.LatestDeliveredNotificationForDestination(db, journalTaskID, destination)
 	if err != nil {
 		return "deferred"
@@ -105,18 +127,23 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 	if previous != nil {
 		priorMessageID, priorThreadID = previous.DiscordMessageID, previous.DiscordThreadID
 	}
-	payload := fileDeliveryPayload(db, event, row.ProductionID, event.RecipientTaskID)
+	var payload Payload
+	if isShare {
+		payload = fileSharePayload(db, share)
+	} else {
+		payload = fileDeliveryPayload(db, delivery, row.ProductionID, delivery.RecipientTaskID)
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		_ = model.QuarantineVFXFilesEvent(db, row.EventID, "notification_payload_invalid", time.Now().UTC())
 		return "processed"
 	}
 	intent := model.NotificationDeliveryIntent{
-		TaskID: journalTaskID, ProductionID: row.ProductionID, TaskTypeID: event.RecipientTaskTypeID,
-		TaskStatus:     "FILE_" + strings.ToUpper(strings.ReplaceAll(strings.TrimPrefix(event.EventType, "file_delivery."), "-", "_")),
-		DeliverySource: "vfx_files", SourceEventID: event.EventID, TaskUpdatedAt: event.OccurredAt,
+		TaskID: journalTaskID, ProductionID: row.ProductionID, TaskTypeID: recipientTaskTypeID,
+		TaskStatus:     map[bool]string{true: "FILE_SHARE_CREATED", false: "FILE_" + strings.ToUpper(strings.ReplaceAll(strings.TrimPrefix(delivery.EventType, "file_delivery."), "-", "_"))}[isShare],
+		DeliverySource: "vfx_files", SourceEventID: eventID, TaskUpdatedAt: occurredAt,
 		Payload: encoded, WebhookRowID: destination.WebhookRowID, GuildID: destination.GuildID, ChannelID: destination.ChannelID,
-		DiscordWebhookID: destination.WebhookID, NotificationRevision: revision, ThreadName: "Files · " + sanitizeDiscordText(event.EntityName),
+		DiscordWebhookID: destination.WebhookID, NotificationRevision: revision, ThreadName: "Files · " + sanitizeDiscordText(entityName),
 		PriorMessageID: priorMessageID, PriorThreadID: priorThreadID,
 	}
 	prepared, err := model.PrepareNotificationDelivery(db, intent)
@@ -130,6 +157,17 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 		}
 		return "deferred"
 	}
+	if isShare {
+		allowed, consentErr := model.VFXFilesDriveLinkDisclosureAllowed(db, row.ProductionID, recipientTaskTypeID)
+		if consentErr != nil {
+			return "deferred"
+		}
+		if !allowed {
+			_ = model.SetUnstartedNotificationDeliveryDisposition(db, prepared.EventID, model.DeliveryTerminalFailure, "drive_link_disclosure_consent_revoked")
+			_ = model.QuarantineVFXFilesEvent(db, row.EventID, "drive_link_disclosure_consent_revoked", time.Now().UTC())
+			return "processed"
+		}
+	}
 	sent := dispatchPreparedNotification(db, *prepared, webhook.WebhookURL)
 	disposition, dispositionErr := model.NotificationDeliveryDisposition(db, prepared.EventID)
 	if dispositionErr != nil {
@@ -142,6 +180,41 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 		return "processed"
 	}
 	return "deferred"
+}
+
+func fileSharePayload(db *gorm.DB, event vfxfiles.FileShareNotification) Payload {
+	lang := "en"
+	if db != nil {
+		if project := model.FindProjectByKitsuID(db, event.ProductionID); project != nil && strings.EqualFold(strings.TrimSpace(project.Language), "ja") {
+			lang = "ja"
+		}
+	}
+	title, access := "Drive file shared", "Drive access follows the recipient's existing Google Drive ACLs. No Drive ACLs were changed."
+	if lang == "ja" {
+		title, access = "Drive ファイルを共有", "Driveへのアクセスは受信者の既存のGoogle Drive ACLに従います。Drive ACLは変更していません。"
+	}
+	label := "File"
+	if event.ObjectType == "folder" {
+		label = "Folder"
+		if lang == "ja" {
+			label = "フォルダー"
+		}
+	} else if lang == "ja" {
+		label = "ファイル"
+	}
+	name := boundedDiscordField(event.Name, event.ObjectID)
+	description := label + ": " + name + "\n" + access
+	if lang == "ja" {
+		description = label + ": " + name + "\n" + access
+	}
+	embed := Embed{Title: title, Description: description, Url: event.URL, Color: 0x64748B}
+	if KitsuPublicURLResolver != nil {
+		taskURL := KitsuTaskURL(KitsuPublicURLResolver(), event.ProductionID, event.EntityType, event.RecipientTaskID)
+		if taskURL != "" {
+			embed.Fields = []EmbedField{{Name: "Recipient Task", Value: taskURL}}
+		}
+	}
+	return Payload{Username: "KitsuSync", Content: "", Embeds: []Embed{embed}, AllowedMentions: &AllowedMentions{Parse: []string{}, Users: []string{}, Roles: []string{}}}
 }
 
 // vfxFilesJournalTaskID separates each Plugin recipient delivery stream from

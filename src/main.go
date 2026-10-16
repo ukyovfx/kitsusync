@@ -827,6 +827,8 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.VFXFilesEventInbox{},
 		&model.VFXFilesEventNonce{},
 		&model.VFXFilesEventConflict{},
+		&model.VFXFilesDriveLinkDisclosureConsent{},
+		&model.VFXFilesDriveLinkDisclosureAudit{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
 	}

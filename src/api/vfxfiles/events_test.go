@@ -28,10 +28,16 @@ func eventHandlerTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB, _ := db.DB()
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}, &model.NotificationDeliveryEvent{}, &model.ProductionNotificationWriteLock{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.VFXFilesDriveLinkDisclosureConsent{}, &model.VFXFilesDriveLinkDisclosureAudit{}, &model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}, &model.NotificationDeliveryEvent{}, &model.ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.VFXFilesProductionConfig{ProductionID: "10000000-0000-4000-8000-000000000001", ActivationEpoch: 1, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Project{KitsuProjectID: "10000000-0000-4000-8000-000000000001", Name: "Synthetic"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ProductionNotificationConfig{ProductionID: "10000000-0000-4000-8000-000000000001", Enabled: true}).Error; err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
@@ -88,6 +94,111 @@ func TestPluginEventHandlerVerifiesAndDurablyAcceptsContractFixture(t *testing.T
 	handler(response, signedEventRequest(t, body, key, "synthetic-nonce-0000001", "synthetic-idempotency-0001", clock))
 	if response.Code != http.StatusConflict {
 		t.Fatalf("replayed nonce status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestParseFileShareV11FixtureAndRejectsUnsafeDriveURLVariants(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "file-share-created-v1.1-two-recipient.json")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var batch eventBatch
+	if err := json.Unmarshal(body, &batch); err != nil || batch.ContractVersion != "1.1" || len(batch.Events) != 2 {
+		t.Fatalf("fixture batch invalid: %v", err)
+	}
+	var inputs []model.VFXFilesEventInput
+	for _, raw := range batch.Events {
+		input, err := parsePluginEvent(raw)
+		if err != nil || input.EventType != "file_share.created" || input.RecipientTaskID == "" || input.ShareTargetID == "" {
+			t.Fatalf("share event parse=%+v err=%v", input, err)
+		}
+		inputs = append(inputs, input)
+	}
+	if !validShareBatchSemantics(batch.Events, inputs) {
+		t.Fatal("positive two-recipient batch semantics failed")
+	}
+	duplicateEvents := append([]json.RawMessage(nil), batch.Events...)
+	var first, second map[string]json.RawMessage
+	_ = json.Unmarshal(duplicateEvents[0], &first)
+	_ = json.Unmarshal(duplicateEvents[1], &second)
+	var firstShare, secondShare map[string]json.RawMessage
+	_ = json.Unmarshal(first["share"], &firstShare)
+	_ = json.Unmarshal(second["share"], &secondShare)
+	firstShare["share_target_id"] = secondShare["share_target_id"]
+	first["share"], _ = json.Marshal(firstShare)
+	duplicateEvents[0], _ = json.Marshal(first)
+	if validShareBatchSemantics(duplicateEvents, inputs) {
+		t.Fatal("duplicate share target was accepted")
+	}
+	var versionMismatch map[string]any
+	if err := json.Unmarshal(batch.Events[0], &versionMismatch); err != nil {
+		t.Fatal(err)
+	}
+	versionMismatch["event_type"] = "file_delivery.ready"
+	encodedMismatch, _ := json.Marshal(versionMismatch)
+	if _, err := parsePluginEvent(encodedMismatch); err == nil {
+		t.Fatal("file delivery was accepted under contract 1.1")
+	}
+	var event map[string]any
+	if err := json.Unmarshal(batch.Events[0], &event); err != nil {
+		t.Fatal(err)
+	}
+	share := event["share"].(map[string]any)
+	obj := share["object"].(map[string]any)
+	for _, unsafe := range []string{
+		"https://drive.google.com/drive/folders/1FzExampleDriveFolder_opaqueID?resourcekey=secret",
+		"https://attacker.example/drive/folders/1FzExampleDriveFolder_opaqueID",
+		"https://user@drive.google.com/drive/folders/1FzExampleDriveFolder_opaqueID",
+		"https://drive.google.com/drive/folders/another-id",
+	} {
+		obj["url"] = unsafe
+		encoded, _ := json.Marshal(event)
+		if _, err := parsePluginEvent(encoded); err == nil {
+			t.Fatalf("unsafe Drive URL accepted: %s", unsafe)
+		}
+	}
+}
+
+func TestPluginEventHandlerDurablyReportsMissingShareDisclosureConsent(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "file-share-created-v1.1-two-recipient.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bind the frozen synthetic fixture to this test Production and its active
+	// epoch while retaining the contract's two-recipient homogeneous batch.
+	body = []byte(strings.ReplaceAll(string(body), "9cb8f70d-0b63-40b7-a73d-3237e6f50d3d", "10000000-0000-4000-8000-000000000001"))
+	body = []byte(strings.ReplaceAll(string(body), `"activation_epoch": 7`, `"activation_epoch": 1`))
+	db := eventHandlerTestDB(t)
+	key := "synthetic-event-signing-key-material-0001"
+	clock := time.Date(2026, 10, 17, 5, 0, 0, 0, time.UTC)
+	handler := EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })
+	response := httptest.NewRecorder()
+	handler(response, signedEventRequest(t, body, key, "share-consent-nonce-000001", "share-consent-idempotency-000001", clock))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("no-consent share batch status=%d body=%s", response.Code, response.Body.String())
+	}
+	var accepted struct {
+		ContractVersion string                      `json:"contract_version"`
+		Results         []model.VFXFilesEventResult `json:"results"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.ContractVersion != "1.0" || len(accepted.Results) != 2 {
+		t.Fatalf("response contract/results=%+v", accepted)
+	}
+	for _, result := range accepted.Results {
+		if result.Outcome != model.VFXFilesEventQuarantined || result.Code != "drive_link_disclosure_consent_missing" {
+			t.Fatalf("no-consent event result=%+v", result)
+		}
+	}
+	if strings.Contains(response.Body.String(), "drive.google.com") || strings.Contains(response.Body.String(), "opaqueID") {
+		t.Fatalf("response leaked Drive reference: %s", response.Body.String())
+	}
+	var quarantined int64
+	if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_type = ? AND outcome = ? AND diagnostic_code = ?", "file_share.created", model.VFXFilesEventQuarantined, "drive_link_disclosure_consent_missing").Count(&quarantined).Error; err != nil || quarantined != 2 {
+		t.Fatalf("durable no-consent quarantine count=%d err=%v", quarantined, err)
 	}
 }
 
