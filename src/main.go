@@ -932,10 +932,9 @@ func main() {
 		slog.Fatal("failed to migrate SQLite schema", "error_class", "schema_migration_failed")
 		os.Exit(1)
 	}
-	vfxRuntimeConfig, err := vfxfiles.LoadRuntimeConfig(nil, nil)
-	if err != nil {
-		slog.Fatal("VFX Files integration configuration is invalid", "error_class", "vfx_files_configuration_invalid")
-		os.Exit(1)
+	vfxRuntimeConfig, vfxRuntimeConfigInvalid := loadOptionalVFXFilesRuntimeConfig(nil, nil)
+	if vfxRuntimeConfigInvalid {
+		slog.Warn("VFX Files integration disabled because its optional server configuration is invalid", "error_class", "vfx_files_configuration_invalid")
 	}
 	model.PurgeLegacySensitiveData(db)
 
@@ -1146,8 +1145,14 @@ func main() {
 			hostname, _, _ := getKitsuCreds(db, conf)
 			return setup.ResolveKitsuConnection(ctx, hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
 		}
-		mux.HandleFunc(prefix+"/admin/vfx-files", setup.RequireSession(setup.VFXFilesAdminHandler(db, vfxRuntimeConfig, resolveKitsuForVFXFiles)))
-		mux.HandleFunc(prefix+"/admin/vfx-files/oauth-return", setup.RequireSession(setup.VFXFilesOAuthReturnHandler(db, resolveKitsuForVFXFiles)))
+		if vfxRuntimeConfigInvalid {
+			unavailable := setup.RequireSession(setup.VFXFilesConfigurationUnavailableHandler())
+			mux.HandleFunc(prefix+"/admin/vfx-files", unavailable)
+			mux.HandleFunc(prefix+"/admin/vfx-files/oauth-return", unavailable)
+		} else {
+			mux.HandleFunc(prefix+"/admin/vfx-files", setup.RequireSession(setup.VFXFilesAdminHandler(db, vfxRuntimeConfig, resolveKitsuForVFXFiles)))
+			mux.HandleFunc(prefix+"/admin/vfx-files/oauth-return", setup.RequireSession(setup.VFXFilesOAuthReturnHandler(db, resolveKitsuForVFXFiles)))
+		}
 		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)

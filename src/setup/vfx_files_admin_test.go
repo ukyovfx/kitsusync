@@ -218,6 +218,39 @@ func TestVFXFilesAdminConnectionStatesFailClosed(t *testing.T) {
 	}
 }
 
+func TestVFXFilesInvalidOptionalConfigurationIsActionableAndAdminOnly(t *testing.T) {
+	resetSessions()
+	t.Cleanup(resetSessions)
+	handler := VFXFilesConfigurationUnavailableHandler()
+
+	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=ja", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: newSessionToken("manager@example.test", "synthetic-session", "manager", "")})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "設定") {
+		t.Fatalf("Japanese invalid-configuration response = %d %q", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "files.example") || strings.Contains(response.Body.String(), "private.pem") {
+		t.Fatalf("configuration response leaked implementation details: %q", response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=en", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: newSessionToken("manager@example.test", "synthetic-session", "manager", "")})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "server configuration is invalid") {
+		t.Fatalf("English invalid-configuration response = %d %q", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=en", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: newSessionToken("viewer@example.test", "synthetic-session", "artist", "")})
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("non-admin access to configuration error = %d, want 403", response.Code)
+	}
+}
+
 func TestVFXFilesVerifiedMyDriveOwnerMustComeFromMatchingPluginRootProof(t *testing.T) {
 	valid := vfxFilesRootVerification{ContractVersion: "1.0", ConnectionID: "30000000-0000-4000-8000-000000000001", AccountMode: "my_drive", RootID: "root-verified", OwnerSubject: "google-subject-opaque", State: "verified", Capabilities: vfxFilesRootCapabilities{CanRead: true, CanAddChildren: true}}
 	if _, _, err := verifiedVFXFilesRootIdentity(valid, valid.ConnectionID, valid.AccountMode, valid.RootID, ""); err != nil {
