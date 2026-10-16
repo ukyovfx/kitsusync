@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -211,6 +212,7 @@ const (
 var (
 	ErrVFXFilesEventConflict               = errors.New("VFX Files event identity conflict")
 	ErrVFXFilesActivationPending           = errors.New("VFX Files activation mirror is pending")
+	ErrVFXFilesAuthorityTransition         = errors.New("VFX Files authority transition cannot be proven")
 	ErrVFXFilesInvalidBatch                = errors.New("VFX Files event batch is invalid")
 	ErrVFXFilesConfigConflict              = errors.New("VFX Files desired config revision conflict")
 	ErrVFXFilesSyncJobUnresolved           = errors.New("VFX Files sync job is unresolved")
@@ -566,22 +568,134 @@ type VFXFilesEventConflict struct {
 func (VFXFilesEventConflict) TableName() string { return "vfx_files_event_conflicts" }
 
 type VFXFilesEventInput struct {
-	ProducerID          string
-	EventID             string
-	EventType           string
-	ProductionID        string
-	ActivationEpoch     uint64
-	DeliveryID          string
-	DeliveryRevision    uint64
-	RecipientTaskID     string
-	RecipientTaskTypeID string
-	Payload             []byte
+	ProducerID              string
+	EventID                 string
+	EventType               string
+	ProductionID            string
+	ActivationEpoch         uint64
+	ConfigRevision          uint64
+	PreviousActivationEpoch uint64
+	NewActivationEpoch      uint64
+	DeliveryID              string
+	DeliveryRevision        uint64
+	RecipientTaskID         string
+	RecipientTaskTypeID     string
+	Payload                 []byte
 }
 
 type VFXFilesEventResult struct {
 	EventID string `json:"event_id"`
 	Outcome string `json:"outcome"`
 	Code    string `json:"code"`
+}
+
+// ApplyVFXFilesAuthorityTransition durably changes the mirror while the caller
+// holds the exclusive per-Production dispatch barrier. Its successful return
+// proves old-epoch dispatches have drained and queued old events are fenced.
+func ApplyVFXFilesAuthorityTransition(db *gorm.DB, keyID, nonce string, input VFXFilesEventInput, now time.Time) (VFXFilesEventResult, error) {
+	if db == nil || keyID == "" || len(nonce) < 16 || input.ProducerID != "vfx-files-plugin" ||
+		(input.EventType != "storage_authority.activation_requested" && input.EventType != "storage_authority.deactivation_requested") ||
+		!vfxFilesUUIDRE.MatchString(input.ProductionID) || !vfxFilesUUIDRE.MatchString(input.EventID) ||
+		input.ConfigRevision == 0 || input.PreviousActivationEpoch == 0 || input.PreviousActivationEpoch == ^uint64(0) || input.NewActivationEpoch != input.PreviousActivationEpoch+1 {
+		return VFXFilesEventResult{}, ErrVFXFilesInvalidBatch
+	}
+	activating := input.EventType == "storage_authority.activation_requested"
+	if activating && input.ActivationEpoch != input.NewActivationEpoch || !activating && input.ActivationEpoch != input.PreviousActivationEpoch {
+		return VFXFilesEventResult{}, ErrVFXFilesInvalidBatch
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	payloadHash := sha256.Sum256(input.Payload)
+	payloadDigest := hex.EncodeToString(payloadHash[:])
+	result := VFXFilesEventResult{EventID: input.EventID, Outcome: VFXFilesEventAccepted, Code: "activation_barrier_complete"}
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var nonceCount int64
+		if err := tx.Model(&VFXFilesEventNonce{}).Where("key_id = ? AND nonce = ?", keyID, nonce).Count(&nonceCount).Error; err != nil {
+			return err
+		}
+		if nonceCount != 0 {
+			return ErrVFXFilesEventConflict
+		}
+		var prior VFXFilesEventInbox
+		priorErr := tx.Where("producer_id = ? AND event_id = ?", input.ProducerID, input.EventID).Take(&prior).Error
+		if priorErr == nil {
+			if prior.PayloadSHA256 != payloadDigest {
+				return ErrVFXFilesEventConflict
+			}
+			result.Outcome, result.Code = VFXFilesEventDuplicate, "duplicate_event"
+		} else if !errors.Is(priorErr, gorm.ErrRecordNotFound) {
+			return priorErr
+		}
+		if err := tx.Create(&VFXFilesEventNonce{KeyID: keyID, Nonce: nonce, ExpiresAt: now.Add(10 * time.Minute), CreatedAt: now}).Error; err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return ErrVFXFilesEventConflict
+			}
+			return err
+		}
+		var config VFXFilesProductionConfig
+		configErr := tx.Where("production_id = ?", input.ProductionID).First(&config).Error
+		if errors.Is(configErr, gorm.ErrRecordNotFound) && activating {
+			config = VFXFilesProductionConfig{ProductionID: input.ProductionID, ConfigRevision: input.ConfigRevision, ActivationEpoch: input.PreviousActivationEpoch, Activated: false}
+			if err := tx.Create(&config).Error; err != nil {
+				return err
+			}
+		} else if configErr != nil {
+			if errors.Is(configErr, gorm.ErrRecordNotFound) {
+				return ErrVFXFilesAuthorityTransition
+			}
+			return configErr
+		}
+		if activating {
+			if config.Activated && config.ActivationEpoch == input.NewActivationEpoch {
+				// Idempotent retry after the mirror was durably activated.
+			} else if !config.Activated && config.ActivationEpoch == input.PreviousActivationEpoch {
+				config.Activated = true
+				config.ActivationEpoch = input.NewActivationEpoch
+			} else {
+				return ErrVFXFilesAuthorityTransition
+			}
+		} else {
+			if !config.Activated && config.ActivationEpoch == input.NewActivationEpoch {
+				// Idempotent retry after the mirror was durably fenced.
+			} else if config.Activated && config.ActivationEpoch == input.PreviousActivationEpoch {
+				config.Activated = false
+				config.ActivationEpoch = input.NewActivationEpoch
+			} else {
+				return ErrVFXFilesAuthorityTransition
+			}
+		}
+		if config.ConfigRevision > input.ConfigRevision {
+			return ErrVFXFilesAuthorityTransition
+		}
+		config.ConfigRevision = input.ConfigRevision
+		config.DesiredConfigJSON = fmt.Sprintf(`{"contract_version":"1.0","activation":{"enabled":%t,"notification_epoch":%d}}`, config.Activated, config.ActivationEpoch)
+		config.PendingActivationEpoch = 0
+		if err := tx.Save(&config).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&VFXFilesEventInbox{}).Where(
+			"production_id = ? AND event_type LIKE ? AND outcome = ? AND processed_at IS NULL AND activation_epoch <> ?",
+			input.ProductionID, "file_delivery.%", VFXFilesEventAccepted, input.NewActivationEpoch,
+		).Updates(map[string]any{
+			"outcome": VFXFilesEventQuarantined, "diagnostic_code": "activation_epoch_fenced", "processed_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		if priorErr != nil {
+			row := VFXFilesEventInbox{
+				ProducerID: input.ProducerID, EventID: input.EventID, PayloadSHA256: payloadDigest,
+				PayloadJSON: string(input.Payload), EventType: input.EventType, ProductionID: input.ProductionID,
+				ActivationEpoch: input.ActivationEpoch, Outcome: VFXFilesEventAccepted,
+				DiagnosticCode: "activation_barrier_complete", CreatedAt: now, ProcessedAt: &now,
+			}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return result, err
 }
 
 // VFXFilesEventDiagnostics contains counts only; payloads and identity values

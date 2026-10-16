@@ -7,6 +7,6 @@
   "required": ["contract_version", "events"],
   "properties": {
     "contract_version": {"const": "1.0"},
-    "events": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"oneOf": [{"$ref": "file-event.schema.json"}, {"$ref": "folder-event.schema.json"}, {"$ref": "output-package-event.schema.json"}]}}
+    "events": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"oneOf": [{"$ref": "file-event.schema.json"}, {"$ref": "folder-event.schema.json"}, {"$ref": "output-package-event.schema.json"}, {"$ref": "authority-transition-event.schema.json"}]}}
   }
 }

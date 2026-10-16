@@ -3,7 +3,7 @@
   "info": {
     "title": "KitsuSync Files Plugin event intake",
     "version": "1.0.0",
-    "description": "Plugin-to-KitsuSync signed event endpoint. HTTP acceptance means durable intake only, not Discord delivery or recipient receipt."
+    "description": "Plugin-to-KitsuSync signed event endpoint. Business events report durable intake, not Discord delivery. A signed authority transition is acknowledged only after KitsuSync durably fences the epoch, resolves old-epoch deliveries, and drains in-flight dispatches."
   },
   "servers": [
     {
@@ -125,7 +125,7 @@
     },
     "responses": {
       "Accepted": {
-        "description": "Every event was durably accepted, recognized as identical duplicate, or quarantined",
+        "description": "Business events were durably accepted, recognized as identical duplicates, or quarantined. Authority transition events receive HTTP 202 only after the epoch fence and dispatch drain are durably complete.",
         "content": {
           "application/json": {
             "schema": {

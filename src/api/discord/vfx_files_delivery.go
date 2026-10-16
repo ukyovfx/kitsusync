@@ -32,7 +32,10 @@ func ProcessVFXFilesDeliveryEvents(db *gorm.DB, limit int) (processed, deferred 
 		}
 		afterID = rows[len(rows)-1].ID
 		for _, row := range rows {
-			result := processVFXFilesDeliveryEvent(db, row)
+			result := "deferred"
+			vfxfiles.WithVFXFilesDeliveryDispatch(row.ProductionID, func() {
+				result = processVFXFilesDeliveryEvent(db, row)
+			})
 			if result == "processed" {
 				processed++
 			} else if result == "deferred" {

@@ -153,6 +153,112 @@ func TestSignedNonDeliveryLifecycleEventsAreDurableButNeverPendingDiscord(t *tes
 	}
 }
 
+func TestSignedAuthorityBarrierDrainsOldEpochAndAllowsActivationAfterAck(t *testing.T) {
+	db := eventHandlerTestDB(t)
+	key := "synthetic-event-signing-key-material-0001"
+	clock := time.Date(2026, 10, 17, 3, 0, 0, 0, time.UTC)
+	handler := EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })
+	if err := db.Create(&model.VFXFilesEventInbox{
+		ProducerID: "vfx-files-plugin", EventID: "60000000-0000-4000-8000-000000000090",
+		PayloadSHA256: strings.Repeat("a", 64), PayloadJSON: `{"stale":"pending"}`,
+		EventType: "file_delivery.ready", ProductionID: "10000000-0000-4000-8000-000000000001",
+		ActivationEpoch: 1, Outcome: model.VFXFilesEventAccepted, CreatedAt: clock,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	requestFor := func(eventID, eventType string, revision, previous, next, eventEpoch uint64, nonce string) *http.Request {
+		body, err := json.Marshal(map[string]any{"contract_version": "1.0", "events": []any{map[string]any{
+			"contract_version": "1.0", "producer_id": "vfx-files-plugin", "event_id": eventID,
+			"event_type": eventType, "occurred_at": clock.Format(time.RFC3339),
+			"production_id": "10000000-0000-4000-8000-000000000001", "activation_epoch": eventEpoch,
+			"config_revision": revision, "previous_activation_epoch": previous, "new_activation_epoch": next,
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signedEventRequest(t, body, key, nonce, eventID, clock)
+	}
+	deactivatedID := "60000000-0000-4000-8000-000000000091"
+	response := httptest.NewRecorder()
+	handler(response, requestFor(deactivatedID, "storage_authority.deactivation_requested", 4, 1, 2, 1, "authority-nonce-deactivate-01"))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("deactivation barrier=%d %s", response.Code, response.Body.String())
+	}
+	var config model.VFXFilesProductionConfig
+	if err := db.Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Take(&config).Error; err != nil || config.Activated || config.ActivationEpoch != 2 || config.ConfigRevision != 4 {
+		t.Fatalf("deactivated mirror=%+v err=%v", config, err)
+	}
+	var stored model.VFXFilesEventInbox
+	if err := db.Where("event_id = ?", deactivatedID).Take(&stored).Error; err != nil || stored.ProcessedAt == nil || stored.DiagnosticCode != "activation_barrier_complete" {
+		t.Fatalf("barrier receipt=%+v err=%v", stored, err)
+	}
+	var fenced model.VFXFilesEventInbox
+	if err := db.Where("event_id = ?", "60000000-0000-4000-8000-000000000090").Take(&fenced).Error; err != nil || fenced.Outcome != model.VFXFilesEventQuarantined || fenced.ProcessedAt == nil || fenced.DiagnosticCode != "activation_epoch_fenced" {
+		t.Fatalf("queued old-epoch delivery was not durably fenced: %+v err=%v", fenced, err)
+	}
+	response = httptest.NewRecorder()
+	handler(response, requestFor("60000000-0000-4000-8000-000000000092", "storage_authority.activation_requested", 5, 2, 3, 3, "authority-nonce-activate-0001"))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("activation barrier=%d %s", response.Code, response.Body.String())
+	}
+	if err := db.Where("production_id = ?", "10000000-0000-4000-8000-000000000001").Take(&config).Error; err != nil || !config.Activated || config.ActivationEpoch != 3 || config.ConfigRevision != 5 {
+		t.Fatalf("activated mirror=%+v err=%v", config, err)
+	}
+	response = httptest.NewRecorder()
+	handler(response, requestFor(deactivatedID, "storage_authority.deactivation_requested", 4, 1, 2, 1, "authority-nonce-retry-0001"))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("stale deactivation must not overwrite a newer epoch: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAuthorityBarrierWaitsForInFlightDiscordDispatch(t *testing.T) {
+	const productionID = "10000000-0000-4000-8000-000000000099"
+	dispatchStarted, releaseDispatch, barrierApplied := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go WithVFXFilesDeliveryDispatch(productionID, func() { close(dispatchStarted); <-releaseDispatch })
+	<-dispatchStarted
+	go func() {
+		_ = WithVFXFilesAuthorityBarrier(productionID, func() error { close(barrierApplied); return nil })
+	}()
+	select {
+	case <-barrierApplied:
+		t.Fatal("barrier acknowledged before the in-flight dispatch resolved")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseDispatch)
+	select {
+	case <-barrierApplied:
+	case <-time.After(time.Second):
+		t.Fatal("barrier did not proceed after the in-flight dispatch resolved")
+	}
+}
+
+func TestAuthorityBarrierWaitsForInFlightOldEpochIntake(t *testing.T) {
+	const productionID = "10000000-0000-4000-8000-000000000098"
+	intakeStarted, releaseIntake, barrierApplied := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = WithVFXFilesEventAdmission([]model.VFXFilesEventInput{{ProductionID: productionID}}, func() error {
+			close(intakeStarted)
+			<-releaseIntake
+			return nil
+		})
+	}()
+	<-intakeStarted
+	go func() {
+		_ = WithVFXFilesAuthorityBarrier(productionID, func() error { close(barrierApplied); return nil })
+	}()
+	select {
+	case <-barrierApplied:
+		t.Fatal("barrier acknowledged before the old-epoch intake resolved")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(releaseIntake)
+	select {
+	case <-barrierApplied:
+	case <-time.After(time.Second):
+		t.Fatal("barrier did not proceed after the old-epoch intake resolved")
+	}
+}
+
 func TestSignedEventHandlerQuarantinesWrongProductionStaleEpochAndDisabledIntegration(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "folder-provisioning-completed.json"))
 	if err != nil {

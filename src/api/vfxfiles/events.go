@@ -10,7 +10,9 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"app/src/model"
@@ -26,24 +28,79 @@ type eventBatch struct {
 	Events          []json.RawMessage `json:"events"`
 }
 type pluginEvent struct {
-	ContractVersion string              `json:"contract_version"`
-	ProducerID      string              `json:"producer_id"`
-	EventID         string              `json:"event_id"`
-	EventType       string              `json:"event_type"`
-	OccurredAt      string              `json:"occurred_at"`
-	ProductionID    string              `json:"production_id"`
-	ActivationEpoch uint64              `json:"activation_epoch"`
-	ProductionName  string              `json:"production_name,omitempty"`
-	EpisodeID       *string             `json:"episode_id,omitempty"`
-	EpisodeName     *string             `json:"episode_name,omitempty"`
-	Entity          *eventEntity        `json:"entity,omitempty"`
-	Source          *eventTask          `json:"source,omitempty"`
-	Sender          *eventPerson        `json:"sender,omitempty"`
-	SenderPersonID  *string             `json:"sender_person_id,omitempty"`
-	OutputPackage   *eventOutputPackage `json:"output_package,omitempty"`
-	Delivery        *eventDelivery      `json:"delivery,omitempty"`
-	Folder          *eventFolder        `json:"folder,omitempty"`
+	ContractVersion         string              `json:"contract_version"`
+	ProducerID              string              `json:"producer_id"`
+	EventID                 string              `json:"event_id"`
+	EventType               string              `json:"event_type"`
+	OccurredAt              string              `json:"occurred_at"`
+	ProductionID            string              `json:"production_id"`
+	ActivationEpoch         uint64              `json:"activation_epoch"`
+	ConfigRevision          uint64              `json:"config_revision,omitempty"`
+	PreviousActivationEpoch uint64              `json:"previous_activation_epoch,omitempty"`
+	NewActivationEpoch      uint64              `json:"new_activation_epoch,omitempty"`
+	ProductionName          string              `json:"production_name,omitempty"`
+	EpisodeID               *string             `json:"episode_id,omitempty"`
+	EpisodeName             *string             `json:"episode_name,omitempty"`
+	Entity                  *eventEntity        `json:"entity,omitempty"`
+	Source                  *eventTask          `json:"source,omitempty"`
+	Sender                  *eventPerson        `json:"sender,omitempty"`
+	SenderPersonID          *string             `json:"sender_person_id,omitempty"`
+	OutputPackage           *eventOutputPackage `json:"output_package,omitempty"`
+	Delivery                *eventDelivery      `json:"delivery,omitempty"`
+	Folder                  *eventFolder        `json:"folder,omitempty"`
 }
+
+var productionDispatchFences sync.Map
+
+func productionDispatchFence(productionID string) *sync.RWMutex {
+	value, _ := productionDispatchFences.LoadOrStore(strings.ToLower(strings.TrimSpace(productionID)), &sync.RWMutex{})
+	return value.(*sync.RWMutex)
+}
+
+// WithVFXFilesDeliveryDispatch holds the old-epoch side of a per-Production
+// barrier through the durable Discord delivery result.
+func WithVFXFilesDeliveryDispatch(productionID string, dispatch func()) {
+	lock := productionDispatchFence(productionID)
+	lock.RLock()
+	defer lock.RUnlock()
+	dispatch()
+}
+
+// WithVFXFilesEventAdmission shares the same Production fence as dispatch so
+// a transition cannot acknowledge while an old-epoch intake is still being
+// durably admitted.
+func WithVFXFilesEventAdmission(inputs []model.VFXFilesEventInput, accept func() error) error {
+	ids := make([]string, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		id := strings.ToLower(strings.TrimSpace(input.ProductionID))
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var lockAll func(int) error
+	lockAll = func(index int) error {
+		if index == len(ids) {
+			return accept()
+		}
+		lock := productionDispatchFence(ids[index])
+		lock.RLock()
+		defer lock.RUnlock()
+		return lockAll(index + 1)
+	}
+	return lockAll(0)
+}
+
+func WithVFXFilesAuthorityBarrier(productionID string, apply func() error) error {
+	lock := productionDispatchFence(productionID)
+	lock.Lock()
+	defer lock.Unlock()
+	return apply()
+}
+
 type eventEntity struct {
 	Type string  `json:"type"`
 	ID   string  `json:"id"`
@@ -207,7 +264,43 @@ func EventHandler(db *gorm.DB, keys map[string][]byte, now func() time.Time) htt
 			}
 			inputs = append(inputs, input)
 		}
-		results, err := model.AcceptVFXFilesEvents(db, keyID, nonce, inputs, current)
+		if strings.HasPrefix(inputs[0].EventType, "storage_authority.") {
+			if len(inputs) != 1 {
+				http.Error(w, "authority transition must be sent alone", http.StatusBadRequest)
+				return
+			}
+			var transition model.VFXFilesEventResult
+			err := WithVFXFilesAuthorityBarrier(inputs[0].ProductionID, func() error {
+				var applyErr error
+				transition, applyErr = model.ApplyVFXFilesAuthorityTransition(db, keyID, nonce, inputs[0], current)
+				return applyErr
+			})
+			if errors.Is(err, model.ErrVFXFilesEventConflict) {
+				http.Error(w, "event replay or identity conflict", http.StatusConflict)
+				return
+			}
+			if errors.Is(err, model.ErrVFXFilesAuthorityTransition) {
+				http.Error(w, "authority transition cannot be proven", http.StatusConflict)
+				return
+			}
+			if err != nil {
+				http.Error(w, "authority barrier is unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(struct {
+				ContractVersion string                      `json:"contract_version"`
+				Results         []model.VFXFilesEventResult `json:"results"`
+			}{ContractVersion: contractVersion, Results: []model.VFXFilesEventResult{transition}})
+			return
+		}
+		var results []model.VFXFilesEventResult
+		err = WithVFXFilesEventAdmission(inputs, func() error {
+			var acceptErr error
+			results, acceptErr = model.AcceptVFXFilesEvents(db, keyID, nonce, inputs, current)
+			return acceptErr
+		})
 		if errors.Is(err, model.ErrVFXFilesEventConflict) {
 			http.Error(w, "event replay or identity conflict", http.StatusConflict)
 			return
@@ -270,6 +363,17 @@ func parsePluginEvent(raw []byte) (model.VFXFilesEventInput, error) {
 		if event.Folder == nil || !validFolder(*event.Folder) || event.Delivery != nil || event.Entity != nil || event.Source != nil || event.Sender != nil || event.SenderPersonID != nil || event.OutputPackage != nil {
 			return model.VFXFilesEventInput{}, errors.New("incomplete folder event")
 		}
+	case "storage_authority.activation_requested", "storage_authority.deactivation_requested":
+		if event.ConfigRevision == 0 || event.PreviousActivationEpoch == 0 || event.PreviousActivationEpoch == ^uint64(0) || event.NewActivationEpoch != event.PreviousActivationEpoch+1 {
+			return model.VFXFilesEventInput{}, errors.New("invalid authority transition epochs")
+		}
+		if event.EventType == "storage_authority.activation_requested" && event.ActivationEpoch != event.NewActivationEpoch ||
+			event.EventType == "storage_authority.deactivation_requested" && event.ActivationEpoch != event.PreviousActivationEpoch {
+			return model.VFXFilesEventInput{}, errors.New("invalid authority transition epoch")
+		}
+		input.ConfigRevision = event.ConfigRevision
+		input.PreviousActivationEpoch = event.PreviousActivationEpoch
+		input.NewActivationEpoch = event.NewActivationEpoch
 	default:
 		return model.VFXFilesEventInput{}, errors.New("unsupported event type")
 	}
