@@ -32,10 +32,7 @@ func ProcessVFXFilesDeliveryEvents(db *gorm.DB, limit int) (processed, deferred 
 		}
 		afterID = rows[len(rows)-1].ID
 		for _, row := range rows {
-			result := "deferred"
-			vfxfiles.WithVFXFilesDeliveryDispatch(row.ProductionID, func() {
-				result = processVFXFilesDeliveryEvent(db, row)
-			})
+			result := processVFXFilesDeliveryEvent(db, row)
 			if result == "processed" {
 				processed++
 			} else if result == "deferred" {
@@ -123,6 +120,9 @@ func processVFXFilesDeliveryEvent(db *gorm.DB, row model.VFXFilesEventInbox) str
 		PriorMessageID: priorMessageID, PriorThreadID: priorThreadID,
 	}
 	prepared, err := model.PrepareNotificationDelivery(db, intent)
+	if errors.Is(err, model.ErrVFXFilesActivationEpochFenced) {
+		return "processed"
+	}
 	if err != nil || prepared == nil {
 		if errors.Is(err, model.ErrDeliveryIdentityConflict) {
 			_ = model.QuarantineVFXFilesEvent(db, row.EventID, "delivery_identity_conflict", time.Now().UTC())

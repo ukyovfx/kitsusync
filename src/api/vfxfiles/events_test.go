@@ -28,7 +28,7 @@ func eventHandlerTestDB(t *testing.T) *gorm.DB {
 	}
 	sqlDB, _ := db.DB()
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}, &model.NotificationDeliveryEvent{}); err != nil {
+	if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}, &model.VFXFilesEventInbox{}, &model.VFXFilesEventNonce{}, &model.VFXFilesEventConflict{}, &model.NotificationDeliveryEvent{}, &model.ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.VFXFilesProductionConfig{ProductionID: "10000000-0000-4000-8000-000000000001", ActivationEpoch: 1, Activated: true}).Error; err != nil {
@@ -208,54 +208,6 @@ func TestSignedAuthorityBarrierDrainsOldEpochAndAllowsActivationAfterAck(t *test
 	handler(response, requestFor(deactivatedID, "storage_authority.deactivation_requested", 4, 1, 2, 1, "authority-nonce-retry-0001"))
 	if response.Code != http.StatusConflict {
 		t.Fatalf("stale deactivation must not overwrite a newer epoch: %d %s", response.Code, response.Body.String())
-	}
-}
-
-func TestAuthorityBarrierWaitsForInFlightDiscordDispatch(t *testing.T) {
-	const productionID = "10000000-0000-4000-8000-000000000099"
-	dispatchStarted, releaseDispatch, barrierApplied := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	go WithVFXFilesDeliveryDispatch(productionID, func() { close(dispatchStarted); <-releaseDispatch })
-	<-dispatchStarted
-	go func() {
-		_ = WithVFXFilesAuthorityBarrier(productionID, func() error { close(barrierApplied); return nil })
-	}()
-	select {
-	case <-barrierApplied:
-		t.Fatal("barrier acknowledged before the in-flight dispatch resolved")
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(releaseDispatch)
-	select {
-	case <-barrierApplied:
-	case <-time.After(time.Second):
-		t.Fatal("barrier did not proceed after the in-flight dispatch resolved")
-	}
-}
-
-func TestAuthorityBarrierWaitsForInFlightOldEpochIntake(t *testing.T) {
-	const productionID = "10000000-0000-4000-8000-000000000098"
-	intakeStarted, releaseIntake, barrierApplied := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	go func() {
-		_ = WithVFXFilesEventAdmission([]model.VFXFilesEventInput{{ProductionID: productionID}}, func() error {
-			close(intakeStarted)
-			<-releaseIntake
-			return nil
-		})
-	}()
-	<-intakeStarted
-	go func() {
-		_ = WithVFXFilesAuthorityBarrier(productionID, func() error { close(barrierApplied); return nil })
-	}()
-	select {
-	case <-barrierApplied:
-		t.Fatal("barrier acknowledged before the old-epoch intake resolved")
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(releaseIntake)
-	select {
-	case <-barrierApplied:
-	case <-time.After(time.Second):
-		t.Fatal("barrier did not proceed after the old-epoch intake resolved")
 	}
 }
 

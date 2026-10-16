@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -214,6 +215,7 @@ var (
 	ErrVFXFilesActivationPending           = errors.New("VFX Files activation mirror is pending")
 	ErrVFXFilesAuthorityTransition         = errors.New("VFX Files authority transition cannot be proven")
 	ErrVFXFilesAuthorityUnresolved         = errors.New("VFX Files old-epoch delivery outcome remains unresolved")
+	ErrVFXFilesActivationEpochFenced       = errors.New("VFX Files delivery belongs to a fenced activation epoch")
 	ErrVFXFilesInvalidBatch                = errors.New("VFX Files event batch is invalid")
 	ErrVFXFilesConfigConflict              = errors.New("VFX Files desired config revision conflict")
 	ErrVFXFilesSyncJobUnresolved           = errors.New("VFX Files sync job is unresolved")
@@ -590,9 +592,9 @@ type VFXFilesEventResult struct {
 	Code    string `json:"code"`
 }
 
-// ApplyVFXFilesAuthorityTransition durably changes the mirror while the caller
-// holds the exclusive per-Production dispatch barrier. Its successful return
-// proves old-epoch dispatches have drained and queued old events are fenced.
+// ApplyVFXFilesAuthorityTransition durably changes the mirror under the shared
+// per-Production SQLite write fence. Its successful return proves old-epoch
+// dispatches have drained and queued old events are fenced.
 func ApplyVFXFilesAuthorityTransition(db *gorm.DB, keyID, nonce string, input VFXFilesEventInput, now time.Time) (VFXFilesEventResult, error) {
 	if db == nil || keyID == "" || len(nonce) < 16 || input.ProducerID != "vfx-files-plugin" ||
 		(input.EventType != "storage_authority.activation_requested" && input.EventType != "storage_authority.deactivation_requested") ||
@@ -611,6 +613,11 @@ func ApplyVFXFilesAuthorityTransition(db *gorm.DB, keyID, nonce string, input VF
 	payloadDigest := hex.EncodeToString(payloadHash[:])
 	result := VFXFilesEventResult{EventID: input.EventID, Outcome: VFXFilesEventAccepted, Code: "activation_barrier_complete"}
 	err := db.Transaction(func(tx *gorm.DB) error {
+		// Serialize transitions across app processes sharing the supported SQLite
+		// database. Process-local synchronization cannot establish this fence.
+		if err := AcquireProductionNotificationWriteLock(tx, input.ProductionID); err != nil {
+			return err
+		}
 		var nonceCount int64
 		if err := tx.Model(&VFXFilesEventNonce{}).Where("key_id = ? AND nonce = ?", keyID, nonce).Count(&nonceCount).Error; err != nil {
 			return err
@@ -856,7 +863,8 @@ func QuarantineVFXFilesEvent(db *gorm.DB, eventID, diagnostic string, now time.T
 	}).Error
 }
 
-// AcceptVFXFilesEvents records a signed batch and consumes its nonce atomically.
+// AcceptVFXFilesEvents records a signed batch and consumes its nonce atomically
+// under each affected Production's shared SQLite write fence.
 // A duplicate event with identical body is harmless; a conflicting body is
 // retained as a safe conflict diagnostic and cannot replace the original.
 func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEventInput, now time.Time) ([]VFXFilesEventResult, error) {
@@ -879,6 +887,27 @@ func AcceptVFXFilesEvents(db *gorm.DB, keyID, nonce string, events []VFXFilesEve
 	byEventID := make(map[string]VFXFilesEventResult, len(events))
 	activationPending := make(map[string]struct{})
 	err := db.Transaction(func(tx *gorm.DB) error {
+		// Acquire every Production fence in stable order before reading authority
+		// state. A transition and an event batch therefore have one durable order
+		// even when requests are handled by different app processes.
+		productionIDs := make([]string, 0, len(ordered))
+		seenProductions := make(map[string]struct{}, len(ordered))
+		for _, input := range ordered {
+			if input.ProductionID == "" {
+				return ErrVFXFilesInvalidBatch
+			}
+			if _, ok := seenProductions[input.ProductionID]; ok {
+				continue
+			}
+			seenProductions[input.ProductionID] = struct{}{}
+			productionIDs = append(productionIDs, input.ProductionID)
+		}
+		sort.Strings(productionIDs)
+		for _, productionID := range productionIDs {
+			if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
+				return err
+			}
+		}
 		// Hold only the exact epoch recorded by an in-progress activation.
 		// Other events in the same signed batch still get durable accepted or
 		// quarantined outcomes before the request asks the Plugin to retry.

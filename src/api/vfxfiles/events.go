@@ -10,9 +10,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"app/src/model"
@@ -48,57 +46,6 @@ type pluginEvent struct {
 	OutputPackage           *eventOutputPackage `json:"output_package,omitempty"`
 	Delivery                *eventDelivery      `json:"delivery,omitempty"`
 	Folder                  *eventFolder        `json:"folder,omitempty"`
-}
-
-var productionDispatchFences sync.Map
-
-func productionDispatchFence(productionID string) *sync.RWMutex {
-	value, _ := productionDispatchFences.LoadOrStore(strings.ToLower(strings.TrimSpace(productionID)), &sync.RWMutex{})
-	return value.(*sync.RWMutex)
-}
-
-// WithVFXFilesDeliveryDispatch holds the old-epoch side of a per-Production
-// barrier through the durable Discord delivery result.
-func WithVFXFilesDeliveryDispatch(productionID string, dispatch func()) {
-	lock := productionDispatchFence(productionID)
-	lock.RLock()
-	defer lock.RUnlock()
-	dispatch()
-}
-
-// WithVFXFilesEventAdmission shares the same Production fence as dispatch so
-// a transition cannot acknowledge while an old-epoch intake is still being
-// durably admitted.
-func WithVFXFilesEventAdmission(inputs []model.VFXFilesEventInput, accept func() error) error {
-	ids := make([]string, 0, len(inputs))
-	seen := make(map[string]struct{}, len(inputs))
-	for _, input := range inputs {
-		id := strings.ToLower(strings.TrimSpace(input.ProductionID))
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var lockAll func(int) error
-	lockAll = func(index int) error {
-		if index == len(ids) {
-			return accept()
-		}
-		lock := productionDispatchFence(ids[index])
-		lock.RLock()
-		defer lock.RUnlock()
-		return lockAll(index + 1)
-	}
-	return lockAll(0)
-}
-
-func WithVFXFilesAuthorityBarrier(productionID string, apply func() error) error {
-	lock := productionDispatchFence(productionID)
-	lock.Lock()
-	defer lock.Unlock()
-	return apply()
 }
 
 type eventEntity struct {
@@ -270,11 +217,7 @@ func EventHandler(db *gorm.DB, keys map[string][]byte, now func() time.Time) htt
 				return
 			}
 			var transition model.VFXFilesEventResult
-			err := WithVFXFilesAuthorityBarrier(inputs[0].ProductionID, func() error {
-				var applyErr error
-				transition, applyErr = model.ApplyVFXFilesAuthorityTransition(db, keyID, nonce, inputs[0], current)
-				return applyErr
-			})
+			transition, err := model.ApplyVFXFilesAuthorityTransition(db, keyID, nonce, inputs[0], current)
 			if errors.Is(err, model.ErrVFXFilesEventConflict) {
 				http.Error(w, "event replay or identity conflict", http.StatusConflict)
 				return
@@ -301,11 +244,7 @@ func EventHandler(db *gorm.DB, keys map[string][]byte, now func() time.Time) htt
 			return
 		}
 		var results []model.VFXFilesEventResult
-		err = WithVFXFilesEventAdmission(inputs, func() error {
-			var acceptErr error
-			results, acceptErr = model.AcceptVFXFilesEvents(db, keyID, nonce, inputs, current)
-			return acceptErr
-		})
+		results, err = model.AcceptVFXFilesEvents(db, keyID, nonce, inputs, current)
 		if errors.Is(err, model.ErrVFXFilesEventConflict) {
 			http.Error(w, "event replay or identity conflict", http.StatusConflict)
 			return

@@ -675,6 +675,7 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 		Disposition:            DeliveryPending, ThreadName: intent.ThreadName, PriorMessageID: intent.PriorMessageID, PriorThreadID: intent.PriorThreadID,
 	}
 	var identityConflict bool
+	var activationEpochFenced bool
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := AcquireProductionNotificationWriteLock(tx, intent.ProductionID); err != nil {
 			return err
@@ -741,6 +742,28 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		if source == "vfx_files" {
+			var inbox VFXFilesEventInbox
+			if err := tx.Where("producer_id = ? AND event_id = ? AND production_id = ?", "vfx-files-plugin", strings.TrimSpace(intent.SourceEventID), strings.TrimSpace(intent.ProductionID)).Take(&inbox).Error; err != nil {
+				return err
+			}
+			var authority VFXFilesProductionConfig
+			authorityErr := tx.Where("production_id = ?", strings.TrimSpace(intent.ProductionID)).Take(&authority).Error
+			if authorityErr != nil && !errors.Is(authorityErr, gorm.ErrRecordNotFound) {
+				return authorityErr
+			}
+			if errors.Is(authorityErr, gorm.ErrRecordNotFound) || !authority.Activated || authority.ActivationEpoch == 0 || inbox.ActivationEpoch != authority.ActivationEpoch || inbox.Outcome != VFXFilesEventAccepted || inbox.ProcessedAt != nil {
+				if inbox.Outcome == VFXFilesEventAccepted && inbox.ProcessedAt == nil {
+					if err := tx.Model(&VFXFilesEventInbox{}).Where("id = ? AND outcome = ? AND processed_at IS NULL", inbox.ID, VFXFilesEventAccepted).Updates(map[string]any{
+						"outcome": VFXFilesEventQuarantined, "diagnostic_code": "activation_epoch_fenced", "processed_at": time.Now().UTC(),
+					}).Error; err != nil {
+						return err
+					}
+				}
+				activationEpochFenced = true
+				return nil
+			}
+		}
 		var count int64
 		if err := tx.Model(&ManagedChannelDeletion{}).Where("guild_id = ? AND channel_id = ? AND discord_webhook_id = ? AND disposition <> ?", row.DestinationGuildID, row.DestinationChannelID, row.DestinationWebhookID, ChannelDeletionComplete).Count(&count).Error; err != nil {
 			return err
@@ -752,6 +775,9 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 	})
 	if err != nil {
 		return nil, err
+	}
+	if activationEpochFenced {
+		return nil, ErrVFXFilesActivationEpochFenced
 	}
 	if identityConflict {
 		return &row, ErrDeliveryIdentityConflict

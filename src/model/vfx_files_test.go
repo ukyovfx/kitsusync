@@ -32,7 +32,7 @@ func vfxEventTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesAuthorizationIntent{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}, &VFXFilesSyncOperation{}); err != nil {
+	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesAuthorizationIntent{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}, &VFXFilesSyncOperation{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
@@ -50,11 +50,96 @@ func vfxEventConcurrentTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(4)
-	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}, &VFXFilesSyncOperation{}); err != nil {
+	if err := db.AutoMigrate(&VFXFilesProductionConfig{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}, &VFXFilesSyncOperation{}, &ProductionNotificationWriteLock{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db
+}
+
+func TestVFXFilesAuthorityBarrierCoordinatesIndependentSQLiteConnections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared-authority.db")
+	open := func() *gorm.DB {
+		db, err := gorm.Open(sqlite.Open(path+"?_busy_timeout=10000&_journal_mode=WAL"), &gorm.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sqlDB.SetMaxOpenConns(1)
+		t.Cleanup(func() { _ = sqlDB.Close() })
+		return db
+	}
+	firstProcess, secondProcess := open(), open()
+	models := []any{&VFXFilesProductionConfig{}, &VFXFilesEventInbox{}, &VFXFilesEventNonce{}, &VFXFilesEventConflict{}, &NotificationDeliveryEvent{}, &ManagedChannelDeletion{}, &ProductionNotificationWriteLock{}}
+	if err := firstProcess.AutoMigrate(models...); err != nil {
+		t.Fatal(err)
+	}
+	if err := firstProcess.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ConfigRevision: 3, ActivationEpoch: 1, Activated: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldEventID := "60000000-0000-4000-8000-000000000090"
+	if err := firstProcess.Create(&VFXFilesEventInbox{
+		ProducerID: "vfx-files-plugin", EventID: oldEventID, PayloadSHA256: strings.Repeat("a", 64), PayloadJSON: `{}`,
+		EventType: "file_delivery.ready", ProductionID: vfxProductionID, ActivationEpoch: 1,
+		Outcome: VFXFilesEventAccepted, CreatedAt: time.Now().UTC(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	journal := NotificationDeliveryEvent{
+		EventID: "70000000-0000-4000-8000-000000000090", TaskID: "synthetic-task", ProductionID: vfxProductionID,
+		TaskTypeID: "synthetic-type", TaskStatus: "FILE_READY", DeliverySource: "vfx_files", SourceEventID: oldEventID,
+		PayloadJSON: `{}`, PayloadSHA256: strings.Repeat("b", 64), WebhookRowID: 1,
+		DestinationGuildID: "synthetic-guild", DestinationChannelID: "synthetic-channel", DestinationWebhookID: "synthetic-webhook",
+		DestinationFingerprint: strings.Repeat("c", 64), Disposition: DeliveryInFlight,
+	}
+	if err := firstProcess.Create(&journal).Error; err != nil {
+		t.Fatal(err)
+	}
+	transition := VFXFilesEventInput{
+		ProducerID: "vfx-files-plugin", EventID: "60000000-0000-4000-8000-000000000091",
+		EventType: "storage_authority.deactivation_requested", ProductionID: vfxProductionID,
+		ActivationEpoch: 1, ConfigRevision: 4, PreviousActivationEpoch: 1, NewActivationEpoch: 2, Payload: []byte(`{"transition":true}`),
+	}
+	now := time.Now().UTC()
+	if _, err := ApplyVFXFilesAuthorityTransition(secondProcess, "synthetic-key", "synthetic-nonce-first-0001", transition, now); !errors.Is(err, ErrVFXFilesAuthorityUnresolved) {
+		t.Fatalf("second SQLite connection acknowledged while old dispatch was unresolved: %v", err)
+	}
+	var config VFXFilesProductionConfig
+	if err := firstProcess.Where("production_id = ?", vfxProductionID).Take(&config).Error; err != nil || !config.Activated || config.ActivationEpoch != 1 {
+		t.Fatalf("deferred cross-connection barrier changed authority: %+v err=%v", config, err)
+	}
+	if err := firstProcess.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", journal.EventID).Update("disposition", DeliveryPending).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := ApplyVFXFilesAuthorityTransition(secondProcess, "synthetic-key", "synthetic-nonce-retry-0001", transition, now.Add(time.Second))
+	if err != nil || result.Code != "activation_barrier_complete" {
+		t.Fatalf("second SQLite connection could not complete resolved barrier: result=%+v err=%v", result, err)
+	}
+	var fenced NotificationDeliveryEvent
+	if err := firstProcess.Where("event_id = ?", journal.EventID).Take(&fenced).Error; err != nil || fenced.Disposition != DeliveryTerminalFailure || fenced.FailureClass != "activation_epoch_fenced" {
+		t.Fatalf("first SQLite connection did not observe durable old-epoch fence: %+v err=%v", fenced, err)
+	}
+	stale := vfxInput("60000000-0000-4000-8000-000000000092", "90000000-0000-4000-8000-000000000090", 1, 1, `{"stale":true}`)
+	accepted, err := AcceptVFXFilesEvents(firstProcess, "synthetic-key", "synthetic-nonce-stale-0001", []VFXFilesEventInput{stale}, now.Add(2*time.Second))
+	if err != nil || len(accepted) != 1 || accepted[0].Outcome != VFXFilesEventQuarantined || accepted[0].Code != "activation_epoch_mismatch" {
+		t.Fatalf("stale event crossed shared SQLite fence: results=%+v err=%v", accepted, err)
+	}
+	staleIntent := NotificationDeliveryIntent{
+		TaskID: "vfx-files-delivery:90000000-0000-4000-8000-000000000090", ProductionID: vfxProductionID,
+		TaskTypeID: "50000000-0000-4000-8000-000000000010", TaskStatus: "FILE_READY",
+		DeliverySource: "vfx_files", SourceEventID: stale.EventID, Payload: []byte(`{"content":"stale"}`),
+		WebhookRowID: 1, GuildID: "synthetic-guild", ChannelID: "synthetic-channel", DiscordWebhookID: "synthetic-webhook",
+	}
+	if pending, err := PrepareNotificationDelivery(firstProcess, staleIntent); pending != nil || !errors.Is(err, ErrVFXFilesActivationEpochFenced) {
+		t.Fatalf("stale worker read created or retained a dispatch intent: pending=%+v err=%v", pending, err)
+	}
+	var pendingCount int64
+	if err := firstProcess.Model(&NotificationDeliveryEvent{}).Where("delivery_source = ? AND source_event_id = ? AND disposition IN ?", "vfx_files", stale.EventID, []string{DeliveryPending, DeliveryRetryable, DeliveryInFlight}).Count(&pendingCount).Error; err != nil || pendingCount != 0 {
+		t.Fatalf("stale worker left a sendable journal intent: count=%d err=%v", pendingCount, err)
+	}
 }
 
 func TestVFXFilesAuthorizationIntentIsProductionActorBoundAndExpires(t *testing.T) {
