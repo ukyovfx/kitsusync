@@ -1,6 +1,10 @@
 package discord
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"app/src/api/vfxfiles"
 	"app/src/model"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -106,17 +111,43 @@ func TestVFXFilesEventUsesProductionTaskTypeRouteAndDurableJournal(t *testing.T)
 	if err := db.Create(&model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: taskTypeID, TaskTypeName: "FX", DestinationWebhookID: webhook.ID, DestinationChannelID: "78901"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&model.VFXFilesProductionConfig{ProductionID: productionID, ConfigRevision: 4, ActivationEpoch: 2, Activated: true}).Error; err != nil {
-		t.Fatal(err)
+	pluginConfigBody := []byte(fmt.Sprintf(`{"contract_version":"1.0","production_id":%q,"config_revision":4,"connection_id":"20000000-0000-4000-8000-000000000001","drive":{"account_mode":"my_drive","owner_subject":"synthetic-drive-owner","root_id":"synthetic-root-01","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"vfx-files.production.default","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[],"include_ids":[],"exclude_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":true,"activated_at":"2026-10-13T00:00:00Z","notification_epoch":2}}`, productionID))
+	if err := model.StoreVFXFilesDesiredConfigMirror(db, productionID, pluginConfigBody); err != nil {
+		t.Fatalf("store Plugin-owned Drive authority mirror: %v", err)
 	}
 	oldResolver := KitsuPublicURLResolver
 	KitsuPublicURLResolver = func() string { return "https://kitsu.example.invalid" }
 	defer func() { KitsuPublicURLResolver = oldResolver }()
 
 	payload := []byte(fmt.Sprintf(`{"contract_version":"1.0","producer_id":"vfx-files-plugin","event_id":%q,"event_type":"file_delivery.ready","occurred_at":"2026-10-13T00:00:00Z","production_id":%q,"activation_epoch":2,"production_name":"Synthetic Production","entity":{"type":"shot","id":"30000000-0000-4000-8000-000000000001","name":"sh010"},"source":{"id":"50000000-0000-4000-8000-000000000001","task_type_id":"50000000-0000-4000-8000-000000000010","task_type_name":"Compositing"},"sender":{"id":"40000000-0000-4000-8000-000000000001","display_name":"Synthetic Artist"},"output_package":{"id":"70000000-0000-4000-8000-000000000001","version":3,"classification":"Low-res EXR","manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","objects":[{"drive_file_id":"fake-drive-file-01","classification":"EXR","size_bytes":10,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]},"delivery":{"id":%q,"revision":1,"status":"ready","recipient_task_id":"50000000-0000-4000-8000-000000000002","recipient_task_type_id":%q,"recipient_task_type_name":"FX"}}`, eventID, productionID, deliveryID, taskTypeID))
-	results, err := model.AcceptVFXFilesEvents(db, "test-key", "synthetic-nonce-00000001", []model.VFXFilesEventInput{{ProducerID: "vfx-files-plugin", EventID: eventID, EventType: "file_delivery.ready", ProductionID: productionID, ActivationEpoch: 2, DeliveryID: deliveryID, DeliveryRevision: 1, RecipientTaskID: "50000000-0000-4000-8000-000000000002", RecipientTaskTypeID: taskTypeID, Payload: payload}}, time.Now().UTC())
-	if err != nil || len(results) != 1 || results[0].Outcome != model.VFXFilesEventAccepted {
-		t.Fatalf("synthetic event acceptance=%+v err=%v", results, err)
+	const signingKey = "synthetic-plugin-event-key-material-0001"
+	requestBody, err := json.Marshal(map[string]any{"contract_version": "1.0", "events": []json.RawMessage{payload}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	timestamp := now.Format(time.RFC3339)
+	nonce := "synthetic-kitsu-sync-event-nonce-0001"
+	idempotencyKey := "synthetic-kitsu-sync-event-idempotency-0001"
+	bodyHash := sha256.Sum256(requestBody)
+	canonical := timestamp + "\n" + nonce + "\n" + hex.EncodeToString(bodyHash[:]) + "\n" + idempotencyKey
+	mac := hmac.New(sha256.New, []byte(signingKey))
+	_, _ = mac.Write([]byte(canonical))
+	request := httptest.NewRequest(http.MethodPost, "/api/integrations/vfx-files/v1/events", bytes.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-VFX-Key-Id", "synthetic-plugin-key")
+	request.Header.Set("X-VFX-Timestamp", timestamp)
+	request.Header.Set("X-VFX-Nonce", nonce)
+	request.Header.Set("X-VFX-Content-SHA256", hex.EncodeToString(bodyHash[:]))
+	request.Header.Set("X-VFX-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	response := httptest.NewRecorder()
+	vfxfiles.EventHandler(db, map[string][]byte{"synthetic-plugin-key": []byte(signingKey)}, func() time.Time { return now })(response, request)
+	var acceptance struct {
+		Results []model.VFXFilesEventResult `json:"results"`
+	}
+	if response.Code != http.StatusAccepted || json.Unmarshal(response.Body.Bytes(), &acceptance) != nil || len(acceptance.Results) != 1 || acceptance.Results[0].Outcome != model.VFXFilesEventAccepted {
+		t.Fatalf("signed synthetic Plugin event acceptance: status=%d body=%s", response.Code, response.Body.String())
 	}
 	processed, deferred, err := ProcessVFXFilesDeliveryEvents(db, 10)
 	if err != nil || processed != 0 || deferred != 1 || posts != 1 {

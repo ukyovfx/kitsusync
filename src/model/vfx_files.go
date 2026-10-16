@@ -393,8 +393,12 @@ func validVFXIDList(values []string, limit int) bool {
 	return true
 }
 
-// VFXFilesProductionConfig stores KitsuSync-owned desired integration state;
-// it never contains OAuth credentials or the Plugin's credential reference.
+// VFXFilesProductionConfig stores a validated, non-secret mirror of the
+// Plugin-owned Production Drive authority/configuration for event admission
+// and delivery fencing. Existing rows also remain the explicit legacy-import
+// source until an administrator completes the Plugin import. KitsuSync is not
+// an authority writer, and this mirror never contains OAuth credentials or a
+// Plugin credential reference.
 type VFXFilesProductionConfig struct {
 	ID                     uint   `gorm:"primaryKey"`
 	ProductionID           string `gorm:"not null;uniqueIndex;size:64"`

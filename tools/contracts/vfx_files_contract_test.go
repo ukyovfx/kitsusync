@@ -54,17 +54,17 @@ func TestVFXFilesContractDocumentsAreValidAndReferencesResolve(t *testing.T) {
 	}
 }
 
-func TestVFXFilesOAuthReturnAndPreviewRetrySemanticsAreDocumented(t *testing.T) {
+func TestVFXFilesNativeOwnershipAndMirrorFreshnessGateAreDocumented(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join(contractDir, "README.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, required := range []string{
-		"/bot/admin/vfx-files/oauth-return",
-		"only `authorization_id` as a query parameter",
-		"same logged-in actor",
-		"stable `Idempotency-Key`",
-		"the existing Preview resource",
+		"The Plugin's native Kitsu Production page owns the callback flow.",
+		"KitsuSync does not receive or process OAuth codes, tokens",
+		"KitsuSync does not write Drive settings.",
+		"retries must reuse the same key",
+		"trusted, bounded Plugin status synchronization mechanism",
 		"explicit activation",
 	} {
 		if !strings.Contains(string(readme), required) {

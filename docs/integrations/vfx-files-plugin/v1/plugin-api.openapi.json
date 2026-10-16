@@ -404,7 +404,7 @@
       "get": {
         "operationId": "getDesiredConfigMirror",
           "x-required-scope": "vfx.config.read",
-        "summary": "Read Plugin mirror of KitsuSync-owned desired configuration",
+        "summary": "Read Plugin-owned Production configuration snapshot for status and event fencing",
         "parameters": [
           {
             "name": "production_id",
@@ -449,7 +449,7 @@
       "put": {
         "operationId": "applyDesiredConfigMirror",
           "x-required-scope": "vfx.config.write",
-        "summary": "Create or conditionally update the exact versioned desired configuration mirror",
+        "summary": "Legacy KitsuSync configuration write; unavailable after Plugin authority is claimed",
         "description": "For first creation send If-None-Match: *; for existing mirrors send exactly one strong If-Match. Sending both, neither, or an unsupported precondition must fail closed.",
         "parameters": [
           {
