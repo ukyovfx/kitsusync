@@ -596,14 +596,7 @@ func renderIASelectedProduction(w http.ResponseWriter, r *http.Request, db *gorm
 		headerClass, headerLabel = "warning", label
 	}
 	header := renderProductionContext(p, lang, r, tab, headerClass, headerLabel)
-	// Storage feedback belongs to the selected-Production page, rather than the
-	// Storage panel, so it is announced before the Production context and tabs.
-	// The panel itself remains the single renderer for the Storage form.
-	feedback := ""
-	if tab == "settings" && r.URL.Query().Get("tab") == "storage-settings" && !p.ValidationOnly && !p.ReadOnlyPreview {
-		feedback = renderStorageSettingsFeedback(r, lang)
-	}
-	body := feedback + `<div class="production-context">` + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, botTokens...) + `</section></div>`
+	body := `<div class="production-context">` + header + `<section id="panel-` + esc(tab) + `" role="tabpanel" aria-labelledby="tab-` + esc(tab) + `" tabindex="0" class="section-stack production-tabpanel">` + renderProductionPanelMarkup(db, r, p, lang, tab, class, label, hint, botTokens...) + `</section></div>`
 	if legacySection != "" {
 		fallback := ""
 		if requestedTab == "activity" {
@@ -642,22 +635,6 @@ func renderProductionContext(p model.Project, lang string, r *http.Request, tab,
 
 func renderProductionIdentity(p model.Project, lang, headerClass, headerLabel string) string {
 	return `<div class="production-identity"><div><div class="eyebrow">` + esc(t(lang, "プロダクション", "Production")) + `</div><h1>` + esc(p.Name) + `</h1></div><span class="status-pill ` + esc(headerClass) + `" role="status">` + esc(headerLabel) + `</span></div>`
-}
-
-func renderStorageSettingsFeedback(r *http.Request, lang string) string {
-	if r == nil {
-		return ""
-	}
-	switch {
-	case r.URL.Query().Get("drive_saved") == "1":
-		return `<div class="notice notice-success" role="status">` + esc(t(lang, "保存しました。", "Saved.")) + `</div>`
-	case r.URL.Query().Get("drive_error") == "save":
-		return `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定を保存できませんでした。Productionを確認して、もう一度お試しください。", "Drive settings could not be saved. Verify the Production and try again.")) + `</div>`
-	case r.URL.Query().Get("drive_error") == "readback":
-		return `<div class="notice notice-error" role="alert">` + esc(t(lang, "Drive設定の保存結果を確認できませんでした。もう一度お試しください。", "Drive settings were not confirmed after saving. Please try again.")) + `</div>`
-	default:
-		return ""
-	}
 }
 
 func renderIAUnconnectedProduction(r *http.Request, p model.Project, lang string) string {
@@ -837,11 +814,9 @@ func renderCurrentProductionSettings(db *gorm.DB, r *http.Request, p model.Proje
 }
 
 func renderCurrentProductionStorage(r *http.Request, p model.Project, lang string) string {
-	storageBody := `<p class="hint">` + esc(t(lang, "このProductionの保存先とリンクを管理します。", "Manage storage destinations and links for this Production.")) + `</p>`
-	if p.ValidationOnly || p.ReadOnlyPreview {
-		storageBody = `<p class="field-help" role="status">` + esc(t(lang, "検証専用Productionではストレージ設定を変更できません。", "Storage settings are read-only for validation-only Productions.")) + `</p>`
-	} else {
-		storageBody += `<form method="POST" action="` + esc(withLang("/bot/admin/drive", r)) + `" class="form-stack drive-storage-form production-storage-form"><input type="hidden" name="kitsu_project_id" value="` + esc(p.KitsuProjectID) + `"><label class="production-storage-field" for="storage-url">` + esc(t(lang, "保存先リンク", "Storage link")) + `</label><div class="production-storage-control-row"><input id="storage-url" type="url" name="storage_url" value="` + esc(p.StorageURL) + `"><div class="button-row production-storage-actions"><button class="btn" type="submit" data-drive-save disabled>` + esc(t(lang, "保存", "Save")) + `</button></div></div></form><script>(function(){var form=document.querySelector('.drive-storage-form'),input=form&&form.querySelector('#storage-url'),button=form&&form.querySelector('[data-drive-save]');if(!form||!input||!button)return;var original=input.value;var sync=function(){button.disabled=input.value===original};input.addEventListener('input',sync);input.addEventListener('change',sync);sync();form.addEventListener('submit',function(){button.disabled=true;button.setAttribute('aria-busy','true');button.textContent='` + esc(t(lang, "保存中...", "Saving...")) + `';});}());</script>`
+	storageBody := `<p class="hint">` + esc(t(lang, "Drive接続、確認済みルート、保存先設定、テンプレート、有効化はVFX Files Pluginで管理します。", "Drive connection, verified root, storage settings, templates, and activation are managed by the VFX Files Plugin.")) + `</p>`
+	if strings.TrimSpace(p.StorageURL) != "" {
+		storageBody += `<p class="field-help">` + esc(t(lang, "既存の通知リンク（読み取り専用・Driveルートの検証情報ではありません）", "Existing notification link (read-only; this does not verify the Drive root)")) + `: <code class="storage-link-readonly">` + esc(p.StorageURL) + `</code></p>`
 	}
 	driveSettings := ""
 	if vfxfiles.ManagementConfigured() {

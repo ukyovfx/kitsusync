@@ -299,8 +299,8 @@ func TestProductionSettingsGroupsExistingSectionsWithoutChangingForms(t *testing
 			t.Fatalf("Settings sections are out of order: %v", positions)
 		}
 	}
-	if !strings.Contains(body, `class="form-stack drive-storage-form production-storage-form"`) || !strings.Contains(body, `name="storage_url"`) || !strings.Contains(body, "https://storage.example") {
-		t.Fatal("Storage form no longer preserves the existing saved value and form contract")
+	if strings.Contains(body, `name="storage_url"`) || strings.Contains(body, `class="drive-storage-form`) || !strings.Contains(body, `class="storage-link-readonly"`) || !strings.Contains(body, "https://storage.example") {
+		t.Fatal("Storage status must preserve the existing link as read-only")
 	}
 	for _, id := range []string{"technical-details", "diagnostics", "danger-zone"} {
 		start := strings.Index(body, `<details id="`+id+`"`)
@@ -314,9 +314,6 @@ func TestProductionSettingsGroupsExistingSectionsWithoutChangingForms(t *testing
 		if strings.Contains(body[start:start+end], " open") {
 			t.Errorf("normal Settings view should keep %q collapsed", id)
 		}
-	}
-	if !strings.Contains(body, `data-drive-save disabled>`) || !strings.Contains(body, `button.disabled=input.value===original`) || !strings.Contains(body, `);sync();`) {
-		t.Fatal("Storage Save should start disabled until the value changes, with no-JavaScript submission still available")
 	}
 	if !strings.Contains(body, `data-require-text="DISCONNECT"`) || !strings.Contains(body, `data-require-text="DELETE"`) {
 		t.Fatal("Danger Zone lost its existing destructive confirmations")
