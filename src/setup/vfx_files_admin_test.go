@@ -431,3 +431,57 @@ func TestVFXFilesManagementConsumesAuthorityStatusReadOnly(t *testing.T) {
 }
 
 func ptrVFXFilesAdmin(value string) *string { return &value }
+
+func TestVFXFilesAdminRejectsPostBeforeResolvingKitsu(t *testing.T) {
+	resetSessions()
+	t.Cleanup(resetSessions)
+
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.Project{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Project{KitsuProjectID: vfxTestProductionID, Name: "Synthetic Production"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseURL := "https://plugin.example.test" + vfxfiles.ServiceAudienceSuffix
+	client, err := vfxfiles.NewPluginClient(baseURL, http.DefaultClient, vfxfiles.ServiceTokenConfig{
+		Issuer: "https://kitsusync.example.test", Audience: baseURL, Subject: "kitsusync",
+		ClientID: "kitsusync", KeyID: "test-key", PrivateKey: key,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	token := newSessionToken("manager@example.test", "synthetic-session-token", "manager", "")
+	request := httptest.NewRequest(http.MethodPost, "/bot/admin/vfx-files?production="+vfxTestProductionID, strings.NewReader("action=activate"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+
+	resolveCalls := 0
+	handler := VFXFilesAdminHandler(db, &vfxfiles.RuntimeConfig{Client: client}, func(context.Context) (KitsuURLModel, error) {
+		resolveCalls++
+		return KitsuURLModel{}, errors.New("unexpected Kitsu resolution for read-only POST")
+	})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want %d: %s", response.Code, http.StatusMethodNotAllowed, response.Body.String())
+	}
+	if resolveCalls != 0 {
+		t.Fatalf("read-only POST triggered %d Kitsu connection resolutions, want 0", resolveCalls)
+	}
+}

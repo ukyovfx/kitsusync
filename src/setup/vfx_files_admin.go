@@ -185,6 +185,10 @@ func VFXFilesAdminHandler(db *gorm.DB, runtime *vfxfiles.RuntimeConfig, resolveK
 			http.Error(w, "administrator access required", http.StatusForbidden)
 			return
 		}
+		if r.Method == http.MethodPost {
+			http.Error(w, "Drive settings are managed in the native Kitsu Files Plugin; this page is read-only", http.StatusMethodNotAllowed)
+			return
+		}
 		productionID := strings.TrimSpace(r.URL.Query().Get("production"))
 		project := model.FindProjectByKitsuID(db, productionID)
 		if project == nil || !vfxfiles.ValidID(productionID) {
@@ -215,15 +219,10 @@ func VFXFilesAdminHandler(db *gorm.DB, runtime *vfxfiles.RuntimeConfig, resolveK
 				state.integrationReady = true
 			}
 		}
-		if r.Method == http.MethodPost {
-			http.Error(w, "Drive settings are managed in the native Kitsu Files Plugin; this page is read-only", http.StatusMethodNotAllowed)
-			return
-		}
+
 		if runtime != nil && runtime.Client != nil && authorizer != nil {
 			selected := strings.TrimSpace(r.URL.Query().Get("connection_id"))
-			if r.Method == http.MethodPost && state.selectedID != "" {
-				selected = state.selectedID
-			}
+
 			loadVFXFilesAdminState(r.Context(), db, runtime, authorizer, productionID, selected, &state, lang)
 		}
 		if state.actionKey == "" {
