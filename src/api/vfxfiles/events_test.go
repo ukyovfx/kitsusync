@@ -202,6 +202,110 @@ func TestPluginEventHandlerDurablyReportsMissingShareDisclosureConsent(t *testin
 	}
 }
 
+func TestPluginEventHandlerAcceptsAndDeduplicatesConsentedMultiRecipientShareBatch(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "file-share-created-v1.1-two-recipient.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Bind the frozen synthetic fixture to the test Production and its active
+	// epoch while retaining the contract's two-recipient homogeneous batch.
+	productionID := "10000000-0000-4000-8000-000000000001"
+	body = []byte(strings.ReplaceAll(string(body), "9cb8f70d-0b63-40b7-a73d-3237e6f50d3d", productionID))
+	body = []byte(strings.ReplaceAll(string(body), `"activation_epoch": 7`, `"activation_epoch": 1`))
+	var batch eventBatch
+	if err := json.Unmarshal(body, &batch); err != nil || batch.ContractVersion != "1.1" || len(batch.Events) != 2 {
+		t.Fatalf("two-recipient share fixture is invalid: batch=%+v err=%v", batch, err)
+	}
+	inputs := make([]model.VFXFilesEventInput, 0, len(batch.Events))
+	for _, raw := range batch.Events {
+		input, err := parsePluginEvent(raw)
+		if err != nil {
+			t.Fatalf("parse share fixture event: %v", err)
+		}
+		inputs = append(inputs, input)
+	}
+
+	db := eventHandlerTestDB(t)
+	clock := time.Date(2026, 10, 17, 6, 0, 0, 0, time.UTC)
+	taskTypes := make(map[string]struct{}, len(inputs))
+	for _, input := range inputs {
+		taskTypes[input.RecipientTaskTypeID] = struct{}{}
+	}
+	for taskTypeID := range taskTypes {
+		route := model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: taskTypeID, DestinationWebhookID: 1, CreatedAt: clock}
+		if err := db.Create(&route).Error; err != nil {
+			t.Fatalf("create consent-bound route for Task Type %s: %v", taskTypeID, err)
+		}
+	}
+	project := model.FindProjectByKitsuID(db, productionID)
+	if project == nil {
+		t.Fatal("test Production was not created")
+	}
+	revision, err := model.ProductionNotificationRevisionWithError(db, project.ID, productionID)
+	if err != nil {
+		t.Fatalf("read notification route revision: %v", err)
+	}
+	for taskTypeID := range taskTypes {
+		if err := model.SetVFXFilesDriveLinkDisclosureConsent(db, productionID, taskTypeID, revision, "admin@example.test", true, clock); err != nil {
+			t.Fatalf("enable exact-revision Drive link disclosure consent for Task Type %s: %v", taskTypeID, err)
+		}
+	}
+
+	key := "synthetic-event-signing-key-material-0001"
+	handler := EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })
+	firstResponse := httptest.NewRecorder()
+	handler(firstResponse, signedEventRequest(t, body, key, "share-accept-nonce-000001", "share-accept-idempotency-0001", clock))
+	if firstResponse.Code != http.StatusAccepted {
+		t.Fatalf("consented share batch status=%d body=%s", firstResponse.Code, firstResponse.Body.String())
+	}
+	var firstAccepted struct {
+		ContractVersion string                      `json:"contract_version"`
+		Results         []model.VFXFilesEventResult `json:"results"`
+	}
+	if err := json.Unmarshal(firstResponse.Body.Bytes(), &firstAccepted); err != nil {
+		t.Fatalf("decode first share response: %v", err)
+	}
+	if firstAccepted.ContractVersion != contractVersion || len(firstAccepted.Results) != len(inputs) {
+		t.Fatalf("first response contract/results=%+v", firstAccepted)
+	}
+	for i, input := range inputs {
+		result := firstAccepted.Results[i]
+		if result.EventID != input.EventID || result.Outcome != model.VFXFilesEventAccepted || result.Code != "accepted" {
+			t.Fatalf("first response result[%d]=%+v, expected ordered accepted event %s", i, result, input.EventID)
+		}
+	}
+	var stored int64
+	if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_type = ? AND production_id = ?", "file_share.created", productionID).Count(&stored).Error; err != nil || stored != int64(len(inputs)) {
+		t.Fatalf("durable share inbox rows=%d err=%v", stored, err)
+	}
+
+	retryResponse := httptest.NewRecorder()
+	handler(retryResponse, signedEventRequest(t, body, key, "share-accept-nonce-000002", "share-accept-idempotency-0001", clock))
+	if retryResponse.Code != http.StatusAccepted {
+		t.Fatalf("fresh-nonce share retry status=%d body=%s", retryResponse.Code, retryResponse.Body.String())
+	}
+	var retried struct {
+		ContractVersion string                      `json:"contract_version"`
+		Results         []model.VFXFilesEventResult `json:"results"`
+	}
+	if err := json.Unmarshal(retryResponse.Body.Bytes(), &retried); err != nil {
+		t.Fatalf("decode retried share response: %v", err)
+	}
+	if retried.ContractVersion != contractVersion || len(retried.Results) != len(inputs) {
+		t.Fatalf("retry response contract/results=%+v", retried)
+	}
+	for i, input := range inputs {
+		result := retried.Results[i]
+		if result.EventID != input.EventID || result.Outcome != model.VFXFilesEventDuplicate || result.Code != "duplicate_event" {
+			t.Fatalf("retry response result[%d]=%+v, expected ordered duplicate event %s", i, result, input.EventID)
+		}
+	}
+	stored = 0
+	if err := db.Model(&model.VFXFilesEventInbox{}).Where("event_type = ? AND production_id = ?", "file_share.created", productionID).Count(&stored).Error; err != nil || stored != int64(len(inputs)) {
+		t.Fatalf("retry changed durable share inbox row count to %d err=%v", stored, err)
+	}
+}
+
 func TestSignedNonDeliveryLifecycleEventsAreDurableButNeverPendingDiscord(t *testing.T) {
 	db := eventHandlerTestDB(t)
 	key := "synthetic-event-signing-key-material-0001"
