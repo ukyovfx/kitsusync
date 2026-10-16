@@ -21,25 +21,39 @@ import (
 )
 
 type vfxFilesAdminPageState struct {
-	message          string
-	pluginState      string
-	pluginVerified   bool
-	actionKey        string
-	diagnostics      *model.VFXFilesEventDiagnostics
-	diagnosticsOK    bool
-	integrationReady bool
-	connections      []vfxFilesAdminConnection
-	roots            []vfxFilesAdminRoot
-	rootStatus       string
-	templates        map[string][]vfxFilesAdminTemplate
-	selectedID       string
-	desired          map[string]any
-	etag             string
-	desiredReady     bool
-	connectionsOK    bool
-	syncOperation    *model.VFXFilesSyncOperation
-	preview          *vfxFilesSyncPreview
-	job              *vfxFilesSyncJob
+	message           string
+	pluginState       string
+	pluginVerified    bool
+	actionKey         string
+	diagnostics       *model.VFXFilesEventDiagnostics
+	diagnosticsOK     bool
+	integrationReady  bool
+	connections       []vfxFilesAdminConnection
+	roots             []vfxFilesAdminRoot
+	rootStatus        string
+	templates         map[string][]vfxFilesAdminTemplate
+	selectedID        string
+	desired           map[string]any
+	etag              string
+	desiredReady      bool
+	connectionsOK     bool
+	syncOperation     *model.VFXFilesSyncOperation
+	preview           *vfxFilesSyncPreview
+	job               *vfxFilesSyncJob
+	readOnlyDrive     *vfxFilesDriveAuthorityStatus
+	nativeSettingsURL string
+}
+
+type vfxFilesDriveAuthorityStatus struct {
+	Owner             string  `json:"owner"`
+	State             string  `json:"state"`
+	ConfigRevision    uint64  `json:"config_revision"`
+	ActivationEpoch   uint64  `json:"activation_epoch"`
+	ActivationEnabled bool    `json:"activation_enabled"`
+	ConnectionID      *string `json:"connection_id"`
+	RootID            *string `json:"root_id"`
+	AccountMode       *string `json:"account_mode"`
+	RootState         *string `json:"root_state"`
 }
 
 type vfxFilesSyncPreview struct {
@@ -192,6 +206,7 @@ func VFXFilesAdminHandler(db *gorm.DB, runtime *vfxfiles.RuntimeConfig, resolveK
 			} else if connection, err := resolveKitsu(r.Context()); err != nil {
 				state.message = t(lang, "Kitsuの接続先を確認できません。", "The Kitsu authority could not be verified.")
 			} else {
+				state.nativeSettingsURL = vfxFilesNativeSettingsURL(connection.DisplayBaseURL, productionID)
 				authorizer = NewVFXFilesKitsuSessionAuthorizer(connection, email, token, role, nil)
 				if _, allowed, err := authorizer.AuthorizeProductionAdmin(r.Context(), productionID); err != nil || !allowed {
 					http.Error(w, "Production administrator access could not be verified", http.StatusForbidden)
@@ -201,25 +216,8 @@ func VFXFilesAdminHandler(db *gorm.DB, runtime *vfxfiles.RuntimeConfig, resolveK
 			}
 		}
 		if r.Method == http.MethodPost {
-			if project.ValidationOnly || project.ReadOnlyPreview {
-				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
-				return
-			}
-			if runtime == nil || runtime.Client == nil || authorizer == nil {
-				state.message = t(lang, "Files Pluginが設定されていないため操作できません。", "The Files Plugin is not configured; this action is unavailable.")
-			} else {
-				message, redirect, completed := runVFXFilesAdminAction(r.Context(), db, runtime, authorizer, project, r, lang)
-				state.message = message
-				if redirect != "" {
-					http.Redirect(w, r, redirect, http.StatusSeeOther)
-					return
-				}
-				if completed {
-					state.actionKey, _ = newVFXFilesIdempotencyKey()
-				} else {
-					state.actionKey = safeSubmittedIdempotencyKey(r.FormValue("idempotency_key"))
-				}
-			}
+			http.Error(w, "Drive settings are managed in the native Kitsu Files Plugin; this page is read-only", http.StatusMethodNotAllowed)
+			return
 		}
 		if runtime != nil && runtime.Client != nil && authorizer != nil {
 			selected := strings.TrimSpace(r.URL.Query().Get("connection_id"))
@@ -292,130 +290,39 @@ func vfxFilesOAuthReturnHandler(db *gorm.DB, resolveKitsu func(context.Context) 
 	}
 }
 
-func loadVFXFilesAdminState(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID, selectedID string, state *vfxFilesAdminPageState, lang string) {
-	response, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/drive-connections", url.Values{"production_id": {productionID}}, nil, "vfx.connections.read", false, "", "")
-	if err != nil {
+func loadVFXFilesAdminState(ctx context.Context, db *gorm.DB, runtime *vfxfiles.RuntimeConfig, authorizer vfxfiles.ProductionAdminAuthorizer, productionID, _ string, state *vfxFilesAdminPageState, lang string) {
+	response, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/productions/"+productionID+"/drive-authority", nil, nil, "vfx.config.read", false, "", "")
+	if err != nil || response.StatusCode != http.StatusOK {
 		state.pluginState = "unavailable"
-		state.message = safeVFXFilesError(err, lang)
+		state.message = t(lang, "Files PluginのDrive状態を確認できません。設定変更はこの画面では利用できません。", "The Files Plugin Drive status is unavailable. Drive settings cannot be changed here.")
 		return
 	}
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
-		state.pluginState = "unavailable"
-		state.message = t(lang, "Files Pluginへの権限を確認できません。管理者が接続設定を確認してください。", "Files Plugin access could not be verified. An administrator must check service authorization.")
-		return
-	}
-	if response.StatusCode >= http.StatusInternalServerError {
-		state.pluginState = "unavailable"
-		state.message = t(lang, "Files Pluginが一時的に利用できません。再試行して状態を確認してください。", "The Files Plugin is temporarily unavailable. Retry to check its state.")
-		return
-	}
-	if response.StatusCode != http.StatusOK || decodeVFXFilesConnections(response.Body, &state.connections) != nil {
+	var authority vfxFilesDriveAuthorityStatus
+	if json.Unmarshal(response.Body, &authority) != nil || !validVFXFilesDriveAuthorityStatus(authority) {
 		state.pluginState = "incompatible"
-		state.message = t(lang, "Files Pluginのv1管理APIまたは応答形式を確認できません。", "The Files Plugin v1 management API or response could not be verified.")
+		state.message = t(lang, "Files PluginのDrive状態応答を確認できません。", "The Files Plugin Drive status response is incompatible.")
 		return
 	}
-	state.pluginState = "checking"
-	state.connectionsOK = true
-	explicitSelection := selectedID != ""
-	state.selectedID = ""
-	selectedConnection := (*vfxFilesAdminConnection)(nil)
-	if explicitSelection {
-		for index := range state.connections {
-			if state.connections[index].ID == selectedID {
-				state.selectedID = state.connections[index].ID
-				selectedConnection = &state.connections[index]
-				break
-			}
-		}
+	state.readOnlyDrive = &authority
+	state.pluginState = "available"
+	state.pluginVerified = true
+	if (authority.State != "configured" && authority.State != "legacy_import_required") || authority.ConnectionID == nil || authority.RootID == nil {
+		return
 	}
-	if !explicitSelection && len(state.connections) > 0 {
-		for index := range state.connections {
-			if state.connections[index].State == "connected" {
-				state.selectedID = state.connections[index].ID
-				selectedConnection = &state.connections[index]
-				break
-			}
-		}
-		if selectedConnection == nil {
-			state.selectedID = state.connections[0].ID
-			selectedConnection = &state.connections[0]
-		}
-	}
-	state.templates = make(map[string][]vfxFilesAdminTemplate)
-	for _, scope := range []string{"production", "sequence", "shot", "asset", "task"} {
-		catalog, catalogErr := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/templates", url.Values{"scope": {scope}}, nil, "vfx.templates.read", false, "", "")
-		if catalogErr != nil {
-			state.pluginState = "unavailable"
-			state.message = t(lang, "Files Pluginのテンプレート機能を確認できません。時間をおいて再試行してください。", "Files Plugin template capability could not be verified. Retry later.")
-			return
-		}
-		if catalog.StatusCode != http.StatusOK {
-			if catalog.StatusCode == http.StatusUnauthorized || catalog.StatusCode == http.StatusForbidden || catalog.StatusCode == http.StatusRequestTimeout || catalog.StatusCode == http.StatusTooManyRequests || catalog.StatusCode >= http.StatusInternalServerError {
-				state.pluginState = "unavailable"
-				state.message = t(lang, "Files Pluginのテンプレート機能を確認できません。時間をおいて再試行してください。", "Files Plugin template capability could not be verified. Retry later.")
-			} else {
-				state.pluginState = "incompatible"
-				state.message = t(lang, "Files Pluginのv1テンプレートAPIに対応していません。", "The Files Plugin v1 template API is incompatible.")
-			}
-			return
-		}
-		var templates []vfxFilesAdminTemplate
-		if err := decodeVFXFilesTemplates(catalog.Body, scope, &templates); err != nil {
-			state.pluginState = "incompatible"
-			state.message = t(lang, "Files Pluginのテンプレート応答形式に対応していません。", "Files Plugin template response is incompatible.")
-			return
-		}
-		state.templates[scope] = templates
-	}
+
+	// The signed Plugin read is a mirror for event fencing and notifications;
+	// KitsuSync never writes Drive configuration or renders the mirrored fields.
 	config, err := vfxFilesPluginCall(ctx, runtime, authorizer, productionID, http.MethodGet, "/productions/"+productionID+"/desired-config", nil, nil, "vfx.config.read", false, "", "")
-	if err != nil {
-		state.pluginState = "unavailable"
-		state.message = safeVFXFilesError(err, lang)
-		return
-	}
-	if config.StatusCode == http.StatusNotFound {
-		state.pluginState = "available"
-		state.pluginVerified = true
-		loadVFXFilesAdminRoots(ctx, runtime, authorizer, productionID, selectedConnection, state)
-		return
-	}
-	if config.StatusCode != http.StatusOK {
-		if config.StatusCode == http.StatusUnauthorized || config.StatusCode == http.StatusForbidden || config.StatusCode >= http.StatusInternalServerError {
-			state.pluginState = "unavailable"
-			state.message = t(lang, "Files Pluginの設定機能を一時的に確認できません。操作は停止しています。", "Files Plugin configuration capability is temporarily unavailable. Actions are paused.")
-		} else {
-			state.pluginState = "incompatible"
-			state.message = t(lang, "Files Pluginのv1設定APIに対応していません。", "The Files Plugin v1 configuration API is incompatible.")
-		}
+	if err != nil || config.StatusCode != http.StatusOK || strings.TrimSpace(config.Header.Get("ETag")) == "" {
+		state.message = t(lang, "読み取り専用のDrive状態は確認できましたが、通知安全ミラーを更新できません。", "Drive status is read-only, but the notification safety mirror could not be refreshed.")
 		return
 	}
 	var desired map[string]any
-	if json.Unmarshal(config.Body, &desired) != nil || strings.TrimSpace(config.Header.Get("ETag")) == "" {
-		state.pluginState = "incompatible"
-		state.message = t(lang, "ProductionのFiles設定が不正です。", "Production Files configuration is invalid.")
-		return
-	}
-	if err := model.StoreVFXFilesDesiredConfigMirror(db, productionID, config.Body); err != nil {
-		if state.message == "" {
-			state.message = t(lang, "通知の安全状態を同期できません。操作は無効です。", "Notification safety state could not be synchronized. Actions are disabled.")
-		}
+	if json.Unmarshal(config.Body, &desired) != nil || model.StoreVFXFilesDesiredConfigMirror(db, productionID, config.Body) != nil {
+		state.message = t(lang, "読み取り専用のDrive状態は確認できましたが、通知安全ミラーを更新できません。", "Drive status is read-only, but the notification safety mirror could not be refreshed.")
 		return
 	}
 	state.desired, state.etag, state.desiredReady = desired, config.Header.Get("ETag"), true
-	state.pluginState = "available"
-	state.pluginVerified = true
-	if !explicitSelection {
-		if desiredConnectionID, _ := desired["connection_id"].(string); desiredConnectionID != "" {
-			for index := range state.connections {
-				if state.connections[index].ID == desiredConnectionID {
-					state.selectedID = desiredConnectionID
-					selectedConnection = &state.connections[index]
-					break
-				}
-			}
-		}
-	}
-	loadVFXFilesAdminRoots(ctx, runtime, authorizer, productionID, selectedConnection, state)
 	operation, operationErr := model.FindVFXFilesSyncOperation(db, productionID)
 	if operationErr == nil && operation.ConfigRevision == uint64FromJSON(desired["config_revision"]) {
 		state.syncOperation = &operation
@@ -432,7 +339,7 @@ func loadVFXFilesAdminState(ctx context.Context, db *gorm.DB, runtime *vfxfiles.
 			}
 		}
 	} else if operationErr != nil && !errors.Is(operationErr, gorm.ErrRecordNotFound) && state.message == "" {
-		state.message = t(lang, "Filesの同期状態を安全に読み取れません。", "The Files sync state could not be read safely.")
+		state.message = t(lang, "Filesの同期状態を安全に読み取れません。", "Files sync state could not be read safely.")
 	}
 }
 
@@ -1105,183 +1012,76 @@ func localizedVFXFilesConnectionState(state, lang string) string {
 	}
 }
 
+func validVFXFilesDriveAuthorityStatus(status vfxFilesDriveAuthorityStatus) bool {
+	if status.Owner != "plugin" && status.Owner != "legacy_kitsusync" {
+		return false
+	}
+	if status.State != "unconfigured" && status.State != "configured" && status.State != "legacy_import_required" {
+		return false
+	}
+	if status.ActivationEnabled && (status.State == "unconfigured" || status.ActivationEpoch == 0) {
+		return false
+	}
+	if status.State == "configured" {
+		return status.ConnectionID != nil && *status.ConnectionID != "" && status.RootID != nil && *status.RootID != "" && status.RootState != nil && *status.RootState == "verified"
+	}
+	return true
+}
+
+func vfxFilesNativeSettingsURL(base, productionID string) string {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") || !vfxfiles.ValidID(productionID) {
+		return ""
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/plugins/vfx_files/frontend/"
+	query := u.Query()
+	query.Set("production_id", productionID)
+	query.Set("drive_settings", "1")
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
 func renderVFXFilesAdminPage(r *http.Request, project *model.Project, productionID, lang string, state vfxFilesAdminPageState) string {
-	var connections strings.Builder
-	for _, connection := range state.connections {
-		mode := t(lang, "マイドライブ", "My Drive")
-		if connection.AccountMode == "shared_drive" {
-			mode = t(lang, "共有ドライブ", "Shared Drive")
-		}
-		label := localizedVFXFilesConnectionState(connection.State, lang) + " · " + mode
-		if connection.OwnerLabel != nil {
-			label += " · " + *connection.OwnerLabel
-		}
-		connections.WriteString(`<li class="status-row"><span>` + esc(label) + `</span>`)
-		if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && connection.State != "revoking" && connection.State != "revoke_pending" {
-			connections.WriteString(`<form method="post"><input type="hidden" name="action" value="revoke"><input type="hidden" name="connection_id" value="` + esc(connection.ID) + `"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "revoke-"+connection.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "接続を解除", "Revoke connection")) + `</button></form>`)
-		}
-		connections.WriteString(`</li>`)
+	body := `<section class="section-stack"><div class="page-heading"><div><div class="eyebrow">` + esc(project.Name) + `</div><h2>Google Drive / Files Plugin</h2><p class="hint">` + esc(t(lang, "Drive接続、検証済みルート、テンプレート、同期設定、有効化はKitsuのFiles Plugin設定で管理されます。KitsuSyncは読み取り専用です。", "Drive connection, verified root, templates, sync settings, and activation are managed in the native Kitsu Files Plugin settings. KitsuSync is read-only.")) + `</p></div></div>`
+	if state.message != "" {
+		body += `<p role="status">` + esc(state.message) + `</p>`
 	}
-	if connections.Len() == 0 {
-		if state.connectionsOK {
-			connections.WriteString(`<li class="status-row"><span>` + esc(t(lang, "Drive接続はありません。", "No Drive connections are available.")) + `</span></li>`)
-		}
-	}
-	rootOptions := `<option value="">` + esc(t(lang, "ルート候補を選択", "Select a root candidate")) + `</option>`
-	for _, root := range state.roots {
-		label := root.Name
-		if root.AccountMode == "shared_drive" {
-			label += " · " + t(lang, "共有ドライブ", "Shared Drive")
-		}
-		rootOptions += `<option value="` + esc(root.ID) + `">` + esc(label) + `</option>`
-	}
-	connectedOptions := ``
-	for _, connection := range state.connections {
-		if connection.State != "connected" || connection.ID != state.selectedID {
-			continue
-		}
-		mode := t(lang, "マイドライブ", "My Drive")
-		if connection.AccountMode == "shared_drive" {
-			mode = t(lang, "共有ドライブ", "Shared Drive")
-		}
-		connectedOptions += `<option value="` + esc(connection.ID) + `">` + esc(mode+" · "+localizedVFXFilesConnectionState(connection.State, lang)) + `</option>`
-	}
-	var selectedConnection *vfxFilesAdminConnection
-	for index := range state.connections {
-		if state.connections[index].ID == state.selectedID {
-			selectedConnection = &state.connections[index]
-			break
-		}
-	}
-	message := state.message
-	if message == "" {
-		message = t(lang, "Drive URLの保存はアクセス確認を意味しません。認証・設定はFiles Pluginで検証されます。", "A saved Drive URL does not prove access. The Files Plugin verifies authorization and configuration.")
-	}
-	body := `<section class="section-stack"><div class="page-heading"><div><div class="eyebrow">` + esc(project.Name) + `</div><h2>Google Drive / Files Plugin</h2><p class="hint">` + esc(t(lang, "KitsuSyncはDrive接続状態と同期・通知の有効化を管理します。Driveの秘密情報、ファイル、同期ジョブはPluginが保持します。", "KitsuSync manages Drive connection state and enables sync and notifications. The Plugin owns Drive credentials, files, and sync jobs.")) + `</p></div></div><section class="production-detail-surface"><h3>` + esc(t(lang, "Drive接続", "Drive connection")) + `</h3><p role="status">` + esc(message) + `</p><ul class="status-list">` + connections.String() + `</ul>`
-	if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && (selectedConnection == nil || selectedConnection.State == "not_configured") {
-		body += `<form method="post" class="form-stack"><input type="hidden" name="action" value="authorize"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "authorize")) + `"><label>` + esc(t(lang, "接続先", "Account type")) + `<select name="account_mode" required><option value="my_drive">My Drive</option><option value="shared_drive">Shared Drive</option></select></label><button class="btn" type="submit">` + esc(t(lang, "Google Driveを接続", "Connect Google Drive")) + `</button></form>`
-	} else if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && selectedConnection != nil && (selectedConnection.State == "expired" || selectedConnection.State == "permission_denied") {
-		body += `<form method="post" class="button-row"><input type="hidden" name="action" value="authorize"><input type="hidden" name="connection_id" value="` + esc(selectedConnection.ID) + `"><input type="hidden" name="account_mode" value="` + esc(selectedConnection.AccountMode) + `"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "reauthorize-"+selectedConnection.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "期限切れ・権限不足の接続を再認証", "Reauthorize this expired or permission-limited connection")) + `</button></form>`
-	}
-	body += `</section><section class="production-detail-surface"><h3>` + esc(t(lang, "Driveルート確認", "Drive root verification")) + `</h3><p class="field-help">` + esc(t(lang, "候補を選ぶかURLを貼り付けて検証します。URLは候補として扱い、確認時にPluginが権限を検証します。ここでは保存・作成・移動・共有を行いません。", "Choose a listed root or paste a candidate URL. The Plugin verifies access; the URL is untrusted until then. This check does not save settings, create, move, or share folders.")) + `</p>`
-	if state.rootStatus == "unavailable" {
-		body += `<p role="status" class="status-row">` + esc(t(lang, "Driveルートを一時的に確認できません。再試行してください。", "Drive roots are temporarily unavailable. Retry to check access.")) + `</p>`
-	} else if state.rootStatus == "incompatible" {
-		body += `<p role="status" class="status-row">` + esc(t(lang, "Driveルート応答を検証できません。操作は停止しています。", "The Drive root response could not be verified. Actions are paused.")) + `</p>`
-	}
-	if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && connectedOptions != "" {
-		body += `<form method="post" class="form-stack"><input type="hidden" name="action" value="verify_root"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "verify-listed-root")) + `"><input type="hidden" name="connection_id" value="` + esc(state.selectedID) + `"><label>` + esc(t(lang, "一覧から選択", "Choose listed root")) + `<select name="root_id" required>` + rootOptions + `</select></label><button class="btn-ghost" type="submit">` + esc(t(lang, "アクセスを確認", "Verify access")) + `</button></form><form method="post" class="form-stack"><input type="hidden" name="action" value="verify_root"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "verify-root-url")) + `"><input type="hidden" name="connection_id" value="` + esc(state.selectedID) + `"><label>` + esc(t(lang, "またはDriveフォルダーURL候補", "Or verify a Drive folder URL candidate")) + `<input type="url" name="candidate_url" required maxlength="2048" placeholder="https://drive.google.com/drive/folders/..."></label><button class="btn-ghost" type="submit">` + esc(t(lang, "URLのアクセスを確認", "Verify URL access")) + `</button></form>`
-	} else if state.connectionsOK && connectedOptions == "" {
-		body += `<p class="status-row">` + esc(t(lang, "利用できる接続済みDriveアカウントがありません。", "No connected Drive account is available.")) + `</p>`
-	}
-	body += `<h4>` + esc(t(lang, "利用可能なテンプレート", "Available templates")) + `</h4>`
-	for _, scope := range []string{"production", "sequence", "shot", "asset", "task"} {
-		if len(state.templates[scope]) == 0 {
-			continue
-		}
-		body += `<p class="status-row"><strong>` + esc(scope) + `</strong>: `
-		labels := make([]string, 0, len(state.templates[scope]))
-		for _, template := range state.templates[scope] {
-			labels = append(labels, esc(template.Label)+" v"+fmt.Sprint(template.Revision))
-		}
-		body += strings.Join(labels, ` · `) + `</p>`
-	}
-	body += `</section><section class="production-detail-surface"><h3>` + esc(t(lang, "Files設定と通知", "Files configuration and notifications")) + `</h3>`
-	if !state.desiredReady {
-		body += `<p class="status-row">` + esc(t(lang, "有効なDriveルートと同期設定はまだ確認できません。同期Applyと通知有効化は停止しています。", "A verified Drive root and desired sync configuration are not available. Sync Apply and notification activation are blocked.")) + `</p>`
-		if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && connectedOptions != "" && len(state.roots) > 0 && len(state.templates["production"]) > 0 {
-			body += `<details class="settings-disclosure"><summary>` + esc(t(lang, "初回Files設定", "Initial Files configuration")) + `</summary><form method="post" class="form-stack"><input type="hidden" name="action" value="save_config"><input type="hidden" name="connection_id" value="` + esc(state.selectedID) + `"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "save-config")) + `"><label>` + esc(t(lang, "検証するDriveルート", "Drive root to verify")) + `<select name="root_id" required>` + rootOptions + `</select></label>`
-			for _, scope := range []string{"production", "asset", "sequence", "shot", "task"} {
-				if len(state.templates[scope]) == 0 {
-					continue
-				}
-				body += `<label>` + esc(t(lang, "テンプレート", "Template")) + ` · ` + esc(scope) + `<select name="template_` + esc(scope) + `"` + func() string {
-					if scope == "production" {
-						return ` required`
-					}
-					return ""
-				}() + `>`
-				if scope != "production" {
-					body += `<option value="">` + esc(t(lang, "選択しない", "Not selected")) + `</option>`
-				}
-				for _, template := range state.templates[scope] {
-					body += `<option value="` + esc(template.ID) + `">` + esc(template.Label) + ` · v` + fmt.Sprint(template.Revision) + `</option>`
-				}
-				body += `</select></label>`
-			}
-			body += `<label>` + esc(t(lang, "初回同期の扱い", "Initial sync mode")) + `<select name="sync_mode"><option value="new_production">` + esc(t(lang, "新規Production", "New Production")) + `</option></select></label><p class="field-help" role="status">` + esc(t(lang, "既存Productionの取り込みと今後の項目のみの同期は、安全な動作が検証されるまで利用できません。新規ProductionでもPluginの階層テンプレート連携が完了するまでは同期を開始できません。", "Adopt existing and Future items only are unavailable until their safety is verified. New Production sync also requires the Plugin hierarchy-template integration to be completed.")) + `</p><fieldset><legend>` + esc(t(lang, "Preview対象", "Preview scope")) + `</legend>`
-			for _, scope := range []string{"episodes", "sequences", "shots", "assets", "tasks"} {
-				body += `<label><input type="checkbox" name="scope_` + scope + `">` + esc(strings.Title(scope)) + `</label>`
-			}
-			body += `</fieldset><p class="field-help">` + esc(t(lang, "保存後も同期・フォルダー作成・通知は開始されません。次の差分Previewと明示Applyが必要です。", "Saving does not start sync, create folders, or enable notifications. A diff preview and separate explicit Apply are required.")) + `</p><button class="btn" type="submit">` + esc(t(lang, "設定を保存してPreviewへ", "Save configuration and continue to preview")) + `</button></form></details>`
-		}
+	body += `<section class="production-detail-surface"><h3>` + esc(t(lang, "Drive状態", "Drive status")) + `</h3>`
+	if state.readOnlyDrive == nil {
+		body += `<p role="status">` + esc(t(lang, "Files Pluginの状態を確認できません。設定は変更されていません。", "Files Plugin status is unavailable. No settings were changed.")) + `</p>`
 	} else {
-		activation, _ := state.desired["activation"].(map[string]any)
-		active, _ := activation["enabled"].(bool)
-		epoch, _ := activation["notification_epoch"].(float64)
-		status := t(lang, "無効", "Disabled")
-		if active && epoch > 0 {
-			status = t(lang, "有効", "Enabled")
+		status := state.readOnlyDrive
+		ownerLabel := t(lang, "Files Plugin", "Files Plugin")
+		if status.Owner == "legacy_kitsusync" {
+			ownerLabel = t(lang, "既存KitsuSync設定（Pluginへの明示的な移行が必要）", "Existing KitsuSync settings (explicit Plugin import required)")
 		}
-		body += `<p class="status-row">` + esc(t(lang, "同期と通知", "Sync and notifications")) + `: <strong>` + esc(status) + `</strong> · ` + esc(t(lang, "設定リビジョン", "Config revision")) + ` ` + esc(fmt.Sprint(state.desired["config_revision"])) + `</p>`
-		policy, _ := state.desired["sync_policy"].(map[string]any)
-		mode, _ := policy["mode"].(string)
-		modeSupported := mode == "new_production"
-		if !modeSupported {
-			body += `<p role="status" class="field-help">` + esc(t(lang, "この同期方式は現在利用できません。Preview・Apply・有効化は停止しています。既存の有効状態は無効化できます。", "This synchronization mode is not supported yet. Preview, Apply, and activation are paused. Existing activation can still be disabled.")) + `</p>`
+		connectionLabel := t(lang, "未設定", "Not configured")
+		rootLabel := t(lang, "未検証", "Not verified")
+		if status.ConnectionID != nil {
+			connectionLabel = t(lang, "接続済み", "Connected")
 		}
-		if modeSupported && state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
-			body += `<form method="post" class="button-row"><input type="hidden" name="action" value="preview_sync"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-preview")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "Kitsuを読み取り、差分Previewを作成", "Read Kitsu and create a diff preview")) + `</button></form>`
+		if status.RootState != nil && *status.RootState == "verified" {
+			rootLabel = t(lang, "検証済み", "Verified")
 		}
-		if state.preview != nil {
-			body += `<section class="settings-disclosure" aria-labelledby="vfx-files-preview-title"><h4 id="vfx-files-preview-title">` + esc(t(lang, "同期Preview", "Sync preview")) + `</h4><p class="status-row">` + esc(t(lang, "既存", "Existing")) + ` ` + fmt.Sprint(state.preview.Summary.Existing) + ` · ` + esc(t(lang, "作成", "Create")) + ` ` + fmt.Sprint(state.preview.Summary.Create) + ` · ` + esc(t(lang, "リンク", "Link")) + ` ` + fmt.Sprint(state.preview.Summary.Link) + ` · ` + esc(t(lang, "除外", "Excluded")) + ` ` + fmt.Sprint(state.preview.Summary.Excluded) + ` · ` + esc(t(lang, "警告", "Warnings")) + ` ` + fmt.Sprint(state.preview.Summary.Warnings) + `</p>`
-			if len(state.preview.Changes) > 0 {
-				body += `<ul class="status-list">`
-				for _, change := range state.preview.Changes {
-					body += `<li class="status-row"><strong>` + esc(change.Action) + `</strong> · ` + esc(change.ObjectType) + ` · ` + esc(change.DisplayName) + `</li>`
-				}
-				body += `</ul>`
-			}
-			previewRevision := uint64FromJSON(state.desired["config_revision"])
-			previewCurrent := state.desiredReady && previewRevision > 0 && state.preview.ConfigRevision == previewRevision
-			if !previewCurrent {
-				body += `<p class="field-help" role="status">` + esc(t(lang, "設定または有効状態がPreview後に変わりました。現在の状態を再Previewしてください。", "The configuration or activation changed after this preview. Create a new preview for the current state.")) + `</p>`
-			} else if !active || epoch == 0 {
-				body += `<p class="field-help" role="status">` + esc(t(lang, "Previewは読み取り専用です。同期と通知を有効化した後、新しいPreviewを作成してApplyしてください。", "Preview is read-only. After enabling sync and notifications, create a new preview before Apply.")) + `</p>`
-			} else if modeSupported && state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
-				body += `<form method="post" class="button-row"><input type="hidden" name="action" value="apply_sync"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-apply")) + `"><button class="btn" type="submit">` + esc(t(lang, "このPreviewを明示的にApply", "Explicitly apply this preview")) + `</button></form>`
-			}
-			body += `</section>`
+		activationLabel := t(lang, "無効", "Inactive")
+		if status.ActivationEnabled {
+			activationLabel = t(lang, "有効", "Active")
 		}
-		if state.job != nil {
-			body += `<section class="settings-disclosure" aria-labelledby="vfx-files-job-title"><h4 id="vfx-files-job-title">` + esc(t(lang, "同期ジョブ", "Sync job")) + `</h4><p class="status-row">` + esc(localizedVFXFilesSyncJobState(state.job.State, lang)) + ` · ` + fmt.Sprint(state.job.Progress.Completed) + ` / ` + fmt.Sprint(state.job.Progress.Total) + `</p>`
-			if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview {
-				body += `<form method="post" class="button-row"><input type="hidden" name="action" value="refresh_sync_job"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-refresh")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "状態を更新", "Refresh status")) + `</button></form>`
-				if state.job.State == "failed" {
-					body += `<form method="post" class="button-row"><input type="hidden" name="action" value="retry_sync_job"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-retry")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "失敗ジョブを安全に再試行", "Retry failed job safely")) + `</button></form>`
-				} else if state.job.State == "reconcile_required" {
-					body += `<form method="post" class="button-row"><input type="hidden" name="action" value="reconcile_sync_job"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, "sync-reconcile")) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "ジョブ結果を再照合", "Reconcile job outcome")) + `</button></form>`
-				}
-			}
-			body += `</section>`
-		}
-		if state.pluginVerified && state.integrationReady && !project.ValidationOnly && !project.ReadOnlyPreview && (modeSupported || (active && epoch > 0)) {
-			action := "activate"
-			label := t(lang, "同期と通知を有効にする", "Enable sync and notifications")
-			if active && epoch > 0 {
-				action = "deactivate"
-				label = t(lang, "同期と通知を無効にする", "Disable sync and notifications")
-			}
-			body += `<form method="post" class="button-row"><input type="hidden" name="action" value="` + action + `"><input type="hidden" name="idempotency_key" value="` + esc(vfxFilesActionKey(state.actionKey, action)) + `"><button class="btn" type="submit">` + esc(label) + `</button></form>`
-		}
+		body += `<ul class="status-list"><li class="status-row">` + esc(t(lang, "所有者", "Authority")) + `: <strong>` + esc(ownerLabel) + `</strong></li><li class="status-row">` + esc(t(lang, "接続", "Connection")) + `: <strong>` + esc(connectionLabel) + `</strong></li><li class="status-row">` + esc(t(lang, "Productionルート", "Production root")) + `: <strong>` + esc(rootLabel) + `</strong></li><li class="status-row">` + esc(t(lang, "同期有効化", "Sync activation")) + `: <strong>` + esc(activationLabel) + `</strong></li><li class="status-row">` + esc(t(lang, "設定リビジョン / 有効化エポック", "Configuration revision / activation epoch")) + `: <strong>` + fmt.Sprint(status.ConfigRevision) + ` / ` + fmt.Sprint(status.ActivationEpoch) + `</strong></li></ul>`
 	}
-	body += `</section><section class="production-detail-surface"><h3>` + esc(t(lang, "イベント診断", "Event diagnostics")) + `</h3>`
+	if state.nativeSettingsURL != "" {
+		body += `<p><a class="btn" href="` + esc(state.nativeSettingsURL) + `" target="_blank" rel="noopener noreferrer">` + esc(t(lang, "Kitsu Files Plugin設定を開く", "Open Kitsu Files Plugin settings")) + `</a></p>`
+	} else {
+		body += `<p class="field-help">` + esc(t(lang, "Kitsu Files Plugin設定リンクを確認できません。Kitsu接続設定を確認してください。", "The native Kitsu Files Plugin link is unavailable. Check the Kitsu connection settings.")) + `</p>`
+	}
+	body += `</section><section class="production-detail-surface"><h3>` + esc(t(lang, "Discord通知", "Discord notifications")) + `</h3><p>` + esc(t(lang, "Discord配送と受信Task TypeのルーティングはKitsuSyncが管理します。", "Discord delivery and recipient Task Type routing remain managed by KitsuSync.")) + `</p><p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "Discord通知ルートを管理", "Manage Discord notification routes")) + `</a></p></section>`
+	body += `<section class="production-detail-surface"><h3>` + esc(t(lang, "イベント診断", "Event diagnostics")) + `</h3>`
 	if state.diagnosticsOK && state.diagnostics != nil {
 		body += `<ul class="status-list"><li class="status-row">` + esc(t(lang, "未処理の配布通知", "Pending delivery events")) + `: <strong>` + fmt.Sprint(state.diagnostics.PendingDelivery) + `</strong></li><li class="status-row">` + esc(t(lang, "隔離イベント", "Quarantined events")) + `: <strong>` + fmt.Sprint(state.diagnostics.Quarantined) + `</strong></li><li class="status-row">` + esc(t(lang, "イベントID競合", "Event identity conflicts")) + `: <strong>` + fmt.Sprint(state.diagnostics.IdentityConflict) + `</strong></li></ul>`
 	} else {
-		body += `<p role="status">` + esc(t(lang, "イベント診断を確認できません。状態を空として扱わず、操作前にデータベースを確認してください。", "Event diagnostics are unavailable. Do not treat this as an empty state; check the database before taking action.")) + `</p>`
+		body += `<p role="status">` + esc(t(lang, "イベント診断を確認できません。", "Event diagnostics are unavailable.")) + `</p>`
 	}
-	body += `</section><p class="field-help">` + esc(t(lang, "Previewは有効化前でも読み取り専用で実行できます。管理者が同期と通知を明示的に有効化した後にのみ、PreviewをApplyできます。Google認証や設定保存だけでは同期・通知は開始されません。", "Read-only previews are available before activation. Apply is allowed only after an administrator explicitly enables sync and notifications. Google authorization or saving configuration never starts sync or notifications.")) + `</p><p><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=settings", r)) + `">` + esc(t(lang, "Production設定へ戻る", "Back to Production settings")) + `</a></p></section>`
+	body += `</section></section>`
 	return body
 }
 

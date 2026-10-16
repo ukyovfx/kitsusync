@@ -107,6 +107,17 @@ func TestActivationAndDeactivationRequireStrongConfigPrecondition(t *testing.T) 
 	}
 }
 
+func TestDriveAuthorityEndpointIsReadOnly(t *testing.T) {
+	path := "/productions/123e4567-e89b-42d3-a456-426614174001/drive-authority"
+	op, ok := findPluginOperation(http.MethodGet, path)
+	if !ok || op.scope != "vfx.config.read" || op.write {
+		t.Fatalf("Drive authority status endpoint is not allowlisted as read-only: %+v, %v", op, ok)
+	}
+	if _, ok := findPluginOperation(http.MethodPost, path); ok {
+		t.Fatal("Drive authority status endpoint unexpectedly allows writes")
+	}
+}
+
 func TestPluginTemplateCatalogUsesContractGlobalReadShapeWithBoundActorToken(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

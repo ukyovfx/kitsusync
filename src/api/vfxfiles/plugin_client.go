@@ -67,6 +67,7 @@ var pluginOperations = []pluginOperation{
 	{http.MethodPost, "/drive-connections/{connection_id}/roots", "vfx.roots.verify", true},
 	{http.MethodGet, "/templates", "vfx.templates.read", false},
 	{http.MethodGet, "/productions/{production_id}/desired-config", "vfx.config.read", false},
+	{http.MethodGet, "/productions/{production_id}/drive-authority", "vfx.config.read", false},
 	{http.MethodPut, "/productions/{production_id}/desired-config", "vfx.config.write", true},
 	{http.MethodPost, "/productions/{production_id}/activation", "vfx.activation.write", true},
 	{http.MethodPost, "/productions/{production_id}/deactivation", "vfx.activation.write", true},

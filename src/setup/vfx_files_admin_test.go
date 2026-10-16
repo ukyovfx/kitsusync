@@ -331,7 +331,7 @@ func TestVFXFilesUnsupportedSyncModesRejectBeforeProviderCall(t *testing.T) {
 	}
 }
 
-func TestVFXFilesInitialUIOffersOnlySupportedSyncMode(t *testing.T) {
+func TestVFXFilesInitialUIIsReadOnlyAndLinksToNativeSettings(t *testing.T) {
 	state := vfxFilesAdminPageState{
 		pluginVerified:   true,
 		integrationReady: true,
@@ -341,29 +341,28 @@ func TestVFXFilesInitialUIOffersOnlySupportedSyncMode(t *testing.T) {
 			ContractVersion: "1.0", ID: "30000000-0000-4000-8000-000000000001",
 			State: "connected", AccountMode: "my_drive",
 		}},
-		roots: []vfxFilesAdminRoot{{ID: "fake-root", Name: "Synthetic Root", AccountMode: "my_drive"}},
+		roots:             []vfxFilesAdminRoot{{ID: "fake-root", Name: "Synthetic Root", AccountMode: "my_drive"}},
+		nativeSettingsURL: vfxFilesNativeSettingsURL("https://kitsu.example.test", vfxTestProductionID),
 		templates: map[string][]vfxFilesAdminTemplate{
 			"production": {{ID: "vfx-files.production.default", Revision: 1, Scope: "production", Label: "Default", Pattern: "{production}"}},
 		},
 	}
-	for _, tc := range []struct{ lang, message string }{
-		{"en", "Adopt existing and Future items only are unavailable"},
-		{"ja", "既存Productionの取り込みと今後の項目のみの同期"},
+	for _, tc := range []struct{ lang, marker string }{
+		{"en", "Drive connection, verified root, templates, sync settings, and activation are managed in the native Kitsu Files Plugin settings"},
+		{"ja", "Drive接続、検証済みルート、テンプレート、同期設定、有効化はKitsuのFiles Plugin設定で管理"},
 	} {
 		page := renderVFXFilesAdminPage(
 			httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang="+tc.lang, nil),
 			&model.Project{Name: "Synthetic Production"}, vfxTestProductionID, tc.lang, state,
 		)
-		if !strings.Contains(page, `name="sync_mode"><option value="new_production"`) {
-			t.Fatalf("%s omitted supported mode selector", tc.lang)
+		if !strings.Contains(page, tc.marker) {
+			t.Fatalf("%s omitted read-only explanation", tc.lang)
 		}
-		for _, unsupported := range []string{`option value="future_only"`, `option value="adopt_existing"`} {
-			if strings.Contains(page, unsupported) {
-				t.Fatalf("%s advertised unimplemented sync mode %q", tc.lang, unsupported)
-			}
+		if strings.Contains(page, `name="sync_mode"`) || strings.Contains(page, `name="action" value="save_config"`) {
+			t.Fatalf("%s rendered editable Drive configuration", tc.lang)
 		}
-		if !strings.Contains(page, tc.message) {
-			t.Fatalf("%s did not explain currently unavailable modes", tc.lang)
+		if !strings.Contains(page, `href="`+esc(vfxFilesNativeSettingsURL("https://kitsu.example.test", vfxTestProductionID))+`"`) {
+			t.Fatalf("%s omitted navigation to native Kitsu Plugin settings", tc.lang)
 		}
 	}
 }
@@ -696,26 +695,29 @@ func TestVFXFilesRootCandidateURLRejectsUntrustedFormsBeforePluginAccess(t *test
 	}
 }
 
-func TestVFXFilesAdminRootAndTemplateViewIsLocalizedAndValidationOnlyReadOnly(t *testing.T) {
+func TestVFXFilesAdminSettingsViewIsLocalizedAndReadOnly(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=ja", nil)
 	state := vfxFilesAdminPageState{
-		pluginVerified:   true,
-		integrationReady: true,
-		actionKey:        "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef",
-		selectedID:       "30000000-0000-4000-8000-000000000001",
-		connections:      []vfxFilesAdminConnection{{ContractVersion: "1.0", ID: "30000000-0000-4000-8000-000000000001", State: "connected", AccountMode: "shared_drive", DriveID: ptrVFXFilesAdmin("fake-drive-secret")}},
-		roots:            []vfxFilesAdminRoot{{ID: "fake-root-1", Name: "Synthetic Root", AccountMode: "shared_drive", DriveID: ptrVFXFilesAdmin("fake-drive-1")}},
-		templates:        map[string][]vfxFilesAdminTemplate{"production": {{ID: "template-v1", Revision: 1, Scope: "production", Label: "Production standard", Pattern: "{production}"}}},
+		pluginVerified:    true,
+		integrationReady:  true,
+		actionKey:         "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef",
+		selectedID:        "30000000-0000-4000-8000-000000000001",
+		connections:       []vfxFilesAdminConnection{{ContractVersion: "1.0", ID: "30000000-0000-4000-8000-000000000001", State: "connected", AccountMode: "shared_drive", DriveID: ptrVFXFilesAdmin("fake-drive-secret")}},
+		roots:             []vfxFilesAdminRoot{{ID: "fake-root-1", Name: "Synthetic Root", AccountMode: "shared_drive", DriveID: ptrVFXFilesAdmin("fake-drive-1")}},
+		nativeSettingsURL: vfxFilesNativeSettingsURL("https://kitsu.example.test", vfxTestProductionID),
+		templates:         map[string][]vfxFilesAdminTemplate{"production": {{ID: "template-v1", Revision: 1, Scope: "production", Label: "Production standard", Pattern: "{production}"}}},
 	}
 	project := &model.Project{Name: "Synthetic Production"}
 	page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, "ja", state)
-	for _, marker := range []string{"Driveルート確認", "利用可能なテンプレート", "Production standard", "フォルダーURL候補", "作成・移動・共有を行いません"} {
+	for _, marker := range []string{"Drive状態", "Kitsu Files Plugin設定を開く", "Discord通知ルートを管理"} {
 		if !strings.Contains(page, marker) {
-			t.Errorf("Japanese Files management view missing %q", marker)
+			t.Errorf("Japanese read-only Files view missing %q", marker)
 		}
 	}
-	if strings.Contains(page, "fake-drive-secret") {
-		t.Fatal("private Drive identity was rendered")
+	for _, private := range []string{"fake-drive-secret", "fake-root-1", "Production standard", "name=\"action\""} {
+		if strings.Contains(page, private) {
+			t.Fatalf("read-only Files view rendered Drive configuration detail %q", private)
+		}
 	}
 	readOnly := renderVFXFilesAdminPage(request, &model.Project{Name: "Validation", ValidationOnly: true}, vfxTestProductionID, "en", state)
 	if strings.Contains(readOnly, `name="action" value="verify_root"`) || strings.Contains(readOnly, `name="action" value="authorize"`) || strings.Contains(readOnly, `name="action" value="activate"`) {
@@ -723,7 +725,7 @@ func TestVFXFilesAdminRootAndTemplateViewIsLocalizedAndValidationOnlyReadOnly(t 
 	}
 }
 
-func TestVFXFilesActivationAndPreviewApplyLabelsAreLocalizedAndRevisionAware(t *testing.T) {
+func TestVFXFilesAdminNeverRendersDriveMutationControls(t *testing.T) {
 	project := &model.Project{Name: "Synthetic Production"}
 	request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files", nil)
 	preview := &vfxFilesSyncPreview{ConfigRevision: 3}
@@ -735,29 +737,13 @@ func TestVFXFilesActivationAndPreviewApplyLabelsAreLocalizedAndRevisionAware(t *
 		desired:          map[string]any{"config_revision": float64(3), "sync_policy": map[string]any{"mode": "new_production"}, "activation": map[string]any{"enabled": false, "notification_epoch": float64(0)}},
 		preview:          preview,
 	}
-	for _, tc := range []struct{ lang, activation, stale string }{
-		{"ja", "同期と通知を有効にする", "同期と通知を有効化した後"},
-		{"en", "Enable sync and notifications", "After enabling sync and notifications"},
-	} {
-		page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, tc.lang, state)
-		for _, marker := range []string{tc.activation, tc.stale} {
-			if !strings.Contains(page, marker) {
-				t.Errorf("%s UI missing %q", tc.lang, marker)
+	for _, lang := range []string{"ja", "en"} {
+		page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, lang, state)
+		for _, action := range []string{"save_config", "activate", "deactivate", "preview_sync", "apply_sync"} {
+			if strings.Contains(page, `name="action" value="`+action+`"`) {
+				t.Errorf("%s rendered Drive mutation %q", lang, action)
 			}
 		}
-		if strings.Contains(page, `name="action" value="apply_sync"`) {
-			t.Errorf("%s UI offered Apply before activation and a fresh preview", tc.lang)
-		}
-	}
-	state.desired = map[string]any{"config_revision": float64(4), "sync_policy": map[string]any{"mode": "new_production"}, "activation": map[string]any{"enabled": true, "notification_epoch": float64(2)}}
-	page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
-	if !strings.Contains(page, "Create a new preview for the current state") || strings.Contains(page, `name="action" value="apply_sync"`) {
-		t.Fatal("stale pre-activation preview was rendered as applicable")
-	}
-	state.preview.ConfigRevision = 4
-	page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, "en", state)
-	if !strings.Contains(page, `name="action" value="apply_sync"`) || strings.Contains(page, "Enable notifications") {
-		t.Fatal("current post-activation preview did not offer Apply with sync+notification terminology")
 	}
 }
 
@@ -775,28 +761,22 @@ func TestVFXFilesUnsupportedSavedModeHidesUnsafeActionsButCanDisable(t *testing.
 		preview: &vfxFilesSyncPreview{ConfigRevision: 4},
 	}
 	project := &model.Project{Name: "Synthetic Production"}
-	for _, tc := range []struct{ lang, warning string }{
-		{"ja", "この同期方式は現在利用できません"},
-		{"en", "This synchronization mode is not supported yet"},
-	} {
+	for _, lang := range []string{"ja", "en"} {
 		state.desired["activation"] = map[string]any{"enabled": false, "notification_epoch": float64(0)}
-		request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang="+tc.lang, nil)
-		page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, tc.lang, state)
+		request := httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang="+lang, nil)
+		page := renderVFXFilesAdminPage(request, project, vfxTestProductionID, lang, state)
 		for _, action := range []string{"preview_sync", "apply_sync", "activate"} {
 			if strings.Contains(page, `name="action" value="`+action+`"`) {
-				t.Errorf("%s unsupported saved mode advertised unsafe %q action", tc.lang, action)
+				t.Errorf("%s Drive settings page rendered unsafe %q action", lang, action)
 			}
 		}
-		if !strings.Contains(page, tc.warning) {
-			t.Errorf("%s unsupported saved mode did not give a recovery explanation", tc.lang)
-		}
 		state.desired["activation"] = map[string]any{"enabled": true, "notification_epoch": float64(3)}
-		page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, tc.lang, state)
-		if !strings.Contains(page, `name="action" value="deactivate"`) {
-			t.Errorf("%s unsupported active configuration must retain explicit deactivation", tc.lang)
+		page = renderVFXFilesAdminPage(request, project, vfxTestProductionID, lang, state)
+		if strings.Contains(page, `name="action" value="deactivate"`) {
+			t.Errorf("%s activation must be changed in the native Plugin settings", lang)
 		}
 		if strings.Contains(page, `name="action" value="apply_sync"`) {
-			t.Errorf("%s unsupported active configuration must not offer Apply", tc.lang)
+			t.Errorf("%s Drive settings page rendered a sync mutation", lang)
 		}
 	}
 }
@@ -901,53 +881,92 @@ func TestVFXFilesAdminDoesNotRenderMutatingControlsWhenPluginIsUnavailable(t *te
 	}
 }
 
-func TestVFXFilesManagementReusesVerifiedConnectionAndDoesNotRenderOutageAsEmpty(t *testing.T) {
+func TestVFXFilesAdminRendersReadOnlyPluginAuthorityAndDiscordNavigation(t *testing.T) {
+	productionID := vfxTestProductionID
+	connectionID := "30000000-0000-4000-8000-000000000001"
+	rootID := "synthetic-root"
+	rootState := "verified"
+	status := vfxFilesDriveAuthorityStatus{
+		Owner: "plugin", State: "configured", ConfigRevision: 4, ActivationEpoch: 7, ActivationEnabled: true,
+		ConnectionID: &connectionID, RootID: &rootID, RootState: &rootState,
+	}
+	if !validVFXFilesDriveAuthorityStatus(status) {
+		t.Fatal("valid Plugin authority status was rejected")
+	}
+	page := renderVFXFilesAdminPage(
+		httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files", nil),
+		&model.Project{Name: "Synthetic Production"}, productionID, "en",
+		vfxFilesAdminPageState{
+			readOnlyDrive:     &status,
+			nativeSettingsURL: vfxFilesNativeSettingsURL("https://kitsu.example.test", productionID),
+		},
+	)
+	for _, marker := range []string{
+		"KitsuSync is read-only", "Connection", "Verified", "Active", "4 / 7",
+		"/api/plugins/vfx_files/frontend/?drive_settings=1&amp;production_id=" + productionID,
+		"Discord delivery and recipient Task Type routing remain managed by KitsuSync",
+		"tab=notifications",
+	} {
+		if !strings.Contains(page, marker) {
+			t.Errorf("read-only Files page missing %q", marker)
+		}
+	}
+	for _, action := range []string{"authorize", "verify_root", "revoke", "save_config", "activate", "deactivate"} {
+		if strings.Contains(page, `name="action" value="`+action+`"`) {
+			t.Errorf("read-only Files page rendered Drive mutation %q", action)
+		}
+	}
+	if strings.Contains(page, rootID) || strings.Contains(page, connectionID) {
+		t.Fatal("provider connection or root identifier was unnecessarily rendered")
+	}
+}
+
+func TestVFXFilesNativeSettingsURLAndAuthorityStatusFailClosed(t *testing.T) {
+	if got := vfxFilesNativeSettingsURL("javascript:alert(1)", vfxTestProductionID); got != "" {
+		t.Fatalf("unsafe native settings URL accepted: %q", got)
+	}
+	if got := vfxFilesNativeSettingsURL("https://kitsu.example.test", "bad-id"); got != "" {
+		t.Fatalf("invalid Production ID accepted: %q", got)
+	}
+	status := vfxFilesDriveAuthorityStatus{Owner: "plugin", State: "configured", ActivationEnabled: true}
+	if validVFXFilesDriveAuthorityStatus(status) {
+		t.Fatal("configured authority without a verified root was accepted")
+	}
+	legacy := vfxFilesDriveAuthorityStatus{Owner: "legacy_kitsusync", State: "legacy_import_required"}
+	if !validVFXFilesDriveAuthorityStatus(legacy) {
+		t.Fatal("explicit legacy import-required status was rejected")
+	}
+}
+
+func TestVFXFilesManagementConsumesAuthorityStatusReadOnly(t *testing.T) {
 	connectionID := "30000000-0000-4000-8000-000000000001"
 	for _, tc := range []struct {
-		name               string
-		statusCode         int
-		templateFailScope  string
-		templateFailStatus int
-		wantReuse          bool
+		name       string
+		statusCode int
+		configured bool
 	}{
-		{name: "verified connection reused", statusCode: http.StatusOK, wantReuse: true},
-		{name: "temporary provider outage", statusCode: http.StatusServiceUnavailable},
-		{name: "partial template capability outage", statusCode: http.StatusOK, templateFailScope: "shot", templateFailStatus: http.StatusServiceUnavailable},
+		{name: "verified Plugin authority", statusCode: http.StatusOK, configured: true},
+		{name: "authority status unavailable", statusCode: http.StatusServiceUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls = append(calls, r.Method+" "+r.URL.Path)
 				w.Header().Set("Content-Type", "application/json")
-				if r.URL.Path == vfxfiles.ServiceAudienceSuffix+"/drive-connections" {
+				if strings.HasSuffix(r.URL.Path, "/drive-authority") {
 					if tc.statusCode != http.StatusOK {
 						w.WriteHeader(tc.statusCode)
 						return
 					}
-					_, _ = io.WriteString(w, `{"contract_version":"1.0","connections":[{"contract_version":"1.0","id":"`+connectionID+`","account_mode":"my_drive","state":"connected"}]}`)
-					return
-				}
-				if r.URL.Path == vfxfiles.ServiceAudienceSuffix+"/templates" {
-					scope := r.URL.Query().Get("scope")
-					if scope == tc.templateFailScope && tc.templateFailStatus != 0 {
-						w.WriteHeader(tc.templateFailStatus)
-						return
-					}
-					_, _ = io.WriteString(w, `{"contract_version":"1.0","templates":[{"id":"`+scope+`-template","revision":1,"scope":"`+scope+`","label":"Default","pattern":"{production}","materialization":{"schema_revision":1,"root_binding":"verified_root_is_production_root","available_overrides":[]}}]}`)
+					_, _ = io.WriteString(w, `{"owner":"plugin","state":"configured","config_revision":4,"activation_epoch":7,"activation_enabled":true,"connection_id":"`+connectionID+`","root_id":"synthetic-root","account_mode":"my_drive","root_state":"verified"}`)
 					return
 				}
 				if strings.HasSuffix(r.URL.Path, "/desired-config") {
-					if tc.wantReuse {
-						w.Header().Set("ETag", `"1"`)
-						_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":1,"connection_id":"`+connectionID+`","drive":{"account_mode":"my_drive","root_id":"root-1","root_state":"verified","owner_subject":"opaque-subject"},"template_selection":{"selections":[{"scope":"production","template_id":"production-template","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":false,"activated_at":null,"notification_epoch":0}}`)
-					} else {
-						w.WriteHeader(http.StatusNotFound)
-					}
+					w.Header().Set("ETag", `"4"`)
+					_, _ = io.WriteString(w, `{"contract_version":"1.0","production_id":"`+vfxTestProductionID+`","config_revision":4,"connection_id":"`+connectionID+`","drive":{"account_mode":"my_drive","owner_subject":"opaque-subject","root_id":"synthetic-root","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"production-template","revision":1,"overrides":{}}]},"sync_policy":{"mode":"new_production","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false,"task_type_ids":[]},"notify_new_deliveries":false},"activation":{"enabled":true,"activated_at":"2026-10-17T00:00:00Z","notification_epoch":7}}`)
 					return
 				}
-				if strings.HasSuffix(r.URL.Path, "/roots") {
-					_, _ = io.WriteString(w, `{"contract_version":"1.0","roots":[{"id":"root-1","name":"Project root","account_mode":"my_drive"}]}`)
-					return
-				}
-				http.NotFound(w, r)
+				http.Error(w, "unexpected Plugin request", http.StatusNotFound)
 			}))
 			defer server.Close()
 			key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -968,32 +987,23 @@ func TestVFXFilesManagementReusesVerifiedConnectionAndDoesNotRenderOutageAsEmpty
 			if err := db.AutoMigrate(&model.VFXFilesProductionConfig{}); err != nil {
 				t.Fatal(err)
 			}
-			state := vfxFilesAdminPageState{integrationReady: true, actionKey: "ks-files-0123456789abcdef0123456789abcdef0123456789abcdef"}
+			state := vfxFilesAdminPageState{}
 			loadVFXFilesAdminState(context.Background(), db, &vfxfiles.RuntimeConfig{Client: client}, vfxAdminAuthorizer{actorID: vfxTestActorID, allowed: true}, vfxTestProductionID, "", &state, "en")
 			page := renderVFXFilesAdminPage(httptest.NewRequest(http.MethodGet, "/bot/admin/vfx-files?lang=en", nil), &model.Project{Name: "Test Production"}, vfxTestProductionID, "en", state)
-			if tc.wantReuse {
-				if state.pluginState != "available" || !state.pluginVerified || state.selectedID != connectionID || !strings.Contains(page, connectionID) {
-					t.Fatalf("verified connection was not reused after reload: state=%+v", state)
+			for _, call := range calls {
+				if strings.HasPrefix(call, "POST ") || strings.HasPrefix(call, "PUT ") || strings.Contains(call, "/drive-connections") || strings.HasSuffix(call, "/templates") {
+					t.Fatalf("read-only status page called a Drive configuration endpoint: %s", call)
 				}
-				if strings.Contains(page, `name="action" value="authorize"`) || strings.Contains(page, "Connect Google Drive") {
-					t.Fatal("valid persisted connection incorrectly prompted for Google OAuth again")
+			}
+			if tc.configured {
+				if state.pluginState != "available" || !state.pluginVerified || state.readOnlyDrive == nil || !state.desiredReady {
+					t.Fatalf("Plugin authority or read-only mirror was not verified: %+v", state)
 				}
-			} else if tc.templateFailScope != "" {
-				if state.pluginState != "unavailable" || state.pluginVerified {
-					t.Fatalf("partial Plugin capability outage was treated as verified: %+v", state)
+				if strings.Contains(page, connectionID) || strings.Contains(page, "opaque-subject") || strings.Contains(page, `name="action"`) {
+					t.Fatal("read-only page exposed provider identity or a Drive mutation")
 				}
-				for _, action := range []string{"authorize", "verify_root", "activate", "preview_sync"} {
-					if strings.Contains(page, `name="action" value="`+action+`"`) {
-						t.Errorf("partial capability outage rendered action %q", action)
-					}
-				}
-			} else {
-				if state.pluginState != "unavailable" || state.connectionsOK || state.pluginVerified {
-					t.Fatalf("provider outage was treated as verified: %+v", state)
-				}
-				if strings.Contains(page, "No Drive connections are available.") || strings.Contains(page, `name="action" value="authorize"`) {
-					t.Fatal("provider outage was presented as empty state or allowed OAuth action")
-				}
+			} else if state.pluginState != "unavailable" || state.pluginVerified || state.readOnlyDrive != nil || strings.Contains(page, "Connected") {
+				t.Fatalf("Plugin outage was treated as verified status: %+v", state)
 			}
 		})
 	}
