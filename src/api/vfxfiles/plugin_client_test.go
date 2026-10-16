@@ -53,14 +53,14 @@ func TestPluginClientAddsBoundServiceTokenAndActorHeaders(t *testing.T) {
 	}
 }
 
-func TestPluginClientAllowsOnlyWildcardConditionalCreateHeader(t *testing.T) {
+func TestPluginClientRejectsDriveConfigurationMutationEvenWithConditionalCreateHeader(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gotNoneMatch string
+	var reachedPlugin bool
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotNoneMatch = r.Header.Get("If-None-Match")
+		reachedPlugin = true
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer server.Close()
@@ -70,18 +70,19 @@ func TestPluginClientAllowsOnlyWildcardConditionalCreateHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	productionID := "123e4567-e89b-42d3-a456-426614174001"
-	request := PluginRequest{Method: http.MethodPut, Path: "/productions/" + productionID + "/desired-config", Headers: http.Header{"If-None-Match": {"*"}}, Body: []byte(`{"contract_version":"1.0","connection_id":"123e4567-e89b-42d3-a456-426614174002","drive":{"account_mode":"shared_drive","root_id":"root","root_state":"verified"},"template_selection":{"selections":[{"scope":"production","template_id":"p","revision":1,"overrides":{}}]},"sync_policy":{"mode":"future_only","scope":{"episodes":false,"sequences":false,"shots":false,"assets":false,"tasks":false},"notify_new_deliveries":false}}`), ProductionID: productionID, Authorizer: testProductionAdminAuthorizer{actorID: "123e4567-e89b-42d3-a456-426614174000", allowed: true}, Scope: "vfx.config.write", IdempotencyKey: "create-configuration-1", Mutating: true}
-	response, err := client.Do(context.Background(), request)
-	if err != nil {
-		t.Fatalf("conditional create was rejected: %v", err)
+	request := PluginRequest{
+		Method: http.MethodPut, Path: "/productions/" + productionID + "/desired-config",
+		Headers: http.Header{"If-None-Match": {"*"}},
+		Body: []byte(`{"contract_version":"1.0","production_id":"123e4567-e89b-42d3-a456-426614174001"}`),
+		ProductionID: productionID,
+		Authorizer: testProductionAdminAuthorizer{actorID: "123e4567-e89b-42d3-a456-426614174000", allowed: true},
+		Scope: "vfx.config.write", IdempotencyKey: "create-configuration-1", Mutating: true,
 	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusCreated || gotNoneMatch != "*" {
-		t.Fatalf("conditional create header/status = %q/%d", gotNoneMatch, response.StatusCode)
-	}
-	request.Headers = http.Header{"If-None-Match": {"\"4\""}}
 	if _, err := client.Do(context.Background(), request); err == nil {
-		t.Fatal("non-wildcard If-None-Match was allowed")
+		t.Fatal("KitsuSync Drive configuration mutation was allowed")
+	}
+	if reachedPlugin {
+		t.Fatal("rejected Drive configuration mutation reached the Plugin")
 	}
 }
 
@@ -185,13 +186,14 @@ func TestPluginClientRequiresIdempotencyForMutationsAndNeverFollowsRedirects(t *
 	}
 	productionID := "123e4567-e89b-42d3-a456-426614174001"
 	authorizer := testProductionAdminAuthorizer{actorID: "123e4567-e89b-42d3-a456-426614174000", allowed: true}
-	_, err = client.Do(context.Background(), PluginRequest{Method: http.MethodPost, Path: "/productions/" + productionID + "/activation", Headers: http.Header{"If-Match": {`"1"`}}, ProductionID: productionID, Authorizer: authorizer, Scope: "vfx.activation.write"})
+	jobPath := "/sync-jobs/123e4567-e89b-42d3-a456-426614174002/retry"
+	_, err = client.Do(context.Background(), PluginRequest{Method: http.MethodPost, Path: jobPath, ProductionID: productionID, Authorizer: authorizer, Scope: "vfx.sync.retry"})
 	if err == nil {
 		t.Fatal("mutation without Idempotency-Key was accepted")
 	}
 	response, err := client.Do(context.Background(), PluginRequest{
-		Method: http.MethodPost, Path: "/productions/" + productionID + "/activation", ProductionID: productionID, Authorizer: authorizer,
-		Headers: http.Header{"If-Match": {`"1"`}}, Scope: "vfx.activation.write", IdempotencyKey: "request-01", Mutating: true, Body: []byte(`{"contract_version":"1.0"}`),
+		Method: http.MethodPost, Path: jobPath, ProductionID: productionID, Authorizer: authorizer,
+		Scope: "vfx.sync.retry", IdempotencyKey: "request-01", Mutating: true, Body: []byte(`{"contract_version":"1.0"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
