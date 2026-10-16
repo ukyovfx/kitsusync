@@ -32,7 +32,7 @@ func TestVFXFilesDriveLinkDisclosureConsentDefaultsOffAndBindsExactRouteRevision
 	if err := db.Create(&ProductionNotificationConfig{ProductionID: productionID, Enabled: true, UpdatedAt: now}).Error; err != nil {
 		t.Fatal(err)
 	}
-	route := ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: taskTypeID, DestinationWebhookID: 1}
+	route := ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: taskTypeID, DestinationWebhookID: 1, CreatedAt: now}
 	if err := db.Create(&route).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -55,8 +55,12 @@ func TestVFXFilesDriveLinkDisclosureConsentDefaultsOffAndBindsExactRouteRevision
 	if err := db.Delete(&route).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Create(&ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: taskTypeID, DestinationWebhookID: 1}).Error; err != nil {
+	recreatedRoute := ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: taskTypeID, DestinationWebhookID: 1, CreatedAt: now.Add(time.Second)}
+	if err := db.Create(&recreatedRoute).Error; err != nil {
 		t.Fatal(err)
+	}
+	if recreatedRoute.ID != route.ID {
+		t.Fatalf("expected SQLite fixture to demonstrate row ID reuse: old=%d new=%d", route.ID, recreatedRoute.ID)
 	}
 	allowed, err = VFXFilesDriveLinkDisclosureAllowed(db, productionID, taskTypeID)
 	if err != nil || allowed {
@@ -90,7 +94,7 @@ func TestVFXFilesShareIntakeDurablyQuarantinesWithoutRouteConsent(t *testing.T) 
 		t.Fatalf("no-consent intake=%+v err=%v", results, err)
 	}
 	var stored VFXFilesEventInbox
-	if err := db.Where("event_id = ?", input.EventID).Take(&stored).Error; err != nil || stored.Outcome != VFXFilesEventQuarantined || stored.ProcessedAt == nil {
+	if err := db.Where("event_id = ?", input.EventID).Take(&stored).Error; err != nil || stored.Outcome != VFXFilesEventQuarantined || stored.DiagnosticCode != "drive_link_disclosure_consent_missing" || stored.ProcessedAt != nil {
 		t.Fatalf("quarantine was not durable: %+v err=%v", stored, err)
 	}
 	if err := SetVFXFilesDriveLinkDisclosureConsent(db, productionID, taskTypeID, ProductionNotificationRevision(db, FindProjectByKitsuID(db, productionID).ID, productionID), "admin@example.test", true, time.Now().UTC()); err != nil {

@@ -554,6 +554,7 @@ type VFXFilesDriveLinkDisclosureConsent struct {
 	ProductionID    string    `gorm:"not null;uniqueIndex:idx_vfx_drive_link_consent,priority:1;size:64"`
 	TaskTypeID      string    `gorm:"not null;uniqueIndex:idx_vfx_drive_link_consent,priority:2;size:64"`
 	RouteID         uint      `gorm:"not null;default:0"`
+	RouteCreatedAt  time.Time `gorm:"not null"`
 	RoutingRevision string    `gorm:"not null;size:64"`
 	ConfigUpdatedAt time.Time `gorm:"not null"`
 	Enabled         bool      `gorm:"not null;default:false"`
@@ -570,6 +571,7 @@ type VFXFilesDriveLinkDisclosureAudit struct {
 	ProductionID    string    `gorm:"not null;index;size:64"`
 	TaskTypeID      string    `gorm:"not null;index;size:64"`
 	RouteID         uint      `gorm:"not null;default:0"`
+	RouteCreatedAt  time.Time `gorm:"not null"`
 	RoutingRevision string    `gorm:"not null;size:64"`
 	ConfigUpdatedAt time.Time `gorm:"not null"`
 	Enabled         bool      `gorm:"not null"`
@@ -608,7 +610,7 @@ func VFXFilesDriveLinkDisclosureAllowed(db *gorm.DB, productionID, taskTypeID st
 		return false, err
 	}
 	var consent VFXFilesDriveLinkDisclosureConsent
-	if err := db.Where("production_id = ? AND task_type_id = ? AND route_id = ? AND routing_revision = ? AND config_updated_at = ? AND enabled = ?", productionID, taskTypeID, route.ID, revision, notificationConfig.UpdatedAt, true).First(&consent).Error; err != nil {
+	if err := db.Where("production_id = ? AND task_type_id = ? AND route_id = ? AND route_created_at = ? AND routing_revision = ? AND config_updated_at = ? AND enabled = ?", productionID, taskTypeID, route.ID, route.CreatedAt, revision, notificationConfig.UpdatedAt, true).First(&consent).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, nil
 		}
@@ -647,7 +649,7 @@ func SetVFXFilesDriveLinkDisclosureConsent(db *gorm.DB, productionID, taskTypeID
 		if err := tx.Where("production_id = ? AND task_type_id = ?", productionID, taskTypeID).First(&route).Error; err != nil {
 			return err
 		}
-		row := VFXFilesDriveLinkDisclosureConsent{ProductionID: productionID, TaskTypeID: taskTypeID, RouteID: route.ID, RoutingRevision: revision, ConfigUpdatedAt: notificationConfig.UpdatedAt, Enabled: enabled, ActorEmail: strings.TrimSpace(actorEmail), UpdatedAt: now.UTC()}
+		row := VFXFilesDriveLinkDisclosureConsent{ProductionID: productionID, TaskTypeID: taskTypeID, RouteID: route.ID, RouteCreatedAt: route.CreatedAt, RoutingRevision: revision, ConfigUpdatedAt: notificationConfig.UpdatedAt, Enabled: enabled, ActorEmail: strings.TrimSpace(actorEmail), UpdatedAt: now.UTC()}
 		var existing VFXFilesDriveLinkDisclosureConsent
 		if err := tx.Where("production_id = ? AND task_type_id = ?", productionID, taskTypeID).First(&existing).Error; err == nil {
 			row.ID = existing.ID
@@ -655,7 +657,7 @@ func SetVFXFilesDriveLinkDisclosureConsent(db *gorm.DB, productionID, taskTypeID
 		if err := tx.Save(&row).Error; err != nil {
 			return err
 		}
-		return tx.Create(&VFXFilesDriveLinkDisclosureAudit{ProductionID: productionID, TaskTypeID: taskTypeID, RouteID: route.ID, RoutingRevision: revision, ConfigUpdatedAt: notificationConfig.UpdatedAt, Enabled: enabled, ActorEmail: row.ActorEmail, CreatedAt: now.UTC()}).Error
+		return tx.Create(&VFXFilesDriveLinkDisclosureAudit{ProductionID: productionID, TaskTypeID: taskTypeID, RouteID: route.ID, RouteCreatedAt: route.CreatedAt, RoutingRevision: revision, ConfigUpdatedAt: notificationConfig.UpdatedAt, Enabled: enabled, ActorEmail: row.ActorEmail, CreatedAt: now.UTC()}).Error
 	})
 }
 
