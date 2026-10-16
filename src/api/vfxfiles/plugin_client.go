@@ -60,17 +60,11 @@ type pluginOperation struct {
 
 var pluginOperations = []pluginOperation{
 	{http.MethodGet, "/drive-connections", "vfx.connections.read", false},
-	{http.MethodPost, "/drive-connections/authorizations", "vfx.connections.authorize", true},
 	{http.MethodGet, "/drive-connections/{connection_id}", "vfx.connections.read", false},
-	{http.MethodPost, "/drive-connections/{connection_id}/revoke", "vfx.connections.revoke", true},
 	{http.MethodGet, "/drive-connections/{connection_id}/roots", "vfx.roots.read", false},
-	{http.MethodPost, "/drive-connections/{connection_id}/roots", "vfx.roots.verify", true},
 	{http.MethodGet, "/templates", "vfx.templates.read", false},
 	{http.MethodGet, "/productions/{production_id}/desired-config", "vfx.config.read", false},
 	{http.MethodGet, "/productions/{production_id}/drive-authority", "vfx.config.read", false},
-	{http.MethodPut, "/productions/{production_id}/desired-config", "vfx.config.write", true},
-	{http.MethodPost, "/productions/{production_id}/activation", "vfx.activation.write", true},
-	{http.MethodPost, "/productions/{production_id}/deactivation", "vfx.activation.write", true},
 	// Preview creates an expiring provider record even though it never mutates
 	// Drive. The contract requires a key so a retry reuses that exact record.
 	{http.MethodPost, "/productions/{production_id}/sync-previews", "vfx.sync.preview", true},

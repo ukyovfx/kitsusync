@@ -116,6 +116,21 @@ func TestDriveAuthorityEndpointIsReadOnly(t *testing.T) {
 	if _, ok := findPluginOperation(http.MethodPost, path); ok {
 		t.Fatal("Drive authority status endpoint unexpectedly allows writes")
 	}
+	for _, mutation := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/drive-connections/authorizations"},
+		{http.MethodPost, "/drive-connections/123e4567-e89b-42d3-a456-426614174002/revoke"},
+		{http.MethodPost, "/drive-connections/123e4567-e89b-42d3-a456-426614174002/roots"},
+		{http.MethodPut, "/productions/123e4567-e89b-42d3-a456-426614174001/desired-config"},
+		{http.MethodPost, "/productions/123e4567-e89b-42d3-a456-426614174001/activation"},
+		{http.MethodPost, "/productions/123e4567-e89b-42d3-a456-426614174001/deactivation"},
+	} {
+		if op, ok := findPluginOperation(mutation.method, mutation.path); ok {
+			t.Errorf("KitsuSync Drive mutation remains allowlisted: %s %s (%s)", mutation.method, mutation.path, op.scope)
+		}
+	}
 }
 
 func TestPluginTemplateCatalogUsesContractGlobalReadShapeWithBoundActorToken(t *testing.T) {
