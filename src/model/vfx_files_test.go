@@ -77,6 +77,48 @@ func TestVFXFilesAuthorityBarrierCoordinatesIndependentSQLiteConnections(t *test
 	if err := firstProcess.AutoMigrate(models...); err != nil {
 		t.Fatal(err)
 	}
+	firstHeld, firstAcquired, secondStarted, secondAcquired := make(chan error, 1), make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		firstHeld <- firstProcess.Transaction(func(tx *gorm.DB) error {
+			if err := AcquireProductionNotificationWriteLock(tx, vfxProductionID); err != nil {
+				return err
+			}
+			close(firstAcquired)
+			<-secondStarted
+			time.Sleep(40 * time.Millisecond)
+			return nil
+		})
+	}()
+	select {
+	case <-firstAcquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first SQLite connection did not acquire the Production write fence")
+	}
+	go func() {
+		close(secondStarted)
+		secondAcquired <- secondProcess.Transaction(func(tx *gorm.DB) error {
+			if err := AcquireProductionNotificationWriteLock(tx, vfxProductionID); err != nil {
+				return err
+			}
+			return nil
+		})
+	}()
+	select {
+	case err := <-secondAcquired:
+		t.Fatalf("second SQLite connection crossed an uncommitted Production fence: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	if err := <-firstHeld; err != nil {
+		t.Fatalf("first SQLite connection could not commit its fence: %v", err)
+	}
+	select {
+	case err := <-secondAcquired:
+		if err != nil {
+			t.Fatalf("second SQLite connection did not acquire the released fence: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second SQLite connection remained blocked after the fence committed")
+	}
 	if err := firstProcess.Create(&VFXFilesProductionConfig{ProductionID: vfxProductionID, ConfigRevision: 3, ActivationEpoch: 1, Activated: true}).Error; err != nil {
 		t.Fatal(err)
 	}
