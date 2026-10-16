@@ -259,6 +259,66 @@ func TestAuthorityBarrierWaitsForInFlightOldEpochIntake(t *testing.T) {
 	}
 }
 
+func TestAuthorityBarrierDefersForUnknownDiscordOutcomeAndFencesPendingJournal(t *testing.T) {
+	db := eventHandlerTestDB(t)
+	key := "synthetic-event-signing-key-material-0001"
+	clock := time.Date(2026, 10, 17, 3, 0, 0, 0, time.UTC)
+	handler := EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })
+	productionID := "10000000-0000-4000-8000-000000000001"
+	fileEventID := "60000000-0000-4000-8000-000000000090"
+	if err := db.Create(&model.VFXFilesEventInbox{
+		ProducerID: "vfx-files-plugin", EventID: fileEventID, PayloadSHA256: strings.Repeat("a", 64),
+		PayloadJSON: `{"stale":"pending"}`, EventType: "file_delivery.ready", ProductionID: productionID,
+		ActivationEpoch: 1, Outcome: model.VFXFilesEventAccepted, CreatedAt: clock,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	journal := model.NotificationDeliveryEvent{
+		EventID: "70000000-0000-4000-8000-000000000090", TaskID: "task-a", ProductionID: productionID,
+		TaskTypeID: "task-type-a", TaskStatus: "FILE_READY", DeliverySource: "vfx_files", SourceEventID: fileEventID,
+		PayloadJSON: `{}`, PayloadSHA256: strings.Repeat("b", 64), WebhookRowID: 1,
+		DestinationGuildID: "guild-a", DestinationChannelID: "channel-a", DestinationWebhookID: "webhook-a",
+		DestinationFingerprint: strings.Repeat("c", 64), Disposition: model.DeliveryUnknown,
+	}
+	if err := db.Create(&journal).Error; err != nil {
+		t.Fatal(err)
+	}
+	requestFor := func(nonce string) *http.Request {
+		body, err := json.Marshal(map[string]any{"contract_version": "1.0", "events": []any{map[string]any{
+			"contract_version": "1.0", "producer_id": "vfx-files-plugin",
+			"event_id":   "60000000-0000-4000-8000-000000000091",
+			"event_type": "storage_authority.deactivation_requested", "occurred_at": clock.Format(time.RFC3339),
+			"production_id": productionID, "activation_epoch": 1, "config_revision": 4,
+			"previous_activation_epoch": 1, "new_activation_epoch": 2,
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return signedEventRequest(t, body, key, nonce, "60000000-0000-4000-8000-000000000091", clock)
+	}
+	response := httptest.NewRecorder()
+	handler(response, requestFor("authority-nonce-unresolved-01"))
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Retry-After") != "30" {
+		t.Fatalf("unresolved Discord outcome must defer barrier ACK: status=%d retry=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+	var config model.VFXFilesProductionConfig
+	if err := db.Where("production_id = ?", productionID).Take(&config).Error; err != nil || !config.Activated || config.ActivationEpoch != 1 {
+		t.Fatalf("unresolved dispatch changed mirror authority: %+v err=%v", config, err)
+	}
+	if err := db.Model(&model.NotificationDeliveryEvent{}).Where("event_id = ?", journal.EventID).Update("disposition", model.DeliveryPending).Error; err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler(response, requestFor("authority-nonce-resolved-0001"))
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("resolved old delivery barrier=%d %s", response.Code, response.Body.String())
+	}
+	var fenced model.NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", journal.EventID).Take(&fenced).Error; err != nil || fenced.Disposition != model.DeliveryTerminalFailure || fenced.FailureClass != "activation_epoch_fenced" {
+		t.Fatalf("pending old dispatch was not durably terminalized: %+v err=%v", fenced, err)
+	}
+}
+
 func TestSignedEventHandlerQuarantinesWrongProductionStaleEpochAndDisabledIntegration(t *testing.T) {
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "integrations", "vfx-files-plugin", "v1", "fixtures", "folder-provisioning-completed.json"))
 	if err != nil {

@@ -213,6 +213,7 @@ var (
 	ErrVFXFilesEventConflict               = errors.New("VFX Files event identity conflict")
 	ErrVFXFilesActivationPending           = errors.New("VFX Files activation mirror is pending")
 	ErrVFXFilesAuthorityTransition         = errors.New("VFX Files authority transition cannot be proven")
+	ErrVFXFilesAuthorityUnresolved         = errors.New("VFX Files old-epoch delivery outcome remains unresolved")
 	ErrVFXFilesInvalidBatch                = errors.New("VFX Files event batch is invalid")
 	ErrVFXFilesConfigConflict              = errors.New("VFX Files desired config revision conflict")
 	ErrVFXFilesSyncJobUnresolved           = errors.New("VFX Files sync job is unresolved")
@@ -667,6 +668,28 @@ func ApplyVFXFilesAuthorityTransition(db *gorm.DB, keyID, nonce string, input VF
 		}
 		if config.ConfigRevision > input.ConfigRevision {
 			return ErrVFXFilesAuthorityTransition
+		}
+		oldDeliveryEvents := tx.Model(&VFXFilesEventInbox{}).Select("event_id").Where(
+			"production_id = ? AND event_type LIKE ? AND activation_epoch <> ?",
+			input.ProductionID, "file_delivery.%", input.NewActivationEpoch,
+		)
+		var unresolvedDispatches int64
+		if err := tx.Model(&NotificationDeliveryEvent{}).Where(
+			"delivery_source = ? AND production_id = ? AND source_event_id IN (?) AND disposition IN ?",
+			"vfx_files", input.ProductionID, oldDeliveryEvents, []string{DeliveryInFlight, DeliveryUnknown},
+		).Count(&unresolvedDispatches).Error; err != nil {
+			return err
+		}
+		if unresolvedDispatches != 0 {
+			return ErrVFXFilesAuthorityUnresolved
+		}
+		if err := tx.Model(&NotificationDeliveryEvent{}).Where(
+			"delivery_source = ? AND production_id = ? AND source_event_id IN (?) AND disposition IN ?",
+			"vfx_files", input.ProductionID, oldDeliveryEvents, []string{DeliveryPending, DeliveryRetryable},
+		).Updates(map[string]any{
+			"disposition": DeliveryTerminalFailure, "failure_class": "activation_epoch_fenced", "retry_after_at": nil,
+		}).Error; err != nil {
+			return err
 		}
 		config.ConfigRevision = input.ConfigRevision
 		config.DesiredConfigJSON = fmt.Sprintf(`{"contract_version":"1.0","activation":{"enabled":%t,"notification_epoch":%d}}`, config.Activated, config.ActivationEpoch)

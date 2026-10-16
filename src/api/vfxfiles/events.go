@@ -283,6 +283,11 @@ func EventHandler(db *gorm.DB, keys map[string][]byte, now func() time.Time) htt
 				http.Error(w, "authority transition cannot be proven", http.StatusConflict)
 				return
 			}
+			if errors.Is(err, model.ErrVFXFilesAuthorityUnresolved) {
+				w.Header().Set("Retry-After", "30")
+				http.Error(w, "old-epoch delivery outcome remains unresolved", http.StatusServiceUnavailable)
+				return
+			}
 			if err != nil {
 				http.Error(w, "authority barrier is unavailable", http.StatusServiceUnavailable)
 				return

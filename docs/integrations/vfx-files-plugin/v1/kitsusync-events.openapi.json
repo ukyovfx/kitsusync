@@ -145,7 +145,7 @@
         }
       },
       "ActivationSynchronizing": {
-        "description": "A Plugin activation completed but its exact next activation epoch is still being mirrored. The exact pending event is not persisted; other events in the signed batch retain their durable accepted/quarantined outcomes and the request nonce is consumed. Retry the batch with a fresh timestamp and nonce while retaining each stable event_id.",
+        "description": "The Plugin authority epoch is synchronizing or an old-epoch Discord outcome remains unknown, so KitsuSync cannot yet prove the transition barrier. The transition and request nonce are not persisted. Retry with a fresh timestamp and nonce while retaining the stable event_id; no HTTP 202 is returned until the old epoch is durably fenced and all dispatch outcomes are resolved.",
         "headers": {
           "Retry-After": {
             "description": "Minimum delay before retrying this exact event",
