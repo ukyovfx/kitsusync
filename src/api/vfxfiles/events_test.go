@@ -520,6 +520,16 @@ func TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck(t *testing.T) {
 			http.Error(w, "unauthorized test control", http.StatusUnauthorized)
 			return
 		}
+		var mirror model.VFXFilesProductionConfig
+		if err := db.Where("production_id = ?", productionID).Take(&mirror).Error; err != nil || !mirror.Activated || mirror.ActivationEpoch != 4 {
+			http.Error(w, "unresolved barrier was not fail-closed", http.StatusConflict)
+			return
+		}
+		var unresolved model.NotificationDeliveryEvent
+		if err := db.Where("event_id = ?", "70000000-0000-4000-8000-000000000090").Take(&unresolved).Error; err != nil || unresolved.Disposition != model.DeliveryUnknown {
+			http.Error(w, "synthetic Discord outcome was not left unresolved", http.StatusConflict)
+			return
+		}
 		result := db.Model(&model.NotificationDeliveryEvent{}).
 			Where("event_id = ? AND disposition = ?", "70000000-0000-4000-8000-000000000090", model.DeliveryUnknown).
 			Update("disposition", model.DeliveryPending)
@@ -569,6 +579,18 @@ func TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("Plugin HTTP integration failed: %v\n%s", err, output)
+	}
+	var mirror model.VFXFilesProductionConfig
+	if err := db.Where("production_id = ?", productionID).Take(&mirror).Error; err != nil || mirror.Activated || mirror.ActivationEpoch != 5 || mirror.ConfigRevision != 8 {
+		t.Fatalf("durable barrier mirror=%+v err=%v", mirror, err)
+	}
+	var resolved model.NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", "70000000-0000-4000-8000-000000000090").Take(&resolved).Error; err != nil || resolved.Disposition != model.DeliveryTerminalFailure || resolved.FailureClass != "activation_epoch_fenced" {
+		t.Fatalf("old-epoch Discord journal=%+v err=%v", resolved, err)
+	}
+	var receipt model.VFXFilesEventInbox
+	if err := db.Where("production_id = ? AND event_type = ? AND diagnostic_code = ?", productionID, "storage_authority.deactivation_requested", "activation_barrier_complete").Take(&receipt).Error; err != nil || receipt.ProcessedAt == nil {
+		t.Fatalf("durable barrier receipt=%+v err=%v", receipt, err)
 	}
 	t.Logf("Plugin's durable retry, receiver ACK, and fresh-confirmation test passed: %s", strings.TrimSpace(string(output)))
 }
