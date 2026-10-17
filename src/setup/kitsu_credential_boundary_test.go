@@ -119,7 +119,11 @@ func TestCredentialCallerInventoryUsesApprovedTransports(t *testing.T) {
 	approvedBearer := map[string]bool{
 		filepath.Clean("setup/kitsu_connection_security.go"): true,
 		filepath.Clean("setup/kitsu_bot_validation.go"):      true,
+		filepath.Clean("setup/vfx_files_authorizer.go"):      true,
 		filepath.Clean("utils/request/request.go"):           true,
+		// PluginClient is only initialized for production by LoadRuntimeConfig,
+		// which supplies the origin-pinned, no-proxy TLS transport.
+		filepath.Clean("api/vfxfiles/plugin_client.go"): true,
 	}
 	err := filepath.Walk(srcRoot, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {

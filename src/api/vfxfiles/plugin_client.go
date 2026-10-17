@@ -13,9 +13,21 @@ import (
 )
 
 const (
+	contractVersion         = "1.0"
 	pluginRequestBodyLimit  = 1 << 20
 	pluginResponseBodyLimit = 4 << 20
 )
+
+func validID(value string) bool { return serviceUUIDPattern.MatchString(strings.TrimSpace(value)) }
+
+// ValidID reports whether a contract resource identifier is a canonical UUID.
+func ValidID(value string) bool { return validID(value) }
+
+// IsTrustedAuthorizationURL accepts only the Plugin's fixed Google OAuth URL.
+func IsTrustedAuthorizationURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && parsed.Scheme == "https" && strings.EqualFold(parsed.Hostname(), "accounts.google.com") && parsed.Port() == "" && parsed.User == nil && parsed.Path == "/o/oauth2/v2/auth" && parsed.Fragment == ""
+}
 
 var ErrPluginRequestRejected = errors.New("vfx files Plugin request rejected")
 
@@ -48,17 +60,14 @@ type pluginOperation struct {
 
 var pluginOperations = []pluginOperation{
 	{http.MethodGet, "/drive-connections", "vfx.connections.read", false},
-	{http.MethodPost, "/drive-connections/authorizations", "vfx.connections.authorize", true},
 	{http.MethodGet, "/drive-connections/{connection_id}", "vfx.connections.read", false},
-	{http.MethodPost, "/drive-connections/{connection_id}/revoke", "vfx.connections.revoke", true},
 	{http.MethodGet, "/drive-connections/{connection_id}/roots", "vfx.roots.read", false},
-	{http.MethodPost, "/drive-connections/{connection_id}/roots", "vfx.roots.verify", true},
 	{http.MethodGet, "/templates", "vfx.templates.read", false},
 	{http.MethodGet, "/productions/{production_id}/desired-config", "vfx.config.read", false},
-	{http.MethodPut, "/productions/{production_id}/desired-config", "vfx.config.write", true},
-	{http.MethodPost, "/productions/{production_id}/activation", "vfx.activation.write", true},
-	{http.MethodPost, "/productions/{production_id}/deactivation", "vfx.activation.write", true},
-	{http.MethodPost, "/productions/{production_id}/sync-previews", "vfx.sync.preview", false},
+	{http.MethodGet, "/productions/{production_id}/drive-authority", "vfx.config.read", false},
+	// Preview creates an expiring provider record even though it never mutates
+	// Drive. The contract requires a key so a retry reuses that exact record.
+	{http.MethodPost, "/productions/{production_id}/sync-previews", "vfx.sync.preview", true},
 	{http.MethodPost, "/productions/{production_id}/sync-jobs", "vfx.sync.apply", true},
 	{http.MethodGet, "/sync-jobs/{job_id}", "vfx.sync.read", false},
 	{http.MethodPost, "/sync-jobs/{job_id}/retry", "vfx.sync.retry", true},
@@ -71,15 +80,18 @@ var pluginOperations = []pluginOperation{
 // NewPluginClient accepts only the exact Zou plugin route base. The HTTP client
 // never follows redirects, which prevents bearer credentials crossing origin.
 func NewPluginClient(baseURL string, httpClient *http.Client, tokenConfig ServiceTokenConfig) (*PluginClient, error) {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" || parsed.Path != ServiceAudienceSuffix {
+	parsed, err := parsePluginAudience(baseURL)
+	if err != nil {
 		return nil, ErrPluginRequestRejected
 	}
 	if err := validateServiceTokenConfig(tokenConfig); err != nil || tokenConfig.Audience != parsed.String() {
 		return nil, ErrPluginRequestRejected
 	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient, err = defaultPluginHTTPClient(parsed.String())
+		if err != nil {
+			return nil, err
+		}
 	}
 	clientCopy := *httpClient
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -87,9 +99,18 @@ func NewPluginClient(baseURL string, httpClient *http.Client, tokenConfig Servic
 	return &PluginClient{baseURL: parsed, http: &clientCopy, token: tokenConfig}, nil
 }
 
+func parsePluginAudience(baseURL string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" || parsed.Path != ServiceAudienceSuffix || parsed.Opaque != "" {
+		return nil, ErrPluginRequestRejected
+	}
+	return parsed, nil
+}
+
 // Do sends one contract-declared management API operation. Scope is derived
-// from the operation table, not from caller input. All writes except the
-// explicitly read-only preview require a caller-provided idempotency key.
+// from the operation table, not from caller input. Operations that create or
+// change provider-side state, including expiring read-only Preview records,
+// require a caller-provided idempotency key.
 func (c *PluginClient) Do(ctx context.Context, request PluginRequest) (*http.Response, error) {
 	if c == nil || c.baseURL == nil || c.http == nil || ctx == nil || len(request.Body) > pluginRequestBodyLimit {
 		return nil, ErrPluginRequestRejected
@@ -116,6 +137,9 @@ func (c *PluginClient) Do(ctx context.Context, request PluginRequest) (*http.Res
 		return nil, ErrPluginRequestRejected
 	}
 	if request.Method == http.MethodPost && request.Body == nil {
+		return nil, ErrPluginRequestRejected
+	}
+	if !validConditionalHeaders(request) {
 		return nil, ErrPluginRequestRejected
 	}
 	// Re-authorize on every call so revoked Production access does not survive a
@@ -195,8 +219,14 @@ func requestProductionMatches(path string, query url.Values, body []byte, produc
 		}
 		bound = bound || found
 	}
-	if strings.HasPrefix(path, "/drive-connections") || path == "/templates" {
+	if strings.HasPrefix(path, "/drive-connections") {
 		return bound
+	}
+	// The v1 template catalog is actor-authorized and has a global route shape.
+	// The short-lived bearer still carries the one Production whose live admin
+	// permission was checked by AuthorizeProductionActor.
+	if path == "/templates" {
+		return true
 	}
 	// Job and snapshot identifiers are resolved server-side under the signed
 	// one-Production token. The Plugin must still enforce that binding in storage.
@@ -297,9 +327,48 @@ func safeIdempotencyKey(value string) bool {
 
 func allowedPluginRequestHeader(name string) bool {
 	switch http.CanonicalHeaderKey(name) {
-	case "If-Match":
+	case "If-Match", "If-None-Match":
 		return true
 	default:
 		return false
 	}
+}
+
+func validConditionalHeaders(request PluginRequest) bool {
+	if request.Method == http.MethodPut && strings.HasPrefix(request.Path, "/productions/") && strings.HasSuffix(request.Path, "/desired-config") {
+		ifMatch := request.Headers.Values("If-Match")
+		ifNoneMatch := request.Headers.Values("If-None-Match")
+		if len(ifMatch)+len(ifNoneMatch) != 1 {
+			return false
+		}
+		if len(ifNoneMatch) == 1 {
+			return ifNoneMatch[0] == "*"
+		}
+		return validConfigETag(ifMatch[0])
+	}
+	if request.Method == http.MethodPost && (strings.HasSuffix(request.Path, "/activation") || strings.HasSuffix(request.Path, "/deactivation")) {
+		ifMatch := request.Headers.Values("If-Match")
+		return len(ifMatch) == 1 && len(request.Headers.Values("If-None-Match")) == 0 && validConfigETag(ifMatch[0])
+	}
+	if len(request.Headers.Values("If-None-Match")) != 0 {
+		return false
+	}
+	for _, value := range request.Headers.Values("If-Match") {
+		if !validConfigETag(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func validConfigETag(value string) bool {
+	if len(value) < 3 || value[0] != '"' || value[len(value)-1] != '"' {
+		return false
+	}
+	for _, char := range value[1 : len(value)-1] {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return value != `"0"`
 }

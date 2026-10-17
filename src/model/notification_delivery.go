@@ -55,6 +55,8 @@ type NotificationDeliveryEvent struct {
 	ProductionID           string `gorm:"not null;index"`
 	TaskTypeID             string `gorm:"not null"`
 	TaskStatus             string `gorm:"not null"`
+	DeliverySource         string `gorm:"not null;default:'kitsu';index"`
+	SourceEventID          string `gorm:"size:64;index"`
 	TaskUpdatedAt          string
 	CommentID              string
 	CommentUpdatedAt       string
@@ -62,14 +64,15 @@ type NotificationDeliveryEvent struct {
 	PayloadJSON            string `gorm:"type:text;not null"`
 	PayloadSHA256          string `gorm:"not null;size:64"`
 	PayloadRedactedAt      *time.Time
-	WebhookRowID           uint   `gorm:"not null;index"`
-	DestinationGuildID     string `gorm:"not null;index"`
-	DestinationChannelID   string `gorm:"not null;index"`
-	DestinationWebhookID   string `gorm:"not null;index"`
-	DestinationFingerprint string `gorm:"not null;size:64"`
-	NotificationRevision   string `gorm:"size:64"`
-	Disposition            string `gorm:"not null;index"`
-	AttemptID              string `gorm:"size:32"`
+	WebhookRowID           uint       `gorm:"not null;index"`
+	DestinationGuildID     string     `gorm:"not null;index"`
+	DestinationChannelID   string     `gorm:"not null;index"`
+	DestinationWebhookID   string     `gorm:"not null;index"`
+	DestinationFingerprint string     `gorm:"not null;size:64"`
+	NotificationRevision   string     `gorm:"size:64"`
+	Disposition            string     `gorm:"not null;index"`
+	RetryAfterAt           *time.Time `gorm:"index" json:"-"`
+	AttemptID              string     `gorm:"size:32"`
 	AttemptCount           int
 	AttemptStartedAt       *time.Time
 	DeliveredAt            *time.Time
@@ -360,6 +363,8 @@ type NotificationDeliveryIntent struct {
 	ProductionID         string
 	TaskTypeID           string
 	TaskStatus           string
+	DeliverySource       string
+	SourceEventID        string
 	TaskUpdatedAt        string
 	CommentID            string
 	CommentUpdatedAt     string
@@ -398,6 +403,11 @@ type NotificationDestinationIdentity struct {
 }
 
 func NotificationEventIdentity(intent NotificationDeliveryIntent) string {
+	if intent.DeliverySource == "vfx_files" && strings.TrimSpace(intent.SourceEventID) != "" {
+		data, _ := json.Marshal([]string{"vfx_files", strings.TrimSpace(intent.SourceEventID)})
+		sum := sha256.Sum256(data)
+		return hex.EncodeToString(sum[:])
+	}
 	data, _ := json.Marshal([]string{
 		strings.TrimSpace(intent.ProductionID), strings.TrimSpace(intent.TaskID), strings.TrimSpace(intent.TaskTypeID),
 		strings.ToUpper(strings.TrimSpace(intent.TaskStatus)), strings.TrimSpace(intent.TaskUpdatedAt), strings.TrimSpace(intent.CommentID),
@@ -436,7 +446,7 @@ func supersedeKnownRejectedNotificationEvents(tx *gorm.DB, intent NotificationDe
 		return 0, gorm.ErrInvalidData
 	}
 	observedAt, ok := notificationEventTime(intent.TaskUpdatedAt, intent.CommentUpdatedAt)
-	if !ok {
+	if !ok || intent.DeliverySource != "" && intent.DeliverySource != "kitsu" {
 		return 0, nil
 	}
 	newEventID := NotificationEventIdentity(intent)
@@ -645,9 +655,17 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 	}
 	eventID := NotificationEventIdentity(intent)
 	payloadSum := sha256.Sum256(intent.Payload)
+	source := strings.TrimSpace(intent.DeliverySource)
+	if source == "" {
+		source = "kitsu"
+	}
+	if source != "kitsu" && source != "vfx_files" || source == "vfx_files" && (strings.TrimSpace(intent.SourceEventID) == "" || !vfxFilesUUIDRE.MatchString(intent.SourceEventID)) {
+		return nil, gorm.ErrInvalidData
+	}
 	row := NotificationDeliveryEvent{
 		EventID: eventID, TaskID: strings.TrimSpace(intent.TaskID), ProductionID: strings.TrimSpace(intent.ProductionID),
 		TaskTypeID: strings.TrimSpace(intent.TaskTypeID), TaskStatus: strings.TrimSpace(intent.TaskStatus),
+		DeliverySource: source, SourceEventID: strings.TrimSpace(intent.SourceEventID),
 		TaskUpdatedAt: intent.TaskUpdatedAt, CommentID: intent.CommentID, CommentUpdatedAt: intent.CommentUpdatedAt,
 		IsAssignNotification: intent.IsAssignNotification, PayloadJSON: string(intent.Payload), PayloadSHA256: hex.EncodeToString(payloadSum[:]),
 		WebhookRowID: intent.WebhookRowID, DestinationGuildID: strings.TrimSpace(intent.GuildID),
@@ -657,6 +675,7 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 		Disposition:            DeliveryPending, ThreadName: intent.ThreadName, PriorMessageID: intent.PriorMessageID, PriorThreadID: intent.PriorThreadID,
 	}
 	var identityConflict bool
+	var activationEpochFenced bool
 	err := db.Transaction(func(tx *gorm.DB) error {
 		if err := AcquireProductionNotificationWriteLock(tx, intent.ProductionID); err != nil {
 			return err
@@ -723,6 +742,28 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		if source == "vfx_files" {
+			var inbox VFXFilesEventInbox
+			if err := tx.Where("producer_id = ? AND event_id = ? AND production_id = ?", "vfx-files-plugin", strings.TrimSpace(intent.SourceEventID), strings.TrimSpace(intent.ProductionID)).Take(&inbox).Error; err != nil {
+				return err
+			}
+			var authority VFXFilesProductionConfig
+			authorityErr := tx.Where("production_id = ?", strings.TrimSpace(intent.ProductionID)).Take(&authority).Error
+			if authorityErr != nil && !errors.Is(authorityErr, gorm.ErrRecordNotFound) {
+				return authorityErr
+			}
+			if errors.Is(authorityErr, gorm.ErrRecordNotFound) || !authority.Activated || authority.ActivationEpoch == 0 || inbox.ActivationEpoch != authority.ActivationEpoch || inbox.Outcome != VFXFilesEventAccepted || inbox.ProcessedAt != nil {
+				if inbox.Outcome == VFXFilesEventAccepted && inbox.ProcessedAt == nil {
+					if err := tx.Model(&VFXFilesEventInbox{}).Where("id = ? AND outcome = ? AND processed_at IS NULL", inbox.ID, VFXFilesEventAccepted).Updates(map[string]any{
+						"outcome": VFXFilesEventQuarantined, "diagnostic_code": "activation_epoch_fenced", "processed_at": time.Now().UTC(),
+					}).Error; err != nil {
+						return err
+					}
+				}
+				activationEpochFenced = true
+				return nil
+			}
+		}
 		var count int64
 		if err := tx.Model(&ManagedChannelDeletion{}).Where("guild_id = ? AND channel_id = ? AND discord_webhook_id = ? AND disposition <> ?", row.DestinationGuildID, row.DestinationChannelID, row.DestinationWebhookID, ChannelDeletionComplete).Count(&count).Error; err != nil {
 			return err
@@ -734,6 +775,9 @@ func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent)
 	})
 	if err != nil {
 		return nil, err
+	}
+	if activationEpochFenced {
+		return nil, ErrVFXFilesActivationEpochFenced
 	}
 	if identityConflict {
 		return &row, ErrDeliveryIdentityConflict
@@ -776,12 +820,55 @@ func beginNotificationDelivery(db *gorm.DB, eventID string, expected *Notificati
 		if err := EnsureProductionNotificationMutationIdle(tx, row.ProductionID, ""); err != nil {
 			return err
 		}
+		if row.DeliverySource == "vfx_files" {
+			var routing ProductionNotificationConfig
+			if err := tx.Where("production_id = ? AND enabled = ?", row.ProductionID, true).First(&routing).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					unavailable = true
+					return nil
+				}
+				return err
+			}
+			var integration VFXFilesProductionConfig
+			if err := tx.Where("production_id = ?", row.ProductionID).First(&integration).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					unavailable = true
+					return nil
+				}
+				return err
+			}
+			var inbox VFXFilesEventInbox
+			if err := tx.Where("producer_id = ? AND event_id = ?", "vfx-files-plugin", row.SourceEventID).First(&inbox).Error; err != nil {
+				return err
+			}
+			if !integration.Activated || integration.ActivationEpoch == 0 || inbox.ActivationEpoch != integration.ActivationEpoch || inbox.Outcome != VFXFilesEventAccepted || inbox.ProcessedAt != nil {
+				unavailable = true
+				return nil
+			}
+			if inbox.EventType == "file_share.created" {
+				allowed, consentErr := VFXFilesDriveLinkDisclosureAllowed(tx, row.ProductionID, row.TaskTypeID)
+				if consentErr != nil {
+					return consentErr
+				}
+				if !allowed {
+					unavailable = true
+					if err := tx.Model(&VFXFilesEventInbox{}).Where("id = ? AND outcome = ? AND processed_at IS NULL", inbox.ID, VFXFilesEventAccepted).Updates(map[string]any{"outcome": VFXFilesEventQuarantined, "diagnostic_code": "drive_link_disclosure_consent_revoked", "processed_at": time.Now().UTC()}).Error; err != nil {
+						return err
+					}
+					return tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition IN ?", row.ID, []string{DeliveryPending, DeliveryRetryable}).Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "drive_link_disclosure_consent_revoked"}).Error
+				}
+			}
+		}
 		if row.Disposition == DeliveryInFlight {
 			if row.AttemptStartedAt == nil || now.Sub(*row.AttemptStartedAt) > 2*time.Minute {
 				if err := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ?", row.ID, DeliveryInFlight).Updates(map[string]any{"disposition": DeliveryUnknown, "failure_class": "expired_in_flight"}).Error; err != nil {
 					return err
 				}
 			}
+			unavailable = true
+			return nil
+		}
+		if row.Disposition == DeliveryRetryable && row.RetryAfterAt != nil && now.Before(*row.RetryAfterAt) {
 			unavailable = true
 			return nil
 		}
@@ -865,7 +952,7 @@ func beginNotificationDelivery(db *gorm.DB, eventID string, expected *Notificati
 		attempt.Event = row
 		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition IN ?", row.ID, []string{DeliveryPending, DeliveryRetryable}).Updates(map[string]any{
 			"disposition": DeliveryInFlight, "attempt_id": attempt.ID, "attempt_count": row.AttemptCount + 1, "attempt_started_at": now,
-			"failure_class": "",
+			"failure_class": "", "retry_after_at": nil,
 		})
 		if result.Error != nil {
 			return result.Error
@@ -894,13 +981,16 @@ func CompleteNotificationDelivery(db *gorm.DB, attempt DeliveryAttempt, messageI
 		}
 		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{
 			"disposition": DeliveryDelivered, "discord_message_id": messageID, "discord_thread_id": threadID, "delivered_at": now,
-			"prior_cleanup_pending": attempt.Event.PriorMessageID != "",
+			"prior_cleanup_pending": attempt.Event.PriorMessageID != "", "retry_after_at": nil,
 		})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return ErrDeliveryAttemptConflict
+		}
+		if attempt.Event.DeliverySource == "vfx_files" {
+			return nil
 		}
 		return updateTaskDeliveryCheckpoint(tx, attempt.Event, messageID, threadID)
 	})
@@ -933,11 +1023,29 @@ func SetNotificationDeliveryDisposition(db *gorm.DB, attempt DeliveryAttempt, di
 	if db == nil || (disposition != DeliveryRetryable && disposition != DeliveryUnknown && disposition != DeliveryTerminalFailure) {
 		return gorm.ErrInvalidData
 	}
+	return setNotificationDeliveryDisposition(db, attempt, disposition, failureClass, nil)
+}
+
+func SetNotificationDeliveryRetryAfter(db *gorm.DB, attempt DeliveryAttempt, failureClass string, retryAt time.Time) error {
+	if retryAt.IsZero() {
+		return gorm.ErrInvalidData
+	}
+	return setNotificationDeliveryDisposition(db, attempt, DeliveryRetryable, failureClass, &retryAt)
+}
+
+func setNotificationDeliveryDisposition(db *gorm.DB, attempt DeliveryAttempt, disposition, failureClass string, retryAt *time.Time) error {
+	if db == nil || attempt.ID == "" || (disposition != DeliveryRetryable && disposition != DeliveryUnknown && disposition != DeliveryTerminalFailure) {
+		return gorm.ErrInvalidData
+	}
+	updates := map[string]any{"disposition": disposition, "failure_class": failureClass, "retry_after_at": nil}
+	if disposition == DeliveryRetryable && retryAt != nil {
+		updates["retry_after_at"] = retryAt.UTC()
+	}
 	return db.Transaction(func(tx *gorm.DB) error {
 		if err := AcquireProductionNotificationWriteLock(tx, attempt.Event.ProductionID); err != nil {
 			return err
 		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{"disposition": disposition, "failure_class": failureClass})
+		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}

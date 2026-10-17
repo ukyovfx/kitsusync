@@ -821,6 +821,14 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ProductionNotificationWriteLock{},
 		&model.NotificationDeliveryEvent{},
 		&model.ManagedChannelDeletion{},
+		&model.VFXFilesProductionConfig{},
+		&model.VFXFilesAuthorizationIntent{},
+		&model.VFXFilesSyncOperation{},
+		&model.VFXFilesEventInbox{},
+		&model.VFXFilesEventNonce{},
+		&model.VFXFilesEventConflict{},
+		&model.VFXFilesDriveLinkDisclosureConsent{},
+		&model.VFXFilesDriveLinkDisclosureAudit{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
 	}
@@ -926,6 +934,11 @@ func main() {
 		slog.Fatal("failed to migrate SQLite schema", "error_class", "schema_migration_failed")
 		os.Exit(1)
 	}
+	vfxRuntimeConfig, err := vfxfiles.LoadRuntimeConfig(nil, nil)
+	if err != nil {
+		slog.Fatal("VFX Files integration configuration is invalid", "error_class", "vfx_files_configuration_invalid")
+		os.Exit(1)
+	}
 	model.PurgeLegacySensitiveData(db)
 
 	setup.SeedConfigIfFixture(db, conf)
@@ -1023,6 +1036,11 @@ func main() {
 
 	// HTTP server: health checks, project setup APIs, and admin UI routes.
 	mux := http.NewServeMux()
+	var vfxEventKeys map[string][]byte
+	if vfxRuntimeConfig != nil {
+		vfxEventKeys = vfxRuntimeConfig.EventKeys
+	}
+	mux.HandleFunc("POST /api/integrations/vfx-files/v1/events", vfxfiles.EventHandler(db, vfxEventKeys, time.Now))
 	mux.Handle("GET /favicon.ico", setup.FaviconHandler())
 	mux.Handle("GET /kitsusync.svg", setup.KitsuSyncIconHandler())
 	mux.HandleFunc("/health", healthHandler(runtime, func(ctx context.Context) error {
@@ -1126,6 +1144,12 @@ func main() {
 
 	registerAdminRoutes := func(prefix string) {
 		mux.HandleFunc(prefix+"/admin", setup.RequireSession(setup.AdminIndexWithRuntime(db, runtime.ready)))
+		resolveKitsuForVFXFiles := func(ctx context.Context) (setup.KitsuURLModel, error) {
+			hostname, _, _ := getKitsuCreds(db, conf)
+			return setup.ResolveKitsuConnection(ctx, hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
+		}
+		mux.HandleFunc(prefix+"/admin/vfx-files", setup.RequireSession(setup.VFXFilesAdminHandler(db, vfxRuntimeConfig, resolveKitsuForVFXFiles)))
+		mux.HandleFunc(prefix+"/admin/vfx-files/oauth-return", setup.RequireSession(setup.VFXFilesOAuthReturnHandler(db, resolveKitsuForVFXFiles)))
 		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)
@@ -1194,6 +1218,23 @@ func main() {
 		runtime.runWhenReady(func() { runOnePoll(conf, db) })
 	})
 	c.AddFunc("@every 1h", func() { redactExpiredNotificationPayloads(conf, db, time.Now()) })
+	c.AddFunc("@every 1h", func() {
+		if _, err := model.PruneVFXFilesEventNonces(db, time.Now().UTC(), 200); err != nil {
+			slog.Warn("VFX Files nonce cleanup failed", "error_class", "vfx_files_nonce_cleanup_failed")
+		}
+	})
+	if vfxRuntimeConfig != nil {
+		c.AddFunc("@every 15s", func() {
+			processed, deferred, err := discord.ProcessVFXFilesDeliveryEvents(db, 25)
+			if err != nil {
+				slog.Warn("VFX Files delivery inbox read failed", "error_class", "vfx_files_inbox_read_failed")
+				return
+			}
+			if processed > 0 || deferred > 0 {
+				slog.Info("VFX Files delivery inbox pass complete", "processed", processed, "deferred", deferred)
+			}
+		})
+	}
 	c.AddFunc("0 3 * * *", func() {
 		deleted := model.PurgeOldAuditLogs(db, 90)
 		if deleted > 0 {

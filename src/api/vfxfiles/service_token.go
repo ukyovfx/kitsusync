@@ -30,9 +30,12 @@ const (
 )
 
 var (
-	serviceKeyIDPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	serviceUUIDPattern   = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	serviceScopePattern  = regexp.MustCompile(`^vfx\.[a-z]+\.[a-z]+$`)
+	serviceKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	serviceUUIDPattern  = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	// Contract scopes may have two or three components after the vfx prefix
+	// (for example vfx.connections.read and vfx.sync.snapshot.write). The
+	// allowlist below remains the authority for which scopes can be issued.
+	serviceScopePattern  = regexp.MustCompile(`^vfx\.[a-z]+(?:\.[a-z]+){1,2}$`)
 	allowedServiceScopes = map[string]struct{}{
 		"vfx.connections.read": {}, "vfx.connections.authorize": {}, "vfx.connections.revoke": {},
 		"vfx.roots.read": {}, "vfx.roots.verify": {}, "vfx.templates.read": {},

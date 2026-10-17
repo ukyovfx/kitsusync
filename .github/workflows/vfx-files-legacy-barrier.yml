@@ -1,0 +1,30 @@
+name: VFX Files legacy activation barrier
+
+on:
+  push:
+    branches: [codex/kitsu-files-plugin-implementation]
+  pull_request:
+    branches: [master, codex/vfx-files-auth-route-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inactive-legacy-epoch-barrier:
+    name: KitsuSync Go tests with CGO SQLite (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run all KitsuSync source package tests with CGO SQLite
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./src/... -count=1 -timeout=240s

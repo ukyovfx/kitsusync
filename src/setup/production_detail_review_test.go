@@ -34,19 +34,33 @@ func TestUnconfiguredProductionSharesConfiguredDetailShell(t *testing.T) {
 	}
 }
 
-func TestProductionStorageSaveSharesDesktopFieldRow(t *testing.T) {
+func TestProductionStorageIsReadOnlyAndLinksToFilesPlugin(t *testing.T) {
+	t.Setenv("KITSUSYNC_VFX_FILES_API_URL", "https://files.example.invalid/api/plugins/vfx_files/integrations/v1")
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=storage-row", nil)
 	body := renderCurrentProductionStorage(request, model.Project{KitsuProjectID: "storage-row", StorageURL: "https://drive.example.invalid/project"}, "en")
 	for _, marker := range []string{
-		`class="form-stack drive-storage-form production-storage-form"`,
-		`class="production-storage-field"`,
-		`class="production-storage-control-row"`,
-		`data-drive-save`,
-		`production-storage-actions`,
+		`class="storage-link-readonly"`,
+		`https://drive.example.invalid/project`,
+		`Drive connection, verified root, storage settings, templates, and activation are managed by the VFX Files Plugin.`,
 	} {
 		if !strings.Contains(body, marker) {
-			t.Errorf("Storage input/Save row is missing %q: %s", marker, body)
+			t.Errorf("read-only Storage status is missing %q: %s", marker, body)
 		}
+	}
+	if strings.Contains(body, `name="storage_url"`) || strings.Contains(body, `class="drive-storage-form`) {
+		t.Fatal("KitsuSync still renders an editable per-Production Drive link")
+	}
+	if !strings.Contains(body, `Drive / Files Plugin settings`) || !strings.Contains(body, `/bot/admin/vfx-files?lang=ja&amp;production=storage-row`) {
+		t.Fatalf("Production Storage settings do not link to the scoped Files integration page: %s", body)
+	}
+}
+
+func TestProductionStorageHidesFilesEntryWhenPluginIsNotConfigured(t *testing.T) {
+	t.Setenv("KITSUSYNC_VFX_FILES_API_URL", "")
+	request := httptest.NewRequest("GET", "/bot/admin/projects?project=storage-row", nil)
+	body := renderCurrentProductionStorage(request, model.Project{KitsuProjectID: "storage-row", StorageURL: "https://drive.example.invalid/project"}, "en")
+	if strings.Contains(body, "/bot/admin/vfx-files") || strings.Contains(body, "Files Plugin settings") {
+		t.Fatalf("Files integration entry was visible while the Plugin is not configured: %s", body)
 	}
 }
 
