@@ -2,14 +2,18 @@ package vfxfiles
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -462,6 +466,111 @@ func TestSignedDeactivationBarrierAdvancesAlreadyInactiveLegacyEpoch(t *testing.
 	if err := db.Where("event_id = ?", eventID).Take(&receipt).Error; err != nil || receipt.ProcessedAt == nil || receipt.DiagnosticCode != "activation_barrier_complete" {
 		t.Fatalf("inactive barrier receipt=%+v err=%v", receipt, err)
 	}
+}
+
+// TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck runs the Plugin's
+// real outbox client against this package's signed HTTPS receiver. CI enables
+// it only after checking out the exact Plugin PR head and preparing its small
+// Python test environment; normal Go unit runs remain repository-local.
+func TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck(t *testing.T) {
+	pluginRoot := strings.TrimSpace(os.Getenv("VFX_FILES_CROSS_REPO_PLUGIN_ROOT"))
+	if pluginRoot == "" {
+		t.Skip("set VFX_FILES_CROSS_REPO_PLUGIN_ROOT to run the pinned Plugin integration")
+	}
+
+	db := eventHandlerTestDB(t)
+	productionID := "10000000-0000-4000-8000-000000000001"
+	fileEventID := "60000000-0000-4000-8000-000000000090"
+	clock := time.Now().UTC()
+	if result := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", productionID).
+		Updates(map[string]any{"config_revision": 7, "activation_epoch": 4, "activated": true}); result.Error != nil || result.RowsAffected != 1 {
+		if result.Error != nil {
+			t.Fatal(result.Error)
+		}
+		t.Fatalf("legacy config rows updated = %d, want 1", result.RowsAffected)
+	}
+	if err := db.Create(&model.VFXFilesEventInbox{
+		ProducerID: "vfx-files-plugin", EventID: fileEventID, PayloadSHA256: strings.Repeat("a", 64),
+		PayloadJSON: `{"synthetic":"prior-delivery"}`, EventType: "file_delivery.ready", ProductionID: productionID,
+		ActivationEpoch: 4, Outcome: model.VFXFilesEventAccepted, CreatedAt: clock,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.NotificationDeliveryEvent{
+		EventID: "70000000-0000-4000-8000-000000000090", TaskID: "synthetic-task", ProductionID: productionID,
+		TaskTypeID: "synthetic-task-type", TaskStatus: "FILE_READY", DeliverySource: "vfx_files", SourceEventID: fileEventID,
+		PayloadJSON: `{}`, PayloadSHA256: strings.Repeat("b", 64), WebhookRowID: 1,
+		DestinationGuildID: "synthetic-guild", DestinationChannelID: "synthetic-channel", DestinationWebhookID: "synthetic-webhook",
+		DestinationFingerprint: strings.Repeat("c", 64), Disposition: model.DeliveryUnknown,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	controlSecret := make([]byte, 32)
+	if _, err := rand.Read(controlSecret); err != nil {
+		t.Fatal(err)
+	}
+	controlKey := hex.EncodeToString(controlSecret)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/integrations/vfx-files/v1/events", EventHandler(
+		db, map[string][]byte{"vfx-files-plugin": []byte("synthetic-event-signing-key-material-0001")}, time.Now,
+	))
+	mux.HandleFunc("POST /__test__/resolve", func(w http.ResponseWriter, r *http.Request) {
+		if !hmac.Equal([]byte(r.Header.Get("X-Test-Control-Key")), []byte(controlKey)) {
+			http.Error(w, "unauthorized test control", http.StatusUnauthorized)
+			return
+		}
+		result := db.Model(&model.NotificationDeliveryEvent{}).
+			Where("event_id = ? AND disposition = ?", "70000000-0000-4000-8000-000000000090", model.DeliveryUnknown).
+			Update("disposition", model.DeliveryPending)
+		if result.Error != nil {
+			http.Error(w, "synthetic dispatch resolution failed", http.StatusInternalServerError)
+			return
+		}
+		if result.RowsAffected != 1 {
+			http.Error(w, "synthetic dispatch was not unresolved", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	server := httptest.NewTLSServer(mux)
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	keyPath := filepath.Join(tempDir, "event-hmac.key")
+	if err := os.WriteFile(keyPath, []byte("synthetic-event-signing-key-material-0001"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	certPath := filepath.Join(tempDir, "receiver-ca.pem")
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(certPath, certificate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	python := strings.TrimSpace(os.Getenv("VFX_FILES_CROSS_REPO_TEST_PYTHON"))
+	if python == "" {
+		python = "python3"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, python, "-m", "pytest", "-q", "tests/integrations/test_oauth_vault.py::test_integrated_legacy_import_waits_for_durable_deactivation_barrier")
+	cmd.Dir = pluginRoot
+	cmd.Env = append(os.Environ(),
+		"VFX_FILES_CROSS_REPO_TEST_ENDPOINT="+server.URL+"/api/integrations/vfx-files/v1/events",
+		"VFX_FILES_CROSS_REPO_TEST_HMAC_KEY_FILE="+keyPath,
+		"VFX_FILES_CROSS_REPO_TEST_KEY_ID=vfx-files-plugin",
+		"VFX_FILES_CROSS_REPO_TEST_CONTROL_URL="+server.URL+"/__test__/resolve",
+		"VFX_FILES_CROSS_REPO_TEST_CONTROL_KEY="+controlKey,
+		"SSL_CERT_FILE="+certPath,
+	)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatalf("Plugin HTTP integration timed out: %s", output)
+	}
+	if err != nil {
+		t.Fatalf("Plugin HTTP integration failed: %v\n%s", err, output)
+	}
+	t.Logf("Plugin's durable retry, receiver ACK, and fresh-confirmation test passed: %s", strings.TrimSpace(string(output)))
 }
 
 func TestAuthorityBarrierDefersForUnknownDiscordOutcomeAndFencesPendingJournal(t *testing.T) {
