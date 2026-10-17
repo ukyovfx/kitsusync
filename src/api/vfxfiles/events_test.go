@@ -477,6 +477,17 @@ func TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck(t *testing.T) {
 	if pluginRoot == "" {
 		t.Skip("set VFX_FILES_CROSS_REPO_PLUGIN_ROOT to run the pinned Plugin integration")
 	}
+	pluginSHA := strings.TrimSpace(os.Getenv("VFX_FILES_CROSS_REPO_PLUGIN_SHA"))
+	if decoded, err := hex.DecodeString(pluginSHA); err != nil || len(decoded) != sha256.Size {
+		t.Fatal("VFX_FILES_CROSS_REPO_PLUGIN_SHA must pin the 40-character Plugin commit SHA")
+	}
+	pluginHead, err := exec.Command("git", "-C", pluginRoot, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read pinned Plugin HEAD: %v: %s", err, pluginHead)
+	}
+	if got := strings.TrimSpace(string(pluginHead)); got != pluginSHA {
+		t.Fatalf("Plugin checkout HEAD = %s, want pinned SHA %s", got, pluginSHA)
+	}
 
 	db := eventHandlerTestDB(t)
 	productionID := "10000000-0000-4000-8000-000000000001"
@@ -563,9 +574,10 @@ func TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, python, "-m", "pytest", "-q", "tests/integrations/test_oauth_vault.py::test_integrated_legacy_import_waits_for_durable_deactivation_barrier")
+	cmd := exec.CommandContext(ctx, python, "-m", "pytest", "-q", "tests/integrations/test_oauth_vault.py::test_native_integrated_legacy_import_waits_for_durable_barrier_ack")
 	cmd.Dir = pluginRoot
 	cmd.Env = append(os.Environ(),
+		"VFX_FILES_CROSS_REPO_PLUGIN_SHA="+pluginSHA,
 		"VFX_FILES_CROSS_REPO_TEST_ENDPOINT="+server.URL+"/api/integrations/vfx-files/v1/events",
 		"VFX_FILES_CROSS_REPO_TEST_HMAC_KEY_FILE="+keyPath,
 		"VFX_FILES_CROSS_REPO_TEST_KEY_ID=vfx-files-plugin",
@@ -592,7 +604,7 @@ func TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck(t *testing.T) {
 	if err := db.Where("production_id = ? AND event_type = ? AND diagnostic_code = ?", productionID, "storage_authority.deactivation_requested", "activation_barrier_complete").Take(&receipt).Error; err != nil || receipt.ProcessedAt == nil {
 		t.Fatalf("durable barrier receipt=%+v err=%v", receipt, err)
 	}
-	t.Logf("Plugin's durable retry, receiver ACK, and fresh-confirmation test passed: %s", strings.TrimSpace(string(output)))
+	t.Logf("Plugin HEAD %s passed durable retry, receiver ACK, and authenticated fresh-confirmation test: %s", pluginSHA, strings.TrimSpace(string(output)))
 }
 
 func TestAuthorityBarrierDefersForUnknownDiscordOutcomeAndFencesPendingJournal(t *testing.T) {
