@@ -431,10 +431,12 @@ func TestSignedDeactivationBarrierAdvancesAlreadyInactiveLegacyEpoch(t *testing.
 	productionID := "10000000-0000-4000-8000-000000000001"
 	key := "synthetic-event-signing-key-material-0001"
 	clock := time.Date(2026, 10, 17, 3, 0, 0, 0, time.UTC)
-	if err := db.Create(&model.VFXFilesProductionConfig{
-		ProductionID: productionID, ConfigRevision: 7, ActivationEpoch: 4, Activated: false,
-	}).Error; err != nil {
-		t.Fatal(err)
+	if result := db.Model(&model.VFXFilesProductionConfig{}).Where("production_id = ?", productionID).
+		Updates(map[string]any{"config_revision": 7, "activation_epoch": 4, "activated": false}); result.Error != nil || result.RowsAffected != 1 {
+		if result.Error != nil {
+			t.Fatal(result.Error)
+		}
+		t.Fatalf("legacy config rows updated = %d, want 1", result.RowsAffected)
 	}
 	eventID := "60000000-0000-4000-8000-000000000093"
 	body, err := json.Marshal(map[string]any{"contract_version": "1.0", "events": []any{map[string]any{
