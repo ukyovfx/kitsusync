@@ -28,4 +28,3 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test ./src/... -count=1 -timeout=240s
-
