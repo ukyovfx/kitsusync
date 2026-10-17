@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   inactive-legacy-epoch-barrier:
-    name: Inactive legacy epoch SQLite barrier (Linux/CGO)
+    name: VFX Files API package with CGO SQLite (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -24,7 +24,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Run inactive legacy epoch barrier test with CGO SQLite
+      - name: Run VFX Files API package tests with CGO SQLite
         env:
           CGO_ENABLED: "1"
-        run: go test ./src/api/vfxfiles -run '^TestSignedDeactivationBarrierAdvancesAlreadyInactiveLegacyEpoch$' -count=1 -timeout=120s
+        run: go test ./src/api/vfxfiles -count=1 -timeout=120s -v
