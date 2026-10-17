@@ -468,6 +468,46 @@ func TestSignedDeactivationBarrierAdvancesAlreadyInactiveLegacyEpoch(t *testing.
 	}
 }
 
+// pluginCommitSHABytes is the decoded length of a 40-character git SHA-1 commit
+// id, the shape VFX_FILES_CROSS_REPO_PLUGIN_SHA pins.
+const pluginCommitSHABytes = 20
+
+// validPluginCommitSHA reports whether sha is a valid 40-character hexadecimal
+// git commit id. hex.DecodeString rejects non-hexadecimal and odd-length input,
+// and the decoded-length check rejects strings that are not exactly 40
+// characters (for example a 64-character SHA-256 digest).
+func validPluginCommitSHA(sha string) bool {
+	decoded, err := hex.DecodeString(sha)
+	return err == nil && len(decoded) == pluginCommitSHABytes
+}
+
+// TestPluginCommitSHAValidation pins the VFX_FILES_CROSS_REPO_PLUGIN_SHA shape
+// check without requiring the cross-repository Plugin checkout.
+func TestPluginCommitSHAValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		sha  string
+		want bool
+	}{
+		{"valid lowercase 40-hex git SHA", strings.Repeat("a", 40), true},
+		{"valid uppercase 40-hex git SHA", strings.Repeat("A", 40), true},
+		{"valid real 40-hex git SHA", "4941f5cece0d33c6a948b190cbfc1a48d1f38915", true},
+		{"sha256 64-hex digest rejected", strings.Repeat("a", 64), false},
+		{"39-character SHA rejected", strings.Repeat("a", 39), false},
+		{"38-character SHA rejected", strings.Repeat("a", 38), false},
+		{"42-character SHA rejected", strings.Repeat("a", 42), false},
+		{"non-hexadecimal 40-character value rejected", strings.Repeat("g", 40), false},
+		{"empty value rejected", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validPluginCommitSHA(tc.sha); got != tc.want {
+				t.Fatalf("validPluginCommitSHA(%q) = %v, want %v", tc.sha, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck runs the Plugin's
 // real outbox client against this package's signed HTTPS receiver. CI enables
 // it only after checking out the exact Plugin PR head and preparing its small
@@ -478,7 +518,7 @@ func TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck(t *testing.T) {
 		t.Skip("set VFX_FILES_CROSS_REPO_PLUGIN_ROOT to run the pinned Plugin integration")
 	}
 	pluginSHA := strings.TrimSpace(os.Getenv("VFX_FILES_CROSS_REPO_PLUGIN_SHA"))
-	if decoded, err := hex.DecodeString(pluginSHA); err != nil || len(decoded) != sha256.Size {
+	if !validPluginCommitSHA(pluginSHA) {
 		t.Fatal("VFX_FILES_CROSS_REPO_PLUGIN_SHA must pin the 40-character Plugin commit SHA")
 	}
 	pluginHead, err := exec.Command("git", "-C", pluginRoot, "rev-parse", "HEAD").CombinedOutput()
