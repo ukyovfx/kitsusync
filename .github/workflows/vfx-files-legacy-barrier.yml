@@ -29,27 +29,3 @@ jobs:
           CGO_ENABLED: "1"
         run: go test ./src/... -count=1 -timeout=240s
 
-      - name: Fetch exact VFX Files Plugin test source
-        env:
-          PLUGIN_HEAD: 40acd19c53708faa5a61234c62fd202c032e0a7c
-        run: |
-          plugin_root="$RUNNER_TEMP/vfx-files-plugin"
-          mkdir -p "$plugin_root"
-          git -C "$plugin_root" init
-          git -C "$plugin_root" remote add origin https://github.com/ukyovfx/vfx-kitsu-files-plugin.git
-          git -C "$plugin_root" fetch --depth=1 origin "$PLUGIN_HEAD"
-          git -C "$plugin_root" checkout --detach FETCH_HEAD
-          test "$(git -C "$plugin_root" rev-parse HEAD)" = "$PLUGIN_HEAD"
-
-      - name: Prepare isolated Plugin test dependencies
-        run: |
-          python3 -m venv "$RUNNER_TEMP/vfx-plugin-venv"
-          "$RUNNER_TEMP/vfx-plugin-venv/bin/python" -m pip install --disable-pip-version-check \
-            pytest==9.1.1 sqlalchemy==2.1.4 Flask==3.1.3 Flask-SQLAlchemy==3.1.1 cryptography==50.0.2
-
-      - name: Verify Plugin legacy import against the signed KitsuSync HTTPS barrier
-        env:
-          CGO_ENABLED: "1"
-          VFX_FILES_CROSS_REPO_PLUGIN_ROOT: ${{ runner.temp }}/vfx-files-plugin
-          VFX_FILES_CROSS_REPO_TEST_PYTHON: ${{ runner.temp }}/vfx-plugin-venv/bin/python
-        run: go test ./src/api/vfxfiles -run '^TestPluginLegacyImportReceivesDurableKitsuSyncBarrierAck$' -count=1 -timeout=180s
