@@ -233,6 +233,24 @@ func VFXFilesAdminHandler(db *gorm.DB, runtime *vfxfiles.RuntimeConfig, resolveK
 	}
 }
 
+// VFXFilesConfigurationUnavailableHandler reports an invalid optional server
+// configuration only to authenticated Studio administrators. It does not
+// expose configuration values or attempt Plugin requests.
+func VFXFilesConfigurationUnavailableHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, _, role, ok := CurrentSessionKitsuAuth(r)
+		if !ok || !isStudioManagerOrHigher(role) {
+			http.Error(w, "administrator access required", http.StatusForbidden)
+			return
+		}
+		lang := currentLang(r)
+		http.Error(w, t(lang,
+			"Files Pluginのサーバー設定に問題があるため、この連携は利用できません。管理者が設定を確認してください。",
+			"Files Plugin integration is unavailable because its server configuration is invalid. An administrator must review the configuration.",
+		), http.StatusServiceUnavailable)
+	}
+}
+
 // VFXFilesOAuthReturnHandler restores the Production context after the
 // Plugin-owned OAuth callback. The opaque intent ID is only a lookup key; the
 // Production and actor are loaded from SQLite and re-authorized against Kitsu.
