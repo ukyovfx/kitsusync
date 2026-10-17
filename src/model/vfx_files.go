@@ -783,7 +783,9 @@ func ApplyVFXFilesAuthorityTransition(db *gorm.DB, keyID, nonce string, input VF
 		} else {
 			if !config.Activated && config.ActivationEpoch == input.NewActivationEpoch {
 				// Idempotent retry after the mirror was durably fenced.
-			} else if config.Activated && config.ActivationEpoch == input.PreviousActivationEpoch {
+			} else if config.ActivationEpoch == input.PreviousActivationEpoch {
+				// Deactivation must also advance an already inactive legacy mirror:
+				// queued work from that epoch still needs the durable fence.
 				config.Activated = false
 				config.ActivationEpoch = input.NewActivationEpoch
 			} else {

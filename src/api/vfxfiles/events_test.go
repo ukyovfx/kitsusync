@@ -426,6 +426,42 @@ func TestSignedAuthorityBarrierDrainsOldEpochAndAllowsActivationAfterAck(t *test
 	}
 }
 
+func TestSignedDeactivationBarrierAdvancesAlreadyInactiveLegacyEpoch(t *testing.T) {
+	db := eventHandlerTestDB(t)
+	productionID := "10000000-0000-4000-8000-000000000001"
+	key := "synthetic-event-signing-key-material-0001"
+	clock := time.Date(2026, 10, 17, 3, 0, 0, 0, time.UTC)
+	if err := db.Create(&model.VFXFilesProductionConfig{
+		ProductionID: productionID, ConfigRevision: 7, ActivationEpoch: 4, Activated: false,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	eventID := "60000000-0000-4000-8000-000000000093"
+	body, err := json.Marshal(map[string]any{"contract_version": "1.0", "events": []any{map[string]any{
+		"contract_version": "1.0", "producer_id": "vfx-files-plugin", "event_id": eventID,
+		"event_type": "storage_authority.deactivation_requested", "occurred_at": clock.Format(time.RFC3339),
+		"production_id": productionID, "activation_epoch": 4, "config_revision": 8,
+		"previous_activation_epoch": 4, "new_activation_epoch": 5,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := signedEventRequest(t, body, key, "authority-nonce-inactive-0001", eventID, clock)
+	response := httptest.NewRecorder()
+	EventHandler(db, map[string][]byte{"fake-key-1": []byte(key)}, func() time.Time { return clock })(response, req)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("inactive deactivation barrier=%d %s", response.Code, response.Body.String())
+	}
+	var config model.VFXFilesProductionConfig
+	if err := db.Where("production_id = ?", productionID).Take(&config).Error; err != nil || config.Activated || config.ActivationEpoch != 5 || config.ConfigRevision != 8 {
+		t.Fatalf("inactive legacy mirror was not fenced: %+v err=%v", config, err)
+	}
+	var receipt model.VFXFilesEventInbox
+	if err := db.Where("event_id = ?", eventID).Take(&receipt).Error; err != nil || receipt.ProcessedAt == nil || receipt.DiagnosticCode != "activation_barrier_complete" {
+		t.Fatalf("inactive barrier receipt=%+v err=%v", receipt, err)
+	}
+}
+
 func TestAuthorityBarrierDefersForUnknownDiscordOutcomeAndFencesPendingJournal(t *testing.T) {
 	db := eventHandlerTestDB(t)
 	key := "synthetic-event-signing-key-material-0001"
