@@ -40,6 +40,7 @@ var (
 	ErrDeliveryIdentityConflict             = errors.New("notification delivery identity conflict")
 	ErrDeliveryUnavailable                  = errors.New("notification delivery is not safely dispatchable")
 	ErrDeliveryAttemptConflict              = errors.New("notification delivery attempt conflict")
+	ErrDeliveryReconciliationConflict       = errors.New("notification delivery reconciliation conflict")
 	ErrChannelDeletionConflict              = errors.New("managed channel deletion conflict")
 	ErrNotificationDeliveryInFlight         = errors.New("notification delivery is in flight")
 	ErrNotificationMutationRecoveryRequired = errors.New("production notification mutation requires recovery")
@@ -90,6 +91,58 @@ type NotificationDeliveryEvent struct {
 	IdentityConflictAt     *time.Time `json:"-"`
 	CreatedAt              time.Time  `gorm:"index"`
 	UpdatedAt              time.Time
+}
+
+const NotificationReconciliationProviderVerified = "discord_webhook_readback_verified"
+
+// NotificationDeliveryReconciliationAudit records the bounded proof used to
+// resolve an otherwise ambiguous delivery. It intentionally stores hashes
+// and provider IDs only; webhook credentials and message bodies are excluded.
+type NotificationDeliveryReconciliationAudit struct {
+	ID                     uint      `gorm:"primaryKey"`
+	EventID                string    `gorm:"not null;uniqueIndex:idx_delivery_reconcile_event_attempt;size:64"`
+	AttemptID              string    `gorm:"not null;uniqueIndex:idx_delivery_reconcile_event_attempt;size:32"`
+	ProductionID           string    `gorm:"not null;index"`
+	ActorEmail             string    `gorm:"not null;size:254"`
+	Action                 string    `gorm:"not null;size:64"`
+	ProviderMessageID      string    `gorm:"not null;size:32"`
+	ProviderThreadID       string    `gorm:"size:32"`
+	DestinationChannelID   string    `gorm:"not null;size:32"`
+	PayloadSHA256          string    `gorm:"not null;size:64"`
+	ProviderResponseSHA256 string    `gorm:"not null;size:64"`
+	CreatedAt              time.Time `gorm:"index"`
+}
+
+type VerifiedNotificationDeliveryEvidence struct {
+	EventID                string
+	AttemptID              string
+	ProductionID           string
+	WebhookRowID           uint
+	DestinationGuildID     string
+	DestinationChannelID   string
+	DestinationWebhookID   string
+	MessageID              string
+	ThreadID               string
+	PayloadSHA256          string
+	WebhookURLFingerprint  string
+	ProviderResponseSHA256 string
+	ActorEmail             string
+	VerifiedAt             time.Time
+}
+
+type UnknownVFXFilesDelivery struct {
+	EventID              string
+	SourceEventID        string
+	AttemptID            string
+	ProductionID         string
+	TaskID               string
+	TaskTypeID           string
+	DestinationChannelID string
+	PayloadSHA256        string
+	FailureClass         string
+	AttemptCount         int
+	AttemptStartedAt     *time.Time
+	UpdatedAt            time.Time
 }
 
 // ManagedChannelDeletion is a recoverable tombstone. A pending row prevents
@@ -996,6 +1049,104 @@ func CompleteNotificationDelivery(db *gorm.DB, attempt DeliveryAttempt, messageI
 	})
 }
 
+// RecordProviderVerifiedUnknownDelivery atomically records a positive,
+// provider-readback proof for the exact interrupted VFX Files attempt. It has
+// no retry or "not delivered" transition: absent or inconclusive evidence
+// must leave the row unknown.
+func RecordProviderVerifiedUnknownDelivery(db *gorm.DB, evidence VerifiedNotificationDeliveryEvidence) (bool, error) {
+	if db == nil || strings.TrimSpace(evidence.EventID) == "" || strings.TrimSpace(evidence.AttemptID) == "" ||
+		strings.TrimSpace(evidence.ProductionID) == "" || evidence.WebhookRowID == 0 ||
+		strings.TrimSpace(evidence.DestinationGuildID) == "" || strings.TrimSpace(evidence.DestinationChannelID) == "" ||
+		strings.TrimSpace(evidence.DestinationWebhookID) == "" || strings.TrimSpace(evidence.MessageID) == "" ||
+		strings.TrimSpace(evidence.PayloadSHA256) == "" || !isSHA256Hex(evidence.PayloadSHA256) ||
+		!isSHA256Hex(evidence.WebhookURLFingerprint) ||
+		!isSHA256Hex(evidence.ProviderResponseSHA256) || strings.TrimSpace(evidence.ActorEmail) == "" || evidence.VerifiedAt.IsZero() {
+		return false, gorm.ErrInvalidData
+	}
+	changed := false
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var event NotificationDeliveryEvent
+		if err := tx.Where("event_id = ?", strings.TrimSpace(evidence.EventID)).First(&event).Error; err != nil {
+			return err
+		}
+		if event.Disposition == DeliveryDelivered {
+			var existing NotificationDeliveryReconciliationAudit
+			if err := tx.Where("event_id = ? AND attempt_id = ?", event.EventID, evidence.AttemptID).First(&existing).Error; err != nil {
+				return ErrDeliveryReconciliationConflict
+			}
+			if existing.Action == NotificationReconciliationProviderVerified && existing.ProviderMessageID == evidence.MessageID && existing.ProviderThreadID == evidence.ThreadID && existing.ProviderResponseSHA256 == evidence.ProviderResponseSHA256 {
+				return nil
+			}
+			return ErrDeliveryReconciliationConflict
+		}
+		if event.Disposition != DeliveryUnknown || event.DeliverySource != "vfx_files" || event.AttemptID != evidence.AttemptID ||
+			event.ProductionID != evidence.ProductionID || event.WebhookRowID != evidence.WebhookRowID ||
+			event.DestinationGuildID != evidence.DestinationGuildID || event.DestinationChannelID != evidence.DestinationChannelID ||
+			event.DestinationWebhookID != evidence.DestinationWebhookID || event.PayloadSHA256 != evidence.PayloadSHA256 ||
+			event.AttemptStartedAt == nil || evidence.VerifiedAt.Before(event.AttemptStartedAt.Add(-2*time.Minute)) {
+			return ErrDeliveryReconciliationConflict
+		}
+		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, event.ProductionID, ""); err != nil {
+			return err
+		}
+		var project Project
+		if err := tx.Where("kitsu_project_id = ?", event.ProductionID).First(&project).Error; err != nil {
+			return err
+		}
+		var webhook ProjectWebhook
+		if err := tx.Where("id = ? AND kitsu_project_id = ? AND discord_channel_id = ?", event.WebhookRowID, event.ProductionID, event.DestinationChannelID).First(&webhook).Error; err != nil {
+			return ErrDeliveryReconciliationConflict
+		}
+		webhookURLHash := sha256.Sum256([]byte(webhook.WebhookURL))
+		if project.ValidationOnly || project.DiscordGuildID != event.DestinationGuildID ||
+			hex.EncodeToString(webhookURLHash[:]) != strings.ToLower(evidence.WebhookURLFingerprint) ||
+			notificationDestinationFingerprint(project.DiscordGuildID, webhook.DiscordChannelID, evidence.DestinationWebhookID) != event.DestinationFingerprint {
+			return ErrDeliveryReconciliationConflict
+		}
+		var route ProductionNotificationRoute
+		if err := tx.Where("production_id = ? AND task_type_id = ? AND destination_webhook_id = ? AND destination_channel_id = ?", event.ProductionID, event.TaskTypeID, event.WebhookRowID, event.DestinationChannelID).First(&route).Error; err != nil {
+			return ErrDeliveryReconciliationConflict
+		}
+		var tombstones int64
+		if err := tx.Model(&ManagedChannelDeletion{}).Where("webhook_row_id = ? AND disposition <> ?", event.WebhookRowID, ChannelDeletionComplete).Count(&tombstones).Error; err != nil {
+			return err
+		}
+		if tombstones != 0 {
+			return ErrDeliveryReconciliationConflict
+		}
+		audit := NotificationDeliveryReconciliationAudit{
+			EventID: event.EventID, AttemptID: event.AttemptID, ProductionID: event.ProductionID,
+			ActorEmail: strings.TrimSpace(evidence.ActorEmail), Action: NotificationReconciliationProviderVerified,
+			ProviderMessageID: evidence.MessageID, ProviderThreadID: evidence.ThreadID,
+			DestinationChannelID: event.DestinationChannelID, PayloadSHA256: event.PayloadSHA256,
+			ProviderResponseSHA256: strings.ToLower(evidence.ProviderResponseSHA256), CreatedAt: evidence.VerifiedAt.UTC(),
+		}
+		if err := tx.Create(&audit).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&NotificationDeliveryEvent{}).
+			Where("id = ? AND disposition = ? AND attempt_id = ? AND payload_sha256 = ?", event.ID, DeliveryUnknown, event.AttemptID, event.PayloadSHA256).
+			Updates(map[string]any{"disposition": DeliveryDelivered, "discord_message_id": evidence.MessageID, "discord_thread_id": evidence.ThreadID, "delivered_at": evidence.VerifiedAt.UTC(), "failure_class": "", "retry_after_at": nil})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrDeliveryReconciliationConflict
+		}
+		changed = true
+		return nil
+	})
+	return changed, err
+}
+
+func isSHA256Hex(value string) bool {
+	decoded, err := hex.DecodeString(strings.TrimSpace(value))
+	return err == nil && len(decoded) == sha256.Size
+}
+
 func updateTaskDeliveryCheckpoint(tx *gorm.DB, event NotificationDeliveryEvent, messageID, threadID string) error {
 	var task Task
 	err := tx.Where("task_id = ?", event.TaskID).First(&task).Error
@@ -1283,6 +1434,32 @@ func ListUnresolvedNotificationDeliveries(db *gorm.DB, limit int) ([]DeliveryDia
 	}
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out, nil
+}
+
+// ListUnknownVFXFilesDeliveries returns only the non-secret fields an
+// administrator needs to locate and reconcile an interrupted Plugin event.
+func ListUnknownVFXFilesDeliveries(db *gorm.DB, limit int) ([]UnknownVFXFilesDelivery, error) {
+	if db == nil {
+		return nil, gorm.ErrInvalidDB
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	var rows []NotificationDeliveryEvent
+	if err := db.Select("event_id", "source_event_id", "attempt_id", "production_id", "task_id", "task_type_id", "destination_channel_id", "payload_sha256", "failure_class", "attempt_count", "attempt_started_at", "updated_at").
+		Where("delivery_source = ? AND disposition = ?", "vfx_files", DeliveryUnknown).Order("updated_at asc, id asc").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]UnknownVFXFilesDelivery, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, UnknownVFXFilesDelivery{
+			EventID: row.EventID, SourceEventID: row.SourceEventID, AttemptID: row.AttemptID, ProductionID: row.ProductionID,
+			TaskID: row.TaskID, TaskTypeID: row.TaskTypeID, DestinationChannelID: row.DestinationChannelID,
+			PayloadSHA256: row.PayloadSHA256, FailureClass: row.FailureClass, AttemptCount: row.AttemptCount,
+			AttemptStartedAt: row.AttemptStartedAt, UpdatedAt: row.UpdatedAt,
+		})
 	}
 	return out, nil
 }

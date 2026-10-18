@@ -12,6 +12,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const vfxFilesDeliveryMarkerPrefix = "KitsuSync delivery: "
+
 // ProcessVFXFilesDeliveryEvents walks a fixed inbox high-water mark in bounded
 // pages. Deferred rows remain durable but cannot pin the first page ahead of
 // later events. It never mentions Discord users/roles or exposes Drive refs.
@@ -207,7 +209,7 @@ func fileSharePayload(db *gorm.DB, event vfxfiles.FileShareNotification) Payload
 	if lang == "ja" {
 		description = label + ": " + name + "\n" + access
 	}
-	embed := Embed{Title: title, Description: description, Url: event.URL, Color: 0x64748B}
+	embed := Embed{Title: title, Description: description, Url: event.URL, Color: 0x64748B, Footer: EmbedFooter{Text: vfxFilesDeliveryMarkerPrefix + event.EventID}}
 	if KitsuPublicURLResolver != nil {
 		taskURL := KitsuTaskURL(KitsuPublicURLResolver(), event.ProductionID, event.EntityType, event.RecipientTaskID)
 		if taskURL != "" {
@@ -250,7 +252,7 @@ func fileDeliveryPayload(db *gorm.DB, event vfxfiles.FileDeliveryNotification, p
 	if KitsuPublicURLResolver != nil {
 		link = KitsuTaskURL(KitsuPublicURLResolver(), productionID, event.EntityType, taskID)
 	}
-	embed := Embed{Title: label("ファイル配布 · "+strings.ToUpper(status), "File delivery · "+strings.ToUpper(status)), Color: 0x64748B, Fields: fields}
+	embed := Embed{Title: label("ファイル配布 · "+strings.ToUpper(status), "File delivery · "+strings.ToUpper(status)), Color: 0x64748B, Footer: EmbedFooter{Text: vfxFilesDeliveryMarkerPrefix + event.EventID}, Fields: fields}
 	if link != "" {
 		embed.Url = link
 	}

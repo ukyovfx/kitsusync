@@ -2688,6 +2688,7 @@ func pipelineNotificationDetails(lang string, stats RuntimeSnapshot, db *gorm.DB
 			rows.WriteString(`<div><dt><code>` + esc(item.EventID) + `</code></dt><dd>` + esc(detail) + `</dd></div>`)
 		}
 	}
+	rows.WriteString(`<div><dt>` + esc(t(lang, "曖昧なFiles通知", "Ambiguous Files notifications")) + `</dt><dd><a href="/bot/admin/notifications/recovery">` + esc(t(lang, "証拠を確認", "Review evidence")) + `</a></dd></div>`)
 	rows.WriteString(`</dl>`)
 	return rows.String()
 }

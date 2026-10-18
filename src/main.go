@@ -820,6 +820,7 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ProjectSetting{},
 		&model.ProductionNotificationWriteLock{},
 		&model.NotificationDeliveryEvent{},
+		&model.NotificationDeliveryReconciliationAudit{},
 		&model.ManagedChannelDeletion{},
 		&model.VFXFilesProductionConfig{},
 		&model.VFXFilesAuthorizationIntent{},
@@ -1150,6 +1151,7 @@ func main() {
 		}
 		mux.HandleFunc(prefix+"/admin/vfx-files", setup.RequireSession(setup.VFXFilesAdminHandler(db, vfxRuntimeConfig, resolveKitsuForVFXFiles)))
 		mux.HandleFunc(prefix+"/admin/vfx-files/oauth-return", setup.RequireSession(setup.VFXFilesOAuthReturnHandler(db, resolveKitsuForVFXFiles)))
+		mux.HandleFunc(prefix+"/admin/notifications/recovery", setup.RequireSession(setup.NotificationRecoveryHandler(db, discord.VerifyUnknownVFXFilesDelivery)))
 		mux.HandleFunc(prefix+"/admin/users", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			h, _, _ := getKitsuCreds(db, conf)
 			setup.UsersHandler(db, h)(w, r)

@@ -35,9 +35,10 @@ func TestVFXFilesJournalTaskIDIsStableAndSeparateFromKitsuTaskIDs(t *testing.T) 
 	}
 }
 
-func TestFileSharePayloadStatesExistingDriveAccessAndDisablesMentions(t *testing.T) {
+func TestFileSharePayloadMarksSourceEventAndDisablesMentions(t *testing.T) {
+	const eventID = "60000000-0000-4000-8000-000000000090"
 	payload := fileSharePayload(nil, vfxfiles.FileShareNotification{
-		EventID: "60000000-0000-4000-8000-000000000090", ProductionID: "10000000-0000-4000-8000-000000000001",
+		EventID: eventID, ProductionID: "10000000-0000-4000-8000-000000000001",
 		EntityType: "shot", EntityID: "30000000-0000-4000-8000-000000000001", RecipientTaskID: "50000000-0000-4000-8000-000000000002",
 		ObjectID: "opaque-id", ObjectType: "file", URL: "https://drive.google.com/file/d/opaque-id/view", Name: "plates.exr",
 	})
@@ -46,7 +47,7 @@ func TestFileSharePayloadStatesExistingDriveAccessAndDisablesMentions(t *testing
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, expected := range []string{"https://drive.google.com/file/d/opaque-id/view", "existing Google Drive ACLs", "No Drive ACLs were changed", "plates.exr"} {
+	for _, expected := range []string{"https://drive.google.com/file/d/opaque-id/view", "existing Google Drive ACLs", "No Drive ACLs were changed", "plates.exr", vfxFilesDeliveryMarkerPrefix + eventID} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("Drive link notification omitted %q: %s", expected, text)
 		}
