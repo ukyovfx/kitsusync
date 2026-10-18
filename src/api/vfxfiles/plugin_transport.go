@@ -15,13 +15,13 @@ var lookupPluginOrigin = func(ctx context.Context, host string) ([]netip.Addr, e
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
-func resolvePluginOrigin(ctx context.Context, host string) ([]netip.Addr, error) {
+func resolvePluginOrigin(ctx context.Context, host string, trustedPrivate []netip.Addr) ([]netip.Addr, error) {
 	host = normalizePluginHost(host)
 	if host == "" || host == "metadata" || host == "metadata.google.internal" {
 		return nil, ErrPluginRequestRejected
 	}
 	if address, err := netip.ParseAddr(host); err == nil {
-		if !validPluginAddress(address) {
+		if !validPluginAddress(address) && !trustedPrivatePluginAddress(address, trustedPrivate) {
 			return nil, ErrPluginRequestRejected
 		}
 		return []netip.Addr{address}, nil
@@ -36,7 +36,7 @@ func resolvePluginOrigin(ctx context.Context, host string) ([]netip.Addr, error)
 	seen := make(map[netip.Addr]struct{}, len(addresses))
 	for _, address := range addresses {
 		address = address.Unmap()
-		if !validPluginAddress(address) {
+		if !validPluginAddress(address) && !trustedPrivatePluginAddress(address, trustedPrivate) {
 			return nil, ErrPluginRequestRejected
 		}
 		if _, exists := seen[address]; exists {
@@ -52,16 +52,33 @@ func resolvePluginOrigin(ctx context.Context, host string) ([]netip.Addr, error)
 }
 
 func validPluginAddress(address netip.Addr) bool {
-	return address.IsValid() && address.IsGlobalUnicast() && !address.IsLinkLocalUnicast() && !address.IsMulticast() && !address.IsUnspecified()
+	return address.IsValid() && address.IsGlobalUnicast() && !address.IsPrivate() && !address.IsLinkLocalUnicast() && !address.IsMulticast() && !address.IsUnspecified()
+}
+
+// trustedPrivatePluginAddress permits only an explicitly pinned private IP.
+// Loopback, link-local, multicast, unspecified, and metadata destinations are
+// never allowed, even when a private endpoint is configured.
+func trustedPrivatePluginAddress(address netip.Addr, trusted []netip.Addr) bool {
+	address = address.Unmap()
+	if !address.IsValid() || !address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsUnspecified() {
+		return false
+	}
+	for _, candidate := range trusted {
+		if address == candidate.Unmap() {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePluginHost(host string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
-func newPinnedPluginTransport(host, port string, pinned []netip.Addr, dial func(context.Context, string, string) (net.Conn, error)) *http.Transport {
+func newPinnedPluginTransport(host, port string, pinned, trustedPrivate []netip.Addr, dial func(context.Context, string, string) (net.Conn, error)) *http.Transport {
 	host = normalizePluginHost(host)
 	addresses := append([]netip.Addr(nil), pinned...)
+	trusted := append([]netip.Addr(nil), trustedPrivate...)
 	transport := &http.Transport{
 		Proxy:                 nil,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
@@ -81,7 +98,7 @@ func newPinnedPluginTransport(host, port string, pinned []netip.Addr, dial func(
 		}
 		var lastErr error
 		for _, pinnedAddress := range addresses {
-			if !validPluginAddress(pinnedAddress) {
+			if !validPluginAddress(pinnedAddress) && !trustedPrivatePluginAddress(pinnedAddress, trusted) {
 				return nil, ErrPluginRequestRejected
 			}
 			connection, dialErr := dial(ctx, network, net.JoinHostPort(pinnedAddress.String(), port))
@@ -98,7 +115,7 @@ func newPinnedPluginTransport(host, port string, pinned []netip.Addr, dial func(
 	return transport
 }
 
-func defaultPluginHTTPClient(baseURL string) (*http.Client, error) {
+func defaultPluginHTTPClient(baseURL string, trustedPrivate []netip.Addr) (*http.Client, error) {
 	parsed, err := parsePluginAudience(baseURL)
 	if err != nil {
 		return nil, ErrPluginRequestRejected
@@ -110,9 +127,9 @@ func defaultPluginHTTPClient(baseURL string) (*http.Client, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	pinned, err := resolvePluginOrigin(ctx, host)
+	pinned, err := resolvePluginOrigin(ctx, host, trustedPrivate)
 	if err != nil {
 		return nil, ErrPluginRequestRejected
 	}
-	return &http.Client{Transport: newPinnedPluginTransport(host, port, pinned, nil), Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
+	return &http.Client{Transport: newPinnedPluginTransport(host, port, pinned, trustedPrivate, nil), Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }

@@ -6,19 +6,21 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 )
 
 const (
-	apiBaseURLEnv      = "KITSUSYNC_VFX_FILES_API_URL"
-	issuerEnv          = "KITSUSYNC_VFX_FILES_ISSUER"
-	subjectEnv         = "KITSUSYNC_VFX_FILES_SUBJECT"
-	clientIDEnv        = "KITSUSYNC_VFX_FILES_CLIENT_ID"
-	keyIDEnv           = "KITSUSYNC_VFX_FILES_KEY_ID"
-	signingKeyPathEnv  = "KITSUSYNC_VFX_FILES_SIGNING_KEY_PATH"
-	verificationDirEnv = "KITSUSYNC_VFX_FILES_JWKS_DIR"
-	eventHMACKeysEnv   = "KITSUSYNC_VFX_FILES_EVENT_HMAC_KEYS"
+	apiBaseURLEnv        = "KITSUSYNC_VFX_FILES_API_URL"
+	issuerEnv            = "KITSUSYNC_VFX_FILES_ISSUER"
+	subjectEnv           = "KITSUSYNC_VFX_FILES_SUBJECT"
+	clientIDEnv          = "KITSUSYNC_VFX_FILES_CLIENT_ID"
+	keyIDEnv             = "KITSUSYNC_VFX_FILES_KEY_ID"
+	signingKeyPathEnv    = "KITSUSYNC_VFX_FILES_SIGNING_KEY_PATH"
+	verificationDirEnv   = "KITSUSYNC_VFX_FILES_JWKS_DIR"
+	eventHMACKeysEnv     = "KITSUSYNC_VFX_FILES_EVENT_HMAC_KEYS"
+	trustedPrivateIPsEnv = "KITSUSYNC_VFX_FILES_TRUSTED_PRIVATE_IPS"
 )
 
 var keyIDRE = serviceKeyIDPattern
@@ -48,8 +50,9 @@ func LoadRuntimeConfig(getenv func(string) string, httpClient *http.Client) (*Ru
 	privatePath := strings.TrimSpace(getenv(signingKeyPathEnv))
 	verificationDir := strings.TrimSpace(getenv(verificationDirEnv))
 	eventRaw := strings.TrimSpace(getenv(eventHMACKeysEnv))
+	trustedPrivateRaw := strings.TrimSpace(getenv(trustedPrivateIPsEnv))
 	values := []string{base, issuer, subject, clientID, keyID, privatePath, verificationDir, eventRaw}
-	configured := false
+	configured := trustedPrivateRaw != ""
 	for _, value := range values {
 		configured = configured || value != ""
 	}
@@ -84,12 +87,44 @@ func LoadRuntimeConfig(getenv func(string) string, httpClient *http.Client) (*Ru
 		}
 		eventKeys[id] = key
 	}
+	trustedPrivate, err := parseTrustedPrivatePluginIPs(trustedPrivateRaw)
+	if err != nil {
+		return nil, errors.New("VFX Files trusted private endpoint configuration is invalid")
+	}
 	token := ServiceTokenConfig{Issuer: issuer, Audience: base, Subject: subject, ClientID: clientID, KeyID: keyID, PrivateKey: privateKey}
-	client, err := NewPluginClient(base, httpClient, token)
+	client, err := newPluginClient(base, httpClient, token, trustedPrivate)
 	if err != nil {
 		return nil, errors.New("VFX Files Plugin endpoint or service identity is invalid")
 	}
 	return &RuntimeConfig{Client: client, Token: token, VerificationKeys: verificationKeys, VerificationKeyDir: verificationDir, EventKeys: eventKeys}, nil
+}
+
+func parseTrustedPrivatePluginIPs(raw string) ([]netip.Addr, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > 16 {
+		return nil, errors.New("too many trusted endpoint addresses")
+	}
+	addresses := make([]netip.Addr, 0, len(parts))
+	seen := make(map[netip.Addr]struct{}, len(parts))
+	for _, part := range parts {
+		address, err := netip.ParseAddr(strings.TrimSpace(part))
+		if err != nil {
+			return nil, errors.New("invalid trusted endpoint address")
+		}
+		address = address.Unmap()
+		if !address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsMulticast() || address.IsUnspecified() {
+			return nil, errors.New("trusted endpoint address is not an allowed private address")
+		}
+		if _, exists := seen[address]; exists {
+			return nil, errors.New("duplicate trusted endpoint address")
+		}
+		seen[address] = struct{}{}
+		addresses = append(addresses, address)
+	}
+	return addresses, nil
 }
 
 // ManagementConfigured reports whether the server-side Plugin API has been

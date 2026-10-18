@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,6 +31,18 @@ func TestRuntimeConfigAbsentOrPartialFailsClosed(t *testing.T) {
 	values["KITSUSYNC_VFX_FILES_ACTOR_HMAC_KEY"] = strings.Repeat("a", 64)
 	if _, err := LoadRuntimeConfig(get, nil); err == nil {
 		t.Fatal("legacy bearer identity configuration was accepted")
+	}
+}
+
+func TestParseTrustedPrivatePluginIPsIsExactAndRejectsSpecialAddresses(t *testing.T) {
+	got, err := parseTrustedPrivatePluginIPs("172.28.0.5, fd00::5")
+	if err != nil || len(got) != 2 || got[0] != netip.MustParseAddr("172.28.0.5") || got[1] != netip.MustParseAddr("fd00::5") {
+		t.Fatalf("valid explicit private IP pins were rejected: %v %v", got, err)
+	}
+	for _, raw := range []string{"0.0.0.0", "127.0.0.1", "169.254.169.254", "224.0.0.1", "8.8.8.8", "172.28.0.5,172.28.0.5", "172.28.0.0/24"} {
+		if _, err := parseTrustedPrivatePluginIPs(raw); err == nil {
+			t.Errorf("unsafe or non-exact address input accepted: %q", raw)
+		}
 	}
 }
 

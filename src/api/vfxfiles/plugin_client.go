@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -80,6 +81,10 @@ var pluginOperations = []pluginOperation{
 // NewPluginClient accepts only the exact Zou plugin route base. The HTTP client
 // never follows redirects, which prevents bearer credentials crossing origin.
 func NewPluginClient(baseURL string, httpClient *http.Client, tokenConfig ServiceTokenConfig) (*PluginClient, error) {
+	return newPluginClient(baseURL, httpClient, tokenConfig, nil)
+}
+
+func newPluginClient(baseURL string, httpClient *http.Client, tokenConfig ServiceTokenConfig, trustedPrivate []netip.Addr) (*PluginClient, error) {
 	parsed, err := parsePluginAudience(baseURL)
 	if err != nil {
 		return nil, ErrPluginRequestRejected
@@ -88,7 +93,7 @@ func NewPluginClient(baseURL string, httpClient *http.Client, tokenConfig Servic
 		return nil, ErrPluginRequestRejected
 	}
 	if httpClient == nil {
-		httpClient, err = defaultPluginHTTPClient(parsed.String())
+		httpClient, err = defaultPluginHTTPClient(parsed.String(), trustedPrivate)
 		if err != nil {
 			return nil, err
 		}
