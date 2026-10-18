@@ -2894,50 +2894,14 @@ document.addEventListener('DOMContentLoaded', function(){
 	}
 }
 
-func DriveHandler(db *gorm.DB) http.HandlerFunc {
+func DriveHandler(_ *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		projectID := strings.TrimSpace(r.FormValue("kitsu_project_id"))
-		if projectID == "" {
-			http.Error(w, "a connected Production is required", http.StatusBadRequest)
-			return
-		}
-		if model.IsValidationOnlyProject(db, projectID) {
-			http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
-			return
-		}
-		storageURL := strings.TrimSpace(r.FormValue("storage_url"))
-		if storageURL != "" && !validConfiguredStorageURL(storageURL) {
-			http.Error(w, "storage URL must be an absolute HTTP or HTTPS URL", http.StatusBadRequest)
-			return
-		}
-		if err := model.SetProjectStorageURL(db, projectID, storageURL); err != nil {
-			target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings&drive_error=save", r)
-			http.Redirect(w, r, target, http.StatusSeeOther)
-			return
-		}
-		if model.GetProjectStorageURL(db, projectID) != storageURL {
-			target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings&drive_error=readback", r)
-			http.Redirect(w, r, target, http.StatusSeeOther)
-			return
-		}
-		target := withLang("/bot/admin/projects?project="+url.QueryEscape(projectID)+"&tab=storage-settings&drive_saved=1", r)
-		http.Redirect(w, r, target, http.StatusSeeOther)
-		return
+		http.Error(w, "Drive settings are managed in the native Kitsu Files Plugin; this legacy endpoint is read-only", http.StatusMethodNotAllowed)
 	}
-}
-
-func validConfiguredStorageURL(raw string) bool {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || strings.Contains(raw, "YOUR_FOLDER_ID") {
-		return false
-	}
-	parsed, err := url.Parse(raw)
-	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil
 }
 
 type connectionStatus struct {

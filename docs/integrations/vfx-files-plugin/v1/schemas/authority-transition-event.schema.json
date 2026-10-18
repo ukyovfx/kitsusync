@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kitsusync.invalid/contracts/vfx-files/v1/authority-transition-event.schema.json",
+  "title": "Plugin Drive authority transition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract_version", "producer_id", "event_id", "event_type", "occurred_at", "production_id", "activation_epoch", "config_revision", "previous_activation_epoch", "new_activation_epoch"],
+  "properties": {
+    "contract_version": {"const": "1.0"},
+    "producer_id": {"const": "vfx-files-plugin"},
+    "event_id": {"type": "string", "format": "uuid"},
+    "event_type": {"enum": ["storage_authority.activation_requested", "storage_authority.deactivation_requested"]},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "production_id": {"type": "string", "format": "uuid"},
+    "activation_epoch": {"type": "integer", "minimum": 1},
+    "config_revision": {"type": "integer", "minimum": 1},
+    "previous_activation_epoch": {"type": "integer", "minimum": 1},
+    "new_activation_epoch": {"type": "integer", "minimum": 2}
+  },
+  "description": "Sent alone. new_activation_epoch must equal previous_activation_epoch + 1. activation_requested uses the new epoch; deactivation_requested uses the previous epoch. KitsuSync acknowledges only after durable epoch fencing, old-event resolution, and in-flight dispatch drain."
+}

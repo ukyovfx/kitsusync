@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "KitsuSync Files Plugin event intake",
-    "version": "1.0.0",
-    "description": "Plugin-to-KitsuSync signed event endpoint. HTTP acceptance means durable intake only, not Discord delivery or recipient receipt."
+    "version": "1.1.0",
+    "description": "Plugin-to-KitsuSync signed event endpoint. Accepts homogeneous contract 1.0 event batches unchanged and strict homogeneous 1.1 file_share.created batches. Responses retain contract_version 1.0. Business events report durable intake, not Discord delivery. Drive-link notification is default-off and requires KitsuSync-owned route consent checked at intake and dispatch. A signed authority transition is acknowledged only after KitsuSync durably fences the epoch, resolves old-epoch deliveries, and drains in-flight dispatches."
   },
   "servers": [
     {
@@ -14,7 +14,7 @@
     "/events": {
       "post": {
         "operationId": "ingestFilesPluginEvents",
-        "summary": "Durably accept or quarantine Plugin business events",
+        "summary": "Durably accept, quarantine, or defer Plugin business events (contracts 1.0 and 1.1)",
         "security": [
           {
             "PluginHmacSignature": []
@@ -104,6 +104,9 @@
           "413": {
             "$ref": "#/components/responses/Error"
           },
+          "503": {
+            "$ref": "#/components/responses/ActivationSynchronizing"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -122,7 +125,7 @@
     },
     "responses": {
       "Accepted": {
-        "description": "Every event was durably accepted, recognized as identical duplicate, or quarantined",
+        "description": "Business events were durably accepted, recognized as identical duplicates, or quarantined. Authority transition events receive HTTP 202 only after the epoch fence and dispatch drain are durably complete.",
         "content": {
           "application/json": {
             "schema": {
@@ -137,6 +140,25 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ActivationSynchronizing": {
+        "description": "The Plugin authority epoch is synchronizing or an old-epoch Discord outcome remains unknown, so KitsuSync cannot yet prove the transition barrier. The transition and request nonce are not persisted. Retry with a fresh timestamp and nonce while retaining the stable event_id; no HTTP 202 is returned until the old epoch is durably fenced and all dispatch outcomes are resolved.",
+        "headers": {
+          "Retry-After": {
+            "description": "Minimum delay before retrying this exact event",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
             }
           }
         }

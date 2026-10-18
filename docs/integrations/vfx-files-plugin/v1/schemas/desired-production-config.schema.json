@@ -55,7 +55,8 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "description": "For My Drive this must be copied from the Plugin's successful RootVerification response for the same connected account and root. KitsuSync must never accept it from browser input. It is the Google OIDC subject, not an email or credential."
         },
         "root_id": {
           "type": "string",
@@ -75,6 +76,9 @@
             }
           },
           "then": {
+            "required": [
+              "drive_id"
+            ],
             "properties": {
               "drive_id": {
                 "type": "string",
@@ -92,6 +96,9 @@
             }
           },
           "then": {
+            "required": [
+              "owner_subject"
+            ],
             "properties": {
               "owner_subject": {
                 "type": "string",

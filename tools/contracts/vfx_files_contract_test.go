@@ -54,6 +54,25 @@ func TestVFXFilesContractDocumentsAreValidAndReferencesResolve(t *testing.T) {
 	}
 }
 
+func TestVFXFilesNativeOwnershipAndMirrorFreshnessGateAreDocumented(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join(contractDir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"The Plugin's native Kitsu Production page owns the callback flow.",
+		"KitsuSync does not receive or process OAuth codes, tokens",
+		"KitsuSync does not write Drive settings.",
+		"retries must reuse the same key",
+		"trusted, bounded Plugin status synchronization mechanism",
+		"explicit activation",
+	} {
+		if !strings.Contains(string(readme), required) {
+			t.Errorf("VFX Files contract documentation missing %q", required)
+		}
+	}
+}
+
 func checkRefs(t *testing.T, base string, value any) {
 	t.Helper()
 	switch typed := value.(type) {
@@ -138,6 +157,36 @@ func TestOpenAPIContractHasBothTrustDirectionsAndCriticalOperations(t *testing.T
 	if propertyListContains(update["properties"], "activation") {
 		t.Fatal("ordinary desired-config update must not bypass the explicit activation endpoint")
 	}
+	desiredConfigPut := pluginPaths["/productions/{production_id}/desired-config"].(map[string]any)["put"].(map[string]any)
+	if !parametersContainOptionalHeader(desiredConfigPut["parameters"], "If-Match") || !parametersContainOptionalHeader(desiredConfigPut["parameters"], "If-None-Match") {
+		t.Fatal("desired-config PUT must support conditional creation and conditional updates")
+	}
+	responses := desiredConfigPut["responses"].(map[string]any)
+	if responses["201"] == nil || responses["200"] == nil || responses["412"] == nil {
+		t.Fatal("desired-config PUT must document create, update, and failed precondition responses")
+	}
+	createdResponse := responses["201"].(map[string]any)
+	createdContent := createdResponse["content"].(map[string]any)
+	createdJSON := createdContent["application/json"].(map[string]any)
+	createdSchema := createdJSON["schema"].(map[string]any)
+	if createdSchema["$ref"] != "schemas/desired-production-config.schema.json" {
+		t.Fatalf("conditional create must return the desired config, got response schema %#v", createdSchema)
+	}
+	desiredConfig := readJSON(t, "schemas/desired-production-config.schema.json")
+	driveSchema := desiredConfig["properties"].(map[string]any)["drive"].(map[string]any)
+	if !driveModeRequires(driveSchema, "my_drive", "owner_subject") || !driveModeRequires(driveSchema, "shared_drive", "drive_id") {
+		t.Fatal("desired config schema must require the Plugin-verified My Drive subject or Shared Drive identity")
+	}
+	if !strings.Contains(desiredConfigPut["description"].(string), "exactly one strong If-Match") {
+		t.Fatal("desired-config conditional create/update exclusivity is not documented")
+	}
+	verification := plugin["components"].(map[string]any)["schemas"].(map[string]any)["RootVerification"].(map[string]any)
+	if !stringSliceContains(verification["required"], "account_mode") || !stringSliceContains(verification["required"], "owner_subject") {
+		t.Fatal("root verification must identify the verified Drive account subject for initial My Drive configuration")
+	}
+	if !propertyListContains(verification["properties"], "owner_subject") {
+		t.Fatal("root verification must expose the verified account subject, never a client-supplied identity")
+	}
 	for _, path := range []string{"/productions/{production_id}/activation", "/productions/{production_id}/deactivation"} {
 		operation := pluginPaths[path].(map[string]any)["post"].(map[string]any)
 		if !parametersContainHeader(operation["parameters"], "If-Match") {
@@ -162,11 +211,8 @@ func TestOpenAPIContractHasBothTrustDirectionsAndCriticalOperations(t *testing.T
 			if method != "post" && method != "put" && method != "patch" && method != "delete" {
 				continue
 			}
-			if path == "/productions/{production_id}/sync-previews" {
-				continue // preview is read-only and creates no durable provider operation
-			}
 			if !parametersContainHeader(operation["parameters"], "Idempotency-Key") {
-				t.Errorf("mutating Plugin operation %s %s must require Idempotency-Key", method, path)
+				t.Errorf("stateful Plugin operation %s %s must require Idempotency-Key", method, path)
 			}
 		}
 	}
@@ -176,6 +222,61 @@ func TestOpenAPIContractHasBothTrustDirectionsAndCriticalOperations(t *testing.T
 			t.Errorf("%s must scope connection/root reads to a Production", path)
 		}
 	}
+}
+
+func driveModeRequires(schema map[string]any, mode, requiredProperty string) bool {
+	conditions, ok := schema["allOf"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		ifClause, ok := condition["if"].(map[string]any)
+		if !ok {
+			continue
+		}
+		properties, ok := ifClause["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		accountMode, ok := properties["account_mode"].(map[string]any)
+		if !ok || accountMode["const"] != mode {
+			continue
+		}
+		thenClause, ok := condition["then"].(map[string]any)
+		if !ok {
+			return false
+		}
+		return stringSliceContains(thenClause["required"], requiredProperty)
+	}
+	return false
+}
+
+func TestMyDriveOwnerSubjectFixtureComesFromVerifiedPluginResponse(t *testing.T) {
+	fixture := readJSON(t, "fixtures/root-verification-my-drive.json")
+	if fixture["account_mode"] != "my_drive" || fixture["state"] != "verified" || fixture["owner_subject"] != "synthetic-oidc-subject-01" || fixture["connection_id"] == nil || fixture["root_id"] == nil {
+		t.Fatal("My Drive fixture must carry an opaque server-verified identity bound to connection and root")
+	}
+	if containsForbiddenKey(fixture) {
+		t.Fatal("root verification fixture contains credential material")
+	}
+}
+
+func parametersContainOptionalHeader(value any, wanted string) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range items {
+		parameter, ok := raw.(map[string]any)
+		if ok && parameter["in"] == "header" && parameter["name"] == wanted {
+			return parameter["required"] == false
+		}
+	}
+	return false
 }
 
 func TestOpenAPIRequiredMembersAreStringsBackedByProperties(t *testing.T) {
@@ -434,7 +535,7 @@ func TestFixturesHaveSafeStateAndContainNoCredentialFields(t *testing.T) {
 	if activation["enabled"] != false || activation["notification_epoch"] != float64(0) {
 		t.Fatal("fake desired config must start inactive and suppress bootstrap notifications")
 	}
-	for _, name := range []string{"delivery-created-multi-target.json", "delivery-needs-fix.json", "delivery-revised.json", "folder-provisioning-completed.json", "output-package-ready.json"} {
+	for _, name := range []string{"delivery-created-multi-target.json", "delivery-needs-fix.json", "delivery-revised.json", "folder-provisioning-completed.json", "output-package-created.json", "output-package-ready.json"} {
 		fixture := readJSON(t, "fixtures/"+name)
 		if containsForbiddenKey(fixture) {
 			t.Errorf("fixture %s contains a credential or live endpoint field", name)
