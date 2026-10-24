@@ -52,6 +52,7 @@ Never claim verification was run if it was not.
 - Update `docs/agent/CURRENT-STATE.md` only when accepted default-branch project state materially changes or its verification basis needs refresh.
 - Move completed durable task plans to `docs/agent/plans/archive/` when useful.
 - Keep reusable cross-project AI workflow rules in the separate `AI-Knowledge` repository; do not duplicate them here.
+- Proposed Hindsight transition (not active until approved): when the project-routed Hindsight MCP is available, use only the bank selected from this repository's canonical Git origin, and treat recalled content as advisory until checked against current Git, tests, configuration, CI, PRs, and runtime. If origin routing or Hindsight is unavailable, continue from repository evidence and report memory unavailable; do not fall back to stale Obsidian/Vault content. Do not retain durable Knowledge from this repository until the approved cutover and write policy explicitly permit it.
 - Do not store secrets, credentials, private keys, session tokens, raw logs, or full chat transcripts in project knowledge files.
 
 ## Not Yet
