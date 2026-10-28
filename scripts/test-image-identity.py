@@ -163,3 +163,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # Run the nested-index/attestation/gzip regression in existing CI entrypoints.
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "test-oci-nested-index.py")], check=True)

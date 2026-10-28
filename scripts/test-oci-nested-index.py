@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Reproduce Docker 2026 OCI nested-index layout with content-addressed fixture."""
+import gzip
 import hashlib
 import io
 import json
@@ -127,4 +128,47 @@ with tempfile.TemporaryDirectory() as tmpname:
             tf.addfile(info, io.BytesIO(blob))
     rejected = fixture.run("archive", str(ambiguous_path), fixture.IMAGE_REF, check=False)
     assert rejected.returncode != 0 and "exactly one deployable image" in rejected.stderr
+    # Docker 29 stores content-addressed compressed layers while rootfs
+    # diff_ids identify the decompressed bytes.
+    compressed = dict(raw)
+    saved_manifest = json.loads(compressed["manifest.json"])
+    original_layer_name = saved_manifest[0]["Layers"][0]
+    original_layer = compressed.pop(original_layer_name)
+    compressed_layer = gzip.compress(original_layer, mtime=0)
+    compressed_layer_hash = hashof(compressed_layer)
+    compressed_layer_name = "blobs/sha256/" + compressed_layer_hash
+    compressed[compressed_layer_name] = compressed_layer
+    saved_manifest[0]["Layers"][0] = compressed_layer_name
+    compressed["manifest.json"] = compact(saved_manifest)
+    image_descriptor = json.loads(child_raw)["manifests"][0]
+    oci_manifest_name = "blobs/sha256/" + image_descriptor["digest"].split(":")[1]
+    compressed_manifest = json.loads(compressed[oci_manifest_name])
+    compressed_manifest["layers"][0] = {
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "digest": "sha256:" + compressed_layer_hash,
+        "size": len(compressed_layer),
+    }
+    compressed_manifest_bytes = compact(compressed_manifest)
+    compressed_manifest_hash = hashof(compressed_manifest_bytes)
+    compressed["blobs/sha256/" + compressed_manifest_hash] = compressed_manifest_bytes
+    compressed_child = json.loads(child_raw)
+    compressed_child["manifests"][0]["digest"] = "sha256:" + compressed_manifest_hash
+    compressed_child["manifests"][0]["size"] = len(compressed_manifest_bytes)
+    compressed_child_bytes = compact(compressed_child)
+    compressed_child_hash = hashof(compressed_child_bytes)
+    compressed["blobs/sha256/" + compressed_child_hash] = compressed_child_bytes
+    compressed_root = json.loads(compressed["index.json"])
+    compressed_root["manifests"][0]["digest"] = "sha256:" + compressed_child_hash
+    compressed_root["manifests"][0]["size"] = len(compressed_child_bytes)
+    compressed["index.json"] = compact(compressed_root)
+    compressed_path = tmp / "nested-gzip.tar"
+    with tarfile.open(compressed_path, "w") as tf:
+        for name, blob in compressed.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(blob)
+            tf.addfile(info, io.BytesIO(blob))
+    gzip_result = fixture.run("archive", str(compressed_path), fixture.IMAGE_REF, check=False)
+    assert gzip_result.returncode == 0, gzip_result.stderr
+    assert fixture.fields(gzip_result.stdout)["image_content_digest"] == fixture.fields(direct.stdout)["image_content_digest"]
+
     print("nested-oci-index-tests=PASS")

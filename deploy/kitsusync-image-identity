@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import re
@@ -301,20 +302,33 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, int]:
             fail("image archive layer count does not match rootfs identity")
         for index, layer_name in enumerate(layer_names):
             expected_layer_digest = content_addressed_digest(layer_name)
-            if diff_ids[index] != expected_layer_digest:
-                fail("image archive layer descriptor does not match rootfs identity")
+            oci_layer = oci_layers[index]
+            if not isinstance(oci_layer, dict) or oci_layer.get("digest") != expected_layer_digest:
+                fail("OCI image layer descriptor does not match the archive layer")
             try:
                 member = archive.getmember(layer_name)
             except KeyError:
                 fail(f"image archive layer is missing: {layer_name}")
-            if not member.isfile():
-                fail(f"image archive layer is unsafe: {layer_name}")
+            if not member.isfile() or oci_layer.get("size") != member.size:
+                fail("OCI image layer size or type is invalid")
             layer_stream = archive.extractfile(member)
             if layer_stream is None or digest_stream(layer_stream) != expected_layer_digest:
                 fail("image archive layer content digest does not match its descriptor")
-            oci_layer = oci_layers[index]
-            if not isinstance(oci_layer, dict) or oci_layer.get("mediaType") not in UNCOMPRESSED_LAYER_MEDIA_TYPES or oci_layer.get("digest") != expected_layer_digest or oci_layer.get("size") != member.size:
-                fail("OCI image layer descriptor does not match the archive layer")
+            media_type = oci_layer.get("mediaType")
+            if media_type in UNCOMPRESSED_LAYER_MEDIA_TYPES:
+                if diff_ids[index] != expected_layer_digest:
+                    fail("image archive layer descriptor does not match rootfs identity")
+            elif media_type == "application/vnd.oci.image.layer.v1.tar+gzip":
+                try:
+                    layer_stream.seek(0)
+                    with gzip.GzipFile(fileobj=layer_stream, mode="rb") as uncompressed:
+                        actual_diff_id = digest_stream(uncompressed)
+                except (OSError, EOFError, ValueError):
+                    fail("OCI gzip layer cannot be validated")
+                if diff_ids[index] != actual_diff_id:
+                    fail("OCI gzip layer decompressed digest does not match rootfs identity")
+            else:
+                fail("OCI image layer media type is unsupported")
 
         platform = {"architecture": config.get("architecture"), "os": config.get("os"), "variant": config.get("variant", "")}
         descriptor = normalize_descriptor(platform, rootfs, image_config)
