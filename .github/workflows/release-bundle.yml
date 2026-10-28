@@ -103,7 +103,40 @@ jobs:
           archive="$(mktemp)"
           trap 'rm -f "$archive"' EXIT
           docker save --output "$archive" "$IMAGE_REF"
-          python3 control/scripts/diagnose-oci-index.py "$archive"
+          python3 - "$archive" <<'PY'
+          import json
+          import re
+          import sys
+          import tarfile
+
+          safe_media = {
+              "application/vnd.oci.image.manifest.v1+json",
+              "application/vnd.docker.distribution.manifest.v2+json",
+              "application/vnd.oci.image.index.v1+json",
+              "application/vnd.docker.distribution.manifest.list.v2+json",
+          }
+          with tarfile.open(sys.argv[1], "r:*") as tar:
+              member = tar.getmember("index.json")
+              if not member.isfile() or member.size > 1024 * 1024:
+                  raise ValueError("unsafe index metadata")
+              stream = tar.extractfile(member)
+              if stream is None:
+                  raise ValueError("unreadable index metadata")
+              index = json.load(stream)
+              descriptors = index.get("manifests")
+              if not isinstance(descriptors, list):
+                  raise ValueError("invalid index descriptors")
+              print(f"oci_index_descriptor_count={len(descriptors)}")
+              for index, entry in enumerate(descriptors):
+                  if not isinstance(entry, dict):
+                      raise ValueError("invalid descriptor")
+                  media = entry.get("mediaType")
+                  safe = media if media in safe_media else "missing-or-unrecognized"
+                  digest = entry.get("digest")
+                  valid = isinstance(digest, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None
+                  print(f"oci_descriptor_{index}_media_type={safe}")
+                  print(f"oci_descriptor_{index}_sha256_syntax_valid={str(valid).lower()}")
+          PY
 
       - name: Build and verify deployable release bundle
         env:
