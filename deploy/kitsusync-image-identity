@@ -234,16 +234,51 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, int]:
         manifest_descriptor = index_manifests[0]
         if not isinstance(manifest_descriptor, dict):
             fail("OCI image manifest descriptor is invalid")
-        manifest_digest = manifest_descriptor.get("digest")
-        manifest_size = manifest_descriptor.get("size")
         annotations = manifest_descriptor.get("annotations", {})
         expected_tag = expected_ref.rsplit(":", 1)[-1]
+        if not isinstance(annotations, dict) or annotations.get("org.opencontainers.image.ref.name") != expected_tag:
+            fail("OCI image index tag mapping does not match the approved image reference")
+        if manifest_descriptor.get("mediaType") == OCI_INDEX_MEDIA_TYPE:
+            nested_digest = manifest_descriptor.get("digest")
+            nested_size = manifest_descriptor.get("size")
+            if not isinstance(nested_digest, str) or DIGEST_RE.fullmatch(nested_digest) is None:
+                fail("OCI nested index digest is invalid")
+            if type(nested_size) is not int or nested_size <= 0:
+                fail("OCI nested index size is invalid")
+            nested_name = "blobs/sha256/" + nested_digest.removeprefix("sha256:")
+            nested_index, actual_nested_digest = read_json_member(archive, nested_name)
+            if actual_nested_digest != nested_digest or archive.getmember(nested_name).size != nested_size:
+                fail("OCI nested index content does not match its descriptor")
+            descendants = nested_index.get("manifests")
+            if nested_index.get("schemaVersion") != 2 or nested_index.get("mediaType") != OCI_INDEX_MEDIA_TYPE or not isinstance(descendants, list) or not 1 <= len(descendants) <= 8:
+                fail("OCI nested index structure is invalid")
+            candidates = []
+            for entry in descendants:
+                if not isinstance(entry, dict) or entry.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE:
+                    fail("OCI nested index contains an unsupported descriptor")
+                digest = entry.get("digest")
+                size = entry.get("size")
+                if not isinstance(digest, str) or DIGEST_RE.fullmatch(digest) is None or type(size) is not int or size <= 0:
+                    fail("OCI nested image manifest descriptor is invalid")
+                name = "blobs/sha256/" + digest.removeprefix("sha256:")
+                body, actual = read_json_member(archive, name)
+                if actual != digest or archive.getmember(name).size != size:
+                    fail("OCI nested image manifest bytes do not match the descriptor")
+                attestation = entry.get("annotations", {}).get("vnd.docker.reference.type") == "attestation-manifest" if isinstance(entry.get("annotations", {}), dict) else False
+                if attestation:
+                    if body.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE or body.get("schemaVersion") != 2:
+                        fail("OCI nested attestation manifest is invalid")
+                else:
+                    candidates.append(entry)
+            if len(candidates) != 1:
+                fail("OCI nested index must identify exactly one deployable image")
+            manifest_descriptor = candidates[0]
+        manifest_digest = manifest_descriptor.get("digest")
+        manifest_size = manifest_descriptor.get("size")
         if manifest_descriptor.get("mediaType") != OCI_MANIFEST_MEDIA_TYPE or not isinstance(manifest_digest, str) or DIGEST_RE.fullmatch(manifest_digest) is None:
             fail("OCI image manifest digest is invalid")
         if not isinstance(manifest_size, int) or isinstance(manifest_size, bool) or manifest_size < 0:
             fail("OCI image manifest size is invalid")
-        if not isinstance(annotations, dict) or annotations.get("org.opencontainers.image.ref.name") != expected_tag:
-            fail("OCI image index tag mapping does not match the approved image reference")
         manifest_name = "blobs/sha256/" + manifest_digest.removeprefix("sha256:")
         oci_manifest, actual_manifest_digest = read_json_member(archive, manifest_name)
         if actual_manifest_digest != manifest_digest or archive.getmember(manifest_name).size != manifest_size:
