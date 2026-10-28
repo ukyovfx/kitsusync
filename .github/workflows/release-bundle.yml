@@ -95,6 +95,16 @@ jobs:
             --build-arg IMAGE_REVISION="${{ steps.release.outputs.commit }}" \
             --build-arg WORKTREE_DIRTY=false app
 
+      - name: Diagnose OCI index shape without revealing image metadata
+        env:
+          IMAGE_REF: kitsusync:${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          archive="$(mktemp)"
+          trap 'rm -f "$archive"' EXIT
+          docker save --output "$archive" "$IMAGE_REF"
+          python3 control/scripts/diagnose-oci-index.py "$archive"
+
       - name: Build and verify deployable release bundle
         env:
           ARTIFACT_KIND: release
