@@ -52,7 +52,8 @@ Never claim verification was run if it was not.
 - Update `docs/agent/CURRENT-STATE.md` only when accepted default-branch project state materially changes or its verification basis needs refresh.
 - Move completed durable task plans to `docs/agent/plans/archive/` when useful.
 - Keep reusable cross-project AI workflow rules in the separate `AI-Knowledge` repository; do not duplicate them here.
-- For an explicitly approved, selective KitsuSync Hindsight milestone Retain, store only a verified,
+- For a verified reusable KitsuSync outcome at a meaningful milestone, Codex may Retain it under
+  task-level authorization already granted without separate per-Retain Owner approval; the Retain must store only a verified,
   durable lesson absent from the origin-routed KitsuSync Bank. Use a stable topic-based `document_id`
   with `update_mode=replace`; include `source_repo`, `source_path`, `source_url`, `source_sha`, and
   `verification_status`. Check for an equivalent before writing; use `SKIP` when none qualifies.
