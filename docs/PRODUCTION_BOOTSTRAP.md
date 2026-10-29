@@ -79,7 +79,10 @@ integrity without opening or checkpointing WAL/SHM state; when either sidecar
 exists, the database result is unknown and the sidecar files remain untouched.
 
 The collector reports the additive `database.migration_compatibility` field
-for the v0.4.9-to-v0.5.1 upgrade. It verifies the legacy table/column contract
+for the verified staged release. It retains separate exact-source contracts
+for v0.5.1 and the v0.5.2 candidate, reporting
+`v0.4.9_to_v0.5.1` or `v0.4.9_to_v0.5.2` only when that candidate's immutable
+source identity is approved. It verifies the legacy table/column contract
 needed by the migration; it does not execute a migration against Production.
 An absent database, unreadable schema, active WAL/SHM, or missing required
 legacy schema cannot be reported as compatible.
@@ -242,7 +245,7 @@ The read-only preflight is evidence gathering, not authorization to deploy.
 Before a separately approved Production update, an operator must verify all
 items below against the same candidate source SHA and the live host:
 
-- [ ] The released v0.5.1 candidate has successful exact-source CI, Security,
+- [ ] The selected release candidate has successful exact-source CI, Security,
   CodeQL, normal release bundle provenance, and immutable image identity.
 - [ ] The installed deploy wrapper and inspection helpers have approved owner,
   mode, source digest, and recorded provenance. Any deploy-wrapper or
@@ -254,8 +257,10 @@ items below against the same candidate source SHA and the live host:
 - [ ] Runtime readiness is `ready` in normal mode. `setup_required` is an
   absolute stop for normal deployment; do not force or reinterpret it.
 - [ ] The fixed Production SQLite path is proven to be the live app container's
-  `/app/data` bind mount; integrity is `ok`; migration compatibility is
-  `v0.4.9_to_v0.5.1`; no unresolved WAL/SHM or schema state remains.
+  `/app/data` bind mount; integrity is `ok`; migration compatibility matches
+  the selected release (`v0.4.9_to_v0.5.1` for v0.5.1 or
+  `v0.4.9_to_v0.5.2` for the v0.5.2 candidate); no unresolved WAL/SHM or
+  schema state remains.
 - [ ] The existing protected backup inventory and restore verifier pass. The
   operator understands that this verifies the captured backup only; it does
   not prove that it contains writes made after its capture.
@@ -344,3 +349,16 @@ the wrapper removes only the new KitsuSync app container, project network, and
 files created in the still-marked fresh data directory. The verified seed and
 control plane remain for an identical retry. It never changes Kitsu/Zou,
 PostgreSQL, Redis, nginx, Tailscale, firewall, or SSH configuration.
+
+Release source identity after v0.5.1 is deliberately not pinned inside the
+application source: that would make the tag's source SHA self-referential. The
+maintenance artifact carries a strict `approved_releases` map in its manifest,
+and the root-owned installed identity binds that map to the exact installed
+inspector and collector hashes. The map is empty in this PR. After a release
+tag is created from reviewed immutable source, a separate accepted-master
+maintenance change may add its tag, exact tag commit, image reference and
+migration label to `deploy/approved-release-identities.json`. That updated
+artifact must pass its own source, file-hash and archive-digest checks and the
+fixed administrator install procedure before preflight accepts the tagged
+release. Until then, v0.5.2 remains fail-closed; the v0.5.1 static contract is
+unchanged.
