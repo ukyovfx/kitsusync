@@ -55,6 +55,12 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(self.db.read_bytes(), before)
         self.assertNotIn("private-marker", repr(result))
 
+    def test_v052_target_has_separate_migration_label_and_unknown_targets_fail_closed(self):
+        result = collector.inspect_database(self.db, TEST_UID, target_version="0.5.2")
+        self.assertEqual(result["migration_compatibility"], "v0.4.9_to_v0.5.2")
+        unsupported = collector.inspect_database(self.db, TEST_UID, target_version="0.5.3")
+        self.assertEqual(unsupported["migration_compatibility"], "unknown")
+
     def test_database_integrity_opens_the_validated_file_descriptor(self):
         opened_uris = []
         fake_db = mock.MagicMock()
@@ -254,7 +260,7 @@ class CollectorTests(unittest.TestCase):
         (runtime / "plan.json").write_text("substituted")
         self.assertFalse(collector.validate_rollback_unit(backup, TEST_UID))
 
-    def _complete_recovery_bundle(self, mode="recovery"):
+    def _complete_recovery_bundle(self, mode="recovery", version="0.5.1"):
         stage = self.paths.release_stage
         stage.mkdir(exist_ok=True)
         payload = {filename: f"fixture:{filename}".encode()
@@ -271,11 +277,13 @@ class CollectorTests(unittest.TestCase):
             path = stage / filename
             path.write_bytes(data)
             os.chmod(path, 0o600)
-        commit = "f8a32bbba94d84068d9e96c18554ac4ab7b24540"
+        contract = collector.RELEASE_CONTRACTS[f"v{version}"]
+        commit = contract["source_commit"]
         values = {
-            "artifact_kind": "release", "version": "0.5.1", "release_tag": "v0.5.1",
+            "artifact_kind": "release", "version": version,
+            "release_tag": f"v{version}",
             "source_commit": commit, "source_id": commit, "release_commit": commit,
-            "image_ref": "kitsusync:v0.5.1", "image_config_digest": config,
+            "image_ref": contract["image_ref"], "image_config_digest": config,
             "image_manifest_digest": manifest, "image_content_digest": content,
         }
         for key, filename in collector.PROVENANCE_DIGESTS.items():
@@ -307,6 +315,33 @@ class CollectorTests(unittest.TestCase):
         result = collector.inspect_bundle(self._complete_recovery_bundle("normal"), TEST_UID,
                                           identity_runner=self._trusted_identity_result)
         self.assertEqual(result["mode"], "normal")
+
+    def test_v052_normal_bundle_uses_exact_source_ref_and_preserves_v051_contract(self):
+        stage = self._complete_recovery_bundle("normal", version="0.5.2")
+        runner = mock.Mock(side_effect=self._trusted_identity_result)
+        result = collector.inspect_bundle(stage, TEST_UID, identity_runner=runner)
+        self.assertTrue(result["source_matches_release"])
+        self.assertTrue(result["provenance_verified"])
+        self.assertEqual(result["version"], "0.5.2")
+        self.assertEqual(result["image_ref"], "kitsusync:v0.5.2")
+        runner.assert_called_once_with(stage / "kitsusync-image.tar", "kitsusync:v0.5.2")
+        self.assertEqual(collector.inspect_database(self.db, TEST_UID, target_version=result["version"])
+                         ["migration_compatibility"], "v0.4.9_to_v0.5.2")
+
+    def test_unpinned_v052_source_fails_closed(self):
+        stage = self._complete_recovery_bundle("normal", version="0.5.2")
+        provenance = stage / "provenance.txt"
+        bogus = "a" * 40
+        fields = {}
+        for line in provenance.read_text().splitlines():
+            key, separator, value = line.partition("=")
+            if not separator:
+                self.fail("fixture provenance line is malformed")
+            fields[key] = bogus if key in {"source_commit", "release_commit", "source_id"} else value
+        provenance.write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
+        result = collector.inspect_bundle(stage, TEST_UID, identity_runner=self._trusted_identity_result)
+        self.assertFalse(result["source_matches_release"])
+        self.assertFalse(result["provenance_verified"])
 
     def test_bundle_identity_script_is_never_executed_without_trusted_runner(self):
         stage = self._complete_recovery_bundle()
@@ -422,6 +457,21 @@ class CollectorTests(unittest.TestCase):
             info.size = len(layer)
             archive.addfile(info, io.BytesIO(layer))
         os.chmod(archive_path, 0o600)
+        self.assertIsNone(collector.image_layer_bytes(archive_path, TEST_UID))
+
+    def test_image_layer_capacity_accepts_v052_ref_without_changing_v051_default(self):
+        archive_path = self.root / "kitsusync-image-v052.tar"
+        layer = b"synthetic docker layer bytes"
+        with tarfile.open(archive_path, "w:") as archive:
+            manifest = json.dumps([{"RepoTags": ["kitsusync:v0.5.2"], "Layers": ["abc/layer.tar"]}]).encode()
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(manifest)
+            archive.addfile(info, io.BytesIO(manifest))
+            info = tarfile.TarInfo("abc/layer.tar")
+            info.size = len(layer)
+            archive.addfile(info, io.BytesIO(layer))
+        os.chmod(archive_path, 0o600)
+        self.assertEqual(collector.image_layer_bytes(archive_path, TEST_UID, "kitsusync:v0.5.2"), len(layer))
         self.assertIsNone(collector.image_layer_bytes(archive_path, TEST_UID))
 
     def test_database_is_not_identified_without_verified_production_mount(self):
