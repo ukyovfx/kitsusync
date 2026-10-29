@@ -34,6 +34,8 @@ class CollectorTests(unittest.TestCase):
                      self.paths.state_root, self.paths.control_root,
                      self.paths.release_stage, self.paths.docker_root):
             path.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(self.paths.backup_root, 0o700)
         self.db = self.paths.runtime_data / "sqlite.db"
         with closing(sqlite3.connect(self.db)) as db:
             db.execute("CREATE TABLE fixture (value TEXT)")
