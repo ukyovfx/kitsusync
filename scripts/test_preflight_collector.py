@@ -56,6 +56,10 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn("private-marker", repr(result))
 
     def test_v052_target_has_separate_migration_label_and_unknown_targets_fail_closed(self):
+        self.assertEqual(
+            collector.RELEASE_CONTRACTS["v0.5.2"]["source_commit"],
+            "fb8cf0bbd73f46e3ce06e8ec53932c7e7703b723",
+        )
         result = collector.inspect_database(self.db, TEST_UID, target_version="0.5.2")
         self.assertEqual(result["migration_compatibility"], "v0.4.9_to_v0.5.2")
         unsupported = collector.inspect_database(self.db, TEST_UID, target_version="0.5.3")

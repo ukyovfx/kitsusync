@@ -106,7 +106,7 @@ RELEASE_CONTRACTS = {
     },
     "v0.5.2": {
         "version": "0.5.2",
-        "source_commit": "58c6e4d77ed539bf44cb14c72816a222fc8542a6",
+        "source_commit": "fb8cf0bbd73f46e3ce06e8ec53932c7e7703b723",
         "image_ref": "kitsusync:v0.5.2",
         "migration_compatibility": "v0.4.9_to_v0.5.2",
     },
