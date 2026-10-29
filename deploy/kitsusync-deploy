@@ -53,7 +53,7 @@ restored_validation_mode() {
 }
 
 archive_image_id_allows() {
-  [[ "$1" == "$2" || "$1" == "$3" ]]
+  [[ "$1" == "$2" || "$1" == "$3" || ( -n "${4:-}" && "$1" == "$4" ) ]]
 }
 
 backup_is_complete() {
@@ -333,7 +333,7 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
       PROVENANCE_FILE="${KITSUSYNC_DEPLOY_TEST_PROVENANCE:?test provenance required}"
       maintenance_identity_allows "$1" "$2" "$3" ;;
     compare) [[ "$#" -eq 6 ]]; compare_runtime_state "$1" "$2" "$3" "$4" "$5" "$6" ;;
-    image-id) [[ "$#" -eq 3 ]]; archive_image_id_allows "$1" "$2" "$3" ;;
+    image-id) [[ "$#" -eq 3 || "$#" -eq 4 ]]; archive_image_id_allows "$1" "$2" "$3" "${4:-}" ;;
     runtime|legacy-runtime)
       CURL_BIN="${KITSUSYNC_DEPLOY_TEST_CURL_BIN:?test curl required}"
       # This override is test-only: the real wrapper always reads the root-owned
@@ -413,6 +413,8 @@ for helper in runtime_state restore_state; do
   fi
 done
 archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" archive "${IMAGE_ARCHIVE}" "${image}")" || die "approved image archive identity cannot be verified"
+approved_index_digest="$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_index_digest=//p')"
+[[ -z "${approved_index_digest}" || "${approved_index_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "approved image index digest is invalid"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_config_digest=//p')" == "${approved_config_digest}" ]] || die "approved image config digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_manifest_digest=//p')" == "${approved_manifest_digest}" ]] || die "approved image manifest digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_content_digest=//p')" == "${approved_content_digest}" ]] || die "approved image content identity mismatch"
@@ -483,7 +485,7 @@ PY
 
   ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null || die "approved image load failed"
   loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"
-  archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || die "loaded image ID is not an approved archive content identity"
+  archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" "${approved_index_digest}" || die "loaded image ID is not an approved archive content identity"
   loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || die "loaded image content identity cannot be verified"
   [[ "${loaded_content_digest}" == "${approved_content_digest}" ]] || die "loaded image content identity does not match approved provenance"
   [[ "$(${DOCKER_BIN} image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${source_commit}" ]] || die "image revision label mismatch"
@@ -576,7 +578,7 @@ network_data="$(${DOCKER_BIN} network inspect "${network_name}" --format '{{with
 # A Docker data-root capacity failure cannot strand a stopped service.
 ${DOCKER_BIN} load -i "${IMAGE_ARCHIVE}" >/dev/null || die "approved image load failed before maintenance window"
 loaded_image_id="$(${DOCKER_BIN} image inspect --format '{{.Id}}' "${image}")"
-archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" || die "loaded image ID is not an approved archive content identity"
+archive_image_id_allows "${loaded_image_id}" "${approved_config_digest}" "${approved_manifest_digest}" "${approved_index_digest}" || die "loaded image ID is not an approved archive content identity"
 loaded_content_digest="$(${DOCKER_BIN} image inspect --format '{{json .}}' "${image}" | /usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${IMAGE_IDENTITY}" inspect | /usr/bin/sed -n 's/^image_content_digest=//p')" || die "loaded image content identity cannot be verified"
 [[ "${loaded_content_digest}" == "${approved_content_digest}" ]] || die "loaded image content identity does not match approved provenance"
 [[ "$("${DOCKER_BIN}" image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")" == "${source_commit}" ]] || die "image revision label mismatch"

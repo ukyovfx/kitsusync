@@ -105,12 +105,18 @@ fi
 
 config_id=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 manifest_id=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+index_id=sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 wrong_id=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 test_docker="$(type -P true)"
 KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${config_id}" "${config_id}" "${manifest_id}"
 KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${manifest_id}" "${config_id}" "${manifest_id}"
+KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${index_id}" "${config_id}" "${manifest_id}" "${index_id}"
 if KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${wrong_id}" "${config_id}" "${manifest_id}"; then
   printf 'unrelated daemon image ID was accepted\n' >&2
+  exit 1
+fi
+if KITSUSYNC_DEPLOY_TEST_DOCKER_BIN="${test_docker}" KITSUSYNC_DEPLOY_TEST_MODE=image-id bash "$wrapper" "${wrong_id}" "${config_id}" "${manifest_id}" "${index_id}"; then
+  printf 'unrelated daemon image ID was accepted when a verified index was present\n' >&2
   exit 1
 fi
 

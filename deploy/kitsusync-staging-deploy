@@ -352,10 +352,11 @@ archive_sha="$(sha256sum "$PRIVATE/kitsusync-image.tar" | cut -d' ' -f1)"
 [[ "$archive_sha" == "$(field image_archive_sha256)" ]] || die IMAGE_ARCHIVE_DIGEST_MISMATCH
 archive_identity="$(python3 "$PRIVATE/kitsusync-image-identity" archive "$PRIVATE/kitsusync-image.tar" "$IMAGE_REF")" || die IMAGE_ARCHIVE_INVALID
 for key in image_config_digest image_manifest_digest image_content_digest; do value="$(printf '%s\n' "$archive_identity" | sed -n "s/^${key}=//p")"; [[ "$value" == "$(field "$key")" ]] || die IMAGE_ARCHIVE_IDENTITY_MISMATCH; done
+image_index_digest="$(printf '%s\n' "$archive_identity" | sed -n 's/^image_index_digest=//p')"
 
 docker load --input "$PRIVATE/kitsusync-image.tar" >/dev/null || die IMAGE_LOAD_FAILED
 loaded_id="$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")"
-[[ "$loaded_id" == "$(field image_config_digest)" || "$loaded_id" == "$(field image_manifest_digest)" ]] || die LOADED_IMAGE_ID_MISMATCH
+[[ "$loaded_id" == "$(field image_config_digest)" || "$loaded_id" == "$(field image_manifest_digest)" || ( -n "$image_index_digest" && "$loaded_id" == "$image_index_digest" ) ]] || die LOADED_IMAGE_ID_MISMATCH
 loaded_content="$(docker image inspect --format '{{json .}}' "$IMAGE_REF" | python3 "$PRIVATE/kitsusync-image-identity" inspect | sed -n 's/^image_content_digest=//p')"
 [[ "$loaded_content" == "$(field image_content_digest)" ]] || die LOADED_IMAGE_CONTENT_MISMATCH
 [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_REF")" == "$SOURCE_SHA" ]] || die IMAGE_REVISION_MISMATCH
