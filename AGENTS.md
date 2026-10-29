@@ -52,7 +52,15 @@ Never claim verification was run if it was not.
 - Update `docs/agent/CURRENT-STATE.md` only when accepted default-branch project state materially changes or its verification basis needs refresh.
 - Move completed durable task plans to `docs/agent/plans/archive/` when useful.
 - Keep reusable cross-project AI workflow rules in the separate `AI-Knowledge` repository; do not duplicate them here.
-- Do not store secrets, credentials, private keys, session tokens, raw logs, or full chat transcripts in project knowledge files.
+- For an explicitly approved, selective KitsuSync Hindsight milestone Retain, store only a verified,
+  durable lesson absent from the origin-routed KitsuSync Bank. Use a stable topic-based `document_id`
+  with `update_mode=replace`; include `source_repo`, `source_path`, `source_url`, `source_sha`, and
+  `verification_status`. Check for an equivalent before writing; use `SKIP` when none qualifies.
+- Read the same ID back with the official project-scoped `get_document`; verify Bank ID, provenance,
+  and content. This Hindsight workflow does not replace the authorized GitHub Issues Inbox and
+  serialized Writer route for Knowledge Vault updates.
+- Do not store secrets, credentials, private keys, session tokens, raw logs, full chat transcripts,
+  or private reasoning in project knowledge files.
 
 ## Not Yet
 These remain intentionally out of scope unless explicitly requested:
