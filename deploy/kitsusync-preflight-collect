@@ -55,6 +55,12 @@ class Paths:
 
 
 BACKUP_NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\Z")
+CI_IMAGE_TAG = re.compile(r"ci-[0-9a-f]{40}\Z")
+IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
+CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
+MAX_IMAGE_INVENTORY_IMAGES = 1000
+MAX_IMAGE_INVENTORY_CONTAINERS = 2000
+MAX_IMAGE_INVENTORY_BYTES = 256 * 1024
 PERSISTENT_FILES = {"sqlite.db", "conf.toml", "templates.tar", "operator.env",
                     "runtime-secret.key", "runtime-secret.absent"}
 V049_REQUIRED_COLUMNS = {
@@ -689,6 +695,222 @@ def rollback_image_retained(ref: str, expected_image_id: str, runner=subprocess.
         return False
 
 
+def _provenance_values(path: Path, expected_uid: int) -> dict | None:
+    """Read a bounded, protected provenance file with no duplicate or malformed keys."""
+    try:
+        raw = _read_limited(path, expected_uid, 64 * 1024).decode("ascii")
+        values = {}
+        for line in raw.splitlines():
+            match = re.fullmatch(r"([a-z0-9_]+)=([^\r\n]*)", line)
+            if not match or match[1] in values:
+                return None
+            values[match[1]] = match[2]
+        return values
+    except (OSError, UnicodeError, EvidenceError):
+        return None
+
+
+def _verified_release_ref(values: dict | None) -> str | None:
+    """Return only a structurally complete, self-consistent release tag reference."""
+    if not values:
+        return None
+    version = values.get("version", "")
+    source = values.get("source_commit", "")
+    if (values.get("artifact_kind") != "release"
+            or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+            or values.get("release_tag") != f"v{version}"
+            or not re.fullmatch(r"[0-9a-f]{40}", source)
+            or values.get("source_id") != source
+            or values.get("release_commit") != source
+            or not IMAGE_ID.fullmatch(values.get("build_daemon_image_id", ""))
+            or values.get("image_ref") != f"kitsusync:v{version}"):
+        return None
+    for key in PROVENANCE_DIGESTS:
+        if not re.fullmatch(r"[0-9a-f]{64}", values.get(key, "")):
+            return None
+    for key in ("image_config_digest", "image_manifest_digest", "image_content_digest"):
+        if not IMAGE_ID.fullmatch(values.get(key, "")):
+            return None
+    return values["image_ref"]
+
+
+def _docker_lines(runner, command: list[str], timeout: int = 20) -> list[str] | None:
+    try:
+        result = runner(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, timeout=timeout, check=False,
+                        env={"PATH": "/usr/bin:/bin"}, text=True)
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            return None
+        return result.stdout.splitlines()
+    except (OSError, subprocess.SubprocessError, AttributeError):
+        return None
+
+
+def image_inventory(paths: Paths, expected_uid: int = 0, docker_runner=subprocess.run,
+                    release_verifier=None, backup_verifier=None) -> dict:
+    """Return a versioned, read-only inventory; incomplete evidence never permits cleanup."""
+    status = "VERIFIED"
+    tags: dict[str, str] = {}
+    local_refs: dict[str, str] = {}
+    tag_errors: set[str] = set()
+    image_lines = _docker_lines(docker_runner, [
+        "/usr/bin/docker", "image", "ls", "--no-trunc", "--format", "{{json .}}"], timeout=30)
+    if image_lines is None or len(image_lines) > MAX_IMAGE_INVENTORY_IMAGES * 4:
+        image_lines = []
+        status = "UNKNOWN"
+    else:
+        for line in image_lines:
+            try:
+                item = json.loads(line)
+                if type(item) is not dict:
+                    raise ValueError
+                repository, tag, image_id = item.get("Repository"), item.get("Tag"), item.get("ID")
+                if repository != "kitsusync" or not isinstance(tag, str):
+                    continue
+                if not isinstance(image_id, str) or not IMAGE_ID.fullmatch(image_id):
+                    if tag.startswith("ci-"):
+                        tag_errors.add(tag)
+                        status = "UNKNOWN"
+                    if tag.startswith("v"):
+                        status = "UNKNOWN"
+                    continue
+                if tag in local_refs and local_refs[tag] != image_id:
+                    status = "UNKNOWN"
+                local_refs[tag] = image_id
+                if not tag.startswith("ci-"):
+                    continue
+                if not CI_IMAGE_TAG.fullmatch(tag):
+                    tag_errors.add(tag)
+                    status = "UNKNOWN"
+                    continue
+                if tag in tags and tags[tag] != image_id:
+                    tag_errors.add(tag)
+                    status = "UNKNOWN"
+                tags[tag] = image_id
+            except (ValueError, TypeError):
+                status = "UNKNOWN"
+        if len(tags) > MAX_IMAGE_INVENTORY_IMAGES:
+            tags = {}
+            status = "UNKNOWN"
+
+    container_ids = _docker_lines(docker_runner, [
+        "/usr/bin/docker", "ps", "--all", "--quiet", "--no-trunc"], timeout=20)
+    containers_by_image: dict[str, list[dict]] = {}
+    if (container_ids is None or len(container_ids) > MAX_IMAGE_INVENTORY_CONTAINERS
+            or any(not CONTAINER_ID.fullmatch(item) for item in container_ids)):
+        status = "UNKNOWN"
+    elif container_ids:
+        inspected = _docker_lines(docker_runner, [
+            "/usr/bin/docker", "inspect", "--format",
+            '{{range .}}{{.Id}}|{{.Image}}|{{.State.Status}}{{"\\n"}}{{end}}',
+            *container_ids], timeout=30)
+        if inspected is None or len(inspected) != len(container_ids):
+            status = "UNKNOWN"
+        else:
+            seen = set()
+            for line in inspected:
+                fields = line.split("|")
+                if (len(fields) != 3 or not CONTAINER_ID.fullmatch(fields[0])
+                        or not IMAGE_ID.fullmatch(fields[1])
+                        or fields[2] not in {"created", "restarting", "running", "removing",
+                                             "paused", "exited", "dead"}
+                        or fields[0] in seen):
+                    status = "UNKNOWN"
+                    continue
+                seen.add(fields[0])
+                containers_by_image.setdefault(fields[1], []).append(
+                    {"container_id": fields[0], "state": fields[2]})
+            if seen != set(container_ids):
+                status = "UNKNOWN"
+
+    release_refs: set[str] = set()
+    control_values = _provenance_values(paths.control_root / "provenance", expected_uid)
+    control_ref = _verified_release_ref(control_values)
+    if control_ref is None:
+        status = "UNKNOWN"
+    else:
+        release_refs.add(control_ref)
+    stage = inspect_bundle(paths.release_stage, expected_uid,
+                           identity_runner=(release_verifier or trusted_identity_runner(
+                               paths.control_root, expected_uid)) if expected_uid == 0 else None)
+    if stage is not None and stage.get("provenance_verified"):
+        staged_values = _provenance_values(paths.release_stage / "provenance.txt", expected_uid)
+        staged_ref = _verified_release_ref(staged_values)
+        if staged_ref is None:
+            status = "UNKNOWN"
+        else:
+            release_refs.add(staged_ref)
+    else:
+        try:
+            # An empty fixed staging directory has no references; partial or
+            # malformed staged content may contain an untrusted image ref.
+            if paths.release_stage.exists() and any(paths.release_stage.iterdir()):
+                status = "UNKNOWN"
+        except OSError:
+            status = "UNKNOWN"
+
+    rollback_refs: dict[str, set[str]] = {}
+    try:
+        backups = _fixed_children(paths.backup_root, expected_uid)
+        if not backups:
+            status = "UNKNOWN"
+        for backup in backups:
+            if (not BACKUP_NAME.fullmatch(backup.name) or backup.is_symlink()
+                    or not backup.is_dir()):
+                status = "UNKNOWN"
+                continue
+            verifier = backup_verifier
+            if verifier is None and expected_uid == 0:
+                verifier = _official_restore_verify
+            if (not validate_backup_directory(backup, expected_uid, verifier=verifier)
+                    or not validate_rollback_unit(backup, expected_uid)):
+                status = "UNKNOWN"
+                continue
+            try:
+                ref = _read_limited(backup / "rollback-image-ref", expected_uid, 256).decode("ascii").strip()
+                previous_id = _read_limited(backup / "previous-image-id", expected_uid, 256).decode("ascii").strip()
+            except (OSError, UnicodeError, EvidenceError):
+                status = "UNKNOWN"
+                continue
+            expected_ref = f"kitsusync:rollback-{backup.name}"
+            supported_ref = re.fullmatch(re.escape(expected_ref) + r"(?:-[A-Za-z0-9]{8})?", ref)
+            if (not supported_ref
+                    or not rollback_image_retained(ref, previous_id, runner=docker_runner)):
+                status = "UNKNOWN"
+                continue
+            rollback_refs.setdefault(previous_id, set()).add(ref)
+    except (OSError, EvidenceError):
+        status = "UNKNOWN"
+
+    rows = []
+    for tag, image_id in sorted(tags.items()):
+        containers = sorted(containers_by_image.get(image_id, []), key=lambda item: item["container_id"])
+        release_matches = sorted(ref for ref in release_refs
+                                 if local_refs.get(ref.removeprefix("kitsusync:")) == image_id)
+        rollback_matches = sorted(rollback_refs.get(image_id, set()))
+        if containers or release_matches or rollback_matches:
+            classification = "KEEP"
+        elif status == "VERIFIED" and tag not in tag_errors:
+            classification = "DELETE_CANDIDATE"
+        else:
+            classification = "UNKNOWN"
+        rows.append({"tag": f"kitsusync:{tag}", "image_id": image_id,
+                     "classification": classification, "containers": containers,
+                     "release_refs": release_matches, "rollback_refs": rollback_matches})
+    for tag in sorted(tag_errors):
+        if not any(row["tag"] == f"kitsusync:{tag}" for row in rows):
+            rows.append({"tag": f"kitsusync:{tag}", "image_id": None,
+                         "classification": "UNKNOWN", "containers": [],
+                         "release_refs": [], "rollback_refs": []})
+    rows.sort(key=lambda row: row["tag"])
+    output = {"schema_version": 1, "status": status, "images": rows}
+    encoded = json.dumps(output, separators=(",", ":"), sort_keys=True)
+    if len(encoded.encode("utf-8")) > MAX_IMAGE_INVENTORY_BYTES:
+        return {"schema_version": 1, "status": "UNKNOWN", "images": [],
+                "reason": "inventory_output_limit"}
+    return output
+
+
 def collect(paths: Paths, expected_uid: int = 0, docker_runner=subprocess.run,
             capacity_statvfs=None) -> dict:
     evidence = {"schema_version": 1}
@@ -823,9 +1045,15 @@ def validate_rollback_unit(backup: Path, expected_uid: int) -> bool:
 
 
 def main() -> int:
-    if len(sys.argv) != 1 or os.geteuid() != 0:
+    if os.geteuid() != 0:
         return 2
     try:
+        if sys.argv[1:] == ["--image-inventory-v1"]:
+            evidence = image_inventory(Paths.production())
+            sys.stdout.write(json.dumps(evidence, separators=(",", ":"), sort_keys=True) + "\n")
+            return 0
+        if sys.argv[1:]:
+            return 2
         evidence = collect(Paths.production())
         sys.stdout.write(json.dumps(evidence, separators=(",", ":"), sort_keys=True) + "\n")
         return 0
