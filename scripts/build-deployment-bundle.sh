@@ -59,7 +59,7 @@ image_config_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_co
 image_manifest_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_manifest_digest=//p')"
 image_index_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_index_digest=//p')"
 image_content_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_content_digest=//p')"
-[[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'portable archive identity is invalid\n' >&2; exit 1; }
+[[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && ( -z "${image_index_digest}" || "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ ) && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'portable archive identity is invalid\n' >&2; exit 1; }
 
 IMAGE_ARCHIVE_SHA256="${archive_sha}" COMPOSE_SHA256="${compose_sha}" \
 DEPLOYMENT_TOOL_SHA256="${deploy_sha}" INSPECTION_TOOL_SHA256="${inspect_sha}" \

@@ -58,6 +58,16 @@ with tempfile.TemporaryDirectory() as tmpname:
             tf.addfile(info, io.BytesIO(blob))
     result = fixture.run("archive", str(nested), fixture.IMAGE_REF, check=False)
     assert result.returncode == 0, "nested OCI index rejected: " + result.stderr.strip()
+    nested_fields = fixture.fields(result.stdout)
+    assert nested_fields["image_index_digest"] == "sha256:" + child_digest
+    assert fixture.run("verify-loaded-id", "sha256:" + child_digest,
+                       nested_fields["image_config_digest"], nested_fields["image_manifest_digest"],
+                       nested_fields["image_index_digest"]).returncode == 0
+    for unknown_id in ("sha256:" + "0" * 64, "sha256:" + "f" * 64):
+        rejected_id = fixture.run("verify-loaded-id", unknown_id,
+                                  nested_fields["image_config_digest"], nested_fields["image_manifest_digest"],
+                                  nested_fields["image_index_digest"], check=False)
+        assert rejected_id.returncode != 0 and "approved archive content identity" in rejected_id.stderr
     direct = fixture.run("archive", str(base), fixture.IMAGE_REF)
     assert fixture.fields(result.stdout)["image_content_digest"] == fixture.fields(direct.stdout)["image_content_digest"]
 

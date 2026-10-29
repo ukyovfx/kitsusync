@@ -228,7 +228,7 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, str, 
         if actual_config_digest != expected_config_digest:
             fail("image archive config content digest does not match its descriptor")
 
-        index, actual_index_digest = read_json_member(archive, "index.json")
+        index, _ = read_json_member(archive, "index.json")
         index_manifests = index.get("manifests")
         if index.get("schemaVersion") != 2 or index.get("mediaType") != OCI_INDEX_MEDIA_TYPE or not isinstance(index_manifests, list) or len(index_manifests) != 1:
             fail("OCI image index must contain exactly one manifest descriptor")
@@ -239,6 +239,7 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, str, 
         expected_tag = expected_ref.rsplit(":", 1)[-1]
         if not isinstance(annotations, dict) or annotations.get("org.opencontainers.image.ref.name") != expected_tag:
             fail("OCI image index tag mapping does not match the approved image reference")
+        root_index_digest = ""
         if manifest_descriptor.get("mediaType") == OCI_INDEX_MEDIA_TYPE:
             nested_digest = manifest_descriptor.get("digest")
             nested_size = manifest_descriptor.get("size")
@@ -250,6 +251,7 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, str, 
             nested_index, actual_nested_digest = read_json_member(archive, nested_name)
             if actual_nested_digest != nested_digest or archive.getmember(nested_name).size != nested_size:
                 fail("OCI nested index content does not match its descriptor")
+            root_index_digest = actual_nested_digest
             descendants = nested_index.get("manifests")
             if nested_index.get("schemaVersion") != 2 or nested_index.get("mediaType") != OCI_INDEX_MEDIA_TYPE or not isinstance(descendants, list) or not 1 <= len(descendants) <= 8:
                 fail("OCI nested index structure is invalid")
@@ -332,15 +334,17 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, str, 
 
         platform = {"architecture": config.get("architecture"), "os": config.get("os"), "variant": config.get("variant", "")}
         descriptor = normalize_descriptor(platform, rootfs, image_config)
-        return actual_config_digest, actual_manifest_digest, actual_index_digest, descriptor_digest(descriptor), len(layer_names)
+        return actual_config_digest, actual_manifest_digest, root_index_digest, descriptor_digest(descriptor), len(layer_names)
 
 
 def verify_loaded_image_id(loaded_id: str, config_digest: str, manifest_digest: str, index_digest: str) -> None:
     """Accept only Docker's exact image identity forms bound to this archive."""
     candidates = (config_digest, manifest_digest, index_digest)
-    if DIGEST_RE.fullmatch(loaded_id) is None or any(DIGEST_RE.fullmatch(item) is None for item in candidates):
+    if DIGEST_RE.fullmatch(loaded_id) is None or any(
+        DIGEST_RE.fullmatch(item) is None for item in candidates[:2]
+    ) or (index_digest and DIGEST_RE.fullmatch(index_digest) is None):
         fail("loaded image identity digest is invalid")
-    if loaded_id not in candidates:
+    if loaded_id not in tuple(item for item in candidates if item):
         fail("loaded image ID is not an approved archive content identity")
 
 
