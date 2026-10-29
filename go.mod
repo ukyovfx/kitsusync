@@ -1,6 +1,6 @@
 module app
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/beefsack/go-rate v0.0.0-20200827232406-6cde80facd47
@@ -25,5 +25,5 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.15.0 // indirect
-	golang.org/x/text v0.39.0 // indirect
+	golang.org/x/text v0.41.0 // indirect
 )

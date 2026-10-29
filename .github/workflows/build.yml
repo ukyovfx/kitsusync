@@ -266,7 +266,7 @@ jobs:
   reviewer-browser-acceptance:
     name: reviewer-browser-acceptance
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       CGO_ENABLED: "1"

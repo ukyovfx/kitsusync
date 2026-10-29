@@ -241,7 +241,7 @@ readonly INCOMING="/var/tmp/kitsusync-staging-candidate-${SOURCE_SHA}"
 readonly PRIVATE="${STAGE_ROOT}/incoming-${SOURCE_SHA}"
 readonly IMAGE_REF="kitsusync:ci-${SOURCE_SHA}"
 readonly PROJECT=kitsusync-staging
-readonly TRUSTED_IMAGE_IDENTITY_SHA256=7698731a4f4b30bca140b700b6716afee6a7dd35ce73f84e3bf11d6676372d0b
+readonly TRUSTED_IMAGE_IDENTITY_SHA256=135b51826ce7d7179a2812acd6100c5caee9d396b7ffbfc060e7ce7162843238
 readonly TRUSTED_SQLITE_BACKUP_SHA256=6554ca0c07e171b27f039db513d8a929c974fbea1ca0df4efb810081ae11b960
 
 verify_trusted_candidate_tool() {
