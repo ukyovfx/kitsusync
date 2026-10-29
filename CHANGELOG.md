@@ -6,6 +6,18 @@ All notable changes to this project should be recorded here.
 
 - No unreleased changes yet.
 
+## v0.5.2
+
+### Security and deployment
+
+- Update the Go builder to 1.26.10 and `golang.org/x/text` to 0.41.0.
+- Verify Docker-save nested OCI indexes and compressed layers while retaining archive, config, manifest, portable-content, provenance, and rollback checks.
+- Pin the Reviewer browser CI runner to Ubuntu 24.04 for the supported Playwright Chromium environment.
+
+### Compatibility
+
+- Preserve the existing v0.4.9-to-v0.5.1 migration contract; v0.5.2 compatibility is separately gated by the release preflight contract.
+
 ## v0.5.1
 
 ### Added
