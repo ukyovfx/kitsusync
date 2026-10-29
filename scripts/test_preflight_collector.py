@@ -23,6 +23,11 @@ SPEC = importlib.util.spec_from_loader(
 collector = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(collector)
 TEST_UID = getattr(os, "getuid", lambda: 0)()
+V052_TEST_CONTRACTS = {"v0.5.2": {
+    "version": "0.5.2", "source_commit": "d" * 40,
+    "image_ref": "kitsusync:v0.5.2",
+    "migration_compatibility": "v0.4.9_to_v0.5.2",
+}}
 
 
 class CollectorTests(unittest.TestCase):
@@ -56,11 +61,9 @@ class CollectorTests(unittest.TestCase):
         self.assertNotIn("private-marker", repr(result))
 
     def test_v052_target_has_separate_migration_label_and_unknown_targets_fail_closed(self):
-        self.assertEqual(
-            collector.RELEASE_CONTRACTS["v0.5.2"]["source_commit"],
-            "fb8cf0bbd73f46e3ce06e8ec53932c7e7703b723",
-        )
-        result = collector.inspect_database(self.db, TEST_UID, target_version="0.5.2")
+        self.assertNotIn("v0.5.2", collector.RELEASE_CONTRACTS)
+        result = collector.inspect_database(self.db, TEST_UID, target_version="0.5.2",
+                                            approved_release_contracts=V052_TEST_CONTRACTS)
         self.assertEqual(result["migration_compatibility"], "v0.4.9_to_v0.5.2")
         unsupported = collector.inspect_database(self.db, TEST_UID, target_version="0.5.3")
         self.assertEqual(unsupported["migration_compatibility"], "unknown")
@@ -281,7 +284,8 @@ class CollectorTests(unittest.TestCase):
             path = stage / filename
             path.write_bytes(data)
             os.chmod(path, 0o600)
-        contract = collector.RELEASE_CONTRACTS[f"v{version}"]
+        contract = (collector.RELEASE_CONTRACTS.get(f"v{version}")
+                    or V052_TEST_CONTRACTS.get(f"v{version}"))
         commit = contract["source_commit"]
         values = {
             "artifact_kind": "release", "version": version,
@@ -323,13 +327,15 @@ class CollectorTests(unittest.TestCase):
     def test_v052_normal_bundle_uses_exact_source_ref_and_preserves_v051_contract(self):
         stage = self._complete_recovery_bundle("normal", version="0.5.2")
         runner = mock.Mock(side_effect=self._trusted_identity_result)
-        result = collector.inspect_bundle(stage, TEST_UID, identity_runner=runner)
+        result = collector.inspect_bundle(stage, TEST_UID, identity_runner=runner,
+                                          approved_release_contracts=V052_TEST_CONTRACTS)
         self.assertTrue(result["source_matches_release"])
         self.assertTrue(result["provenance_verified"])
         self.assertEqual(result["version"], "0.5.2")
         self.assertEqual(result["image_ref"], "kitsusync:v0.5.2")
         runner.assert_called_once_with(stage / "kitsusync-image.tar", "kitsusync:v0.5.2")
-        self.assertEqual(collector.inspect_database(self.db, TEST_UID, target_version=result["version"])
+        self.assertEqual(collector.inspect_database(self.db, TEST_UID, target_version=result["version"],
+                                                    approved_release_contracts=V052_TEST_CONTRACTS)
                          ["migration_compatibility"], "v0.4.9_to_v0.5.2")
 
     def test_unpinned_v052_source_fails_closed(self):
@@ -343,7 +349,40 @@ class CollectorTests(unittest.TestCase):
                 self.fail("fixture provenance line is malformed")
             fields[key] = bogus if key in {"source_commit", "release_commit", "source_id"} else value
         provenance.write_text("".join(f"{key}={value}\n" for key, value in fields.items()))
+        result = collector.inspect_bundle(stage, TEST_UID, identity_runner=self._trusted_identity_result,
+                                          approved_release_contracts=V052_TEST_CONTRACTS)
+        self.assertFalse(result["source_matches_release"])
+        self.assertFalse(result["provenance_verified"])
+
+    def test_v052_bundle_is_rejected_without_post_tag_trusted_identity(self):
+        stage = self._complete_recovery_bundle("normal", version="0.5.2")
         result = collector.inspect_bundle(stage, TEST_UID, identity_runner=self._trusted_identity_result)
+        self.assertFalse(result["source_matches_release"])
+        self.assertFalse(result["provenance_verified"])
+
+    def test_v052_invalid_release_tag_and_approved_contract_fail_closed(self):
+        stage = self._complete_recovery_bundle("normal", version="0.5.2")
+        provenance = stage / "provenance.txt"
+        provenance.write_text(provenance.read_text().replace("release_tag=v0.5.2", "release_tag=v0.5.3"))
+        result = collector.inspect_bundle(stage, TEST_UID, identity_runner=self._trusted_identity_result,
+                                          approved_release_contracts=V052_TEST_CONTRACTS)
+        self.assertFalse(result["source_matches_release"])
+        self.assertFalse(result["provenance_verified"])
+        bad_digest = self._complete_recovery_bundle("normal", version="0.5.2")
+        provenance = bad_digest / "provenance.txt"
+        provenance.write_text(provenance.read_text().replace(
+            "image_config_digest=sha256:" + "a" * 64,
+            "image_config_digest=sha256:" + "e" * 64))
+        result = collector.inspect_bundle(bad_digest, TEST_UID,
+                                          identity_runner=self._trusted_identity_result,
+                                          approved_release_contracts=V052_TEST_CONTRACTS)
+        self.assertTrue(result["source_matches_release"])
+        self.assertTrue(result["digest_verified"])
+        self.assertFalse(result["provenance_verified"])
+        wrong = {"v0.5.2": dict(V052_TEST_CONTRACTS["v0.5.2"], source_commit="e" * 40)}
+        result = collector.inspect_bundle(self._complete_recovery_bundle("normal", version="0.5.2"),
+                                          TEST_UID, identity_runner=self._trusted_identity_result,
+                                          approved_release_contracts=wrong)
         self.assertFalse(result["source_matches_release"])
         self.assertFalse(result["provenance_verified"])
 
@@ -533,6 +572,26 @@ class CollectorTests(unittest.TestCase):
             provenance, {"deployment_tool_sha256": deploy_tool,
                          "inspection_tool_sha256": current_inspect}, TEST_UID,
             identity, current_collector)["helpers_match_baseline"])
+
+    def test_maintenance_identity_approves_only_well_formed_post_tag_contracts(self):
+        inspector = self.root / "maintained-inspector"
+        preflight = self.root / "maintained-collector"
+        identity = self.root / "inspection-maintenance.json"
+        inspector.write_bytes(b"inspector")
+        preflight.write_bytes(b"collector")
+        for path in (inspector, preflight):
+            os.chmod(path, 0o600)
+        record = {"schema_version": 1, "baseline_release": "v0.5.1", "source_commit": "a" * 40,
+                  "inspection_tool_sha256": hashlib.sha256(inspector.read_bytes()).hexdigest(),
+                  "preflight_collector_tool_sha256": hashlib.sha256(preflight.read_bytes()).hexdigest(),
+                  "approved_releases": V052_TEST_CONTRACTS}
+        identity.write_text(json.dumps(record), encoding="ascii")
+        os.chmod(identity, 0o600)
+        self.assertEqual(collector.inspection_maintenance_record(identity, inspector, preflight, TEST_UID)
+                         ["approved_releases"], V052_TEST_CONTRACTS)
+        record["approved_releases"] = {"v0.5.1": V052_TEST_CONTRACTS["v0.5.2"]}
+        identity.write_text(json.dumps(record), encoding="ascii")
+        self.assertIsNone(collector.inspection_maintenance_record(identity, inspector, preflight, TEST_UID))
 
 
 if __name__ == "__main__":

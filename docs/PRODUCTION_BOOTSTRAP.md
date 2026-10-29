@@ -349,3 +349,16 @@ the wrapper removes only the new KitsuSync app container, project network, and
 files created in the still-marked fresh data directory. The verified seed and
 control plane remain for an identical retry. It never changes Kitsu/Zou,
 PostgreSQL, Redis, nginx, Tailscale, firewall, or SSH configuration.
+
+Release source identity after v0.5.1 is deliberately not pinned inside the
+application source: that would make the tag's source SHA self-referential. The
+maintenance artifact carries a strict `approved_releases` map in its manifest,
+and the root-owned installed identity binds that map to the exact installed
+inspector and collector hashes. The map is empty in this PR. After a release
+tag is created from reviewed immutable source, a separate accepted-master
+maintenance change may add its tag, exact tag commit, image reference and
+migration label to `deploy/approved-release-identities.json`. That updated
+artifact must pass its own source, file-hash and archive-digest checks and the
+fixed administrator install procedure before preflight accepts the tagged
+release. Until then, v0.5.2 remains fail-closed; the v0.5.1 static contract is
+unchanged.

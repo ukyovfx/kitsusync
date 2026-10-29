@@ -104,12 +104,6 @@ RELEASE_CONTRACTS = {
         "image_ref": "kitsusync:v0.5.1",
         "migration_compatibility": "v0.4.9_to_v0.5.1",
     },
-    "v0.5.2": {
-        "version": "0.5.2",
-        "source_commit": "fb8cf0bbd73f46e3ce06e8ec53932c7e7703b723",
-        "image_ref": "kitsusync:v0.5.2",
-        "migration_compatibility": "v0.4.9_to_v0.5.2",
-    },
 }
 STAGED_FILES = set(PROVENANCE_DIGESTS.values()) | {"deployment-mode", "provenance.txt"}
 INSTALLED = {
@@ -141,7 +135,28 @@ def _regular(path: Path, expected_uid: int) -> os.stat_result:
         os.close(fd)
 
 
-def inspect_database(path: Path, expected_uid: int, target_version: str = "0.5.1") -> dict:
+def _approved_release_contracts(value) -> dict:
+    """Validate the root-owned post-tag approval map; never override v0.5.1."""
+    if type(value) is not dict or len(value) > 16:
+        return {}
+    contracts = {}
+    for tag, contract in value.items():
+        if (not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)
+                or tag in RELEASE_CONTRACTS or type(contract) is not dict
+                or set(contract) != {"version", "source_commit", "image_ref", "migration_compatibility"}):
+            return {}
+        version = tag[1:]
+        if (contract.get("version") != version
+                or not re.fullmatch(r"[0-9a-f]{40}", contract.get("source_commit", ""))
+                or contract.get("image_ref") != f"kitsusync:{tag}"
+                or contract.get("migration_compatibility") != f"v0.4.9_to_{tag}"):
+            return {}
+        contracts[tag] = contract
+    return contracts
+
+
+def inspect_database(path: Path, expected_uid: int, target_version: str = "0.5.1",
+                     approved_release_contracts=None) -> dict:
     fd = None
     try:
         before = path.lstat()
@@ -175,7 +190,8 @@ def inspect_database(path: Path, expected_uid: int, target_version: str = "0.5.1
             ok = db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
             tables = {row[0] for row in db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-            contract = next((item for item in RELEASE_CONTRACTS.values()
+            contract = next((item for item in (RELEASE_CONTRACTS | _approved_release_contracts(
+                approved_release_contracts)).values()
                              if item["version"] == target_version), None)
             compatibility = (contract["migration_compatibility"]
                              if contract and set(V049_REQUIRED_COLUMNS) <= tables
@@ -226,7 +242,8 @@ def _read_limited(path: Path, expected_uid: int, limit: int) -> bytes:
     return data
 
 
-def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None) -> dict | None:
+def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None,
+                   approved_release_contracts=None) -> dict | None:
     try:
         metadata = stage.lstat()
         if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != expected_uid
@@ -253,7 +270,8 @@ def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None) -> dict
                 continue
             if _hash_file(stage / filename, expected_uid) != digest:
                 digest_verified = False
-        release_contract = RELEASE_CONTRACTS.get(values.get("release_tag", ""))
+        release_contracts = RELEASE_CONTRACTS | _approved_release_contracts(approved_release_contracts)
+        release_contract = release_contracts.get(values.get("release_tag", ""))
         expected_image_ref = release_contract["image_ref"] if release_contract else ""
         portable_identity_verified = False
         if digest_verified and identity_runner is not None and expected_image_ref:
@@ -427,27 +445,41 @@ def newest_backup(root: Path, expected_uid: int) -> Path | None:
         return None
 
 
-def inspection_maintenance_matches(identity: Path, inspector: Path, collector: Path,
-                                   expected_uid: int) -> bool | None:
+def inspection_maintenance_record(identity: Path, inspector: Path, collector: Path,
+                                  expected_uid: int) -> dict | None:
     if not os.path.lexists(identity):
         return None
     try:
         record = json.loads(_read_limited(identity, expected_uid, 64 * 1024).decode("ascii"))
-        expected_keys = {"schema_version", "baseline_release", "source_commit",
-                         "inspection_tool_sha256", "preflight_collector_tool_sha256"}
-        if (type(record) is not dict or set(record) != expected_keys
+        legacy_keys = {"schema_version", "baseline_release", "source_commit",
+                       "inspection_tool_sha256", "preflight_collector_tool_sha256"}
+        expected_keys = legacy_keys | {"approved_releases"}
+        if (type(record) is not dict or set(record) not in (legacy_keys, expected_keys)
                 or record.get("schema_version") != 1 or record.get("baseline_release") != "v0.5.1"
                 or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", ""))):
-            return False
+            return None
+        contracts = _approved_release_contracts(record.get("approved_releases", {}))
+        if "approved_releases" in record and (type(record["approved_releases"]) is not dict
+                                                or contracts != record["approved_releases"]):
+            return None
         inspect_sha = record.get("inspection_tool_sha256", "")
         collector_sha = record.get("preflight_collector_tool_sha256", "")
         if not (re.fullmatch(r"[0-9a-f]{64}", inspect_sha)
                 and re.fullmatch(r"[0-9a-f]{64}", collector_sha)):
-            return False
-        return (_hash_file(inspector, expected_uid) == inspect_sha
-                and _hash_file(collector, expected_uid) == collector_sha)
+            return None
+        if (_hash_file(inspector, expected_uid) != inspect_sha
+                or _hash_file(collector, expected_uid) != collector_sha):
+            return None
+        return {"approved_releases": contracts}
     except (OSError, UnicodeError, ValueError, EvidenceError):
-        return False
+        return None
+
+
+def inspection_maintenance_matches(identity: Path, inspector: Path, collector: Path,
+                                   expected_uid: int) -> bool | None:
+    if not os.path.lexists(identity):
+        return None
+    return inspection_maintenance_record(identity, inspector, collector, expected_uid) is not None
 
 
 def inspect_tools(provenance: Path, installed: dict[str, Path], expected_uid: int,
@@ -717,9 +749,15 @@ def rollback_image_retained(ref: str, expected_image_id: str, runner=subprocess.
 def collect(paths: Paths, expected_uid: int = 0, docker_runner=subprocess.run,
             capacity_statvfs=None) -> dict:
     evidence = {"schema_version": 1}
+    maintenance = (inspection_maintenance_record(
+        paths.state_root / "inspection-maintenance.json",
+        Path("/usr/local/sbin/kitsusync-inspect"), Path(__file__), expected_uid)
+        if expected_uid == 0 else None)
+    approved_release_contracts = (maintenance or {}).get("approved_releases", {})
     identity_runner = (trusted_identity_runner(paths.control_root, expected_uid)
                        if expected_uid == 0 else None)
-    bundle = inspect_bundle(paths.release_stage, expected_uid, identity_runner=identity_runner)
+    bundle = inspect_bundle(paths.release_stage, expected_uid, identity_runner=identity_runner,
+                            approved_release_contracts=approved_release_contracts)
     if bundle is not None:
         evidence["bundle"] = bundle
     evidence["runtime"] = inspect_runtime() if expected_uid == 0 else {
@@ -729,7 +767,8 @@ def collect(paths: Paths, expected_uid: int = 0, docker_runner=subprocess.run,
                       else "unknown" if bundle is not None else "0.5.1")
     db = inspect_database(paths.runtime_data / "sqlite.db",
                           10001 if expected_uid == 0 else expected_uid,
-                          target_version=target_version)
+                          target_version=target_version,
+                          approved_release_contracts=approved_release_contracts)
     if expected_uid == 0:
         mount_verified = production_database_mount_verified(paths.runtime_data, runner=docker_runner)
         db["runtime_mount_verified"] = mount_verified
