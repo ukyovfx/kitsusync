@@ -194,7 +194,7 @@ def descriptor_digest(descriptor: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, int]:
+def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, str, int]:
     try:
         archive = tarfile.open(path, mode="r:*")
     except (OSError, tarfile.TarError) as exc:
@@ -228,7 +228,7 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, int]:
         if actual_config_digest != expected_config_digest:
             fail("image archive config content digest does not match its descriptor")
 
-        index, _ = read_json_member(archive, "index.json")
+        index, actual_index_digest = read_json_member(archive, "index.json")
         index_manifests = index.get("manifests")
         if index.get("schemaVersion") != 2 or index.get("mediaType") != OCI_INDEX_MEDIA_TYPE or not isinstance(index_manifests, list) or len(index_manifests) != 1:
             fail("OCI image index must contain exactly one manifest descriptor")
@@ -332,7 +332,16 @@ def archive_identity(path: str, expected_ref: str) -> tuple[str, str, str, int]:
 
         platform = {"architecture": config.get("architecture"), "os": config.get("os"), "variant": config.get("variant", "")}
         descriptor = normalize_descriptor(platform, rootfs, image_config)
-        return actual_config_digest, actual_manifest_digest, descriptor_digest(descriptor), len(layer_names)
+        return actual_config_digest, actual_manifest_digest, actual_index_digest, descriptor_digest(descriptor), len(layer_names)
+
+
+def verify_loaded_image_id(loaded_id: str, config_digest: str, manifest_digest: str, index_digest: str) -> None:
+    """Accept only Docker's exact image identity forms bound to this archive."""
+    candidates = (config_digest, manifest_digest, index_digest)
+    if DIGEST_RE.fullmatch(loaded_id) is None or any(DIGEST_RE.fullmatch(item) is None for item in candidates):
+        fail("loaded image identity digest is invalid")
+    if loaded_id not in candidates:
+        fail("loaded image ID is not an approved archive content identity")
 
 
 def inspect_identity(stream: BinaryIO) -> str:
@@ -357,16 +366,24 @@ def main() -> int:
     archive_parser = subparsers.add_parser("archive")
     archive_parser.add_argument("archive")
     archive_parser.add_argument("image_ref")
+    verify_parser = subparsers.add_parser("verify-loaded-id")
+    verify_parser.add_argument("loaded_id")
+    verify_parser.add_argument("config_digest")
+    verify_parser.add_argument("manifest_digest")
+    verify_parser.add_argument("index_digest")
     subparsers.add_parser("inspect")
     args = parser.parse_args()
     try:
         if args.command == "archive":
-            config_digest, manifest_digest, content_digest, layer_count = archive_identity(args.archive, args.image_ref)
+            config_digest, manifest_digest, index_digest, content_digest, layer_count = archive_identity(args.archive, args.image_ref)
             print(f"image_ref={args.image_ref}")
             print(f"image_config_digest={config_digest}")
             print(f"image_manifest_digest={manifest_digest}")
+            print(f"image_index_digest={index_digest}")
             print(f"image_content_digest={content_digest}")
             print(f"layer_count={layer_count}")
+        elif args.command == "verify-loaded-id":
+            verify_loaded_image_id(args.loaded_id, args.config_digest, args.manifest_digest, args.index_digest)
         else:
             print(f"image_content_digest={inspect_identity(sys.stdin.buffer)}")
     except IdentityError as exc:

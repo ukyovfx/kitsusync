@@ -57,8 +57,9 @@ preflight_sha="$(sha256sum "${output}/kitsusync-preflight-collect" | cut -d' ' -
 archive_identity="$(python3 "${output}/kitsusync-image-identity" archive "${output}/kitsusync-image.tar" "${image_ref}")"
 image_config_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_config_digest=//p')"
 image_manifest_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_manifest_digest=//p')"
+image_index_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_index_digest=//p')"
 image_content_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_content_digest=//p')"
-[[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'portable archive identity is invalid\n' >&2; exit 1; }
+[[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'portable archive identity is invalid\n' >&2; exit 1; }
 
 IMAGE_ARCHIVE_SHA256="${archive_sha}" COMPOSE_SHA256="${compose_sha}" \
 DEPLOYMENT_TOOL_SHA256="${deploy_sha}" INSPECTION_TOOL_SHA256="${inspect_sha}" \
@@ -76,10 +77,11 @@ docker image rm "${image_ref}" >/dev/null
 docker load --input "${output}/kitsusync-image.tar" >/dev/null
 loaded_id="$(docker image inspect --format '{{.Id}}' "${image_ref}")"
 loaded_content_digest="$(docker image inspect --format '{{json .}}' "${image_ref}" | python3 "${output}/kitsusync-image-identity" inspect | sed -n 's/^image_content_digest=//p')"
-if [[ "${loaded_id}" != "${image_config_digest}" && "${loaded_id}" != "${image_manifest_digest}" ]]; then
+if ! python3 "${output}/kitsusync-image-identity" verify-loaded-id \
+  "${loaded_id}" "${image_config_digest}" "${image_manifest_digest}" "${image_index_digest}"; then
   printf 'loaded image ID is not an approved archive content identity\n' >&2
-  printf 'oci_identity_diagnostic loaded_image_id=%s archive_config_digest=%s archive_manifest_digest=%s loaded_content_digest=%s archive_content_digest=%s\n' \
-    "${loaded_id}" "${image_config_digest}" "${image_manifest_digest}" "${loaded_content_digest}" "${image_content_digest}" >&2
+  printf 'oci_identity_diagnostic loaded_image_id=%s archive_config_digest=%s archive_manifest_digest=%s archive_index_digest=%s loaded_content_digest=%s archive_content_digest=%s\n' \
+    "${loaded_id}" "${image_config_digest}" "${image_manifest_digest}" "${image_index_digest}" "${loaded_content_digest}" "${image_content_digest}" >&2
   exit 1
 fi
 [[ "${loaded_content_digest}" == "${image_content_digest}" ]] || { printf 'loaded portable image content identity mismatch\n' >&2; exit 1; }

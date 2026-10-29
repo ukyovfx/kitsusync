@@ -121,6 +121,21 @@ def main() -> None:
         archive_fields = fields(run("archive", str(approved), IMAGE_REF).stdout)
         assert archive_fields["image_config_digest"] == config_digest
         assert archive_fields["image_manifest_digest"] == manifest_digest
+        with tarfile.open(approved) as archive:
+            index_digest = "sha256:" + sha(archive.extractfile("index.json").read())
+        assert archive_fields["image_index_digest"] == index_digest
+
+        # Docker may expose the verified root index digest as the loaded .Id.
+        # The archive parser has already bound it to the exact index bytes;
+        # all other identity and provenance checks remain mandatory.
+        for approved_id in (config_digest, manifest_digest, index_digest):
+            assert run("verify-loaded-id", approved_id, config_digest, manifest_digest, index_digest).returncode == 0
+        for rejected_id in ("sha256:" + "0" * 64, "not-a-digest"):
+            rejected = run("verify-loaded-id", rejected_id, config_digest, manifest_digest, index_digest, check=False)
+            assert rejected.returncode != 0
+            assert "approved archive content identity" in rejected.stderr or "digest is invalid" in rejected.stderr
+        invalid_expected = run("verify-loaded-id", index_digest, config_digest, manifest_digest, "sha256:bad", check=False)
+        assert invalid_expected.returncode != 0 and "digest is invalid" in invalid_expected.stderr
 
         # Docker daemon-local .Id is deliberately excluded. The portable
         # identity remains equal when the exact approved Linux content has
