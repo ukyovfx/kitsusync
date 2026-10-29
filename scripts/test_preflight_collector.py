@@ -262,11 +262,14 @@ class CollectorTests(unittest.TestCase):
 
     def test_image_inventory_matches_full_ids_containers_and_verified_rollback(self):
         self._inventory_release_provenance()
-        running_id, rollback_id, unused_id, release_id = ["sha256:" + value * 64 for value in "1234"]
-        running_container, other_container = "a" * 64, "b" * 64
+        common_prefix = "a" * 12
+        running_id = "sha256:" + common_prefix + "1" * 52
+        stopped_id = "sha256:" + common_prefix + "2" * 52
+        rollback_id, unused_id, release_id = ["sha256:" + value * 64 for value in "345"]
+        running_container, stopped_container = "a" * 64, "b" * 64
         backup = self._inventory_rollback_backup(rollback_id)
-        tags = ["ci-" + value * 40 for value in "1234"]
-        image_rows = list(zip(tags, (running_id, rollback_id, unused_id, release_id)))
+        tags = ["ci-" + value * 40 for value in "12345"]
+        image_rows = list(zip(tags, (running_id, rollback_id, unused_id, release_id, stopped_id)))
         image_rows.append(("v0.5.1", release_id))
         image_output = "".join(json.dumps({"Repository": "kitsusync", "Tag": tag, "ID": image_id}) + "\n"
                               for tag, image_id in image_rows)
@@ -275,11 +278,13 @@ class CollectorTests(unittest.TestCase):
             if args[1:4] == ["image", "ls", "--no-trunc"]:
                 return SimpleNamespace(returncode=0, stdout=image_output)
             if args[1:5] == ["ps", "--all", "--quiet", "--no-trunc"]:
-                return SimpleNamespace(returncode=0, stdout=f"{running_container}\n{other_container}\n")
+                return SimpleNamespace(returncode=0, stdout=f"{running_container}\n{stopped_container}\n")
             if args[1] == "inspect":
+                self.assertEqual(args[3], "{{.Id}}|{{.Image}}|{{.State.Status}}")
+                self.assertEqual(args[4:], [running_container, stopped_container])
                 return SimpleNamespace(returncode=0, stdout=(
                     f"{running_container}|{running_id}|running\n"
-                    f"{other_container}|sha256:{'9' * 64}|exited\n"))
+                    f"{stopped_container}|{stopped_id}|exited\n"))
             if args[1:4] == ["image", "inspect", "--format"]:
                 self.assertEqual(args[-1], f"kitsusync:rollback-{backup.name}")
                 return SimpleNamespace(returncode=0, stdout=rollback_id + "\n")
@@ -294,11 +299,53 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(rows[f"kitsusync:{tags[0]}"]["image_id"], running_id)
         self.assertEqual(rows[f"kitsusync:{tags[0]}"]["containers"], [
             {"container_id": running_container, "state": "running"}])
+        self.assertEqual(rows[f"kitsusync:{tags[0]}"]["image_id"][:19],
+                         rows[f"kitsusync:{tags[4]}"]["image_id"][:19])
+        self.assertNotEqual(rows[f"kitsusync:{tags[0]}"]["image_id"],
+                            rows[f"kitsusync:{tags[4]}"]["image_id"])
         self.assertEqual(rows[f"kitsusync:{tags[1]}"]["classification"], "KEEP")
         self.assertEqual(rows[f"kitsusync:{tags[1]}"]["rollback_refs"], [f"kitsusync:rollback-{backup.name}"])
         self.assertEqual(rows[f"kitsusync:{tags[2]}"]["classification"], "DELETE_CANDIDATE")
         self.assertEqual(rows[f"kitsusync:{tags[3]}"]["classification"], "KEEP")
         self.assertEqual(rows[f"kitsusync:{tags[3]}"]["release_refs"], ["kitsusync:v0.5.1"])
+        self.assertEqual(rows[f"kitsusync:{tags[4]}"]["classification"], "KEEP")
+        self.assertEqual(rows[f"kitsusync:{tags[4]}"]["containers"], [
+            {"container_id": stopped_container, "state": "exited"}])
+
+    def test_image_inventory_inspect_anomalies_fail_closed(self):
+        self._inventory_release_provenance()
+        rollback_id, candidate_id = "sha256:" + "6" * 64, "sha256:" + "7" * 64
+        backup = self._inventory_rollback_backup(rollback_id)
+        tag = "ci-" + "8" * 40
+        image_output = json.dumps({"Repository": "kitsusync", "Tag": tag, "ID": candidate_id}) + "\n"
+        first_container, second_container = "c" * 64, "d" * 64
+
+        for anomaly in ("malformed", "id_mismatch", "duplicate_id"):
+            def docker(args, **_kwargs):
+                if args[1:4] == ["image", "ls", "--no-trunc"]:
+                    return SimpleNamespace(returncode=0, stdout=image_output)
+                if args[1:5] == ["ps", "--all", "--quiet", "--no-trunc"]:
+                    ids = ([first_container, second_container] if anomaly == "malformed" else
+                           [first_container] if anomaly == "id_mismatch" else
+                           [first_container, first_container])
+                    return SimpleNamespace(returncode=0, stdout="".join(f"{item}\n" for item in ids))
+                if args[1:4] == ["image", "inspect", "--format"]:
+                    self.assertEqual(args[-1], f"kitsusync:rollback-{backup.name}")
+                    return SimpleNamespace(returncode=0, stdout=rollback_id + "\n")
+                if args[1] == "inspect":
+                    if anomaly == "malformed":
+                        return SimpleNamespace(returncode=0, stdout=f"short|{candidate_id}|exited\n")
+                    if anomaly == "id_mismatch":
+                        return SimpleNamespace(returncode=0, stdout=f"{second_container}|{candidate_id}|running\n")
+                    return SimpleNamespace(returncode=0, stdout=(
+                        f"{first_container}|{candidate_id}|running\n"
+                        f"{first_container}|{candidate_id}|exited\n"))
+                raise AssertionError(f"unexpected Docker command: {args[1:5]}")
+
+            result = collector.image_inventory(self.paths, TEST_UID, docker_runner=docker,
+                                               backup_verifier=lambda _backup: True)
+            self.assertEqual(result["status"], "UNKNOWN", anomaly)
+            self.assertNotEqual(result["images"][0]["classification"], "DELETE_CANDIDATE", anomaly)
 
     def test_image_inventory_malformed_manifest_prevents_delete_candidate(self):
         self._inventory_release_provenance()

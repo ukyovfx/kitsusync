@@ -802,7 +802,7 @@ def image_inventory(paths: Paths, expected_uid: int = 0, docker_runner=subproces
     elif container_ids:
         inspected = _docker_lines(docker_runner, [
             "/usr/bin/docker", "inspect", "--format",
-            '{{range .}}{{.Id}}|{{.Image}}|{{.State.Status}}{{"\\n"}}{{end}}',
+            '{{.Id}}|{{.Image}}|{{.State.Status}}',
             *container_ids], timeout=30)
         if inspected is None or len(inspected) != len(container_ids):
             status = "UNKNOWN"
