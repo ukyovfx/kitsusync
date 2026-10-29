@@ -5,7 +5,7 @@ helper="$root/deploy/kitsusync-staging-deploy"
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
 
-image_sha=7698731a4f4b30bca140b700b6716afee6a7dd35ce73f84e3bf11d6676372d0b
+image_sha=135b51826ce7d7179a2812acd6100c5caee9d396b7ffbfc060e7ce7162843238
 sqlite_sha=6554ca0c07e171b27f039db513d8a929c974fbea1ca0df4efb810081ae11b960
 [[ "$(sed 's/\r$//' "$root/deploy/kitsusync-image-identity" | sha256sum | cut -d' ' -f1)" == "$image_sha" ]]
 [[ "$(sed 's/\r$//' "$root/deploy/kitsusync-sqlite-backup" | sha256sum | cut -d' ' -f1)" == "$sqlite_sha" ]]

@@ -57,8 +57,9 @@ preflight_sha="$(sha256sum "${output}/kitsusync-preflight-collect" | cut -d' ' -
 archive_identity="$(python3 "${output}/kitsusync-image-identity" archive "${output}/kitsusync-image.tar" "${image_ref}")"
 image_config_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_config_digest=//p')"
 image_manifest_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_manifest_digest=//p')"
+image_index_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_index_digest=//p')"
 image_content_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_content_digest=//p')"
-[[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'portable archive identity is invalid\n' >&2; exit 1; }
+[[ "${image_config_digest}" =~ ^sha256:[0-9a-f]{64}$ && "${image_manifest_digest}" =~ ^sha256:[0-9a-f]{64}$ && ( -z "${image_index_digest}" || "${image_index_digest}" =~ ^sha256:[0-9a-f]{64}$ ) && "${image_content_digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { printf 'portable archive identity is invalid\n' >&2; exit 1; }
 
 IMAGE_ARCHIVE_SHA256="${archive_sha}" COMPOSE_SHA256="${compose_sha}" \
 DEPLOYMENT_TOOL_SHA256="${deploy_sha}" INSPECTION_TOOL_SHA256="${inspect_sha}" \
@@ -75,8 +76,14 @@ chmod 0600 "${output}/provenance.txt"
 docker image rm "${image_ref}" >/dev/null
 docker load --input "${output}/kitsusync-image.tar" >/dev/null
 loaded_id="$(docker image inspect --format '{{.Id}}' "${image_ref}")"
-[[ "${loaded_id}" == "${image_config_digest}" || "${loaded_id}" == "${image_manifest_digest}" ]] || { printf 'loaded image ID is not an approved archive content identity\n' >&2; exit 1; }
 loaded_content_digest="$(docker image inspect --format '{{json .}}' "${image_ref}" | python3 "${output}/kitsusync-image-identity" inspect | sed -n 's/^image_content_digest=//p')"
+if ! python3 "${output}/kitsusync-image-identity" verify-loaded-id \
+  "${loaded_id}" "${image_config_digest}" "${image_manifest_digest}" "${image_index_digest}"; then
+  printf 'loaded image ID is not an approved archive content identity\n' >&2
+  printf 'oci_identity_diagnostic loaded_image_id=%s archive_config_digest=%s archive_manifest_digest=%s archive_index_digest=%s loaded_content_digest=%s archive_content_digest=%s\n' \
+    "${loaded_id}" "${image_config_digest}" "${image_manifest_digest}" "${image_index_digest}" "${loaded_content_digest}" "${image_content_digest}" >&2
+  exit 1
+fi
 [[ "${loaded_content_digest}" == "${image_content_digest}" ]] || { printf 'loaded portable image content identity mismatch\n' >&2; exit 1; }
 [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image_ref}")" == "${SOURCE_COMMIT}" ]] || { printf 'loaded image revision mismatch\n' >&2; exit 1; }
 [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source-id"}}' "${image_ref}")" == "${SOURCE_ID}" ]] || { printf 'loaded image source mismatch\n' >&2; exit 1; }
@@ -85,3 +92,4 @@ loaded_content_digest="$(docker image inspect --format '{{json .}}' "${image_ref
 [[ "$(sha256sum "${output}/docker-compose.yml" | cut -d' ' -f1)" == "${compose_sha}" ]] || { printf 'Compose digest changed\n' >&2; exit 1; }
 
 printf 'deployment-bundle=verified path=%s image_id=%s image_content_digest=%s archive_sha256=%s\n' "${output}" "${loaded_id}" "${loaded_content_digest}" "${archive_sha}"
+
