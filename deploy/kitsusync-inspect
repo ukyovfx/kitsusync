@@ -109,3 +109,9 @@ preflight_collector=/usr/local/libexec/kitsusync-preflight-collect
 preflight_evidence="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${preflight_collector}")" || die "preflight evidence collection is incomplete"
 [[ "${#preflight_evidence}" -le 65536 && "${preflight_evidence}" =~ ^\{.*\}$ ]] || die "preflight evidence output is invalid"
 printf 'preflight_evidence_json=%s\n' "${preflight_evidence}"
+
+image_inventory="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${preflight_collector}" --image-inventory-v1 2>/dev/null)" || image_inventory='{"schema_version":1,"status":"UNKNOWN","images":[],"reason":"collector_failed"}'
+if [[ "${#image_inventory}" -gt 262144 || "${image_inventory}" == *$'\n'* || ! "${image_inventory}" =~ ^\{.*\}$ ]]; then
+  image_inventory='{"schema_version":1,"status":"UNKNOWN","images":[],"reason":"invalid_or_oversized_output"}'
+fi
+printf 'image_inventory_v1=%s\n' "${image_inventory}"

@@ -10,7 +10,7 @@ import sqlite3
 import tarfile
 import tempfile
 import unittest
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from types import SimpleNamespace
 from unittest import SkipTest, mock
 
@@ -34,6 +34,8 @@ class CollectorTests(unittest.TestCase):
                      self.paths.state_root, self.paths.control_root,
                      self.paths.release_stage, self.paths.docker_root):
             path.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(self.paths.backup_root, 0o700)
         self.db = self.paths.runtime_data / "sqlite.db"
         with closing(sqlite3.connect(self.db)) as db:
             db.execute("CREATE TABLE fixture (value TEXT)")
@@ -214,6 +216,184 @@ class CollectorTests(unittest.TestCase):
         self.assertFalse(collector.rollback_image_retained(ref, image_id, wrong))
         self.assertTrue(collector.rollback_image_retained(ref, image_id, present))
         self.assertTrue(collector.rollback_image_retained(ref + "-AbC123x9", image_id, present))
+
+    def _inventory_release_provenance(self):
+        source = "a" * 40
+        values = {
+            "artifact_kind": "release", "version": "0.5.1", "release_tag": "v0.5.1",
+            "source_commit": source, "source_id": source, "release_commit": source,
+            "build_daemon_image_id": "sha256:" + "b" * 64,
+            "image_ref": "kitsusync:v0.5.1",
+            "image_config_digest": "sha256:" + "c" * 64,
+            "image_manifest_digest": "sha256:" + "d" * 64,
+            "image_content_digest": "sha256:" + "e" * 64,
+        }
+        values.update({key: "f" * 64 for key in collector.PROVENANCE_DIGESTS})
+        path = self.paths.control_root / "provenance"
+        path.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+        os.chmod(path, 0o600)
+
+    def _inventory_rollback_backup(self, image_id):
+        backup = self._complete_backup()
+        runtime = backup / "runtime"
+        runtime.mkdir()
+        (runtime / "plan.json").write_text("{}\n")
+        (backup / "container-id").write_text("c" * 64 + "\n")
+        (backup / "previous-image").write_text("kitsusync:v0.5.1\n")
+        (backup / "previous-image-id").write_text(image_id + "\n")
+        for name in ("previous-revision", "previous-source-id", "previous-version", "prior-validation",
+                     "network", "target-provenance", "target.override.yml", "target-compose.json",
+                     "backup-complete"):
+            (backup / name).write_text("fixture\n")
+        (backup / "production-compose.yml").write_text("services: {}\n")
+        (backup / "compose.sha256").write_text(
+            f"{hashlib.sha256((backup / 'production-compose.yml').read_bytes()).hexdigest()}  production-compose.yml\n")
+        (backup / "env.sha256").write_text(
+            f"{hashlib.sha256((backup / 'operator.env').read_bytes()).hexdigest()}  operator.env\n")
+        backup_name = backup.name
+        (backup / "rollback-image-ref").write_text(f"kitsusync:rollback-{backup_name}\n")
+        hashed = [runtime / "plan.json"] + [backup / name for name in collector.RUNTIME_HASHED_ROOT_FILES]
+        (backup / "runtime-state.sha256").write_text("".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path}\n" for path in hashed))
+        for path in backup.rglob("*"):
+            if path.is_file():
+                os.chmod(path, 0o600)
+        os.chmod(runtime, 0o700)
+        os.chmod(backup, 0o700)
+        return backup
+
+    def test_image_inventory_matches_full_ids_containers_and_verified_rollback(self):
+        self._inventory_release_provenance()
+        common_prefix = "a" * 12
+        running_id = "sha256:" + common_prefix + "1" * 52
+        stopped_id = "sha256:" + common_prefix + "2" * 52
+        rollback_id, unused_id, release_id = ["sha256:" + value * 64 for value in "345"]
+        running_container, stopped_container = "a" * 64, "b" * 64
+        backup = self._inventory_rollback_backup(rollback_id)
+        tags = ["ci-" + value * 40 for value in "12345"]
+        image_rows = list(zip(tags, (running_id, rollback_id, unused_id, release_id, stopped_id)))
+        image_rows.append(("v0.5.1", release_id))
+        image_output = "".join(json.dumps({"Repository": "kitsusync", "Tag": tag, "ID": image_id}) + "\n"
+                              for tag, image_id in image_rows)
+
+        def docker(args, **_kwargs):
+            if args[1:4] == ["image", "ls", "--no-trunc"]:
+                return SimpleNamespace(returncode=0, stdout=image_output)
+            if args[1:5] == ["ps", "--all", "--quiet", "--no-trunc"]:
+                return SimpleNamespace(returncode=0, stdout=f"{running_container}\n{stopped_container}\n")
+            if args[1] == "inspect":
+                self.assertEqual(args[3], "{{.Id}}|{{.Image}}|{{.State.Status}}")
+                self.assertEqual(args[4:], [running_container, stopped_container])
+                return SimpleNamespace(returncode=0, stdout=(
+                    f"{running_container}|{running_id}|running\n"
+                    f"{stopped_container}|{stopped_id}|exited\n"))
+            if args[1:4] == ["image", "inspect", "--format"]:
+                self.assertEqual(args[-1], f"kitsusync:rollback-{backup.name}")
+                return SimpleNamespace(returncode=0, stdout=rollback_id + "\n")
+            raise AssertionError(f"unexpected Docker command: {args[1:5]}")
+
+        result = collector.image_inventory(self.paths, TEST_UID, docker_runner=docker,
+                                           backup_verifier=lambda _backup: True)
+        self.assertEqual(result["schema_version"], 1)
+        self.assertEqual(result["status"], "VERIFIED")
+        rows = {row["tag"]: row for row in result["images"]}
+        self.assertEqual(rows[f"kitsusync:{tags[0]}"]["classification"], "KEEP")
+        self.assertEqual(rows[f"kitsusync:{tags[0]}"]["image_id"], running_id)
+        self.assertEqual(rows[f"kitsusync:{tags[0]}"]["containers"], [
+            {"container_id": running_container, "state": "running"}])
+        self.assertEqual(rows[f"kitsusync:{tags[0]}"]["image_id"][:19],
+                         rows[f"kitsusync:{tags[4]}"]["image_id"][:19])
+        self.assertNotEqual(rows[f"kitsusync:{tags[0]}"]["image_id"],
+                            rows[f"kitsusync:{tags[4]}"]["image_id"])
+        self.assertEqual(rows[f"kitsusync:{tags[1]}"]["classification"], "KEEP")
+        self.assertEqual(rows[f"kitsusync:{tags[1]}"]["rollback_refs"], [f"kitsusync:rollback-{backup.name}"])
+        self.assertEqual(rows[f"kitsusync:{tags[2]}"]["classification"], "DELETE_CANDIDATE")
+        self.assertEqual(rows[f"kitsusync:{tags[3]}"]["classification"], "KEEP")
+        self.assertEqual(rows[f"kitsusync:{tags[3]}"]["release_refs"], ["kitsusync:v0.5.1"])
+        self.assertEqual(rows[f"kitsusync:{tags[4]}"]["classification"], "KEEP")
+        self.assertEqual(rows[f"kitsusync:{tags[4]}"]["containers"], [
+            {"container_id": stopped_container, "state": "exited"}])
+
+    def test_image_inventory_inspect_anomalies_fail_closed(self):
+        self._inventory_release_provenance()
+        rollback_id, candidate_id = "sha256:" + "6" * 64, "sha256:" + "7" * 64
+        backup = self._inventory_rollback_backup(rollback_id)
+        tag = "ci-" + "8" * 40
+        image_output = json.dumps({"Repository": "kitsusync", "Tag": tag, "ID": candidate_id}) + "\n"
+        first_container, second_container = "c" * 64, "d" * 64
+
+        for anomaly in ("malformed", "id_mismatch", "duplicate_id"):
+            def docker(args, **_kwargs):
+                if args[1:4] == ["image", "ls", "--no-trunc"]:
+                    return SimpleNamespace(returncode=0, stdout=image_output)
+                if args[1:5] == ["ps", "--all", "--quiet", "--no-trunc"]:
+                    ids = ([first_container, second_container] if anomaly == "malformed" else
+                           [first_container] if anomaly == "id_mismatch" else
+                           [first_container, first_container])
+                    return SimpleNamespace(returncode=0, stdout="".join(f"{item}\n" for item in ids))
+                if args[1:4] == ["image", "inspect", "--format"]:
+                    self.assertEqual(args[-1], f"kitsusync:rollback-{backup.name}")
+                    return SimpleNamespace(returncode=0, stdout=rollback_id + "\n")
+                if args[1] == "inspect":
+                    if anomaly == "malformed":
+                        return SimpleNamespace(returncode=0, stdout=f"short|{candidate_id}|exited\n")
+                    if anomaly == "id_mismatch":
+                        return SimpleNamespace(returncode=0, stdout=f"{second_container}|{candidate_id}|running\n")
+                    return SimpleNamespace(returncode=0, stdout=(
+                        f"{first_container}|{candidate_id}|running\n"
+                        f"{first_container}|{candidate_id}|exited\n"))
+                raise AssertionError(f"unexpected Docker command: {args[1:5]}")
+
+            result = collector.image_inventory(self.paths, TEST_UID, docker_runner=docker,
+                                               backup_verifier=lambda _backup: True)
+            self.assertEqual(result["status"], "UNKNOWN", anomaly)
+            self.assertNotEqual(result["images"][0]["classification"], "DELETE_CANDIDATE", anomaly)
+
+    def test_image_inventory_malformed_manifest_prevents_delete_candidate(self):
+        self._inventory_release_provenance()
+        rollback_id, candidate_id = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+        backup = self._inventory_rollback_backup(rollback_id)
+        with (backup / "runtime-state.sha256").open("a") as stream:
+            stream.write("tampered\n")
+        tag = "ci-" + "3" * 40
+        image_output = json.dumps({"Repository": "kitsusync", "Tag": tag, "ID": candidate_id}) + "\n"
+
+        def docker(args, **_kwargs):
+            if args[1:4] == ["image", "ls", "--no-trunc"]:
+                return SimpleNamespace(returncode=0, stdout=image_output)
+            if args[1:5] == ["ps", "--all", "--quiet", "--no-trunc"]:
+                return SimpleNamespace(returncode=0, stdout="")
+            raise AssertionError(f"unexpected Docker command: {args[1:5]}")
+
+        result = collector.image_inventory(self.paths, TEST_UID, docker_runner=docker,
+                                           backup_verifier=lambda _backup: True)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["images"][0]["classification"], "UNKNOWN")
+
+    def test_image_inventory_invalid_ids_and_docker_failure_fail_closed(self):
+        self._inventory_release_provenance()
+        tag = "ci-" + "4" * 40
+        malformed = json.dumps({"Repository": "kitsusync", "Tag": tag, "ID": "short"}) + "\n"
+
+        def docker(args, **_kwargs):
+            if args[1:4] == ["image", "ls", "--no-trunc"]:
+                return SimpleNamespace(returncode=0, stdout=malformed)
+            return SimpleNamespace(returncode=1, stdout="")
+
+        result = collector.image_inventory(self.paths, TEST_UID, docker_runner=docker)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["images"][0]["image_id"], None)
+        self.assertEqual(result["images"][0]["classification"], "UNKNOWN")
+
+    def test_collector_no_argument_preflight_contract_is_unchanged(self):
+        output = io.StringIO()
+        with (mock.patch.object(collector.os, "geteuid", return_value=0, create=True),
+              mock.patch.object(collector.sys, "argv", [str(SOURCE)]),
+              mock.patch.object(collector.Paths, "production", return_value=self.paths),
+              mock.patch.object(collector, "collect", return_value={"schema_version": 1}),
+              redirect_stdout(output)):
+            self.assertEqual(collector.main(), 0)
+        self.assertEqual(output.getvalue(), '{"schema_version":1}\n')
 
     def test_complete_rollback_unit_and_tampering(self):
         backup = self.paths.backup_root / "20261012T000000Z-abcdef012345"
