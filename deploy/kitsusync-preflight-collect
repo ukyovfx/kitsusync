@@ -2,7 +2,7 @@
 """Read-only KitsuSync deployment evidence collector.
 
 Production invocation takes no arguments and uses only the fixed paths below.
-It prints sanitized evidence matching the vfxstudio-server evaluator's v1
+It prints sanitized evidence matching the deployment evaluator's v1
 section names; unavailable proof is omitted so the evaluator returns BLOCKED.
 """
 from __future__ import annotations
