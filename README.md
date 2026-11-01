@@ -4,11 +4,11 @@
 [![Docker](https://img.shields.io/badge/runtime-Docker-2496ED)](#quick-start)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](#license)
 [![Security Policy](https://img.shields.io/badge/security-policy-important)](#contributing-and-security)
-[![Latest release](https://img.shields.io/badge/release-v0.4.9-orange)](https://github.com/ukyovfx/kitsusync/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/ukyovfx/kitsusync?color=orange)](https://github.com/ukyovfx/kitsusync/releases/latest)
 
 KitsuSync is a Kitsu x Discord pipeline bridge for VFX and animation teams. It polls Kitsu, detects task changes, and posts structured Discord notifications with setup and admin tools in the browser.
 
-**Current source baseline: v0.5.1.** The latest published GitHub Release remains v0.4.9. The immutable v0.5.0 tag was created but not published after its tag CI provenance check failed; its accepted source changes are carried forward in v0.5.1. KitsuSync is currently focused on small/mid-size CG/VFX and indie animation team workflows. It is not intended to replace enterprise production tracking systems.
+**Current source baseline: v0.5.1.** See the [latest GitHub Release](https://github.com/ukyovfx/kitsusync/releases/latest) for the current published version and assets. KitsuSync is focused on small and mid-size CG/VFX and indie animation team workflows; it is not intended to replace enterprise production tracking systems.
 
 ## Why This Repo Exists
 
@@ -50,9 +50,7 @@ Browser admin UI
 - v0.4.2: status-aware Discord notification cards, safe User Linking-based mentions, and bounded card rendering
 - v0.4.3: safe Kitsu endpoint auto-discovery and validated fresh-initialization URL fallback
 - v0.4.4: status-aware notification cards and Production-level Discord notification language selection
-- v0.5.1: accepted v0.5.0 product changes plus release-tag provenance validation correction; real Discord message/mention E2E remains untested
-
-The v0.5.0 tag is retained as an unpublished historical tag; no GitHub Release or deployment bundle was published for it.
+- v0.5.1: accepted v0.5.0 product changes plus release-tag provenance validation correction; consult the release notes for version-specific verification status
 
 For release history, see `CHANGELOG.md` and the [GitHub Releases](https://github.com/ukyovfx/kitsusync/releases) page. Per-version release notes live with their GitHub Releases.
 
@@ -108,7 +106,9 @@ docker-compose.yml        App + optional FileBrowser(debug profile only)
 conf.toml.example         App configuration template
 src/                      Go application source
 tpl/                      Discord message templates
-docs/                     Current development, operations, and release procedures
+scripts/                  Maintainer and deployment validation scripts
+deploy/                   Supported deployment tooling and examples
+docs/                     User guides, product contracts, and historical records
 ```
 
 ## Requirements
