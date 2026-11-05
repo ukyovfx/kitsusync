@@ -61,7 +61,10 @@ func TestMigrateApplicationSchemaUpgradesLegacyV043DatabaseForSessions(t *testin
 	}
 }
 
-func TestMigrateApplicationSchemaRehearsesSyntheticV049UpgradeToV051(t *testing.T) {
+func TestMigrateApplicationSchemaRehearsesSyntheticV049UpgradeForV051AndV052(t *testing.T) {
+	// v0.5.2 intentionally keeps the v0.5.1 SQLite schema. This fixture
+	// exercises the same v0.4.9-to-patch-release migration code in the exact
+	// v0.5.2 source; the preflight separately reports the versioned contract.
 	dbPath := filepath.Join(t.TempDir(), "synthetic-v049.db")
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
 	if err != nil {

@@ -71,6 +71,7 @@ class InspectorMaintenanceTests(unittest.TestCase):
             "baseline_release": "v0.5.1",
             "expected_previous_inspect_sha256": digest(self.old_inspector),
             "expected_previous_collector": "absent",
+            "approved_releases": {},
             "files": files,
         }
         (self.stage / "manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
@@ -84,6 +85,7 @@ class InspectorMaintenanceTests(unittest.TestCase):
         self.assertEqual(identity["source_commit"], self.commit)
         self.assertEqual(identity["inspection_tool_sha256"], digest(self.new_inspector))
         self.assertEqual(identity["preflight_collector_tool_sha256"], digest(self.new_collector))
+        self.assertEqual(identity["approved_releases"], {})
         if os.name != "nt":
             for target in self.paths.install.values():
                 self.assertEqual(target.stat().st_mode & 0o777, 0o700)
@@ -250,6 +252,17 @@ class InspectorMaintenanceTests(unittest.TestCase):
     def test_manifest_rejects_unexpected_artifact_files(self):
         (self.stage / "untrusted-helper").write_text("must not execute")
         with self.assertRaisesRegex(maintenance.MaintenanceError, "inventory"):
+            maintenance.install(self.paths, TEST_UID)
+
+    def test_manifest_rejects_malformed_post_tag_release_approval(self):
+        manifest_path = self.stage / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["approved_releases"] = {"v0.5.2": {
+            "version": "0.5.2", "source_commit": "b" * 40,
+            "image_ref": "kitsusync:v0.5.2", "migration_compatibility": "wrong",
+        }}
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+        with self.assertRaisesRegex(maintenance.MaintenanceError, "manifest"):
             maintenance.install(self.paths, TEST_UID)
 
 

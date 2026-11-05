@@ -97,6 +97,14 @@ PROVENANCE_DIGESTS = {
     "restore_state_tool_sha256": "kitsusync-restore-state",
     "preflight_collector_tool_sha256": "kitsusync-preflight-collect",
 }
+RELEASE_CONTRACTS = {
+    "v0.5.1": {
+        "version": "0.5.1",
+        "source_commit": "f8a32bbba94d84068d9e96c18554ac4ab7b24540",
+        "image_ref": "kitsusync:v0.5.1",
+        "migration_compatibility": "v0.4.9_to_v0.5.1",
+    },
+}
 STAGED_FILES = set(PROVENANCE_DIGESTS.values()) | {"deployment-mode", "provenance.txt"}
 INSTALLED = {
     "deployment_tool_sha256": Path("/usr/local/sbin/kitsusync-deploy"),
@@ -127,7 +135,28 @@ def _regular(path: Path, expected_uid: int) -> os.stat_result:
         os.close(fd)
 
 
-def inspect_database(path: Path, expected_uid: int) -> dict:
+def _approved_release_contracts(value) -> dict:
+    """Validate the root-owned post-tag approval map; never override v0.5.1."""
+    if type(value) is not dict or len(value) > 16:
+        return {}
+    contracts = {}
+    for tag, contract in value.items():
+        if (not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)
+                or tag in RELEASE_CONTRACTS or type(contract) is not dict
+                or set(contract) != {"version", "source_commit", "image_ref", "migration_compatibility"}):
+            return {}
+        version = tag[1:]
+        if (contract.get("version") != version
+                or not re.fullmatch(r"[0-9a-f]{40}", contract.get("source_commit", ""))
+                or contract.get("image_ref") != f"kitsusync:{tag}"
+                or contract.get("migration_compatibility") != f"v0.4.9_to_{tag}"):
+            return {}
+        contracts[tag] = contract
+    return contracts
+
+
+def inspect_database(path: Path, expected_uid: int, target_version: str = "0.5.1",
+                     approved_release_contracts=None) -> dict:
     fd = None
     try:
         before = path.lstat()
@@ -161,7 +190,12 @@ def inspect_database(path: Path, expected_uid: int) -> dict:
             ok = db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
             tables = {row[0] for row in db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-            compatibility = "v0.4.9_to_v0.5.1" if set(V049_REQUIRED_COLUMNS) <= tables else "incompatible"
+            contract = next((item for item in (RELEASE_CONTRACTS | _approved_release_contracts(
+                approved_release_contracts)).values()
+                             if item["version"] == target_version), None)
+            compatibility = (contract["migration_compatibility"]
+                             if contract and set(V049_REQUIRED_COLUMNS) <= tables
+                             else "incompatible" if contract else "unknown")
             if compatibility != "incompatible":
                 for table, required_columns in V049_REQUIRED_COLUMNS.items():
                     columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")').fetchall()}
@@ -208,7 +242,8 @@ def _read_limited(path: Path, expected_uid: int, limit: int) -> bytes:
     return data
 
 
-def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None) -> dict | None:
+def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None,
+                   approved_release_contracts=None) -> dict | None:
     try:
         metadata = stage.lstat()
         if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != expected_uid
@@ -235,10 +270,13 @@ def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None) -> dict
                 continue
             if _hash_file(stage / filename, expected_uid) != digest:
                 digest_verified = False
+        release_contracts = RELEASE_CONTRACTS | _approved_release_contracts(approved_release_contracts)
+        release_contract = release_contracts.get(values.get("release_tag", ""))
+        expected_image_ref = release_contract["image_ref"] if release_contract else ""
         portable_identity_verified = False
-        if digest_verified and identity_runner is not None:
+        if digest_verified and identity_runner is not None and expected_image_ref:
             try:
-                result = identity_runner(stage / "kitsusync-image.tar")
+                result = identity_runner(stage / "kitsusync-image.tar", expected_image_ref)
                 identity = dict(line.split("=", 1) for line in result.stdout.splitlines()
                                 if re.fullmatch(r"[a-z0-9_]+=[^\r\n]*", line))
                 portable_identity_verified = (
@@ -250,21 +288,23 @@ def inspect_bundle(stage: Path, expected_uid: int, identity_runner=None) -> dict
             except (OSError, subprocess.SubprocessError, ValueError):
                 portable_identity_verified = False
         source_matches = (
-            values.get("artifact_kind") == "release"
-            and values.get("version") == "0.5.1"
-            and values.get("release_tag") == "v0.5.1"
-            and values.get("source_commit") == "f8a32bbba94d84068d9e96c18554ac4ab7b24540"
+            release_contract is not None
+            and values.get("artifact_kind") == "release"
+            and values.get("version") == release_contract["version"]
+            and values.get("source_commit") == release_contract["source_commit"]
             and values.get("release_commit") == values.get("source_commit")
             and values.get("source_id") == values.get("source_commit")
         )
         provenance_verified = (source_matches and digest_verified and portable_identity_verified
-                              and values.get("image_ref") == "kitsusync:v0.5.1"
+                              and values.get("image_ref") == expected_image_ref
                               and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", values.get("image_config_digest", "")))
                               and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", values.get("image_manifest_digest", "")))
                               and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", values.get("image_content_digest", ""))))
         if mode not in {"normal", "recovery"}:
             return None
-        return {"mode": mode, "source_matches_release": source_matches,
+        return {"mode": mode, "version": release_contract["version"] if release_contract else "",
+                "image_ref": expected_image_ref if release_contract else "",
+                "source_matches_release": source_matches,
                 "digest_verified": digest_verified,
                 "provenance_verified": provenance_verified,
                 "_preflight_collector_digest": values.get("preflight_collector_tool_sha256", "")}
@@ -405,27 +445,41 @@ def newest_backup(root: Path, expected_uid: int) -> Path | None:
         return None
 
 
-def inspection_maintenance_matches(identity: Path, inspector: Path, collector: Path,
-                                   expected_uid: int) -> bool | None:
+def inspection_maintenance_record(identity: Path, inspector: Path, collector: Path,
+                                  expected_uid: int) -> dict | None:
     if not os.path.lexists(identity):
         return None
     try:
         record = json.loads(_read_limited(identity, expected_uid, 64 * 1024).decode("ascii"))
-        expected_keys = {"schema_version", "baseline_release", "source_commit",
-                         "inspection_tool_sha256", "preflight_collector_tool_sha256"}
-        if (type(record) is not dict or set(record) != expected_keys
+        legacy_keys = {"schema_version", "baseline_release", "source_commit",
+                       "inspection_tool_sha256", "preflight_collector_tool_sha256"}
+        expected_keys = legacy_keys | {"approved_releases"}
+        if (type(record) is not dict or set(record) not in (legacy_keys, expected_keys)
                 or record.get("schema_version") != 1 or record.get("baseline_release") != "v0.5.1"
                 or not re.fullmatch(r"[0-9a-f]{40}", record.get("source_commit", ""))):
-            return False
+            return None
+        contracts = _approved_release_contracts(record.get("approved_releases", {}))
+        if "approved_releases" in record and (type(record["approved_releases"]) is not dict
+                                                or contracts != record["approved_releases"]):
+            return None
         inspect_sha = record.get("inspection_tool_sha256", "")
         collector_sha = record.get("preflight_collector_tool_sha256", "")
         if not (re.fullmatch(r"[0-9a-f]{64}", inspect_sha)
                 and re.fullmatch(r"[0-9a-f]{64}", collector_sha)):
-            return False
-        return (_hash_file(inspector, expected_uid) == inspect_sha
-                and _hash_file(collector, expected_uid) == collector_sha)
+            return None
+        if (_hash_file(inspector, expected_uid) != inspect_sha
+                or _hash_file(collector, expected_uid) != collector_sha):
+            return None
+        return {"approved_releases": contracts}
     except (OSError, UnicodeError, ValueError, EvidenceError):
-        return False
+        return None
+
+
+def inspection_maintenance_matches(identity: Path, inspector: Path, collector: Path,
+                                   expected_uid: int) -> bool | None:
+    if not os.path.lexists(identity):
+        return None
+    return inspection_maintenance_record(identity, inspector, collector, expected_uid) is not None
 
 
 def inspect_tools(provenance: Path, installed: dict[str, Path], expected_uid: int,
@@ -482,10 +536,10 @@ def trusted_identity_runner(control_root: Path, expected_uid: int):
     except (OSError, UnicodeError, EvidenceError):
         return None
 
-    def run(image_archive: Path):
+    def run(image_archive: Path, image_ref: str = "kitsusync:v0.5.1"):
         return subprocess.run(
             ["/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "/usr/bin/python3",
-             str(installed), "archive", str(image_archive), "kitsusync:v0.5.1"],
+             str(installed), "archive", str(image_archive), image_ref],
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             timeout=30, check=False, env={"PATH": "/usr/bin:/bin"}, text=True,
         )
@@ -594,7 +648,8 @@ def production_database_mount_verified(runtime_data: Path, runner=subprocess.run
         return False
 
 
-def image_layer_bytes(archive: Path, expected_uid: int) -> int | None:
+def image_layer_bytes(archive: Path, expected_uid: int,
+                      image_ref: str = "kitsusync:v0.5.1") -> int | None:
     """Bound Docker's image-layer unpack requirement from the verified archive."""
     try:
         _regular(archive, expected_uid)
@@ -617,7 +672,7 @@ def image_layer_bytes(archive: Path, expected_uid: int) -> int | None:
             if type(manifests) is not list or len(manifests) != 1 or type(manifests[0]) is not dict:
                 return None
             image = manifests[0]
-            if image.get("RepoTags") != ["kitsusync:v0.5.1"]:
+            if image.get("RepoTags") != [image_ref]:
                 return None
             layers = image.get("Layers")
             if type(layers) is not list or not layers or len(layers) > 1000:
@@ -658,7 +713,9 @@ def production_capacity_requirements(paths: Paths, bundle: dict | None) -> tuple
         runtime_required = 2 * (db_size + sidecar_size) + 64 * 1024 * 1024
     except (OSError, EvidenceError):
         runtime_required = None
-    layer_size = image_layer_bytes(paths.release_stage / "kitsusync-image.tar", 0) if bundle and bundle.get("provenance_verified") else None
+    layer_size = (image_layer_bytes(paths.release_stage / "kitsusync-image.tar", 0,
+                                    bundle["image_ref"])
+                  if bundle and bundle.get("provenance_verified") else None)
     docker_required = layer_size + 64 * 1024 * 1024 if layer_size is not None else None
     # The deployment rollback snapshot contains Docker inspect environment
     # values. Do not read secret-bearing runtime configuration for a capacity
@@ -692,14 +749,26 @@ def rollback_image_retained(ref: str, expected_image_id: str, runner=subprocess.
 def collect(paths: Paths, expected_uid: int = 0, docker_runner=subprocess.run,
             capacity_statvfs=None) -> dict:
     evidence = {"schema_version": 1}
+    maintenance = (inspection_maintenance_record(
+        paths.state_root / "inspection-maintenance.json",
+        Path("/usr/local/sbin/kitsusync-inspect"), Path(__file__), expected_uid)
+        if expected_uid == 0 else None)
+    approved_release_contracts = (maintenance or {}).get("approved_releases", {})
     identity_runner = (trusted_identity_runner(paths.control_root, expected_uid)
                        if expected_uid == 0 else None)
-    bundle = inspect_bundle(paths.release_stage, expected_uid, identity_runner=identity_runner)
+    bundle = inspect_bundle(paths.release_stage, expected_uid, identity_runner=identity_runner,
+                            approved_release_contracts=approved_release_contracts)
     if bundle is not None:
         evidence["bundle"] = bundle
     evidence["runtime"] = inspect_runtime() if expected_uid == 0 else {
         "health": "unknown", "readiness": "unknown"}
-    db = inspect_database(paths.runtime_data / "sqlite.db", 10001 if expected_uid == 0 else expected_uid)
+    target_version = (bundle.get("version", "0.5.1")
+                      if bundle and bundle.get("provenance_verified")
+                      else "unknown" if bundle is not None else "0.5.1")
+    db = inspect_database(paths.runtime_data / "sqlite.db",
+                          10001 if expected_uid == 0 else expected_uid,
+                          target_version=target_version,
+                          approved_release_contracts=approved_release_contracts)
     if expected_uid == 0:
         mount_verified = production_database_mount_verified(paths.runtime_data, runner=docker_runner)
         db["runtime_mount_verified"] = mount_verified

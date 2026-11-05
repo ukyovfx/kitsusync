@@ -24,6 +24,7 @@ with tarfile.open(archive, "r:gz") as bundle:
     by_name = {name: item for name, item in zip(normalized, members) if item.isfile()}
     manifest = json.load(bundle.extractfile(by_name["manifest.json"]))
     if (manifest.get("baseline_release") != "v0.5.1"
+            or manifest.get("approved_releases") != {}
             or set(manifest.get("files", {})) != expected - {"manifest.json"}
             or len(manifest.get("source_commit", "")) != 40):
         raise SystemExit("maintenance artifact baseline mismatch")

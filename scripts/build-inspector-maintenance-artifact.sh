@@ -46,17 +46,35 @@ that record with the helper pair.
 EOF
 chmod 0600 "${output}/INSTALL.txt"
 
-python3 - "${output}" "${source_commit}" "${prior_inspect_sha}" <<'PY'
+python3 - "${output}" "${source_commit}" "${prior_inspect_sha}" \
+  "${root}/deploy/approved-release-identities.json" <<'PY'
 import hashlib, json, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-source, old_inspect = sys.argv[2:]
+root, policy_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[4])
+source, old_inspect = sys.argv[2:4]
+policy = json.loads(policy_path.read_text(encoding="ascii"))
+if (type(policy) is not dict or set(policy) != {"schema_version", "releases"}
+        or policy.get("schema_version") != 1 or type(policy.get("releases")) is not dict
+        or len(policy["releases"]) > 16):
+    raise SystemExit("approved release identity policy is invalid")
+releases = policy["releases"]
+for tag, contract in releases.items():
+    import re
+    if (not isinstance(tag, str) or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag)
+            or tag == "v0.5.1" or type(contract) is not dict
+            or set(contract) != {"version", "source_commit", "image_ref", "migration_compatibility"}
+            or contract.get("version") != tag[1:]
+            or not re.fullmatch(r"[0-9a-f]{40}", contract.get("source_commit", ""))
+            or contract.get("image_ref") != f"kitsusync:{tag}"
+            or contract.get("migration_compatibility") != f"v0.4.9_to_{tag}"):
+        raise SystemExit("approved release identity entry is invalid")
 names = ("install-inspection", "rollback-inspection", "kitsusync-inspect",
          "kitsusync-preflight-collect", "INSTALL.txt")
 files = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names}
 manifest = {"schema_version": 1, "source_commit": source,
             "baseline_release": "v0.5.1",
             "expected_previous_inspect_sha256": old_inspect,
-            "expected_previous_collector": "absent", "files": files}
+            "expected_previous_collector": "absent", "approved_releases": releases,
+            "files": files}
 (root / "manifest.json").write_text(json.dumps(manifest, sort_keys=True,
     separators=(",", ":")) + "\n", encoding="ascii")
 (root / "manifest.json").chmod(0o600)
