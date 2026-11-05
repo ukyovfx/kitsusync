@@ -602,7 +602,7 @@ func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookUR
 // Prefer DB settings, then environment variables, then conf.toml.
 func getKitsuCreds(db *gorm.DB, conf config.Config) (hostname, email, password string) {
 	if strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) == "" && strings.TrimSpace(conf.Kitsu.Hostname) != "" {
-		os.Setenv("KITSU_HOSTNAME", conf.Kitsu.Hostname)
+		setup.SetAppManagedKitsuHostname(conf.Kitsu.Hostname)
 	}
 	if apiBase := strings.TrimSpace(model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); apiBase != "" {
 		if normalized, err := setup.NormalizeKitsuURL(apiBase, setup.APISourceExplicit); err == nil {
@@ -883,7 +883,7 @@ func main() {
 	// Make the configured conf.toml host available to the UI/runtime fallback
 	// path without overriding an explicitly saved SQLite endpoint.
 	if strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) == "" && strings.TrimSpace(conf.Kitsu.Hostname) != "" {
-		os.Setenv("KITSU_HOSTNAME", conf.Kitsu.Hostname)
+		setup.SetAppManagedKitsuHostname(conf.Kitsu.Hostname)
 	}
 
 	if issues := conf.Validate(); len(issues) > 0 {
