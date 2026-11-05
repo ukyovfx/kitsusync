@@ -151,6 +151,45 @@ func redactErr(err error) error {
 	return err
 }
 
+// pinnedTransportIdleTimeout bounds how long a reused keep-alive connection may
+// sit idle before it is closed.
+const pinnedTransportIdleTimeout = 90 * time.Second
+
+var pinnedTransportCache struct {
+	sync.Mutex
+	key       string
+	transport *http.Transport
+}
+
+// pinnedTransport returns a shared Transport dialing only the verified IPs, so
+// connections are reused across requests. The cache is keyed by the pinned IP
+// list: when the verified origin changes, a new Transport replaces the old one
+// and the old one's idle connections are closed.
+func pinnedTransport(ips []netip.Addr) *http.Transport {
+	parts := make([]string, len(ips))
+	for i, ip := range ips {
+		parts[i] = ip.String()
+	}
+	key := strings.Join(parts, ",")
+
+	pinnedTransportCache.Lock()
+	defer pinnedTransportCache.Unlock()
+	if pinnedTransportCache.transport != nil && pinnedTransportCache.key == key {
+		return pinnedTransportCache.transport
+	}
+	if pinnedTransportCache.transport != nil {
+		pinnedTransportCache.transport.CloseIdleConnections()
+	}
+	pinnedTransportCache.key = key
+	pinnedTransportCache.transport = &http.Transport{
+		Proxy:           nil,
+		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		DialContext:     pinnedDialer(ips),
+		IdleConnTimeout: pinnedTransportIdleTimeout,
+	}
+	return pinnedTransportCache.transport
+}
+
 type attemptStatus int
 
 const (
@@ -176,11 +215,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	}
 	client := &http.Client{
 		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			Proxy:           nil,
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-			DialContext:     pinnedDialer(origin.PinnedIPs),
-		},
+		Transport: pinnedTransport(origin.PinnedIPs),
 		// Legacy Kitsu callers must never replay bearer credentials to a
 		// redirect target. Callers receive the original 3xx as a failure.
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
