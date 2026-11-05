@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"app/src/utils/safego"
 	"context"
 	"strings"
 	"sync"
@@ -25,7 +26,8 @@ func recordAPIMonitoringCycle(stats *RuntimeStats, probes []runtimeAPIProbe) {
 		go func() {
 			defer wg.Done()
 			started := time.Now()
-			success, classification := probe.run()
+			success, classification := false, "error"
+			safego.Run("runtime api probe "+probe.service, func() { success, classification = probe.run() })
 			observationsMu.Lock()
 			observations[probe.service] = APIObservation{At: sampledAt, Duration: time.Since(started), Success: success, Classification: classification}
 			observationsMu.Unlock()

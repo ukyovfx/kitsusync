@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -183,8 +184,41 @@ func sameKitsuIPs(a, b []netip.Addr) bool {
 	return true
 }
 
-func safeKitsuClient(model KitsuURLModel, pinned []netip.Addr) *http.Client {
-	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+const safeKitsuTransportIdleTimeout = 90 * time.Second
+
+var safeKitsuTransportCache struct {
+	sync.Mutex
+	key       string
+	transport *http.Transport
+}
+
+// safeKitsuTransport shares one Transport per (target scope, pinned IPs) so
+// repeated setup probes reuse connections. The dial-time scope checks still run
+// on every new connection; a changed key replaces the Transport and closes the
+// old one's idle connections.
+func safeKitsuTransport(model KitsuURLModel, pinned []netip.Addr) *http.Transport {
+	parts := make([]string, len(pinned))
+	for i, ip := range pinned {
+		parts[i] = ip.String()
+	}
+	key := model.TargetScope + "|" + strings.Join(parts, ",")
+
+	safeKitsuTransportCache.Lock()
+	defer safeKitsuTransportCache.Unlock()
+	if safeKitsuTransportCache.transport != nil && safeKitsuTransportCache.key == key {
+		return safeKitsuTransportCache.transport
+	}
+	if safeKitsuTransportCache.transport != nil {
+		safeKitsuTransportCache.transport.CloseIdleConnections()
+	}
+	transport := newSafeKitsuTransport(model, pinned)
+	safeKitsuTransportCache.key = key
+	safeKitsuTransportCache.transport = transport
+	return transport
+}
+
+func newSafeKitsuTransport(model KitsuURLModel, pinned []netip.Addr) *http.Transport {
+	transport := &http.Transport{Proxy: nil, TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 5 * time.Second, IdleConnTimeout: safeKitsuTransportIdleTimeout, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
@@ -207,9 +241,13 @@ func safeKitsuClient(model KitsuURLModel, pinned []netip.Addr) *http.Client {
 		}
 		return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 	}
+	return transport
+}
+
+func safeKitsuClient(model KitsuURLModel, pinned []netip.Addr) *http.Client {
 	// Direct dials are intentional for user-selected private and container
 	// targets. Public proxy support is opt-in and is not enabled by setup.
-	return &http.Client{Transport: transport, Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{Transport: safeKitsuTransport(model, pinned), Timeout: 8 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
 func ensureKitsuTargetStable(ctx context.Context, model KitsuURLModel) error {
