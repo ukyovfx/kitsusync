@@ -82,5 +82,9 @@ finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
 }
 
+# Both emergency SSH calls must select the configured emergency account explicitly, not SSH's default user.
+$wrapperSource = Get-Content -Raw -LiteralPath $wrapperPath
+if ([regex]::Matches($wrapperSource, '-l \$emergencyUser \$emergencyHost').Count -ne 2) { throw 'Emergency SSH calls do not pass the configured emergency account with -l.' }
+
 Write-Output 'staging-helper-upgrade-contract=PASS deployed-v7-63371b16=UPGRADE deployed-v9-4afd1d26=UPGRADE'
 

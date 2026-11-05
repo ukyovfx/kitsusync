@@ -155,7 +155,7 @@ except Exception:
     if ($LASTEXITCODE -ne 0) { throw 'Could not secure uploaded Staging helper files.' }
     Invoke-UpgradePreflight $false $true @{ 'kitsusync-staging-deploy'=$helperSha; 'upgrade-root.sh'=$upgradeSha }
 
-    $emergency = @(& $ssh -o BatchMode=yes -o StrictHostKeyChecking=yes $emergencyHost 'id -un; id -u' 2>&1)
+    $emergency = @(& $ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -l $emergencyUser $emergencyHost 'id -un; id -u' 2>&1)
     $emergencyStatus = $LASTEXITCODE
     $expectedEmergencyUid = @(& $ssh @sshArgs $stagingHost "id -u $emergencyUser" 2>&1)
     $expectedEmergencyStatus = $LASTEXITCODE
@@ -163,7 +163,7 @@ except Exception:
         $emergency[1].Trim() -notmatch '^[0-9]+$' -or $emergency[1].Trim() -ne $expectedEmergencyUid[0].Trim()) {
         throw "Emergency account identity mismatch: $($emergency -join ' ')"
     }
-    & $ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=yes $emergencyHost "sudo /bin/bash $remoteDir/upgrade-root.sh $CommitSha $helperSha $upgradeSha"
+    & $ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=yes -l $emergencyUser $emergencyHost "sudo /bin/bash $remoteDir/upgrade-root.sh $CommitSha $helperSha $upgradeSha"
     if ($LASTEXITCODE -ne 0) { throw 'Privileged Staging helper upgrade failed.' }
     $installed = @(& $ssh @sshArgs $stagingHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
     if ($LASTEXITCODE -ne 0 -or ($installed -join "`n") -notmatch [regex]::Escape('STAGING_HELPER_CONTRACT=staging-v10 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=operators.conf')) {
