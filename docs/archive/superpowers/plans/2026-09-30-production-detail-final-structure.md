@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Gemini prototype owns Production Detail structure and interaction order; `docs/CURRENT-IA-UI-SPEC.md` owns KitsuSync screen semantics.
-- Verified structure reference: `C:\AI-Workspace\artifacts\kitsusync-ui-reference\production-detail-final\kitsusync_production_detail_prototype.html` exists. Use that exact file for structure/interaction only; do not substitute another prototype or adopt its styling.
+- Verified structure reference: `<local-artifacts>\kitsusync-ui-reference\production-detail-final\kitsusync_production_detail_prototype.html` exists. Use that exact file for structure/interaction only; do not substitute another prototype or adopt its styling.
 - Existing KitsuSync visual styling, colors, typography, tokens, authenticated dot-grid, and controls remain authoritative.
 - Four tabs only: Overview, Notifications, Team, Settings; preserve all legacy route mappings.
 - Automatic WFA recipients remain Kitsu-derived, read-only, and never enter the writable Apply payload.

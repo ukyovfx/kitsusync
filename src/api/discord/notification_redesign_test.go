@@ -107,7 +107,7 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 		StatusTransitionMessage: "A revision is required after review",
 		PreviousStatus:          "WFA",
 		AssigneeLabel:           "Assignee",
-		AssigneesStr:            "UKYO M",
+		AssigneesStr:            "Jane Doe",
 		NotificationLanguage:    "en",
 		TaskURL:                 "https://kitsu.example/tasks/cut009",
 		GoogleDriveURL:          "https://drive.example/cut009",
@@ -129,7 +129,7 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 	if strings.Contains(embed.Description, "<@") {
 		t.Fatalf("mention leaked into embed: %q", embed.Description)
 	}
-	if !strings.Contains(embed.Description, "**📊 Status**　　　**👤 Assignee**\nwfa → retake　　　　UKYO M") {
+	if !strings.Contains(embed.Description, "**📊 Status**　　　**👤 Assignee**\nwfa → retake　　　　Jane Doe") {
 		t.Fatalf("metadata is missing from the description: %q", embed.Description)
 	}
 	if len(embed.Fields) != 0 || !strings.Contains(embed.Description, "[🦊 Kitsu](https://kitsu.example/tasks/cut009)　　[📁 Drive](https://drive.example/cut009)") {
@@ -195,11 +195,11 @@ func TestAssigneeDisplayNeverRendersOrAllowsAssigneeMentions(t *testing.T) {
 }
 
 func TestKitsuPersonDisplayNameUsesStructuredJapaneseOrderSafely(t *testing.T) {
-	person := kitsu.Person{FirstName: "侑恭", LastName: "松尾", FullName: "侑恭 松尾"}
-	if got := kitsuPersonDisplayName(person, "ja"); got != "松尾 侑恭" {
+	person := kitsu.Person{FirstName: "太郎", LastName: "山田", FullName: "太郎 山田"}
+	if got := kitsuPersonDisplayName(person, "ja"); got != "山田 太郎" {
 		t.Fatalf("Japanese structured name = %q", got)
 	}
-	if got := kitsuPersonDisplayName(person, "en"); got != "侑恭 松尾" {
+	if got := kitsuPersonDisplayName(person, "en"); got != "太郎 山田" {
 		t.Fatalf("English display-name convention changed = %q", got)
 	}
 	if got := kitsuPersonDisplayName(kitsu.Person{FullName: "Unknown order"}, "ja"); got != "Unknown order" {
@@ -289,7 +289,7 @@ func TestNotificationCardSerializedPayloadMatchesFinalDiscordContract(t *testing
 		StatusMessage:        "修正をお願いします",
 		PreviousStatus:       "WFA",
 		AssigneeLabel:        "担当",
-		AssigneesStr:         "松尾 侑恭",
+		AssigneesStr:         "山田 太郎",
 		TaskURL:              "https://kitsu.example.com/productions/p/shots/s/tasks/t",
 		GoogleDriveURL:       "https://drive.example.com/folder",
 		NotificationLanguage: "ja",
@@ -320,7 +320,7 @@ func TestNotificationCardSerializedPayloadMatchesFinalDiscordContract(t *testing
 	if embed.Author.Name != "Compositing" || embed.Title != "" || embed.URL != "" {
 		t.Fatalf("serialized author/title contract mismatch: %+v", embed)
 	}
-	if embed.Description != "## Shot / sc001 - sh001\n\n### 🔄 RETAKE\n修正をお願いします\n\n[🦊 Kitsu](https://kitsu.example.com/productions/p/shots/s/tasks/t)　　[📁 Drive](https://drive.example.com/folder)\n\n**📊 ステータス**　　　**👤 担当**\nwfa → retake　　　　松尾 侑恭" {
+	if embed.Description != "## Shot / sc001 - sh001\n\n### 🔄 RETAKE\n修正をお願いします\n\n[🦊 Kitsu](https://kitsu.example.com/productions/p/shots/s/tasks/t)　　[📁 Drive](https://drive.example.com/folder)\n\n**📊 ステータス**　　　**👤 担当**\nwfa → retake　　　　山田 太郎" {
 		t.Fatalf("serialized status/body contract mismatch: %q", embed.Description)
 	}
 	if embed.Footer.Text != "" {
@@ -437,7 +437,7 @@ func TestStatusChangeDeliverySerializesTheCanonicalCard(t *testing.T) {
 	event.TaskType.TaskType = kitsu.TaskType{ID: "task-type-42", Name: "Compositing"}
 	event.TaskStatus.TaskStatus = kitsu.TaskStatus{ID: "retake", ShortName: "RETAKE"}
 	event.PreviousStatusName = "WFA"
-	event.Assignees = []kitsu.Person{{FirstName: "侑恭", LastName: "松尾", FullName: "侑恭 松尾"}}
+	event.Assignees = []kitsu.Person{{FirstName: "太郎", LastName: "山田", FullName: "太郎 山田"}}
 
 	conf := config.Config{TplPreset: "legacy"}
 	conf.GoogleDrive.URL = "https://drive.example.com/folder"
