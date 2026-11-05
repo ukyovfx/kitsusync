@@ -20,6 +20,9 @@ config_file="${config_dir}/conf.toml"
 install -d -m 0700 "${config_dir}"
 printf 'private-config-fixture-do-not-display\n' >"${config_file}"
 chmod 0400 "${config_file}"
+operators_file="${config_dir}/operators.conf"
+printf 'operator_user=fixture-operator\nemergency_user=fixture-emergency\n' >"${operators_file}"
+chmod 0600 "${operators_file}"
 config_sha_before="$(sha256sum "${config_file}" | cut -d' ' -f1)"
 
 cat >"${helper_file}" <<'HELPER'
@@ -27,11 +30,13 @@ cat >"${helper_file}" <<'HELPER'
 set -euo pipefail
 [[ "$#" -eq 1 && "$1" == --contract-info ]]
 printf '%s\n' "$(stat -c '%a' "$0")" >> "$MODE_LOG"
-printf 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+printf 'STAGING_HELPER_CONTRACT=staging-v10 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=operators.conf\n'
 HELPER
 chmod 0600 "${helper_file}"
 deployed_v7_commit=2f08155688b8f6c733d043714016f5d86f4decfc
 deployed_v7_sha=63371b16e7f13af1e1d7046217c8ce0ae200b0e9b42ab1bf342b158af121e78d
+v9_helper_sha=4afd1d26869b89ab2844d4718ee9565d269683f3bec58e947c1e2e6631a7e7d7
+grep -Fq "  ${v9_helper_sha}" "${upgrade_source}"
 git -C "${root}" cat-file blob "${deployed_v7_commit}:deploy/kitsusync-staging-deploy" >"${old_file}"
 old_sha="$(sha256sum "${old_file}" | cut -d' ' -f1)"
 [[ "${old_sha}" == "${deployed_v7_sha}" ]]
@@ -55,8 +60,12 @@ replacements = {
     '  4550cecbb12e83ca8647127624ec1062f5a11c63e37171015677efb8c2e88443': f'  {old_sha}',
     '  eb0ec326c89c0414cceb15390e58c4a2195b4f9377cdbbc8b5e8fe2d38b0f77b': f'  {old_sha}',
     '  7e839420b54e39d1022b131a977c7b9f4efba0be6768002e3b58d932a83f83cc': f'  {old_sha}',
-    'id -u ukyo_vfx': f'printf {uid}',
-    'id -u vfx-breakglass': f'printf {uid}',
+    'readonly OPERATORS_FILE_OWNER=0:0': (
+        'id() { case "$*" in '
+        f'"-u -- fixture-operator") printf "%s\\n" {uid} ;; "-u -- fixture-emergency") printf "%s\\n" {int(uid) + 1} ;; '
+        '*) return 1 ;; esac; }\n'
+        f'readonly OPERATORS_FILE_OWNER={uid}:{gid}'
+    ),
     '0:0:700': f'{uid}:{gid}:700',
     '0:0:400': f'{uid}:{gid}:400',
     '0:10001:440': f'{uid}:{gid}:440',
@@ -92,4 +101,46 @@ grep -Fq 'config_migration=ROOT_10001_0440' <<<"${output}"
 [[ "$(stat -c '%u:%g:%a' "${config_file}")" == "${uid}:${gid}:440" ]]
 [[ "$(sha256sum "${config_file}" | cut -d' ' -f1)" == "${config_sha_before}" ]]
 [[ ! -e "${incoming}" ]]
+
+# Fail closed: a missing, unsafe, malformed or wrongly owned operators.conf stops the upgrade before anything is installed.
+expect_upgrade_refused() {
+  local name="$1" script="${2:-${upgrade_file}}" status=0 output script_sha
+  rm -rf "${incoming}"
+  install -d -m 0700 "${incoming}"
+  install -m 0600 "${helper_file}" "${incoming}/kitsusync-staging-deploy"
+  install -m 0600 "${script}" "${incoming}/upgrade-root.sh"
+  install -m 0750 "${old_file}" "${sandbox}/usr-local-sbin/kitsusync-staging-deploy"
+  : >"${mode_log}"
+  script_sha="$(sha256sum "${incoming}/upgrade-root.sh" | cut -d' ' -f1)"
+  output="$(bash "${incoming}/upgrade-root.sh" "${source_sha}" "${helper_sha}" "${script_sha}" 2>&1)" || status=$?
+  [[ "${status}" -ne 0 ]] || { echo "upgrade accepted an invalid operators.conf: ${name}" >&2; exit 1; }
+  grep -Fq 'STAGING_HELPER_UPGRADE=FAIL reason=OPERATORS_CONFIG_INVALID' <<<"${output}" || { echo "unexpected failure for ${name}: ${output}" >&2; exit 1; }
+  [[ "$(sha256sum "${sandbox}/usr-local-sbin/kitsusync-staging-deploy" | cut -d' ' -f1)" == "${old_sha}" ]]
+  [[ -d "${incoming}" && ! -s "${mode_log}" ]]
+  [[ "$(sha256sum "${config_file}" | cut -d' ' -f1)" == "${config_sha_before}" ]]
+}
+valid_operators='operator_user=fixture-operator
+emergency_user=fixture-emergency
+'
+rm -f "${operators_file}"
+expect_upgrade_refused 'missing file'
+printf '%s' "${valid_operators}" >"${operators_file}"
+chmod 0666 "${operators_file}"
+expect_upgrade_refused 'world-writable file'
+chmod 0600 "${operators_file}"
+printf '%sextra=1\n' "${valid_operators}" >"${operators_file}"
+expect_upgrade_refused 'unknown key'
+printf 'operator_user=fixture-operator\nemergency_user=fixture-operator\n' >"${operators_file}"
+expect_upgrade_refused 'same account for both roles'
+rm -f "${operators_file}"
+printf '%s' "${valid_operators}" >"${sandbox}/operators-target.conf"
+chmod 0600 "${sandbox}/operators-target.conf"
+ln -s "${sandbox}/operators-target.conf" "${operators_file}"
+expect_upgrade_refused 'symlink'
+rm -f "${operators_file}"
+printf '%s' "${valid_operators}" >"${operators_file}"
+chmod 0600 "${operators_file}"
+wrong_owner_script="${sandbox}/upgrade-root-wrong-owner.sh"
+sed "s/^readonly OPERATORS_FILE_OWNER=.*\$/readonly OPERATORS_FILE_OWNER=$((uid + 1)):${gid}/" "${upgrade_file}" >"${wrong_owner_script}"
+expect_upgrade_refused 'file owned by someone other than the pinned owner' "${wrong_owner_script}"
 printf 'staging-helper-upgrade-flow=PASS config-migration=ROOT_RUNTIME_GID_0440\n'

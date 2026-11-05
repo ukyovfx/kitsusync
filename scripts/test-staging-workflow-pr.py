@@ -93,6 +93,14 @@ class StagingWorkflowPRResolutionTests(unittest.TestCase):
         self.assertLess(resolution, config)
         self.assertLess(resolution, tailscale)
 
+    def test_workflow_reads_operator_account_and_network_tags_from_variables(self):
+        workflow = (ROOT / ".github/workflows/staging-deploy.yml").read_text(encoding="utf-8")
+        self.assertIn("vars.KITSUSYNC_STAGING_SSH_USER", workflow)
+        self.assertIn("tags: ${{ vars.KITSUSYNC_TAILSCALE_TAGS }}", workflow)
+        self.assertIn("for name in STAGING_HOST STAGING_SSH_USER TAILSCALE_TAGS", workflow)
+        self.assertNotRegex(workflow, r"tags:\s*tag:")
+        self.assertNotRegex(workflow, r"KITSUSYNC_STAGING_SSH_USER=[^\"$]")
+
 
 if __name__ == "__main__":
     unittest.main()

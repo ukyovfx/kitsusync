@@ -70,7 +70,7 @@ import hashlib, json, os, pwd, stat, sys
 cfg = json.loads(sys.argv[1])
 uid = os.getuid()
 user = pwd.getpwuid(uid).pw_name
-trusted = {name: pwd.getpwnam(name).pw_uid for name in ("ukyo_vfx", "vfx-breakglass")}
+trusted = {cfg["operator"]: pwd.getpwnam(cfg["operator"]).pw_uid}
 path = cfg["path"]
 owner = "missing"
 mode = "missing"
@@ -141,7 +141,7 @@ report(True, "ok")
 '@
 
 function Invoke-RemotePreflight([string]$HostName, [string]$Path, [string[]]$Names, [hashtable]$Hashes, [string]$Phase, [bool]$Create, [bool]$Complete) {
-    $configJson = @{ path = $Path; names = @($Names); hashes = $Hashes; phase = $Phase; create = $Create; complete = $Complete } | ConvertTo-Json -Compress
+    $configJson = @{ path = $Path; names = @($Names); hashes = $Hashes; phase = $Phase; create = $Create; complete = $Complete; operator = $script:remoteUser } | ConvertTo-Json -Compress
     $codeBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remotePreflightPython))
     $configBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($configJson))
     $remoteCommand = 'python3 -c ''import base64,sys;sys.argv=[sys.argv[0],base64.b64decode("' + $configBase64 + '").decode()];exec(base64.b64decode("' + $codeBase64 + '"))'''
@@ -169,7 +169,7 @@ function Get-RemoteHelperContract {
 }
 
 function Assert-RoutineStagingHelperContract([int]$Status, [string]$Output) {
-    $expected = 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+    $expected = 'STAGING_HELPER_CONTRACT=staging-v10 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=operators.conf'
     if ($Status -ne 0 -or $Output -notmatch [regex]::Escape($expected)) {
         throw "STAGING_BOOTSTRAP_REQUIRED expected='$expected' observed_status=$Status observed_output='$Output'"
     }
@@ -178,10 +178,15 @@ function Assert-RoutineStagingHelperContract([int]$Status, [string]$Output) {
 $script:gh = Resolve-NativeCommand 'gh'
 $script:ssh = Resolve-NativeCommand 'ssh'
 $script:scp = Resolve-NativeCommand 'scp'
-$script:remoteHost = if ([string]::IsNullOrWhiteSpace($env:KITSUSYNC_STAGING_SSH_HOST)) { 'vfxstudio' } else { $env:KITSUSYNC_STAGING_SSH_HOST }
-$script:remoteUser = if ([string]::IsNullOrWhiteSpace($env:KITSUSYNC_STAGING_SSH_USER)) { 'ukyo_vfx' } else { $env:KITSUSYNC_STAGING_SSH_USER }
-if ($script:remoteHost -notmatch '^[A-Za-z0-9.-]+$' -or $script:remoteUser -ne 'ukyo_vfx') {
-    throw 'Staging SSH target must be a DNS/IP host reached as the unprivileged ukyo_vfx account.'
+foreach ($requiredVariable in @('KITSUSYNC_STAGING_SSH_HOST', 'KITSUSYNC_STAGING_SSH_USER')) {
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($requiredVariable))) {
+        throw "Required environment variable is not set: $requiredVariable"
+    }
+}
+$script:remoteHost = $env:KITSUSYNC_STAGING_SSH_HOST
+$script:remoteUser = $env:KITSUSYNC_STAGING_SSH_USER
+if ($script:remoteHost -notmatch '^[A-Za-z0-9.-]+$' -or $script:remoteUser -notmatch '^[a-z_][a-z0-9_-]{0,31}$' -or $script:remoteUser -eq 'root') {
+    throw 'Staging SSH target must be a DNS/IP host reached as the configured unprivileged operator account.'
 }
 $script:remoteTarget = "$($script:remoteUser)@$($script:remoteHost)"
 $script:sshOptions = @('-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes')

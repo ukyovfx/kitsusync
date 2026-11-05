@@ -92,13 +92,15 @@ jobs:
       - name: Check one-time staging automation configuration
         env:
           STAGING_HOST: ${{ vars.KITSUSYNC_STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ vars.KITSUSYNC_STAGING_SSH_USER }}
+          TAILSCALE_TAGS: ${{ vars.KITSUSYNC_TAILSCALE_TAGS }}
           TAILSCALE_CLIENT_ID: ${{ vars.KITSUSYNC_TAILSCALE_OIDC_CLIENT_ID }}
           TAILSCALE_AUDIENCE: ${{ vars.KITSUSYNC_TAILSCALE_OIDC_AUDIENCE }}
           STAGING_SSH_PRIVATE_KEY: ${{ secrets.KITSUSYNC_STAGING_SSH_PRIVATE_KEY }}
           STAGING_SSH_KNOWN_HOSTS: ${{ secrets.KITSUSYNC_STAGING_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          for name in STAGING_HOST TAILSCALE_CLIENT_ID TAILSCALE_AUDIENCE STAGING_SSH_PRIVATE_KEY STAGING_SSH_KNOWN_HOSTS; do
+          for name in STAGING_HOST STAGING_SSH_USER TAILSCALE_TAGS TAILSCALE_CLIENT_ID TAILSCALE_AUDIENCE STAGING_SSH_PRIVATE_KEY STAGING_SSH_KNOWN_HOSTS; do
             [[ -n "${!name}" ]] || { echo "STAGING_AUTODEPLOY_CONFIG=INCOMPLETE missing=$name"; exit 1; }
           done
 
@@ -107,7 +109,7 @@ jobs:
         with:
           oauth-client-id: ${{ vars.KITSUSYNC_TAILSCALE_OIDC_CLIENT_ID }}
           audience: ${{ vars.KITSUSYNC_TAILSCALE_OIDC_AUDIENCE }}
-          tags: tag:github-actions
+          tags: ${{ vars.KITSUSYNC_TAILSCALE_TAGS }}
           version: 1.102.4
           ping: ${{ vars.KITSUSYNC_STAGING_SSH_HOST }}
 
@@ -116,6 +118,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_SHA: ${{ github.event.workflow_run.head_sha }}
           STAGING_HOST: ${{ vars.KITSUSYNC_STAGING_SSH_HOST }}
+          STAGING_SSH_USER: ${{ vars.KITSUSYNC_STAGING_SSH_USER }}
           STAGING_SSH_PRIVATE_KEY: ${{ secrets.KITSUSYNC_STAGING_SSH_PRIVATE_KEY }}
           STAGING_SSH_KNOWN_HOSTS: ${{ secrets.KITSUSYNC_STAGING_SSH_KNOWN_HOSTS }}
         shell: bash
@@ -132,6 +135,6 @@ jobs:
           trap 'ssh-agent -k >/dev/null 2>&1 || true; rm -rf -- "$ssh_dir"' EXIT
           ssh-add "$key_file" >/dev/null
           export KITSUSYNC_STAGING_SSH_HOST="$STAGING_HOST"
-          export KITSUSYNC_STAGING_SSH_USER=ukyo_vfx
+          export KITSUSYNC_STAGING_SSH_USER="$STAGING_SSH_USER"
           export KITSUSYNC_SSH_KNOWN_HOSTS_FILE="$known_hosts_file"
           pwsh -NoProfile -File scripts/deploy-kitsusync-staging-candidate.ps1 -CommitSha "$CANDIDATE_SHA"

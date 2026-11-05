@@ -20,15 +20,25 @@ if (-not $allowlistMatch.Success -or [regex]::Matches($allowlistMatch.Groups[1].
     throw 'The exact deployed staging-v7 helper identity is not allowed exactly once.'
 }
 
-$v9 = 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-$v8 = 'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-$v7 = 'STAGING_HELPER_CONTRACT=staging-v7 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-$v6 = 'STAGING_HELPER_CONTRACT=staging-v6 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-$v5 = 'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-$v4 = 'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-$v3 = 'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+$prefix = 'STAGING_HELPER_CONTRACT='
+$suffix = ' incoming=/var/tmp/kitsusync-staging-candidate-<sha>'
+$current = $prefix + 'staging-v10' + $suffix + ' owners=operators.conf'
+# Earlier helpers printed their own owner list; any such value must still be recognized for the exact predecessor versions.
+$v9 = $prefix + 'staging-v9' + $suffix + ' owners=legacy-a,legacy-b'
+$v8 = $prefix + 'staging-v8' + $suffix + ' owners=legacy-a,legacy-b'
+$v7 = $prefix + 'staging-v7' + $suffix + ' owners=legacy-a,legacy-b'
+$v6 = $prefix + 'staging-v6' + $suffix + ' owners=legacy-a,legacy-b'
+$v5 = $prefix + 'staging-v5' + $suffix + ' owners=legacy-a,legacy-b'
+$v4 = $prefix + 'staging-v4' + $suffix + ' owners=legacy-a,legacy-b'
+$v3 = $prefix + 'staging-v3' + $suffix + ' owners=legacy-a,legacy-b'
 
-if ((Get-StagingHelperUpgradeAction 0 $v9) -ne 'ALREADY_CURRENT') { throw 'v9 helper was not recognized as current.' }
+$deployedV9Sha = '4afd1d26869b89ab2844d4718ee9565d269683f3bec58e947c1e2e6631a7e7d7'
+if ([regex]::Matches($allowlistMatch.Groups[1].Value, "(?m)^\s*$deployedV9Sha\s*$").Count -ne 1) {
+    throw 'The exact deployed staging-v9 helper identity is not allowed exactly once.'
+}
+
+if ((Get-StagingHelperUpgradeAction 0 $current) -ne 'ALREADY_CURRENT') { throw 'v10 helper was not recognized as current.' }
+if ((Get-StagingHelperUpgradeAction 0 $v9) -ne 'UPGRADE') { throw 'Exact v9 helper was not recognized as an upgradable predecessor.' }
 if ((Get-StagingHelperUpgradeAction 0 $v8) -ne 'UPGRADE') { throw 'Exact v8 helper was not recognized as an upgradable predecessor.' }
 if ((Get-StagingHelperUpgradeAction 0 $v7) -ne 'UPGRADE') { throw 'Exact v7 helper was not recognized as an upgradable predecessor.' }
 if ((Get-StagingHelperUpgradeAction 0 $v6) -ne 'UPGRADE') { throw 'Exact v6 helper was not recognized as an upgradable predecessor.' }
@@ -39,7 +49,9 @@ if ((Get-StagingHelperUpgradeAction 1 'STAGING_DEPLOY_ERROR=INVALID_ARGUMENT') -
 
 foreach ($case in @(
     @{ Status = 0; Output = 'STAGING_HELPER_CONTRACT=staging-v3'; Name = 'incomplete-v3' },
-    @{ Status = 0; Output = 'STAGING_HELPER_CONTRACT=staging-v10 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'; Name = 'unknown-version' },
+    @{ Status = 0; Output = ($prefix + 'staging-v11' + $suffix + ' owners=operators.conf'); Name = 'unknown-version' },
+    @{ Status = 0; Output = ($prefix + 'staging-v10' + $suffix + ' owners=other'); Name = 'current-with-unexpected-owners' },
+    @{ Status = 0; Output = ($prefix + 'staging-v9' + $suffix + ' owners=a;rm -rf /'); Name = 'predecessor-with-metacharacters' },
     @{ Status = 1; Output = 'arbitrary error'; Name = 'unknown-error' }
 )) {
     try {
@@ -51,4 +63,24 @@ foreach ($case in @(
     }
 }
 
-Write-Output 'staging-helper-upgrade-contract=PASS deployed-v7-63371b16=UPGRADE'
+# The maintenance wrapper takes every connection setting from the environment and fails before any network access when one is missing.
+$names = @('KITSUSYNC_STAGING_SSH_HOST', 'KITSUSYNC_STAGING_SSH_USER', 'KITSUSYNC_STAGING_EMERGENCY_SSH_HOST', 'KITSUSYNC_STAGING_EMERGENCY_USER')
+$saved = @{}
+foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name); [Environment]::SetEnvironmentVariable($name, $null) }
+try {
+    foreach ($index in 0..($names.Count - 1)) {
+        for ($j = 0; $j -lt $index; $j++) { [Environment]::SetEnvironmentVariable($names[$j], 'fixture-value') }
+        $env:KITSUSYNC_FIXTURE_SCRIPT = $wrapperPath
+        $child = 'try { & $env:KITSUSYNC_FIXTURE_SCRIPT -CommitSha (''a'' * 40); exit 0 } catch { Write-Output (''MESSAGE='' + $_.Exception.Message); exit 3 }'
+        $output = (& pwsh -NoProfile -Command $child 2>&1 | Out-String)
+        if ($LASTEXITCODE -eq 0 -or $output -notmatch ('Required environment variable is not set: ' + $names[$index])) {
+            throw "Upgrade wrapper did not fail closed when $($names[$index]) is missing: $output"
+        }
+    }
+}
+finally {
+    foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
+}
+
+Write-Output 'staging-helper-upgrade-contract=PASS deployed-v7-63371b16=UPGRADE deployed-v9-4afd1d26=UPGRADE'
+
