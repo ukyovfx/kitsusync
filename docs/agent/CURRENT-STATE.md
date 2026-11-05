@@ -18,7 +18,7 @@ Repository, Git, CI, tests, configuration, and verified live runtime evidence ov
 
 ## Staging boundary
 
-- The documented Staging contract is `staging-v9` (v9 isolates the helper's Python via `cd /` and `python3 -I`; installed-host adoption requires running `scripts/upgrade-kitsusync-staging-helper.ps1`). The previously operator-reported helper SHA-256 `c2e8b1b8dda50357909e2b5f8081560c262cff30e0107958ab85b9366a726490` is historical evidence, not proof of current installed identity.
+- The documented Staging contract is `staging-v10` (merged in https://github.com/ukyovfx/kitsusync/pull/268): the helper, installer and bootstrap read the operator and emergency account names from the root-owned `/etc/kitsusync-staging/operators.conf` instead of fixed names, and fail closed when it is missing or invalid. v10 keeps v9's isolation of the helper's Python via `cd /` and `python3 -I`. Installed-host adoption requires creating `operators.conf` first and then running `scripts/upgrade-kitsusync-staging-helper.ps1`; installed-host identity is not established by this document. The previously operator-reported helper SHA-256 `c2e8b1b8dda50357909e2b5f8081560c262cff30e0107958ab85b9366a726490` is historical evidence, not proof of current installed identity.
 - Staging is designed as a separate Compose project on `127.0.0.1:8091`, with isolated state and polling disabled. Production follows the separate release-only path on `127.0.0.1:8090`.
 - `scripts/deploy-kitsusync-staging-candidate.ps1 -CommitSha <sha>` is the documented candidate path. Confirm actual Staging identity, helper version, and checks when needed; a workflow marked skipped does not establish a deployed candidate.
 
