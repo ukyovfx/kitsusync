@@ -16,6 +16,7 @@ This document describes the **KitsuSync product's staging behavior and safety co
 - A routine candidate deployment must use the **already installed and verified** Staging helper. If the expected helper contract is absent or outdated, fail closed and require a separately reviewed infrastructure update; do not silently bootstrap or upgrade infrastructure.
 - Deploy only to the isolated Staging Compose project. Verify container/network membership, exact mounts, configuration readability under the runtime user, polling restrictions, health, readiness, and admin routes.
 - Before a Staging replacement, preserve the previous Staging SQLite/runtime-secret state and support verified rollback to the previous candidate.
+- If that rollback itself fails, the helper never deletes the private import directory (it holds the SQLite backup and previous runtime secrets). It moves it to a unique `failed-rollback-<sha>-<UTC time>-<pid>` directory under the Staging state root, or leaves it in place if the move fails, and reports the actual location as `STAGING_ROLLBACK_BACKUP=<path>`. Treat that directory as secret-bearing and remove it only after manual recovery.
 - Guard the Production runtime boundary: a Staging transaction must not select, replace, or alter Production containers, ports, data or release identity.
 
 ## Supported workflows

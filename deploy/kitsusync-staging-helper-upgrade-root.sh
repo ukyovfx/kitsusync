@@ -20,6 +20,7 @@ readonly EXPECTED_OLD_HELPER_SHAS=(
   41dec98c9e6e6f7165733212bb3518b1cb08bcb19a17fad047fd0c76ae5f7704
   b43df984dd87321c4f9eb76478557b23db35cac8986b01ddd4b3af5a2353e5ae
   4550cecbb12e83ca8647127624ec1062f5a11c63e37171015677efb8c2e88443
+  7e839420b54e39d1022b131a977c7b9f4efba0be6768002e3b58d932a83f83cc
 )
 
 incoming_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"

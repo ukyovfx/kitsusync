@@ -54,6 +54,7 @@ replacements = {
     '  b43df984dd87321c4f9eb76478557b23db35cac8986b01ddd4b3af5a2353e5ae': f'  {old_sha}',
     '  4550cecbb12e83ca8647127624ec1062f5a11c63e37171015677efb8c2e88443': f'  {old_sha}',
     '  eb0ec326c89c0414cceb15390e58c4a2195b4f9377cdbbc8b5e8fe2d38b0f77b': f'  {old_sha}',
+    '  7e839420b54e39d1022b131a977c7b9f4efba0be6768002e3b58d932a83f83cc': f'  {old_sha}',
     'id -u ukyo_vfx': f'printf {uid}',
     'id -u vfx-breakglass': f'printf {uid}',
     '0:0:700': f'{uid}:{gid}:700',
