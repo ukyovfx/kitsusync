@@ -3309,6 +3309,10 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					return
 				}
 				apiOverride := strings.TrimSpace(r.FormValue("kitsu_api_base_url"))
+				if kitsuAPIOverrideBlocked(apiOverride) {
+					rejectPinnedKitsuEndpointChange(w, lang, "admin_save_kitsu_api_override")
+					return
+				}
 				connection, connectionErr := ResolveKitsuConnection(context.Background(), hostForAuth, apiOverride)
 				if connectionErr != nil {
 					w.WriteHeader(http.StatusBadRequest)

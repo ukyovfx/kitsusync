@@ -72,7 +72,7 @@ func (m *runtimeManager) authenticateToken(connection setup.KitsuURLModel, token
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	os.Setenv("KITSU_HOSTNAME", hostname)
+	setup.ExportRuntimeKitsuHostname(hostname)
 	os.Setenv("KitsuJWTToken", token)
 	m.mode = runtimeConfigured
 	m.canPoll = true

@@ -27,6 +27,18 @@ func SetAppManagedKitsuHostname(host string) {
 	os.Setenv("KITSU_HOSTNAME", host)
 }
 
+// ExportRuntimeKitsuHostname is used by runtime authentication to export the
+// endpoint it connected to. Without an operator pin the value is app-managed;
+// with a pin the export keeps its previous behavior but is not recorded, so it
+// never turns an app value into a pin or hides a genuine one.
+func ExportRuntimeKitsuHostname(host string) {
+	if _, pinned := operatorPinnedKitsuHost(); pinned {
+		os.Setenv("KITSU_HOSTNAME", host)
+		return
+	}
+	SetAppManagedKitsuHostname(host)
+}
+
 // operatorPinnedKitsuHost returns the normalized endpoint when the operator set
 // a valid, non-placeholder KITSU_HOSTNAME. An invalid value is not a pin.
 func operatorPinnedKitsuHost() (string, bool) {
@@ -35,7 +47,9 @@ func operatorPinnedKitsuHost() (string, bool) {
 	if configured == "" {
 		appManagedKitsuHostname.value = ""
 	}
-	appManaged := configured == appManagedKitsuHostname.value
+	// Compare normalized forms: runtime authentication exports the same endpoint
+	// with and without a trailing slash.
+	appManaged := appManagedKitsuHostname.value != "" && sameKitsuEndpoint(normalizeKitsuHostname(configured), normalizeKitsuHostname(appManagedKitsuHostname.value))
 	appManagedKitsuHostname.mu.Unlock()
 	if configured == "" || appManaged {
 		return "", false
@@ -65,6 +79,33 @@ func kitsuEndpointChangeBlocked(requestedHost string) bool {
 	return true
 }
 
+// kitsuAPIOverrideBlocked reports whether an explicit API base URL would point
+// the connection somewhere other than the operator-pinned endpoint.
+func kitsuAPIOverrideBlocked(apiOverride string) bool {
+	if strings.TrimSpace(apiOverride) == "" {
+		return false
+	}
+	pinned, ok := operatorPinnedKitsuHost()
+	if !ok {
+		return false
+	}
+	target, err := NormalizeKitsuURL(apiOverride, APISourceExplicit)
+	if err != nil {
+		return true
+	}
+	return !sameKitsuEndpoint(strings.TrimRight(target.RuntimeBaseURL, "/")+"/", pinned)
+}
+
+// logSafe strips control characters so a request-derived value cannot forge log lines.
+func logSafe(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
+}
+
 // rejectPinnedKitsuEndpointChange writes a bilingual explanation (never a blank
 // page or a 500) and logs the rejection without any endpoint value.
 func rejectPinnedKitsuEndpointChange(w http.ResponseWriter, lang, source string) {
@@ -81,5 +122,5 @@ func logKitsuEndpointChange(source, previous, current string) {
 	if sameKitsuEndpoint(previous, current) {
 		return
 	}
-	slog.Info("Kitsu endpoint changed", "source", source, "previous", safeKitsuHostDisplay(previous), "current", safeKitsuHostDisplay(current))
+	slog.Info("Kitsu endpoint changed", "source", source, "previous", logSafe(safeKitsuHostDisplay(previous)), "current", logSafe(safeKitsuHostDisplay(current)))
 }

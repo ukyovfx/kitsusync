@@ -191,3 +191,61 @@ func TestPinnedKitsuHostDoesNotFallBackToSavedHostWhenDown(t *testing.T) {
 		t.Fatalf("placeholder must not pin the endpoint: %+v", result)
 	}
 }
+
+func TestRuntimeExportDoesNotCreateFalsePin(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	t.Setenv("KITSU_HOSTNAME", "")
+	resetAppManagedKitsuHostname(t)
+	first := newKitsuSaveStubServer(t)
+	second := newKitsuSaveStubServer(t)
+	db := newSetupStateTestDB(t)
+
+	if rr := postSaveKitsu(t, db, first.URL, "en"); rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected the first save to succeed, got %d", rr.Code)
+	}
+	// Runtime authentication re-exports the host without the trailing slash.
+	ExportRuntimeKitsuHostname(first.URL)
+	if _, pinned := operatorPinnedKitsuHost(); pinned {
+		t.Fatal("an app-exported host must not count as operator-pinned")
+	}
+	if rr := postSaveKitsu(t, db, second.URL, "en"); rr.Code != http.StatusSeeOther {
+		t.Fatalf("expected a later save to succeed, got %d", rr.Code)
+	}
+
+	// A genuine operator pin must survive a runtime export of the same host.
+	resetAppManagedKitsuHostname(t)
+	t.Setenv("KITSU_HOSTNAME", first.URL)
+	ExportRuntimeKitsuHostname(first.URL + "/")
+	if _, pinned := operatorPinnedKitsuHost(); !pinned {
+		t.Fatal("a runtime export must not hide a genuine operator pin")
+	}
+}
+
+func TestPinnedKitsuHostRejectsAPIOverrideToOtherServer(t *testing.T) {
+	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
+	resetAppManagedKitsuHostname(t)
+	pinned := newKitsuSaveStubServer(t)
+	other := newKitsuSaveStubServer(t)
+	t.Setenv("KITSU_HOSTNAME", pinned.URL)
+	db := newSetupStateTestDB(t)
+
+	form := url.Values{"action": {"save_kitsu"}, "kitsu_hostname": {pinned.URL}, "kitsu_api_base_url": {other.URL}, "kitsu_bot_token": {"test-bot-token"}}
+	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?lang=en", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	addRecentBotEditSession(t, req)
+	rr := httptest.NewRecorder()
+	BotHandler(db, nil)(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected the API override to be rejected, got %d", rr.Code)
+	}
+	if StoredRuntimeKitsuToken(db) != "" || model.GetSetting(db, KitsuAPIBaseURLSettingKey) != "" {
+		t.Fatal("nothing may be persisted on a rejected save")
+	}
+
+	if kitsuAPIOverrideBlocked(pinned.URL) {
+		t.Fatal("an override equal to the pinned host must be allowed")
+	}
+	if kitsuAPIOverrideBlocked("") {
+		t.Fatal("no override must be allowed")
+	}
+}
