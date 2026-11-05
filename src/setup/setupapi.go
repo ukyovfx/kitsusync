@@ -283,6 +283,21 @@ var setupProbeLimiter = struct {
 	started map[string][]time.Time
 }{started: make(map[string][]time.Time)}
 
+// requirePOST rejects every non-POST request before the body is read, so a
+// GET carrying a JSON body can never reach a handler that writes settings.
+func requirePOST(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			_, _ = w.Write([]byte(`{"error":"method not allowed"}`))
+			return
+		}
+		next(w, r)
+	}
+}
+
 func allowSetupProbe(r *http.Request) bool {
 	key := "local"
 	if r != nil {
@@ -505,7 +520,7 @@ func PreviewProjectHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken
 // ApplyProjectHandler handles POST /api/setup/apply-project.
 // Runs the full channel/webhook creation flow for the given Kitsu project.
 func ApplyProjectHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, guildID, webhookURL string)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		var req ApplyProjectRequest
@@ -598,12 +613,12 @@ func ApplyProjectHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, 
 		}
 
 		json.NewEncoder(w).Encode(resp)
-	}
+	})
 }
 
 // TestNotificationHandler sends a small message to one project webhook and marks the setup as verified.
 func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, guildID, webhookURL string)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		var req TestNotificationRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -670,7 +685,7 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			MessageID:            res.MessageID,
 			NotificationVerified: true,
 		})
-	}
+	})
 }
 
 func testNotificationPayload(project model.Project, message string) discord.Payload {
@@ -731,7 +746,7 @@ func validateTestNotificationDestination(db *gorm.DB, projectID string, destinat
 // TestKitsuHandler handles POST /api/setup/test-kitsu.
 // Verifies connectivity and authentication against a provided Kitsu endpoint.
 func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if !allowSetupProbe(r) {
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -745,6 +760,9 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 			return
 		}
 
+		// test-kitsu only verifies the credentials against the endpoint. It must
+		// not persist the endpoint: kitsu.hostname is changed only by the explicit
+		// connection flows, never as a side effect of a probe.
 		hostname := strings.TrimSpace(req.Hostname)
 		if hostname == "" {
 			hostname = publicKitsuHostnameFromRequest(r, os.Getenv("KITSU_HOSTNAME"))
@@ -763,7 +781,6 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 			return
 		}
 
-		model.SetSetting(db, "kitsu.hostname", hostname)
 		setRuntimeKitsuEmail(db, email)
 		if err := setRuntimeKitsuPassword(db, password); err != nil {
 			writeTestKitsuError(w, "could not safely store runtime credentials")
@@ -774,7 +791,7 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 		}
 
 		json.NewEncoder(w).Encode(TestKitsuResponse{Reachable: true, Authenticated: true})
-	}
+	})
 }
 
 func safeKitsuConnectionMessage(class string) string {
@@ -789,7 +806,7 @@ func safeKitsuConnectionMessage(class string) string {
 // TestDiscordHandler handles POST /api/setup/test-discord.
 // Verifies bot token validity, guild membership, and required permissions.
 func TestDiscordHandler(db *gorm.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		var req TestDiscordRequest
@@ -815,7 +832,7 @@ func TestDiscordHandler(db *gorm.DB) http.HandlerFunc {
 			Permissions: info.Permissions,
 			Error:       info.Error,
 		})
-	}
+	})
 }
 
 // --- Internal helpers ---
@@ -1219,7 +1236,7 @@ func buildTemplatePreviewChannels(tmpl ProjectTemplate, language string) []Previ
 // SaveUserMappingHandler handles POST /api/setup/mapping/users.
 // Upserts project-scoped user → Discord ID mappings; entries with empty discord_user_id are deleted.
 func SaveUserMappingHandler(db *gorm.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		var req SaveUserMappingRequest
@@ -1248,13 +1265,13 @@ func SaveUserMappingHandler(db *gorm.DB) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
-	}
+	})
 }
 
 // SaveCheckerMappingHandler handles POST /api/setup/mapping/checkers.
 // Upserts project-scoped task type → checker Discord ID mappings; empty discord_user_id deletes the entry.
 func SaveCheckerMappingHandler(db *gorm.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
 		var req SaveCheckerMappingRequest
@@ -1298,5 +1315,5 @@ func SaveCheckerMappingHandler(db *gorm.DB) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusNoContent)
-	}
+	})
 }
