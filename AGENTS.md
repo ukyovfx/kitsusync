@@ -38,6 +38,14 @@ This repo prioritizes runtime safety and beginner onboarding clarity over clever
 - Cleanup is incremental, not architectural.
 - Preserve beginner UX even when code could be cleaner.
 
+
+## Avoid speculative defensive complexity
+- Validate external input at trust boundaries; do not repeat equivalent checks on already-validated internal values unless the trust boundary changes.
+- Keep one-off operations inline when extracting functions, classes, or layers would not improve clarity or reuse.
+- Do not add nil checks, fallbacks, speculative error branches, or `recover` merely for hypothetical scenarios. Handle real failures at the responsible boundary; never silently discard errors.
+- Prefer existing code and Go standard-library facilities over extra dependencies, configuration, or wrappers. Do not generalize for unrequested future use cases.
+- Preserve necessary security, authorization, API/DB contracts, Discord notifications, Docker/release safeguards, data integrity, idempotency, retries, recovery, and auditability; these rules never justify removing required validation or error handling.
+
 ## Required Verification
 Run these after meaningful repo changes when applicable:
 - `go test ./src/... -count=1 -timeout=120s`
