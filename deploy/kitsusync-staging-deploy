@@ -273,9 +273,15 @@ cleanup() { rm -rf -- "$PRIVATE"; }
 on_exit() {
   status=$?; trap - EXIT
   if [[ "$status" -ne 0 ]] && ! rollback_staging; then
-    failed_backup="$STAGE_ROOT/failed-rollback-${SOURCE_SHA}"
-    if [[ ! -e "$failed_backup" && ! -L "$failed_backup" ]]; then mv -f "$PRIVATE" "$failed_backup" || true; fi
-    printf 'STAGING_ROLLBACK_BACKUP=%s\n' "$failed_backup" >&2
+    # Rollback failed: the DB backup in $PRIVATE may be the only recovery path, so never delete it.
+    rollback_backup="$PRIVATE"
+    failed_stamp="$(date -u +%Y%m%dT%H%M%SZ)" || failed_stamp=unknown
+    failed_backup="$STAGE_ROOT/failed-rollback-${SOURCE_SHA}-${failed_stamp}-$$"
+    if [[ ! -e "$failed_backup" && ! -L "$failed_backup" ]] && mv -T -- "$PRIVATE" "$failed_backup"; then
+      rollback_backup="$failed_backup"
+    fi
+    printf 'STAGING_ROLLBACK_BACKUP=%s\n' "$rollback_backup" >&2
+    exit "$status"
   fi
   [[ ! -d "$PRIVATE" ]] || cleanup
   exit "$status"
