@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -54,6 +55,8 @@ func configuredVerifiedOrigin() VerifiedOrigin {
 // 失敗時は slog.Error を出してから空文字列を返す（slog.Fatal は使わない）。
 // 一時的なネットワーク障害・5xx・429 に対してはリトライ＋指数バックオフを行う。
 // 4xx（429 を除く）は永続的エラーとみなし即座に返る。
+// リトライするのは冪等なメソッド（GET/HEAD）だけで、POST/PUT/PATCH/DELETE は
+// 書き込みの重複を避けるため 1 回だけ送信する。
 func Do(token, method, url string, payload, unmarshal interface{}) string {
 	body, _ := DoWithError(token, method, url, payload, unmarshal)
 	return body
@@ -63,9 +66,10 @@ func Do(token, method, url string, payload, unmarshal interface{}) string {
 // the failure outcome for callers that must distinguish an empty response from
 // an unsuccessful request.
 func DoWithError(token, method, url string, payload, unmarshal interface{}) (string, error) {
-	const maxAttempts = 3
-	// 試行間の待機時間: 2s → 6s
-	retryDelays := []time.Duration{2 * time.Second, 6 * time.Second}
+	maxAttempts := 3
+	if !isIdempotentMethod(method) {
+		maxAttempts = 1
+	}
 
 	// payload の JSON 化は一度だけ行う（ループ内で bytes.NewBuffer でコピーして再利用）
 	var payloadBytes []byte
@@ -73,7 +77,7 @@ func DoWithError(token, method, url string, payload, unmarshal interface{}) (str
 		var err error
 		payloadBytes, err = json.Marshal(payload)
 		if err != nil {
-			slog.Error("request.Do: marshal payload failed", "err", err, "url", url)
+			slog.Error("request.Do: marshal payload failed", "err", err, "url", redactURL(url))
 			return "", fmt.Errorf("marshal payload: %w", err)
 		}
 	}
@@ -86,7 +90,7 @@ func DoWithError(token, method, url string, payload, unmarshal interface{}) (str
 				"attempt", attempt+1,
 				"maxAttempts", maxAttempts,
 				"delay", delay,
-				"url", url)
+				"url", redactURL(url))
 			time.Sleep(delay)
 		}
 
@@ -110,8 +114,41 @@ func DoWithError(token, method, url string, payload, unmarshal interface{}) (str
 		}
 	}
 
-	slog.Error("request.Do: all attempts exhausted", "url", url, "maxAttempts", maxAttempts)
+	slog.Error("request.Do: all attempts exhausted", "url", redactURL(url), "maxAttempts", maxAttempts)
 	return "", fmt.Errorf("request failed after %d attempts: %w", maxAttempts, lastErr)
+}
+
+// retryDelays は試行間の待機時間（2s → 6s）。テストから短縮できるよう var にしている。
+var retryDelays = []time.Duration{2 * time.Second, 6 * time.Second}
+
+// isIdempotentMethod は自動リトライしても書き込みが重複しないメソッドかを返す。
+func isIdempotentMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case http.MethodGet, http.MethodHead:
+		return true
+	}
+	return false
+}
+
+// redactURL はログ出力用に URL からクエリ・フラグメント・userinfo を除く。
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(invalid url)"
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
+	return u.String()
+}
+
+// redactErr は *url.Error に埋め込まれた URL からクエリ等を除く（ログ・戻り値の漏洩防止）。
+func redactErr(err error) error {
+	var uerr *url.Error
+	if errors.As(err, &uerr) {
+		return &url.Error{Op: uerr.Op, URL: redactURL(uerr.URL), Err: uerr.Err}
+	}
+	return err
 }
 
 type attemptStatus int
@@ -156,7 +193,8 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 		req, err = http.NewRequest(method, url, nil)
 	}
 	if err != nil {
-		slog.Error("request.Do: NewRequest failed", "err", err, "url", url)
+		err = redactErr(err)
+		slog.Error("request.Do: NewRequest failed", "err", err, "url", redactURL(url))
 		return attemptResult{status: statusPermanent, err: fmt.Errorf("create request: %w", err)}
 	}
 
@@ -167,14 +205,15 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 
 	resp, err := client.Do(req)
 	if err != nil {
-		slog.Error("request.Do: client.Do failed", "err", err, "method", method, "url", url)
+		err = redactErr(err)
+		slog.Error("request.Do: client.Do failed", "err", err, "method", method, "url", redactURL(url))
 		return attemptResult{status: statusTransient, err: fmt.Errorf("send request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		slog.Error("request.Do: read body failed", "err", err, "url", url)
+		slog.Error("request.Do: read body failed", "err", err, "url", redactURL(url))
 		return attemptResult{status: statusTransient, err: fmt.Errorf("read response: %w", err)}
 	}
 
@@ -185,7 +224,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	// 429 Too Many Requests — 一時的なレート制限
 	if resp.StatusCode == 429 {
 		slog.Warn("request.Do: rate limited (429)",
-			"url", url,
+			"url", redactURL(url),
 			"retryAfter", resp.Header.Get("Retry-After"))
 		return attemptResult{status: statusTransient, err: fmt.Errorf("HTTP status %d", resp.StatusCode)}
 	}
@@ -195,7 +234,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 		slog.Error("request.Do: 5xx response",
 			"status", resp.StatusCode,
 			"method", method,
-			"url", url)
+			"url", redactURL(url))
 		return attemptResult{status: statusTransient, err: fmt.Errorf("HTTP status %d", resp.StatusCode)}
 	}
 
@@ -204,14 +243,14 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 		slog.Error("request.Do: non-2xx response",
 			"status", resp.StatusCode,
 			"method", method,
-			"url", url)
+			"url", redactURL(url))
 		return attemptResult{status: statusPermanent, err: fmt.Errorf("HTTP status %d", resp.StatusCode)}
 	}
 
 	// 成功
 	if unmarshal != nil {
 		if err := json.Unmarshal(respBody, &unmarshal); err != nil {
-			slog.Error("request.Do: unmarshal failed", "err", err, "url", url)
+			slog.Error("request.Do: unmarshal failed", "err", err, "url", redactURL(url))
 			return attemptResult{status: statusPermanent, err: fmt.Errorf("decode response: %w", err)}
 		}
 	}
