@@ -27,7 +27,7 @@ cat >"${helper_file}" <<'HELPER'
 set -euo pipefail
 [[ "$#" -eq 1 && "$1" == --contract-info ]]
 printf '%s\n' "$(stat -c '%a' "$0")" >> "$MODE_LOG"
-printf 'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+printf 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
 HELPER
 chmod 0600 "${helper_file}"
 deployed_v7_commit=2f08155688b8f6c733d043714016f5d86f4decfc

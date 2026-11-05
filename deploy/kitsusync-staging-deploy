@@ -233,7 +233,7 @@ verify_staging_network_name() {
   docker inspect --format '{{json .NetworkSettings.Networks}}' "$1" | python3 -I -c 'import json,sys; n=json.load(sys.stdin); sys.exit(0 if set(n)=={"kitsusync-staging-network"} else 1)'
 }
 if [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" == --contract-info ]]; then
-  printf 'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
+  printf 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass\n'
   exit 0
 fi
 [[ "${EUID}" -eq 0 && "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || die INVALID_ARGUMENT
