@@ -96,14 +96,11 @@ func kitsuAPIOverrideBlocked(apiOverride string) bool {
 	return !sameKitsuEndpoint(strings.TrimRight(target.RuntimeBaseURL, "/")+"/", pinned)
 }
 
-// logSafe strips control characters so a request-derived value cannot forge log lines.
+// logSafe removes line breaks so a request-derived value cannot forge log lines.
 func logSafe(value string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, value)
+	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, "\r", "")
+	return strings.ReplaceAll(value, "\t", "")
 }
 
 // rejectPinnedKitsuEndpointChange writes a bilingual explanation (never a blank
