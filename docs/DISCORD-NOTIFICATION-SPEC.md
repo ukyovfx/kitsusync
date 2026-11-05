@@ -210,7 +210,7 @@ WFA → RETAKE
 — コメント投稿者
 
 担当
-UKYO M
+Jane Doe
 
 リンク
 Kitsu · Google Drive
@@ -266,7 +266,7 @@ Please reduce the red tint
 — Comment by
 
 Assignee
-UKYO M
+Jane Doe
 
 Links
 Kitsu · Google Drive
@@ -308,7 +308,7 @@ Please adjust this area again
 Mention examples:
 
 ```text
-WFA:     <@checker-id>          + embed with Assignee: UKYO M
+WFA:     <@checker-id>          + embed with Assignee: Jane Doe
 RETAKE:  <@artist-a> <@artist-b> + embed with both assignee names
 DONE:    empty content by default + embed only
 missing mapping: empty content   + embed with Kitsu assignee name

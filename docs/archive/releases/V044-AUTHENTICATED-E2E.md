@@ -1,6 +1,6 @@
 # KitsuSync v0.4.4 authenticated E2E procedure
 
-This procedure is for the `codex/v0.4.4-notification-card` RC only. Run it against a disposable Kitsu/Zou instance, a disposable Discord Guild, and a fresh KitsuSync SQLite data directory. Never use `vfxstudio`, a real Production, or a shared Discord destination.
+This procedure is for the `codex/v0.4.4-notification-card` RC only. Run it against a disposable Kitsu/Zou instance, a disposable Discord Guild, and a fresh KitsuSync SQLite data directory. Never use `example-studio`, a real Production, or a shared Discord destination.
 
 ## Existing repository tooling
 
