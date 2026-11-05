@@ -15,17 +15,11 @@ function Resolve-NativeCommand([string]$Name) {
 }
 
 function Get-StagingHelperUpgradeAction([int]$Status, [string]$Output) {
-    $currentContract = 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-    $predecessorContracts = @(
-        'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass',
-        'STAGING_HELPER_CONTRACT=staging-v7 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass',
-        'STAGING_HELPER_CONTRACT=staging-v6 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass',
-        'STAGING_HELPER_CONTRACT=staging-v5 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass',
-        'STAGING_HELPER_CONTRACT=staging-v4 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass',
-        'STAGING_HELPER_CONTRACT=staging-v3 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
-    )
+    $currentContract = 'STAGING_HELPER_CONTRACT=staging-v10 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=operators.conf'
+    # Earlier helpers printed their owner account names in the contract line; accept any owners value for the exact predecessor versions.
+    $predecessorPattern = '^STAGING_HELPER_CONTRACT=staging-v[3-9] incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=[A-Za-z0-9_,.-]+$'
     if ($Status -eq 0 -and $Output -ceq $currentContract) { return 'ALREADY_CURRENT' }
-    if ($Status -eq 0 -and $Output -cin $predecessorContracts) { return 'UPGRADE' }
+    if ($Status -eq 0 -and $Output -cmatch $predecessorPattern) { return 'UPGRADE' }
     if ($Status -eq 1 -and $Output -match '(?m)^STAGING_DEPLOY_ERROR=INVALID_ARGUMENT$') { return 'UPGRADE' }
     throw "Could not safely identify the installed Staging helper: $Output"
 }
@@ -40,6 +34,11 @@ function Get-TrustedWorkflowRuns($Runs, [string]$Name, [string]$WorkflowPath, [s
     } | Sort-Object run_number -Descending)
 }
 
+foreach ($requiredVariable in @('KITSUSYNC_STAGING_SSH_HOST', 'KITSUSYNC_STAGING_SSH_USER', 'KITSUSYNC_STAGING_EMERGENCY_SSH_HOST', 'KITSUSYNC_STAGING_EMERGENCY_USER')) {
+    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($requiredVariable))) {
+        throw "Required environment variable is not set: $requiredVariable"
+    }
+}
 $git = Resolve-NativeCommand 'git'
 $gh = Resolve-NativeCommand 'gh'
 $ssh = Resolve-NativeCommand 'ssh'
@@ -85,10 +84,16 @@ try {
     $helperSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $helperPath).Hash.ToLowerInvariant()
     $upgradeSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $upgradePath).Hash.ToLowerInvariant()
 
-    $stagingHost = if ([string]::IsNullOrWhiteSpace($env:KITSUSYNC_STAGING_SSH_HOST)) { 'vfxstudio' } else { $env:KITSUSYNC_STAGING_SSH_HOST }
+    $stagingHost = $env:KITSUSYNC_STAGING_SSH_HOST
+    $operatorUser = $env:KITSUSYNC_STAGING_SSH_USER
+    $emergencyHost = $env:KITSUSYNC_STAGING_EMERGENCY_SSH_HOST
+    $emergencyUser = $env:KITSUSYNC_STAGING_EMERGENCY_USER
     if ($stagingHost -notmatch '^[A-Za-z0-9.-]+$') { throw 'Staging host must be a DNS/IP host.' }
-    $sshArgs = @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-l','ukyo_vfx')
-    $scpArgs = @('-q','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','User=ukyo_vfx')
+    if ($operatorUser -notmatch '^[a-z_][a-z0-9_-]{0,31}$' -or $operatorUser -eq 'root') { throw 'Staging operator account name is invalid.' }
+    if ($emergencyHost -notmatch '^[A-Za-z0-9.-]+$') { throw 'Staging emergency SSH host must be a DNS/IP host or SSH alias.' }
+    if ($emergencyUser -notmatch '^[a-z_][a-z0-9_-]{0,31}$' -or $emergencyUser -eq 'root' -or $emergencyUser -eq $operatorUser) { throw 'Staging emergency account name is invalid.' }
+    $sshArgs = @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-l',$operatorUser)
+    $scpArgs = @('-q','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o',"User=$operatorUser")
     if (-not [string]::IsNullOrWhiteSpace($env:KITSUSYNC_SSH_KNOWN_HOSTS_FILE)) {
         $sshArgs += @('-o', "UserKnownHostsFile=$env:KITSUSYNC_SSH_KNOWN_HOSTS_FILE")
         $scpArgs += @('-o', "UserKnownHostsFile=$env:KITSUSYNC_SSH_KNOWN_HOSTS_FILE")
@@ -107,7 +112,7 @@ import json,os,pwd,stat,sys
 c=json.loads(sys.argv[1]); uid=os.getuid(); user=pwd.getpwuid(uid).pw_name; p=c['path']
 try:
  s=os.lstat('/var/tmp'); assert stat.S_ISDIR(s.st_mode) and not stat.S_ISLNK(s.st_mode) and s.st_uid==0 and stat.S_IMODE(s.st_mode)==0o1777
- assert user=='ukyo_vfx'
+ assert user==c['operator']
  try: d=os.lstat(p)
  except FileNotFoundError:
   assert c['create']; os.mkdir(p,0o700); d=os.lstat(p)
@@ -134,7 +139,7 @@ except Exception:
 '@
     $code = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($preflight))
     function Invoke-UpgradePreflight([bool]$Create, [bool]$Complete, [hashtable]$Hashes) {
-        $json = @{ path=$remoteDir; create=$Create; complete=$Complete; hashes=$Hashes } | ConvertTo-Json -Compress
+        $json = @{ path=$remoteDir; create=$Create; complete=$Complete; hashes=$Hashes; operator=$operatorUser } | ConvertTo-Json -Compress
         $config = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
         $remoteCommand = 'python3 -c ''import base64,sys;sys.argv=[sys.argv[0],base64.b64decode("' + $config + '").decode()];exec(base64.b64decode("' + $code + '"))'''
         $out = @(& $ssh @sshArgs $stagingHost $remoteCommand 2>&1)
@@ -143,25 +148,25 @@ except Exception:
     }
     Invoke-UpgradePreflight $true $false @{}
     foreach ($entry in @(@{Path=$helperPath;Name='kitsusync-staging-deploy'},@{Path=$upgradePath;Name='upgrade-root.sh'})) {
-        & $scp @scpArgs -- $entry.Path "ukyo_vfx@${stagingHost}:${remoteDir}/$($entry.Name)"
+        & $scp @scpArgs -- $entry.Path "${operatorUser}@${stagingHost}:${remoteDir}/$($entry.Name)"
         if ($LASTEXITCODE -ne 0) { throw "Staging infrastructure helper upload failed: $($entry.Name)" }
     }
     & $ssh @sshArgs $stagingHost "chmod 600 $remoteDir/kitsusync-staging-deploy $remoteDir/upgrade-root.sh"
     if ($LASTEXITCODE -ne 0) { throw 'Could not secure uploaded Staging helper files.' }
     Invoke-UpgradePreflight $false $true @{ 'kitsusync-staging-deploy'=$helperSha; 'upgrade-root.sh'=$upgradeSha }
 
-    $breakglass = @(& $ssh -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio-breakglass 'id -un; id -u' 2>&1)
-    $breakglassStatus = $LASTEXITCODE
-    $expectedBreakglassUid = @(& $ssh @sshArgs $stagingHost 'id -u vfx-breakglass' 2>&1)
-    $expectedBreakglassStatus = $LASTEXITCODE
-    if ($breakglassStatus -ne 0 -or $expectedBreakglassStatus -ne 0 -or $expectedBreakglassUid.Count -ne 1 -or $breakglass.Count -lt 2 -or $breakglass[0].Trim() -ne 'vfx-breakglass' -or
-        $breakglass[1].Trim() -notmatch '^[0-9]+$' -or $breakglass[1].Trim() -ne $expectedBreakglassUid[0].Trim()) {
-        throw "Breakglass identity mismatch: $($breakglass -join ' ')"
+    $emergency = @(& $ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -l $emergencyUser $emergencyHost 'id -un; id -u' 2>&1)
+    $emergencyStatus = $LASTEXITCODE
+    $expectedEmergencyUid = @(& $ssh @sshArgs $stagingHost "id -u $emergencyUser" 2>&1)
+    $expectedEmergencyStatus = $LASTEXITCODE
+    if ($emergencyStatus -ne 0 -or $expectedEmergencyStatus -ne 0 -or $expectedEmergencyUid.Count -ne 1 -or $emergency.Count -lt 2 -or $emergency[0].Trim() -ne $emergencyUser -or
+        $emergency[1].Trim() -notmatch '^[0-9]+$' -or $emergency[1].Trim() -ne $expectedEmergencyUid[0].Trim()) {
+        throw "Emergency account identity mismatch: $($emergency -join ' ')"
     }
-    & $ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=yes vfxstudio-breakglass "sudo /bin/bash $remoteDir/upgrade-root.sh $CommitSha $helperSha $upgradeSha"
+    & $ssh -tt -o BatchMode=yes -o StrictHostKeyChecking=yes -l $emergencyUser $emergencyHost "sudo /bin/bash $remoteDir/upgrade-root.sh $CommitSha $helperSha $upgradeSha"
     if ($LASTEXITCODE -ne 0) { throw 'Privileged Staging helper upgrade failed.' }
     $installed = @(& $ssh @sshArgs $stagingHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
-    if ($LASTEXITCODE -ne 0 -or ($installed -join "`n") -notmatch 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass') {
+    if ($LASTEXITCODE -ne 0 -or ($installed -join "`n") -notmatch [regex]::Escape('STAGING_HELPER_CONTRACT=staging-v10 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=operators.conf')) {
         throw "Installed Staging helper contract verification failed: $($installed -join ' ')"
     }
     Write-Output "STAGING_HELPER_UPGRADE=PASS source_sha=$CommitSha helper_sha256=$helperSha"
