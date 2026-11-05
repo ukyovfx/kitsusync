@@ -153,6 +153,16 @@ function Invoke-RemotePreflight([string]$HostName, [string]$Path, [string[]]$Nam
     }
 }
 
+function Get-TrustedWorkflowRuns($Runs, [string]$Name, [string]$WorkflowPath, [string]$Repository, [string]$CommitSha) {
+    # A run name alone is not an identity: require the canonical workflow file, the pull_request event and a same-repository head.
+    # The Actions API may report the path with an "@ref" suffix.
+    @($Runs | Where-Object {
+        $_.name -ceq $Name -and (([string]$_.path) -split '@')[0] -ceq $WorkflowPath -and $_.event -ceq 'pull_request' -and
+        $_.head_repository.full_name -ceq $Repository -and $_.head_sha -ceq $CommitSha -and
+        $_.status -eq 'completed' -and $_.conclusion -eq 'success'
+    } | Sort-Object run_number -Descending)
+}
+
 function Get-RemoteHelperContract {
     $output = @(& $script:ssh @script:sshOptions $script:remoteHost 'sudo -n /usr/local/sbin/kitsusync-staging-deploy --contract-info' 2>&1)
     return @{ Status = $LASTEXITCODE; Output = ($output -join "`n") }
@@ -220,14 +230,10 @@ try {
     New-Item -ItemType Directory -Path $extractRoot | Out-Null
 
     $runs = Invoke-GhJson "repos/$repo/actions/runs?head_sha=$CommitSha&per_page=100"
-    $ciRuns = @($runs.workflow_runs | Where-Object {
-        $_.name -eq 'CI' -and $_.head_sha -eq $CommitSha -and $_.status -eq 'completed' -and $_.conclusion -eq 'success'
-    } | Sort-Object run_number -Descending)
+    $ciRuns = Get-TrustedWorkflowRuns $runs.workflow_runs 'CI' '.github/workflows/build.yml' $repo $CommitSha
     if ($ciRuns.Count -eq 0) { throw "No successful completed CI run exists for $CommitSha." }
-    foreach ($workflowName in @('Security Audit')) {
-        if (@($runs.workflow_runs | Where-Object {
-            $_.name -eq $workflowName -and $_.head_sha -eq $CommitSha -and $_.status -eq 'completed' -and $_.conclusion -eq 'success'
-        }).Count -eq 0) { throw "No successful completed '$workflowName' run exists for $CommitSha." }
+    if ((Get-TrustedWorkflowRuns $runs.workflow_runs 'Security Audit' '.github/workflows/security-audit.yml' $repo $CommitSha).Count -eq 0) {
+        throw "No successful completed 'Security Audit' run exists for $CommitSha."
     }
 
     $artifact = $null

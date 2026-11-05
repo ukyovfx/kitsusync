@@ -240,10 +240,9 @@ func publicKitsuHostnameFromRequest(r *http.Request, storedHost string) string {
 				scheme = "http"
 			}
 		}
-		host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
-		if host == "" {
-			host = strings.TrimSpace(r.Host)
-		}
+		// X-Forwarded-Host is client-controlled unless a trusted proxy is
+		// configured, so it is never used as a default endpoint.
+		host := strings.TrimSpace(r.Host)
 		if host != "" && !strings.Contains(host, "localhost") && !strings.HasPrefix(host, "127.0.0.1") {
 			return normalizeKitsuHostname(scheme + "://" + host)
 		}

@@ -6,6 +6,7 @@ import (
 	"app/src/model"
 	"app/src/setup"
 	"app/src/utils/config"
+	"app/src/utils/safego"
 	logutil "app/src/utils/log"
 	"context"
 	"database/sql"
@@ -980,6 +981,7 @@ func main() {
 	}
 
 	c := cron.New(cron.WithChain(
+		safego.CronRecover(),
 		cron.DelayIfStillRunning(cron.DefaultLogger),
 	))
 
@@ -1040,7 +1042,7 @@ func main() {
 			return
 		}
 		slog.Debug("Kitsu reconnect result", "success", true)
-		go runtime.runWhenReady(func() { runOnePoll(conf, db) })
+		safego.Go("kitsu reconnect poll", func() { runtime.runWhenReady(func() { runOnePoll(conf, db) }) })
 	}
 
 	setupHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -1104,7 +1106,7 @@ func main() {
 		mux.HandleFunc(prefix+"/api/setup/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, setup.ProjectsHandler(db))))
 		mux.HandleFunc(prefix+"/api/setup/preview-project", setup.RequireSession(setup.ReadOnlyAuditPreviewRoute(runtime.ready, setup.PreviewProjectHandler(db, setupCredsFunc))))
 		mux.HandleFunc(prefix+"/api/setup/apply-project", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.ApplyProjectHandler(db, setupCredsFunc)))))
-		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.TestKitsuHandler(db, onRuntimeConfigured)))
+		mux.HandleFunc(prefix+"/api/setup/test-kitsu", setup.RequireSession(setup.RejectValidationMutation(setup.TestKitsuHandler(db, onRuntimeConfigured))))
 		mux.HandleFunc(prefix+"/api/setup/test-discord", setup.RequireSession(setup.RejectValidationMutation(setup.TestDiscordHandler(db))))
 		// Test Notification is a synthetic Discord-only verification. It must remain
 		// available while Kitsu runtime polling is disconnected; the handler still
@@ -1159,11 +1161,13 @@ func main() {
 				slog.Info("validation-only profile imported", "productions", count)
 			}
 		}
-		go runtime.runWhenReady(func() {
-			runOnePoll(conf, db)
-			if conf.Log {
-				slog.Info("Done initial poll", "duration", time.Since(start).String())
-			}
+		safego.Go("initial poll", func() {
+			runtime.runWhenReady(func() {
+				runOnePoll(conf, db)
+				if conf.Log {
+					slog.Info("Done initial poll", "duration", time.Since(start).String())
+				}
+			})
 		})
 	} else {
 		slog.Warn("Kitsu runtime setup required; HTTP UI is available and notifications are paused")
