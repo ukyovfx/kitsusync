@@ -18,7 +18,7 @@ Repository, Git, CI, tests, configuration, and verified live runtime evidence ov
 
 ## Staging boundary
 
-- The documented Staging contract is `staging-v8`. The previously operator-reported helper SHA-256 `c2e8b1b8dda50357909e2b5f8081560c262cff30e0107958ab85b9366a726490` is historical evidence, not proof of current installed identity.
+- The documented Staging contract is `staging-v9` (v9 isolates the helper's Python via `cd /` and `python3 -I`; installed-host adoption requires running `scripts/upgrade-kitsusync-staging-helper.ps1`). The previously operator-reported helper SHA-256 `c2e8b1b8dda50357909e2b5f8081560c262cff30e0107958ab85b9366a726490` is historical evidence, not proof of current installed identity.
 - Staging is designed as a separate Compose project on `127.0.0.1:8091`, with isolated state and polling disabled. Production follows the separate release-only path on `127.0.0.1:8090`.
 - `scripts/deploy-kitsusync-staging-candidate.ps1 -CommitSha <sha>` is the documented candidate path. Confirm actual Staging identity, helper version, and checks when needed; a workflow marked skipped does not establish a deployed candidate.
 

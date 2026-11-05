@@ -48,13 +48,13 @@ try { Assert-CandidateProvenance $wrongSha $false }
 catch { $rejectedWrongSha = $_.Exception.Message -like 'Artifact provenance does not identify*' }
 if (-not $rejectedWrongSha) { throw 'Candidate provenance gate accepted the wrong source SHA.' }
 
-$healthy = 'STAGING_HELPER_CONTRACT=staging-v8 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
+$healthy = 'STAGING_HELPER_CONTRACT=staging-v9 incoming=/var/tmp/kitsusync-staging-candidate-<sha> owners=ukyo_vfx,vfx-breakglass'
 Assert-RoutineStagingHelperContract 0 $healthy
 
 $outdatedFailedClosed = $false
-try { Assert-RoutineStagingHelperContract 0 ($healthy.Replace('staging-v8', 'staging-v7')) }
+try { Assert-RoutineStagingHelperContract 0 ($healthy.Replace('staging-v9', 'staging-v8')) }
 catch { $outdatedFailedClosed = $_.Exception.Message -like 'STAGING_BOOTSTRAP_REQUIRED*' }
-if (-not $outdatedFailedClosed) { throw 'Routine deploy accepted an outdated v3 helper contract.' }
+if (-not $outdatedFailedClosed) { throw 'Routine deploy accepted an outdated v8 helper contract.' }
 
 foreach ($case in @(
     @{ Status = 1; Output = 'STAGING_DEPLOY_ERROR=INVALID_ARGUMENT'; Name = 'outdated' },

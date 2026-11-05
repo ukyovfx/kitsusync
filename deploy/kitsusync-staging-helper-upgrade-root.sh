@@ -21,6 +21,12 @@ readonly EXPECTED_OLD_HELPER_SHAS=(
   b43df984dd87321c4f9eb76478557b23db35cac8986b01ddd4b3af5a2353e5ae
   4550cecbb12e83ca8647127624ec1062f5a11c63e37171015677efb8c2e88443
   7e839420b54e39d1022b131a977c7b9f4efba0be6768002e3b58d932a83f83cc
+  c2e8b1b8dda50357909e2b5f8081560c262cff30e0107958ab85b9366a726490
+  b7ed3756b0df66bc70b74f399b84e93a4085742820a648bc5910d2d931cb564e
+  22de0a3ac88c7ba1aef80e138b00d64ee85de05289d5dfeabec2a200498431dd
+  bb27defcdd4750d842e9a46419aeff848c3528e1f318a7ee572aae3a8554010f
+  8c75897d3046a9a88b165ae2c689efa457af728f3c1c5f557641d78a138fecd2
+  a933fc7e55db496d11bfb2fcfe01101a96e58dec525d5d76e8b2fd4e125a9f4f
 )
 
 incoming_uid="$(stat -c '%u' "$INCOMING" 2>/dev/null || printf missing)"
@@ -73,7 +79,7 @@ trap cleanup_upgrade EXIT
 install -o root -g root -m 0600 "$helper_file" "$root_tmp/kitsusync-staging-deploy"
 [[ "$(sha256sum "$root_tmp/kitsusync-staging-deploy" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die ROOT_COPY_DIGEST_INVALID
 bash -n "$root_tmp/kitsusync-staging-deploy" || die NEW_HELPER_SYNTAX_INVALID
-/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v8' || die NEW_HELPER_CONTRACT_INVALID
+/bin/bash "$root_tmp/kitsusync-staging-deploy" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v9' || die NEW_HELPER_CONTRACT_INVALID
 
 target_tmp="$(mktemp /usr/local/sbin/.kitsusync-staging-deploy.XXXXXX)"
 install -o root -g root -m 0750 "$root_tmp/kitsusync-staging-deploy" "$target_tmp"
@@ -87,6 +93,6 @@ mv -f -- "$target_tmp" "$TARGET"
 target_tmp=""
 helper_replaced=1
 [[ "$(sha256sum "$TARGET" | cut -d' ' -f1)" == "$NEW_HELPER_SHA" ]] || die INSTALLED_HELPER_DIGEST_INVALID
-"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v8' || die INSTALLED_HELPER_CONTRACT_INVALID
+"$TARGET" --contract-info | grep -Fq 'STAGING_HELPER_CONTRACT=staging-v9' || die INSTALLED_HELPER_CONTRACT_INVALID
 rm -rf -- "$INCOMING"
 printf 'STAGING_HELPER_UPGRADE=PASS source_sha=%s helper_sha256=%s config_migration=ROOT_10001_0440\n' "$SOURCE_SHA" "$NEW_HELPER_SHA"
