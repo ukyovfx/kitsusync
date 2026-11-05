@@ -29,6 +29,16 @@ function Get-StagingHelperUpgradeAction([int]$Status, [string]$Output) {
     throw "Could not safely identify the installed Staging helper: $Output"
 }
 
+function Get-TrustedWorkflowRuns($Runs, [string]$Name, [string]$WorkflowPath, [string]$Repository, [string]$CommitSha) {
+    # A run name alone is not an identity: require the canonical workflow file, the pull_request event and a same-repository head.
+    # The Actions API may report the path with an "@ref" suffix.
+    @($Runs | Where-Object {
+        $_.name -ceq $Name -and (([string]$_.path) -split '@')[0] -ceq $WorkflowPath -and $_.event -ceq 'pull_request' -and
+        $_.head_repository.full_name -ceq $Repository -and $_.head_sha -ceq $CommitSha -and
+        $_.status -eq 'completed' -and $_.conclusion -eq 'success'
+    } | Sort-Object run_number -Descending)
+}
+
 $git = Resolve-NativeCommand 'git'
 $gh = Resolve-NativeCommand 'gh'
 $ssh = Resolve-NativeCommand 'ssh'
@@ -39,11 +49,16 @@ $head = (& $git -C $repoRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $head -ne $CommitSha) { throw 'The checked-out source must exactly match CommitSha.' }
 
 $repo = 'ukyovfx/kitsusync'
+# The helper source must be accepted code: the commit has to be an ancestor of the freshly fetched origin/master.
+& $git -C $repoRoot fetch --quiet origin master
+if ($LASTEXITCODE -ne 0) { throw 'Could not refresh origin/master to verify the commit is accepted.' }
+& $git -C $repoRoot merge-base --is-ancestor $CommitSha refs/remotes/origin/master
+if ($LASTEXITCODE -ne 0) { throw "Commit $CommitSha is not an ancestor of origin/master." }
 $runs = & $gh api "repos/$repo/actions/runs?head_sha=$CommitSha&per_page=100" | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Could not query exact-SHA GitHub checks.' }
-foreach ($name in @('CI', 'Security Audit')) {
-    if (@($runs.workflow_runs | Where-Object { $_.name -eq $name -and $_.head_sha -eq $CommitSha -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' }).Count -eq 0) {
-        throw "No successful '$name' run exists for $CommitSha."
+foreach ($gate in @(@{ Name = 'CI'; Path = '.github/workflows/build.yml' }, @{ Name = 'Security Audit'; Path = '.github/workflows/security-audit.yml' })) {
+    if ((Get-TrustedWorkflowRuns $runs.workflow_runs $gate.Name $gate.Path $repo $CommitSha).Count -eq 0) {
+        throw "No successful '$($gate.Name)' run exists for $CommitSha."
     }
 }
 

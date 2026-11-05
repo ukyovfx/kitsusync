@@ -20,6 +20,8 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.path == '.github/workflows/security-audit.yml' ||
+        startsWith(github.event.workflow_run.path, '.github/workflows/security-audit.yml@')) &&
       vars.KITSUSYNC_STAGING_AUTODEPLOY == 'enabled'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -58,7 +60,7 @@ jobs:
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           for attempt in $(seq 1 180); do
             runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$CANDIDATE_SHA&per_page=100")"
-            ci="$(jq -r '[.workflow_runs[] | select(.name == "CI" and .event == "pull_request" and .head_sha == env.CANDIDATE_SHA)] | sort_by(.run_number) | last // empty | [.status, .conclusion] | @tsv' <<<"$runs")"
+            ci="$(jq -r '[.workflow_runs[] | select(.name == "CI" and ((.path // "") | split("@")[0]) == ".github/workflows/build.yml" and .event == "pull_request" and .head_repository.full_name == env.REPOSITORY and .head_sha == env.CANDIDATE_SHA)] | sort_by(.run_number) | last // empty | [.status, .conclusion] | @tsv' <<<"$runs")"
             if [[ -z "$ci" ]]; then sleep 10; continue; fi
             read -r status conclusion <<<"$ci"
             if [[ "$status" == completed ]]; then
