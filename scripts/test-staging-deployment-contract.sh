@@ -10,6 +10,7 @@ runtime_e2e="${root}/scripts/test-staging-runtime-e2e.sh"
 
 bash "${root}/scripts/test-staging-candidate-download-contract.sh"
 bash "${root}/scripts/test-staging-network-membership.sh"
+bash "${root}/scripts/test-staging-python-isolation.sh"
 bash -n "${helper}"
 bash -n "${bootstrap}"
 grep -Fq 'set -Eeuo pipefail' "${helper}"
