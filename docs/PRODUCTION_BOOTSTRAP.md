@@ -331,7 +331,7 @@ Zou route. Do not gate the installation on a host curl to the Docker bridge
 address: host self-routing and host firewall policy may reject that path even
 when the bridged container path is correct.
 
-For the vfxstudio loopback Zou topology, the host-only proxy remains bound to
+For a loopback Zou topology on the staging host, the host-only proxy remains bound to
 the Docker bridge and accepts only Docker address space. Its `/api/` locations
 use `proxy_pass http://127.0.0.1:5000/`; nginx removes the `/api/` prefix, so
 the direct Zou upstream receives `/` for `/api/` and `/status` for

@@ -719,7 +719,7 @@ func TestLoginHandlerRejectsStatusDiscoveredAuthorityWithoutOperatorTrust(t *tes
 }
 
 func TestLoginHandlerAcceptsOperatorEstablishedPrivateAndTailscaleAuthority(t *testing.T) {
-	if got := classifyKitsuIP(netip.MustParseAddr("100.114.77.117")); got != "vpn/shared" {
+	if got := classifyKitsuIP(netip.MustParseAddr("100.64.0.10")); got != "vpn/shared" {
 		t.Fatalf("Tailscale address scope=%q", got)
 	}
 	resetSessions()
