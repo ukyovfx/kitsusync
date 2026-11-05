@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRequestBodyLimitRejectsOversizedUnauthenticatedLogin(t *testing.T) {
@@ -293,5 +295,81 @@ func TestConcurrentDiagnosticsDoNotShareAWritePath(t *testing.T) {
 	}
 	if string(got) != sentinel {
 		t.Fatalf("legacy path changed during concurrent diagnostics to %q", string(got))
+	}
+}
+
+func TestLoginRateLimitEvictsStaleKeysAndAdmitsNewClientsAfterCap(t *testing.T) {
+	loginAttempts.Lock()
+	saved := loginAttempts.started
+	loginAttempts.started = make(map[string][]time.Time)
+	loginAttempts.Unlock()
+	t.Cleanup(func() {
+		loginAttempts.Lock()
+		loginAttempts.started = saved
+		loginAttempts.Unlock()
+	})
+
+	handler := LoginRateLimit(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	post := func(addr string) int {
+		req := httptest.NewRequest(http.MethodPost, "/bot/login", nil)
+		req.RemoteAddr = addr
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	// Fill past the cap with unique, still-active sources.
+	for i := 0; i < maxRateLimitKeys+100; i++ {
+		addr := fmt.Sprintf("10.%d.%d.%d:1000", i>>16&255, i>>8&255, i&255)
+		if code := post(addr); code != http.StatusOK {
+			t.Fatalf("unique source %d status=%d", i, code)
+		}
+	}
+	loginAttempts.Lock()
+	size := len(loginAttempts.started)
+	loginAttempts.Unlock()
+	if size > maxRateLimitKeys {
+		t.Fatalf("limiter grew to %d keys, cap %d", size, maxRateLimitKeys)
+	}
+	if code := post("198.51.100.77:1000"); code != http.StatusOK {
+		t.Fatalf("new client after cap status=%d", code)
+	}
+	// Expired keys are dropped first.
+	loginAttempts.Lock()
+	for k := range loginAttempts.started {
+		loginAttempts.started[k] = []time.Time{time.Now().Add(-2 * time.Minute)}
+	}
+	loginAttempts.started["direct:198.51.100.77"] = []time.Time{time.Now()}
+	loginAttempts.Unlock()
+	if code := post("198.51.100.78:1000"); code != http.StatusOK {
+		t.Fatalf("new client after expiry status=%d", code)
+	}
+	loginAttempts.Lock()
+	size = len(loginAttempts.started)
+	loginAttempts.Unlock()
+	if size != 2 {
+		t.Fatalf("expired keys not evicted: %d keys", size)
+	}
+}
+
+func TestLoginRateLimitIgnoresClientSuppliedForwardedForPrefix(t *testing.T) {
+	handler := LoginRateLimit(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	const real = "198.51.100.90"
+	t.Cleanup(func() {
+		loginAttempts.Lock()
+		delete(loginAttempts.started, "forwarded:"+real)
+		loginAttempts.Unlock()
+	})
+	var last int
+	for i := 0; i < maxLoginAttemptsPerPeer+1; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/bot/login", nil)
+		req.RemoteAddr = "127.0.0.1:8090"
+		// Proxy appends the real peer; the leading value is attacker-chosen.
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("203.0.113.%d, %s", i+1, real))
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		last = rr.Code
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("rotating XFF prefix bypassed limit: status=%d", last)
 	}
 }
