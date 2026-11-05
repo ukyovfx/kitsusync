@@ -125,7 +125,7 @@ func TestDoWithErrorAcceptsPinnedPrivateAddress(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{}`))
 	}))
-	origin := "http://100.114.77.117:" + strconv.Itoa(port)
+	origin := "http://100.64.0.10:" + strconv.Itoa(port)
 	if err := ConfigureVerifiedOrigin(VerifiedOrigin{BaseURL: origin, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
