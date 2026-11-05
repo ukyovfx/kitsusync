@@ -356,8 +356,6 @@ location ~ ^/api/pictures/thumbnails/preview-files/ {
 
 ## Documentation
 
-User documentation is maintained at https://rigoo.jp/.
-
 - Template variables and custom preset guide: `docs/TEMPLATES.md`
 - Dev vs production environment setup: `docs/ENVIRONMENTS.md`
 - First-time studio setup walkthrough: `docs/SETUP_FOR_STUDIOS.md`

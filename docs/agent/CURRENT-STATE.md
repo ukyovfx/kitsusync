@@ -42,4 +42,4 @@ Repository, Git, CI, tests, configuration, and verified live runtime evidence ov
 - `docs/agent/START-HERE.md` points here for accepted `master` state and to `docs/agent/plans/active/` for durable active-task plans. Do not create duplicate plans when no further active repository implementation is needed.
 - Follow `AGENTS.md`, `docs/PRODUCTION_BOOTSTRAP.md`, and the relevant in-repo deployment contracts before scoped operations.
 - Current IA UI decisions remain in `docs/CURRENT-IA-UI-SPEC.md`; browser-rendered output is the final source of truth for visual acceptance.
-- Keep Production, Staging, server administration, and the separate VFX Files Plugin repository's acceptance boundaries distinct.
+- Keep Production, Staging, and server administration acceptance boundaries distinct.
