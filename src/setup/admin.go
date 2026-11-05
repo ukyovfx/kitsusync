@@ -3304,7 +3304,15 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsuホストを入力してください。", "Enter the Kitsu host.")))
 					return
 				}
+				if kitsuEndpointChangeBlocked(hostForAuth) {
+					rejectPinnedKitsuEndpointChange(w, lang, "admin_save_kitsu")
+					return
+				}
 				apiOverride := strings.TrimSpace(r.FormValue("kitsu_api_base_url"))
+				if kitsuAPIOverrideBlocked(apiOverride) {
+					rejectPinnedKitsuEndpointChange(w, lang, "admin_save_kitsu_api_override")
+					return
+				}
 				connection, connectionErr := ResolveKitsuConnection(context.Background(), hostForAuth, apiOverride)
 				if connectionErr != nil {
 					w.WriteHeader(http.StatusBadRequest)
@@ -3359,6 +3367,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 						fmt.Fprint(w, renderKitsuConnectionError(lang, botTokenValidationUserMessageSafe(lang, validation)))
 						return
 					}
+					previousHost := effectiveRuntimeKitsuEndpoint(db)
 					if err := persistKitsuConnection(db, submittedBotToken, validation, externalURLWasSubmitted, externalURLToSave, displayedHost, hostForAuth, apiOverride); err != nil {
 						slog.Warn("Kitsu connection persistence failed", "error_class", "connection_persistence_failed")
 						w.WriteHeader(http.StatusInternalServerError)
@@ -3370,7 +3379,10 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					} else {
 						os.Unsetenv("KITSU_API_BASE_URL")
 					}
-					os.Setenv("KITSU_HOSTNAME", hostForAuth)
+					if _, pinned := operatorPinnedKitsuHost(); !pinned {
+						SetAppManagedKitsuHostname(hostForAuth)
+						logKitsuEndpointChange("admin_save_kitsu", previousHost, hostForAuth)
+					}
 					if kitsuReconnect != nil {
 						go kitsuReconnect()
 					}
@@ -3443,19 +3455,26 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続先を確認できませんでした。", "The Kitsu connection endpoint is invalid.")))
 					return
-				}
+					}
+					if kitsuEndpointChangeBlocked(hostForAuth) {
+						rejectPinnedKitsuEndpointChange(w, lang, "admin_legacy_save")
+						return
+					}
 				if err := RecoverRuntimeCredentials(db, hostForAuth, runtimeEmail, runtimePassword); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
 					return
 				}
-				if model.GetSetting(db, "kitsu.hostname") != hostForAuth {
+				if _, pinned := operatorPinnedKitsuHost(); !pinned && model.GetSetting(db, "kitsu.hostname") != hostForAuth {
+					logKitsuEndpointChange("admin_legacy_save", model.GetSetting(db, "kitsu.hostname"), hostForAuth)
 					model.SetSetting(db, "kitsu.hostname", hostForAuth)
 				}
 				kitsuChanged = true
 			}
-			if runtimeHost := effectiveRuntimeKitsuEndpoint(db); runtimeHost != "" {
-				os.Setenv("KITSU_HOSTNAME", runtimeHost)
+			if _, pinned := operatorPinnedKitsuHost(); !pinned {
+				if runtimeHost := effectiveRuntimeKitsuEndpoint(db); runtimeHost != "" {
+					SetAppManagedKitsuHostname(runtimeHost)
+				}
 			}
 			if value := strings.TrimSpace(r.FormValue("bot_token")); value != "" {
 				if err := setRuntimeDiscordBotToken(db, value); err != nil {

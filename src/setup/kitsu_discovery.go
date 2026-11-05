@@ -52,6 +52,11 @@ func DiscoverKitsuHost(db *gorm.DB) KitsuHostDiscoveryResult {
 			return KitsuHostDiscoveryResult{RuntimeHost: normalized, DisplayHost: safeKitsuHostDisplay(normalized), Status: authenticatedKitsu, Source: "explicit"}
 		}
 	}
+	// An operator-pinned endpoint that does not answer right now must not be
+	// replaced by a saved or discovered one; report "not found" instead.
+	if _, pinned := operatorPinnedKitsuHost(); pinned {
+		return KitsuHostDiscoveryResult{}
+	}
 	if db != nil {
 		if saved := strings.TrimSpace(model.GetSetting(db, "kitsu.hostname")); saved != "" {
 			if normalized, err := validateKitsuEndpoint(saved); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
