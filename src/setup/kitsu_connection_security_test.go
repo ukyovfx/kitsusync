@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -162,5 +163,30 @@ func TestAPIOverridePersistsAndReadsBack(t *testing.T) {
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, want)
 	if got := model.GetSetting(db, KitsuAPIBaseURLSettingKey); got != want {
 		t.Fatalf("API override readback = %q, want %q", got, want)
+	}
+}
+
+func TestSetupProbeLimiterStaysBoundedAndAdmitsNewPeers(t *testing.T) {
+	setupProbeLimiter.Lock()
+	saved := setupProbeLimiter.started
+	setupProbeLimiter.started = make(map[string][]time.Time)
+	setupProbeLimiter.Unlock()
+	t.Cleanup(func() {
+		setupProbeLimiter.Lock()
+		setupProbeLimiter.started = saved
+		setupProbeLimiter.Unlock()
+	})
+	for i := 0; i < maxRateLimitKeys+50; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/setup/test-kitsu", nil)
+		req.RemoteAddr = fmt.Sprintf("10.%d.%d.%d:1000", i>>16&255, i>>8&255, i&255)
+		if !allowSetupProbe(req) {
+			t.Fatalf("unique peer %d rejected", i)
+		}
+	}
+	setupProbeLimiter.Lock()
+	size := len(setupProbeLimiter.started)
+	setupProbeLimiter.Unlock()
+	if size > maxRateLimitKeys {
+		t.Fatalf("probe limiter grew to %d keys", size)
 	}
 }

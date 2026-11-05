@@ -297,6 +297,9 @@ func allowSetupProbe(r *http.Request) bool {
 	now := time.Now()
 	setupProbeLimiter.Lock()
 	defer setupProbeLimiter.Unlock()
+	if _, known := setupProbeLimiter.started[key]; !known {
+		makeRoomForRateKey(setupProbeLimiter.started, now, time.Minute, maxRateLimitKeys)
+	}
 	entries := setupProbeLimiter.started[key][:0]
 	for _, at := range setupProbeLimiter.started[key] {
 		if now.Sub(at) < time.Minute {

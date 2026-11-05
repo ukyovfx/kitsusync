@@ -474,11 +474,8 @@ func LoginRateLimit(next http.Handler) http.Handler {
 		key := loginPeerKey(r)
 		now := time.Now()
 		loginAttempts.Lock()
-		if _, known := loginAttempts.started[key]; !known && len(loginAttempts.started) >= 4096 {
-			loginAttempts.Unlock()
-			w.Header().Set("Retry-After", "60")
-			http.Error(w, "login rate limit exceeded", http.StatusTooManyRequests)
-			return
+		if _, known := loginAttempts.started[key]; !known {
+			makeRoomForRateKey(loginAttempts.started, now, time.Minute, maxRateLimitKeys)
 		}
 		entries := loginAttempts.started[key][:0]
 		for _, at := range loginAttempts.started[key] {
@@ -499,6 +496,40 @@ func LoginRateLimit(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// maxRateLimitKeys bounds the in-memory per-peer rate-limit maps.
+const maxRateLimitKeys = 4096
+
+// makeRoomForRateKey must be called with the owning mutex held before a new
+// key is inserted. It drops keys whose attempts have all expired; if the map is
+// still full it evicts the key with the oldest latest attempt, so new clients
+// are never locked out until restart.
+func makeRoomForRateKey(m map[string][]time.Time, now time.Time, window time.Duration, limit int) {
+	if len(m) < limit {
+		return
+	}
+	var oldestKey string
+	var oldestAt time.Time
+	found := false
+	for key, entries := range m {
+		var last time.Time
+		for _, at := range entries {
+			if at.After(last) {
+				last = at
+			}
+		}
+		if now.Sub(last) >= window {
+			delete(m, key)
+			continue
+		}
+		if !found || last.Before(oldestAt) {
+			oldestKey, oldestAt, found = key, last, true
+		}
+	}
+	if len(m) >= limit && found {
+		delete(m, oldestKey)
+	}
 }
 
 func loginPeerKey(r *http.Request) string {
@@ -525,10 +556,16 @@ func isTrustedProxyPeer(ip net.IP) bool {
 	return ip.IsLoopback()
 }
 
+// forwardedPeerIP reads the client address supplied by the loopback proxy.
+// X-Real-IP is overwritten by the documented proxy configuration. For
+// X-Forwarded-For only the last entry is used: that is the one the proxy
+// appended, while earlier entries are client-supplied and spoofable.
 func forwardedPeerIP(r *http.Request) string {
-	for _, value := range []string{r.Header.Get("X-Real-IP"), strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]} {
-		value = strings.TrimSpace(value)
-		if ip := net.ParseIP(value); ip != nil {
+	values := []string{r.Header.Get("X-Real-IP")}
+	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	values = append(values, parts[len(parts)-1])
+	for _, value := range values {
+		if ip := net.ParseIP(strings.TrimSpace(value)); ip != nil {
 			return ip.String()
 		}
 	}
