@@ -25,6 +25,9 @@ for inherited_name in $(compgen -e); do
   case "${inherited_name}" in DOCKER_*|COMPOSE_*) die "inherited Docker/Compose control variables are not accepted" ;; esac
 done
 [[ "${EUID}" -eq 0 ]] || die "root execution required"
+HOME=/root
+DOCKER_CONFIG=/root/.docker
+export HOME DOCKER_CONFIG
 cd /
 
 secure_source() {

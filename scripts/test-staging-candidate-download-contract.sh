@@ -30,6 +30,7 @@ candidate_sudo_line="$(grep -n 'sudo -n /usr/local/sbin/kitsusync-staging-deploy
 pwsh -NoProfile -File "${root}/scripts/test-staging-provenance-parser.ps1" -DeployScript "${candidate_deploy}"
 pwsh -NoProfile -File "${root}/scripts/test-staging-routine-deploy-contract.ps1" -DeployScript "${candidate_deploy}"
 pwsh -NoProfile -File "${root}/scripts/test-staging-helper-upgrade-contract.ps1"
+pwsh -NoProfile -File "${root}/scripts/test-staging-workflow-run-gate.ps1"
 bash "${root}/scripts/test-staging-helper-upgrade-flow.sh"
 bash "${root}/scripts/test-staging-http-readiness.sh"
 bash "${root}/scripts/test-staging-trusted-tool-contract.sh"
