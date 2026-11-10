@@ -6,6 +6,12 @@ All notable changes to this project should be recorded here.
 
 - No unreleased changes yet.
 
+## v0.5.3
+
+### Fixed
+
+- Comments-list fetch failures no longer abort the whole polling round. On Zou 1.1.1 the `GET /api/data/comments` LIST endpoint requires admin privileges and returns 403 for the non-admin bot token, so every poll discarded all its data and no notifications fired at all. `MakeKitsuResponse` now logs a distinguished warning (`error_class: kitsu_comments_fetch_failed`) and continues the round with comment data treated as unavailable; all other endpoint failures still fail the poll. During a comments-unavailable round, comment notifications are suppressed and each task's stored delivered-comment checkpoint (ID/UpdatedAt) is preserved unchanged, so the next successful comments round produces a correct diff with no false delete-all or all-new wave.
+
 ## v0.5.2
 
 ### Fixed
