@@ -95,12 +95,17 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	}
 
 	var comments kitsu.Comments
+	commentsUnavailable := false
 	if conf.Kitsu.SkipComments == false {
 		comments, err = kitsu.GetCommentsWithError()
 		if err != nil {
-			return nil, fmt.Errorf("fetch comments: %w", err)
+			// The comments LIST endpoint requires admin on Zou 1.1x, so a
+			// non-admin bot token gets 403 here. Losing comment visibility for
+			// one poll must not discard the rest of the fetched data.
+			commentsUnavailable = true
+			slog.Warn("Comments fetch failed; continuing this poll without comment data", "error_class", "kitsu_comments_fetch_failed", "error", err)
 		}
-		if conf.Log {
+		if conf.Log && !commentsUnavailable {
 			slog.Info("Got comments: " + strconv.Itoa(len(comments.Each)))
 		}
 	}
@@ -235,6 +240,7 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	var out []kitsu.MessagePayload
 	for _, elem := range response {
 		if len(elem.Task.Task.ID) > 0 {
+			elem.CommentsUnavailable = commentsUnavailable
 			out = append(out, elem)
 		}
 	}
@@ -385,6 +391,15 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			statusChanged := deliveredStatus != currentStatus
 			timestampChanged := deliveredTaskUpdatedAt != data[i].Task.Task.UpdatedAt
 			commentChanged := deliveredCommentID != data[i].LatestComment.Comment.ID || deliveredCommentUpdatedAt != data[i].LatestComment.Comment.UpdatedAt
+
+			if data[i].CommentsUnavailable {
+				// Comments could not be fetched this poll (or were skipped):
+				// never diff against empty comment data and keep the stored
+				// checkpoint so the next successful poll resumes the real delta.
+				commentChanged = false
+				data[i].LatestComment.Comment.ID = deliveredCommentID
+				data[i].LatestComment.Comment.UpdatedAt = deliveredCommentUpdatedAt
+			}
 
 			if statusChanged || timestampChanged || commentChanged {
 				observed := model.NotificationDeliveryIntent{
