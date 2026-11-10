@@ -20,7 +20,12 @@ SERVICE=app
 EXPECTED_CONTAINER_NAME=/kitsusync-app-1
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-[[ "$#" -eq 0 ]] || die "arguments are not accepted"
+validate_only=false
+if [[ "$#" -eq 1 && "$1" == --validate-only ]]; then
+  validate_only=true
+elif [[ "$#" -ne 0 ]]; then
+  die "arguments are not accepted"
+fi
 for inherited_name in $(compgen -e); do
   case "${inherited_name}" in DOCKER_*|COMPOSE_*) die "inherited Docker/Compose control variables are not accepted" ;; esac
 done
@@ -103,6 +108,10 @@ archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${STAGE
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_config_digest=//p')" == "${image_config_digest}" ]] || die "staged image config digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_manifest_digest=//p')" == "${image_manifest_digest}" ]] || die "staged image manifest digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_content_digest=//p')" == "${image_content_digest}" ]] || die "staged image content identity mismatch"
+if [[ "${validate_only}" == true ]]; then
+  printf 'KitsuSync release validation passed: version=%s tag=%s commit=%s mode=%s\n' "${version}" "${release_tag}" "${source_commit}" "${mode}"
+  exit 0
+fi
 export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 if [[ "${mode}" == fresh-install && -f "${CONTROL}/deployment-mode" && ! -L "${CONTROL}/deployment-mode" && "$(/usr/bin/tr -d '\r\n' <"${CONTROL}/deployment-mode")" == normal ]]; then
   die "fresh install has already completed"
