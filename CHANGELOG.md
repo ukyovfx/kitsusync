@@ -6,6 +6,12 @@ All notable changes to this project should be recorded here.
 
 - No unreleased changes yet.
 
+## v0.5.2
+
+### Fixed
+
+- Kitsu API base URL normalization: `kitsuBase()` now guarantees exactly one trailing slash on every configuration path (KITSU_API_BASE_URL, KITSU_HOSTNAME, and the config file). Previously a KITSU_HOSTNAME without a trailing slash produced invalid request URLs such as `http://host:8080api/data/tasks`, so every production poll failed with `invalid URL`.
+
 ## v0.5.1
 
 ### Added

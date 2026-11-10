@@ -16,16 +16,23 @@ import (
 // kitsuBase は Kitsu ベース URL を返す。
 // 環境変数 KITSU_HOSTNAME が設定されている場合はそちらを優先する。
 // これにより管理画面（/bot/admin/bot）で設定した Hostname が反映される。
+// 呼び出し側は "api/..." を連結するため、どの経路でも末尾の "/" を1つに揃える。
 func kitsuBase() string {
 	if h := os.Getenv("KITSU_API_BASE_URL"); h != "" {
-		h = strings.TrimRight(h, "/")
-		h = strings.TrimSuffix(h, "/api")
-		return h + "/"
+		return normalizeKitsuBase(h)
 	}
 	if h := os.Getenv("KITSU_HOSTNAME"); h != "" {
-		return h
+		return normalizeKitsuBase(h)
 	}
-	return config.Read().Kitsu.Hostname
+	return normalizeKitsuBase(config.Read().Kitsu.Hostname)
+}
+
+// normalizeKitsuBase は末尾の "/" と "/api" を取り除き、"/" 終端に正規化する。
+func normalizeKitsuBase(h string) string {
+	h = strings.TrimRight(h, "/")
+	h = strings.TrimSuffix(h, "/api")
+	h = strings.TrimRight(h, "/")
+	return h + "/"
 }
 
 type Task struct {
