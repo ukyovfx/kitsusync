@@ -14,6 +14,7 @@ REQUIRED = {
     "deployment-mode", "kitsusync-deploy", "kitsusync-inspect",
     "kitsusync-sqlite-backup", "kitsusync-bootstrap", "kitsusync-image-identity",
     "kitsusync-runtime-state", "kitsusync-restore-state", "kitsusync-preflight-collect",
+    "kitsusync-release-apply", "release_zip.py", "release_registration.py",
 }
 
 
@@ -28,7 +29,7 @@ def extract(archive_path, expected_sha256, destination):
     try:
         # Hash and extract the same private copy, even if the caller can modify
         # the original file while the operation is running.
-        with open(archive_path, "rb") as original, tempfile.TemporaryFile() as source:
+        with open(archive_path, "rb") as original, tempfile.TemporaryFile(dir=destination.parent) as source:
             digest = hashlib.sha256()
             for block in iter(lambda: original.read(1024 * 1024), b""):
                 digest.update(block)

@@ -56,6 +56,22 @@ if [[ "${mode}" == fresh-install ]]; then
 fi
 
 field() { /usr/bin/sed -n "s/^$1=//p" "${STAGE}/provenance.txt" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r'; }
+release_apply_sha="$(field release_apply_tool_sha256)"
+release_zip_sha="$(field release_zip_tool_sha256)"
+release_registration_sha="$(field release_registration_tool_sha256)"
+coordinator_present=false
+if [[ -n "${release_apply_sha}${release_zip_sha}${release_registration_sha}" ]]; then
+  coordinator_present=true
+  for name in kitsusync-release-apply release_zip.py release_registration.py; do
+    secure_source "${STAGE}/${name}" 600
+  done
+  for digest in "${release_apply_sha}" "${release_zip_sha}" "${release_registration_sha}"; do
+    [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || die "release coordinator provenance is incomplete"
+  done
+  [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-release-apply" | /usr/bin/cut -d' ' -f1)" == "${release_apply_sha}" ]] || die "release coordinator digest mismatch"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/release_zip.py" | /usr/bin/cut -d' ' -f1)" == "${release_zip_sha}" ]] || die "release ZIP helper digest mismatch"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/release_registration.py" | /usr/bin/cut -d' ' -f1)" == "${release_registration_sha}" ]] || die "release registration helper digest mismatch"
+fi
 archive_sha="$(field image_archive_sha256)"
 compose_sha="$(field compose_sha256)"
 deploy_sha="$(field deployment_tool_sha256)"
@@ -203,6 +219,11 @@ fi
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-runtime-state" /usr/local/libexec/kitsusync-runtime-state
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-restore-state" /usr/local/libexec/kitsusync-restore-state
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-preflight-collect" /usr/local/libexec/kitsusync-preflight-collect
+if [[ "${coordinator_present}" == true ]]; then
+  /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-release-apply" /usr/local/sbin/kitsusync-release-apply
+  /usr/bin/install -o root -g root -m 0600 "${STAGE}/release_zip.py" /usr/local/libexec/release_zip.py
+  /usr/bin/install -o root -g root -m 0600 "${STAGE}/release_registration.py" /usr/local/libexec/release_registration.py
+fi
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/docker-compose.yml" "${CONTROL}/docker-compose.yml"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"

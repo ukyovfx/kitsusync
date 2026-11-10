@@ -21,6 +21,9 @@ identity_sha="${IMAGE_IDENTITY_TOOL_SHA256:-}"
 runtime_state_sha="${RUNTIME_STATE_TOOL_SHA256:-}"
 restore_state_sha="${RESTORE_STATE_TOOL_SHA256:-}"
 preflight_sha="${PREFLIGHT_COLLECTOR_TOOL_SHA256:-}"
+release_apply_sha="${RELEASE_APPLY_TOOL_SHA256:-}"
+release_zip_sha="${RELEASE_ZIP_TOOL_SHA256:-}"
+release_registration_sha="${RELEASE_REGISTRATION_TOOL_SHA256:-}"
 fresh_conf_sha="${FRESH_CONF_SHA256:-}"
 fresh_env_sha="${FRESH_ENV_SHA256:-}"
 fresh_templates_sha="${FRESH_TEMPLATES_SHA256:-}"
@@ -52,6 +55,11 @@ if [[ -n "${fresh_conf_sha}${fresh_env_sha}${fresh_templates_sha}${fresh_templat
     [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || { printf 'invalid fresh runtime seed digest\n' >&2; exit 1; }
   done
 fi
+if [[ -n "${release_apply_sha}${release_zip_sha}${release_registration_sha}" ]]; then
+  for digest in "${release_apply_sha}" "${release_zip_sha}" "${release_registration_sha}"; do
+    [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || { printf 'invalid release coordinator digest\n' >&2; exit 1; }
+  done
+fi
 
 {
   printf 'artifact_kind=%s\n' "${kind}"
@@ -78,6 +86,9 @@ fi
   printf 'runtime_state_tool_sha256=%s\n' "${runtime_state_sha}"
   printf 'restore_state_tool_sha256=%s\n' "${restore_state_sha}"
   printf 'preflight_collector_tool_sha256=%s\n' "${preflight_sha}"
+  printf 'release_apply_tool_sha256=%s\n' "${release_apply_sha}"
+  printf 'release_zip_tool_sha256=%s\n' "${release_zip_sha}"
+  printf 'release_registration_tool_sha256=%s\n' "${release_registration_sha}"
   printf 'fresh_conf_sha256=%s\n' "${fresh_conf_sha}"
   printf 'fresh_env_sha256=%s\n' "${fresh_env_sha}"
   printf 'fresh_templates_sha256=%s\n' "${fresh_templates_sha}"

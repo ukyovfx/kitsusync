@@ -12,8 +12,17 @@ import tempfile
 from pathlib import Path
 
 
-class RegistrationError(Exception):
+class RegistrationError(ValueError):
     pass
+
+
+def _sync_dir(path):
+    if os.name != 'nt':
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def _hash(path):
@@ -30,7 +39,7 @@ def _check_regular(path):
         raise RegistrationError('registration input is not a trusted regular file')
 
 
-def _atomic_copy(source, target, mode):
+def _atomic_copy(source, target, mode, expected=None):
     fd, temporary = tempfile.mkstemp(prefix='.registration-', dir=target.parent)
     try:
         with os.fdopen(fd, 'wb') as out, source.open('rb') as inp:
@@ -38,13 +47,10 @@ def _atomic_copy(source, target, mode):
             out.flush()
             os.fsync(out.fileno())
             os.fchmod(out.fileno(), mode) if hasattr(os, 'fchmod') else None
+        if expected is not None and _hash(Path(temporary)) != expected:
+            raise RegistrationError('registration copy digest mismatch')
         os.replace(temporary, target)
-        if os.name != 'nt':
-            directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+        _sync_dir(target.parent)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -59,6 +65,7 @@ def _cleanup(journal, names):
         (journal / name).unlink()
     (journal / 'manifest.json').unlink()
     journal.rmdir()
+    _sync_dir(journal.parent)
 
 
 def recover(state, mapping):
@@ -85,7 +92,7 @@ def recover(state, mapping):
             if _hash(target) not in (record['before'], record['after']):
                 raise RegistrationError('registered file changed outside transaction')
         for name, (target, _, mode) in mapping.items():
-            _atomic_copy(journal / name, target, mode)
+            _atomic_copy(journal / name, target, mode, manifest[name]['before'])
         _cleanup(journal, mapping)
         return True
     except (KeyError, TypeError, ValueError, OSError) as exc:
@@ -102,6 +109,7 @@ def register(state, mapping, fault_hook=None):
         _check_regular(target)
         _check_regular(source)
     journal.mkdir(mode=0o700)
+    _sync_dir(journal.parent)
     manifest = {}
     for name, (target, source, mode) in mapping.items():
         _atomic_copy(target, journal / name, 0o600)
@@ -115,7 +123,7 @@ def register(state, mapping, fault_hook=None):
         for index, (name, (target, source, mode)) in enumerate(mapping.items()):
             if _hash(source) != manifest[name]['after']:
                 raise RegistrationError('registration source changed')
-            _atomic_copy(source, target, mode)
+            _atomic_copy(source, target, mode, manifest[name]['after'])
             if _hash(target) != manifest[name]['after']:
                 raise RegistrationError('registered file digest mismatch')
             if fault_hook:
