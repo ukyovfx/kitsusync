@@ -25,6 +25,22 @@ func TestKitsuBaseUsesExplicitAPIOverrideWithoutDuplicateAPIPath(t *testing.T) {
 	}
 }
 
+func TestKitsuBaseNormalizesHostnameWithoutTrailingSlash(t *testing.T) {
+	t.Setenv("KITSU_API_BASE_URL", "")
+	t.Setenv("KITSU_HOSTNAME", "http://kitsu.example.test:8080")
+	if got := kitsuBase(); got != "http://kitsu.example.test:8080/" {
+		t.Fatalf("kitsuBase() = %q, want trailing slash added", got)
+	}
+	t.Setenv("KITSU_HOSTNAME", "http://kitsu.example.test:8080///")
+	if got := kitsuBase(); got != "http://kitsu.example.test:8080/" {
+		t.Fatalf("kitsuBase() = %q, want exactly one trailing slash", got)
+	}
+	t.Setenv("KITSU_HOSTNAME", "http://kitsu.example.test:8080/api")
+	if got := kitsuBase(); got != "http://kitsu.example.test:8080/" {
+		t.Fatalf("kitsuBase() = %q, want /api suffix removed", got)
+	}
+}
+
 func TestExplicitAPIOverrideLeavesDisplayURLUnchanged(t *testing.T) {
 	t.Setenv("KITSU_API_BASE_URL", "https://private.example.test/api")
 	t.Setenv("KITSU_HOSTNAME", "https://public.example.test/studio")
