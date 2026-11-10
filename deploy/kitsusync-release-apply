@@ -16,6 +16,8 @@ CONTROL = Path('/etc/kitsusync-deploy')
 LIB = Path('/usr/local/libexec')
 SBIN = Path('/usr/local/sbin')
 ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root'}
+SUMMARY = {'current': 'unknown', 'new': 'unknown', 'tag': 'unknown', 'commit': 'unknown',
+           'image': 'unknown', 'backup': 'not created', 'recovery': 'not started'}
 
 
 def safe(path, mode, directory=False):
@@ -106,13 +108,18 @@ def main():
             if (STAGE / 'deployment-mode').read_text(encoding='ascii').strip() != 'normal':
                 raise ValueError('deployment mode mismatch: expected normal')
             fields = provenance()
-            current = subprocess.run(
-                ['/usr/bin/docker', 'inspect', '--format', '{{index .Config.Labels "org.opencontainers.image.version"}}', 'kitsusync-app-1'],
-                env=ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                check=False, timeout=10)
-            current_version = current.stdout.strip() if current.returncode == 0 else ''
+            SUMMARY.update(new=fields['version'], tag=fields['release_tag'], commit=fields['source_commit'])
+            try:
+                current = subprocess.run(
+                    ['/usr/bin/docker', 'inspect', '--format', '{{index .Config.Labels "org.opencontainers.image.version"}}', 'kitsusync-app-1'],
+                    env=ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    check=False, timeout=10)
+                current_version = current.stdout.strip() if current.returncode == 0 else ''
+            except (OSError, subprocess.TimeoutExpired):
+                current_version = ''
             if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', current_version):
                 current_version = 'unknown'
+            SUMMARY['current'] = current_version
             print('Version:', current_version, '->', fields['version'], flush=True)
             print('Checking approved release:', fields['release_tag'], fields['source_commit'], flush=True)
             result = subprocess.run(['/bin/bash', str(STAGE / 'kitsusync-bootstrap'), '--validate-only'], env=ENV, check=False)
@@ -125,10 +132,26 @@ def main():
             release_registration.register(STATE, files)
             print('Deploying registered release...', flush=True)
             os.dup2(lock, 9, inheritable=True)
-            result = subprocess.run([str(SBIN / 'kitsusync-deploy')], env=ENV, pass_fds=(9,), check=False)
-            if result.returncode:
+            SUMMARY.update(backup='unknown', recovery='inspect deploy output')
+            with subprocess.Popen([str(SBIN / 'kitsusync-deploy')], env=ENV, pass_fds=(9,),
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  bufsize=1) as process:
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    image = re.search(r'\bimage_id=(sha256:[0-9a-f]{64})\b', line)
+                    backup = re.search(r'\bbackup=(/var/backups/kitsusync-deploy/[^\s;]+)', line)
+                    if image:
+                        SUMMARY['image'] = image.group(1)
+                    if backup:
+                        SUMMARY['backup'] = backup.group(1)
+                    if 'rollback=verified' in line:
+                        SUMMARY['recovery'] = 'automatic rollback verified'
+                result_code = process.wait()
+            if result_code == 0:
+                SUMMARY['recovery'] = 'not needed'
+            if result_code:
                 print('Recovery: retain the reported protected backup and inspect automatic recovery before retry.', file=sys.stderr)
-                return result.returncode
+                return result_code
             return 0
         finally:
             if created:
@@ -139,8 +162,11 @@ def main():
 
 if __name__ == '__main__':
     try:
-        sys.exit(main())
+        result_code = main()
     except (OSError, ValueError, RuntimeError) as exc:
         print('ERROR:', exc, file=sys.stderr)
         print('Recovery: inspect the error and preserve any pending registration or backup before retry.', file=sys.stderr)
-        sys.exit(1)
+        result_code = 1
+    finally:
+        print('Summary: version={current} -> {new}; tag={tag}; commit={commit}; image_id={image}; backup={backup}; recovery={recovery}'.format(**SUMMARY), flush=True)
+    sys.exit(result_code)

@@ -140,6 +140,11 @@ def main():
         result = apply(archive())
         assert result.returncode and 'provenance identity mismatch' in result.stdout, result.stdout
         assert not STAGE.exists()
+        (bundle / 'provenance.txt').write_text(original_provenance.replace(
+            'release_tag=' + fields['release_tag'], 'release_tag=v9.9.9'))
+        result = apply(archive())
+        assert result.returncode and 'provenance identity mismatch' in result.stdout, result.stdout
+        assert digest(CONTROL / 'provenance') == prior_provenance
         (bundle / 'provenance.txt').write_text(original_provenance)
         compose = bundle / 'docker-compose.yml'
         compose_data = compose.read_bytes()
@@ -165,6 +170,8 @@ def main():
         assert 'release validation passed' in result.stdout, result.stdout
         assert 'Registering verified release' in result.stdout, result.stdout
         assert 'Deploying registered release' in result.stdout, result.stdout
+        assert f'Summary: version=0.5.2 -> {fields["version"]};' in result.stdout, result.stdout
+        assert 'image_id=unknown; backup=unknown;' in result.stdout, result.stdout
         # The isolated fixture deliberately has no production runtime; deploy
         # must fail without contacting any external service.
         assert result.returncode != 0, result.stdout
