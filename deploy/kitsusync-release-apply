@@ -1,0 +1,172 @@
+#!/usr/bin/python3 -I
+"""Apply an approved normal release using the protected deployment wrapper."""
+import argparse
+import fcntl
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import sys
+
+STAGE = Path('/root/kitsusync-release-stage')
+STATE = Path('/var/lib/kitsusync-deploy')
+CONTROL = Path('/etc/kitsusync-deploy')
+LIB = Path('/usr/local/libexec')
+SBIN = Path('/usr/local/sbin')
+ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root'}
+SUMMARY = {'current': 'unknown', 'new': 'unknown', 'tag': 'unknown', 'commit': 'unknown',
+           'image': 'unknown', 'backup': 'not created', 'recovery': 'not started'}
+
+
+def safe(path, mode, directory=False):
+    info = path.lstat()
+    if (info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) != mode
+            or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))):
+        raise ValueError('unsafe trusted path: ' + str(path))
+
+
+def mapping():
+    names = {
+        'deploy': (SBIN / 'kitsusync-deploy', 'kitsusync-deploy', 0o700),
+        'inspect': (SBIN / 'kitsusync-inspect', 'kitsusync-inspect', 0o700),
+        'apply': (SBIN / 'kitsusync-release-apply', 'kitsusync-release-apply', 0o700),
+        'backup': (LIB / 'kitsusync-sqlite-backup', 'kitsusync-sqlite-backup', 0o700),
+        'identity': (LIB / 'kitsusync-image-identity', 'kitsusync-image-identity', 0o700),
+        'runtime': (LIB / 'kitsusync-runtime-state', 'kitsusync-runtime-state', 0o700),
+        'restore': (LIB / 'kitsusync-restore-state', 'kitsusync-restore-state', 0o700),
+        'preflight': (LIB / 'kitsusync-preflight-collect', 'kitsusync-preflight-collect', 0o700),
+        'ziphelper': (LIB / 'release_zip.py', 'release_zip.py', 0o600),
+        'register': (LIB / 'release_registration.py', 'release_registration.py', 0o600),
+        'compose': (CONTROL / 'docker-compose.yml', 'docker-compose.yml', 0o600),
+        'provenance': (CONTROL / 'provenance', 'provenance.txt', 0o600),
+        'mode': (CONTROL / 'deployment-mode', 'deployment-mode', 0o600),
+        'image': (STATE / 'kitsusync-image.tar', 'kitsusync-image.tar', 0o600),
+    }
+    return {name: (target, STAGE / source, mode) for name, (target, source, mode) in names.items()}
+
+
+def provenance():
+    fields = {}
+    for line in (STAGE / 'provenance.txt').read_text(encoding='ascii').splitlines():
+        key, sep, value = line.partition('=')
+        if not sep or key in fields:
+            raise ValueError('malformed or duplicate provenance field')
+        fields[key] = value
+    version = fields.get('version', '')
+    commit = fields.get('source_commit', '')
+    if (not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version)
+            or fields.get('release_tag') != 'v' + version
+            or fields.get('image_ref') != 'kitsusync:v' + version
+            or fields.get('artifact_kind') != 'release'
+            or not re.fullmatch(r'[0-9a-f]{40}', commit)
+            or fields.get('source_id') != commit or fields.get('release_commit') != commit):
+        raise ValueError('release provenance identity mismatch')
+    return fields
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--zip', required=True)
+    parser.add_argument('--sha256', required=True)
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        raise ValueError('root execution required')
+    os.umask(0o077)
+    for name in os.environ:
+        if name.startswith(('DOCKER_', 'COMPOSE_', 'PYTHON')):
+            raise ValueError('inherited control variables are not accepted')
+    for path, mode in ((Path('/root'), 0o700), (STATE, 0o700), (CONTROL, 0o700),
+                       (LIB, 0o755), (SBIN, 0o755)):
+        safe(path, mode, True)
+    for path, mode in ((LIB / 'release_zip.py', 0o600), (LIB / 'release_registration.py', 0o600)):
+        safe(path, mode)
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(LIB))
+    import release_zip
+    import release_registration
+    lock = os.open(STATE / 'deploy.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(lock)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+            raise ValueError('unsafe deployment lock')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if (STATE / 'deployment-maintenance.pending').exists():
+            raise ValueError('deployment maintenance recovery is pending')
+        files = mapping()
+        if release_registration.recover(STATE, files):
+            raise ValueError('interrupted registration restored; inspect state before retry')
+        for target, _, mode in files.values():
+            safe(target, mode)
+        if os.path.lexists(STAGE):
+            raise ValueError('existing release stage preserved; inspect it before retry')
+        created = False
+        try:
+            release_zip.extract(args.zip, args.sha256.lower(), STAGE)
+            created = True
+            if (STAGE / 'deployment-mode').read_text(encoding='ascii').strip() != 'normal':
+                raise ValueError('deployment mode mismatch: expected normal')
+            fields = provenance()
+            SUMMARY.update(new=fields['version'], tag=fields['release_tag'], commit=fields['source_commit'])
+            try:
+                current = subprocess.run(
+                    ['/usr/bin/docker', 'inspect', '--format', '{{index .Config.Labels "org.opencontainers.image.version"}}', 'kitsusync-app-1'],
+                    env=ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    check=False, timeout=10)
+                current_version = current.stdout.strip() if current.returncode == 0 else ''
+            except (OSError, subprocess.TimeoutExpired):
+                current_version = ''
+            if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', current_version):
+                current_version = 'unknown'
+            SUMMARY['current'] = current_version
+            print('Version:', current_version, '->', fields['version'], flush=True)
+            print('Checking approved release:', fields['release_tag'], fields['source_commit'], flush=True)
+            result = subprocess.run(['/bin/bash', str(STAGE / 'kitsusync-bootstrap'), '--validate-only'], env=ENV, check=False)
+            if result.returncode:
+                raise ValueError('bootstrap rejected release provenance')
+            for field in ('release_apply_tool_sha256', 'release_zip_tool_sha256', 'release_registration_tool_sha256'):
+                if not re.fullmatch(r'[0-9a-f]{64}', fields.get(field, '')):
+                    raise ValueError('release coordinator provenance is missing')
+            print('Registering verified release...', flush=True)
+            release_registration.register(STATE, files)
+            print('Deploying registered release...', flush=True)
+            os.dup2(lock, 9, inheritable=True)
+            SUMMARY.update(backup='unknown', recovery='inspect deploy output')
+            with subprocess.Popen([str(SBIN / 'kitsusync-deploy')], env=ENV, pass_fds=(9,),
+                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  bufsize=1) as process:
+                for line in process.stdout:
+                    print(line, end='', flush=True)
+                    image = re.search(r'\bimage_id=(sha256:[0-9a-f]{64})\b', line)
+                    backup = re.search(r'\bbackup=(/var/backups/kitsusync-deploy/[^\s;]+)', line)
+                    if image:
+                        SUMMARY['image'] = image.group(1)
+                    if backup:
+                        SUMMARY['backup'] = backup.group(1)
+                    if 'rollback=verified' in line:
+                        SUMMARY['recovery'] = 'automatic rollback verified'
+                result_code = process.wait()
+            if result_code == 0:
+                SUMMARY['recovery'] = 'not needed'
+            if result_code:
+                print('Recovery: retain the reported protected backup and inspect automatic recovery before retry.', file=sys.stderr)
+                return result_code
+            return 0
+        finally:
+            if created:
+                shutil.rmtree(STAGE)
+    finally:
+        os.close(lock)
+
+
+if __name__ == '__main__':
+    try:
+        result_code = main()
+    except (OSError, ValueError, RuntimeError) as exc:
+        print('ERROR:', exc, file=sys.stderr)
+        print('Recovery: inspect the error and preserve any pending registration or backup before retry.', file=sys.stderr)
+        result_code = 1
+    finally:
+        print('Summary: version={current} -> {new}; tag={tag}; commit={commit}; image_id={image}; backup={backup}; recovery={recovery}'.format(**SUMMARY), flush=True)
+    sys.exit(result_code)

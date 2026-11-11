@@ -33,6 +33,20 @@ EXPECTED_CONTAINER_NAME=/kitsusync-app-1
 die() { printf 'ERROR: %s\n' "$*" >&2; /usr/bin/logger -t kitsusync-deploy -- "failed: $*" 2>/dev/null || true; exit 1; }
 log() { /usr/bin/logger -t kitsusync-deploy -- "$*" 2>/dev/null || true; }
 
+acquire_deployment_lock() {
+  local lock_file="$1"
+  # The release coordinator may pass an already locked descriptor. Keeping the
+  # same open file description preserves the lock throughout registration and
+  # deployment; ordinary invocations open the file themselves.
+  if [[ -e /proc/$$/fd/9 && /proc/$$/fd/9 -ef "${lock_file}" ]]; then
+    :
+  else
+    [[ ! -L "${lock_file}" ]] || die "deployment lock is unsafe"
+    exec 9>"${lock_file}"
+  fi
+  /usr/bin/flock -n 9 || die "another deployment transaction is active"
+}
+
 readiness_allows() {
   local mode="$1" readiness="$2"
   case "${mode}:${readiness}" in
@@ -348,6 +362,7 @@ if [[ -n "${KITSUSYNC_DEPLOY_TEST_MODE:-}" ]]; then
       maintenance_identity_allows "$1" "$2" "$3" ;;
     compare) [[ "$#" -eq 6 ]]; compare_runtime_state "$1" "$2" "$3" "$4" "$5" "$6" ;;
     image-id) [[ "$#" -eq 3 || "$#" -eq 4 ]]; archive_image_id_allows "$1" "$2" "$3" "${4:-}" ;;
+    lock-contract) [[ "$#" -eq 1 ]]; acquire_deployment_lock "$1" ;;
     runtime|legacy-runtime)
       CURL_BIN="${KITSUSYNC_DEPLOY_TEST_CURL_BIN:?test curl required}"
       # This override is test-only: the real wrapper always reads the root-owned
@@ -386,9 +401,9 @@ secure_file() { [[ -f "$1" && ! -L "$1" && "$(/usr/bin/stat -c '%u:%g:%a' "$1")"
 reject_env_controls() { ! /usr/bin/grep -Eq '^[[:space:]]*(export[[:space:]]+)?(DOCKER_|COMPOSE_)[A-Za-z0-9_]*[[:space:]]*=' "$1" || die "protected environment contains Docker/Compose control variables"; }
 secure_dir "${CONTROL_DIR}" 700; secure_dir "${STATE_DIR}" 700; secure_dir "${BACKUP_ROOT}" 700
 # Serialize the entire backup/deploy/recovery transaction, including preflight.
-exec 9>"${STATE_DIR}/deploy.lock"
-/usr/bin/flock -n 9 || die "another deployment transaction is active"
+acquire_deployment_lock "${STATE_DIR}/deploy.lock"
 [[ ! -e "${STATE_DIR}/deployment-maintenance.pending" && ! -L "${STATE_DIR}/deployment-maintenance.pending" ]] || die "deployment helper maintenance recovery is pending"
+[[ ! -e "${STATE_DIR}/release-registration.pending" && ! -L "${STATE_DIR}/release-registration.pending" ]] || die "release registration recovery is pending"
 for file in "${COMPOSE_FILE}" "${ENV_FILE}" "${PROVENANCE_FILE}" "${MODE_FILE}" "${IMAGE_ARCHIVE}"; do secure_file "${file}" 600; done
 reject_env_controls "${ENV_FILE}"
 [[ -d "${RUNTIME_ROOT}" && ! -L "${RUNTIME_ROOT}" && "$(/usr/bin/stat -c '%u:%g:%a' "${RUNTIME_ROOT}")" == 0:0:755 ]] || die "runtime root is replaceable or unsafe"

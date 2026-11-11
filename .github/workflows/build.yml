@@ -136,6 +136,8 @@ jobs:
           python3 scripts/test-staging-kitsu-hostname-source.py
           bash scripts/test-production-path-contract.sh
           bash scripts/test-bootstrap-security.sh
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.test_release_zip scripts.test_release_registration -v
+          bash scripts/test-release-deploy-lock.sh
           python3 -m unittest scripts.test_preflight_collector -v
           python3 -m unittest scripts.test_inspector_maintenance -v
           python3 -m unittest scripts.test_deployment_maintenance -v
@@ -254,6 +256,31 @@ jobs:
         run: |
           bash scripts/test-deployment-behavior.sh
           KITSUSYNC_RUNTIME_DOCKER_TEST=1 python3 scripts/test-runtime-state.py
+
+      - name: Release ZIP registration integration
+        env:
+          SOURCE_SHA: ${{ steps.identity.outputs.source_commit }}
+          RELEASE_VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${RELEASE_VERSION}"
+          docker tag "kitsusync:ci-${SOURCE_SHA}" "kitsusync:${tag}"
+          ARTIFACT_KIND=release SOURCE_COMMIT="$SOURCE_SHA" SOURCE_ID="$SOURCE_SHA" \
+            RELEASE_COMMIT="$SOURCE_SHA" RELEASE_TAG="$tag" IMAGE_REF="kitsusync:${tag}" \
+            IMAGE_ID="$(docker image inspect --format '{{.Id}}' "kitsusync:${tag}")" \
+            BUNDLE_OUTPUT="$RUNNER_TEMP/release-integration-bundle" DEPLOYMENT_MODE=normal \
+            bash scripts/build-deployment-bundle.sh
+          python3 - "$RUNNER_TEMP/release-integration-bundle" "$RUNNER_TEMP/release-integration.zip" <<'PY'
+          import pathlib, sys, zipfile
+          with zipfile.ZipFile(sys.argv[2], 'w', zipfile.ZIP_DEFLATED) as archive:
+              for path in pathlib.Path(sys.argv[1]).iterdir():
+                  archive.write(path, path.name)
+          PY
+          digest="$(sha256sum "$RUNNER_TEMP/release-integration.zip" | cut -d' ' -f1)"
+          docker run --rm --network none -e KITSUSYNC_ISOLATED_TEST=yes -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD:/work:ro" -v "$RUNNER_TEMP/release-integration.zip:/input/bundle.zip:ro" \
+            python@sha256:a5bab0ff300f91231c2e68bf73a8a8d60762ac39ce1c50eaf6803e4c38a9062b \
+            timeout 110s /usr/bin/python3 /work/scripts/test-release-apply-integration.py /input/bundle.zip "$digest"
 
       - name: Upload provenance and deployment bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

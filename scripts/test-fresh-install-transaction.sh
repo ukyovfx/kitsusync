@@ -10,10 +10,11 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime=/home/ukyo_vfx/kitsusync
 source_commit=b7b30157cb90c4500e8b00d3c26ac7038f5c8c10
 protected=(/etc/kitsusync-deploy /var/lib/kitsusync-deploy /var/backups/kitsusync-deploy "$runtime" /root/kitsusync-release-stage)
-tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect
+tools=(/usr/local/sbin/kitsusync-deploy /usr/local/sbin/kitsusync-inspect /usr/local/sbin/kitsusync-release-apply
        /usr/local/libexec/kitsusync-sqlite-backup /usr/local/libexec/kitsusync-image-identity
        /usr/local/libexec/kitsusync-runtime-state /usr/local/libexec/kitsusync-restore-state
-       /usr/local/libexec/kitsusync-preflight-collect)
+       /usr/local/libexec/kitsusync-preflight-collect
+       /usr/local/libexec/release_zip.py /usr/local/libexec/release_registration.py)
 proxy_container=kitsusync-fresh-proxy-fixture
 zou_container=kitsusync-fresh-zou-fixture
 host_self_test_rule=false
@@ -207,6 +208,12 @@ start_proxy_fixture
 stage_bundle "${work}/bad-bundle"
 stage=bootstrap-empty-host
 sudo /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin /bin/bash /root/kitsusync-release-stage/kitsusync-bootstrap
+sudo cmp /root/kitsusync-release-stage/kitsusync-release-apply /usr/local/sbin/kitsusync-release-apply
+sudo cmp /root/kitsusync-release-stage/release_zip.py /usr/local/libexec/release_zip.py
+sudo cmp /root/kitsusync-release-stage/release_registration.py /usr/local/libexec/release_registration.py
+[[ "$(sudo stat -c '%u:%g:%a' /usr/local/sbin/kitsusync-release-apply)" == 0:0:700 ]]
+[[ "$(sudo stat -c '%u:%g:%a' /usr/local/libexec/release_zip.py)" == 0:0:600 ]]
+[[ "$(sudo stat -c '%u:%g:%a' /usr/local/libexec/release_registration.py)" == 0:0:600 ]]
 sudo test -f "${runtime}/.fresh-install-seed"
 sudo test -f /var/lib/kitsusync-deploy/fresh-install.pending
 sudo test "$(sudo cat /etc/kitsusync-deploy/deployment-mode)" = fresh-install

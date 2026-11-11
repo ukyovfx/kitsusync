@@ -23,6 +23,9 @@ install -m 0600 "${root}/deploy/kitsusync-image-identity" "${output}/kitsusync-i
 install -m 0600 "${root}/deploy/kitsusync-runtime-state" "${output}/kitsusync-runtime-state"
 install -m 0600 "${root}/deploy/kitsusync-restore-state" "${output}/kitsusync-restore-state"
 install -m 0600 "${root}/deploy/kitsusync-preflight-collect" "${output}/kitsusync-preflight-collect"
+install -m 0600 "${root}/deploy/kitsusync-release-apply" "${output}/kitsusync-release-apply"
+install -m 0600 "${root}/deploy/release_zip.py" "${output}/release_zip.py"
+install -m 0600 "${root}/deploy/release_registration.py" "${output}/release_registration.py"
 printf '%s\n' "${mode}" >"${output}/deployment-mode"
 chmod 0600 "${output}/deployment-mode"
 
@@ -54,6 +57,9 @@ identity_sha="$(sha256sum "${output}/kitsusync-image-identity" | cut -d' ' -f1)"
 runtime_state_sha="$(sha256sum "${output}/kitsusync-runtime-state" | cut -d' ' -f1)"
 restore_state_sha="$(sha256sum "${output}/kitsusync-restore-state" | cut -d' ' -f1)"
 preflight_sha="$(sha256sum "${output}/kitsusync-preflight-collect" | cut -d' ' -f1)"
+release_apply_sha="$(sha256sum "${output}/kitsusync-release-apply" | cut -d' ' -f1)"
+release_zip_sha="$(sha256sum "${output}/release_zip.py" | cut -d' ' -f1)"
+release_registration_sha="$(sha256sum "${output}/release_registration.py" | cut -d' ' -f1)"
 archive_identity="$(python3 "${output}/kitsusync-image-identity" archive "${output}/kitsusync-image.tar" "${image_ref}")"
 image_config_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_config_digest=//p')"
 image_manifest_digest="$(printf '%s\n' "${archive_identity}" | sed -n 's/^image_manifest_digest=//p')"
@@ -66,6 +72,7 @@ DEPLOYMENT_TOOL_SHA256="${deploy_sha}" INSPECTION_TOOL_SHA256="${inspect_sha}" \
 SQLITE_BACKUP_TOOL_SHA256="${backup_sha}" BOOTSTRAP_TOOL_SHA256="${bootstrap_sha}" IMAGE_IDENTITY_TOOL_SHA256="${identity_sha}" \
 RUNTIME_STATE_TOOL_SHA256="${runtime_state_sha}" RESTORE_STATE_TOOL_SHA256="${restore_state_sha}" \
 PREFLIGHT_COLLECTOR_TOOL_SHA256="${preflight_sha}" \
+RELEASE_APPLY_TOOL_SHA256="${release_apply_sha}" RELEASE_ZIP_TOOL_SHA256="${release_zip_sha}" RELEASE_REGISTRATION_TOOL_SHA256="${release_registration_sha}" \
 FRESH_CONF_SHA256="${fresh_conf_sha}" FRESH_ENV_SHA256="${fresh_env_sha}" \
 FRESH_TEMPLATES_SHA256="${fresh_templates_sha}" FRESH_TEMPLATES_MANIFEST_SHA256="${fresh_templates_manifest_sha}" \
 IMAGE_CONFIG_DIGEST="${image_config_digest}" IMAGE_MANIFEST_DIGEST="${image_manifest_digest}" IMAGE_CONTENT_DIGEST="${image_content_digest}" PROVENANCE_OUTPUT="${output}/provenance.txt" \

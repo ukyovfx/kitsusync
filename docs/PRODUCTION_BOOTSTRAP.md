@@ -51,6 +51,35 @@ The sudo policy permits only the two exact commands below, with no arguments
 and no caller-supplied environment. It does not grant Docker-group access or a
 general root shell.
 
+## Normal release ZIP updates
+
+The first release containing `kitsusync-release-apply` must be installed using
+the existing verified manual staging, bootstrap, and no-argument deploy
+procedure. The proposed first release is v0.5.4; the release version is decided
+separately. Bootstrap installs the coordinator and its digest-bound helpers.
+This one-time adoption does not change the existing narrow sudo policy.
+
+For a later normal release, an administrator who already has root authorization
+places the release ZIP on the host, obtains its SHA-256 through a trusted release
+channel, and runs:
+
+```bash
+/usr/local/sbin/kitsusync-release-apply --zip /path/to/release.zip --sha256 EXPECTED_SHA256
+```
+
+The ZIP digest does not itself authenticate the channel supplying it. The
+coordinator verifies the ZIP, the release identity and its component digests,
+requires `deployment-mode=normal`, registers the release, then invokes the
+existing no-argument deploy wrapper. It does not require `unzip`. The wrapper
+continues to own runtime validation, backup and automatic recovery. If an
+existing `/root/kitsusync-release-stage` remains, the coordinator preserves it
+and stops; an administrator must inspect it before another attempt. Interrupted
+registration leaves a protected journal and blocks deploy; the coordinator
+attempts recovery on the next run and stops for inspection if evidence is
+incomplete. Keep any reported backup and inspect the recovery result before
+retrying. The original manual procedure remains available for the
+other deployment modes.
+
 ## Normal inspection
 
 ```bash

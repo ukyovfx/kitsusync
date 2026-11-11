@@ -20,7 +20,12 @@ SERVICE=app
 EXPECTED_CONTAINER_NAME=/kitsusync-app-1
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-[[ "$#" -eq 0 ]] || die "arguments are not accepted"
+validate_only=false
+if [[ "$#" -eq 1 && "$1" == --validate-only ]]; then
+  validate_only=true
+elif [[ "$#" -ne 0 ]]; then
+  die "arguments are not accepted"
+fi
 for inherited_name in $(compgen -e); do
   case "${inherited_name}" in DOCKER_*|COMPOSE_*) die "inherited Docker/Compose control variables are not accepted" ;; esac
 done
@@ -51,6 +56,22 @@ if [[ "${mode}" == fresh-install ]]; then
 fi
 
 field() { /usr/bin/sed -n "s/^$1=//p" "${STAGE}/provenance.txt" | /usr/bin/head -n 1 | /usr/bin/tr -d '\r'; }
+release_apply_sha="$(field release_apply_tool_sha256)"
+release_zip_sha="$(field release_zip_tool_sha256)"
+release_registration_sha="$(field release_registration_tool_sha256)"
+coordinator_present=false
+if [[ -n "${release_apply_sha}${release_zip_sha}${release_registration_sha}" ]]; then
+  coordinator_present=true
+  for name in kitsusync-release-apply release_zip.py release_registration.py; do
+    secure_source "${STAGE}/${name}" 600
+  done
+  for digest in "${release_apply_sha}" "${release_zip_sha}" "${release_registration_sha}"; do
+    [[ "${digest}" =~ ^[0-9a-f]{64}$ ]] || die "release coordinator provenance is incomplete"
+  done
+  [[ "$(/usr/bin/sha256sum "${STAGE}/kitsusync-release-apply" | /usr/bin/cut -d' ' -f1)" == "${release_apply_sha}" ]] || die "release coordinator digest mismatch"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/release_zip.py" | /usr/bin/cut -d' ' -f1)" == "${release_zip_sha}" ]] || die "release ZIP helper digest mismatch"
+  [[ "$(/usr/bin/sha256sum "${STAGE}/release_registration.py" | /usr/bin/cut -d' ' -f1)" == "${release_registration_sha}" ]] || die "release registration helper digest mismatch"
+fi
 archive_sha="$(field image_archive_sha256)"
 compose_sha="$(field compose_sha256)"
 deploy_sha="$(field deployment_tool_sha256)"
@@ -103,6 +124,10 @@ archive_identity="$(/usr/bin/env -i PATH=/usr/bin:/bin /usr/bin/python3 "${STAGE
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_config_digest=//p')" == "${image_config_digest}" ]] || die "staged image config digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_manifest_digest=//p')" == "${image_manifest_digest}" ]] || die "staged image manifest digest mismatch"
 [[ "$(printf '%s\n' "${archive_identity}" | /usr/bin/sed -n 's/^image_content_digest=//p')" == "${image_content_digest}" ]] || die "staged image content identity mismatch"
+if [[ "${validate_only}" == true ]]; then
+  printf 'KitsuSync release validation passed: version=%s tag=%s commit=%s mode=%s\n' "${version}" "${release_tag}" "${source_commit}" "${mode}"
+  exit 0
+fi
 export KITSUSYNC_APP_VERSION="${version}" KITSUSYNC_IMAGE_TAG="v${version}"
 if [[ "${mode}" == fresh-install && -f "${CONTROL}/deployment-mode" && ! -L "${CONTROL}/deployment-mode" && "$(/usr/bin/tr -d '\r\n' <"${CONTROL}/deployment-mode")" == normal ]]; then
   die "fresh install has already completed"
@@ -194,6 +219,11 @@ fi
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-runtime-state" /usr/local/libexec/kitsusync-runtime-state
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-restore-state" /usr/local/libexec/kitsusync-restore-state
 /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-preflight-collect" /usr/local/libexec/kitsusync-preflight-collect
+if [[ "${coordinator_present}" == true ]]; then
+  /usr/bin/install -o root -g root -m 0700 "${STAGE}/kitsusync-release-apply" /usr/local/sbin/kitsusync-release-apply
+  /usr/bin/install -o root -g root -m 0600 "${STAGE}/release_zip.py" /usr/local/libexec/release_zip.py
+  /usr/bin/install -o root -g root -m 0600 "${STAGE}/release_registration.py" /usr/local/libexec/release_registration.py
+fi
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/docker-compose.yml" "${CONTROL}/docker-compose.yml"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/provenance.txt" "${CONTROL}/provenance"
 /usr/bin/install -o root -g root -m 0600 "${STAGE}/deployment-mode" "${CONTROL}/deployment-mode"
