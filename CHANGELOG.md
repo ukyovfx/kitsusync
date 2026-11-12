@@ -6,6 +6,30 @@ All notable changes to this project should be recorded here.
 
 - No unreleased changes yet.
 
+## v0.5.4
+
+First release that ships the verified release-ZIP deployment coordinator
+(`kitsusync-release-apply`, PR #272).
+
+### Added
+
+- Global user linking can save every changed row in one submit; unchanged rows
+  are not sent, and each submitted row keeps the existing single-row validation.
+
+### Changed
+
+- Opening the Connections settings page and ordinary edits (hostname, Guild,
+  display settings) no longer require re-authentication. A step-up is asked for
+  only when a credential (token or password) is actually submitted or removed.
+- Removing a task type from the production-connection channel plan now updates
+  the page in place instead of reloading the whole wizard.
+
+### Fixed
+
+- Connecting a Production no longer floods Discord with notifications for tasks
+  that were already waiting (for example in WFA). The state at connection time
+  is checkpointed silently, so only later changes notify.
+
 ## v0.5.3
 
 ### Fixed

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -117,7 +118,50 @@ var firstTimeOps = defaultFirstTimeConnectionOps
 
 var firstTimeActivateRouting = model.ActivateProductionRoutingFromMappings
 
+// firstTimeFetchTasks returns the current Kitsu tasks; injectable for tests.
+var firstTimeFetchTasks = func() (kitsu.Tasks, error) { return kitsu.GetTasksWithError() }
+
+// firstTimeFetchTaskStatuses returns the Kitsu task statuses; injectable for tests.
+var firstTimeFetchTaskStatuses = func() (kitsu.TaskStatuses, error) { return kitsu.GetTaskStatusesWithError() }
+
 var firstTimeExecutionMu sync.Mutex
+
+// checkpointInitialTaskStates silently records the task states that already
+// exist when a production is first connected, so the first poll does not
+// notify for work that was already waiting. Only later changes notify.
+// Best effort: a failure here must never fail the connection.
+func checkpointInitialTaskStates(db *gorm.DB, projectID string) {
+	tasks, err := firstTimeFetchTasks()
+	if err != nil {
+		slog.Warn("initial task checkpoint skipped", "project_id", projectID, "error", err)
+		return
+	}
+	statuses, err := firstTimeFetchTaskStatuses()
+	if err != nil {
+		slog.Warn("initial task checkpoint skipped", "project_id", projectID, "error", err)
+		return
+	}
+	shortNameByID := make(map[string]string, len(statuses.Each))
+	for _, status := range statuses.Each {
+		shortNameByID[status.ID] = status.ShortName
+	}
+	for _, task := range tasks.Each {
+		if task.ProjectID != projectID || !isNotifiableTaskStatus(shortNameByID[task.TaskStatusID]) {
+			continue
+		}
+		if err := model.MarkTaskObserved(db, task.ID, task.UpdatedAt, shortNameByID[task.TaskStatusID], "", ""); err != nil {
+			slog.Warn("initial task checkpoint failed", "project_id", projectID, "task_id", task.ID, "error", err)
+		}
+	}
+}
+
+func isNotifiableTaskStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "wfa", "retake", "done":
+		return true
+	}
+	return false
+}
 
 func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken string, db *gorm.DB) (firstTimeConnectionPlan, error) {
 	ops := firstTimeOps
@@ -418,6 +462,8 @@ func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, la
 		markPendingChannelPlanFailure(db, rows, operationID, err.Error())
 		return renderFirstTimeExecutionError(lang, r, "接続を完了できませんでした。保存済みの状態を確認してから再試行してください。")
 	}
+	// The checkpoint is best effort and must not delay the completion page.
+	go checkpointInitialTaskStates(db, plan.Project.ID)
 	completed = true
 	return adminPage(lang, tr(lang, "wizard.complete_title"), r, renderWizardFrame(lang, 7, renderWizardComplete(lang, r, db, plan)))
 }

@@ -85,7 +85,7 @@ func TestUserLinkingUnavailableGuildMemberDoesNotFabricateOrUnlink(t *testing.T)
 	const linkedID = "123456789012345678"
 	db := userLinkingIdentityDB(t, linkedID, "cached nickname must not be trusted")
 	body := renderUserLinkingIdentity(db, "en", userLinkingIdentityDirectory(globalDiscordUserOption{ID: "different-user", Username: "other", Name: "Other User"}))
-	for _, want := range []string{"Unavailable in selected Discord server", `option value="` + linkedID + `" selected disabled`, `action" value="remove_global_link"`, `name="discord_user_id"`} {
+	for _, want := range []string{"Unavailable in selected Discord server", `option value="` + linkedID + `" selected disabled`, `name="unlink_user_id"`, `name="bulk_discord_user_id"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("unavailable mapping lost truthful status, preserved selection, or unlink action %q: %s", want, body)
 		}
@@ -135,8 +135,10 @@ func TestUserLinkingJapaneseUnavailableStateAndEscaping(t *testing.T) {
 	db := userLinkingIdentityDB(t, linkedID, "<script>cached()</script>")
 	option := globalDiscordUserOption{ID: linkedID, Username: `<img src=x onerror=alert(1)>`, Name: `<script>alert(1)</script>`}
 	available := renderUserLinkingIdentity(db, "ja", userLinkingIdentityDirectory(option))
-	if !strings.Contains(available, `@&lt;img src=x onerror=alert(1)&gt;`) || !strings.Contains(available, `&lt;script&gt;alert(1)&lt;/script&gt;`) || strings.Contains(available, `<script>`) || strings.Contains(available, `<img`) {
-		t.Fatalf("Discord identity fields were not escaped: %s", available)
+	row := available[strings.Index(available, `<tr class="user-link-grid-row"`):]
+	row = row[:strings.Index(row, `</tr>`)]
+	if !strings.Contains(row, `@&lt;img src=x onerror=alert(1)&gt;`) || !strings.Contains(row, `&lt;script&gt;alert(1)&lt;/script&gt;`) || strings.Contains(row, `<script>`) || strings.Contains(row, `<img`) {
+		t.Fatalf("Discord identity fields were not escaped: %s", row)
 	}
 	unavailable := renderUserLinkingIdentity(db, "ja", userLinkingIdentityDirectory())
 	for _, want := range []string{"選択中のDiscordサーバーで利用できません", "要確認", `option value="` + linkedID + `" selected disabled`} {
@@ -153,7 +155,7 @@ func TestUserLinkingLongDiscordNicknameUsesConstrainedIdentityCell(t *testing.T)
 	longNick := "Long" + strings.Repeat("Nickname", 30)
 	db := userLinkingIdentityDB(t, "", "")
 	body := renderUserLinkingIdentity(db, "en", userLinkingIdentityDirectory(globalDiscordUserOption{ID: "new-id", Username: "account", Name: longNick}))
-	if !strings.Contains(body, `title="`+longNick+`">`+longNick+`</option>`) || !strings.Contains(adminThemeCSS, `.user-link-actions .user-link-form select{min-width:0;width:100%}`) {
+	if !strings.Contains(body, `title="`+longNick+`">`+longNick+`</option>`) || !strings.Contains(adminThemeCSS, `.user-link-actions .user-linking-bulk select{min-width:0;width:100%}`) {
 		t.Fatal("long Discord nickname should retain a full native option label in a width-constrained selection control")
 	}
 }
@@ -161,8 +163,8 @@ func TestUserLinkingLongDiscordNicknameUsesConstrainedIdentityCell(t *testing.T)
 func TestUserLinkingExistingSaveAndUnlinkControlsRemain(t *testing.T) {
 	db := userLinkingIdentityDB(t, "123456789012345678", "cached")
 	body := renderUserLinkingIdentity(db, "en", userLinkingIdentityDirectory(globalDiscordUserOption{ID: "123456789012345678", Username: "global_user", Name: "Guild Nick"}))
-	if strings.Count(body, `type="submit" disabled`) != 1 || !strings.Contains(body, `action" value="save_global_link"`) || !strings.Contains(body, `action" value="remove_global_link"`) {
-		t.Fatal("User Linking save/unlink actions or disabled initial Save behavior changed")
+	if strings.Count(body, `type="submit" disabled`) != 1 || !strings.Contains(body, `action" value="save_global_links"`) || !strings.Contains(body, `name="unlink_user_id"`) {
+		t.Fatal("User Linking bulk save/unlink actions or disabled initial Save behavior changed")
 	}
 }
 

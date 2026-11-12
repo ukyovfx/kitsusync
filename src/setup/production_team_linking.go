@@ -101,8 +101,62 @@ func saveGlobalUserLink(db *gorm.DB, r *http.Request) (bool, string) {
 	return true, globalUserLinkingURL(r, directory.SelectedGuild.ID, "saved")
 }
 
-func globalUserLinkingURL(r *http.Request, validatedGuildID, message string) string {
-	path := "/bot/admin/users"
+// saveGlobalUserLinks applies a bulk save. Each submitted row is validated with
+// the same rules as a single save; rows the client did not change are not sent.
+func saveGlobalUserLinks(db *gorm.DB, r *http.Request) string {
+	_ = r.ParseForm()
+	userIDs := r.PostForm["bulk_user_id"]
+	kitsuIDs := r.PostForm["bulk_kitsu_id"]
+	kitsuNames := r.PostForm["bulk_kitsu_name"]
+	kitsuEmails := r.PostForm["bulk_kitsu_email"]
+	discordIDs := r.PostForm["bulk_discord_user_id"]
+	guildID := strings.TrimSpace(r.FormValue("discord_guild_id"))
+	saved, failed := 0, 0
+	for i, discordID := range discordIDs {
+		if i >= len(userIDs) || i >= len(kitsuIDs) {
+			failed++
+			continue
+		}
+		row := url.Values{
+			"action":          {"save_global_link"},
+			"user_id":         {userIDs[i]},
+			"kitsu_id":        {kitsuIDs[i]},
+			"kitsu_name":      {formValueAt(kitsuNames, i)},
+			"kitsu_email":     {formValueAt(kitsuEmails, i)},
+			"discord_guild_id": {guildID},
+			"discord_user_id": {discordID},
+		}
+		rowRequest := r.Clone(r.Context())
+		rowRequest.Form = row
+		rowRequest.PostForm = row
+		if ok, _ := saveGlobalUserLink(db, rowRequest); ok {
+			saved++
+		} else {
+			failed++
+		}
+	}
+	message := "saved"
+	if failed > 0 {
+		message = "error"
+	}
+	validatedGuildID := ""
+	if directory, err := globalDiscordDirectoryReader(storedRuntimeDiscordBotToken(db), guildID); err == nil {
+		validatedGuildID = validatedDiscordGuildSelection(directory, guildID)
+	}
+	if saved == 0 && failed == 0 {
+		message = ""
+	}
+	return globalUserLinkingURL(r, validatedGuildID, message)
+}
+
+func formValueAt(values []string, index int) string {
+	if index < len(values) {
+		return values[index]
+	}
+	return ""
+}
+
+func globalUserLinkingURL(r *http.Request, validatedGuildID, message string) string {	path := "/bot/admin/users"
 	if isDiscordSnowflake(validatedGuildID) {
 		path += "?discord_guild_id=" + url.QueryEscape(validatedGuildID)
 	}

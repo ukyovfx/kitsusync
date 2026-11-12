@@ -2498,6 +2498,19 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			return
 		}
 		if r.URL.Query().Get("legacy") != "1" && strings.TrimSpace(r.URL.Query().Get("project")) == "" && r.Method == http.MethodPost {
+			if r.FormValue("action") == "save_global_links" {
+				if unlinkID := parseUint(r.FormValue("unlink_user_id")); unlinkID > 0 {
+					if user := model.FindUserMapByID(db, unlinkID); user != nil {
+						model.UpdateUserMap(db, unlinkID, user.KitsuName, user.KitsuEmail, "")
+						model.UpdateUserMapDisplayName(db, unlinkID, "")
+						db.Model(&model.UserMap{}).Where("id = ?", unlinkID).Update("discord_guild_id", "")
+					}
+					http.Redirect(w, r, globalUserLinkingURL(r, userLinkingGuildForRedirect(db, r), "saved"), http.StatusSeeOther)
+					return
+				}
+				http.Redirect(w, r, saveGlobalUserLinks(db, r), http.StatusSeeOther)
+				return
+			}
 			id := parseUint(r.FormValue("user_id"))
 			action := r.FormValue("action")
 			saved := false
@@ -3201,15 +3214,24 @@ func BotHandler(db *gorm.DB, kitsuReconnect func()) http.HandlerFunc {
 	return BotHandlerWithRuntime(db, kitsuReconnect, nil)
 }
 
+// botMutationRequiresRecentAuthentication asks for a step-up only when the
+// request actually submits a new credential. Viewing the page and ordinary
+// edits (hostname, guild, display settings) never require re-authentication.
 func botMutationRequiresRecentAuthentication(r *http.Request, action string) bool {
 	if r == nil || r.Method != http.MethodPost {
 		return false
 	}
 	switch action {
-	case "save_kitsu", "save_discord", "save_external_kitsu_url":
-		return true
+	case "save_kitsu":
+		return strings.TrimSpace(r.FormValue("kitsu_bot_token")) != ""
+	case "save_discord":
+		return strings.TrimSpace(r.FormValue("bot_token")) != ""
 	default:
-		return r.URL.Query().Get("legacy") == "1"
+		if r.URL.Query().Get("legacy") != "1" {
+			return false
+		}
+		return strings.TrimSpace(r.FormValue("kitsu_runtime_password")) != "" ||
+			strings.TrimSpace(r.FormValue("bot_token")) != ""
 	}
 }
 
@@ -3254,7 +3276,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 			"parse_error", parseErr != nil,
 			"action_class", actionClass,
 		)
-		if (editMode || botMutationRequiresRecentAuthentication(r, action)) && !botEditAllowed(r) {
+		if botMutationRequiresRecentAuthentication(r, action) && !botEditAllowed(r) {
 			http.Redirect(w, r, recentBotAuthenticationLoginURL(r, lang), http.StatusSeeOther)
 			return
 		}
