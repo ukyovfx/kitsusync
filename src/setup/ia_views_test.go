@@ -1313,11 +1313,14 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 		Options:       []globalDiscordUserOption{{ID: "123456789012345678", Name: "Discord One"}},
 	}
 	body := renderGlobalUserLinkingTable(db, "en", directory, []KitsuPerson{{ID: "user-1", FullName: "User One", Active: true}})
-	if !strings.Contains(body, `type="submit" disabled`) {
+	if !strings.Contains(body, `id="user-linking-save" disabled`) {
 		t.Fatal("User Linking Save was not disabled initially")
 	}
-	if !strings.Contains(body, "data-initial-index") || !strings.Contains(body, "selectedIndex === Number(this.dataset.initialIndex)") {
+	if !strings.Contains(body, "data-initial-index") || !strings.Contains(body, "selectedIndex!==Number(select.dataset.initialIndex)") {
 		t.Fatal("User Linking did not include unchanged-selection dirty-state handling")
+	}
+	if !strings.Contains(body, `data-bulk-link-form`) || !strings.Contains(body, `name="action" value="save_global_links"`) {
+		t.Fatal("User Linking did not render the single bulk save form")
 	}
 	if !strings.Contains(body, `class="user-link-grid-row"`) || !strings.Contains(body, "data-label=") || !strings.Contains(body, "user-link-actions") {
 		t.Fatal("User Linking did not render the shared responsive grid structure")

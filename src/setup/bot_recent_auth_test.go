@@ -10,23 +10,62 @@ import (
 	"time"
 )
 
-func TestSensitiveBotMutationsRequireRecentAuthenticationWithoutEditQuery(t *testing.T) {
+// Opening the settings page and ordinary edits must not ask for re-login.
+func TestConnectionsViewAndOrdinaryEditsDoNotRequireRecentAuthentication(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
+		method string
 		path   string
-		action string
+		form   url.Values
 	}{
-		{name: "canonical Kitsu save", path: "/bot/admin/bot", action: "save_kitsu"},
-		{name: "canonical Discord save", path: "/bot/admin/bot", action: "save_discord"},
-		{name: "root alias Kitsu save", path: "/admin/bot", action: "save_kitsu"},
-		{name: "root alias Discord save", path: "/admin/bot", action: "save_discord"},
+		{name: "view connections edit", method: http.MethodGet, path: "/bot/admin/bot?edit=1&lang=en"},
+		{name: "view legacy connections edit", method: http.MethodGet, path: "/admin/bot?edit=1&legacy=1&lang=en"},
+		{name: "save Kitsu host without token", method: http.MethodPost, path: "/bot/admin/bot", form: url.Values{"action": {"save_kitsu"}, "kitsu_hostname": {"kitsu.invalid"}}},
+		{name: "save Discord guild without token", method: http.MethodPost, path: "/bot/admin/bot", form: url.Values{"action": {"save_discord"}, "guild_id": {"999999999999999999"}}},
+		{name: "save external Kitsu URL", method: http.MethodPost, path: "/bot/admin/bot", form: url.Values{"action": {"save_external_kitsu_url"}, "kitsu_external_url": {""}}},
+		{name: "legacy edit without password", method: http.MethodPost, path: "/admin/bot?legacy=1", form: url.Values{"guild_id": {"999999999999999999"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetSessions()
 			t.Cleanup(resetSessions)
 			token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
-			form := url.Values{"action": {tc.action}}
-			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(form.Encode()))
+			var req *http.Request
+			if tc.form == nil {
+				req = httptest.NewRequest(tc.method, tc.path, nil)
+			} else {
+				req = httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.form.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			}
+			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+			rr := httptest.NewRecorder()
+
+			BotHandler(newSetupStateTestDB(t), nil)(rr, req)
+
+			if location := rr.Header().Get("Location"); strings.Contains(location, "/bot/login") {
+				t.Fatalf("non-credential request demanded re-authentication: status=%d location=%q", rr.Code, location)
+			}
+		})
+	}
+}
+
+// Changing or removing a credential remains a sensitive operation.
+func TestCredentialChangesRequireRecentAuthentication(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		form url.Values
+	}{
+		{name: "canonical Kitsu token", path: "/bot/admin/bot", form: url.Values{"action": {"save_kitsu"}, "kitsu_bot_token": {"new-token"}}},
+		{name: "canonical Discord token", path: "/bot/admin/bot", form: url.Values{"action": {"save_discord"}, "bot_token": {"new-token"}}},
+		{name: "root alias Discord token", path: "/admin/bot", form: url.Values{"action": {"save_discord"}, "bot_token": {"new-token"}}},
+		{name: "legacy Kitsu password", path: "/admin/bot?legacy=1", form: url.Values{"kitsu_runtime_password": {"new-password"}}},
+		{name: "legacy Discord token", path: "/admin/bot?legacy=1", form: url.Values{"bot_token": {"new-token"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetSessions()
+			t.Cleanup(resetSessions)
+			token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.form.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
 			rr := httptest.NewRecorder()
@@ -44,7 +83,7 @@ func TestSensitiveBotMutationsRequireRecentAuthenticationWithoutEditQuery(t *tes
 	}
 }
 
-func TestSensitiveBotMutationAllowsValidRecentAuthentication(t *testing.T) {
+func TestCredentialChangeAllowsValidRecentAuthentication(t *testing.T) {
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))
 	db := newSetupStateTestDB(t)
 	oldValidator := validateDiscordBotTokenForSave
@@ -64,7 +103,7 @@ func TestSensitiveBotMutationAllowsValidRecentAuthentication(t *testing.T) {
 	}
 }
 
-func TestSensitiveBotMutationRejectsExpiredRecentAuthentication(t *testing.T) {
+func TestCredentialChangeRejectsExpiredRecentAuthentication(t *testing.T) {
 	resetSessions()
 	t.Cleanup(resetSessions)
 	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin/bot?edit=1")
@@ -74,7 +113,7 @@ func TestSensitiveBotMutationRejectsExpiredRecentAuthentication(t *testing.T) {
 	sessions[token] = session
 	sessionMu.Unlock()
 
-	form := url.Values{"action": {"save_discord"}}
+	form := url.Values{"action": {"save_discord"}, "bot_token": {"new-token"}}
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?edit=1", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
@@ -83,31 +122,6 @@ func TestSensitiveBotMutationRejectsExpiredRecentAuthentication(t *testing.T) {
 
 	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/login") {
 		t.Fatalf("expired recent authentication was not rejected: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
-	}
-}
-
-func TestConnectionsEditStepUpRedirectPreservesTheExistingValidSession(t *testing.T) {
-	resetSessions()
-	t.Cleanup(resetSessions)
-	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
-	req := httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil)
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	rr := httptest.NewRecorder()
-
-	BotHandler(newSetupStateTestDB(t), nil)(rr, req)
-
-	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/login") || !strings.Contains(rr.Header().Get("Location"), "next=") {
-		t.Fatalf("Connections edit must require the deliberate recent-auth step-up: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
-	}
-	stepUpURL, err := url.Parse(rr.Header().Get("Location"))
-	if err != nil || stepUpURL.Query().Get("next") != "/bot/admin/bot?edit=1&lang=en" {
-		t.Fatalf("Connections edit step-up did not preserve its exact return route: location=%q err=%v", rr.Header().Get("Location"), err)
-	}
-	if !validSession(token) {
-		t.Fatal("Connections edit step-up invalidated the still-valid authenticated session")
-	}
-	if strings.Contains(rr.Header().Get("Set-Cookie"), "Max-Age=0") {
-		t.Fatal("Connections edit step-up cleared the existing session cookie")
 	}
 }
 
@@ -139,6 +153,7 @@ func TestNormalLoginGrantsRecentAuthenticationForConnectionsEdit(t *testing.T) {
 		t.Fatalf("normal login still demands a second step-up for Connections edit: status=%d", response.Code)
 	}
 
+	// Even after the recent-auth window expires, viewing and ordinary edits stay open.
 	sessionMu.Lock()
 	session := sessions[cookie.Value]
 	session.BotEditUntil = time.Now().Add(-time.Second)
@@ -146,24 +161,7 @@ func TestNormalLoginGrantsRecentAuthenticationForConnectionsEdit(t *testing.T) {
 	sessionMu.Unlock()
 	response = httptest.NewRecorder()
 	BotHandler(db, nil)(response, edit)
-	if response.Code != http.StatusSeeOther || !strings.Contains(response.Header().Get("Location"), "/bot/login") || !validSession(cookie.Value) {
-		t.Fatalf("expired recent-auth did not require step-up while preserving the valid session: status=%d location=%q", response.Code, response.Header().Get("Location"))
-	}
-}
-
-func TestLegacyBotMutationRequiresRecentAuthentication(t *testing.T) {
-	resetSessions()
-	t.Cleanup(resetSessions)
-	token := newSessionToken("manager@example.com", "", "manager", "/bot/admin")
-	form := url.Values{"guild_id": {"999999999999999999"}}
-	req := httptest.NewRequest(http.MethodPost, "/admin/bot?legacy=1", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-	rr := httptest.NewRecorder()
-
-	BotHandler(newSetupStateTestDB(t), nil)(rr, req)
-
-	if rr.Code != http.StatusSeeOther || !strings.Contains(rr.Header().Get("Location"), "/bot/login") {
-		t.Fatalf("legacy mutation bypassed recent authentication: status=%d location=%q", rr.Code, rr.Header().Get("Location"))
+	if response.Code != http.StatusOK {
+		t.Fatalf("expired recent-auth blocked the Connections view: status=%d location=%q", response.Code, response.Header().Get("Location"))
 	}
 }

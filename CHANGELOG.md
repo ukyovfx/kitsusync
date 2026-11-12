@@ -6,6 +6,42 @@ All notable changes to this project should be recorded here.
 
 - No unreleased changes yet.
 
+## v0.5.4
+
+First release that ships the verified release-ZIP deployment coordinator
+(`kitsusync-release-apply`, PR #272).
+
+### Added
+
+- Global user linking can save every changed row in one submit; unchanged rows
+  are not sent, and each submitted row keeps the existing single-row validation.
+  The Discord directory is read once per save, and every row is resolved before
+  any row is written, so a rejected row cannot leave a partial apply behind.
+
+### Changed
+
+- Opening the Connections settings page and ordinary edits (hostname, Guild,
+  display settings) no longer require re-authentication. A step-up is asked for
+  only when a credential (token or password) is actually submitted or removed.
+- Removing a task type from the production-connection channel plan now updates
+  the page in place instead of reloading the whole wizard. The add-task-type
+  prompt stays in place and the removed type is preselected for re-adding.
+- Go 1.26.11 (from 1.26.10) for GO-2026-6859 in `net/http`.
+
+### Fixed
+
+- Connecting a Production no longer floods Discord with notifications for tasks
+  that were already waiting (for example in WFA). The state at connection time —
+  including each task's latest comment — is checkpointed silently, so only later
+  changes notify. A poll that races the connection stays silent for that
+  Production until the checkpoint has finished.
+- Unlinking a Kitsu user from Discord now asks for confirmation before it is
+  submitted; the bulk Save button is addressed explicitly, so it no longer
+  collides with the per-row Unlink buttons.
+- The race-detector job no longer fails on the initial-connection checkpoint
+  test: the checkpoint now runs to completion inside the connection request
+  instead of in a goroutine that outlived the test.
+
 ## v0.5.3
 
 ### Fixed

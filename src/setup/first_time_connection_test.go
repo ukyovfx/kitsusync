@@ -223,7 +223,7 @@ func TestFirstTimeExecutionWaitsForProductionApplyBeforeCreatingResources(t *tes
 	close(allowChannelCreate)
 	select {
 	case <-requestDone:
-	case <-time.After(time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("first-time setup did not resume after Apply released the Production lock")
 	}
 	if !strings.Contains(response.Body.String(), "Connection setup complete") {

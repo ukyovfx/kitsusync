@@ -485,6 +485,16 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 		}
 		labels[plan.DestinationID][fmt.Sprintf("productionID=%s taskTypeID=%s", payload.Project.ID, payload.TaskType.ID)] = struct{}{}
 	}
+	// A production whose initial checkpoint has not finished yet must stay
+	// silent: its tasks are pre-existing work, not new transitions.
+	for destinationID, payloads := range routes {
+		if setup.InitialCheckpointPending(payloads[0].Project.ID) {
+			delete(routes, destinationID)
+			delete(webhooks, destinationID)
+			stats.Dropped += len(payloads)
+			slog.Info("Notification suppressed until initial checkpoint completes", "productionID", payloads[0].Project.ID, "taskCount", len(payloads))
+		}
+	}
 	for destinationID, payloads := range routes {
 		routeLabels := labelsFromSet(labels[destinationID])
 		stats.DBRouted += len(payloads)

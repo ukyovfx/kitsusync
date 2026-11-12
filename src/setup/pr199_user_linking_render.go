@@ -181,22 +181,17 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 				initialIndex = 1
 			}
 		}
-		form := `<form method="POST" class="inline-form user-link-form">` +
-			`<input type="hidden" name="action" value="save_global_link">` +
-			`<input type="hidden" name="user_id" value="` + esc(userID) + `">` +
-			`<input type="hidden" name="kitsu_id" value="` + esc(person.ID) + `">` +
-			`<input type="hidden" name="kitsu_name" value="` + esc(person.FullName) + `">` +
-			`<input type="hidden" name="kitsu_email" value="` + esc(person.Email) + `">` +
-			`<input type="hidden" name="discord_guild_id" value="` + esc(directory.SelectedGuild.ID) + `">` +
-			`<select data-initial-index="` + fmt.Sprint(initialIndex) + `" name="discord_user_id" onchange="this.form.querySelector('button[type=submit]').disabled = this.value === '' || this.selectedIndex === Number(this.dataset.initialIndex)" aria-label="` +
+		form := `<input type="hidden" name="bulk_user_id" value="` + esc(userID) + `">` +
+			`<input type="hidden" name="bulk_kitsu_id" value="` + esc(person.ID) + `">` +
+			`<input type="hidden" name="bulk_kitsu_name" value="` + esc(person.FullName) + `">` +
+			`<input type="hidden" name="bulk_kitsu_email" value="` + esc(person.Email) + `">` +
+			`<select data-initial-index="` + fmt.Sprint(initialIndex) + `" name="bulk_discord_user_id" aria-label="` +
 			esc(person.FullName+" - "+t(lang, "Discordユーザー", "Discord user")) + `">` +
-			memberOptions(currentDiscordID) + `</select>` +
-			`<button class="btn" type="submit" disabled>` + esc(t(lang, "保存", "Save")) + `</button></form>`
+			memberOptions(currentDiscordID) + `</select>`
 		if mapped != nil && mapped.ID > 0 {
-			form += `<form method="POST" class="inline-form delete-form" data-confirm="` +
+			form += `<button class="btn-ghost" type="submit" name="unlink_user_id" value="` + esc(fmt.Sprint(mapped.ID)) + `" data-confirm="` +
 				esc(t(lang, "Kitsuユーザー「"+person.FullName+"」とDiscordユーザー「"+identity+"」の紐づけを解除します。", "Unlink the Kitsu user \""+person.FullName+"\" from Discord user \""+identity+"\".")) +
-				`"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="discord_guild_id" value="` + esc(directory.SelectedGuild.ID) + `"><input type="hidden" name="user_id" value="` +
-				esc(fmt.Sprint(mapped.ID)) + `"><button class="btn-ghost" type="submit">` + esc(t(lang, "解除", "Unlink")) + `</button></form>`
+				`">` + esc(t(lang, "解除", "Unlink")) + `</button>`
 		}
 		rows.WriteString(`<tr class="user-link-grid-row"><td data-label="` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `">` +
 			esc(person.FullName) + `</td><td data-label="` + esc(t(lang, "Discordユーザー", "Discord user")) + `"><span class="user-link-discord-identity" title="` + esc(identity) + `">` +
@@ -204,10 +199,13 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 			class + `" role="status">` + esc(state) + `</span></td><td data-label="` + esc(t(lang, "操作", "Actions")) +
 			`"><div class="user-link-actions">` + form + `</div></td></tr>`)
 	}
-	return `<div class="table-wrap user-linking-table"><table><thead><tr><th>` +
+	return `<form method="POST" class="user-linking-bulk" data-bulk-link-form><input type="hidden" name="action" value="save_global_links"><input type="hidden" name="discord_guild_id" value="` +
+		esc(directory.SelectedGuild.ID) + `"><div class="table-wrap user-linking-table"><table><thead><tr><th>` +
 		esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` +
 		esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` +
 		esc(t(lang, "状態", "Status")) + `</th><th>` +
 		esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` +
-		rows.String() + `</tbody></table></div>`
+		rows.String() + `</tbody></table></div><div class="button-row user-linking-actions"><button class="btn" type="submit" id="user-linking-save" disabled>` +
+		esc(t(lang, "変更を保存", "Save changes")) + `</button></div></form>` +
+		`<script>(function(){var form=document.querySelector('[data-bulk-link-form]');if(!form)return;var button=document.getElementById('user-linking-save');var sync=function(){button.disabled=true;Array.prototype.forEach.call(form.querySelectorAll('select[data-initial-index]'),function(select){if(select.value!==''&&select.selectedIndex!==Number(select.dataset.initialIndex))button.disabled=false;});};Array.prototype.forEach.call(form.querySelectorAll('select[data-initial-index]'),function(select){select.addEventListener('change',sync);});Array.prototype.forEach.call(form.querySelectorAll('button[name=unlink_user_id]'),function(unlink){unlink.addEventListener('click',function(event){event.preventDefault();if(window.confirm&&window.confirm(unlink.dataset.confirm)){var field=document.createElement('input');field.type='hidden';field.name='unlink_user_id';field.value=unlink.value;form.appendChild(field);form.submit();}});});form.addEventListener('submit',function(){Array.prototype.forEach.call(form.querySelectorAll('select[data-initial-index]'),function(select){if(select.selectedIndex===Number(select.dataset.initialIndex)){var row=select.closest('tr');Array.prototype.forEach.call(row.querySelectorAll('input[name^="bulk_"]'),function(input){input.disabled=true;});select.disabled=true;}});});sync();})();</script>`
 }
