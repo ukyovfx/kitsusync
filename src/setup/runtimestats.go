@@ -37,6 +37,7 @@ type RuntimeStats struct {
 	webhookLastErr  map[string]string
 	webhookLastSend map[string]time.Time
 	apiObservations map[string][]APIObservation
+	productionPolls map[string]*ProductionPollStat
 }
 
 // Stats is the singleton runtime stats instance used by main.go and the health handler.
@@ -78,6 +79,68 @@ func (s *RuntimeStats) RecordAPIObservationBatch(observations map[string]APIObse
 		}
 		s.apiObservations[service] = items
 	}
+}
+
+// ProductionPollStat is the per-production polling visibility snapshot.
+// TaskCount is the raw number of tasks the bot observed for the production in
+// the most recent successful poll, before any age filtering.
+type ProductionPollStat struct {
+	LastSuccessAt time.Time
+	TaskCount     int
+	ZeroStreak    int
+	StallNotified bool
+}
+
+// RecordProductionPoll updates per-production polling visibility after one
+// successful poll cycle. A zero count advances the consecutive-zero streak;
+// a non-zero count clears both the streak and any prior stall notification.
+func (s *RuntimeStats) RecordProductionPoll(productionID string, taskCount int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.productionPolls == nil {
+		s.productionPolls = make(map[string]*ProductionPollStat)
+	}
+	stat, ok := s.productionPolls[productionID]
+	if !ok {
+		stat = &ProductionPollStat{}
+		s.productionPolls[productionID] = stat
+	}
+	stat.LastSuccessAt = time.Now()
+	stat.TaskCount = taskCount
+	if taskCount > 0 {
+		stat.ZeroStreak = 0
+		stat.StallNotified = false
+	} else {
+		stat.ZeroStreak++
+	}
+}
+
+// TakeStallNotification reports — exactly once per stall episode — whether a
+// production has been open with three consecutive zero-task polls. The flag
+// clears only when the production reports tasks again.
+func (s *RuntimeStats) TakeStallNotification(productionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stat, ok := s.productionPolls[productionID]
+	if !ok {
+		return false
+	}
+	if stat.ZeroStreak >= 3 && !stat.StallNotified {
+		stat.StallNotified = true
+		return true
+	}
+	return false
+}
+
+// ProductionPollStats returns a copy of the per-production polling snapshot.
+func (s *RuntimeStats) ProductionPollStats() map[string]ProductionPollStat {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]ProductionPollStat, len(s.productionPolls))
+	for id, stat := range s.productionPolls {
+		out[id] = *stat
+	}
+	return out
 }
 
 // RecordPoll updates polling stats after one cycle completes successfully.

@@ -2047,12 +2047,56 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if issues != "" {
 		issuesSection = `<section class="section-card glass system-issues" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + issues + `</section>`
 	}
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + `</div>`
+	visibilitySection := renderProductionVisibilitySection(lang, r, db)
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + visibilitySection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
 	fmt.Fprint(w, adminPage(lang, tr(lang, "ia.system_status"), r, body))
+}
+
+// renderProductionVisibilitySection renders the per-production polling
+// visibility table: whether the bot still sees each production, how many
+// tasks it observed, and when the last successful poll ran. Productions with
+// no visible tasks or no successful poll yet are marked as warnings.
+func renderProductionVisibilitySection(lang string, r *http.Request, db *gorm.DB) string {
+	projects := model.ListProjects(db)
+	stats := Stats.ProductionPollStats()
+	rows := make([]string, 0, len(projects))
+	warnCount := 0
+	for _, project := range projects {
+		name := project.Name
+		if strings.TrimSpace(name) == "" {
+			name = project.KitsuProjectID
+		}
+		stat, polled := stats[project.KitsuProjectID]
+		visible := polled && stat.TaskCount > 0
+		pillClass, pillLabel := "bad", t(lang, "見えていません", "Not visible")
+		if !polled {
+			pillClass, pillLabel = "warning", t(lang, "未実行", "Never polled")
+		} else if visible {
+			pillClass, pillLabel = "ok", t(lang, "正常", "Visible")
+		} else {
+			warnCount++
+		}
+		lastPoll := t(lang, "未実行", "never")
+		if polled && !stat.LastSuccessAt.IsZero() {
+			ago := time.Since(stat.LastSuccessAt).Round(time.Second)
+			lastPoll = ago.String() + " " + t(lang, "前", "ago")
+		}
+		taskCount := "—"
+		if polled {
+			taskCount = strconv.Itoa(stat.TaskCount)
+		}
+		rows = append(rows, fmt.Sprintf(`<tr><th scope="row">%s</th><td><span class="status-pill %s" role="status">%s</span></td><td>%s</td><td>%s</td></tr>`,
+			esc(name), esc(pillClass), esc(pillLabel), esc(taskCount), esc(lastPoll)))
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	table := `<table class="data-table" aria-label="` + esc(t(lang, "作品ごとのポーリング可視性", "Per-production polling visibility")) + `"><thead><tr><th scope="col">` + esc(t(lang, "作品", "Production")) + `</th><th scope="col">` + esc(t(lang, "bot から見えているか", "Visible to bot")) + `</th><th scope="col">` + esc(t(lang, "タスク件数", "Task count")) + `</th><th scope="col">` + esc(t(lang, "最終ポーリング成功", "Last polling success")) + `</th></tr></thead><tbody>` + strings.Join(rows, "") + `</tbody></table>`
+	return `<section class="section-card glass production-visibility" aria-labelledby="production-visibility-title"><div class="page-heading"><div><h2 id="production-visibility-title">` + esc(t(lang, "作品ごとの可視性", "Per-production visibility")) + `</h2><p class="hint">` + esc(t(lang, "bot が各作品のタスクを取得できているかを表示します。0 件が続く作品は警告になります。", "Shows whether the bot still observes tasks for each production. Productions with zero tasks are marked as warnings.")) + `</p></div>` + map[bool]string{true: `<span class="status-pill bad">` + esc(fmt.Sprint(warnCount)) + `</span>`, false: ""}[warnCount > 0] + `</div>` + table + `</section>`
 }
 
 func renderRuntimeObservabilitySummary(lang string, stats RuntimeSnapshot, readiness SharedBotRuntimeReadiness, windowName, body string) string {

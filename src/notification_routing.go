@@ -15,6 +15,7 @@ type productionRoutingPlan struct {
 	WebhookURL    string
 	DestinationID string
 	RuleID        uint
+	LaneType      string
 	ShouldSend    bool
 	SkipReason    string
 }
@@ -49,6 +50,19 @@ func planProductionNotification(db *gorm.DB, payload kitsu.MessagePayload) produ
 			continue
 		}
 		plan.RuleID = route.ID
+		plan.LaneType = model.LaneChannel
+		if lane := strings.TrimSpace(strings.ToLower(route.DestinationKind)); lane == model.LaneDM || lane == model.LaneRecordOnly {
+			plan.LaneType = lane
+		}
+		if plan.LaneType == model.LaneRecordOnly {
+			// Record-only lane: the notification is written to the delivery
+			// journal without any network send. No webhook is required.
+			plan.DestinationID = "record-only:" + taskTypeID
+			plan.SkipReason = ""
+			return plan
+		}
+		// DM and channel lanes keep a webhook destination: channel lanes send
+		// through it directly and DM lanes fall back to it when the DM fails.
 		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
 		if webhook == nil || webhook.KitsuProjectID != productionID || strings.TrimSpace(webhook.WebhookURL) == "" {
 			plan.SkipReason = "matched route has a stale or invalid destination"
