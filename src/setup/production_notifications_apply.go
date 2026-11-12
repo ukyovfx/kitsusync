@@ -23,9 +23,24 @@ type notificationApplyRequest struct {
 	Routes           []struct {
 		TaskTypeID           string `json:"task_type_id"`
 		DestinationWebhookID uint   `json:"destination_webhook_id"`
+		DestinationKind      string `json:"destination_kind"`
 		CreateChannelName    string `json:"create_channel_name"`
 	} `json:"routes"`
 	ReviewerChanges []model.ProductionReviewerDelta `json:"reviewer_changes"`
+}
+
+// normalizeApplyDestinationKind maps the submitted lane kind onto the stored
+// values. Empty and unknown values keep the legacy channel lane so older
+// clients keep their behavior.
+func normalizeApplyDestinationKind(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case model.LaneDM:
+		return model.LaneDM
+	case model.LaneRecordOnly:
+		return model.LaneRecordOnly
+	default:
+		return model.LaneChannel
+	}
 }
 
 type createdRoutingDiscordResource struct {
@@ -109,12 +124,22 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 		id := strings.TrimSpace(item.TaskTypeID)
 		task, ok := knownByID[id]
 		createName := strings.TrimSpace(item.CreateChannelName)
-		if id == "" || !ok || seen[id] || (item.DestinationWebhookID == 0) == (createName == "") {
+		destinationKind := normalizeApplyDestinationKind(item.DestinationKind)
+		// Record-only routes may keep their Discord destination as metadata
+		// (so switching back to a delivery lane needs no reconfiguration), but
+		// it is optional. Channel and DM lanes keep the exclusive-or rule
+		// (existing webhook or a new channel to create) because both still
+		// need the work-channel fallback destination.
+		if id == "" || !ok || seen[id] {
+			http.Error(w, `{"error":"invalid_route"}`, http.StatusBadRequest)
+			return true
+		}
+		if destinationKind != model.LaneRecordOnly && (item.DestinationWebhookID == 0) == (createName == "") {
 			http.Error(w, `{"error":"invalid_route"}`, http.StatusBadRequest)
 			return true
 		}
 		seen[id] = true
-		route := model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: id, TaskTypeName: task.Name, DestinationWebhookID: item.DestinationWebhookID}
+		route := model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: id, TaskTypeName: task.Name, DestinationKind: destinationKind, DestinationWebhookID: item.DestinationWebhookID}
 		routes = append(routes, route)
 		if createName != "" {
 			normalized := NormalizeTaskTypeChannelName(createName)
@@ -124,7 +149,7 @@ func handleProductionNotificationApply(w http.ResponseWriter, r *http.Request, l
 			}
 			createNames[id] = normalized
 			newWebhooks = append(newWebhooks, &model.ProjectWebhook{KitsuProjectID: productionID, ChannelName: normalized, TaskType: id})
-		} else {
+		} else if item.DestinationWebhookID != 0 {
 			existingRoutes = append(existingRoutes, route)
 		}
 	}
@@ -415,6 +440,11 @@ func sameProductionNotificationRoutes(before, after []model.ProductionNotificati
 		if strings.TrimSpace(before[i].TaskTypeID) != strings.TrimSpace(after[i].TaskTypeID) || before[i].DestinationWebhookID != after[i].DestinationWebhookID {
 			return false
 		}
+		// A lane-kind change (channel ↔ dm ↔ record_only) is a routing change
+		// even when the webhook destination is untouched.
+		if strings.TrimSpace(strings.ToLower(before[i].DestinationKind)) != strings.TrimSpace(strings.ToLower(after[i].DestinationKind)) {
+			return false
+		}
 	}
 	return true
 }
@@ -438,7 +468,7 @@ func compensateProductionNotificationApply(restoreDatabase, restoreDiscordOrder 
 func convertApplyRoutes(request notificationApplyRequest, productionID string) []model.ProductionNotificationRoute {
 	routes := make([]model.ProductionNotificationRoute, 0, len(request.Routes))
 	for _, route := range request.Routes {
-		routes = append(routes, model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: strings.TrimSpace(route.TaskTypeID), DestinationWebhookID: route.DestinationWebhookID})
+		routes = append(routes, model.ProductionNotificationRoute{ProductionID: productionID, TaskTypeID: strings.TrimSpace(route.TaskTypeID), DestinationKind: normalizeApplyDestinationKind(route.DestinationKind), DestinationWebhookID: route.DestinationWebhookID})
 	}
 	return routes
 }
@@ -547,6 +577,10 @@ func validateCurrentRoutingDestinations(project model.Project, routes []model.Pr
 	seen := map[string]bool{}
 	repairs := make([]routingWebhookRepair, 0)
 	for _, route := range routes {
+		// Record-only routes have no Discord destination to verify.
+		if strings.TrimSpace(strings.ToLower(route.DestinationKind)) == model.LaneRecordOnly {
+			continue
+		}
 		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
 		if webhook == nil || webhook.KitsuProjectID != project.KitsuProjectID {
 			return nil, errors.New("routing destination is not owned by this Production")

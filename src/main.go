@@ -427,14 +427,15 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 				data[i].IsCommentOnly = commentChanged && !statusChanged && !timestampChanged
 			} else {
 				// An unfinished durable intent is still eligible even when the
-				// Kitsu event matches the last observed snapshot.
-				intent := model.NotificationDeliveryIntent{TaskID: data[i].Task.ID, ProductionID: data[i].Project.ID, TaskTypeID: data[i].TaskType.ID, TaskStatus: currentStatus, TaskUpdatedAt: data[i].Task.Task.UpdatedAt, CommentID: data[i].LatestComment.Comment.ID, CommentUpdatedAt: data[i].LatestComment.Comment.UpdatedAt, IsAssignNotification: strings.EqualFold(currentStatus, "none")}
-				disposition, stateErr := model.NotificationDeliveryDisposition(db, model.NotificationEventIdentity(intent))
-				if stateErr != nil {
+				// Kitsu event matches the last observed snapshot. The check is
+				// lane-agnostic: a DM-lane row carries a different event ID
+				// than the content-only channel identity.
+				unresolved, unresolvedErr := model.HasUnresolvedNotificationDeliveryForTask(db, data[i].Task.ID)
+				if unresolvedErr != nil {
 					slog.Error("Notification delivery state read failed; event not dispatched", "error_class", "delivery_journal_read_failed")
 					continue
 				}
-				if disposition != model.DeliveryPending && disposition != model.DeliveryRetryable {
+				if !unresolved {
 					continue
 				}
 			}
@@ -476,6 +477,16 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 	for _, payload := range filtered {
 		plan := planProductionNotification(db, payload)
 		if plan.LaneType == model.LaneRecordOnly {
+			// The initial-checkpoint guard comes first: a production whose
+			// first checkpoint has not completed must stay silent, and its
+			// pre-existing tasks must not pollute the delivery ledger.
+			if setup.InitialCheckpointPending(payload.Project.ID) {
+				if err := persistTaskObservation(db, payload); err != nil {
+					slog.Error("Task observation could not be persisted", "error_class", "task_observation_write_failed")
+				}
+				stats.Dropped++
+				continue
+			}
 			// Record-only lane: write the delivery ledger entry without any
 			// network send and keep the observation checkpoint current.
 			if err := model.RecordNotificationOnlyDelivery(db, payload.Task.ID, payload.Project.ID, payload.TaskType.ID, strings.ToUpper(payload.TaskStatus.TaskStatus.ShortName), payload.Task.UpdatedAt, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt, payload.IsAssignNotification); err != nil {
@@ -831,9 +842,11 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	}
 	// Per-production visibility and liveness: raw task counts (before age
 	// filtering) tell whether the bot still sees each open production.
+	// Validation-only profile projects are read-only fixtures and must never
+	// raise liveness alerts.
 	if db != nil {
 		for _, project := range model.ListProjects(db) {
-			if project.KitsuProjectID == "" {
+			if project.KitsuProjectID == "" || project.ValidationOnly {
 				continue
 			}
 			visible := lastPollProductionTaskCounts[project.KitsuProjectID]
@@ -936,6 +949,12 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	}
 	if err := model.QuarantineInflightNotificationDeliveries(db); err != nil {
 		return fmt.Errorf("quarantine interrupted notification deliveries: %w", err)
+	}
+	// Pre-lane ledgers (v0.5.4 and earlier) store event IDs without the lane
+	// components. Re-derive them so still-unresolved rows stay resumable
+	// instead of silently blocking newer intents for the same task.
+	if err := model.MigrateLegacyNotificationEventIdentities(db); err != nil {
+		return fmt.Errorf("migrate legacy notification delivery identities: %w", err)
 	}
 	return nil
 }

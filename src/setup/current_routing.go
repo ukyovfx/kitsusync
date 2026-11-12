@@ -173,6 +173,15 @@ func handleCurrentIARoutingOrderRecovery(w http.ResponseWriter, r *http.Request,
 }
 
 func syncCurrentRoutingDiscordOrder(project model.Project, routes []model.ProductionNotificationRoute, db *gorm.DB) error {
+	// Record-only routes have no Discord channel to position.
+	active := make([]model.ProductionNotificationRoute, 0, len(routes))
+	for _, route := range routes {
+		if model.NormalizeLaneKind(route.DestinationKind) == model.LaneRecordOnly {
+			continue
+		}
+		active = append(active, route)
+	}
+	routes = active
 	if len(routes) == 0 {
 		return nil
 	}
@@ -479,7 +488,19 @@ func renderCurrentIARoutingEditorMarkupWithData(db *gorm.DB, r *http.Request, p 
 			}
 		}
 		evidenceVerified := evidenceErr == nil && evidence.PermissionsKnown && evidence.OwnershipVerified
-		rows.WriteString(`<tr draggable="true" data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-default-channel-name="` + esc(defaultChannelName) + `" data-existing-targets="` + targetsAttribute + `" data-original-destination="` + strconv.FormatUint(uint64(route.DestinationWebhookID), 10) + `" data-role-sender-verified="` + strconv.FormatBool(evidenceVerified) + `" data-bot-can-mention-roles="` + strconv.FormatBool(evidence.CanMentionRoles) + `" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `" tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"><td><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></td><td><div class="routing-destination-control"><select class="routing-destination-select" name="destination_mode" data-destination-control aria-label="` + esc(channelLabel) + `">` + destinationList(route.DestinationWebhookID) + `</select><label class="routing-custom-channel" data-custom-channel-field hidden><span class="sr-only">` + esc(t(lang, "チャンネル名", "Channel name")) + `</span><input data-new-channel-name maxlength="100" autocomplete="off" disabled>` + `</label></div></td><td><details class="routing-row-menu"><summary aria-label="` + esc(menuLabel) + `">&#8942;</summary><div class="routing-row-menu-panel" role="menu"><button type="button" class="routing-remove" data-routing-remove role="menuitem">` + esc(removeLabel) + `</button>` + deleteButton + `</div></details></td></tr>`)
+		laneKind := strings.TrimSpace(strings.ToLower(route.DestinationKind))
+		if laneKind != model.LaneDM && laneKind != model.LaneRecordOnly {
+			laneKind = model.LaneChannel
+		}
+		laneOption := func(value, ja, en string) string {
+			return `<option value="` + value + `"` + map[bool]string{true: " selected", false: ""}[laneKind == value] + `>` + esc(t(lang, ja, en)) + `</option>`
+		}
+		laneSelect := `<select class="routing-lane-select" name="destination_kind" data-lane-control aria-label="` + esc(t(lang, "宛先種別", "Destination lane")) + `">` +
+			laneOption(model.LaneChannel, "チャンネル", "Channel") +
+			laneOption(model.LaneDM, "DM（本人）", "DM (assignee)") +
+			laneOption(model.LaneRecordOnly, "記録のみ", "Record only") +
+			`</select>`
+		rows.WriteString(`<tr draggable="true" data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-default-channel-name="` + esc(defaultChannelName) + `" data-existing-targets="` + targetsAttribute + `" data-original-destination="` + strconv.FormatUint(uint64(route.DestinationWebhookID), 10) + `" data-lane-kind="` + esc(laneKind) + `" data-role-sender-verified="` + strconv.FormatBool(evidenceVerified) + `" data-bot-can-mention-roles="` + strconv.FormatBool(evidence.CanMentionRoles) + `" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `" tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"><td><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></td><td><div class="routing-destination-control">` + laneSelect + `<select class="routing-destination-select" name="destination_mode" data-destination-control aria-label="` + esc(channelLabel) + `">` + destinationList(route.DestinationWebhookID) + `</select><label class="routing-custom-channel" data-custom-channel-field hidden><span class="sr-only">` + esc(t(lang, "チャンネル名", "Channel name")) + `</span><input data-new-channel-name maxlength="100" autocomplete="off" disabled>` + `</label></div></td><td><details class="routing-row-menu"><summary aria-label="` + esc(menuLabel) + `">&#8942;</summary><div class="routing-row-menu-panel" role="menu"><button type="button" class="routing-remove" data-routing-remove role="menuitem">` + esc(removeLabel) + `</button>` + deleteButton + `</div></details></td></tr>`)
 	}
 	userSelectLabel := t(lang, "選択", "Select")
 	userPicker := userAvailability

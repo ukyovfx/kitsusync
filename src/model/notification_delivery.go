@@ -54,6 +54,12 @@ func laneTypeOrDefault(lane string) string {
 	}
 }
 
+// NormalizeLaneKind maps any submitted lane value onto the stored lane kinds.
+// Empty and unknown values keep the legacy channel lane.
+func NormalizeLaneKind(lane string) string {
+	return laneTypeOrDefault(lane)
+}
+
 // destinationGuildForLane returns the guild ID for channel lanes and the
 // empty string for DM and record-only lanes, which have no guild scope.
 func destinationGuildForLane(intent NotificationDeliveryIntent) string {
@@ -434,12 +440,59 @@ func NotificationEventIdentity(intent NotificationDeliveryIntent) string {
 		strings.TrimSpace(intent.ProductionID), strings.TrimSpace(intent.TaskID), strings.TrimSpace(intent.TaskTypeID),
 		strings.ToUpper(strings.TrimSpace(intent.TaskStatus)), strings.TrimSpace(intent.TaskUpdatedAt), strings.TrimSpace(intent.CommentID),
 		strings.TrimSpace(intent.CommentUpdatedAt), fmt.Sprint(intent.IsAssignNotification),
-		// Lane and resolved target separate journal rows per delivery lane so a
-		// DM fallback after a failed primary send never collides with it.
-		strings.TrimSpace(intent.LaneType), strings.TrimSpace(intent.DestinationTarget),
+		// Normalized lane and resolved target separate journal rows per delivery
+		// lane so a DM fallback after a failed primary send never collides with
+		// it. Normalization keeps content-only callers (which pass no lane) on
+		// the same identity as channel-lane rows.
+		laneTypeOrDefault(intent.LaneType), strings.TrimSpace(intent.DestinationTarget),
 	})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// MigrateLegacyNotificationEventIdentities re-derives the event ID of every
+// still-resumable delivery row (pending/retryable) that was written before the
+// lane-aware identity scheme. Without this, a v0.5.4 ledger's rows would never
+// match a fresh lookup and would permanently block newer intents for the same
+// task. Rows whose recomputed ID is already taken are retired as terminal so
+// they cannot block deliveries. In-flight and unknown rows are deliberately
+// left untouched: startup quarantines them to unknown and their evidence must
+// keep its original identity for reconciliation.
+func MigrateLegacyNotificationEventIdentities(db *gorm.DB) error {
+	if db == nil {
+		return gorm.ErrInvalidDB
+	}
+	var rows []NotificationDeliveryEvent
+	if err := db.Where("disposition IN ?", []string{DeliveryPending, DeliveryRetryable}).Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		intent := NotificationDeliveryIntent{
+			TaskID: row.TaskID, ProductionID: row.ProductionID, TaskTypeID: row.TaskTypeID, TaskStatus: row.TaskStatus,
+			TaskUpdatedAt: row.TaskUpdatedAt, CommentID: row.CommentID, CommentUpdatedAt: row.CommentUpdatedAt,
+			IsAssignNotification: row.IsAssignNotification, LaneType: row.LaneType, DestinationTarget: row.DestinationTarget,
+		}
+		newID := NotificationEventIdentity(intent)
+		if newID == row.EventID {
+			continue
+		}
+		err := db.Transaction(func(tx *gorm.DB) error {
+			var taken int64
+			if err := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", newID).Count(&taken).Error; err != nil {
+				return err
+			}
+			if taken > 0 {
+				return tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ?", row.ID, row.EventID).
+					Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "superseded_by_lane_aware_identity"}).Error
+			}
+			return tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ?", row.ID, row.EventID).
+				Update("event_id", newID).Error
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func notificationEventTime(taskUpdatedAt, commentUpdatedAt string) (time.Time, bool) {
@@ -599,6 +652,19 @@ func NotificationDeliveryDisposition(db *gorm.DB, eventID string) (string, error
 		return "", nil
 	}
 	return event.Disposition, err
+}
+
+// HasUnresolvedNotificationDeliveryForTask reports whether the task still has
+// a pending or retryable delivery on any lane. The poll loop re-offers such
+// tasks so the delivery resumes at the lane it failed on, regardless of which
+// lane identity the row was written under.
+func HasUnresolvedNotificationDeliveryForTask(db *gorm.DB, taskID string) (bool, error) {
+	if db == nil {
+		return false, gorm.ErrInvalidDB
+	}
+	var count int64
+	err := db.Model(&NotificationDeliveryEvent{}).Where("task_id = ? AND disposition IN ?", strings.TrimSpace(taskID), []string{DeliveryPending, DeliveryRetryable}).Count(&count).Error
+	return count > 0, err
 }
 
 func ListPendingNotificationDeliveries(db *gorm.DB, limit int) ([]NotificationDeliveryEvent, error) {
@@ -1074,6 +1140,30 @@ func SetNotificationDeliveryDisposition(db *gorm.DB, attempt DeliveryAttempt, di
 			return err
 		}
 		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{"disposition": disposition, "failure_class": failureClass})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrDeliveryAttemptConflict
+		}
+		return nil
+	})
+}
+
+// ReleaseNotificationDeliveryForFallback returns a claimed in-flight delivery
+// to the pending state after a permanent failure on the current lane, keeping
+// the failure class as evidence. The fallback chain can then retarget the
+// still-pending intent to the next destination; only an exhausted chain turns
+// the row terminal.
+func ReleaseNotificationDeliveryForFallback(db *gorm.DB, attempt DeliveryAttempt, failureClass string) error {
+	if db == nil || attempt.ID == "" {
+		return gorm.ErrInvalidData
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := AcquireProductionNotificationWriteLock(tx, attempt.Event.ProductionID); err != nil {
+			return err
+		}
+		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{"disposition": DeliveryPending, "failure_class": failureClass})
 		if result.Error != nil {
 			return result.Error
 		}

@@ -110,13 +110,85 @@ func TestRetargetNotificationDeliveryRejectsDeliveredEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivered := event.Disposition
-	_ = delivered
 	// Simulate a delivered event: the retarget must be refused.
 	if err := db.Model(&NotificationDeliveryEvent{}).Where("id = ?", event.ID).Updates(map[string]any{"disposition": DeliveryDelivered, "discord_message_id": "m-1", "delivered_at": event.CreatedAt}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := RetargetNotificationDelivery(db, event.EventID, LaneChannel, "channel-1", webhook.ID, "guild-1", "channel-1", "111111111111111111"); err == nil {
 		t.Fatal("delivered event was retargeted")
+	}
+}
+
+// TestMigrateLegacyNotificationEventIdentitiesRestartsPendingRow reproduces
+// the P1 finding: a v0.5.4 ledger row stores the pre-lane event ID, so the
+// lane-aware lookup cannot find it and the task's notifications stay blocked.
+// The migration must re-derive the ID so the row resumes.
+func TestMigrateLegacyNotificationEventIdentitiesRestartsPendingRow(t *testing.T) {
+	db := newNotificationLaneDB(t)
+	legacy := NotificationDeliveryEvent{
+		EventID: "legacy-pre-lane-id", TaskID: "task-legacy", ProductionID: "p1", TaskTypeID: "tt1",
+		TaskStatus: "WFA", TaskUpdatedAt: "2026-11-13T00:00:00Z", CommentID: "c1", CommentUpdatedAt: "2026-11-13T00:00:01Z",
+		LaneType: LaneChannel, PayloadJSON: `{"content":"synthetic"}`, PayloadSHA256: "hash",
+		Disposition: DeliveryPending,
+	}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateLegacyNotificationEventIdentities(db); err != nil {
+		t.Fatal(err)
+	}
+	intent := NotificationDeliveryIntent{
+		TaskID: legacy.TaskID, ProductionID: legacy.ProductionID, TaskTypeID: legacy.TaskTypeID,
+		TaskStatus: legacy.TaskStatus, TaskUpdatedAt: legacy.TaskUpdatedAt, CommentID: legacy.CommentID,
+		CommentUpdatedAt: legacy.CommentUpdatedAt, IsAssignNotification: legacy.IsAssignNotification,
+	}
+	migratedID := NotificationEventIdentity(intent)
+	if migratedID == "legacy-pre-lane-id" {
+		t.Fatal("migration did not re-derive the event ID")
+	}
+	disposition, err := NotificationDeliveryDisposition(db, migratedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition != DeliveryPending {
+		t.Fatalf("migrated legacy row disposition = %q, want pending (resumable)", disposition)
+	}
+}
+
+// TestMigrateLegacyNotificationEventIdentitiesRetiresConflictingRow verifies
+// the guard: when the recomputed ID is already taken by a newer row, the
+// legacy row is retired as terminal instead of blocking deliveries.
+func TestMigrateLegacyNotificationEventIdentitiesRetiresConflictingRow(t *testing.T) {
+	db := newNotificationLaneDB(t)
+	intent := NotificationDeliveryIntent{
+		TaskID: "task-legacy", ProductionID: "p1", TaskTypeID: "tt1", TaskStatus: "WFA",
+		TaskUpdatedAt: "2026-11-13T00:00:00Z", CommentID: "c1", CommentUpdatedAt: "2026-11-13T00:00:01Z",
+	}
+	currentID := NotificationEventIdentity(intent)
+	current := NotificationDeliveryEvent{
+		EventID: currentID, TaskID: intent.TaskID, ProductionID: intent.ProductionID, TaskTypeID: intent.TaskTypeID,
+		TaskStatus: intent.TaskStatus, TaskUpdatedAt: intent.TaskUpdatedAt, CommentID: intent.CommentID, CommentUpdatedAt: intent.CommentUpdatedAt,
+		LaneType: LaneChannel, PayloadJSON: `{"content":"synthetic"}`, PayloadSHA256: "hash", Disposition: DeliveryRetryable,
+	}
+	if err := db.Create(&current).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacy := NotificationDeliveryEvent{
+		EventID: "legacy-pre-lane-id", TaskID: intent.TaskID, ProductionID: intent.ProductionID, TaskTypeID: intent.TaskTypeID,
+		TaskStatus: intent.TaskStatus, TaskUpdatedAt: intent.TaskUpdatedAt, CommentID: intent.CommentID, CommentUpdatedAt: intent.CommentUpdatedAt,
+		LaneType: LaneChannel, PayloadJSON: `{"content":"synthetic"}`, PayloadSHA256: "hash", Disposition: DeliveryPending,
+	}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateLegacyNotificationEventIdentities(db); err != nil {
+		t.Fatal(err)
+	}
+	var retired NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", "legacy-pre-lane-id").First(&retired).Error; err != nil {
+		t.Fatalf("legacy row vanished instead of being retired: %v", err)
+	}
+	if retired.Disposition != DeliveryTerminalFailure || retired.FailureClass != "superseded_by_lane_aware_identity" {
+		t.Fatalf("conflicting legacy row = disposition=%q class=%q", retired.Disposition, retired.FailureClass)
 	}
 }
