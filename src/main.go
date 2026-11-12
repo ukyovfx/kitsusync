@@ -6,8 +6,8 @@ import (
 	"app/src/model"
 	"app/src/setup"
 	"app/src/utils/config"
-	"app/src/utils/safego"
 	logutil "app/src/utils/log"
+	"app/src/utils/safego"
 	"context"
 	"database/sql"
 	"fmt"
@@ -84,6 +84,16 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	}
 	if conf.Log {
 		slog.Info("Got taskTypes: " + strconv.Itoa(len(taskTypes.Each)))
+	}
+
+	// Raw per-production task counts, before any age filtering. This is the
+	// bot-visibility signal for the per-production health view and the
+	// open-production liveness monitor.
+	lastPollProductionTaskCounts = make(map[string]int, len(taskTypes.Each))
+	for _, task := range tasks.Each {
+		if id := strings.TrimSpace(task.ProjectID); id != "" {
+			lastPollProductionTaskCounts[id]++
+		}
 	}
 
 	persons, err := kitsu.GetPersonsWithError()
@@ -417,14 +427,15 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 				data[i].IsCommentOnly = commentChanged && !statusChanged && !timestampChanged
 			} else {
 				// An unfinished durable intent is still eligible even when the
-				// Kitsu event matches the last observed snapshot.
-				intent := model.NotificationDeliveryIntent{TaskID: data[i].Task.ID, ProductionID: data[i].Project.ID, TaskTypeID: data[i].TaskType.ID, TaskStatus: currentStatus, TaskUpdatedAt: data[i].Task.Task.UpdatedAt, CommentID: data[i].LatestComment.Comment.ID, CommentUpdatedAt: data[i].LatestComment.Comment.UpdatedAt, IsAssignNotification: strings.EqualFold(currentStatus, "none")}
-				disposition, stateErr := model.NotificationDeliveryDisposition(db, model.NotificationEventIdentity(intent))
-				if stateErr != nil {
+				// Kitsu event matches the last observed snapshot. The check is
+				// lane-agnostic: a DM-lane row carries a different event ID
+				// than the content-only channel identity.
+				unresolved, unresolvedErr := model.HasUnresolvedNotificationDeliveryForTask(db, data[i].Task.ID)
+				if unresolvedErr != nil {
 					slog.Error("Notification delivery state read failed; event not dispatched", "error_class", "delivery_journal_read_failed")
 					continue
 				}
-				if disposition != model.DeliveryPending && disposition != model.DeliveryRetryable {
+				if !unresolved {
 					continue
 				}
 			}
@@ -465,6 +476,28 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 	labels := make(map[string]map[string]struct{})
 	for _, payload := range filtered {
 		plan := planProductionNotification(db, payload)
+		if plan.LaneType == model.LaneRecordOnly {
+			// The initial-checkpoint guard comes first: a production whose
+			// first checkpoint has not completed must stay silent, and its
+			// pre-existing tasks must not pollute the delivery ledger.
+			if setup.InitialCheckpointPending(payload.Project.ID) {
+				if err := persistTaskObservation(db, payload); err != nil {
+					slog.Error("Task observation could not be persisted", "error_class", "task_observation_write_failed")
+				}
+				stats.Dropped++
+				continue
+			}
+			// Record-only lane: write the delivery ledger entry without any
+			// network send and keep the observation checkpoint current.
+			if err := model.RecordNotificationOnlyDelivery(db, payload.Task.ID, payload.Project.ID, payload.TaskType.ID, strings.ToUpper(payload.TaskStatus.TaskStatus.ShortName), payload.Task.UpdatedAt, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt, payload.IsAssignNotification); err != nil {
+				slog.Error("Record-only delivery could not be persisted", "error_class", "record_only_persist_failed", "taskID", payload.Task.ID)
+			}
+			if err := persistTaskObservation(db, payload); err != nil {
+				slog.Error("Task observation could not be persisted", "error_class", "task_observation_write_failed")
+			}
+			stats.Dropped++
+			continue
+		}
 		if !plan.ShouldSend {
 			recordProductionRoutingSkip(db, payload, plan.SkipReason)
 			stats.Dropped++
@@ -725,6 +758,55 @@ func auditActorFromPayload(payload kitsu.MessagePayload) (kind, id, name string)
 	return model.AuditActorHuman, strings.TrimSpace(author.ID), strings.TrimSpace(author.FullName)
 }
 
+// lastPollProductionTaskCounts holds the raw per-production task counts from
+// the most recent successful Kitsu poll, before any age filtering. It is the
+// bot-visibility signal for the health view and the open-production liveness
+// monitor. Written by MakeKitsuResponse, read by runOnePoll; the poll loop is
+// single-flight (pollMu), so no additional synchronization is required.
+var lastPollProductionTaskCounts map[string]int
+
+// pollStallThreshold is the number of consecutive zero-task polls before an
+// open production is reported as stalled to the operations channel.
+const pollStallThreshold = 3
+
+// notifyProductionStall sends the one-shot stall notice for a production to
+// the operations channel. It is best-effort; delivery failures are logged.
+func notifyProductionStall(conf config.Config, db *gorm.DB, project model.Project, zeroPolls int) {
+	_, _, opsWebhookURL := getDiscordSettings(db, conf)
+	if opsWebhookURL == "" {
+		slog.Warn("Open production reports zero visible tasks but no operations channel is configured",
+			"error_class", "production_stall_no_ops_channel",
+			"productionID", project.KitsuProjectID,
+			"productionName", project.Name,
+			"consecutiveZeroPolls", zeroPolls)
+		return
+	}
+	lang := "ja"
+	if project.Language == "en" {
+		lang = "en"
+	}
+	title := "KitsuSync 死活監視: タスクが見えません"
+	body := fmt.Sprintf("Production「%s」(%s) が open のまま、%d 回連続でポーリング結果が 0 件です。Kitsu 側の疎通・権限を確認してください。",
+		project.Name, project.KitsuProjectID, zeroPolls)
+	if lang == "en" {
+		title = "KitsuSync liveness: no tasks visible"
+		body = fmt.Sprintf("Production %q (%s) is open but %d consecutive polls returned 0 tasks. Check Kitsu connectivity and permissions.",
+			project.Name, project.KitsuProjectID, zeroPolls)
+	}
+	payload := discord.Payload{Content: "**" + title + "**\n" + body}
+	if res := discord.SendMessage(payload, opsWebhookURL, "", ""); res.MessageID == "" {
+		slog.Warn("Production stall notice could not be delivered to the operations channel",
+			"error_class", "production_stall_notify_failed",
+			"productionID", project.KitsuProjectID,
+			"category", res.FailureCategory)
+	} else {
+		slog.Warn("Open production reports zero visible tasks", "error_class", "production_stall_detected",
+			"productionID", project.KitsuProjectID,
+			"productionName", project.Name,
+			"consecutiveZeroPolls", zeroPolls)
+	}
+}
+
 func runOnePoll(conf config.Config, db *gorm.DB) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("KITSUSYNC_DISABLE_POLL")), "1") {
 		slog.Info("Poll skipped by local audit guard")
@@ -757,6 +839,22 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	FilterTasks(kitsuResponse, conf, db)
 	if conf.Log {
 		slog.Info("Done FilterTasks")
+	}
+	// Per-production visibility and liveness: raw task counts (before age
+	// filtering) tell whether the bot still sees each open production.
+	// Validation-only profile projects are read-only fixtures and must never
+	// raise liveness alerts.
+	if db != nil {
+		for _, project := range model.ListProjects(db) {
+			if project.KitsuProjectID == "" || project.ValidationOnly {
+				continue
+			}
+			visible := lastPollProductionTaskCounts[project.KitsuProjectID]
+			setup.Stats.RecordProductionPoll(project.KitsuProjectID, visible)
+			if setup.Stats.TakeStallNotification(project.KitsuProjectID) {
+				notifyProductionStall(conf, db, project, pollStallThreshold)
+			}
+		}
 	}
 	setup.Stats.RecordPollWithDuration(taskCount, time.Since(started))
 }
@@ -851,6 +949,12 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	}
 	if err := model.QuarantineInflightNotificationDeliveries(db); err != nil {
 		return fmt.Errorf("quarantine interrupted notification deliveries: %w", err)
+	}
+	// Pre-lane ledgers (v0.5.4 and earlier) store event IDs without the lane
+	// components. Re-derive them so still-unresolved rows stay resumable
+	// instead of silently blocking newer intents for the same task.
+	if err := model.MigrateLegacyNotificationEventIdentities(db); err != nil {
+		return fmt.Errorf("migrate legacy notification delivery identities: %w", err)
 	}
 	return nil
 }
@@ -988,6 +1092,10 @@ func main() {
 	}
 	discord.GoogleDriveURLResolver = func(projectID string) string {
 		return model.GetProjectStorageURL(db, projectID)
+	}
+	discord.DiscordBotTokenResolver = func() string {
+		botToken, _, _ := getDiscordSettings(db, conf)
+		return botToken
 	}
 	discord.KitsuPublicURLResolver = func() string {
 		return setup.PublicKitsuURL(db)

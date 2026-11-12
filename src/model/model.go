@@ -643,7 +643,8 @@ type ProductionNotificationRoute struct {
 	ProductionID           string `gorm:"index;not null;uniqueIndex:idx_production_task_type"`
 	TaskTypeID             string `gorm:"not null;uniqueIndex:idx_production_task_type"`
 	TaskTypeName           string
-	DestinationWebhookID   uint `gorm:"not null"`
+	DestinationKind        string `gorm:"not null;default:channel;index"`
+	DestinationWebhookID   uint
 	DestinationChannelID   string
 	DestinationChannelName string
 	CreatedAt              time.Time
@@ -799,6 +800,12 @@ func ValidateProductionNotificationConfig(db *gorm.DB, productionID string, rout
 			issues = append(issues, "Task Type IDs must be unique")
 		} else {
 			seen[taskTypeID] = struct{}{}
+		}
+		// Only channel routes are bound to a Discord webhook. DM and
+		// record-only routes resolve their destination at send time.
+		kind := strings.TrimSpace(route.DestinationKind)
+		if kind != "" && kind != "channel" {
+			continue
 		}
 		webhook := FindProjectWebhookByID(db, route.DestinationWebhookID)
 		if webhook == nil || webhook.KitsuProjectID != productionID || strings.TrimSpace(webhook.WebhookURL) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" {

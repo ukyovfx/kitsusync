@@ -166,16 +166,22 @@ func applyProductionNotificationState(db *gorm.DB, projectID uint, productionID,
 			if id == "" {
 				return gorm.ErrInvalidData
 			}
+			recordOnly := laneTypeOrDefault(routes[i].DestinationKind) == LaneRecordOnly
 			if routes[i].DestinationWebhookID == 0 {
 				webhook := webhooksByTask[id]
 				if webhook == nil {
-					return gorm.ErrInvalidData
+					// A record-only route legitimately has no Discord
+					// destination; every other lane needs one.
+					if !recordOnly {
+						return gorm.ErrInvalidData
+					}
+				} else {
+					if err := tx.Create(webhook).Error; err != nil {
+						return err
+					}
+					routes[i].DestinationWebhookID = webhook.ID
+					delete(webhooksByTask, id)
 				}
-				if err := tx.Create(webhook).Error; err != nil {
-					return err
-				}
-				routes[i].DestinationWebhookID = webhook.ID
-				delete(webhooksByTask, id)
 			}
 			if _, ok := live[id]; ok {
 				return gorm.ErrInvalidData

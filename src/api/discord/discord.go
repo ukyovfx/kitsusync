@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -809,6 +810,210 @@ func discordHTTPErrorCategory(statusCode int) string {
 	}
 }
 
+// discordBotAPI is the Discord Bot API base used for DM delivery. Webhook
+// delivery keeps using the stored webhook URL and never touches this API.
+// It is a variable so tests can point it at an httptest server.
+var discordBotAPI = "https://discord.com/api/v10"
+
+// SetDiscordBotAPIBase overrides the Discord Bot API base and returns the
+// previous value. Test hook only.
+func SetDiscordBotAPIBase(base string) string {
+	previous := discordBotAPI
+	discordBotAPI = strings.TrimSpace(base)
+	return previous
+}
+
+// ResetDMChannelCache drops every cached DM channel. Test hook only.
+func ResetDMChannelCache() {
+	dmChannelCache.Range(func(key, _ any) bool {
+		dmChannelCache.Delete(key)
+		return true
+	})
+}
+
+// dmChannelCache caches opened DM channel IDs per recipient user ID. Discord
+// returns a stable channel ID for the same user pair, so one lookup per
+// process lifetime is enough; a 404 on send clears the entry.
+var dmChannelCache sync.Map
+
+// OpenDMChannel opens (or reuses) the DM channel between the bot and a user.
+// The bot token is never logged and never stored in the journal.
+func OpenDMChannel(botToken, recipientID string) (string, error) {
+	recipientID = strings.TrimSpace(recipientID)
+	if strings.TrimSpace(botToken) == "" || recipientID == "" {
+		return "", fmt.Errorf("dm channel request is incomplete")
+	}
+	if cached, ok := dmChannelCache.Load(recipientID); ok {
+		if id, _ := cached.(string); id != "" {
+			return id, nil
+		}
+	}
+	body, err := json.Marshal(map[string]string{"recipient_id": recipientID})
+	if err != nil {
+		return "", fmt.Errorf("dm channel request could not be encoded")
+	}
+	req, err := http.NewRequest(http.MethodPost, discordBotAPI+"/users/@me/channels", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("dm channel request could not be prepared")
+	}
+	req.Header.Set("Authorization", "Bot "+botToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("dm channel request failed")
+	}
+	defer resp.Body.Close()
+	body, err = io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("dm channel open returned HTTP %d", resp.StatusCode)
+	}
+	var opened struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &opened); err != nil || strings.TrimSpace(opened.ID) == "" {
+		return "", fmt.Errorf("dm channel response is invalid")
+	}
+	dmChannelCache.Store(recipientID, strings.TrimSpace(opened.ID))
+	return strings.TrimSpace(opened.ID), nil
+}
+
+// SendDirectMessage posts one payload to an open DM channel via the bot API.
+// Webhook-only fields (username/avatar) are stripped because the bot message
+// endpoint rejects them. Retry and failure classification mirror SendMessage.
+func SendDirectMessage(botToken, dmChannelID string, payload Payload) SendResult {
+	if strings.TrimSpace(botToken) == "" {
+		return SendResult{FailureCategory: "dm_bot_token_missing"}
+	}
+	if strings.TrimSpace(dmChannelID) == "" {
+		return SendResult{FailureCategory: "dm_channel_unavailable"}
+	}
+	payload.Username, payload.AvatarUrl = "", ""
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return SendResult{FailureCategory: "invalid_payload"}
+	}
+	req, err := http.NewRequest(http.MethodPost, discordBotAPI+"/channels/"+url.PathEscape(strings.TrimSpace(dmChannelID))+"/messages", bytes.NewReader(body))
+	if err != nil {
+		return SendResult{FailureCategory: "invalid_payload"}
+	}
+	req.Header.Set("Authorization", "Bot "+botToken)
+	req.Header.Set("Content-Type", "application/json")
+	const maxAttempts = 3
+	var respBody []byte
+	var statusCode int
+	for attempt := 0; attempt <= maxAttempts; attempt++ {
+		resp, err := (&http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+		if err != nil {
+			slog.Error("SendDirectMessage: request failed", "category", "network_error", "attempt", attempt+1)
+			return SendResult{FailureCategory: "network_error", Unknown: true}
+		}
+		respBody, err = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		statusCode = resp.StatusCode
+		resp.Body.Close()
+		if err != nil {
+			return SendResult{FailureCategory: "unknown_response", Unknown: true}
+		}
+		if statusCode != http.StatusTooManyRequests {
+			break
+		}
+		wait := time.Second
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			if v, e := strconv.ParseFloat(ra, 64); e == nil && v > 0 {
+				wait = time.Duration(v * float64(time.Second))
+			}
+		}
+		const maxRateLimitWait = 30 * time.Second
+		if wait > maxRateLimitWait {
+			return SendResult{FailureCategory: "rate_limited", Retryable: true}
+		}
+		time.Sleep(wait)
+		// Rebuild the reader consumed by the previous attempt.
+		req, err = http.NewRequest(http.MethodPost, discordBotAPI+"/channels/"+url.PathEscape(strings.TrimSpace(dmChannelID))+"/messages", bytes.NewReader(body))
+		if err != nil {
+			return SendResult{FailureCategory: "invalid_payload"}
+		}
+		req.Header.Set("Authorization", "Bot "+botToken)
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		slog.Error("SendDirectMessage: non-2xx response", "status", statusCode, "category", discordHTTPErrorCategory(statusCode))
+		if statusCode == http.StatusNotFound {
+			// The cached DM channel disappeared; drop it so the next attempt reopens.
+			return SendResult{FailureCategory: "dm_channel_unavailable"}
+		}
+		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests, Unknown: statusCode >= 500}
+	}
+	var msg DiscordMessage
+	if err := json.Unmarshal(respBody, &msg); err != nil || strings.TrimSpace(msg.ID) == "" {
+		return SendResult{FailureCategory: "unknown_response", Unknown: true}
+	}
+	return SendResult{MessageID: msg.ID}
+}
+
+// dispatchPreparedDirectMessage sends an already-prepared DM journal event via
+// the bot API and commits the durable outcome. The DM channel is resolved at
+// send time from the recorded recipient, so an open failure is a delivery
+// outcome like any other: with allowFallback the event is released back to
+// pending so the caller's fallback chain can retarget it, and only a caller
+// with no fallback turns the failure terminal.
+func dispatchPreparedDirectMessage(db *gorm.DB, event model.NotificationDeliveryEvent, botToken string, allowFallback bool) SendResult {
+	if event.Disposition == model.DeliveryDelivered {
+		return SendResult{Durable: true, AlreadyDelivered: true, MessageID: event.DiscordMessageID}
+	}
+	attempt, started, err := model.BeginNotificationDeliveryForEvent(db, event, time.Now().UTC())
+	if err != nil || !started {
+		return SendResult{FailureCategory: "delivery_not_dispatchable", Unknown: event.Disposition == model.DeliveryInFlight || event.Disposition == model.DeliveryUnknown}
+	}
+	var persisted Payload
+	if err := json.Unmarshal([]byte(attempt.Event.PayloadJSON), &persisted); err != nil {
+		if stateErr := model.SetNotificationDeliveryDisposition(db, *attempt, model.DeliveryTerminalFailure, "invalid_persisted_payload"); stateErr != nil {
+			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+		}
+		return SendResult{FailureCategory: "invalid_persisted_payload"}
+	}
+	dmChannelID, openErr := OpenDMChannel(botToken, attempt.Event.DestinationTarget)
+	if openErr != nil {
+		result := SendResult{FailureCategory: "dm_channel_unavailable"}
+		if allowFallback {
+			if stateErr := model.ReleaseNotificationDeliveryForFallback(db, *attempt, result.FailureCategory); stateErr != nil {
+				return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+			}
+			return result
+		}
+		if stateErr := model.SetNotificationDeliveryDisposition(db, *attempt, model.DeliveryTerminalFailure, result.FailureCategory); stateErr != nil {
+			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+		}
+		return result
+	}
+	result := SendDirectMessage(botToken, dmChannelID, persisted)
+	if result.MessageID == "" {
+		if allowFallback && dmFallbackEligible(result) {
+			if stateErr := model.ReleaseNotificationDeliveryForFallback(db, *attempt, result.FailureCategory); stateErr != nil {
+				return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+			}
+			return result
+		}
+		disposition := model.DeliveryTerminalFailure
+		if result.Unknown {
+			disposition = model.DeliveryUnknown
+		} else if result.Retryable {
+			disposition = model.DeliveryRetryable
+		}
+		if stateErr := model.SetNotificationDeliveryDisposition(db, *attempt, disposition, result.FailureCategory); stateErr != nil {
+			return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+		}
+		return result
+	}
+	if err := model.CompleteNotificationDelivery(db, *attempt, result.MessageID, "", time.Now().UTC()); err != nil {
+		if quarantineErr := model.QuarantineAcceptedButUnpersisted(db, *attempt); quarantineErr != nil {
+			slog.Error("Accepted Discord DM requires reconciliation", "error_class", "accepted_dm_checkpoint_uncommitted", "event", attempt.Event.EventID[:12], "quarantine_state", "durable_attempt_retained")
+		}
+		return SendResult{FailureCategory: "delivery_persistence_failed", Unknown: true}
+	}
+	result.Durable = true
+	return result
+}
+
 // DiscordWebhookIDFromURL extracts only the non-secret webhook snowflake.
 // Tokens are never returned, formatted in errors, or written to the journal.
 func DiscordWebhookIDFromURL(raw string) (string, error) {
@@ -862,6 +1067,24 @@ func VerifyWebhookIdentity(raw, expectedWebhookID, expectedGuildID, expectedChan
 	return nil
 }
 
+// DiscordBotTokenResolver supplies the runtime Discord bot token used to open
+// DM channels. main injects the DB/env/conf resolution at startup.
+var DiscordBotTokenResolver func() string
+
+func discordBotToken() string {
+	if DiscordBotTokenResolver != nil {
+		return strings.TrimSpace(DiscordBotTokenResolver())
+	}
+	return strings.TrimSpace(os.Getenv("DISCORD_BOT_TOKEN"))
+}
+
+// dmFallbackEligible reports whether a failed DM delivery may advance to the
+// next fallback destination. Temporary failures (rate limit, 5xx, unknown
+// outcomes) must stay on the DM lane and retry there instead.
+func dmFallbackEligible(result SendResult) bool {
+	return result.MessageID == "" && !result.Retryable && !result.Unknown && result.FailureCategory != ""
+}
+
 func sendDurableNotification(db *gorm.DB, elem kitsu.MessagePayload, payload Payload, webhookURL, threadName, notificationRevision string) SendResult {
 	webhookID, err := DiscordWebhookIDFromURL(webhookURL)
 	if err != nil {
@@ -871,6 +1094,15 @@ func sendDurableNotification(db *gorm.DB, elem kitsu.MessagePayload, payload Pay
 	if err != nil {
 		return SendResult{FailureCategory: "unverified_destination"}
 	}
+	if destination.LaneType == "dm" {
+		return sendDurableNotificationWithFallback(db, elem, payload, destination, webhookURL, threadName, notificationRevision)
+	}
+	return sendDurableChannelNotification(db, elem, payload, destination, webhookURL, threadName, notificationRevision)
+}
+
+// sendDurableChannelNotification is the classic single-destination webhook
+// delivery used by channel-lane routes and by the DM chain's channel stages.
+func sendDurableChannelNotification(db *gorm.DB, elem kitsu.MessagePayload, payload Payload, destination model.NotificationDestinationIdentity, webhookURL, threadName, notificationRevision string) SendResult {
 	previous, err := model.LatestDeliveredNotificationForDestination(db, elem.Task.ID, destination)
 	if err != nil {
 		return SendResult{FailureCategory: "delivery_state_read_failed"}
@@ -902,7 +1134,126 @@ func sendDurableNotification(db *gorm.DB, elem kitsu.MessagePayload, payload Pay
 	return dispatchPreparedNotification(db, *event, webhookURL)
 }
 
-func dispatchPreparedNotification(db *gorm.DB, event model.NotificationDeliveryEvent, webhookURL string) SendResult {
+// sendDurableNotificationWithFallback implements the DM-lane delivery chain:
+// DM → work channel with mention → global channel → stuck record in the
+// delivery ledger. Temporary failures (429/5xx/unknown) never advance the
+// chain; they stay on the current lane and retry there.
+func sendDurableNotificationWithFallback(db *gorm.DB, elem kitsu.MessagePayload, payload Payload, destination model.NotificationDestinationIdentity, webhookURL, threadName, notificationRevision string) SendResult {
+	botToken := discordBotToken()
+	recipients := uniqueDiscordIDs(payload.AllowedMentions.Users)
+	// Resolve the content-only channel identity first, then the DM identity
+	// for the primary recipient: a retargeted event keeps its original DM
+	// event ID, so both forms must be checked for the chain to resume.
+	contentIntent := model.NotificationDeliveryIntent{
+		TaskID: elem.Task.ID, ProductionID: elem.Project.ID, TaskTypeID: elem.TaskType.ID,
+		TaskStatus: strings.ToUpper(strings.TrimSpace(elem.TaskStatus.ShortName)), TaskUpdatedAt: elem.Task.UpdatedAt,
+		CommentID: elem.LatestComment.Comment.ID, CommentUpdatedAt: elem.LatestComment.Comment.UpdatedAt,
+		IsAssignNotification: elem.IsAssignNotification,
+	}
+	existing, lookupErr := model.FindNotificationDeliveryByID(db, model.NotificationEventIdentity(contentIntent))
+	if lookupErr != nil {
+		return SendResult{FailureCategory: "delivery_state_read_failed"}
+	}
+	if existing == nil && len(recipients) > 0 {
+		dmLookup := contentIntent
+		dmLookup.LaneType = model.LaneDM
+		dmLookup.DestinationTarget = recipients[0]
+		dmLookup.ChannelID = recipients[0]
+		existing, lookupErr = model.FindNotificationDeliveryByID(db, model.NotificationEventIdentity(dmLookup))
+		if lookupErr != nil {
+			return SendResult{FailureCategory: "delivery_state_read_failed"}
+		}
+	}
+	if existing != nil {
+		switch existing.Disposition {
+		case model.DeliveryDelivered:
+			return SendResult{Durable: true, AlreadyDelivered: true, MessageID: existing.DiscordMessageID}
+		case model.DeliveryPending, model.DeliveryRetryable:
+			if existing.LaneType == model.LaneDM {
+				result := dispatchPreparedDirectMessage(db, *existing, botToken, true)
+				if result.MessageID != "" || !dmFallbackEligible(result) {
+					return result
+				}
+				// Permanent DM failure: the event is back to pending; retarget
+				// to the work channel below.
+				return sendDurableChannelFallback(db, elem, payload, destination, webhookURL, threadName, notificationRevision, existing.EventID)
+			}
+			return dispatchPreparedNotification(db, *existing, webhookURL, true)
+		default:
+			return SendResult{FailureCategory: "delivery_not_dispatchable", Unknown: existing.Disposition == model.DeliveryUnknown || existing.Disposition == model.DeliveryInFlight}
+		}
+	}
+	if len(recipients) == 0 {
+		// No DM recipient can be resolved: the DM lane is unavailable by
+		// configuration, so deliver through the work channel directly.
+		return sendDurableChannelNotification(db, elem, payload, destination, webhookURL, threadName, notificationRevision)
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return SendResult{FailureCategory: "invalid_payload"}
+	}
+	// The DM conversation identity is the recipient; the actual DM channel is
+	// resolved at send time so an open failure stays a recoverable outcome.
+	dmIntent := model.NotificationDeliveryIntent{
+		TaskID: elem.Task.ID, ProductionID: elem.Project.ID, TaskTypeID: elem.TaskType.ID,
+		TaskStatus: strings.ToUpper(strings.TrimSpace(elem.TaskStatus.ShortName)), TaskUpdatedAt: elem.Task.UpdatedAt,
+		CommentID: elem.LatestComment.Comment.ID, CommentUpdatedAt: elem.LatestComment.Comment.UpdatedAt,
+		IsAssignNotification: elem.IsAssignNotification, LaneType: model.LaneDM, DestinationTarget: recipients[0],
+		Payload: payloadBytes, WebhookRowID: 0, GuildID: "", ChannelID: recipients[0], DiscordWebhookID: "",
+		NotificationRevision: notificationRevision,
+	}
+	event, err := model.PrepareNotificationDelivery(db, dmIntent)
+	if err != nil {
+		return SendResult{FailureCategory: "delivery_intent_persist_failed", Unknown: errors.Is(err, model.ErrDeliveryIdentityConflict)}
+	}
+	result := dispatchPreparedDirectMessage(db, *event, botToken, true)
+	if result.MessageID != "" || !dmFallbackEligible(result) {
+		// Additional recipients get best-effort DMs once the primary is durable.
+		if result.MessageID != "" && botToken != "" {
+			for _, extra := range recipients[1:] {
+				if extraChannelID, openErr := OpenDMChannel(botToken, extra); openErr == nil {
+					if extraResult := SendDirectMessage(botToken, extraChannelID, payload); extraResult.MessageID != "" {
+						slog.Info("Additional DM delivered", "taskID", elem.Task.ID, "recipient", extra)
+					}
+				}
+			}
+		}
+		return result
+	}
+	return sendDurableChannelFallback(db, elem, payload, destination, webhookURL, threadName, notificationRevision, event.EventID)
+}
+// sendDurableChannelFallback continues the DM-lane chain on the work channel:
+// retarget the pending intent, dispatch through the normal webhook path, then
+// the production global channel, and finally record the exhausted chain as a
+// stuck row in the delivery ledger.
+func sendDurableChannelFallback(db *gorm.DB, elem kitsu.MessagePayload, payload Payload, destination model.NotificationDestinationIdentity, webhookURL, threadName, notificationRevision, eventID string) SendResult {
+	// Permanent DM failure: retarget the durable intent to the work channel.
+	if retargetErr := model.RetargetNotificationDelivery(db, eventID, model.LaneChannel, destination.ChannelID, destination.WebhookRowID, destination.GuildID, destination.ChannelID, destination.WebhookID); retargetErr != nil {
+		return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+	}
+	refreshed, refreshErr := model.FindNotificationDeliveryByID(db, eventID)
+	if refreshErr != nil || refreshed == nil {
+		return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+	}
+	channelResult := dispatchPreparedNotification(db, *refreshed, webhookURL, true)
+	if channelResult.MessageID != "" || !dmFallbackEligible(channelResult) {
+		return channelResult
+	}
+	// Global channel: last resort. Direct send, outcome recorded post-hoc.
+	if global := model.FindProductionGlobalWebhook(db, elem.Project.ID); global != nil && strings.TrimSpace(global.WebhookURL) != "" {
+		globalResult := SendMessage(payload, global.WebhookURL, "", "")
+		delivered := globalResult.MessageID != ""
+		_ = model.RecordGlobalFallbackOutcome(db, eventID, global.ID, global.DiscordChannelID, delivered, globalResult.MessageID)
+		if delivered {
+			return SendResult{Durable: true, MessageID: globalResult.MessageID}
+		}
+	}
+	_ = model.SetUnstartedNotificationDeliveryDisposition(db, eventID, model.DeliveryTerminalFailure, "delivery_fallback_exhausted")
+	return SendResult{FailureCategory: "delivery_fallback_exhausted"}
+}
+
+func dispatchPreparedNotification(db *gorm.DB, event model.NotificationDeliveryEvent, webhookURL string, allowFallback ...bool) SendResult {
+	fallbackAllowed := len(allowFallback) > 0 && allowFallback[0]
 	webhookID, err := DiscordWebhookIDFromURL(webhookURL)
 	if err != nil || webhookID != event.DestinationWebhookID {
 		if stateErr := model.SetUnstartedNotificationDeliveryDisposition(db, event.EventID, model.DeliveryTerminalFailure, "webhook_identity_changed"); stateErr != nil {
@@ -939,6 +1290,12 @@ func dispatchPreparedNotification(db *gorm.DB, event model.NotificationDeliveryE
 	}
 	result := SendMessage(persisted, webhookURL, attempt.Event.PriorThreadID, attempt.Event.ThreadName)
 	if result.MessageID == "" {
+		if fallbackAllowed && dmFallbackEligible(result) {
+			if stateErr := model.ReleaseNotificationDeliveryForFallback(db, *attempt, result.FailureCategory); stateErr != nil {
+				return SendResult{FailureCategory: "delivery_state_persist_failed", Unknown: true}
+			}
+			return result
+		}
 		disposition := model.DeliveryTerminalFailure
 		if result.Unknown {
 			disposition = model.DeliveryUnknown

@@ -4,7 +4,28 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
-- No unreleased changes yet.
+### Added — Phase 1 notification routing lanes (design-v2)
+
+- Production notification routes now carry a destination lane kind
+  (`channel` / `dm` / `record_only`). Existing channel routes keep working
+  unchanged; the lane kind is an additive column with `channel` as default.
+- DM delivery for the four direct-address events: WFA → designated reviewer
+  (resolved through the existing ReviewerTarget / CheckerMap chains), RETAKE →
+  assignee, assignment change → new assignee, approval (DONE) → assignee. DMs
+  are opened through the Discord Bot API using the existing encrypted runtime
+  bot token (`discord.runtime_bot_token_encrypted`); channel-destined
+  notifications keep the existing webhook path.
+- Fallback order for DM-lane notifications: DM → work channel with mention →
+  production global channel → stuck record in the delivery ledger. Temporary
+  failures (429/5xx) stay on the current lane and honor `retry_after`.
+- Per-production polling visibility on the admin health screen: whether the
+  bot still observes each production, its task count, and the last polling
+  success time; zero-task or never-polled productions are shown as warnings.
+- Open-production liveness monitor: three consecutive zero-task polls raise a
+  one-shot notice to the operations channel; it does not repeat until tasks
+  are visible again.
+- Delivery journal records the lane kind and resolved destination for every
+  send (item 6 of the Phase 1 brief).
 
 ## v0.5.4
 
