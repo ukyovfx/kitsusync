@@ -163,7 +163,7 @@ func TestUserLinkingLongDiscordNicknameUsesConstrainedIdentityCell(t *testing.T)
 func TestUserLinkingExistingSaveAndUnlinkControlsRemain(t *testing.T) {
 	db := userLinkingIdentityDB(t, "123456789012345678", "cached")
 	body := renderUserLinkingIdentity(db, "en", userLinkingIdentityDirectory(globalDiscordUserOption{ID: "123456789012345678", Username: "global_user", Name: "Guild Nick"}))
-	if strings.Count(body, `type="submit" disabled`) != 1 || !strings.Contains(body, `action" value="save_global_links"`) || !strings.Contains(body, `name="unlink_user_id"`) {
+	if strings.Count(body, `type="submit"`) != 2 || !strings.Contains(body, `id="user-linking-save" disabled`) || !strings.Contains(body, `action" value="save_global_links"`) || !strings.Contains(body, `name="unlink_user_id"`) {
 		t.Fatal("User Linking bulk save/unlink actions or disabled initial Save behavior changed")
 	}
 }

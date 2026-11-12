@@ -103,6 +103,8 @@ func saveGlobalUserLink(db *gorm.DB, r *http.Request) (bool, string) {
 
 // saveGlobalUserLinks applies a bulk save. Each submitted row is validated with
 // the same rules as a single save; rows the client did not change are not sent.
+// The Discord directory is read once, and every row is resolved before any row
+// is written, so a rejected row cannot leave a partial apply behind.
 func saveGlobalUserLinks(db *gorm.DB, r *http.Request) string {
 	_ = r.ParseForm()
 	userIDs := r.PostForm["bulk_user_id"]
@@ -111,42 +113,49 @@ func saveGlobalUserLinks(db *gorm.DB, r *http.Request) string {
 	kitsuEmails := r.PostForm["bulk_kitsu_email"]
 	discordIDs := r.PostForm["bulk_discord_user_id"]
 	guildID := strings.TrimSpace(r.FormValue("discord_guild_id"))
-	saved, failed := 0, 0
+	directory, err := globalDiscordDirectoryReader(storedRuntimeDiscordBotToken(db), guildID)
+	validatedGuildID := validatedDiscordGuildSelection(directory, guildID)
+	if err != nil || validatedGuildID == "" {
+		return globalUserLinkingURL(r, validatedGuildID, "error")
+	}
+	type linkRow struct{ kitsuID, kitsuName, kitsuEmail, discordID, discordName string }
+	rows := make([]linkRow, 0, len(discordIDs))
 	for i, discordID := range discordIDs {
 		if i >= len(userIDs) || i >= len(kitsuIDs) {
-			failed++
-			continue
+			return globalUserLinkingURL(r, validatedGuildID, "error")
 		}
-		row := url.Values{
-			"action":          {"save_global_link"},
-			"user_id":         {userIDs[i]},
-			"kitsu_id":        {kitsuIDs[i]},
-			"kitsu_name":      {formValueAt(kitsuNames, i)},
-			"kitsu_email":     {formValueAt(kitsuEmails, i)},
-			"discord_guild_id": {guildID},
-			"discord_user_id": {discordID},
+		selected := globalDiscordUserOption{}
+		for _, option := range directory.Options {
+			if strings.TrimSpace(option.ID) == strings.TrimSpace(discordID) {
+				selected = option
+				break
+			}
 		}
-		rowRequest := r.Clone(r.Context())
-		rowRequest.Form = row
-		rowRequest.PostForm = row
-		if ok, _ := saveGlobalUserLink(db, rowRequest); ok {
-			saved++
-		} else {
-			failed++
+		if selected.ID == "" || !isDiscordSnowflake(selected.ID) {
+			return globalUserLinkingURL(r, validatedGuildID, "error")
 		}
+		kitsuID, kitsuName, kitsuEmail := kitsuIDs[i], formValueAt(kitsuNames, i), formValueAt(kitsuEmails, i)
+		if id := parseUint(userIDs[i]); id > 0 {
+			user := model.FindUserMapByID(db, id)
+			if user == nil {
+				return globalUserLinkingURL(r, validatedGuildID, "error")
+			}
+			if strings.TrimSpace(user.KitsuName) != "" {
+				kitsuName = user.KitsuName
+			}
+			if strings.TrimSpace(user.KitsuEmail) != "" {
+				kitsuEmail = user.KitsuEmail
+			}
+		}
+		rows = append(rows, linkRow{kitsuID: kitsuID, kitsuName: kitsuName, kitsuEmail: kitsuEmail, discordID: selected.ID, discordName: selected.Name})
 	}
-	message := "saved"
-	if failed > 0 {
-		message = "error"
+	if len(rows) == 0 {
+		return globalUserLinkingURL(r, validatedGuildID, "")
 	}
-	validatedGuildID := ""
-	if directory, err := globalDiscordDirectoryReader(storedRuntimeDiscordBotToken(db), guildID); err == nil {
-		validatedGuildID = validatedDiscordGuildSelection(directory, guildID)
+	for _, row := range rows {
+		model.UpsertUserMapWithIdentity(db, row.kitsuID, row.kitsuName, row.kitsuEmail, directory.SelectedGuild.ID, row.discordID, row.discordName)
 	}
-	if saved == 0 && failed == 0 {
-		message = ""
-	}
-	return globalUserLinkingURL(r, validatedGuildID, message)
+	return globalUserLinkingURL(r, validatedGuildID, "saved")
 }
 
 func formValueAt(values []string, index int) string {
@@ -156,7 +165,8 @@ func formValueAt(values []string, index int) string {
 	return ""
 }
 
-func globalUserLinkingURL(r *http.Request, validatedGuildID, message string) string {	path := "/bot/admin/users"
+func globalUserLinkingURL(r *http.Request, validatedGuildID, message string) string {
+	path := "/bot/admin/users"
 	if isDiscordSnowflake(validatedGuildID) {
 		path += "?discord_guild_id=" + url.QueryEscape(validatedGuildID)
 	}

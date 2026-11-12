@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"app/src/api/kitsu"
 	"app/src/model"
@@ -22,7 +21,6 @@ func TestFirstTimeConnectionCheckpointsExistingTasksSilently(t *testing.T) {
 	previousOps := firstTimeOps
 	firstTimeOps = firstTimeTestOps(func(name string) (string, error) { return "channel-" + name, nil })
 	defer func() { firstTimeOps = previousOps }()
-	statusesFetched := make(chan struct{}, 1)
 	previousFetch := firstTimeFetchTasks
 	firstTimeFetchTasks = func() (kitsu.Tasks, error) {
 		return kitsu.Tasks{Each: []kitsu.Task{
@@ -33,31 +31,36 @@ func TestFirstTimeConnectionCheckpointsExistingTasksSilently(t *testing.T) {
 	defer func() { firstTimeFetchTasks = previousFetch }()
 	previousStatuses := firstTimeFetchTaskStatuses
 	firstTimeFetchTaskStatuses = func() (kitsu.TaskStatuses, error) {
-		defer func() { statusesFetched <- struct{}{} }()
 		return kitsu.TaskStatuses{Each: []kitsu.TaskStatus{{ID: "s-wfa", ShortName: "wfa"}, {ID: "s-todo", ShortName: "todo"}}}, nil
 	}
 	defer func() { firstTimeFetchTaskStatuses = previousStatuses }()
+	previousComments := firstTimeFetchComments
+	firstTimeFetchComments = func() (kitsu.Comments, error) {
+		return kitsu.Comments{Each: []kitsu.Comment{
+			{ID: "c-old", ObjectID: "waiting", UpdatedAt: "2025-12-31T00:00:00"},
+			{ID: "c-new", ObjectID: "waiting", UpdatedAt: "2026-01-01T00:00:00"},
+		}}, nil
+	}
+	defer func() { firstTimeFetchComments = previousComments }()
 
 	w := httptest.NewRecorder()
 	if !handleFirstTimeConnectionAction(w, firstTimeTestRequest("execute_production_connection", firstTimeTestPlan()), "en", "https://kitsu.invalid/", "bot-token", db) {
 		t.Fatal("first-time execution was not handled")
 	}
-	<-statusesFetched
-	// The checkpoint runs after the response; give the write a moment to land.
-	deadline := time.Now().Add(2 * time.Second)
-	var checkpoint model.Task
-	for time.Now().Before(deadline) {
-		checkpoint, _ = model.FindTaskWithError(db, "waiting")
-		if checkpoint.TaskID != "" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	checkpoint, _ := model.FindTaskWithError(db, "waiting")
 	if checkpoint.TaskID == "" || checkpoint.DeliveredTaskStatus != "wfa" || checkpoint.DeliveredTaskUpdatedAt != "2026-01-01T00:00:00" {
 		t.Fatalf("pre-existing task was not silently checkpointed: %#v", checkpoint)
 	}
+	// Pre-existing comments must be part of the baseline too, otherwise the
+	// first poll reports them as a comment change.
+	if checkpoint.DeliveredCommentID != "c-new" || checkpoint.DeliveredCommentUpdatedAt != "2026-01-01T00:00:00" {
+		t.Fatalf("checkpoint did not record the existing comment: %#v", checkpoint)
+	}
 	if other, _ := model.FindTaskWithError(db, "other-production"); other.TaskID != "" {
 		t.Fatal("checkpoint touched a task outside the connected production")
+	}
+	if InitialCheckpointPending("p1") {
+		t.Fatal("checkpoint left the production suppressed after finishing")
 	}
 
 	// The first poll after connecting sees no change, so nothing is notified.
@@ -85,5 +88,25 @@ func TestFirstTimeConnectionSurvivesCheckpointFetchFailure(t *testing.T) {
 	}
 	if model.FindProjectByKitsuID(db, "p1") == nil {
 		t.Fatal("checkpoint failure blocked the connection")
+	}
+	if InitialCheckpointPending("p1") {
+		t.Fatal("failed checkpoint left the production suppressed forever")
+	}
+}
+
+// A poll that runs while the connection is still checkpointing must not report
+// the pre-existing work.
+func TestInitialCheckpointSuppressesNotificationsUntilItCompletes(t *testing.T) {
+	db := newIAViewDB(t)
+	if err := db.AutoMigrate(&model.Task{}); err != nil {
+		t.Fatal(err)
+	}
+	markInitialCheckpointPending("p1")
+	defer clearInitialCheckpointPending("p1")
+	if !InitialCheckpointPending("p1") {
+		t.Fatal("production was not marked as awaiting its initial checkpoint")
+	}
+	if InitialCheckpointPending("p2") {
+		t.Fatal("suppression leaked to another production")
 	}
 }

@@ -124,13 +124,53 @@ var firstTimeFetchTasks = func() (kitsu.Tasks, error) { return kitsu.GetTasksWit
 // firstTimeFetchTaskStatuses returns the Kitsu task statuses; injectable for tests.
 var firstTimeFetchTaskStatuses = func() (kitsu.TaskStatuses, error) { return kitsu.GetTaskStatusesWithError() }
 
+// firstTimeFetchComments returns the Kitsu comments; injectable for tests.
+var firstTimeFetchComments = func() (kitsu.Comments, error) { return kitsu.GetCommentsWithError() }
+
 var firstTimeExecutionMu sync.Mutex
+
+// checkpointPendingProductionIDs holds productions whose initial checkpoint has
+// not finished yet. Polling must not notify for them, otherwise the first poll
+// that races the connection would report pre-existing work.
+var checkpointPendingProductionIDs sync.Map
+
+// markInitialCheckpointPending suppresses notifications for a production until
+// its initial checkpoint completes (or fails).
+func markInitialCheckpointPending(productionID string) {
+	if productionID = strings.TrimSpace(productionID); productionID != "" {
+		checkpointPendingProductionIDs.Store(productionID, struct{}{})
+	}
+}
+
+// ClearInitialCheckpointPending ends the suppression for a production.
+func ClearInitialCheckpointPending(productionID string) {
+	checkpointPendingProductionIDs.Delete(strings.TrimSpace(productionID))
+}
+
+func clearInitialCheckpointPending(productionID string) {
+	ClearInitialCheckpointPending(productionID)
+}
+
+// MarkInitialCheckpointPending suppresses notifications for a production until
+// its initial checkpoint completes.
+func MarkInitialCheckpointPending(productionID string) {
+	markInitialCheckpointPending(productionID)
+}
+
+// InitialCheckpointPending reports whether a production still waits for its
+// initial silent checkpoint. The poll loop observes the same state instead of
+// notifying for work that existed before the connection.
+func InitialCheckpointPending(productionID string) bool {
+	_, pending := checkpointPendingProductionIDs.Load(strings.TrimSpace(productionID))
+	return pending
+}
 
 // checkpointInitialTaskStates silently records the task states that already
 // exist when a production is first connected, so the first poll does not
 // notify for work that was already waiting. Only later changes notify.
 // Best effort: a failure here must never fail the connection.
 func checkpointInitialTaskStates(db *gorm.DB, projectID string) {
+	defer clearInitialCheckpointPending(projectID)
 	tasks, err := firstTimeFetchTasks()
 	if err != nil {
 		slog.Warn("initial task checkpoint skipped", "project_id", projectID, "error", err)
@@ -145,14 +185,34 @@ func checkpointInitialTaskStates(db *gorm.DB, projectID string) {
 	for _, status := range statuses.Each {
 		shortNameByID[status.ID] = status.ShortName
 	}
+	latestComment := latestCommentByTask(projectID)
 	for _, task := range tasks.Each {
 		if task.ProjectID != projectID || !isNotifiableTaskStatus(shortNameByID[task.TaskStatusID]) {
 			continue
 		}
-		if err := model.MarkTaskObserved(db, task.ID, task.UpdatedAt, shortNameByID[task.TaskStatusID], "", ""); err != nil {
+		commentID, commentUpdatedAt := latestComment[task.ID].ID, latestComment[task.ID].UpdatedAt
+		if err := model.MarkTaskObserved(db, task.ID, task.UpdatedAt, shortNameByID[task.TaskStatusID], commentID, commentUpdatedAt); err != nil {
 			slog.Warn("initial task checkpoint failed", "project_id", projectID, "task_id", task.ID, "error", err)
 		}
 	}
+}
+
+// latestCommentByTask indexes the newest comment per task so the checkpoint
+// matches what the poll loop compares against. Comments are optional: without
+// them the checkpoint only covers task state.
+func latestCommentByTask(projectID string) map[string]kitsu.Comment {
+	comments, err := firstTimeFetchComments()
+	if err != nil {
+		slog.Warn("initial task checkpoint without comments", "project_id", projectID, "error", err)
+		return nil
+	}
+	latest := make(map[string]kitsu.Comment, len(comments.Each))
+	for _, comment := range comments.Each {
+		if current, ok := latest[comment.ObjectID]; !ok || comment.UpdatedAt > current.UpdatedAt {
+			latest[comment.ObjectID] = comment
+		}
+	}
+	return latest
 }
 
 func isNotifiableTaskStatus(status string) bool {
@@ -458,12 +518,15 @@ func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, la
 			return renderFirstTimeExecutionError(lang, r, "チャンネル順を反映できませんでした。保存済みの状態を確認してから再試行してください。")
 		}
 	}
+	// Suppress notifications for this production before its routing goes live:
+	// a poll that races the connection must not report pre-existing work.
+	markInitialCheckpointPending(plan.Project.ID)
 	if err := firstTimeActivateRouting(db, plan.Project.ID, plan.GuildID, rows); err != nil {
+		clearInitialCheckpointPending(plan.Project.ID)
 		markPendingChannelPlanFailure(db, rows, operationID, err.Error())
 		return renderFirstTimeExecutionError(lang, r, "接続を完了できませんでした。保存済みの状態を確認してから再試行してください。")
 	}
-	// The checkpoint is best effort and must not delay the completion page.
-	go checkpointInitialTaskStates(db, plan.Project.ID)
+	checkpointInitialTaskStates(db, plan.Project.ID)
 	completed = true
 	return adminPage(lang, tr(lang, "wizard.complete_title"), r, renderWizardFrame(lang, 7, renderWizardComplete(lang, r, db, plan)))
 }

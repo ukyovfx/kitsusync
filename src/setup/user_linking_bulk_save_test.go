@@ -87,8 +87,7 @@ func TestGlobalUserLinkingBulkSaveRejectsInvalidRowWithoutWritingOthers(t *testi
 	if !strings.Contains(response.Header().Get("Location"), "msg=error") {
 		t.Fatalf("bulk save did not report the rejected row: %q", response.Header().Get("Location"))
 	}
-	maps := model.ListUserMap(db)
-	if len(maps) != 1 || maps[0].KitsuID != "person-1" {
-		t.Fatalf("bulk save did not isolate the invalid row: %#v", maps)
+	if maps := model.ListUserMap(db); len(maps) != 0 {
+		t.Fatalf("a rejected row still applied part of the batch: %#v", maps)
 	}
 }

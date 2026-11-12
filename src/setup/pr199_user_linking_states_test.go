@@ -205,7 +205,7 @@ func TestPR199UserLinkingReadyTableExcludesBotsAndHasLanguageParity(t *testing.T
 	en := renderPR199UserLinking(t, db, "/bot/admin/users?lang=en&discord_guild_id="+guildID)
 	ja := renderPR199UserLinking(t, db, "/bot/admin/users?lang=ja&discord_guild_id="+guildID)
 	for _, body := range []string{en, ja} {
-		if !strings.Contains(body, `class="user-link-grid-row"`) || !strings.Contains(body, `type="submit" disabled`) {
+		if !strings.Contains(body, `class="user-link-grid-row"`) || !strings.Contains(body, `id="user-linking-save" disabled`) {
 			t.Fatal("ready state did not render the interactive four-column row")
 		}
 		if !strings.Contains(body, "Person One") || !strings.Contains(body, "Human User") {

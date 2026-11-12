@@ -1313,7 +1313,7 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 		Options:       []globalDiscordUserOption{{ID: "123456789012345678", Name: "Discord One"}},
 	}
 	body := renderGlobalUserLinkingTable(db, "en", directory, []KitsuPerson{{ID: "user-1", FullName: "User One", Active: true}})
-	if !strings.Contains(body, `type="submit" disabled`) {
+	if !strings.Contains(body, `id="user-linking-save" disabled`) {
 		t.Fatal("User Linking Save was not disabled initially")
 	}
 	if !strings.Contains(body, "data-initial-index") || !strings.Contains(body, "selectedIndex!==Number(select.dataset.initialIndex)") {

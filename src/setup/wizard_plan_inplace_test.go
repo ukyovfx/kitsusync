@@ -27,6 +27,14 @@ func TestWizardPlanExcludeUpdatesInPlace(t *testing.T) {
 	if !strings.Contains(body, "wizard-add-task-type") || !strings.Contains(body, "appendChild(option)") {
 		t.Fatal("excluded task type is not offered again in the add-task-type control")
 	}
+	// The prompt option must survive, and the type that just left the plan must
+	// be the one Add puts back.
+	if strings.Contains(body, "select.remove(0)") {
+		t.Fatal("excluding a row deleted the add-task-type prompt option")
+	}
+	if !strings.Contains(body, "select.value=id") {
+		t.Fatal("the excluded task type is not preselected for re-adding")
+	}
 	if !strings.Contains(body, `name="action" value="exclude"`) {
 		t.Fatal("exclude lost its no-JavaScript fallback submit")
 	}
