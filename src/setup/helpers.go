@@ -145,11 +145,13 @@ func ExternalKitsuURL(db *gorm.DB) string {
 	if raw == "" {
 		return ""
 	}
-	publicURL, err := validateKitsuEndpoint(raw)
+	// Read path: stored values are normalized but not re-gated, so an
+	// existing connection keeps working after an upgrade.
+	normalized, err := NormalizeKitsuURL(raw, APISourceLegacy)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimRight(publicURL, "/")
+	return strings.TrimRight(normalized.RuntimeBaseURL, "/")
 }
 
 // OriginalKitsuURL is the user-entered URL retained separately from the
@@ -174,11 +176,13 @@ func OriginalKitsuURL(db *gorm.DB) string {
 	if strings.EqualFold(strings.TrimRight(raw, "/"), "http://host.docker.internal:8080") {
 		return "http://127.0.0.1:8080"
 	}
-	parsed, err := validateKitsuEndpoint(raw)
+	// Read path: stored values are normalized but not re-gated, so an
+	// existing connection keeps working after an upgrade.
+	parsed, err := NormalizeKitsuURL(raw, APISourceLegacy)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimRight(parsed, "/")
+	return strings.TrimRight(parsed.RuntimeBaseURL, "/")
 }
 
 // PublicKitsuURL is retained as the notification resolver compatibility name.
@@ -206,6 +210,9 @@ func effectiveRuntimeKitsuEndpoint(db *gorm.DB) string {
 }
 
 func validateKitsuEndpoint(raw string) (string, error) {
+	if err := enforceKitsuHTTPScheme(raw); err != nil {
+		return "", err
+	}
 	model, err := NormalizeKitsuURL(raw, APISourceLegacy)
 	if err != nil {
 		return "", err

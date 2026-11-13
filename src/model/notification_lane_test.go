@@ -3,6 +3,7 @@ package model
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -88,6 +89,65 @@ func TestRetargetNotificationDeliveryMovesPendingIntent(t *testing.T) {
 	}
 	if retargeted.DestinationGuildID != "guild-1" || !strings.Contains(retargeted.DestinationFingerprint, "") {
 		t.Fatalf("retargeted guild identity = %q", retargeted.DestinationGuildID)
+	}
+}
+
+// TestResolveStaleUnknownNotificationDeliveries reproduces the round-3
+// finding: an unknown row (send timeout / process death) blocked every later
+// notification for its task forever, even across restarts. The resolver must
+// turn stale unknown rows terminal and leave fresh ones untouched, and a
+// resolved row must never be re-dispatched (no duplicate send).
+func TestResolveStaleUnknownNotificationDeliveries(t *testing.T) {
+	db := newNotificationLaneDB(t)
+	base := NotificationDeliveryEvent{
+		TaskID: "task-1", ProductionID: "p1", TaskTypeID: "tt1", TaskStatus: "WFA",
+		TaskUpdatedAt: "2026-11-13T00:00:00Z", CommentID: "c1", CommentUpdatedAt: "2026-11-13T00:00:01Z",
+		LaneType: LaneChannel, PayloadJSON: `{"content":"synthetic"}`, PayloadSHA256: "hash",
+	}
+	stale := base
+	stale.EventID = "stale-unknown"
+	stale.Disposition = DeliveryUnknown
+	stale.FailureClass = "process_restart_during_delivery"
+	if err := db.Create(&stale).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&NotificationDeliveryEvent{}).Where("id = ?", stale.ID).Update("updated_at", time.Now().Add(-2*NotificationUnknownAutoResolveAfter)).Error; err != nil {
+		t.Fatal(err)
+	}
+	fresh := base
+	fresh.EventID = "fresh-unknown"
+	fresh.TaskID = "task-2"
+	fresh.Disposition = DeliveryUnknown
+	if err := db.Create(&fresh).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := ResolveStaleUnknownNotificationDeliveries(db, time.Now().Add(-NotificationUnknownAutoResolveAfter))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != 1 {
+		t.Fatalf("resolved rows = %d, want 1", resolved)
+	}
+	var staleRow NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", "stale-unknown").First(&staleRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	if staleRow.Disposition != DeliveryTerminalFailure || staleRow.FailureClass != "unknown_auto_resolved" {
+		t.Fatalf("stale row = disposition=%q class=%q, want terminal_failure/unknown_auto_resolved", staleRow.Disposition, staleRow.FailureClass)
+	}
+	var freshRow NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", "fresh-unknown").First(&freshRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	if freshRow.Disposition != DeliveryUnknown {
+		t.Fatalf("fresh row disposition = %q, want unknown", freshRow.Disposition)
+	}
+	// The resolved row is terminal, so no dispatch path can ever claim it
+	// again: a message Discord may actually have delivered is not duplicated.
+	_, started, err := BeginNotificationDeliveryForEvent(db, staleRow, time.Now().UTC())
+	if err == nil && started {
+		t.Fatal("resolved unknown row was re-dispatched (duplicate send risk)")
 	}
 }
 

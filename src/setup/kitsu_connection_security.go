@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,28 @@ func NormalizeKitsuURL(raw, source string) (KitsuURLModel, error) {
 func isMetadataHost(host string) bool {
 	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	return host == "metadata.google.internal" || host == "metadata" || host == "169.254.169.254"
+}
+
+// InsecureKitsuHTTPAllowed reports whether plain http to a non-loopback Kitsu
+// was explicitly enabled for a validation lab. Default is reject.
+func InsecureKitsuHTTPAllowed() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("KITSUSYNC_ALLOW_INSECURE_KITSU_HTTP")))
+	return value == "1" || value == "true" || value == "yes"
+}
+
+// insecureKitsuHTTPPermitted decides whether the given host may be reached
+// over plain http without the explicit flag: loopback, the Docker host alias,
+// private addresses and CGNAT/Tailscale ranges count as local infrastructure.
+func insecureKitsuHTTPPermitted(host string) bool {
+	if InsecureKitsuHTTPAllowed() {
+		return true
+	}
+	switch classifyKitsuHost(host) {
+	case "loopback", "docker_host", "private_explicit", "vpn/shared":
+		return true
+	default:
+		return false
+	}
 }
 
 func classifyKitsuHost(host string) string {
@@ -354,7 +377,29 @@ func classifyKitsuTransportError(err error) error {
 	}
 	return connectionError("network_failed")
 }
+// enforceKitsuHTTPScheme rejects plain http connections to public Kitsu hosts
+// at the user-supplied connection boundary. Stored values and display paths
+// are not re-gated here; loopback, the Docker host alias, private addresses
+// and CGNAT/Tailscale ranges stay allowed, and the explicit insecure-HTTP
+// flag overrides for validation labs.
+func enforceKitsuHTTPScheme(raw string) error {
+	if !strings.Contains(raw, "://") {
+		return nil // scheme-less input defaults to https in NormalizeKitsuURL
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "http" {
+		return nil
+	}
+	if insecureKitsuHTTPPermitted(u.Hostname()) {
+		return nil
+	}
+	return connectionError("insecure_http_rejected")
+}
+
 func ResolveAndProbeKitsu(ctx context.Context, raw, source string) (KitsuURLModel, error) {
+	if err := enforceKitsuHTTPScheme(raw); err != nil {
+		return KitsuURLModel{}, err
+	}
 	model, err := NormalizeKitsuURL(raw, source)
 	if err != nil {
 		return KitsuURLModel{}, err
@@ -365,12 +410,18 @@ func ResolveAndProbeKitsu(ctx context.Context, raw, source string) (KitsuURLMode
 // ResolveKitsuConnection keeps the browser/runtime base distinct from an
 // optional API endpoint. The API endpoint owns DNS scope and verification.
 func ResolveKitsuConnection(ctx context.Context, displayRaw, apiOverride string) (KitsuURLModel, error) {
+	if err := enforceKitsuHTTPScheme(displayRaw); err != nil {
+		return KitsuURLModel{}, err
+	}
 	display, err := NormalizeKitsuURL(displayRaw, APISourceDerived)
 	if err != nil {
 		return KitsuURLModel{}, err
 	}
 	target := display
 	if strings.TrimSpace(apiOverride) != "" {
+		if err := enforceKitsuHTTPScheme(apiOverride); err != nil {
+			return KitsuURLModel{}, err
+		}
 		target, err = NormalizeKitsuURL(apiOverride, APISourceExplicit)
 		if err != nil {
 			return KitsuURLModel{}, err

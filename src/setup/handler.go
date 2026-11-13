@@ -1289,9 +1289,9 @@ func renderForm(r *http.Request, projects []model.Project, kitsuProjects []Kitsu
 	}
 	for _, project := range kitsuProjects {
 		if setupDone[project.ID] {
-			projectOptions.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" disabled>%s (%s)</option>`, project.ID, project.Name, project.Name, t(lang, "設定済み", "already set up")))
+			projectOptions.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s" disabled>%s (%s)</option>`, esc(project.ID), esc(project.Name), esc(project.Name), t(lang, "設定済み", "already set up")))
 		} else {
-			projectOptions.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s">%s</option>`, project.ID, project.Name, project.Name))
+			projectOptions.WriteString(fmt.Sprintf(`<option value="%s" data-name="%s">%s</option>`, esc(project.ID), esc(project.Name), esc(project.Name)))
 		}
 	}
 

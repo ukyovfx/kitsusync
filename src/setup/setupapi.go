@@ -796,7 +796,7 @@ func TestKitsuHandler(db *gorm.DB, onRuntimeConfigured ...func()) http.HandlerFu
 
 func safeKitsuConnectionMessage(class string) string {
 	switch class {
-	case "url_parse_invalid", "scheme_not_allowed", "forbidden_metadata_target", "dns_scope_changed", "dns_resolution_failed", "redirect_origin_changed", "tls_downgrade_blocked", "zou_identity_mismatch", "zou_unhealthy", "auth_redirect_blocked", "auth_failed":
+	case "url_parse_invalid", "scheme_not_allowed", "insecure_http_rejected", "forbidden_metadata_target", "dns_scope_changed", "dns_resolution_failed", "redirect_origin_changed", "tls_downgrade_blocked", "zou_identity_mismatch", "zou_unhealthy", "auth_redirect_blocked", "auth_failed":
 		return class
 	default:
 		return "network_failed"

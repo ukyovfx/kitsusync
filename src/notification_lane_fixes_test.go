@@ -12,6 +12,7 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -247,6 +248,83 @@ func TestFilterTasksSuppressesRecordOnlyBeforeInitialCheckpoint(t *testing.T) {
 	db.Model(&model.NotificationDeliveryEvent{}).Where("task_id = ?", payload.Task.ID).Count(&count)
 	if count != 0 {
 		t.Fatalf("pre-existing task recorded after checkpoint: %d rows", count)
+	}
+}
+
+// TestStaleUnknownResolutionUnblocksTaskWithoutDuplicateSend reproduces the
+// round-3 measured stall: an unknown ledger row blocked all later
+// notifications for its task across polls. After auto-resolution the task's
+// next transition delivers again, and the resolved row itself is never
+// re-sent (a message Discord may have delivered is not duplicated).
+func TestStaleUnknownResolutionUnblocksTaskWithoutDuplicateSend(t *testing.T) {
+	db := newNotificationPipelineDB(t)
+	t.Cleanup(func() { closeNotificationPipelineDB(t, db) })
+
+	var sends atomic.Int64
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/webhooks/111111111111111111/token", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"111111111111111111","type":1,"guild_id":"guild-1","channel_id":"channel-1"}`))
+	})
+	mux.HandleFunc("POST /api/webhooks/111111111111111111/token", func(w http.ResponseWriter, r *http.Request) {
+		sends.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"channel-message-1","channel_id":"channel-1"}`))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	webhookURL := server.URL + "/api/webhooks/111111111111111111/token"
+
+	if err := db.Create(&model.Project{KitsuProjectID: "p1", Name: "P1", DiscordGuildID: "guild-1"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.CreateProjectWebhook(db, "p1", "comp", "Comp", webhookURL, "channel-1"); err != nil {
+		t.Fatal(err)
+	}
+	webhook := model.ListProjectWebhooks(db, "p1")[0]
+	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: "p1", Enabled: true}, []model.ProductionNotificationRoute{{TaskTypeID: "tt1", DestinationWebhookID: webhook.ID, DestinationChannelID: "channel-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	stuck := model.NotificationDeliveryEvent{
+		EventID: "stuck-unknown", TaskID: "task-1", ProductionID: "p1", TaskTypeID: "tt1", TaskStatus: "WFA",
+		TaskUpdatedAt: "2026-11-12T00:00:00Z", CommentID: "c0", CommentUpdatedAt: "2026-11-12T00:00:00Z",
+		LaneType: model.LaneChannel, PayloadJSON: `{"content":"synthetic"}`, PayloadSHA256: "hash",
+		WebhookRowID: webhook.ID, DestinationChannelID: "channel-1",
+		Disposition: model.DeliveryUnknown, FailureClass: "process_restart_during_delivery",
+	}
+	if err := db.Create(&stuck).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.NotificationDeliveryEvent{}).Where("id = ?", stuck.ID).Update("updated_at", time.Now().Add(-2*model.NotificationUnknownAutoResolveAfter)).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	oldFactory := makeKitsuResponse
+	t.Cleanup(func() { makeKitsuResponse = oldFactory })
+	makeKitsuResponse = func(config.Config) ([]kitsu.MessagePayload, error) {
+		return []kitsu.MessagePayload{pipelinePayload("WFA")}, nil
+	}
+	conf := pipelineConfig()
+	conf.Discord.EmbedsPerRequests = 10
+	conf.Discord.RequestsPerMinute = 60
+	runOnePoll(conf, db)
+
+	if got := sends.Load(); got != 1 {
+		t.Fatalf("Discord sends after resolution = %d, want exactly 1 (stuck row must never re-send)", got)
+	}
+	var resolved model.NotificationDeliveryEvent
+	if err := db.Where("event_id = ?", "stuck-unknown").First(&resolved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Disposition != model.DeliveryTerminalFailure || resolved.FailureClass != "unknown_auto_resolved" {
+		t.Fatalf("stuck row = disposition=%q class=%q", resolved.Disposition, resolved.FailureClass)
+	}
+	var fresh model.NotificationDeliveryEvent
+	if err := db.Where("task_id = ? AND event_id <> ?", "task-1", "stuck-unknown").First(&fresh).Error; err != nil {
+		t.Fatalf("task stayed blocked after resolution: %v", err)
+	}
+	if fresh.Disposition != model.DeliveryDelivered {
+		t.Fatalf("follow-up notification = %q, want delivered", fresh.Disposition)
 	}
 }
 

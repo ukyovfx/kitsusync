@@ -22,6 +22,9 @@ func writeZouStatus(w http.ResponseWriter) {
 
 func withPinnedTestHost(t *testing.T, serverURL string, lookup func(context.Context, string) ([]netip.Addr, error)) string {
 	t.Helper()
+	// The synthetic host is public-class; these tests exercise transport
+	// security, not the scheme policy, so allow insecure http here.
+	t.Setenv("KITSUSYNC_ALLOW_INSECURE_KITSU_HTTP", "1")
 	old := kitsuLookupNetIP
 	kitsuLookupNetIP = lookup
 	t.Cleanup(func() { kitsuLookupNetIP = old })
