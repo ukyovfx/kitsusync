@@ -4,6 +4,19 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
+### Fixed - notification routing editor
+
+- The routing editor's inline script failed to parse (unbalanced brace), so no
+  change was ever detected and 「変更を適用」 stayed disabled; lane changes
+  could not be saved. The script is fixed and a regression test now asserts
+  every rendered script block keeps its braces balanced.
+- The lane select now renders the saved `destination_kind`, and a lane-only
+  apply round-trip is regression-tested (render saved lane → apply → re-render
+  persisted lane).
+- New routes default to the DM lane (design-v2 standard), and a production
+  level bulk action 「標準レーンを適用（全行 DM）」 presets every row to DM
+  before applying.
+
 ### Security — pentest rounds 1–3 and static audit fixes
 
 - Login rate limiting: the limit identifier now trusts `X-Forwarded-For` /
