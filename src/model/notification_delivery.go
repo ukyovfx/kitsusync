@@ -115,13 +115,19 @@ type NotificationDeliveryEvent struct {
 	PriorThreadID          string
 	PriorCleanupPending    bool `gorm:"not null;default:false;index"`
 	PriorCleanupInFlight   bool `gorm:"not null;default:false;index"`
-	FailureClass           string
-	SupersededByEventID    string `gorm:"size:64;index"`
-	CleanupFailureClass    string
-	IdentityConflictCount  int        `gorm:"not null;default:0" json:"-"`
-	IdentityConflictAt     *time.Time `json:"-"`
-	CreatedAt              time.Time  `gorm:"index"`
-	UpdatedAt              time.Time
+	// Lifecycle cleanup implements the channel-as-queue rule: when a task
+	// leaves WFA, its waiting-for-check post is deleted. The flags mirror the
+	// prior-message cleanup machinery so the sweeper can claim work safely.
+	LifecycleCleanupPending  bool       `gorm:"not null;default:false;index"`
+	LifecycleCleanupInFlight bool       `gorm:"not null;default:false;index"`
+	LifecycleDeletedAt       *time.Time
+	FailureClass             string
+	SupersededByEventID      string `gorm:"size:64;index"`
+	CleanupFailureClass      string
+	IdentityConflictCount    int        `gorm:"not null;default:0" json:"-"`
+	IdentityConflictAt       *time.Time `json:"-"`
+	CreatedAt                time.Time  `gorm:"index"`
+	UpdatedAt                time.Time
 }
 
 // ManagedChannelDeletion is a recoverable tombstone. A pending row prevents
@@ -1246,6 +1252,144 @@ func RecordPriorMessageCleanup(db *gorm.DB, eventID string, succeeded bool, fail
 		}
 		return nil
 	})
+}
+
+// FindLatestDeliveredChannelEventForTask returns the most recent delivered
+// channel-lane event that produced a Discord post for the task. The lifecycle
+// sweeper uses it to find the waiting-for-check post to delete.
+func FindLatestDeliveredChannelEventForTask(db *gorm.DB, taskID, productionID string) (*NotificationDeliveryEvent, error) {
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return nil, gorm.ErrInvalidData
+	}
+	var row NotificationDeliveryEvent
+	query := db.Where("task_id = ? AND lane_type = ? AND disposition = ? AND discord_message_id <> ''", strings.TrimSpace(taskID), LaneChannel, DeliveryDelivered)
+	if productionID = strings.TrimSpace(productionID); productionID != "" {
+		query = query.Where("production_id = ?", productionID)
+	}
+	err := query.Order("id desc").First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+// MarkNotificationLifecycleCleanupPending flags the task's latest delivered
+// channel post for deletion because the task left WFA. Idempotent: rows
+// already pending or already deleted are left untouched.
+func MarkNotificationLifecycleCleanupPending(db *gorm.DB, eventID string) error {
+	if db == nil || strings.TrimSpace(eventID) == "" {
+		return gorm.ErrInvalidData
+	}
+	result := db.Model(&NotificationDeliveryEvent{}).
+		Where("event_id = ? AND disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ? AND lifecycle_deleted_at IS NULL", eventID, DeliveryDelivered, false, false).
+		Update("lifecycle_cleanup_pending", true)
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
+}
+
+// ListPendingLifecycleCleanups returns delivered channel events whose post
+// still waits for lifecycle deletion, oldest first.
+func ListPendingLifecycleCleanups(db *gorm.DB, limit int) ([]NotificationDeliveryEvent, error) {
+	if db == nil {
+		return nil, gorm.ErrInvalidDB
+	}
+	var rows []NotificationDeliveryEvent
+	query := db.Where("disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ? AND discord_message_id <> ''", DeliveryDelivered, true, false).Order("id asc")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// ClaimNotificationLifecycleCleanup atomically moves a pending lifecycle
+// cleanup into flight after re-verifying the webhook ownership, exactly like
+// BeginPriorMessageCleanup. claimed=false means the row is not dispatchable
+// right now (missing ownership evidence, mutation in progress, or lost race).
+func ClaimNotificationLifecycleCleanup(db *gorm.DB, eventID string) (*NotificationDeliveryEvent, bool, error) {
+	if db == nil || strings.TrimSpace(eventID) == "" {
+		return nil, false, gorm.ErrInvalidData
+	}
+	var event NotificationDeliveryEvent
+	var claimed bool
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("event_id = ?", strings.TrimSpace(eventID)).First(&event).Error; err != nil {
+			return err
+		}
+		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
+			return err
+		}
+		if err := EnsureProductionNotificationMutationIdle(tx, event.ProductionID, ""); err != nil {
+			return err
+		}
+		if !event.LifecycleCleanupPending || event.Disposition != DeliveryDelivered || event.DiscordMessageID == "" {
+			return nil
+		}
+		var tombstoneCount int64
+		if err := tx.Model(&ManagedChannelDeletion{}).Where("webhook_row_id = ? AND disposition <> ?", event.WebhookRowID, ChannelDeletionComplete).Count(&tombstoneCount).Error; err != nil {
+			return err
+		}
+		if tombstoneCount != 0 {
+			return nil
+		}
+		var webhook ProjectWebhook
+		if err := tx.Where("id = ? AND kitsu_project_id = ? AND discord_channel_id = ?", event.WebhookRowID, event.ProductionID, event.DestinationChannelID).First(&webhook).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// Ownership evidence is gone; record why the row stays pending.
+				return tx.Model(&NotificationDeliveryEvent{}).Where("id = ?", event.ID).Update("cleanup_failure_class", "destination_identity_changed").Error
+			}
+			return err
+		}
+		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ?", event.ID, DeliveryDelivered, true, false).Update("lifecycle_cleanup_in_flight", true)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil
+		}
+		event.LifecycleCleanupInFlight = true
+		claimed = true
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if !claimed {
+		return nil, false, nil
+	}
+	return &event, true, nil
+}
+
+// CompleteNotificationLifecycleCleanup records the sweeper outcome. Success
+// stamps the deletion time and clears the pending flag; failure keeps the row
+// pending so the next poll retries, and stores the failure class.
+func CompleteNotificationLifecycleCleanup(db *gorm.DB, eventID string, succeeded bool, failureClass string) error {
+	if db == nil || strings.TrimSpace(eventID) == "" {
+		return gorm.ErrInvalidData
+	}
+	updates := map[string]any{"lifecycle_cleanup_pending": !succeeded, "lifecycle_cleanup_in_flight": false, "cleanup_failure_class": ""}
+	if succeeded {
+		updates["lifecycle_deleted_at"] = time.Now().UTC()
+	} else {
+		updates["cleanup_failure_class"] = strings.TrimSpace(failureClass)
+	}
+	result := db.Model(&NotificationDeliveryEvent{}).
+		Where("event_id = ? AND disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ?", eventID, DeliveryDelivered, true, true).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrDeliveryAttemptConflict
+	}
+	return nil
 }
 
 func BeginPriorMessageCleanup(db *gorm.DB, eventID string) (*NotificationDeliveryEvent, bool, error) {

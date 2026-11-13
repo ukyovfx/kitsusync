@@ -10,6 +10,7 @@ import (
 	"app/src/utils/safego"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	stdslog "log/slog"
 	"net/http"
@@ -412,6 +413,19 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			}
 
 			if statusChanged || timestampChanged || commentChanged {
+				// Channel-as-queue: when a task leaves WFA, its waiting-for-check
+				// post is deleted. The transition must come from the current
+				// Kitsu snapshot, and the initial-checkpoint guard keeps
+				// pre-existing tasks silent.
+				if strings.EqualFold(deliveredStatus, "wfa") && !strings.EqualFold(currentStatus, "wfa") && !setup.InitialCheckpointPending(data[i].Project.ID) {
+					if lifecycleEvent, lifecycleErr := model.FindLatestDeliveredChannelEventForTask(db, data[i].Task.ID, data[i].Project.ID); lifecycleErr != nil {
+						slog.Error("Lifecycle cleanup lookup failed", "error_class", "lifecycle_cleanup_lookup_failed", "taskID", data[i].Task.ID)
+					} else if lifecycleEvent != nil {
+						if markErr := model.MarkNotificationLifecycleCleanupPending(db, lifecycleEvent.EventID); markErr != nil {
+							slog.Error("Lifecycle cleanup could not be marked", "error_class", "lifecycle_cleanup_mark_failed", "taskID", data[i].Task.ID)
+						}
+					}
+				}
 				observed := model.NotificationDeliveryIntent{
 					TaskID: data[i].Task.ID, ProductionID: data[i].Project.ID, TaskTypeID: data[i].TaskType.ID,
 					TaskStatus: currentStatus, TaskUpdatedAt: data[i].Task.Task.UpdatedAt,
@@ -425,6 +439,17 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 				// Mark notifications that only changed comment content. Persisting
 				// the observation is deferred until routing and delivery are known.
 				data[i].IsCommentOnly = commentChanged && !statusChanged && !timestampChanged
+				// Mention DMs fire when a NEW comment arrives; the observed
+				// comment checkpoint deduplicates re-offers until observation
+				// advances below. Comment-read degradation is recorded durably.
+				if data[i].CommentsUnavailable {
+					recordCommentReadCapability(db, false)
+				} else {
+					recordCommentReadCapability(db, true)
+					if commentChanged && data[i].LatestComment.Comment.ID != dbResult.CommentID {
+						dispatchMentionDMs(db, data[i])
+					}
+				}
 			} else {
 				// An unfinished durable intent is still eligible even when the
 				// Kitsu event matches the last observed snapshot. The check is
@@ -511,6 +536,25 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			slog.Error("Task observation could not be persisted; event not dispatched", "error_class", "task_observation_write_failed")
 			continue
 		}
+		// Channel-lane deliveries go through the aggregation window so rapid
+		// round-trips and initial bulk collapse into few posts; DM approvals
+		// stay immediate. The initial-checkpoint guard keeps pre-existing
+		// tasks from ever entering the buffer.
+		if plan.LaneType == model.LaneChannel {
+			if setup.InitialCheckpointPending(payload.Project.ID) {
+				stats.Dropped++
+				continue
+			}
+			buffered, bufferErr := bufferChannelTransition(db, payload, plan)
+			if bufferErr != nil {
+				slog.Error("Aggregation buffer write failed; event not dispatched", "error_class", "aggregation_buffer_write_failed", "taskID", payload.Task.ID)
+				continue
+			}
+			if buffered {
+				stats.DBRouted++
+			}
+			continue
+		}
 		webhooks[plan.DestinationID] = plan.WebhookURL
 		routes[plan.DestinationID] = append(routes[plan.DestinationID], payload)
 		if labels[plan.DestinationID] == nil {
@@ -534,6 +578,9 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 		logRouteDispatch("production.task_type_id", routeLabels, payloads, webhooks[destinationID] != "")
 		notificationDispatch(payloads, conf, webhooks[destinationID], db, "production.task_type_id", routeLabels)
 	}
+	// Close aggregation windows that expired while routing ran (tests set the
+	// window to 0 so buffered transitions dispatch immediately).
+	dispatchDueAggregatedNotifications(conf, db)
 
 	if len(data) > 0 && (stats.DBRouted > 0 || stats.Dropped > 0) {
 		slog.Info("Notification routing summary",
@@ -541,6 +588,186 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 			"dbRouted", stats.DBRouted,
 			"dropped", stats.Dropped)
 	}
+}
+
+// bufferChannelTransition stores a channel-lane transition in its aggregation
+// window. It reports whether the buffer accepted a new transition (re-observing
+// the same transition before the window closes is a no-op).
+func bufferChannelTransition(db *gorm.DB, payload kitsu.MessagePayload, plan productionRoutingPlan) (bool, error) {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return false, err
+	}
+	status := strings.ToUpper(strings.TrimSpace(payload.TaskStatus.TaskStatus.ShortName))
+	identity := model.NotificationEventIdentity(model.NotificationDeliveryIntent{
+		TaskID: payload.Task.ID, ProductionID: payload.Project.ID, TaskTypeID: payload.TaskType.ID,
+		TaskStatus: status, TaskUpdatedAt: payload.Task.UpdatedAt,
+		CommentID: payload.LatestComment.Comment.ID, CommentUpdatedAt: payload.LatestComment.Comment.UpdatedAt,
+		IsAssignNotification: payload.IsAssignNotification,
+	})
+	return model.BufferNotificationTransition(db, model.NotificationAggregationBuffer{
+		TaskID: payload.Task.ID, ProductionID: payload.Project.ID, TaskTypeID: payload.TaskType.ID,
+		DestinationID: plan.DestinationID, LaneType: model.LaneChannel, WebhookURL: plan.WebhookURL,
+		LastStatus: status, LastPayloadJSON: string(payloadJSON), LastIdentity: identity,
+	})
+}
+
+// channelAggregationWindow is the task×destination window; tests set it to 0
+// for immediate dispatch.
+var channelAggregationWindow = model.NotificationAggregationWindow
+
+// dispatchDueAggregatedNotifications closes expired aggregation windows.
+// Flap-downgraded tasks are consumed into the ledger without a send; bulk
+// groups send one summary message per destination; everything else dispatches
+// per task through the normal durable path. Buffer rows are only removed once
+// the delivery ledger owns the outcome, so a crash never loses a notification.
+func dispatchDueAggregatedNotifications(conf config.Config, db *gorm.DB) {
+	if db == nil || conf.SilentUpdateDB {
+		return
+	}
+	grouped, err := model.TakeDueAggregatedNotifications(db, time.Now().UTC(), channelAggregationWindow)
+	if err != nil {
+		slog.Error("Aggregation window read failed", "error_class", "aggregation_read_failed")
+		return
+	}
+	for destinationID, buffers := range grouped {
+		webhookURL := buffers[0].WebhookURL
+		var normal []model.NotificationAggregationBuffer
+		for _, buffer := range buffers {
+			if buffer.FlapDowngraded {
+				consumeAggregatedBuffer(db, buffer, "flap_downgraded_to_digest")
+				continue
+			}
+			normal = append(normal, buffer)
+		}
+		if len(normal) == 0 {
+			continue
+		}
+		if len(normal) > model.NotificationBulkSummaryThreshold {
+			if sendAggregatedSummary(conf, webhookURL, destinationID, normal) {
+				for _, buffer := range normal {
+					consumeAggregatedBuffer(db, buffer, "aggregated_bulk_summary")
+				}
+			}
+			continue
+		}
+		var payloads []kitsu.MessagePayload
+		var consumed []uint
+		labelSet := make(map[string]struct{})
+		for _, buffer := range normal {
+			var payload kitsu.MessagePayload
+			if err := json.Unmarshal([]byte(buffer.LastPayloadJSON), &payload); err != nil {
+				// An undecodable buffer can never be delivered; consume it so
+				// it cannot wedge the window.
+				consumeAggregatedBuffer(db, buffer, "aggregation_payload_undecodable")
+				continue
+			}
+			payloads = append(payloads, payload)
+			consumed = append(consumed, buffer.ID)
+			labelSet[fmt.Sprintf("productionID=%s taskTypeID=%s", payload.Project.ID, payload.TaskType.ID)] = struct{}{}
+		}
+		if len(payloads) == 0 {
+			continue
+		}
+		routeLabels := labelsFromSet(labelSet)
+		logRouteDispatch("aggregation.window", routeLabels, payloads, webhookURL != "")
+		notificationDispatch(payloads, conf, webhookURL, db, "aggregation.window", routeLabels)
+		if err := model.DeleteAggregationBuffers(db, consumed); err != nil {
+			slog.Error("Aggregation buffer cleanup failed", "error_class", "aggregation_buffer_cleanup_failed")
+		}
+	}
+}
+
+// consumeAggregatedBuffer records an aggregated transition in the ledger and
+// advances the delivered checkpoint so later polls never re-offer it.
+func consumeAggregatedBuffer(db *gorm.DB, buffer model.NotificationAggregationBuffer, reason string) {
+	var payload kitsu.MessagePayload
+	if err := json.Unmarshal([]byte(buffer.LastPayloadJSON), &payload); err != nil {
+		// Without a decodable payload the checkpoint cannot advance; deleting
+		// the row still unblocks the window and the audit log records the loss.
+		slog.Error("Aggregated payload could not be decoded; buffer consumed without checkpoint", "error_class", reason, "taskID", buffer.TaskID)
+		_ = model.DeleteAggregationBuffers(db, []uint{buffer.ID})
+		return
+	}
+	if err := model.RecordAggregatedNotificationConsumption(db, payload.Task.ID, payload.Project.ID, payload.TaskType.ID,
+		strings.ToUpper(strings.TrimSpace(payload.TaskStatus.TaskStatus.ShortName)), payload.Task.UpdatedAt,
+		payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt, payload.IsAssignNotification, reason); err != nil {
+		slog.Error("Aggregated consumption could not be recorded", "error_class", "aggregation_consume_failed", "taskID", buffer.TaskID)
+		return
+	}
+	if err := model.MarkNotificationDeliveredCheckpoint(db, payload.Task.ID, payload.Task.UpdatedAt,
+		payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt); err != nil {
+		slog.Error("Aggregated delivered checkpoint could not be advanced", "error_class", "aggregation_consume_failed", "taskID", buffer.TaskID)
+		return
+	}
+	_ = model.DeleteAggregationBuffers(db, []uint{buffer.ID})
+}
+
+// sendAggregatedSummary sends one summary message per destination when a
+// window closes with a bulk of transitions. It returns true when the summary
+// was delivered (or permanently rejected); retryable failures keep the
+// buffers for the next poll.
+func sendAggregatedSummary(conf config.Config, webhookURL, destinationID string, buffers []model.NotificationAggregationBuffer) bool {
+	if strings.TrimSpace(webhookURL) == "" {
+		return true
+	}
+	counts := map[string]int{}
+	var previews []string
+	for _, buffer := range buffers {
+		counts[buffer.LastStatus]++
+		var payload kitsu.MessagePayload
+		if err := json.Unmarshal([]byte(buffer.LastPayloadJSON), &payload); err == nil && len(previews) < 20 {
+			previews = append(previews, sanitizeTaskPreview(payload))
+		}
+	}
+	var breakdown []string
+	for _, status := range []string{"WFA", "RETAKE", "DONE"} {
+		if counts[status] > 0 {
+			breakdown = append(breakdown, fmt.Sprintf("%s: %d", status, counts[status]))
+		}
+	}
+	content := fmt.Sprintf("📢 %s — %d 件の更新を集約しました (%s)", destinationID, len(buffers), strings.Join(breakdown, ", "))
+	if len(previews) > 0 {
+		content += "\n" + strings.Join(previews, "\n")
+	}
+	result := discord.SendMessage(discord.Payload{Content: content}, webhookURL, "", "")
+	_ = conf
+	if result.MessageID != "" {
+		return true
+	}
+	if !result.Retryable && !result.Unknown {
+		// Permanent rejection: keep the ledger trace, unblock the window.
+		return true
+	}
+	return false
+}
+
+// sanitizeTaskPreview renders one buffered task as a short summary line.
+func sanitizeTaskPreview(payload kitsu.MessagePayload) string {
+	name := payload.Entity.Name
+	if strings.TrimSpace(name) == "" {
+		name = payload.Task.ID
+	}
+	return fmt.Sprintf("• %s (%s)", name, strings.ToUpper(strings.TrimSpace(payload.TaskStatus.TaskStatus.ShortName)))
+}
+
+// lastDeliveryMetricsLine deduplicates the metrics log: the line is only
+// emitted when the ledger shape changes.
+var lastDeliveryMetricsLine string
+
+// logDeliveryMetrics emits the ledger-derived delivery metrics (per lane,
+// disposition and failure class plus aggregation state) when they change.
+func logDeliveryMetrics(db *gorm.DB) {
+	metrics, err := model.BuildNotificationDeliveryMetrics(db)
+	if err != nil {
+		return
+	}
+	line := fmt.Sprintf("lanes=%v failures=%v buffers=%d flapDowngraded=%d", metrics.LaneDisposition, metrics.FailureClasses, metrics.AggregationBuffers, metrics.FlapDowngradedBuffers)
+	if line == lastDeliveryMetricsLine {
+		return
+	}
+	lastDeliveryMetricsLine = line
+	slog.Info("Notification delivery metrics", "lanes", metrics.LaneDisposition, "failures", metrics.FailureClasses, "aggregationBuffers", metrics.AggregationBuffers, "flapDowngraded", metrics.FlapDowngradedBuffers)
 }
 
 func isNotifiableStatus(status string) bool {
@@ -823,6 +1050,8 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 		// current Kitsu data and FilterTasks freshly renders their recipients and
 		// resolves the current authorized destination.
 		discord.RetryPriorMessageCleanup(db, 50)
+		// Channel-as-queue: delete waiting-for-check posts whose task left WFA.
+		discord.DeletePendingLifecycleMessages(db, 50)
 	}
 
 	// Poll Kitsu with runtime credentials from DB/env/conf priority.
@@ -840,6 +1069,13 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	if conf.Log {
 		slog.Info("Done FilterTasks")
 	}
+	// Close expired aggregation windows: buffered channel transitions dispatch
+	// here, either per task or as one bulk summary per destination.
+	dispatchDueAggregatedNotifications(conf, db)
+	// Daily 09:00 JST digest DMs to configured reviewers.
+	runMorningDigestIfDue(conf, db)
+	// Log-only delivery metrics, emitted when the ledger shape changes.
+	logDeliveryMetrics(db)
 	// Per-production visibility and liveness: raw task counts (before age
 	// filtering) tell whether the bot still sees each open production.
 	// Validation-only profile projects are read-only fixtures and must never
@@ -943,6 +1179,7 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ProjectSetting{},
 		&model.ProductionNotificationWriteLock{},
 		&model.NotificationDeliveryEvent{},
+		&model.NotificationAggregationBuffer{},
 		&model.ManagedChannelDeletion{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)

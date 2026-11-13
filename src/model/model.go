@@ -246,6 +246,25 @@ func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, comme
 	})
 }
 
+// MarkNotificationDeliveredCheckpoint advances the delivered checkpoint without
+// a Discord send. Aggregated consumptions (bulk summaries, flap downgrades) use
+// it so a recorded transition is never re-offered by later polls.
+func MarkNotificationDeliveredCheckpoint(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) error {
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return gorm.ErrInvalidData
+	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt); err != nil {
+			return err
+		}
+		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
+			"task_updated_at": taskUpdatedAt, "task_status": taskStatus, "comment_id": commentID, "comment_updated_at": commentUpdatedAt,
+			"delivered_task_updated_at": taskUpdatedAt, "delivered_task_status": taskStatus,
+			"delivered_comment_id": commentID, "delivered_comment_updated_at": commentUpdatedAt,
+		}).Error
+	})
+}
+
 func ClearMessageID(db *gorm.DB, taskID string) {
 	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
 		"discord_message_id": "",

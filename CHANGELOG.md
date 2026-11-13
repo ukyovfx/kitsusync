@@ -4,6 +4,29 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
+
+### Added - Phase 2 lifecycle, aggregation and digest (design-v2)
+
+- Channel-as-queue lifecycle: a production's waiting-for-check (WFA) post is
+  deleted when the task leaves WFA, and a new post appears if the task returns
+  to WFA. Deletion only happens after webhook ownership is re-verified, and
+  404 responses count as already-deleted.
+- 3-minute aggregation window per task and destination: rapid state round-trips
+  collapse into one delivery of the final state. When a window closes with more
+  than 10 transitions for one destination, a single summary message is sent
+  instead of individual posts. Tasks that round-trip 4+ times per hour are
+  downgraded to digest-only delivery and recorded in the ledger.
+- Morning digest: once per day at 09:00 JST, each configured reviewer receives
+  a DM card with counts for checking-waiting, retakes, stalled (WFA over 24h)
+  and yesterday's completions. Stalled work also raises a one-line notice to
+  the production's first reviewer once per day.
+- Comment mention DMs: new comments that mention a user (matched through the
+  user map) are delivered as DMs, capped at 5 per person per day with the
+  excess counted in the digest. When the comments endpoint is not readable
+  (403), mention DMs are disabled and the capability state is recorded.
+- Delivery metrics: the ledger is aggregated per lane/disposition/failure
+  class and logged when the shape changes (no UI).
+
 ### Added — Phase 1 notification routing lanes (design-v2)
 
 - Production notification routes now carry a destination lane kind

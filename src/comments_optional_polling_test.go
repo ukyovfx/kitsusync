@@ -107,6 +107,7 @@ func TestFilterTasksSkipsCommentDiffWhenCommentsUnavailable(t *testing.T) {
 }
 
 func TestFilterTasksDispatchesCommentOnlyWhenCommentsAvailable(t *testing.T) {
+	withImmediateAggregation(t)
 	db := newNotificationPipelineDB(t)
 	if err := model.MarkTaskObserved(db, "task-1", "2026-08-07T00:00:00", "WFA", "c1", "2026-08-01T00:00:00"); err != nil {
 		t.Fatal(err)

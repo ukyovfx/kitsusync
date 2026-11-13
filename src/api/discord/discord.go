@@ -1379,6 +1379,47 @@ type DiscordMessageWebhookIdentity struct {
 	ChannelID string `json:"channel_id"`
 }
 
+// DeletePendingLifecycleMessages runs the channel-as-queue sweeper: tasks that
+// left WFA have their waiting-for-check post deleted. Every deletion re-verifies
+// webhook ownership first, so a post is never removed on stale or unowned
+// credentials, and 404 responses count as already-deleted success.
+func DeletePendingLifecycleMessages(db *gorm.DB, limit int) {
+	if db == nil {
+		return
+	}
+	events, err := model.ListPendingLifecycleCleanups(db, limit)
+	if err != nil {
+		slog.Error("Lifecycle cleanup journal read failed", "error_class", "lifecycle_cleanup_read_failed")
+		return
+	}
+	for _, candidate := range events {
+		event, claimed, claimErr := model.ClaimNotificationLifecycleCleanup(db, candidate.EventID)
+		if claimErr != nil || !claimed || event == nil {
+			continue
+		}
+		webhook := model.FindProjectWebhookByID(db, event.WebhookRowID)
+		if webhook == nil || webhook.DiscordChannelID != event.DestinationChannelID {
+			_ = model.CompleteNotificationLifecycleCleanup(db, event.EventID, false, "destination_identity_changed")
+			continue
+		}
+		webhookID, err := DiscordWebhookIDFromURL(webhook.WebhookURL)
+		if err != nil || webhookID != event.DestinationWebhookID || VerifyWebhookIdentity(webhook.WebhookURL, event.DestinationWebhookID, event.DestinationGuildID, event.DestinationChannelID) != nil {
+			if stateErr := model.CompleteNotificationLifecycleCleanup(db, event.EventID, false, "lifecycle_webhook_verification_failed"); stateErr != nil {
+				slog.Warn("Lifecycle cleanup claim could not be released", "error_class", "lifecycle_cleanup_state_write_failed", "event", event.EventID[:12])
+			}
+			continue
+		}
+		deleted := DeleteMessage(webhook.WebhookURL, event.DiscordMessageID, event.DiscordThreadID)
+		failure := ""
+		if !deleted {
+			failure = "lifecycle_message_delete_failed"
+		}
+		if err := model.CompleteNotificationLifecycleCleanup(db, event.EventID, deleted, failure); err != nil {
+			slog.Warn("Lifecycle cleanup state update failed", "error_class", "lifecycle_cleanup_state_write_failed", "event", event.EventID[:12])
+		}
+	}
+}
+
 // SendMessageBunch は各タスクを処理して SendResult のマップを返す
 // キーはタスクID
 func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookURL string, previousMessageIDs map[string]string, previousWebhookURLs map[string]string, previousThreadIDs map[string]string, projectNotificationLanguages map[string]string, db *gorm.DB) map[string]SendResult {
