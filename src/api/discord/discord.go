@@ -183,7 +183,16 @@ var discordControlPattern = regexp.MustCompile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\
 
 func sanitizeDiscordText(value string) string {
 	value = discordControlPattern.ReplaceAllString(value, "")
-	value = discordLinkPattern.ReplaceAllString(value, "$1 ($2)")
+	// Nested masked links need repeated passes: "[[safe](a)](b)" still hides
+	// an outer masked link after one replacement. Every pass removes bracket
+	// structure, so the loop reaches a fixed point.
+	for {
+		neutralized := discordLinkPattern.ReplaceAllString(value, "$1 ($2)")
+		if neutralized == value {
+			break
+		}
+		value = neutralized
+	}
 	value = strings.ReplaceAll(value, "<", "＜")
 	value = strings.ReplaceAll(value, ">", "＞")
 	value = strings.ReplaceAll(value, "@everyone", "@ everyone")

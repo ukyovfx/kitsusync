@@ -1347,10 +1347,28 @@ func ResolveStaleUnknownNotificationDeliveries(db *gorm.DB, cutoff time.Time) (i
 	if db == nil {
 		return 0, gorm.ErrInvalidDB
 	}
-	result := db.Model(&NotificationDeliveryEvent{}).
-		Where("disposition = ? AND updated_at < ?", DeliveryUnknown, cutoff).
-		Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "unknown_auto_resolved"})
-	return result.RowsAffected, result.Error
+	// Compare instants in Go instead of letting SQLite compare timestamp
+	// strings: rows are stored with the writer's local offset, so a string
+	// comparison against a UTC cutoff silently mis-orders them on non-UTC
+	// hosts and the auto-resolution never fires (Muse VM, TZ=+09:00).
+	var rows []NotificationDeliveryEvent
+	if err := db.Where("disposition = ?", DeliveryUnknown).Find(&rows).Error; err != nil {
+		return 0, err
+	}
+	var resolved int64
+	for _, row := range rows {
+		if !row.UpdatedAt.Before(cutoff) {
+			continue
+		}
+		result := db.Model(&NotificationDeliveryEvent{}).
+			Where("id = ? AND disposition = ?", row.ID, DeliveryUnknown).
+			Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "unknown_auto_resolved"})
+		if result.Error != nil {
+			return resolved, result.Error
+		}
+		resolved += result.RowsAffected
+	}
+	return resolved, nil
 }
 
 func ListUnresolvedNotificationDeliveries(db *gorm.DB, limit int) ([]DeliveryDiagnostic, error) {

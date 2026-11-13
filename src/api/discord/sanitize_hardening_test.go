@@ -3,6 +3,7 @@ package discord
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +33,22 @@ func TestSanitizeDiscordTextNeutralizesMaskedLinks(t *testing.T) {
 	// The mention-safe replacements keep working.
 	if got := sanitizeDiscordText("@everyone <script>"); got != "@ everyone ＜script＞" {
 		t.Fatalf("legacy sanitization changed: %q", got)
+	}
+}
+
+// TestSanitizeDiscordTextNeutralizesNestedMaskedLinks reproduces the Codex P2
+// finding: in a nested link "[[safe](https://good.example)](https://evil.example)"
+// a single replacement pass only rewrote the inner link and left the outer
+// masked link "[safe (good)](evil)" clickable. Replacement must repeat until
+// no masked-link syntax survives.
+func TestSanitizeDiscordTextNeutralizesNestedMaskedLinks(t *testing.T) {
+	got := sanitizeDiscordText("[[safe](https://good.example)](https://evil.example)")
+	if strings.Contains(got, "](") {
+		t.Fatalf("nested masked link survived sanitization: %q", got)
+	}
+	want := "safe (https://good.example) (https://evil.example)"
+	if got != want {
+		t.Fatalf("nested link = %q, want %q", got, want)
 	}
 }
 

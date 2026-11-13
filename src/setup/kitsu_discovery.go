@@ -59,8 +59,16 @@ func DiscoverKitsuHost(db *gorm.DB) KitsuHostDiscoveryResult {
 	}
 	if db != nil {
 		if saved := strings.TrimSpace(model.GetSetting(db, "kitsu.hostname")); saved != "" {
-			if normalized, err := validateKitsuEndpoint(saved); err == nil && !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
-				return KitsuHostDiscoveryResult{RuntimeHost: normalized, DisplayHost: safeKitsuHostDisplay(normalized), Status: authenticatedKitsu, Source: "persisted"}
+			// Stored values are read without the new-input http gate: an
+			// existing install may legitimately hold a public http endpoint,
+			// and re-discovery must not break it on upgrade. This matches the
+			// other persisted-value read paths, which use NormalizeKitsuURL.
+			normalizedModel, normalizeErr := NormalizeKitsuURL(saved, APISourceLegacy)
+			if normalizeErr == nil {
+				normalized := strings.TrimRight(normalizedModel.RuntimeBaseURL, "/") + "/"
+				if !isPlaceholderKitsuEndpoint(normalized) && probeKitsu(normalized) {
+					return KitsuHostDiscoveryResult{RuntimeHost: normalized, DisplayHost: safeKitsuHostDisplay(normalized), Status: authenticatedKitsu, Source: "persisted"}
+				}
 			}
 		}
 	}
@@ -122,7 +130,9 @@ func discoveryCacheFingerprint(candidates []kitsuHostProbe) string {
 	return strings.Join(parts, "\x00")
 }
 
-func probeKitsu(host string) bool {
+// probeKitsu checks whether a candidate host answers. Variable so tests can
+// stub the network probe.
+var probeKitsu = func(host string) bool {
 	client := &http.Client{Timeout: 750 * time.Millisecond}
 	for _, endpoint := range []string{"/api/", "/api/auth/authenticated", "/api/data/projects/"} {
 		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(host, "/")+endpoint, nil)
