@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
@@ -170,12 +172,50 @@ func normalizeNotificationLang(lang string) string {
 	return "ja"
 }
 
+// discordLinkPattern matches masked markdown links inside embed text. Their
+// visible text can hide the real target (phishing), so the syntax is
+// neutralized to plain "text (url)".
+var discordLinkPattern = regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
+
+// discordControlPattern strips control, bidirectional-override and zero-width
+// characters that can visually disguise content (U+202E RTL override etc.).
+var discordControlPattern = regexp.MustCompile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u0080-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+
 func sanitizeDiscordText(value string) string {
+	value = discordControlPattern.ReplaceAllString(value, "")
+	value = discordLinkPattern.ReplaceAllString(value, "$1 ($2)")
 	value = strings.ReplaceAll(value, "<", "＜")
 	value = strings.ReplaceAll(value, ">", "＞")
 	value = strings.ReplaceAll(value, "@everyone", "@ everyone")
 	value = strings.ReplaceAll(value, "@here", "@ here")
 	return value
+}
+
+// discordRateLimitedUntil marks a hard rate-limit window reported by Discord.
+// While it is in the future, further sends fail fast as retryable instead of
+// sleeping inline, so one rate-limited destination cannot serially stall the
+// whole delivery batch; the durable ledger resumes them on the next poll.
+var discordRateLimitedUntil atomic.Int64
+
+func discordRateLimitGateActive() bool {
+	return discordRateLimitedUntil.Load() > time.Now().UnixNano()
+}
+
+func markDiscordRateLimited(wait time.Duration) {
+	if wait <= 0 {
+		return
+	}
+	const maxMark = 10 * time.Minute
+	if wait > maxMark {
+		wait = maxMark
+	}
+	until := time.Now().Add(wait).UnixNano()
+	for {
+		current := discordRateLimitedUntil.Load()
+		if current >= until || discordRateLimitedUntil.CompareAndSwap(current, until) {
+			return
+		}
+	}
 }
 
 func localizedTemplatePreset(tplPreset, notifLang string) string {
@@ -749,6 +789,12 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 			if wait > maxRateLimitWait {
 				slog.Warn("SendMessage: rate limit wait exceeds cap; skipping this task until next poll cycle",
 					"retryAfterSec", retryAfterSec, "capSec", maxRateLimitWait.Seconds(), "attempt", attempt+1)
+				markDiscordRateLimited(wait)
+				return SendResult{FailureCategory: "rate_limited", Retryable: true}
+			}
+			if discordRateLimitGateActive() {
+				// Another send already observed a hard rate limit: skip the
+				// inline wait so the batch is not serially stalled.
 				return SendResult{FailureCategory: "rate_limited", Retryable: true}
 			}
 			slog.Warn("SendMessage: rate limited, waiting",
@@ -763,6 +809,11 @@ func SendMessage(payload Payload, webhookURL, threadID, threadName string) SendR
 		slog.Error("SendMessage: non-2xx response",
 			"status", statusCode,
 			"category", discordHTTPErrorCategory(statusCode))
+		if statusCode == http.StatusTooManyRequests {
+			// Inline retries exhausted while still rate-limited: mark the
+			// window so the rest of the batch fails fast instead of stalling.
+			markDiscordRateLimited(30 * time.Second)
+		}
 		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests, Unknown: statusCode >= 500 || statusCode >= 300 && statusCode < 400}
 	}
 
@@ -924,6 +975,12 @@ func SendDirectMessage(botToken, dmChannelID string, payload Payload) SendResult
 		}
 		const maxRateLimitWait = 30 * time.Second
 		if wait > maxRateLimitWait {
+			markDiscordRateLimited(wait)
+			return SendResult{FailureCategory: "rate_limited", Retryable: true}
+		}
+		if discordRateLimitGateActive() {
+			// Another send already observed a hard rate limit: skip the
+			// inline wait so the batch is not serially stalled.
 			return SendResult{FailureCategory: "rate_limited", Retryable: true}
 		}
 		time.Sleep(wait)
@@ -940,6 +997,11 @@ func SendDirectMessage(botToken, dmChannelID string, payload Payload) SendResult
 		if statusCode == http.StatusNotFound {
 			// The cached DM channel disappeared; drop it so the next attempt reopens.
 			return SendResult{FailureCategory: "dm_channel_unavailable"}
+		}
+		if statusCode == http.StatusTooManyRequests {
+			// Inline retries exhausted while still rate-limited: mark the
+			// window so the rest of the batch fails fast instead of stalling.
+			markDiscordRateLimited(30 * time.Second)
 		}
 		return SendResult{FailureCategory: discordHTTPErrorCategory(statusCode), Retryable: statusCode == http.StatusTooManyRequests, Unknown: statusCode >= 500}
 	}

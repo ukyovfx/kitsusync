@@ -14,6 +14,9 @@ const validZouStatus = `{"name":"Zou","database-up":true,"event-stream-up":true,
 
 func tryKitsuLoginHost(t *testing.T, serverURL string) string {
 	t.Helper()
+	// The synthetic host is public-class; these tests exercise transport
+	// security, not the scheme policy, so allow insecure http here.
+	t.Setenv("KITSUSYNC_ALLOW_INSECURE_KITSU_HTTP", "1")
 	u, err := url.Parse(serverURL)
 	if err != nil {
 		t.Fatal(err)

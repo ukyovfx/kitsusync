@@ -56,6 +56,8 @@ func TestSanitizeDiscordTextRemovesRawMarkupAndBroadcastMentions(t *testing.T) {
 }
 
 func TestSendMessageRetriesRateLimitThenSucceeds(t *testing.T) {
+	discordRateLimitedUntil.Store(0)
+	t.Cleanup(func() { discordRateLimitedUntil.Store(0) })
 	attempts := 0
 	var retryAt time.Time
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -82,6 +84,8 @@ func TestSendMessageRetriesRateLimitThenSucceeds(t *testing.T) {
 }
 
 func TestSendMessageDefersRateLimitBeyondRetryWaitCap(t *testing.T) {
+	discordRateLimitedUntil.Store(0)
+	t.Cleanup(func() { discordRateLimitedUntil.Store(0) })
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		attempts++

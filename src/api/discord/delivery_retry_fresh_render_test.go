@@ -58,6 +58,10 @@ func newRetryWebhookWithFirstStatus(t *testing.T, webhookID, guildID, channelID 
 		}
 	}))
 	t.Cleanup(server.Close)
+	// A 31s Retry-After marks the process-wide rate-limit gate; reset it so
+	// later tests in this binary are not fail-fast blocked.
+	discordRateLimitedUntil.Store(0)
+	t.Cleanup(func() { discordRateLimitedUntil.Store(0) })
 	return server, recorder
 }
 

@@ -3315,7 +3315,9 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 				)
 				hostForAuth, endpointErr := runtimeEndpointFromDisplay(db, displayedHost)
 				if internalRaw := strings.TrimSpace(r.FormValue("kitsu_internal_url")); internalRaw != "" {
-					if normalized, err := NormalizeKitsuURL(internalRaw, APISourceExplicit); err != nil {
+					if err := enforceKitsuHTTPScheme(internalRaw); err != nil {
+						endpointErr = err
+					} else if normalized, err := NormalizeKitsuURL(internalRaw, APISourceExplicit); err != nil {
 						endpointErr = err
 					} else {
 						hostForAuth = normalized.DisplayBaseURL

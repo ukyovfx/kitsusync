@@ -32,6 +32,12 @@ const (
 	LaneDM         = "dm"
 	LaneRecordOnly = "record_only"
 
+	// NotificationUnknownAutoResolveAfter is how long an unknown delivery row
+	// may block its task before it is resolved to terminal. It must stay far
+	// above the Discord send timeout (15s) plus 429 backoff so a genuinely
+	// in-flight send is never resolved out from under itself.
+	NotificationUnknownAutoResolveAfter = 10 * time.Minute
+
 	ChannelDeletionPending   = "pending"
 	ChannelDeletionComplete  = "complete"
 	ChannelDeletionNeedsHelp = "needs_help"
@@ -1327,6 +1333,24 @@ func QuarantineInflightNotificationDeliveries(db *gorm.DB) error {
 		// original webhook identity.
 		return tx.Model(&NotificationDeliveryEvent{}).Where("prior_cleanup_in_flight = ? AND prior_cleanup_pending = ?", true, true).Update("prior_cleanup_in_flight", false).Error
 	})
+}
+
+// ResolveStaleUnknownNotificationDeliveries ends the permanent per-task stall
+// caused by unknown ledger rows. A row becomes unknown when the send outcome
+// could not be observed (send timeout exceeded, process death mid-delivery);
+// such a row blocks every later notification for the same task. Once the row
+// has been stale past the cutoff, no in-flight send can still be racing it
+// (the HTTP send timeout is far shorter), so it is resolved to terminal and
+// the task is unblocked. The row itself is never re-dispatched, so a message
+// Discord may actually have delivered is not duplicated.
+func ResolveStaleUnknownNotificationDeliveries(db *gorm.DB, cutoff time.Time) (int64, error) {
+	if db == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	result := db.Model(&NotificationDeliveryEvent{}).
+		Where("disposition = ? AND updated_at < ?", DeliveryUnknown, cutoff).
+		Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "unknown_auto_resolved"})
+	return result.RowsAffected, result.Error
 }
 
 func ListUnresolvedNotificationDeliveries(db *gorm.DB, limit int) ([]DeliveryDiagnostic, error) {

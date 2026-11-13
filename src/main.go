@@ -836,6 +836,14 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 		slog.Info("Done MakeKitsuResponse")
 	}
 	taskCount := len(kitsuResponse)
+	// Auto-resolve stale unknown ledger rows before the retry check so a
+	// delivery whose outcome was never observed (send timeout, process death)
+	// cannot block the task's later notifications forever.
+	if resolved, err := model.ResolveStaleUnknownNotificationDeliveries(db, time.Now().UTC().Add(-model.NotificationUnknownAutoResolveAfter)); err != nil {
+		slog.Error("Stale unknown delivery resolution failed", "error_class", "unknown_auto_resolve_failed", "err", err)
+	} else if resolved > 0 {
+		slog.Warn("Stale unknown deliveries auto-resolved to terminal", "count", resolved)
+	}
 	FilterTasks(kitsuResponse, conf, db)
 	if conf.Log {
 		slog.Info("Done FilterTasks")
@@ -955,6 +963,11 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	// instead of silently blocking newer intents for the same task.
 	if err := model.MigrateLegacyNotificationEventIdentities(db); err != nil {
 		return fmt.Errorf("migrate legacy notification delivery identities: %w", err)
+	}
+	// Unknown rows whose send outcome was never observed must not block their
+	// task forever across restarts either.
+	if _, err := model.ResolveStaleUnknownNotificationDeliveries(db, time.Now().UTC().Add(-model.NotificationUnknownAutoResolveAfter)); err != nil {
+		return fmt.Errorf("resolve stale unknown notification deliveries: %w", err)
 	}
 	return nil
 }
