@@ -150,6 +150,8 @@ type Comment struct {
 	PersonID     string      `json:"person_id,omitempty"`
 	TaskStatusID string      `json:"task_status_id,omitempty"`
 	Text         string      `json:"text,omitempty"`
+	// Mentions holds the person IDs @-mentioned in the comment (Zou fills it).
+	Mentions []string `json:"mentions,omitempty"`
 }
 
 type Comments struct {
@@ -250,6 +252,26 @@ func GetComment(objectID string) Comments {
 	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response
+}
+
+// GetTaskCommentsWithError reads one task's comments. Unlike the comments LIST
+// endpoint (admin only on Zou 1.1.x), this one works for any account on the
+// task's project team.
+func GetTaskCommentsWithError(taskID string) (Comments, error) {
+	path := kitsuBase() + "api/data/tasks/" + url.PathEscape(taskID) + "/comments"
+	response := Comments{}
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+
+	return response, err
+}
+
+// GetProjectTasksWithError reads one project's tasks, with assignees.
+func GetProjectTasksWithError(projectID string) (Tasks, error) {
+	path := kitsuBase() + "api/data/projects/" + url.PathEscape(projectID) + "/tasks?relations=true"
+	response := Tasks{}
+	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+
+	return response, err
 }
 
 func GetTasks() Tasks {
