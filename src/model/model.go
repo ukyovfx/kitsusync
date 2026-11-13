@@ -129,6 +129,15 @@ type Task struct {
 	DeliveredTaskStatus       string
 	DeliveredCommentID        string
 	DeliveredCommentUpdatedAt string
+	// ProductionID and EntityName let the digest and cards work from the
+	// observation table alone: tasks silently accepted by the initial
+	// checkpoint never enter the delivery ledger, so membership cannot be
+	// derived from it. StatusChangedAt records when the observed status last
+	// changed (Kitsu updated_at of that transition), which is the completion
+	// time for DONE tasks.
+	ProductionID    string `gorm:"index"`
+	EntityName      string
+	StatusChangedAt time.Time
 }
 
 func CreateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
@@ -150,9 +159,18 @@ func UpdateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, comme
 	})
 }
 
+// taskTransitionTime parses the Kitsu updated_at of a transition; the wall
+// clock is the fallback for malformed timestamps.
+func taskTransitionTime(taskUpdatedAt string) time.Time {
+	if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(taskUpdatedAt)); err == nil {
+		return parsed.UTC()
+	}
+	return time.Now().UTC()
+}
+
 // MarkTaskObserved records a non-deliverable or permanently failed event
 // without clearing a previously delivered Discord message.
-func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) error {
+func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName string) error {
 	if db == nil || strings.TrimSpace(taskID) == "" {
 		return gorm.ErrInvalidData
 	}
@@ -161,16 +179,27 @@ func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID,
 		err := tx.Where("task_id = ?", taskID).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return tx.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: taskStatus, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt,
+				ProductionID: strings.TrimSpace(productionID), EntityName: strings.TrimSpace(entityName), StatusChangedAt: taskTransitionTime(taskUpdatedAt),
 				DeliveredTaskUpdatedAt: taskUpdatedAt, DeliveredTaskStatus: taskStatus, DeliveredCommentID: commentID, DeliveredCommentUpdatedAt: commentUpdatedAt}).Error
 		}
 		if err != nil {
 			return err
 		}
-		return tx.Model(&Task{}).Where("id = ?", existing.ID).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"task_updated_at": taskUpdatedAt, "last_observed_status": taskStatus, "comment_id": commentID, "comment_updated_at": commentUpdatedAt,
 			"task_status": taskStatus, "delivered_task_updated_at": taskUpdatedAt, "delivered_task_status": taskStatus,
 			"delivered_comment_id": commentID, "delivered_comment_updated_at": commentUpdatedAt,
-		}).Error
+		}
+		if strings.TrimSpace(productionID) != "" {
+			updates["production_id"] = strings.TrimSpace(productionID)
+		}
+		if strings.TrimSpace(entityName) != "" {
+			updates["entity_name"] = strings.TrimSpace(entityName)
+		}
+		if last := strings.TrimSpace(existing.LastObservedStatus); last != "" && !strings.EqualFold(last, taskStatus) {
+			updates["status_changed_at"] = taskTransitionTime(taskUpdatedAt)
+		}
+		return tx.Model(&Task{}).Where("id = ?", existing.ID).Updates(updates).Error
 	})
 }
 
@@ -191,8 +220,10 @@ func PreviousTaskStatus(task Task, currentStatus string) string {
 
 // ObserveTaskStatus durably records Kitsu status order without marking the
 // notification delivered. This preserves retry behavior while retaining a
-// real previous status across poll cycles and process recreation.
-func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) error {
+// real previous status across poll cycles and process recreation. The
+// production ID and entity name keep the observation table self-sufficient
+// for digest membership; status_changed_at records the transition time.
+func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName string) error {
 	if db == nil || strings.TrimSpace(taskID) == "" {
 		return gorm.ErrInvalidData
 	}
@@ -200,7 +231,8 @@ func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID
 		var existing Task
 		result := tx.Where("task_id = ?", taskID).First(&existing)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return tx.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt}).Error
+			return tx.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt,
+				ProductionID: strings.TrimSpace(productionID), EntityName: strings.TrimSpace(entityName), StatusChangedAt: taskTransitionTime(taskUpdatedAt)}).Error
 		}
 		if result.Error != nil {
 			return result.Error
@@ -213,6 +245,12 @@ func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID
 			"task_updated_at": taskUpdatedAt, "last_observed_status": taskStatus,
 			"comment_id": commentID, "comment_updated_at": commentUpdatedAt,
 		}
+		if strings.TrimSpace(productionID) != "" {
+			updates["production_id"] = strings.TrimSpace(productionID)
+		}
+		if strings.TrimSpace(entityName) != "" {
+			updates["entity_name"] = strings.TrimSpace(entityName)
+		}
 		// Legacy rows have no separate successful checkpoint. Seed it once from
 		// the old snapshot before replacing the observed values; never reinterpret
 		// the new observation as a successful delivery checkpoint.
@@ -224,17 +262,18 @@ func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID
 		}
 		if last != "" && !strings.EqualFold(last, taskStatus) {
 			updates["previous_observed_status"] = last
+			updates["status_changed_at"] = taskTransitionTime(taskUpdatedAt)
 		}
 		return tx.Model(&Task{}).Where("id = ?", existing.ID).Updates(updates).Error
 	})
 }
 
-func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID string) error {
+func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID, productionID, entityName string) error {
 	if db == nil || strings.TrimSpace(taskID) == "" {
 		return gorm.ErrInvalidData
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt); err != nil {
+		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName); err != nil {
 			return err
 		}
 		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
@@ -249,12 +288,12 @@ func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, comme
 // MarkNotificationDeliveredCheckpoint advances the delivered checkpoint without
 // a Discord send. Aggregated consumptions (bulk summaries, flap downgrades) use
 // it so a recorded transition is never re-offered by later polls.
-func MarkNotificationDeliveredCheckpoint(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) error {
+func MarkNotificationDeliveredCheckpoint(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName string) error {
 	if db == nil || strings.TrimSpace(taskID) == "" {
 		return gorm.ErrInvalidData
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt); err != nil {
+		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName); err != nil {
 			return err
 		}
 		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{

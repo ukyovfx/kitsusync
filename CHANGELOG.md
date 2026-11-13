@@ -5,6 +5,34 @@ All notable changes to this project should be recorded here.
 ## Unreleased
 
 
+### Fixed - Phase 2 review findings (Codex P2 x14, Muse x1)
+
+- Digest membership now comes from the task observation table, so tasks
+  silently accepted by the initial checkpoint appear in the morning digest.
+- 「昨日の完了」 is judged by when the task completed (status-change time
+  recorded at observation), not by when the observation row was last touched.
+- Stall notices and digest cards use per-production / per-recipient daily
+  markers: a partial failure retries only the failed destinations and the
+  second production's stall notice is no longer suppressed by the first.
+- Flap detection counts status round-trips only; comment-only ledger rows no
+  longer inflate the count.
+- Bulk summaries neutralize mention syntax, send with `allowed_mentions`
+  parse `[]`, cap the body length at Discord's limit, re-resolve and verify
+  the destination webhook before sending, and treat Unknown sends as consumed
+  with an explicit `aggregated_bulk_unknown` ledger trace (no blind retry, no
+  double post).
+- Bulk summaries follow the channel-as-queue lifecycle: a summary's WFA
+  entries are edited out as they resolve and the summary is deleted once
+  nothing waits. Stale buffered transitions (task already left the state) are
+  consumed without the wasted post.
+- Lifecycle cleanup claims left in-flight by a restart are released at
+  startup, mirroring the delivery quarantine.
+- Silent-update mode no longer sends mention DMs; a failed mention DM no
+  longer consumes the daily quota; mention matching requires the complete
+  name (@ゆい no longer matches @ゆいと).
+- The digest card lists entity names (sh002-style) recorded with the
+  observation instead of task-ID fragments.
+
 ### Added - Phase 2 lifecycle, aggregation and digest (design-v2)
 
 - Channel-as-queue lifecycle: a production's waiting-for-check (WFA) post is

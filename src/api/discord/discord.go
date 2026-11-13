@@ -178,6 +178,12 @@ func sanitizeDiscordText(value string) string {
 	return value
 }
 
+// SanitizeText neutralizes Kitsu-originated text for Discord bodies built
+// outside this package (aggregated summaries, digest cards).
+func SanitizeText(value string) string {
+	return sanitizeDiscordText(value)
+}
+
 func localizedTemplatePreset(tplPreset, notifLang string) string {
 	if strings.EqualFold(tplPreset, "rich") && normalizeNotificationLang(notifLang) == "en" {
 		return "eng"
@@ -668,6 +674,43 @@ func DeleteMessage(webhookURL, messageID, threadID string) bool {
 		return true
 	}
 	slog.Warn("DeleteMessage: unexpected status", "status", resp.StatusCode, "messageID", messageID)
+	return false
+}
+
+// EditMessage replaces a webhook message's content (PATCH). It is used by the
+// aggregated-summary lifecycle: a summary whose WFA members resolve is edited
+// down to the still-waiting tasks and deleted once none remain.
+func EditMessage(webhookURL, messageID, threadID string, payload Payload) bool {
+	if webhookURL == "" || messageID == "" {
+		return false
+	}
+	editURL := fmt.Sprintf("%s/messages/%s", webhookURL, messageID)
+	if threadID != "" {
+		editURL += "?thread_id=" + url.QueryEscape(threadID)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		slog.Warn("EditMessage: failed to marshal payload", "error_class", "request_invalid", "messageID", messageID)
+		return false
+	}
+	req, err := http.NewRequest(http.MethodPatch, editURL, bytes.NewReader(body))
+	if err != nil {
+		slog.Warn("EditMessage: failed to build request", "error_class", "request_invalid", "messageID", messageID)
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Warn("EditMessage: request failed", "error_class", "network_error", "messageID", messageID)
+		return false
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return true
+	}
+	slog.Warn("EditMessage: unexpected status", "status", resp.StatusCode, "messageID", messageID)
 	return false
 }
 

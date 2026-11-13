@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"gorm.io/gorm"
 )
@@ -99,15 +100,20 @@ func dispatchMentionDMs(db *gorm.DB, payload kitsu.MessagePayload) {
 			stdslog.Info("Mention DM deferred to digest (daily cap)", "recipient", recipient, "taskID", payload.Task.ID)
 			continue
 		}
-		model.SetSetting(db, countKey, strconv.Itoa(count+1))
+		// The cap counts DELIVERED mentions only: a failed send must not
+		// consume quota, so the next mention of this user retries.
 		if err := sendDigestDirectMessage(botToken, recipient, content); err != nil {
-			stdslog.Warn("Mention DM failed", "error_class", "mention_dm_failed", "recipient", recipient, "err", err)
+			stdslog.Warn("Mention DM failed; quota not consumed", "error_class", "mention_dm_failed", "recipient", recipient, "err", err)
+			continue
 		}
+		model.SetSetting(db, countKey, strconv.Itoa(count+1))
 	}
 }
 
 // mentionedDiscordIDs matches @<kitsu name> tokens in the comment text against
-// the user map and returns the mentioned users' Discord IDs.
+// the user map and returns the mentioned users' Discord IDs. Matching requires
+// the complete name: the characters around the match must not continue a name
+// (or longer name), so @ゆい never matches @ゆいと.
 func mentionedDiscordIDs(db *gorm.DB, commentText string) []string {
 	normalized := strings.ToLower(commentText)
 	seen := map[string]bool{}
@@ -118,12 +124,41 @@ func mentionedDiscordIDs(db *gorm.DB, commentText string) []string {
 		if name == "" || id == "" || seen[id] {
 			continue
 		}
-		if strings.Contains(normalized, "@"+name) {
+		if containsCompleteMention(normalized, name) {
 			seen[id] = true
 			ids = append(ids, id)
 		}
 	}
 	return ids
+}
+
+// containsCompleteMention reports whether text contains @name as a complete
+// token. A match is rejected when the character directly after the name (or
+// directly before the @) continues a name, which is how short names would
+// otherwise swallow longer ones.
+func containsCompleteMention(text, name string) bool {
+	needle := "@" + name
+	for start := 0; ; {
+		at := strings.Index(text[start:], needle)
+		if at < 0 {
+			return false
+		}
+		start += at
+		end := start + len(needle)
+		beforeOK := start == 0 || !continuesName(text, start-1)
+		afterOK := end >= len(text) || !continuesName(text, end)
+		if beforeOK && afterOK {
+			return true
+		}
+		start++
+	}
+}
+
+// continuesName reports whether the rune at the byte offset extends a name
+// (letters and digits, which covers CJK names too).
+func continuesName(text string, offset int) bool {
+	r := []rune(text[offset:])[0]
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // mentionExcessForToday returns the recipient's excess-mention count for the

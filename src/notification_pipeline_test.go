@@ -100,7 +100,7 @@ func TestFilterTasksLeavesUnroutedEventAvailableForLaterRouting(t *testing.T) {
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		dispatched += len(data)
 		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -129,7 +129,7 @@ func TestFilterTasksRetriesAfterFailedDispatch(t *testing.T) {
 		attempts++
 		if attempts > 1 {
 			for _, payload := range data {
-				model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+				model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 			}
 		}
 		return data
@@ -197,7 +197,7 @@ func TestFilterTasksReachesConfiguredAssignmentNotification(t *testing.T) {
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		assigned = len(data) == 1 && data[0].IsAssignNotification
 		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -219,7 +219,7 @@ func TestFilterTasksPersistsStatusTransitionsAcrossPollsAndRestart(t *testing.T)
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, db *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		for _, payload := range data {
 			transitions = append(transitions, payload.PreviousStatusName+" -> "+payload.TaskStatus.TaskStatus.ShortName)
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -265,7 +265,7 @@ func TestFilterTasksRetriesKnownTransitionAfterRestart(t *testing.T) {
 				failRetake = false
 				continue
 			}
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -304,7 +304,7 @@ func TestFilterTasksSupersedesKnownRejectedOlderEventAndUnblocksCurrentEvent(t *
 	configurePipelineRoute(t, db)
 	old := pipelinePayload("WFA")
 	old.Task.UpdatedAt = "2026-08-07T00:00:00"
-	if err := model.UpdateTaskWithDiscord(db, old.Task.ID, old.Task.UpdatedAt, "WFA", "comment-1", "2026-08-07T00:00:00", "", "", ""); err != nil {
+	if err := model.UpdateTaskWithDiscord(db, old.Task.ID, old.Task.UpdatedAt, "WFA", "comment-1", "2026-08-07T00:00:00", "", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	project := model.FindProjectByKitsuID(db, "p1")

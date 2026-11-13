@@ -106,7 +106,7 @@ func deliverViaDispatch(t *testing.T, db *gorm.DB, webhookRowID uint) *atomic.In
 				t.Errorf("durable delivery could not complete: %v", err)
 				continue
 			}
-			if err := model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message-1", "", ""); err != nil {
+			if err := model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message-1", "", "", "", ""); err != nil {
 				t.Errorf("delivery checkpoint update failed: %v", err)
 			}
 		}
@@ -302,7 +302,7 @@ func TestBulkWindowSendsOneSummaryPerDestination(t *testing.T) {
 		if i%2 == 0 {
 			payload.TaskStatus.ShortName = "RETAKE"
 		}
-		if _, err := bufferChannelTransition(fixture.db, payload, productionRoutingPlan{DestinationID: "dest-1", LaneType: model.LaneChannel, WebhookURL: fixture.webhookURL, ShouldSend: true}); err != nil {
+		if _, err := bufferChannelTransition(fixture.db, payload, productionRoutingPlan{DestinationID: "channel-1", LaneType: model.LaneChannel, WebhookURL: fixture.webhookURL, ShouldSend: true}); err != nil {
 			t.Fatal(err)
 		}
 	}

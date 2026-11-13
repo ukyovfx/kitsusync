@@ -15,10 +15,11 @@ import (
 
 // The morning digest is a daily 09:00 JST DM card per configured reviewer.
 // It only records one line per production in the audit trail; the delivery
-// ledger remains the source of truth for individual notifications.
+// ledger remains the source of truth for individual notifications. Markers
+// are per recipient so a partial failure retries only the failed destinations.
 const (
-	digestLastSentDateSettingKey = "digest.last_sent_date"
-	digestStallNoticeDateKey     = "digest.stall_notice_date"
+	digestLastSentDateSettingKey = "digest.last_sent_date."
+	digestStallNoticeDateKey     = "digest.stall_notice_date."
 	digestHourJST                = 9
 	digestMaxTasksPerSection     = 10
 	stalledTaskAfter             = 24 * time.Hour
@@ -27,24 +28,24 @@ const (
 // jst is a fixed UTC+9 zone: Japan has no DST, so a FixedZone is exact.
 var jst = time.FixedZone("JST", 9*60*60)
 
-// runMorningDigestIfDue sends the daily digest DMs once per JST day.
+// runMorningDigestIfDue sends the daily digest DMs once per JST day and
+// recipient. A failed destination simply keeps its marker unset and retries on
+// the next poll.
 func runMorningDigestIfDue(conf config.Config, db *gorm.DB) {
 	if db == nil || conf.SilentUpdateDB {
 		return
 	}
 	now := time.Now().In(jst)
-	today := now.Format("2006-01-02")
-	if now.Hour() < digestHourJST || model.GetSetting(db, digestLastSentDateSettingKey) == today {
+	if now.Hour() < digestHourJST {
 		return
 	}
-	if err := sendMorningDigests(conf, db, now, today); err != nil {
-		stdslog.Error("Morning digest failed", "error_class", "digest_send_failed", "err", err)
-		return
+	if err := sendMorningDigests(conf, db, now, now.Format("2006-01-02")); err != nil {
+		stdslog.Error("Morning digest partially failed; failed destinations retry next poll", "error_class", "digest_send_failed", "err", err)
 	}
-	model.SetSetting(db, digestLastSentDateSettingKey, today)
 }
 
-// productionDigest is one production's digest card content.
+// productionDigest is one production's digest card content. Section entries
+// are display names (the shot/asset name recorded with the observation).
 type productionDigest struct {
 	ProductionID   string
 	ProductionName string
@@ -67,20 +68,30 @@ func sendMorningDigests(conf config.Config, db *gorm.DB, now time.Time, today st
 			continue
 		}
 		for _, recipient := range recipients {
+			// Per-destination daily marker: successful cards are never
+			// re-sent; failed ones retry on the next poll.
+			marker := digestLastSentDateSettingKey + project.KitsuProjectID + "." + recipient
+			if model.GetSetting(db, marker) == today {
+				continue
+			}
 			card := renderDigestCard(digest, mentionExcessForToday(db, recipient, now))
 			if err := sendDigestDirectMessage(botToken, recipient, card); err != nil {
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient, err))
+				continue
 			}
+			model.SetSetting(db, marker, today)
 		}
 		// Stalled work gets a separate one-line notice to the lead, once per
-		// day. The lead is the production's first user-kind reviewer target.
-		if len(digest.Stalled) > 0 && model.GetSetting(db, digestStallNoticeDateKey) != today {
+		// day per production. The lead is the production's first user-kind
+		// reviewer target.
+		stallMarker := digestStallNoticeDateKey + project.KitsuProjectID
+		if len(digest.Stalled) > 0 && model.GetSetting(db, stallMarker) != today {
 			notice := fmt.Sprintf("⏰ %s: %d件のタスクがWFAのまま24時間以上経過しています（先頭: %s）",
 				digest.ProductionName, len(digest.Stalled), strings.Join(prefixItems(digest.Stalled, 3), ", "))
 			if err := sendDigestDirectMessage(botToken, recipients[0], notice); err != nil {
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/stall-notice: %v", project.KitsuProjectID, err))
 			} else {
-				model.SetSetting(db, digestStallNoticeDateKey, today)
+				model.SetSetting(db, stallMarker, today)
 			}
 		}
 		model.WriteAuditLog(db, model.AuditLog{
@@ -101,40 +112,62 @@ func sendMorningDigests(conf config.Config, db *gorm.DB, now time.Time, today st
 }
 
 // buildProductionDigest derives the four digest sections from the task
-// observation table, which mirrors the last Kitsu state the bot saw. The
-// production's task set comes from the delivery ledger (the only place task→
-// production membership is recorded).
+// observation table, which carries the production membership itself. Tasks
+// silently accepted by the initial checkpoint never enter the delivery
+// ledger, so the ledger cannot be the membership source.
 func buildProductionDigest(db *gorm.DB, project model.Project, now time.Time) productionDigest {
 	digest := productionDigest{ProductionID: project.KitsuProjectID, ProductionName: project.Name}
-	var taskIDs []string
-	if err := db.Model(&model.NotificationDeliveryEvent{}).Distinct("task_id").Where("production_id = ?", project.KitsuProjectID).Pluck("task_id", &taskIDs).Error; err != nil {
+	var tasks []model.Task
+	if err := db.Where("production_id = ?", project.KitsuProjectID).Find(&tasks).Error; err != nil {
 		return digest
 	}
 	yesterdayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, jst).AddDate(0, 0, -1)
-	for _, taskID := range taskIDs {
-		task, err := model.FindTaskWithError(db, taskID)
-		if err != nil {
-			continue
-		}
+	for _, task := range tasks {
 		status := strings.ToLower(strings.TrimSpace(task.LastObservedStatus))
 		if status == "" {
 			status = strings.ToLower(strings.TrimSpace(task.TaskStatus))
 		}
+		name := taskDisplayItem(task)
 		switch status {
 		case "wfa":
-			digest.WaitingCheck = append(digest.WaitingCheck, task.TaskID)
+			digest.WaitingCheck = append(digest.WaitingCheck, name)
 			if stalledLongerThan(task, now) {
-				digest.Stalled = append(digest.Stalled, task.TaskID)
+				digest.Stalled = append(digest.Stalled, name)
 			}
 		case "retake":
-			digest.Retakes = append(digest.Retakes, task.TaskID)
+			digest.Retakes = append(digest.Retakes, name)
 		case "done":
-			if task.UpdatedAt.In(jst).After(yesterdayStart) && task.UpdatedAt.In(jst).Before(yesterdayStart.Add(24*time.Hour)) {
-				digest.DoneYesterday = append(digest.DoneYesterday, task.TaskID)
+			if taskCompletedWithin(task, yesterdayStart, 24*time.Hour, now) {
+				digest.DoneYesterday = append(digest.DoneYesterday, name)
 			}
 		}
 	}
 	return digest
+}
+
+// taskDisplayItem prefers the entity name recorded with the observation
+// (sh002-style shot names) and falls back to the task ID.
+func taskDisplayItem(task model.Task) string {
+	if name := strings.TrimSpace(task.EntityName); name != "" {
+		return name
+	}
+	if len(task.TaskID) > 12 {
+		return task.TaskID[:12]
+	}
+	return task.TaskID
+}
+
+// taskCompletedWithin reports whether the task's status most recently became
+// done inside the given JST window. The status-change timestamp recorded at
+// observation time is the completion time; the row timestamp is the fallback
+// for observations that predate it.
+func taskCompletedWithin(task model.Task, windowStart time.Time, window time.Duration, now time.Time) bool {
+	completed := task.StatusChangedAt
+	if completed.IsZero() {
+		completed = task.UpdatedAt
+	}
+	completed = completed.In(jst)
+	return completed.After(windowStart) && completed.Before(windowStart.Add(window)) && now.After(completed)
 }
 
 // stalledLongerThan reports whether a WFA task has been unchanged for over a

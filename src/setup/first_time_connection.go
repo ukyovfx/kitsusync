@@ -191,7 +191,7 @@ func checkpointInitialTaskStates(db *gorm.DB, projectID string) {
 			continue
 		}
 		commentID, commentUpdatedAt := latestComment[task.ID].ID, latestComment[task.ID].UpdatedAt
-		if err := model.MarkTaskObserved(db, task.ID, task.UpdatedAt, shortNameByID[task.TaskStatusID], commentID, commentUpdatedAt); err != nil {
+		if err := model.MarkTaskObserved(db, task.ID, task.UpdatedAt, shortNameByID[task.TaskStatusID], commentID, commentUpdatedAt, projectID, ""); err != nil {
 			slog.Warn("initial task checkpoint failed", "project_id", projectID, "task_id", task.ID, "error", err)
 		}
 	}

@@ -100,15 +100,39 @@ func BufferNotificationTransition(db *gorm.DB, buffer NotificationAggregationBuf
 	return buffered, err
 }
 
-// CountTaskTransitionsSince counts delivery journal rows for a task created
-// after the given time; it is the flap-detection signal.
+// CountTaskTransitionsSince counts the task's STATUS round-trips recorded in
+// the delivery journal after the given time; it is the flap-detection signal.
+// Comment-only changes share the status of the preceding row, so only rows
+// whose status differs from the previous row count — otherwise comment traffic
+// would inflate the round-trip count and downgrade quiet tasks. The last row
+// before the window provides the baseline status.
 func CountTaskTransitionsSince(db *gorm.DB, taskID string, since time.Time) (int64, error) {
 	if db == nil || strings.TrimSpace(taskID) == "" {
 		return 0, gorm.ErrInvalidData
 	}
-	var count int64
-	err := db.Model(&NotificationDeliveryEvent{}).Where("task_id = ? AND created_at >= ?", strings.TrimSpace(taskID), since).Count(&count).Error
-	return count, err
+	var baseline NotificationDeliveryEvent
+	hasBaseline := db.Select("task_status").
+		Where("task_id = ? AND created_at < ?", strings.TrimSpace(taskID), since).
+		Order("id desc").First(&baseline).Error == nil
+	previous := ""
+	if hasBaseline {
+		previous = strings.ToUpper(strings.TrimSpace(baseline.TaskStatus))
+	}
+	var rows []NotificationDeliveryEvent
+	if err := db.Select("task_status").
+		Where("task_id = ? AND created_at >= ?", strings.TrimSpace(taskID), since).
+		Order("id asc").Find(&rows).Error; err != nil {
+		return 0, err
+	}
+	count := int64(0)
+	for _, row := range rows {
+		status := strings.ToUpper(strings.TrimSpace(row.TaskStatus))
+		if status != "" && status != previous {
+			count++
+		}
+		previous = status
+	}
+	return count, nil
 }
 
 // TakeDueAggregatedNotifications returns every buffer whose window has closed,
@@ -148,16 +172,20 @@ func DecodeAggregatedPayload(raw string) ([]byte, error) {
 
 // RecordAggregatedNotificationConsumption writes the ledger trace for a
 // transition that was delivered as part of an aggregate (bulk summary or flap
-// downgrade) instead of an individual post. Idempotent per transition.
-func RecordAggregatedNotificationConsumption(db *gorm.DB, taskID, productionID, taskTypeID, taskStatus, taskUpdatedAt, commentID, commentUpdatedAt string, isAssign bool, reason string) error {
+// downgrade) instead of an individual post. Idempotent per transition. For
+// bulk-summary members the summary message ID and webhook row are recorded so
+// the summary can be reconciled when a contained WFA task resolves.
+func RecordAggregatedNotificationConsumption(db *gorm.DB, taskID, productionID, taskTypeID, taskStatus, taskUpdatedAt, commentID, commentUpdatedAt string, isAssign bool, reason, summaryMessageID string, webhookRowID uint) error {
 	if err := RecordNotificationOnlyDelivery(db, taskID, productionID, taskTypeID, taskStatus, taskUpdatedAt, commentID, commentUpdatedAt, isAssign); err != nil {
 		return err
 	}
-	if strings.TrimSpace(reason) == "" {
-		return nil
+	updates := map[string]any{"failure_class": strings.TrimSpace(reason)}
+	if strings.TrimSpace(summaryMessageID) != "" {
+		updates["discord_message_id"] = strings.TrimSpace(summaryMessageID)
+		updates["webhook_row_id"] = webhookRowID
 	}
 	intent := NotificationDeliveryIntent{TaskID: taskID, ProductionID: productionID, TaskTypeID: taskTypeID, TaskStatus: taskStatus, TaskUpdatedAt: taskUpdatedAt, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt, IsAssignNotification: isAssign, LaneType: LaneRecordOnly}
-	return db.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND failure_class = ''", NotificationEventIdentity(intent)).Update("failure_class", strings.TrimSpace(reason)).Error
+	return db.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", NotificationEventIdentity(intent)).Updates(updates).Error
 }
 
 // NotificationDeliveryMetrics aggregates the delivery ledger by lane and

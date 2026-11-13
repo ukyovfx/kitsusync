@@ -74,7 +74,7 @@ func TestMakeKitsuResponseContinuesWhenCommentsListFails(t *testing.T) {
 
 func TestFilterTasksSkipsCommentDiffWhenCommentsUnavailable(t *testing.T) {
 	db := newNotificationPipelineDB(t)
-	if err := model.MarkTaskObserved(db, "task-1", "2026-08-07T00:00:00", "WFA", "c1", "2026-08-01T00:00:00"); err != nil {
+	if err := model.MarkTaskObserved(db, "task-1", "2026-08-07T00:00:00", "WFA", "c1", "2026-08-01T00:00:00", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	original := notificationDispatch
@@ -83,7 +83,7 @@ func TestFilterTasksSkipsCommentDiffWhenCommentsUnavailable(t *testing.T) {
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		dispatched += len(data)
 		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -109,7 +109,7 @@ func TestFilterTasksSkipsCommentDiffWhenCommentsUnavailable(t *testing.T) {
 func TestFilterTasksDispatchesCommentOnlyWhenCommentsAvailable(t *testing.T) {
 	withImmediateAggregation(t)
 	db := newNotificationPipelineDB(t)
-	if err := model.MarkTaskObserved(db, "task-1", "2026-08-07T00:00:00", "WFA", "c1", "2026-08-01T00:00:00"); err != nil {
+	if err := model.MarkTaskObserved(db, "task-1", "2026-08-07T00:00:00", "WFA", "c1", "2026-08-01T00:00:00", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	configurePipelineRoute(t, db)
@@ -119,7 +119,7 @@ func TestFilterTasksDispatchesCommentOnlyWhenCommentsAvailable(t *testing.T) {
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		dispatched += len(data)
 		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}

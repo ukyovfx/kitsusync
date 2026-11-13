@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	stdslog "log/slog"
 	"net/http"
@@ -424,6 +425,15 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 						if markErr := model.MarkNotificationLifecycleCleanupPending(db, lifecycleEvent.EventID); markErr != nil {
 							slog.Error("Lifecycle cleanup could not be marked", "error_class", "lifecycle_cleanup_mark_failed", "taskID", data[i].Task.ID)
 						}
+					} else if memberEvent, memberErr := model.FindSummaryMemberEventForTask(db, data[i].Task.ID, data[i].Project.ID); memberErr != nil {
+						slog.Error("Summary membership lookup failed", "error_class", "lifecycle_cleanup_lookup_failed", "taskID", data[i].Task.ID)
+					} else if memberEvent != nil {
+						// The task was delivered inside a bulk summary: its WFA
+						// entry must leave the summary, so the summary itself
+						// is marked for reconciliation.
+						if markErr := model.MarkNotificationLifecycleCleanupPending(db, memberEvent.EventID); markErr != nil {
+							slog.Error("Summary lifecycle cleanup could not be marked", "error_class", "lifecycle_cleanup_mark_failed", "taskID", data[i].Task.ID)
+						}
 					}
 				}
 				observed := model.NotificationDeliveryIntent{
@@ -446,7 +456,7 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 					recordCommentReadCapability(db, false)
 				} else {
 					recordCommentReadCapability(db, true)
-					if commentChanged && data[i].LatestComment.Comment.ID != dbResult.CommentID {
+					if commentChanged && data[i].LatestComment.Comment.ID != dbResult.CommentID && !conf.SilentUpdateDB {
 						dispatchMentionDMs(db, data[i])
 					}
 				}
@@ -532,7 +542,7 @@ func FilterTasks(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
 		// explicit route. Delivery state remains separate so transient failures
 		// retry with the same real transition, while unrouted events stay
 		// available if a route is configured later.
-		if err := model.ObserveTaskStatus(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt); err != nil {
+		if err := model.ObserveTaskStatus(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt, payload.Project.ID, payload.Entity.Name); err != nil {
 			slog.Error("Task observation could not be persisted; event not dispatched", "error_class", "task_observation_write_failed")
 			continue
 		}
@@ -631,11 +641,17 @@ func dispatchDueAggregatedNotifications(conf config.Config, db *gorm.DB) {
 		return
 	}
 	for destinationID, buffers := range grouped {
-		webhookURL := buffers[0].WebhookURL
 		var normal []model.NotificationAggregationBuffer
 		for _, buffer := range buffers {
 			if buffer.FlapDowngraded {
-				consumeAggregatedBuffer(db, buffer, "flap_downgraded_to_digest")
+				consumeAggregatedBuffer(db, buffer, "flap_downgraded_to_digest", "", 0)
+				continue
+			}
+			if aggregatedTransitionSuperseded(db, buffer) {
+				// The task already left the buffered state before the window
+				// closed (e.g. resolved into a non-notifiable status): the
+				// stale WFA post would be deleted by the next poll anyway.
+				consumeAggregatedBuffer(db, buffer, "aggregation_transition_superseded", "", 0)
 				continue
 			}
 			normal = append(normal, buffer)
@@ -644,11 +660,7 @@ func dispatchDueAggregatedNotifications(conf config.Config, db *gorm.DB) {
 			continue
 		}
 		if len(normal) > model.NotificationBulkSummaryThreshold {
-			if sendAggregatedSummary(conf, webhookURL, destinationID, normal) {
-				for _, buffer := range normal {
-					consumeAggregatedBuffer(db, buffer, "aggregated_bulk_summary")
-				}
-			}
+			dispatchSummaryGroup(db, destinationID, normal)
 			continue
 		}
 		var payloads []kitsu.MessagePayload
@@ -659,7 +671,7 @@ func dispatchDueAggregatedNotifications(conf config.Config, db *gorm.DB) {
 			if err := json.Unmarshal([]byte(buffer.LastPayloadJSON), &payload); err != nil {
 				// An undecodable buffer can never be delivered; consume it so
 				// it cannot wedge the window.
-				consumeAggregatedBuffer(db, buffer, "aggregation_payload_undecodable")
+				consumeAggregatedBuffer(db, buffer, "aggregation_payload_undecodable", "", 0)
 				continue
 			}
 			payloads = append(payloads, payload)
@@ -670,17 +682,46 @@ func dispatchDueAggregatedNotifications(conf config.Config, db *gorm.DB) {
 			continue
 		}
 		routeLabels := labelsFromSet(labelSet)
-		logRouteDispatch("aggregation.window", routeLabels, payloads, webhookURL != "")
-		notificationDispatch(payloads, conf, webhookURL, db, "aggregation.window", routeLabels)
+		logRouteDispatch("aggregation.window", routeLabels, payloads, webhookURLFor(destinationID, normal) != "")
+		notificationDispatch(payloads, conf, webhookURLFor(destinationID, normal), db, "aggregation.window", routeLabels)
 		if err := model.DeleteAggregationBuffers(db, consumed); err != nil {
 			slog.Error("Aggregation buffer cleanup failed", "error_class", "aggregation_buffer_cleanup_failed")
 		}
 	}
 }
 
+// webhookURLFor returns the destination's current webhook URL from the buffers
+// (the dispatch path re-resolves destinations itself).
+func webhookURLFor(destinationID string, buffers []model.NotificationAggregationBuffer) string {
+	for _, buffer := range buffers {
+		if buffer.DestinationID == destinationID && strings.TrimSpace(buffer.WebhookURL) != "" {
+			return buffer.WebhookURL
+		}
+	}
+	return ""
+}
+
+// aggregatedTransitionSuperseded reports whether the task's current observed
+// status already differs from the buffered transition, which means the
+// buffered state is no longer the task's state.
+func aggregatedTransitionSuperseded(db *gorm.DB, buffer model.NotificationAggregationBuffer) bool {
+	task, err := model.FindTaskWithError(db, buffer.TaskID)
+	if err != nil {
+		return false
+	}
+	current := strings.ToLower(strings.TrimSpace(task.LastObservedStatus))
+	if current == "" {
+		current = strings.ToLower(strings.TrimSpace(task.TaskStatus))
+	}
+	buffered := strings.ToLower(strings.TrimSpace(buffer.LastStatus))
+	return current != "" && current != buffered
+}
+
 // consumeAggregatedBuffer records an aggregated transition in the ledger and
-// advances the delivered checkpoint so later polls never re-offer it.
-func consumeAggregatedBuffer(db *gorm.DB, buffer model.NotificationAggregationBuffer, reason string) {
+// advances the delivered checkpoint so later polls never re-offer it. For
+// bulk-summary members the summary message ID and webhook row are recorded so
+// the summary lifecycle can reconcile the message later.
+func consumeAggregatedBuffer(db *gorm.DB, buffer model.NotificationAggregationBuffer, reason, summaryMessageID string, webhookRowID uint) {
 	var payload kitsu.MessagePayload
 	if err := json.Unmarshal([]byte(buffer.LastPayloadJSON), &payload); err != nil {
 		// Without a decodable payload the checkpoint cannot advance; deleting
@@ -691,34 +732,38 @@ func consumeAggregatedBuffer(db *gorm.DB, buffer model.NotificationAggregationBu
 	}
 	if err := model.RecordAggregatedNotificationConsumption(db, payload.Task.ID, payload.Project.ID, payload.TaskType.ID,
 		strings.ToUpper(strings.TrimSpace(payload.TaskStatus.TaskStatus.ShortName)), payload.Task.UpdatedAt,
-		payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt, payload.IsAssignNotification, reason); err != nil {
+		payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt, payload.IsAssignNotification, reason, summaryMessageID, webhookRowID); err != nil {
 		slog.Error("Aggregated consumption could not be recorded", "error_class", "aggregation_consume_failed", "taskID", buffer.TaskID)
 		return
 	}
 	if err := model.MarkNotificationDeliveredCheckpoint(db, payload.Task.ID, payload.Task.UpdatedAt,
-		payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt); err != nil {
+		payload.TaskStatus.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt,
+		payload.Project.ID, payload.Entity.Name); err != nil {
 		slog.Error("Aggregated delivered checkpoint could not be advanced", "error_class", "aggregation_consume_failed", "taskID", buffer.TaskID)
 		return
 	}
 	_ = model.DeleteAggregationBuffers(db, []uint{buffer.ID})
 }
 
-// sendAggregatedSummary sends one summary message per destination when a
-// window closes with a bulk of transitions. It returns true when the summary
-// was delivered (or permanently rejected); retryable failures keep the
-// buffers for the next poll.
-func sendAggregatedSummary(conf config.Config, webhookURL, destinationID string, buffers []model.NotificationAggregationBuffer) bool {
-	if strings.TrimSpace(webhookURL) == "" {
-		return true
-	}
+// summaryMember is one task's live entry in an aggregated summary body.
+type summaryMember struct {
+	Name   string
+	Status string
+	TaskID string
+}
+
+// aggregatedSummaryContentLimit keeps the assembled body inside Discord's
+// 2000-character message limit with headroom for the trailing notice.
+const aggregatedSummaryContentLimit = 1900
+
+// buildAggregatedSummaryBody renders the bulk-summary text from the members'
+// current states: per-status counts plus up to 20 previews, truncated to the
+// Discord content limit. Kitsu-originated names are sanitized so the body can
+// never carry live mentions or markup.
+func buildAggregatedSummaryBody(destinationID string, members []summaryMember) string {
 	counts := map[string]int{}
-	var previews []string
-	for _, buffer := range buffers {
-		counts[buffer.LastStatus]++
-		var payload kitsu.MessagePayload
-		if err := json.Unmarshal([]byte(buffer.LastPayloadJSON), &payload); err == nil && len(previews) < 20 {
-			previews = append(previews, sanitizeTaskPreview(payload))
-		}
+	for _, member := range members {
+		counts[member.Status]++
 	}
 	var breakdown []string
 	for _, status := range []string{"WFA", "RETAKE", "DONE"} {
@@ -726,29 +771,271 @@ func sendAggregatedSummary(conf config.Config, webhookURL, destinationID string,
 			breakdown = append(breakdown, fmt.Sprintf("%s: %d", status, counts[status]))
 		}
 	}
-	content := fmt.Sprintf("📢 %s — %d 件の更新を集約しました (%s)", destinationID, len(buffers), strings.Join(breakdown, ", "))
+	header := fmt.Sprintf("📢 %s — %d 件の更新を集約しました (%s)", destinationID, len(members), strings.Join(breakdown, ", "))
+	previews := memberPreviews(members)
+	content := header
 	if len(previews) > 0 {
 		content += "\n" + strings.Join(previews, "\n")
 	}
-	result := discord.SendMessage(discord.Payload{Content: content}, webhookURL, "", "")
-	_ = conf
-	if result.MessageID != "" {
-		return true
+	if len(content) <= aggregatedSummaryContentLimit {
+		return content
 	}
-	if !result.Retryable && !result.Unknown {
-		// Permanent rejection: keep the ledger trace, unblock the window.
-		return true
+	// Length cap: drop previews from the tail until the body fits.
+	for len(previews) > 0 {
+		previews = previews[:len(previews)-1]
+		content = header
+		if len(previews) > 0 {
+			content += "\n" + strings.Join(previews, "\n")
+		}
+		content += fmt.Sprintf("\n…他 %d 件", len(members)-len(previews))
+		if len(content) <= aggregatedSummaryContentLimit {
+			return content
+		}
 	}
-	return false
+	return header + fmt.Sprintf("\n…他 %d 件", len(members))
 }
 
-// sanitizeTaskPreview renders one buffered task as a short summary line.
-func sanitizeTaskPreview(payload kitsu.MessagePayload) string {
-	name := payload.Entity.Name
-	if strings.TrimSpace(name) == "" {
-		name = payload.Task.ID
+func memberPreviews(members []summaryMember) []string {
+	previews := make([]string, 0, len(members))
+	for _, member := range members {
+		if len(previews) >= 20 {
+			break
+		}
+		name := discord.SanitizeText(member.Name)
+		if strings.TrimSpace(name) == "" {
+			name = member.TaskID
+		}
+		previews = append(previews, fmt.Sprintf("• %s (%s)", name, member.Status))
 	}
-	return fmt.Sprintf("• %s (%s)", name, strings.ToUpper(strings.TrimSpace(payload.TaskStatus.TaskStatus.ShortName)))
+	return previews
+}
+
+// summaryOutcome classifies a bulk-summary send. delivered/permanent/unknown
+// consume the buffers (unknown keeps an explicit ledger trace for manual
+// reconciliation instead of risking a double post); retryable keeps them for
+// the next poll.
+type summaryOutcome string
+
+const (
+	summaryDelivered  summaryOutcome = "delivered"
+	summaryPermanent  summaryOutcome = "permanent"
+	summaryUnknown    summaryOutcome = "unknown"
+	summaryRetryable  summaryOutcome = "retryable"
+	summaryUnresolved summaryOutcome = "unresolved"
+)
+
+// dispatchSummaryGroup sends one destination's bulk summary after re-resolving
+// and verifying the destination webhook, then consumes the buffers according
+// to the send outcome.
+func dispatchSummaryGroup(db *gorm.DB, destinationID string, buffers []model.NotificationAggregationBuffer) {
+	webhook, resolveOutcome := resolveSummaryWebhook(db, buffers[0].ProductionID, destinationID)
+	switch resolveOutcome {
+	case summaryUnresolved:
+		// The destination no longer resolves (route removed or channel
+		// deleted): record the transitions in the ledger and unblock the
+		// window instead of buffering forever.
+		for _, buffer := range buffers {
+			consumeAggregatedBuffer(db, buffer, "aggregation_destination_unresolved", "", 0)
+		}
+		return
+	case summaryRetryable:
+		slog.Warn("Bulk summary destination verification failed; buffers kept", "error_class", "summary_destination_verification_failed", "destination", destinationID)
+		return
+	}
+	outcome, messageID := sendAggregatedSummary(destinationID, webhook, buffers)
+	switch outcome {
+	case summaryRetryable:
+		return
+	case summaryUnknown:
+		for _, buffer := range buffers {
+			consumeAggregatedBuffer(db, buffer, "aggregated_bulk_unknown", "", 0)
+		}
+		return
+	case summaryDelivered:
+		for _, buffer := range buffers {
+			consumeAggregatedBuffer(db, buffer, "aggregated_bulk_summary", messageID, webhook.ID)
+		}
+	default: // permanent rejection by Discord
+		for _, buffer := range buffers {
+			consumeAggregatedBuffer(db, buffer, "aggregated_bulk_rejected", "", 0)
+		}
+	}
+}
+
+// resolveSummaryWebhook re-resolves the destination's webhook fresh from the
+// routing state instead of trusting the URL captured when the transition was
+// buffered; this is the same destination verification the normal delivery
+// path applies.
+func resolveSummaryWebhook(db *gorm.DB, productionID, destinationID string) (model.ProjectWebhook, summaryOutcome) {
+	var webhook model.ProjectWebhook
+	err := db.Where("kitsu_project_id = ? AND discord_channel_id = ?", productionID, destinationID).First(&webhook).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return webhook, summaryUnresolved
+	}
+	if err != nil {
+		return webhook, summaryRetryable
+	}
+	var project model.Project
+	if err := db.Where("kitsu_project_id = ?", productionID).First(&project).Error; err != nil {
+		return webhook, summaryRetryable
+	}
+	webhookID, idErr := discord.DiscordWebhookIDFromURL(webhook.WebhookURL)
+	if idErr != nil {
+		return webhook, summaryRetryable
+	}
+	if verifyErr := discord.VerifyWebhookIdentity(webhook.WebhookURL, webhookID, project.DiscordGuildID, webhook.DiscordChannelID); verifyErr != nil {
+		return webhook, summaryRetryable
+	}
+	return webhook, ""
+}
+
+// sendAggregatedSummary sends one summary message per destination when a
+// window closes with a bulk of transitions.
+func sendAggregatedSummary(destinationID string, webhook model.ProjectWebhook, buffers []model.NotificationAggregationBuffer) (summaryOutcome, string) {
+	members := make([]summaryMember, 0, len(buffers))
+	for _, buffer := range buffers {
+		var payload kitsu.MessagePayload
+		if err := json.Unmarshal([]byte(buffer.LastPayloadJSON), &payload); err != nil {
+			continue
+		}
+		name := payload.Entity.Name
+		if strings.TrimSpace(name) == "" {
+			name = payload.Task.ID
+		}
+		members = append(members, summaryMember{Name: name, Status: strings.ToUpper(strings.TrimSpace(buffer.LastStatus)), TaskID: payload.Task.ID})
+	}
+	content := buildAggregatedSummaryBody(destinationID, members)
+	// parse:[] keeps Kitsu-originated text (task names, previews) from ever
+	// pinging anyone through the summary.
+	result := discord.SendMessage(discord.Payload{Content: content, AllowedMentions: &discord.AllowedMentions{Parse: []string{}}}, webhook.WebhookURL, "", "")
+	if result.MessageID != "" {
+		return summaryDelivered, result.MessageID
+	}
+	if result.Unknown {
+		return summaryUnknown, ""
+	}
+	if result.Retryable {
+		return summaryRetryable, ""
+	}
+	return summaryPermanent, ""
+}
+
+// reconcileAggregatedSummaries keeps bulk summaries aligned with the
+// channel-as-queue lifecycle: when a WFA task inside a summary resolves, the
+// summary is edited down to the still-waiting tasks and deleted once none
+// remain. Members are the record-only ledger rows carrying the summary's
+// message ID.
+func reconcileAggregatedSummaries(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+	var pending []model.NotificationDeliveryEvent
+	if err := db.Where("lane_type = ? AND disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ? AND discord_message_id != ''",
+		model.LaneRecordOnly, model.DeliveryRecorded, true, false).Find(&pending).Error; err != nil {
+		slog.Error("Summary lifecycle read failed", "error_class", "summary_lifecycle_read_failed")
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+	// Rebuild the FULL membership of each affected summary: the pending rows
+	// only mark which summaries need reconciliation.
+	messageIDs := make([]string, 0, len(pending))
+	seenMessage := map[string]bool{}
+	for _, member := range pending {
+		if !seenMessage[member.DiscordMessageID] {
+			seenMessage[member.DiscordMessageID] = true
+			messageIDs = append(messageIDs, member.DiscordMessageID)
+		}
+	}
+	var members []model.NotificationDeliveryEvent
+	if err := db.Where("discord_message_id IN ? AND lane_type = ? AND disposition = ?", messageIDs, model.LaneRecordOnly, model.DeliveryRecorded).Find(&members).Error; err != nil {
+		slog.Error("Summary membership read failed", "error_class", "summary_lifecycle_read_failed")
+		return
+	}
+	byMessage := map[string][]model.NotificationDeliveryEvent{}
+	order := append([]string(nil), messageIDs...)
+	for _, member := range members {
+		byMessage[member.DiscordMessageID] = append(byMessage[member.DiscordMessageID], member)
+	}
+	for _, messageID := range order {
+		group := byMessage[messageID]
+		webhook, ok := summaryLifecycleWebhook(db, group[0].WebhookRowID)
+		if !ok {
+			slog.Warn("Summary lifecycle webhook unavailable; retrying next poll", "error_class", "summary_lifecycle_webhook_missing")
+			continue
+		}
+		waiting := 0
+		liveMembers := make([]summaryMember, 0, len(group))
+		for _, member := range group {
+			status := taskObservedStatus(db, member.TaskID)
+			if status == "" {
+				status = strings.ToUpper(strings.TrimSpace(member.TaskStatus))
+			}
+			if strings.EqualFold(status, "wfa") {
+				waiting++
+			}
+			liveMembers = append(liveMembers, summaryMember{Name: taskEntityName(db, member.TaskID), Status: status, TaskID: member.TaskID})
+		}
+		if waiting == 0 {
+			if discord.DeleteMessage(webhook.WebhookURL, messageID, "") {
+				_ = model.CompleteSummaryLifecycleCleanup(db, messageID, true, true, "")
+			} else {
+				_ = model.CompleteSummaryLifecycleCleanup(db, messageID, false, false, "summary_message_delete_failed")
+			}
+			continue
+		}
+		body := buildAggregatedSummaryBody(webhook.DiscordChannelID, liveMembers)
+		if discord.EditMessage(webhook.WebhookURL, messageID, "", discord.Payload{Content: body, AllowedMentions: &discord.AllowedMentions{Parse: []string{}}}) {
+			_ = model.CompleteSummaryLifecycleCleanup(db, messageID, true, false, "")
+		} else {
+			_ = model.CompleteSummaryLifecycleCleanup(db, messageID, false, false, "summary_message_edit_failed")
+		}
+	}
+}
+
+// summaryLifecycleWebhook loads and verifies the webhook row a summary was
+// delivered through before editing or deleting the message.
+func summaryLifecycleWebhook(db *gorm.DB, webhookRowID uint) (model.ProjectWebhook, bool) {
+	webhook := model.FindProjectWebhookByID(db, webhookRowID)
+	if webhook == nil {
+		return model.ProjectWebhook{}, false
+	}
+	webhookID, idErr := discord.DiscordWebhookIDFromURL(webhook.WebhookURL)
+	if idErr != nil {
+		return model.ProjectWebhook{}, false
+	}
+	var project model.Project
+	if err := db.Where("kitsu_project_id = ?", webhook.KitsuProjectID).First(&project).Error; err != nil {
+		return model.ProjectWebhook{}, false
+	}
+	if verifyErr := discord.VerifyWebhookIdentity(webhook.WebhookURL, webhookID, project.DiscordGuildID, webhook.DiscordChannelID); verifyErr != nil {
+		return model.ProjectWebhook{}, false
+	}
+	return *webhook, true
+}
+
+// taskObservedStatus returns the task's current observed status.
+func taskObservedStatus(db *gorm.DB, taskID string) string {
+	task, err := model.FindTaskWithError(db, taskID)
+	if err != nil {
+		return ""
+	}
+	status := strings.ToUpper(strings.TrimSpace(task.LastObservedStatus))
+	if status == "" {
+		status = strings.ToUpper(strings.TrimSpace(task.TaskStatus))
+	}
+	return status
+}
+
+// taskEntityName returns the display name recorded with the task observation,
+// falling back to the task ID.
+func taskEntityName(db *gorm.DB, taskID string) string {
+	task, err := model.FindTaskWithError(db, taskID)
+	if err != nil || strings.TrimSpace(task.EntityName) == "" {
+		return taskID
+	}
+	return strings.TrimSpace(task.EntityName)
 }
 
 // lastDeliveryMetricsLine deduplicates the metrics log: the line is only
@@ -941,7 +1228,7 @@ var notificationDispatch = DiscordQueueSend
 var makeKitsuResponse = MakeKitsuResponse
 
 func persistTaskObservation(db *gorm.DB, payload kitsu.MessagePayload) error {
-	return model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt)
+	return model.MarkTaskObserved(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, payload.LatestComment.Comment.ID, payload.LatestComment.Comment.UpdatedAt, payload.Project.ID, payload.Entity.Name)
 }
 
 func redactExpiredNotificationPayloads(conf config.Config, db *gorm.DB, now time.Time) {
@@ -1076,6 +1363,9 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	runMorningDigestIfDue(conf, db)
 	// Log-only delivery metrics, emitted when the ledger shape changes.
 	logDeliveryMetrics(db)
+	// Bulk summaries follow the channel-as-queue lifecycle: contained WFA
+	// tasks that resolved get edited out of (or delete) their summary.
+	reconcileAggregatedSummaries(db)
 	// Per-production visibility and liveness: raw task counts (before age
 	// filtering) tell whether the bot still sees each open production.
 	// Validation-only profile projects are read-only fixtures and must never
@@ -1192,6 +1482,12 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	// instead of silently blocking newer intents for the same task.
 	if err := model.MigrateLegacyNotificationEventIdentities(db); err != nil {
 		return fmt.Errorf("migrate legacy notification delivery identities: %w", err)
+	}
+	// Lifecycle cleanup claims left in-flight by a restart go back to pending,
+	// mirroring the delivery quarantine; otherwise the channel post would
+	// never be deleted.
+	if _, err := model.ReleaseStuckNotificationLifecycleCleanups(db); err != nil {
+		return fmt.Errorf("release stuck lifecycle cleanups: %w", err)
 	}
 	return nil
 }

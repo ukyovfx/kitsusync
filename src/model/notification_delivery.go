@@ -1284,7 +1284,7 @@ func MarkNotificationLifecycleCleanupPending(db *gorm.DB, eventID string) error 
 		return gorm.ErrInvalidData
 	}
 	result := db.Model(&NotificationDeliveryEvent{}).
-		Where("event_id = ? AND disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ? AND lifecycle_deleted_at IS NULL", eventID, DeliveryDelivered, false, false).
+		Where("event_id = ? AND disposition IN ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ? AND lifecycle_deleted_at IS NULL", eventID, []string{DeliveryDelivered, DeliveryRecorded}, false, false).
 		Update("lifecycle_cleanup_pending", true)
 	if result.Error != nil {
 		return result.Error
@@ -1390,6 +1390,64 @@ func CompleteNotificationLifecycleCleanup(db *gorm.DB, eventID string, succeeded
 		return ErrDeliveryAttemptConflict
 	}
 	return nil
+}
+
+// ReleaseStuckNotificationLifecycleCleanups returns lifecycle claims left
+// in-flight by a process restart to the pending state, mirroring the delivery
+// quarantine. Without this, a restart during a claim would leave the channel
+// post undeletable forever.
+func ReleaseStuckNotificationLifecycleCleanups(db *gorm.DB) (int64, error) {
+	if db == nil {
+		return 0, gorm.ErrInvalidDB
+	}
+	result := db.Model(&NotificationDeliveryEvent{}).
+		Where("lifecycle_cleanup_in_flight = ?", true).
+		Update("lifecycle_cleanup_in_flight", false)
+	return result.RowsAffected, result.Error
+}
+
+// FindSummaryMemberEventForTask returns the task's aggregated-summary member
+// row: a record-only ledger row that carries the summary message ID. Tasks
+// delivered inside a bulk summary have no individual channel post, so their
+// lifecycle cleanup targets the summary message instead.
+func FindSummaryMemberEventForTask(db *gorm.DB, taskID, productionID string) (*NotificationDeliveryEvent, error) {
+	if db == nil || strings.TrimSpace(taskID) == "" {
+		return nil, gorm.ErrInvalidData
+	}
+	var event NotificationDeliveryEvent
+	err := db.Where("task_id = ? AND production_id = ? AND lane_type = ? AND disposition = ? AND discord_message_id != '' AND lifecycle_deleted_at IS NULL",
+		strings.TrimSpace(taskID), strings.TrimSpace(productionID), LaneRecordOnly, DeliveryRecorded).
+		Order("id desc").First(&event).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
+// CompleteSummaryLifecycleCleanup closes the summary reconciliation for every
+// member row of one aggregated summary message. Failures keep the rows pending
+// so the next poll retries; the edit and delete are idempotent. deleted_at is
+// stamped only when the summary message itself was deleted — after a partial
+// edit the summary still exists and future resolutions must keep reconciling.
+func CompleteSummaryLifecycleCleanup(db *gorm.DB, summaryMessageID string, succeeded, deleted bool, failureClass string) error {
+	if db == nil || strings.TrimSpace(summaryMessageID) == "" {
+		return gorm.ErrInvalidData
+	}
+	updates := map[string]any{"lifecycle_cleanup_in_flight": false, "cleanup_failure_class": ""}
+	if succeeded {
+		updates["lifecycle_cleanup_pending"] = false
+		if deleted {
+			updates["lifecycle_deleted_at"] = time.Now().UTC()
+		}
+	} else {
+		updates["cleanup_failure_class"] = strings.TrimSpace(failureClass)
+	}
+	return db.Model(&NotificationDeliveryEvent{}).
+		Where("discord_message_id = ? AND lane_type = ? AND disposition = ?", strings.TrimSpace(summaryMessageID), LaneRecordOnly, DeliveryRecorded).
+		Updates(updates).Error
 }
 
 func BeginPriorMessageCleanup(db *gorm.DB, eventID string) (*NotificationDeliveryEvent, bool, error) {
