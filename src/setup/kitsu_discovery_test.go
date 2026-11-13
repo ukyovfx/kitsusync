@@ -23,6 +23,23 @@ func TestKitsuHostDiscoveryUsesSavedEndpointBeforeLocalCandidates(t *testing.T) 
 	}
 }
 
+// TestKitsuHostDiscoveryReadsPersistedPublicHTTPEndpoint reproduces the Codex
+// P2 finding: re-discovery ran stored values through the new-input http gate,
+// so an existing install holding a public http kitsu.hostname lost its
+// connection on upgrade. Stored-value reads must skip the gate.
+func TestKitsuHostDiscoveryReadsPersistedPublicHTTPEndpoint(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	model.SetSetting(db, "kitsu.hostname", "http://kitsu.example.internal")
+	t.Setenv("KITSU_HOSTNAME", "")
+	originalProbe := probeKitsu
+	probeKitsu = func(string) bool { return true }
+	t.Cleanup(func() { probeKitsu = originalProbe })
+	result := DiscoverKitsuHost(db)
+	if result.Source != "persisted" || result.RuntimeHost != "http://kitsu.example.internal/" {
+		t.Fatalf("stored public http endpoint was not re-discovered: %+v", result)
+	}
+}
+
 func TestKitsuHostDiscoveryUsesExplicitEndpointBeforePersistedEndpoint(t *testing.T) {
 	explicit := httptest.NewServer(kitsuProbeHandler())
 	defer explicit.Close()

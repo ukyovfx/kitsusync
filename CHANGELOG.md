@@ -4,6 +4,30 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
+### Security — pentest rounds 1–3 and static audit fixes
+
+- Login rate limiting: the limit identifier now trusts `X-Forwarded-For` /
+  `X-Real-IP` only from loopback proxies; client-supplied headers from direct
+  connections no longer rotate the limit (regression-tested). (Verified
+  already present on master; covered by existing tests.)
+- Discord embed text: title-like fields are sanitized before send — Unicode
+  control/bidirectional-override/zero-width characters (e.g. U+202E) are
+  stripped and masked markdown links (`[text](url)`) are neutralized to
+  `text (url)`. Kitsu source data is never modified.
+- Discord 429 handling: a hard rate-limit window is shared process-wide so a
+  rate-limited destination fails fast (retryable, ledger-resumed next poll)
+  instead of serially stalling the whole delivery batch with inline sleeps.
+- Kitsu endpoint scheme: new connections over plain `http` to public hosts are
+  rejected (`insecure_http_rejected`). Loopback, `host.docker.internal`,
+  private addresses and CGNAT/Tailscale ranges stay allowed; a validation lab
+  can override with `KITSUSYNC_ALLOW_INSECURE_KITSU_HTTP=1`.
+- Legacy setup page (`/bot/setup?legacy=1`): Kitsu project names/IDs are now
+  HTML-escaped like every other screen (stored XSS via `<script>` and
+  `data-name` attribute breakout fixed).
+- Delivery ledger: `unknown` rows (send outcome not observed — send timeout or
+  process death) auto-resolve to terminal after 10 minutes so a task's later
+  notifications are no longer blocked forever. The resolved row is never
+  re-dispatched, preserving the zero-duplicate-send fail-safe.
 
 ### Fixed - Phase 2 review findings (Codex P2 x14, Muse x1)
 
