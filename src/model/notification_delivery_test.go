@@ -1222,7 +1222,7 @@ func TestObservedSameStatusCommentEditDoesNotAdvanceDeliveryCheckpoint(t *testin
 		t.Fatal(err)
 	}
 	current := notificationIntent()
-	if err := ObserveTaskStatus(db, current.TaskID, current.TaskUpdatedAt, current.TaskStatus, current.CommentID, current.CommentUpdatedAt); err != nil {
+	if err := ObserveTaskStatus(db, current.TaskID, current.TaskUpdatedAt, current.TaskStatus, current.CommentID, current.CommentUpdatedAt, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	var observed Task
@@ -1243,7 +1243,7 @@ func TestObservedSameStatusCommentEditDoesNotAdvanceDeliveryCheckpoint(t *testin
 	if err := SetNotificationDeliveryDisposition(db, *attempt, DeliveryRetryable, "rate_limited"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ObserveTaskStatus(db, current.TaskID, current.TaskUpdatedAt, current.TaskStatus, current.CommentID, current.CommentUpdatedAt); err != nil {
+	if err := ObserveTaskStatus(db, current.TaskID, current.TaskUpdatedAt, current.TaskStatus, current.CommentID, current.CommentUpdatedAt, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	disposition, err := NotificationDeliveryDisposition(db, event.EventID)

@@ -307,6 +307,9 @@ func TestStaleUnknownResolutionUnblocksTaskWithoutDuplicateSend(t *testing.T) {
 	conf := pipelineConfig()
 	conf.Discord.EmbedsPerRequests = 10
 	conf.Discord.RequestsPerMinute = 60
+	// The merged tree buffers channel transitions; dispatch the window
+	// immediately so the unblocked notification is sent within this poll.
+	withImmediateAggregation(t)
 	runOnePoll(conf, db)
 
 	if got := sends.Load(); got != 1 {

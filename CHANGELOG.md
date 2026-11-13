@@ -29,6 +29,56 @@ All notable changes to this project should be recorded here.
   notifications are no longer blocked forever. The resolved row is never
   re-dispatched, preserving the zero-duplicate-send fail-safe.
 
+### Fixed - Phase 2 review findings (Codex P2 x14, Muse x1)
+
+- Digest membership now comes from the task observation table, so tasks
+  silently accepted by the initial checkpoint appear in the morning digest.
+- 「昨日の完了」 is judged by when the task completed (status-change time
+  recorded at observation), not by when the observation row was last touched.
+- Stall notices and digest cards use per-production / per-recipient daily
+  markers: a partial failure retries only the failed destinations and the
+  second production's stall notice is no longer suppressed by the first.
+- Flap detection counts status round-trips only; comment-only ledger rows no
+  longer inflate the count.
+- Bulk summaries neutralize mention syntax, send with `allowed_mentions`
+  parse `[]`, cap the body length at Discord's limit, re-resolve and verify
+  the destination webhook before sending, and treat Unknown sends as consumed
+  with an explicit `aggregated_bulk_unknown` ledger trace (no blind retry, no
+  double post).
+- Bulk summaries follow the channel-as-queue lifecycle: a summary's WFA
+  entries are edited out as they resolve and the summary is deleted once
+  nothing waits. Stale buffered transitions (task already left the state) are
+  consumed without the wasted post.
+- Lifecycle cleanup claims left in-flight by a restart are released at
+  startup, mirroring the delivery quarantine.
+- Silent-update mode no longer sends mention DMs; a failed mention DM no
+  longer consumes the daily quota; mention matching requires the complete
+  name (@ゆい no longer matches @ゆいと).
+- The digest card lists entity names (sh002-style) recorded with the
+  observation instead of task-ID fragments.
+
+### Added - Phase 2 lifecycle, aggregation and digest (design-v2)
+
+- Channel-as-queue lifecycle: a production's waiting-for-check (WFA) post is
+  deleted when the task leaves WFA, and a new post appears if the task returns
+  to WFA. Deletion only happens after webhook ownership is re-verified, and
+  404 responses count as already-deleted.
+- 3-minute aggregation window per task and destination: rapid state round-trips
+  collapse into one delivery of the final state. When a window closes with more
+  than 10 transitions for one destination, a single summary message is sent
+  instead of individual posts. Tasks that round-trip 4+ times per hour are
+  downgraded to digest-only delivery and recorded in the ledger.
+- Morning digest: once per day at 09:00 JST, each configured reviewer receives
+  a DM card with counts for checking-waiting, retakes, stalled (WFA over 24h)
+  and yesterday's completions. Stalled work also raises a one-line notice to
+  the production's first reviewer once per day.
+- Comment mention DMs: new comments that mention a user (matched through the
+  user map) are delivered as DMs, capped at 5 per person per day with the
+  excess counted in the digest. When the comments endpoint is not readable
+  (403), mention DMs are disabled and the capability state is recorded.
+- Delivery metrics: the ledger is aggregated per lane/disposition/failure
+  class and logged when the shape changes (no UI).
+
 ### Added — Phase 1 notification routing lanes (design-v2)
 
 - Production notification routes now carry a destination lane kind

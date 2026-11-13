@@ -200,6 +200,12 @@ func sanitizeDiscordText(value string) string {
 	return value
 }
 
+// SanitizeText neutralizes Kitsu-originated text for Discord bodies built
+// outside this package (aggregated summaries, digest cards).
+func SanitizeText(value string) string {
+	return sanitizeDiscordText(value)
+}
+
 // discordRateLimitedUntil marks a hard rate-limit window reported by Discord.
 // While it is in the future, further sends fail fast as retryable instead of
 // sleeping inline, so one rate-limited destination cannot serially stall the
@@ -717,6 +723,43 @@ func DeleteMessage(webhookURL, messageID, threadID string) bool {
 		return true
 	}
 	slog.Warn("DeleteMessage: unexpected status", "status", resp.StatusCode, "messageID", messageID)
+	return false
+}
+
+// EditMessage replaces a webhook message's content (PATCH). It is used by the
+// aggregated-summary lifecycle: a summary whose WFA members resolve is edited
+// down to the still-waiting tasks and deleted once none remain.
+func EditMessage(webhookURL, messageID, threadID string, payload Payload) bool {
+	if webhookURL == "" || messageID == "" {
+		return false
+	}
+	editURL := fmt.Sprintf("%s/messages/%s", webhookURL, messageID)
+	if threadID != "" {
+		editURL += "?thread_id=" + url.QueryEscape(threadID)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		slog.Warn("EditMessage: failed to marshal payload", "error_class", "request_invalid", "messageID", messageID)
+		return false
+	}
+	req, err := http.NewRequest(http.MethodPatch, editURL, bytes.NewReader(body))
+	if err != nil {
+		slog.Warn("EditMessage: failed to build request", "error_class", "request_invalid", "messageID", messageID)
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Warn("EditMessage: request failed", "error_class", "network_error", "messageID", messageID)
+		return false
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return true
+	}
+	slog.Warn("EditMessage: unexpected status", "status", resp.StatusCode, "messageID", messageID)
 	return false
 }
 
@@ -1448,6 +1491,47 @@ type DiscordMessageWebhookIdentity struct {
 	Type      int    `json:"type"`
 	GuildID   string `json:"guild_id"`
 	ChannelID string `json:"channel_id"`
+}
+
+// DeletePendingLifecycleMessages runs the channel-as-queue sweeper: tasks that
+// left WFA have their waiting-for-check post deleted. Every deletion re-verifies
+// webhook ownership first, so a post is never removed on stale or unowned
+// credentials, and 404 responses count as already-deleted success.
+func DeletePendingLifecycleMessages(db *gorm.DB, limit int) {
+	if db == nil {
+		return
+	}
+	events, err := model.ListPendingLifecycleCleanups(db, limit)
+	if err != nil {
+		slog.Error("Lifecycle cleanup journal read failed", "error_class", "lifecycle_cleanup_read_failed")
+		return
+	}
+	for _, candidate := range events {
+		event, claimed, claimErr := model.ClaimNotificationLifecycleCleanup(db, candidate.EventID)
+		if claimErr != nil || !claimed || event == nil {
+			continue
+		}
+		webhook := model.FindProjectWebhookByID(db, event.WebhookRowID)
+		if webhook == nil || webhook.DiscordChannelID != event.DestinationChannelID {
+			_ = model.CompleteNotificationLifecycleCleanup(db, event.EventID, false, "destination_identity_changed")
+			continue
+		}
+		webhookID, err := DiscordWebhookIDFromURL(webhook.WebhookURL)
+		if err != nil || webhookID != event.DestinationWebhookID || VerifyWebhookIdentity(webhook.WebhookURL, event.DestinationWebhookID, event.DestinationGuildID, event.DestinationChannelID) != nil {
+			if stateErr := model.CompleteNotificationLifecycleCleanup(db, event.EventID, false, "lifecycle_webhook_verification_failed"); stateErr != nil {
+				slog.Warn("Lifecycle cleanup claim could not be released", "error_class", "lifecycle_cleanup_state_write_failed", "event", event.EventID[:12])
+			}
+			continue
+		}
+		deleted := DeleteMessage(webhook.WebhookURL, event.DiscordMessageID, event.DiscordThreadID)
+		failure := ""
+		if !deleted {
+			failure = "lifecycle_message_delete_failed"
+		}
+		if err := model.CompleteNotificationLifecycleCleanup(db, event.EventID, deleted, failure); err != nil {
+			slog.Warn("Lifecycle cleanup state update failed", "error_class", "lifecycle_cleanup_state_write_failed", "event", event.EventID[:12])
+		}
+	}
 }
 
 // SendMessageBunch は各タスクを処理して SendResult のマップを返す

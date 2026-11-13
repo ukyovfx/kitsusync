@@ -21,7 +21,7 @@ func newNotificationPipelineDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.NotificationAggregationBuffer{}, &model.ManagedChannelDeletion{}, &model.Setting{}, &model.UserMap{}, &model.AuditLog{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -33,10 +33,19 @@ func reopenNotificationPipelineDB(t *testing.T, path string) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.NotificationAggregationBuffer{}, &model.ManagedChannelDeletion{}, &model.Setting{}, &model.UserMap{}, &model.AuditLog{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
+}
+
+// withImmediateAggregation closes aggregation windows instantly so tests can
+// assert on dispatches right after FilterTasks.
+func withImmediateAggregation(t *testing.T) {
+	t.Helper()
+	orig := channelAggregationWindow
+	channelAggregationWindow = 0
+	t.Cleanup(func() { channelAggregationWindow = orig })
 }
 
 func closeNotificationPipelineDB(t *testing.T, db *gorm.DB) {
@@ -63,6 +72,8 @@ func pipelinePayload(status string) kitsu.MessagePayload {
 func pipelineConfig() config.Config {
 	var conf config.Config
 	conf.Notification.NotifyOnAssign = true
+	conf.Discord.EmbedsPerRequests = 10
+	conf.Discord.RequestsPerMinute = 60
 	return conf
 }
 
@@ -81,6 +92,7 @@ func configurePipelineRoute(t *testing.T, db *gorm.DB) {
 }
 
 func TestFilterTasksLeavesUnroutedEventAvailableForLaterRouting(t *testing.T) {
+	withImmediateAggregation(t)
 	db := newNotificationPipelineDB(t)
 	original := notificationDispatch
 	t.Cleanup(func() { notificationDispatch = original })
@@ -88,7 +100,7 @@ func TestFilterTasksLeavesUnroutedEventAvailableForLaterRouting(t *testing.T) {
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		dispatched += len(data)
 		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -107,6 +119,7 @@ func TestFilterTasksLeavesUnroutedEventAvailableForLaterRouting(t *testing.T) {
 }
 
 func TestFilterTasksRetriesAfterFailedDispatch(t *testing.T) {
+	withImmediateAggregation(t)
 	db := newNotificationPipelineDB(t)
 	configurePipelineRoute(t, db)
 	original := notificationDispatch
@@ -116,7 +129,7 @@ func TestFilterTasksRetriesAfterFailedDispatch(t *testing.T) {
 		attempts++
 		if attempts > 1 {
 			for _, payload := range data {
-				model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+				model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 			}
 		}
 		return data
@@ -131,6 +144,7 @@ func TestFilterTasksRetriesAfterFailedDispatch(t *testing.T) {
 }
 
 func TestFilterTasksDoesNotResendUnknownDiscordDelivery(t *testing.T) {
+	withImmediateAggregation(t)
 	db := newNotificationPipelineDB(t)
 	if err := db.AutoMigrate(&model.AuditLog{}); err != nil {
 		t.Fatal(err)
@@ -174,6 +188,7 @@ func TestFilterTasksDoesNotResendUnknownDiscordDelivery(t *testing.T) {
 }
 
 func TestFilterTasksReachesConfiguredAssignmentNotification(t *testing.T) {
+	withImmediateAggregation(t)
 	db := newNotificationPipelineDB(t)
 	configurePipelineRoute(t, db)
 	original := notificationDispatch
@@ -182,7 +197,7 @@ func TestFilterTasksReachesConfiguredAssignmentNotification(t *testing.T) {
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		assigned = len(data) == 1 && data[0].IsAssignNotification
 		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -194,6 +209,7 @@ func TestFilterTasksReachesConfiguredAssignmentNotification(t *testing.T) {
 }
 
 func TestFilterTasksPersistsStatusTransitionsAcrossPollsAndRestart(t *testing.T) {
+	withImmediateAggregation(t)
 	path := filepath.Join(t.TempDir(), "notification-state.db")
 	db := reopenNotificationPipelineDB(t, path)
 	configurePipelineRoute(t, db)
@@ -203,7 +219,7 @@ func TestFilterTasksPersistsStatusTransitionsAcrossPollsAndRestart(t *testing.T)
 	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, db *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
 		for _, payload := range data {
 			transitions = append(transitions, payload.PreviousStatusName+" -> "+payload.TaskStatus.TaskStatus.ShortName)
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -234,6 +250,7 @@ func TestFilterTasksPersistsStatusTransitionsAcrossPollsAndRestart(t *testing.T)
 }
 
 func TestFilterTasksRetriesKnownTransitionAfterRestart(t *testing.T) {
+	withImmediateAggregation(t)
 	path := filepath.Join(t.TempDir(), "retry-state.db")
 	db := reopenNotificationPipelineDB(t, path)
 	configurePipelineRoute(t, db)
@@ -248,7 +265,7 @@ func TestFilterTasksRetriesKnownTransitionAfterRestart(t *testing.T) {
 				failRetake = false
 				continue
 			}
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "")
+			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
 		}
 		return data
 	}
@@ -270,12 +287,13 @@ func TestFilterTasksRetriesKnownTransitionAfterRestart(t *testing.T) {
 }
 
 func TestFilterTasksSupersedesKnownRejectedOlderEventAndUnblocksCurrentEvent(t *testing.T) {
+	withImmediateAggregation(t)
 	path := filepath.Join(t.TempDir(), "superseded-notification.db")
 	db, err := gorm.Open(sqlite.Open("file:"+filepath.ToSlash(path)+"?_busy_timeout=5000&_journal_mode=WAL&_foreign_keys=on"), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.Task{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.NotificationAggregationBuffer{}, &model.ManagedChannelDeletion{}, &model.Setting{}); err != nil {
 		t.Fatal(err)
 	}
 	sqlDB, err := db.DB()
@@ -286,7 +304,7 @@ func TestFilterTasksSupersedesKnownRejectedOlderEventAndUnblocksCurrentEvent(t *
 	configurePipelineRoute(t, db)
 	old := pipelinePayload("WFA")
 	old.Task.UpdatedAt = "2026-08-07T00:00:00"
-	if err := model.UpdateTaskWithDiscord(db, old.Task.ID, old.Task.UpdatedAt, "WFA", "comment-1", "2026-08-07T00:00:00", "", "", ""); err != nil {
+	if err := model.UpdateTaskWithDiscord(db, old.Task.ID, old.Task.UpdatedAt, "WFA", "comment-1", "2026-08-07T00:00:00", "", "", "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	project := model.FindProjectByKitsuID(db, "p1")
