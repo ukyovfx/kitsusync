@@ -1821,7 +1821,10 @@ func main() {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
 		})))
-		mux.HandleFunc(prefix+"/admin/forum", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
+		// Forum settings are local configuration: saving needs neither Kitsu nor the
+		// runtime to be ready, so this page is not behind the runtime-ready gate.
+		// A global validation-only profile still refuses writes.
+		mux.HandleFunc(prefix+"/admin/forum", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))

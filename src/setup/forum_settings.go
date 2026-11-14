@@ -105,7 +105,7 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 		}
 		botToken, fallbackGuildID := discordSettings()
 		if r.Method == http.MethodPost {
-			if project.ValidationOnly {
+			if project.ValidationOnly || ValidationOnlyModeEnabled() {
 				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
 				return
 			}
@@ -190,7 +190,7 @@ func forumSelect(name, selected string, options [][2]string, emptyLabel string) 
 		if option[0] == selected {
 			found = true
 		}
-		b.WriteString(`<option value="` + esc(option[0]) + `"` + selectedAttr(option[0] == selected) + `>` + esc(option[1]) + `</option>`)
+		b.WriteString(`<option value="` + esc(option[0]) + `"` + selectedOptionAttr(option[0] == selected) + `>` + esc(option[1]) + `</option>`)
 	}
 	if !found {
 		// A saved value the live list no longer offers stays visible and kept.
@@ -229,7 +229,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		forumErr = fmt.Errorf("no Discord bot token or server ID")
 	}
 	if statusErr != nil {
-		notices.WriteString(`<p class="field-help" role="status">` + esc(t(lang, "Kitsuのステータス一覧を取得できませんでした。", "Could not read the Kitsu status list.")) + `</p>`)
+		notices.WriteString(`<p class="field-help" role="status">` + esc(t(lang, "Kitsuのステータス一覧を取得できませんでした。保存済みのステータス設定はそのまま残ります。", "Could not read the Kitsu status list. Saved status settings are kept.")) + `</p>`)
 	}
 	if forumErr != nil {
 		notices.WriteString(`<p class="field-help" role="status">` + esc(t(lang, "Discordのフォーラム一覧を取得できませんでした。Bot設定とサーバーIDを確認してください。保存済みの値はそのまま残ります。", "Could not read the Discord forum list. Check Bot settings and the server ID. Saved values are kept.")) + `</p>`)
@@ -275,14 +275,36 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	for _, role := range forumRoleOptions {
 		roleOptions = append(roleOptions, [2]string{role, forumRoleLabel(lang, role)})
 	}
-	var statusRows strings.Builder
-	for _, status := range statuses {
-		name := strings.TrimSpace(status.Name)
-		if name == "" {
-			name = status.ShortName
+	// Every saved status stays a row, whether or not Kitsu lists it right now: a
+	// save replaces the whole mapping, so a status missing from the form (Kitsu
+	// unreachable, or the status deleted there) would silently lose its role.
+	type statusRow struct{ id, name string }
+	var statusList []statusRow
+	seenStatuses := map[string]struct{}{}
+	if statusErr == nil {
+		for _, status := range statuses {
+			name := strings.TrimSpace(status.Name)
+			if name == "" {
+				name = status.ShortName
+			}
+			statusList = append(statusList, statusRow{status.ID, name})
+			seenStatuses[status.ID] = struct{}{}
 		}
-		statusRows.WriteString(`<tr><td>` + esc(name) + `<input type="hidden" name="st_id" value="` + esc(status.ID) + `"><input type="hidden" name="st_name" value="` + esc(name) + `"></td><td>` +
-			forumSelect("st_role", roleByStatus[status.ID], roleOptions, t(lang, "（使わない）", "(unused)")) + `</td></tr>`)
+	}
+	for _, saved := range current.StatusRoles {
+		if _, ok := seenStatuses[saved.StatusID]; !ok {
+			name := saved.StatusName
+			if name == "" {
+				name = saved.StatusID
+			}
+			statusList = append(statusList, statusRow{saved.StatusID, name})
+			seenStatuses[saved.StatusID] = struct{}{}
+		}
+	}
+	var statusRows strings.Builder
+	for _, status := range statusList {
+		statusRows.WriteString(`<tr><td>` + esc(status.name) + `<input type="hidden" name="st_id" value="` + esc(status.id) + `"><input type="hidden" name="st_name" value="` + esc(status.name) + `"></td><td>` +
+			forumSelect("st_role", roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</td></tr>`)
 	}
 
 	tagByKey := map[string]string{}
@@ -338,6 +360,15 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 func forumTaskTypeRow(lang, id, name, selected string, forumOptions [][2]string) string {
 	return `<tr><td>` + esc(name) + `<input type="hidden" name="tt_id" value="` + esc(id) + `"><input type="hidden" name="tt_name" value="` + esc(name) + `"></td><td>` +
 		forumSelect("tt_forum", selected, forumOptions, t(lang, "（通知しない）", "(no forum)")) + `</td></tr>`
+}
+
+// selectedOptionAttr returns the attribute with its leading space, so it can be
+// appended right after the value attribute.
+func selectedOptionAttr(selected bool) string {
+	if selected {
+		return " selected"
+	}
+	return ""
 }
 
 func checkedAttr(checked bool) string {

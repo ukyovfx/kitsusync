@@ -272,3 +272,90 @@ func TestForumSettingsInternalErrorsAreNotShownVerbatim(t *testing.T) {
 		t.Fatalf("internal error leaked: %s", got)
 	}
 }
+
+func TestForumSettingsStatusListFailureKeepsSavedStatusRoles(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
+		t.Fatalf("seed save failed: %d", w.Code)
+	}
+	// Kitsu's status list is now unreachable. Re-saving the page exactly as it is
+	// rendered must not erase the saved status roles.
+	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) { return nil, forumTestError("kitsu down") }
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	body := w.Body.String()
+	if !strings.Contains(body, "Saved status settings are kept") {
+		t.Fatal("the page must say the saved status settings are kept")
+	}
+	for _, id := range []string{"s-wfa", "s-retake", "s-done", "s-wip"} {
+		if !strings.Contains(body, `name="st_id" value="`+id+`"`) {
+			t.Fatalf("saved status %s must stay in the form while Kitsu is unreachable", id)
+		}
+	}
+	if !strings.Contains(body, `<option value="done" selected>`) {
+		t.Fatal("saved roles must stay selected")
+	}
+
+	// Submit the same values the page rendered.
+	form := completeForumForm()
+	if resp := forumPost(t, db, form); resp.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d", resp.Code)
+	}
+	loaded, _, _ := model.LoadProductionForumSettings(db, "p1")
+	if len(loaded.StatusRoles) != 4 {
+		t.Fatalf("saved status roles were lost: %d left", len(loaded.StatusRoles))
+	}
+}
+
+func TestForumSettingsKeepsSavedStatusMissingFromLiveList(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	forumPost(t, db, completeForumForm())
+	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) {
+		return []kitsu.TaskStatus{{ID: "s-wfa", Name: "Waiting For Approval"}}, nil // others vanished in Kitsu
+	}
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	for _, id := range []string{"s-retake", "s-done", "s-wip"} {
+		if !strings.Contains(w.Body.String(), `name="st_id" value="`+id+`"`) {
+			t.Fatalf("saved status %s missing from the live list must stay in the form", id)
+		}
+	}
+}
+
+func TestForumSettingsGlobalValidationOnlyFlagRefusesWrites(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	t.Setenv(validationOnlyEnv, "1")
+	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusForbidden {
+		t.Fatalf("a global validation-only profile must refuse writes, status = %d", w.Code)
+	}
+	if _, ok, _ := model.LoadProductionForumSettings(db, "p1"); ok {
+		t.Fatal("nothing may be stored")
+	}
+	// Reading stays possible.
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("read status = %d", w.Code)
+	}
+}
+
+func TestForumSettingsSavesWithoutAnyKitsuOrDiscordLookup(t *testing.T) {
+	oldTypes, oldStatuses, oldForums := forumTaskTypeLister, forumStatusLister, forumChannelLister
+	t.Cleanup(func() { forumTaskTypeLister, forumStatusLister, forumChannelLister = oldTypes, oldStatuses, oldForums })
+	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType { return nil }
+	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) { return nil, forumTestError("not connected") }
+	forumChannelLister = func(string, string) ([]forumChannelInfo, error) { return nil, forumTestError("not connected") }
+	db := newForumPageDB(t)
+	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
+		t.Fatalf("saving must not need Kitsu or Discord, status = %d: %s", w.Code, w.Body.String())
+	}
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	body := w.Body.String()
+	if w.Code != http.StatusOK || !strings.Contains(body, `name="tt_id" value="tt-anim"`) || !strings.Contains(body, `name="st_id" value="s-done"`) {
+		t.Fatalf("saved rows must render with every lookup down (status %d)", w.Code)
+	}
+}
