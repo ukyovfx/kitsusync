@@ -712,7 +712,7 @@ func renderSelectedProductionPanel(db *gorm.DB, r *http.Request, p model.Project
 		if p.ValidationOnly {
 			return `<section class="section-card glass"><h2>` + esc(tr(lang, "ia.notifications")) + `</h2><dl class="status-list">` + statusSummaryRow(t(lang, "通知状態", "Notification state"), "blocked", t(lang, "利用できません", "Unavailable"), t(lang, "検証専用ProductionではDiscordサーバーが未接続のため、通知は利用できません。", "Notifications are unavailable because this validation-only Production has no Discord server connected."), "") + `</dl></section>`
 		}
-		return renderSelectedProductionNotifications(db, r, p, lang, class, label, hint, botTokens...)
+		return renderSelectedProductionNotifications(db, r, p, lang, class, label, hint, botTokens...) + renderForumSettingsLink(db, r, p, lang)
 	case "team":
 		return renderCurrentProductionTeam(db, r, p, lang, botTokens...)
 	case "settings":
