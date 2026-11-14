@@ -3,6 +3,7 @@ package main
 import (
 	"app/src/api/discord"
 	"app/src/api/kitsu"
+	"app/src/forum"
 	"app/src/model"
 	"app/src/setup"
 	"app/src/utils/config"
@@ -1095,6 +1096,81 @@ func isNotifiableStatus(status string) bool {
 	return false
 }
 
+// forumCardRenderer renders the first message of a forum post with the same
+// card the lane path posts. MentionContent and AllowedMentions are cleared
+// because the first message never mentions anyone (D-04).
+func forumCardRenderer(payload kitsu.MessagePayload) (json.RawMessage, error) {
+	return forum.RenderCard(payload, func(item kitsu.MessagePayload) (discord.Payload, error) {
+		return renderForumCard(item, config.Config{})
+	})
+}
+
+// renderForumCard builds the card for one task. It reuses the lane renderer so
+// the post looks exactly like the existing notification.
+func renderForumCard(payload kitsu.MessagePayload, conf config.Config) (discord.Payload, error) {
+	template, err := discord.NotificationCardTemplate(conf, payload, "", "ja", nil)
+	if err != nil {
+		return discord.Payload{}, err
+	}
+	// The first message never mentions anyone (D-04).
+	template.MentionContent = ""
+	template.AllowedUserIDs = nil
+	template.AllowedRoleIDs = nil
+	card := discord.RenderNotificationPayload(template, conf.TplPreset)
+	card.Content = ""
+	card.AllowedMentions = &discord.AllowedMentions{Parse: []string{}, Users: []string{}, Roles: []string{}}
+	return card, nil
+}
+
+// runForumPoll feeds forum-mode Productions into the forum ledger and drains
+// the outbox. Lane-mode Productions are untouched: the forum ledger only ever
+// sees Productions whose settings say "forum".
+func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) {
+	if db == nil || conf.SilentUpdateDB {
+		return
+	}
+	poller := forum.Poller{DB: db, RenderCard: forumCardRenderer}
+	result, err := poller.PollProjects(data)
+	if err != nil {
+		slog.Error("Forum poll failed", "error_class", "forum_poll_failed", "err", err)
+		return
+	}
+	if result.Productions > 0 {
+		slog.Info("Forum poll summary",
+			"event", "forum_poll_summary",
+			"productions", result.Productions,
+			"baselined", result.Baselined,
+			"created", result.Created,
+			"synced", result.Synced,
+			"signalled", result.Signalled,
+			"skipped", result.Skipped)
+	}
+	botToken, _, _ := getDiscordSettings(db, conf)
+	recipients := forum.Recipients{
+		DB: db,
+		ResolveAssignees: func(projectID string, kitsuPersonIDs []string) []string {
+			return discord.ResolveAssigneeDiscordIDs(projectID, kitsuPersonIDs)
+		},
+		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
+			return discord.ReviewerResolver(projectID, taskTypeID, taskTypeName, "")
+		},
+	}
+	executor := forum.Executor{
+		DB:       db,
+		BotToken: func() string { return botToken },
+		TaskURL:  func(taskID string) string { return forum.TaskURLFor(db, func() string { return setup.PublicKitsuURL(db) }, taskID) },
+		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string) {
+			return recipients.ForTask(taskID, payload)
+		},
+	}
+	if _, err := executor.Drain(forumOutboxDrainLimit); err != nil {
+		slog.Error("Forum outbox drain failed", "error_class", "forum_outbox_drain_failed", "err", err)
+	}
+}
+
+// forumOutboxDrainLimit bounds one poll's Discord calls.
+const forumOutboxDrainLimit = 50
+
 func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookURL string, db *gorm.DB, routeSource string, routeLabels []string) []kitsu.MessagePayload {
 	if webhookURL == "" {
 		slog.Warn("Notification send skipped: webhook is empty",
@@ -1497,6 +1573,7 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	} else if resolved > 0 {
 		slog.Warn("Stale unknown deliveries auto-resolved to terminal", "count", resolved)
 	}
+	runForumPoll(kitsuResponse, conf, db)
 	FilterTasks(kitsuResponse, conf, db)
 	if conf.Log {
 		slog.Info("Done FilterTasks")
@@ -1623,6 +1700,10 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ProductionForumRoute{},
 		&model.ProductionForumStatusRole{},
 		&model.ProductionForumTag{},
+		&model.ForumBaseline{},
+		&model.ForumTask{},
+		&model.ForumTransition{},
+		&model.ForumOutbox{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
 	}
@@ -1645,6 +1726,11 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	// task forever across restarts either.
 	if _, err := model.ResolveStaleUnknownNotificationDeliveries(db, time.Now().UTC().Add(-model.NotificationUnknownAutoResolveAfter)); err != nil {
 		return fmt.Errorf("resolve stale unknown notification deliveries: %w", err)
+	}
+	// Forum outbox rows claimed by a previous process are re-queued rather than
+	// resolved by lookup: a duplicate post is worse than a late one.
+	if err := forum.ReconcileSendingRows(db); err != nil {
+		return fmt.Errorf("reconcile forum outbox: %w", err)
 	}
 	return nil
 }
@@ -1790,6 +1876,33 @@ func main() {
 	discord.KitsuPublicURLResolver = func() string {
 		return setup.PublicKitsuURL(db)
 	}
+
+	// Forum-mode Productions are validated once at startup: a wrong forum or tag
+	// ID would otherwise only surface as a failed post much later.
+	safego.Go("forum target validation", func() {
+		botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
+		for _, project := range model.ListProjects(db) {
+			if project.ValidationOnly || project.KitsuProjectID == "" {
+				continue
+			}
+			if model.NotificationModeForProduction(db, project.KitsuProjectID) != model.NotificationModeForum {
+				continue
+			}
+			settings, ok, err := model.LoadProductionForumSettings(db, project.KitsuProjectID)
+			if err != nil || !ok {
+				continue
+			}
+			guildID := strings.TrimSpace(settings.Config.GuildID)
+			if guildID == "" {
+				guildID = model.ResolveProjectGuildID(db, project.KitsuProjectID, fallbackGuildID)
+			}
+			problems := forum.ValidateForumTargets(db, project.KitsuProjectID, guildID, setup.ForumChannelLister(), botToken)
+			problems = append(problems, setup.CheckForumPermissions(settings, botToken)...)
+			for _, problem := range problems {
+				slog.Warn("Forum target validation failed: "+problem, "event", "forum_target_validation_failed", "production_id", project.KitsuProjectID)
+			}
+		}
+	})
 
 	if conf.Log {
 		slog.Info("Connected to database in %s", time.Since(start))

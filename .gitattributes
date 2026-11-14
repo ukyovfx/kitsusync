@@ -1,0 +1,3 @@
+# The SVG is embedded with //go:embed and its bytes are hashed by a test, so it
+# must keep its committed LF bytes on every checkout.
+src/setup/kitsusync.svg -text
