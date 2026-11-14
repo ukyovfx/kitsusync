@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -39,6 +40,8 @@ import (
 )
 
 func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
+	pollFetchStart := time.Now()
+	taskCommentReads.Store(0)
 
 	projects, err := kitsu.GetProjectsWithError()
 	if err != nil {
@@ -54,8 +57,14 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	// poll itself an error.
 	var tasks kitsu.Tasks
 	failedProjects := make(map[string]struct{})
+	tasksFetchStart := time.Now()
+	var slowestProject time.Duration
 	for _, project := range projects.Each {
+		projectFetchStart := time.Now()
 		projectTasks, projectErr := kitsu.GetProjectTasksWithError(project.ID)
+		if elapsed := time.Since(projectFetchStart); elapsed > slowestProject {
+			slowestProject = elapsed
+		}
 		if projectErr != nil {
 			failedProjects[project.ID] = struct{}{}
 			slog.Warn("Project tasks fetch failed; skipping this project for this poll", "error_class", "kitsu_project_tasks_fetch_failed", "projectID", project.ID, "error", projectErr)
@@ -67,6 +76,7 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 		return nil, fmt.Errorf("fetch tasks: all %d projects failed", len(projects.Each))
 	}
 	lastPollFailedProjects = failedProjects
+	tasksFetchElapsed := time.Since(tasksFetchStart)
 	if conf.Log {
 		slog.Info("Got tasks: " + strconv.Itoa(len(tasks.Each)))
 	}
@@ -261,6 +271,17 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 		}
 	}
 	replaceTaskCommentCache(nextComments)
+	// One line per poll: the data for choosing the polling interval. Counts and
+	// durations only; no Kitsu content.
+	slog.Info("Kitsu fetch timing",
+		"event", "kitsu_fetch_timing",
+		"projects", len(projects.Each),
+		"failedProjects", len(failedProjects),
+		"tasks", len(tasks.Each),
+		"tasksFetchMs", tasksFetchElapsed.Milliseconds(),
+		"slowestProjectMs", slowestProject.Milliseconds(),
+		"commentReads", taskCommentReads.Load(),
+		"totalMs", time.Since(pollFetchStart).Milliseconds())
 
 	if conf.Log {
 		log.Printf("Done secondary loop in %s", time.Since(start))
@@ -1296,6 +1317,9 @@ type cachedTaskComments struct {
 	comments        []kitsu.Comment
 }
 
+// taskCommentReads counts the per-task comment requests of the current poll.
+var taskCommentReads atomic.Int64
+
 var (
 	taskCommentCacheMu sync.Mutex
 	taskCommentCache   = map[string]cachedTaskComments{}
@@ -1333,6 +1357,7 @@ func loadTaskComments(task kitsu.Task, previous, next map[string]cachedTaskComme
 		nextMu.Unlock()
 		return kitsu.Comments{Each: append([]kitsu.Comment(nil), cached.comments...)}, true
 	}
+	taskCommentReads.Add(1)
 	fetched, err := kitsu.GetTaskCommentsWithError(task.ID)
 	if err != nil {
 		slog.Warn("Task comments fetch failed; comment diff skipped for this task", "error_class", "kitsu_comments_fetch_failed", "taskID", task.ID, "error", err)
