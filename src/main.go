@@ -1163,6 +1163,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
 		},
+		NotifyAssigneesOnComment: conf.Notification.CommentNotifyAssignee,
 	}
 	executor := forum.Executor{
 		DB:       db,
@@ -1754,6 +1755,8 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ForumTask{},
 		&model.ForumTransition{},
 		&model.ForumOutbox{},
+		&model.ForumFlapState{},
+		&model.ForumDMChannel{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
 	}
