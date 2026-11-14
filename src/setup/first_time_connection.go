@@ -445,6 +445,13 @@ func rollbackFirstTimeConnection(db *gorm.DB, botToken string, ops firstTimeConn
 	return err
 }
 
+// appendFirstTimeRollbackNote adds a rollback failure to the already-rendered
+// HTML result. The error text is escaped: result is markup, and an error string
+// must never be able to inject any.
+func appendFirstTimeRollbackNote(result string, err error) string {
+	return result + " " + html.EscapeString(err.Error())
+}
+
 func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, lang string, r *http.Request, db *gorm.DB) (result string) {
 	ops := firstTimeOps
 	project := model.FindProjectByKitsuID(db, plan.Project.ID)
@@ -456,7 +463,7 @@ func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, la
 	defer func() {
 		if !completed {
 			if err := rollbackFirstTimeConnection(db, botToken, ops, owned); err != nil {
-				result += " " + err.Error()
+				result = appendFirstTimeRollbackNote(result, err)
 			}
 		}
 	}()
