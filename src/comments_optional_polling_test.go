@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
+	"time"
 	"testing"
 
 	"app/src/utils/request"
@@ -69,8 +71,8 @@ func forumBKitsuMock(t *testing.T, tasksByProject map[string]string, commentStat
 	t.Setenv("KITSU_API_BASE_URL", server.URL+"/api/")
 	t.Setenv("KitsuJWTToken", "test-token")
 	configureMainTestOrigin(t, server.URL)
-	replaceTaskCommentCache(map[string]cachedTaskComments{})
-	t.Cleanup(func() { replaceTaskCommentCache(map[string]cachedTaskComments{}) })
+	replaceTaskCommentCache("", map[string]cachedTaskComments{})
+	t.Cleanup(func() { replaceTaskCommentCache("", map[string]cachedTaskComments{}) })
 	return server
 }
 
@@ -217,5 +219,75 @@ func TestFilterTasksDispatchesCommentOnlyWhenCommentsAvailable(t *testing.T) {
 
 	if dispatched != 1 {
 		t.Fatalf("expected comment-only event to dispatch when comments are readable, got %d", dispatched)
+	}
+}
+
+func TestTaskCommentCacheDoesNotCrossConnections(t *testing.T) {
+	reads := 0
+	forumBKitsuMock(t, map[string]string{"p1": forumBTaskWithComment}, func(string) (int, string) {
+		return http.StatusOK, `[{"id":"c1","object_id":"task-1","person_id":"person-1","text":"hi","created_at":"2026-08-07T00:00:00","updated_at":"2026-08-07T00:00:00"}]`
+	}, &reads)
+
+	if _, err := MakeKitsuResponse(forumBConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MakeKitsuResponse(forumBConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 1 {
+		t.Fatalf("same connection must reuse the cache, got %d reads", reads)
+	}
+	// A different token is a different connection: the task has the same ID and
+	// last_comment_date there, yet its comments must be read again.
+	t.Setenv("KitsuJWTToken", "another-token")
+	if _, err := MakeKitsuResponse(forumBConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if reads != 2 {
+		t.Fatalf("a switched connection must not reuse the previous cache, got %d reads", reads)
+	}
+}
+
+func TestFetchProjectTasksIsBoundedAndKeepsOrder(t *testing.T) {
+	var inFlight, peak int32
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inFlight++
+		if inFlight > peak {
+			peak = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(40 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/data/projects/"), "/tasks")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":"task-` + id + `","project_id":"` + id + `"}]`))
+	}))
+	defer server.Close()
+	t.Setenv("KITSU_API_BASE_URL", server.URL+"/api/")
+	t.Setenv("KitsuJWTToken", "test-token")
+	configureMainTestOrigin(t, server.URL)
+
+	projects := []kitsu.Project{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}, {ID: "e"}, {ID: "f"}}
+	results := fetchProjectTasks(projects, 2)
+	mu.Lock()
+	gotPeak := peak
+	mu.Unlock()
+	if gotPeak > 2 {
+		t.Fatalf("at most 2 reads may be in flight, saw %d", gotPeak)
+	}
+	if gotPeak < 2 {
+		t.Fatalf("reads must actually run in parallel, peak was %d", gotPeak)
+	}
+	for i, project := range projects {
+		if results[i].err != nil || len(results[i].tasks) != 1 || results[i].tasks[0].ProjectID != project.ID {
+			t.Fatalf("result %d out of order or failed: %+v", i, results[i])
+		}
+	}
+	if got := fetchProjectTasks(projects[:1], 0); len(got) != 1 || got[0].err != nil {
+		t.Fatalf("a limit below 1 must still read, got %+v", got)
 	}
 }

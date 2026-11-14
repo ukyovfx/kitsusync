@@ -58,19 +58,18 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	var tasks kitsu.Tasks
 	failedProjects := make(map[string]struct{})
 	tasksFetchStart := time.Now()
+	fetched := fetchProjectTasks(projects.Each, conf.Threads)
 	var slowestProject time.Duration
-	for _, project := range projects.Each {
-		projectFetchStart := time.Now()
-		projectTasks, projectErr := kitsu.GetProjectTasksWithError(project.ID)
-		if elapsed := time.Since(projectFetchStart); elapsed > slowestProject {
-			slowestProject = elapsed
+	for i, result := range fetched {
+		if result.elapsed > slowestProject {
+			slowestProject = result.elapsed
 		}
-		if projectErr != nil {
-			failedProjects[project.ID] = struct{}{}
-			slog.Warn("Project tasks fetch failed; skipping this project for this poll", "error_class", "kitsu_project_tasks_fetch_failed", "projectID", project.ID, "error", projectErr)
+		if result.err != nil {
+			failedProjects[projects.Each[i].ID] = struct{}{}
+			slog.Warn("Project tasks fetch failed; skipping this project for this poll", "error_class", "kitsu_project_tasks_fetch_failed", "projectID", projects.Each[i].ID, "error", result.err)
 			continue
 		}
-		tasks.Each = append(tasks.Each, projectTasks.Each...)
+		tasks.Each = append(tasks.Each, result.tasks...)
 	}
 	if len(projects.Each) > 0 && len(failedProjects) == len(projects.Each) {
 		return nil, fmt.Errorf("fetch tasks: all %d projects failed", len(projects.Each))
@@ -134,7 +133,8 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	// Comments are read per task, and only for tasks whose last_comment_date
 	// moved since the previous poll (the comments LIST endpoint is admin only on
 	// Zou 1.1x). The cache is rebuilt each poll so it only holds tasks still seen.
-	previousComments := snapshotTaskCommentCache()
+	connectionKey := kitsu.ConnectionKey()
+	previousComments := snapshotTaskCommentCache(connectionKey)
 	nextComments := make(map[string]cachedTaskComments, len(tasks.Each))
 	var nextCommentsMu sync.Mutex
 
@@ -270,7 +270,7 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 			out = append(out, elem)
 		}
 	}
-	replaceTaskCommentCache(nextComments)
+	replaceTaskCommentCache(connectionKey, nextComments)
 	// One line per poll: the data for choosing the polling interval. Counts and
 	// durations only; no Kitsu content.
 	slog.Info("Kitsu fetch timing",
@@ -1310,6 +1310,38 @@ var lastPollProductionTaskCounts map[string]int
 // monitor skips them.
 var lastPollFailedProjects map[string]struct{}
 
+// projectTasksResult is one project's task read.
+type projectTasksResult struct {
+	tasks   []kitsu.Task
+	err     error
+	elapsed time.Duration
+}
+
+// fetchProjectTasks reads every project's tasks with at most `limit` reads in
+// flight (conf.Threads, minimum 1). Results keep the projects' order so the
+// poll stays deterministic.
+func fetchProjectTasks(projects []kitsu.Project, limit int) []projectTasksResult {
+	if limit < 1 {
+		limit = 1
+	}
+	results := make([]projectTasksResult, len(projects))
+	slots := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i := range projects {
+		slots <- struct{}{}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			started := time.Now()
+			read, err := kitsu.GetProjectTasksWithError(projects[i].ID)
+			results[i] = projectTasksResult{tasks: read.Each, err: err, elapsed: time.Since(started)}
+		}(i)
+	}
+	wg.Wait()
+	return results
+}
+
 // cachedTaskComments is a task's comments as of the last_comment_date they were
 // read at, so an unchanged task costs no comment request.
 type cachedTaskComments struct {
@@ -1323,11 +1355,20 @@ var taskCommentReads atomic.Int64
 var (
 	taskCommentCacheMu sync.Mutex
 	taskCommentCache   = map[string]cachedTaskComments{}
+	// taskCommentCacheKey is the Kitsu connection the cache was filled from.
+	taskCommentCacheKey string
 )
 
-func snapshotTaskCommentCache() map[string]cachedTaskComments {
+// snapshotTaskCommentCache returns the cache only when it belongs to the given
+// connection. After a switch of Kitsu host or token the previous connection's
+// entries are dropped, so one connection's last_comment_date can never make
+// another connection skip a comment read.
+func snapshotTaskCommentCache(connectionKey string) map[string]cachedTaskComments {
 	taskCommentCacheMu.Lock()
 	defer taskCommentCacheMu.Unlock()
+	if taskCommentCacheKey != connectionKey {
+		return map[string]cachedTaskComments{}
+	}
 	snapshot := make(map[string]cachedTaskComments, len(taskCommentCache))
 	for id, entry := range taskCommentCache {
 		snapshot[id] = entry
@@ -1335,9 +1376,10 @@ func snapshotTaskCommentCache() map[string]cachedTaskComments {
 	return snapshot
 }
 
-func replaceTaskCommentCache(next map[string]cachedTaskComments) {
+func replaceTaskCommentCache(connectionKey string, next map[string]cachedTaskComments) {
 	taskCommentCacheMu.Lock()
 	taskCommentCache = next
+	taskCommentCacheKey = connectionKey
 	taskCommentCacheMu.Unlock()
 }
 

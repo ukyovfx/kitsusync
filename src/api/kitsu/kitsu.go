@@ -4,6 +4,8 @@ package kitsu
 import (
 	"app/src/utils/config"
 	"app/src/utils/request"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -252,6 +254,14 @@ func GetComment(objectID string) Comments {
 	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response
+}
+
+// ConnectionKey identifies the current Kitsu connection (API base and token) for
+// caches that must not outlive it. Only a digest is returned; the token itself
+// is never exposed.
+func ConnectionKey() string {
+	sum := sha256.Sum256([]byte(kitsuBase() + "\x00" + os.Getenv("KitsuJWTToken")))
+	return hex.EncodeToString(sum[:])
 }
 
 // GetTaskCommentsWithError reads one task's comments. Unlike the comments LIST
