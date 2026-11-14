@@ -120,7 +120,7 @@ func TestForumSettingsIncompleteForumModeIsRejectedWithReasons(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "has no tag for role") {
+	if !strings.Contains(w.Body.String(), "has no tag for the role") {
 		t.Fatal("the page must say what is missing")
 	}
 	if got := model.NotificationModeForProduction(db, "p1"); got != model.NotificationModeLane {
@@ -223,3 +223,52 @@ func TestNotificationsTabLinksToForumSettings(t *testing.T) {
 type forumTestError string
 
 func (e forumTestError) Error() string { return string(e) }
+
+func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	form := completeForumForm()
+	form["tag_id"] = make([]string, len(form["tag_id"]))
+	form["st_role"] = []string{"wfa", "retake", "", ""} // no status for Done
+	r := httptest.NewRequest(http.MethodPost, "/bot/admin/forum?lang=ja", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, r)
+	body := w.Body.String()
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", w.Code)
+	}
+	for _, want := range []string{"保存できませんでした", "役割「完了」に割り当てるステータスがありません。", "のタグがありません。"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("Japanese message missing %q", want)
+		}
+	}
+	for _, english := range []string{"has no tag for", "forum mode needs", "invalid forum settings"} {
+		if strings.Contains(body, english) {
+			t.Fatalf("English validation text %q leaked into the Japanese page", english)
+		}
+	}
+}
+
+func TestForumSettingsEveryProblemCodeHasLocalizedText(t *testing.T) {
+	codes := []string{model.ProblemUnknownMode, model.ProblemProductionRequired, model.ProblemRouteIncomplete, model.ProblemTaskTypeDuplicate, model.ProblemStatusNoRole, model.ProblemStatusDuplicate, model.ProblemTagUnroutedForum, model.ProblemTagInvalid, model.ProblemTagRoleDuplicate, model.ProblemTagReused, model.ProblemGuildRequired, model.ProblemRoutesRequired, model.ProblemRoleStatusMissing, model.ProblemForumTagMissing}
+	for _, code := range codes {
+		problem := model.ForumSettingsProblem{Code: code, Args: []string{"x", "wfa"}}
+		for _, lang := range []string{"ja", "en"} {
+			got := forumProblemText(lang, problem)
+			if strings.TrimSpace(got) == "" || got == problem.English() && lang == "ja" {
+				t.Fatalf("code %s has no %s text: %q", code, lang, got)
+			}
+			if lang == "en" && strings.ContainsAny(got, "あいうえおのをがは") {
+				t.Fatalf("code %s English text contains Japanese: %q", code, got)
+			}
+		}
+	}
+}
+
+func TestForumSettingsInternalErrorsAreNotShownVerbatim(t *testing.T) {
+	got := forumSaveErrorMarkup("en", forumTestError("UNIQUE constraint failed: secret table detail"))
+	if strings.Contains(got, "UNIQUE") || strings.Contains(got, "secret") {
+		t.Fatalf("internal error leaked: %s", got)
+	}
+}

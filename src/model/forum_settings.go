@@ -127,18 +127,108 @@ func LoadProductionForumSettings(db *gorm.DB, productionID string) (settings Pro
 	return settings, true, nil
 }
 
-// ValidateProductionForumSettings checks the configuration without touching
-// Discord or Kitsu (live ID checks happen at startup validation). It returns one
-// message per problem. A forum-mode Production needs a complete configuration;
-// a lane-mode one may be saved half-finished.
+// ForumSettingsProblem is one validation failure as a code plus arguments, so
+// the admin page can word it in the viewer's language.
+type ForumSettingsProblem struct {
+	Code string
+	Args []string
+}
+
+// English renders the problem as a plain English sentence (logs, tests, API).
+func (p ForumSettingsProblem) English() string {
+	arg := func(i int) string {
+		if i < len(p.Args) {
+			return p.Args[i]
+		}
+		return ""
+	}
+	switch p.Code {
+	case ProblemUnknownMode:
+		return fmt.Sprintf("unknown notification mode %q", arg(0))
+	case ProblemProductionRequired:
+		return "production ID is required"
+	case ProblemRouteIncomplete:
+		return "every forum route needs a Task Type ID and a forum channel ID"
+	case ProblemTaskTypeDuplicate:
+		return fmt.Sprintf("Task Type %s is routed more than once", arg(0))
+	case ProblemStatusNoRole:
+		return fmt.Sprintf("status %q has no valid role", arg(0))
+	case ProblemStatusDuplicate:
+		return fmt.Sprintf("status %s is mapped more than once", arg(0))
+	case ProblemTagUnroutedForum:
+		return fmt.Sprintf("tag for forum %s, which no Task Type routes to", arg(0))
+	case ProblemTagInvalid:
+		return fmt.Sprintf("forum %s has an invalid tag mapping", arg(0))
+	case ProblemTagRoleDuplicate:
+		return fmt.Sprintf("forum %s maps role %s more than once", arg(0), arg(1))
+	case ProblemTagReused:
+		return fmt.Sprintf("forum %s uses tag %s for more than one role", arg(0), arg(1))
+	case ProblemGuildRequired:
+		return "forum mode needs a Discord server (guild) ID"
+	case ProblemRoutesRequired:
+		return "forum mode needs at least one Task Type routed to a forum"
+	case ProblemRoleStatusMissing:
+		return fmt.Sprintf("forum mode needs a Kitsu status mapped to role %s", arg(0))
+	case ProblemForumTagMissing:
+		return fmt.Sprintf("forum %s has no tag for role %s", arg(0), arg(1))
+	}
+	return p.Code
+}
+
+// Problem codes of ForumSettingsProblem.
+const (
+	ProblemUnknownMode        = "unknown_mode"
+	ProblemProductionRequired = "production_required"
+	ProblemRouteIncomplete    = "route_incomplete"
+	ProblemTaskTypeDuplicate  = "task_type_duplicate"
+	ProblemStatusNoRole       = "status_no_role"
+	ProblemStatusDuplicate    = "status_duplicate"
+	ProblemTagUnroutedForum   = "tag_unrouted_forum"
+	ProblemTagInvalid         = "tag_invalid"
+	ProblemTagRoleDuplicate   = "tag_role_duplicate"
+	ProblemTagReused          = "tag_reused"
+	ProblemGuildRequired      = "guild_required"
+	ProblemRoutesRequired     = "routes_required"
+	ProblemRoleStatusMissing  = "role_status_missing"
+	ProblemForumTagMissing    = "forum_tag_missing"
+)
+
+// ForumSettingsError carries the structured problems of a rejected save.
+type ForumSettingsError struct {
+	Problems []ForumSettingsProblem
+}
+
+func (e *ForumSettingsError) Error() string {
+	parts := make([]string, 0, len(e.Problems))
+	for _, problem := range e.Problems {
+		parts = append(parts, problem.English())
+	}
+	return "invalid forum settings: " + strings.Join(parts, "; ")
+}
+
+// ValidateProductionForumSettings is ForumSettingsProblems rendered in English.
 func ValidateProductionForumSettings(settings ProductionForumSettings) []string {
-	var problems []string
+	var messages []string
+	for _, problem := range ForumSettingsProblems(settings) {
+		messages = append(messages, problem.English())
+	}
+	return messages
+}
+
+// ForumSettingsProblems checks the configuration without touching Discord or
+// Kitsu (live ID checks happen at startup validation). A forum-mode Production
+// needs a complete configuration; a lane-mode one may be saved half-finished.
+func ForumSettingsProblems(settings ProductionForumSettings) []ForumSettingsProblem {
+	var problems []ForumSettingsProblem
+	add := func(code string, args ...string) {
+		problems = append(problems, ForumSettingsProblem{Code: code, Args: args})
+	}
 	mode := settings.Config.Mode
 	if mode != NotificationModeLane && mode != NotificationModeForum {
-		problems = append(problems, fmt.Sprintf("unknown notification mode %q", mode))
+		add(ProblemUnknownMode, mode)
 	}
 	if strings.TrimSpace(settings.Config.ProductionID) == "" {
-		problems = append(problems, "production ID is required")
+		add(ProblemProductionRequired)
 	}
 
 	forums := map[string]struct{}{}
@@ -147,11 +237,11 @@ func ValidateProductionForumSettings(settings ProductionForumSettings) []string 
 		taskTypeID := strings.TrimSpace(route.TaskTypeID)
 		forumID := strings.TrimSpace(route.ForumChannelID)
 		if taskTypeID == "" || forumID == "" {
-			problems = append(problems, "every forum route needs a Task Type ID and a forum channel ID")
+			add(ProblemRouteIncomplete)
 			continue
 		}
 		if _, dup := taskTypes[taskTypeID]; dup {
-			problems = append(problems, fmt.Sprintf("Task Type %s is routed more than once", taskTypeID))
+			add(ProblemTaskTypeDuplicate, taskTypeID)
 		}
 		taskTypes[taskTypeID] = struct{}{}
 		forums[forumID] = struct{}{}
@@ -162,11 +252,11 @@ func ValidateProductionForumSettings(settings ProductionForumSettings) []string 
 	for _, row := range settings.StatusRoles {
 		statusID := strings.TrimSpace(row.StatusID)
 		if statusID == "" || !validForumRole(row.Role) {
-			problems = append(problems, fmt.Sprintf("status %q has no valid role", row.StatusID))
+			add(ProblemStatusNoRole, row.StatusID)
 			continue
 		}
 		if _, dup := statusSeen[statusID]; dup {
-			problems = append(problems, fmt.Sprintf("status %s is mapped more than once", statusID))
+			add(ProblemStatusDuplicate, statusID)
 		}
 		statusSeen[statusID] = struct{}{}
 		rolesInUse[row.Role] = struct{}{}
@@ -178,11 +268,11 @@ func ValidateProductionForumSettings(settings ProductionForumSettings) []string 
 		forumID := strings.TrimSpace(tag.ForumChannelID)
 		tagID := strings.TrimSpace(tag.TagID)
 		if _, known := forums[forumID]; !known {
-			problems = append(problems, fmt.Sprintf("tag for forum %s, which no Task Type routes to", forumID))
+			add(ProblemTagUnroutedForum, forumID)
 			continue
 		}
 		if !validForumRole(tag.Role) || tagID == "" {
-			problems = append(problems, fmt.Sprintf("forum %s has an invalid tag mapping", forumID))
+			add(ProblemTagInvalid, forumID)
 			continue
 		}
 		if tagsByForum[forumID] == nil {
@@ -190,10 +280,10 @@ func ValidateProductionForumSettings(settings ProductionForumSettings) []string 
 			tagIDs[forumID] = map[string]struct{}{}
 		}
 		if _, dup := tagsByForum[forumID][tag.Role]; dup {
-			problems = append(problems, fmt.Sprintf("forum %s maps role %s more than once", forumID, tag.Role))
+			add(ProblemTagRoleDuplicate, forumID, tag.Role)
 		}
 		if _, dup := tagIDs[forumID][tagID]; dup {
-			problems = append(problems, fmt.Sprintf("forum %s uses tag %s for more than one role", forumID, tagID))
+			add(ProblemTagReused, forumID, tagID)
 		}
 		tagsByForum[forumID][tag.Role] = tagID
 		tagIDs[forumID][tagID] = struct{}{}
@@ -201,20 +291,20 @@ func ValidateProductionForumSettings(settings ProductionForumSettings) []string 
 
 	if mode == NotificationModeForum {
 		if strings.TrimSpace(settings.Config.GuildID) == "" {
-			problems = append(problems, "forum mode needs a Discord server (guild) ID")
+			add(ProblemGuildRequired)
 		}
 		if len(settings.Routes) == 0 {
-			problems = append(problems, "forum mode needs at least one Task Type routed to a forum")
+			add(ProblemRoutesRequired)
 		}
 		// Every trigger role must have a status, and a tag in every forum, or a
 		// post could be created without a state tag.
 		for _, role := range []string{ForumRoleWFA, ForumRoleRetake, ForumRoleDone} {
 			if _, ok := rolesInUse[role]; !ok {
-				problems = append(problems, fmt.Sprintf("forum mode needs a Kitsu status mapped to role %s", role))
+				add(ProblemRoleStatusMissing, role)
 			}
 			for forumID := range forums {
 				if _, ok := tagsByForum[forumID][role]; !ok {
-					problems = append(problems, fmt.Sprintf("forum %s has no tag for role %s", forumID, role))
+					add(ProblemForumTagMissing, forumID, role)
 				}
 			}
 		}
@@ -230,8 +320,8 @@ func SaveProductionForumSettings(db *gorm.DB, settings ProductionForumSettings) 
 		return gorm.ErrInvalidDB
 	}
 	settings.Config.ProductionID = strings.TrimSpace(settings.Config.ProductionID)
-	if problems := ValidateProductionForumSettings(settings); len(problems) > 0 {
-		return fmt.Errorf("invalid forum settings: %s", strings.Join(problems, "; "))
+	if problems := ForumSettingsProblems(settings); len(problems) > 0 {
+		return &ForumSettingsError{Problems: problems}
 	}
 	productionID := settings.Config.ProductionID
 	return db.Transaction(func(tx *gorm.DB) error {
