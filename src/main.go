@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -39,11 +40,42 @@ import (
 )
 
 func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
+	pollFetchStart := time.Now()
+	taskCommentReads.Store(0)
 
-	tasks, err := kitsu.GetTasksWithError()
+	projects, err := kitsu.GetProjectsWithError()
 	if err != nil {
-		return nil, fmt.Errorf("fetch tasks: %w", err)
+		return nil, fmt.Errorf("fetch projects: %w", err)
 	}
+	if conf.Log {
+		slog.Info("Got projects: " + strconv.Itoa(len(projects.Each)))
+	}
+
+	// Tasks are read per project (they carry assignees there). A project whose
+	// read fails is skipped for this poll only: its tasks are simply absent, so
+	// nothing is diffed or notified for it. Only when every project fails is the
+	// poll itself an error.
+	var tasks kitsu.Tasks
+	failedProjects := make(map[string]struct{})
+	tasksFetchStart := time.Now()
+	fetched := fetchProjectTasks(projects.Each, conf.Threads)
+	var slowestProject time.Duration
+	for i, result := range fetched {
+		if result.elapsed > slowestProject {
+			slowestProject = result.elapsed
+		}
+		if result.err != nil {
+			failedProjects[projects.Each[i].ID] = struct{}{}
+			slog.Warn("Project tasks fetch failed; skipping this project for this poll", "error_class", "kitsu_project_tasks_fetch_failed", "projectID", projects.Each[i].ID, "error", result.err)
+			continue
+		}
+		tasks.Each = append(tasks.Each, result.tasks...)
+	}
+	if len(projects.Each) > 0 && len(failedProjects) == len(projects.Each) {
+		return nil, fmt.Errorf("fetch tasks: all %d projects failed", len(projects.Each))
+	}
+	lastPollFailedProjects = failedProjects
+	tasksFetchElapsed := time.Since(tasksFetchStart)
 	if conf.Log {
 		slog.Info("Got tasks: " + strconv.Itoa(len(tasks.Each)))
 	}
@@ -72,14 +104,6 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 		slog.Info("Got enitityTypes: " + strconv.Itoa(len(enitityTypes.Each)))
 	}
 
-	projects, err := kitsu.GetProjectsWithError()
-	if err != nil {
-		return nil, fmt.Errorf("fetch projects: %w", err)
-	}
-	if conf.Log {
-		slog.Info("Got projects: " + strconv.Itoa(len(projects.Each)))
-	}
-
 	taskTypes, err := kitsu.GetTaskTypesWithError()
 	if err != nil {
 		return nil, fmt.Errorf("fetch task types: %w", err)
@@ -106,21 +130,13 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 		slog.Info("Got persons: " + strconv.Itoa(len(persons.Each)))
 	}
 
-	var comments kitsu.Comments
-	commentsUnavailable := false
-	if conf.Kitsu.SkipComments == false {
-		comments, err = kitsu.GetCommentsWithError()
-		if err != nil {
-			// The comments LIST endpoint requires admin on Zou 1.1x, so a
-			// non-admin bot token gets 403 here. Losing comment visibility for
-			// one poll must not discard the rest of the fetched data.
-			commentsUnavailable = true
-			slog.Warn("Comments fetch failed; continuing this poll without comment data", "error_class", "kitsu_comments_fetch_failed", "error", err)
-		}
-		if conf.Log && !commentsUnavailable {
-			slog.Info("Got comments: " + strconv.Itoa(len(comments.Each)))
-		}
-	}
+	// Comments are read per task, and only for tasks whose last_comment_date
+	// moved since the previous poll (the comments LIST endpoint is admin only on
+	// Zou 1.1x). The cache is rebuilt each poll so it only holds tasks still seen.
+	connectionKey := kitsu.ConnectionKey()
+	previousComments := snapshotTaskCommentCache(connectionKey)
+	nextComments := make(map[string]cachedTaskComments, len(tasks.Each))
+	var nextCommentsMu sync.Mutex
 
 	start := time.Now()
 
@@ -188,11 +204,10 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 			}
 
 			if conf.Kitsu.SkipComments == false {
-				var taskComments kitsu.Comments
-				for _, elem := range comments.Each {
-					if elem.ObjectID == tasks.Each[i].ID {
-						taskComments.Each = append(taskComments.Each, elem)
-					}
+				taskComments, commentsOK := loadTaskComments(tasks.Each[i], previousComments, nextComments, &nextCommentsMu)
+				if !commentsOK {
+					// Keep the stored comment checkpoint; the next poll retries.
+					response[i].CommentsUnavailable = true
 				}
 
 				if len(taskComments.Each) > 0 {
@@ -252,10 +267,21 @@ func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
 	var out []kitsu.MessagePayload
 	for _, elem := range response {
 		if len(elem.Task.Task.ID) > 0 {
-			elem.CommentsUnavailable = commentsUnavailable
 			out = append(out, elem)
 		}
 	}
+	replaceTaskCommentCache(connectionKey, nextComments)
+	// One line per poll: the data for choosing the polling interval. Counts and
+	// durations only; no Kitsu content.
+	slog.Info("Kitsu fetch timing",
+		"event", "kitsu_fetch_timing",
+		"projects", len(projects.Each),
+		"failedProjects", len(failedProjects),
+		"tasks", len(tasks.Each),
+		"tasksFetchMs", tasksFetchElapsed.Milliseconds(),
+		"slowestProjectMs", slowestProject.Milliseconds(),
+		"commentReads", taskCommentReads.Load(),
+		"totalMs", time.Since(pollFetchStart).Milliseconds())
 
 	if conf.Log {
 		log.Printf("Done secondary loop in %s", time.Since(start))
@@ -1279,6 +1305,117 @@ func auditActorFromPayload(payload kitsu.MessagePayload) (kind, id, name string)
 // single-flight (pollMu), so no additional synchronization is required.
 var lastPollProductionTaskCounts map[string]int
 
+// lastPollFailedProjects lists the projects whose task read failed in the last
+// poll. Their zero count is a fetch failure, not a stall, so the liveness
+// monitor skips them.
+var lastPollFailedProjects map[string]struct{}
+
+// projectTasksResult is one project's task read.
+type projectTasksResult struct {
+	tasks   []kitsu.Task
+	err     error
+	elapsed time.Duration
+}
+
+// fetchProjectTasks reads every project's tasks with at most `limit` reads in
+// flight (conf.Threads, minimum 1). Results keep the projects' order so the
+// poll stays deterministic.
+func fetchProjectTasks(projects []kitsu.Project, limit int) []projectTasksResult {
+	if limit < 1 {
+		limit = 1
+	}
+	results := make([]projectTasksResult, len(projects))
+	slots := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i := range projects {
+		slots <- struct{}{}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			started := time.Now()
+			read, err := kitsu.GetProjectTasksWithError(projects[i].ID)
+			results[i] = projectTasksResult{tasks: read.Each, err: err, elapsed: time.Since(started)}
+		}(i)
+	}
+	wg.Wait()
+	return results
+}
+
+// cachedTaskComments is a task's comments as of the last_comment_date they were
+// read at, so an unchanged task costs no comment request.
+type cachedTaskComments struct {
+	lastCommentDate string
+	comments        []kitsu.Comment
+}
+
+// taskCommentReads counts the per-task comment requests of the current poll.
+var taskCommentReads atomic.Int64
+
+var (
+	taskCommentCacheMu sync.Mutex
+	taskCommentCache   = map[string]cachedTaskComments{}
+	// taskCommentCacheKey is the Kitsu connection the cache was filled from.
+	taskCommentCacheKey string
+)
+
+// snapshotTaskCommentCache returns the cache only when it belongs to the given
+// connection. After a switch of Kitsu host or token the previous connection's
+// entries are dropped, so one connection's last_comment_date can never make
+// another connection skip a comment read.
+func snapshotTaskCommentCache(connectionKey string) map[string]cachedTaskComments {
+	taskCommentCacheMu.Lock()
+	defer taskCommentCacheMu.Unlock()
+	if taskCommentCacheKey != connectionKey {
+		return map[string]cachedTaskComments{}
+	}
+	snapshot := make(map[string]cachedTaskComments, len(taskCommentCache))
+	for id, entry := range taskCommentCache {
+		snapshot[id] = entry
+	}
+	return snapshot
+}
+
+func replaceTaskCommentCache(connectionKey string, next map[string]cachedTaskComments) {
+	taskCommentCacheMu.Lock()
+	taskCommentCache = next
+	taskCommentCacheKey = connectionKey
+	taskCommentCacheMu.Unlock()
+}
+
+// loadTaskComments returns the task's comments, reading them only when
+// last_comment_date differs from the cached read. A task without a
+// last_comment_date has no comments. On a failed read the previous cache entry
+// is kept (so the next poll retries) and ok is false.
+func loadTaskComments(task kitsu.Task, previous, next map[string]cachedTaskComments, nextMu *sync.Mutex) (comments kitsu.Comments, ok bool) {
+	date := strings.TrimSpace(task.LastCommentDate)
+	if date == "" {
+		return kitsu.Comments{}, true
+	}
+	cached, hit := previous[task.ID]
+	if hit && cached.lastCommentDate == date {
+		nextMu.Lock()
+		next[task.ID] = cached
+		nextMu.Unlock()
+		return kitsu.Comments{Each: append([]kitsu.Comment(nil), cached.comments...)}, true
+	}
+	taskCommentReads.Add(1)
+	fetched, err := kitsu.GetTaskCommentsWithError(task.ID)
+	if err != nil {
+		slog.Warn("Task comments fetch failed; comment diff skipped for this task", "error_class", "kitsu_comments_fetch_failed", "taskID", task.ID, "error", err)
+		if hit {
+			nextMu.Lock()
+			next[task.ID] = cached
+			nextMu.Unlock()
+		}
+		return kitsu.Comments{}, false
+	}
+	nextMu.Lock()
+	next[task.ID] = cachedTaskComments{lastCommentDate: date, comments: fetched.Each}
+	nextMu.Unlock()
+	return kitsu.Comments{Each: append([]kitsu.Comment(nil), fetched.Each...)}, true
+}
+
 // pollStallThreshold is the number of consecutive zero-task polls before an
 // open production is reported as stalled to the operations channel.
 const pollStallThreshold = 3
@@ -1381,6 +1518,9 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	if db != nil {
 		for _, project := range model.ListProjects(db) {
 			if project.KitsuProjectID == "" || project.ValidationOnly {
+				continue
+			}
+			if _, failed := lastPollFailedProjects[project.KitsuProjectID]; failed {
 				continue
 			}
 			visible := lastPollProductionTaskCounts[project.KitsuProjectID]

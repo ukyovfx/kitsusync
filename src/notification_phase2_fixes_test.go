@@ -96,20 +96,26 @@ func TestDigestIncludesCheckpointedTasks(t *testing.T) {
 // observation row was last touched.
 func TestDoneYesterdayJudgedByCompletionTime(t *testing.T) {
 	fixture := newPhase2WebhookFixture(t)
-	yesterday := time.Now().In(jst).AddDate(0, 0, -1)
+	// A fixed "now" at noon JST: every offset below stays on the intended side of
+	// the JST day boundary, whatever time of day the test actually runs (a
+	// "one hour ago" taken from the wall clock lands on yesterday during the
+	// first JST hour).
+	realNow := time.Now().In(jst)
+	now := time.Date(realNow.Year(), realNow.Month(), realNow.Day(), 12, 0, 0, 0, jst)
+	yesterday := now.AddDate(0, 0, -1)
 	// Completed yesterday; the observation row was touched again today.
 	completed := model.Task{TaskID: "task-done-old", ProductionID: "p1", TaskStatus: "DONE", LastObservedStatus: "DONE",
-		EntityName: "sh002", StatusChangedAt: yesterday.Add(-time.Hour), UpdatedAt: time.Now().UTC()}
+		EntityName: "sh002", StatusChangedAt: yesterday.Add(-time.Hour), UpdatedAt: now.UTC()}
 	if err := fixture.db.Create(&completed).Error; err != nil {
 		t.Fatal(err)
 	}
 	// Row touched yesterday, but the task only completed today.
 	recent := model.Task{TaskID: "task-done-new", ProductionID: "p1", TaskStatus: "DONE", LastObservedStatus: "DONE",
-		EntityName: "sh003", StatusChangedAt: time.Now().UTC().Add(-time.Hour), UpdatedAt: yesterday.Add(-time.Hour)}
+		EntityName: "sh003", StatusChangedAt: now.Add(-time.Hour).UTC(), UpdatedAt: yesterday.Add(-time.Hour)}
 	if err := fixture.db.Create(&recent).Error; err != nil {
 		t.Fatal(err)
 	}
-	digest := buildProductionDigest(fixture.db, model.ListProjects(fixture.db)[0], time.Now().In(jst))
+	digest := buildProductionDigest(fixture.db, model.ListProjects(fixture.db)[0], now)
 	if len(digest.DoneYesterday) != 1 || digest.DoneYesterday[0] != "sh002" {
 		t.Fatalf("done-yesterday = %#v, want [sh002] (completion time, not row time)", digest.DoneYesterday)
 	}
