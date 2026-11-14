@@ -571,3 +571,13 @@ func TestDiscordRolePermissionsAreCombinedWithEveryoneRole(t *testing.T) {
 		t.Fatalf("role permissions were not combined: %#v", info)
 	}
 }
+
+func TestFirstTimeRollbackNoteEscapesErrorText(t *testing.T) {
+	got := appendFirstTimeRollbackNote("<p>failed</p>", errors.New(`bad <script>alert(1)</script> & "quote"`))
+	if strings.Contains(got, "<script>") {
+		t.Fatalf("rollback error text must be HTML-escaped: %s", got)
+	}
+	if !strings.HasPrefix(got, "<p>failed</p> ") || !strings.Contains(got, "&lt;script&gt;") || !strings.Contains(got, "&amp;") {
+		t.Fatalf("unexpected rollback note: %s", got)
+	}
+}
