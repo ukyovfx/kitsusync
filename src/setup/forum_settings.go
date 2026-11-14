@@ -87,7 +87,7 @@ func forumRoleLabel(lang, role string) string {
 	case model.ForumRoleDone:
 		return t(lang, "完了", "Done")
 	case model.ForumRoleWIP:
-		return t(lang, "作業中（タグだけ更新）", "In progress (tag only)")
+		return t(lang, "作業中（タグのみ）", "In progress (tag only)")
 	}
 	return role
 }
@@ -219,10 +219,6 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	}
 
 	var notices strings.Builder
-	if saveErr != nil {
-		notices.WriteString(`<div class="alert warn" role="alert"><strong>` + esc(t(lang, "保存できませんでした", "Could not save")) + `</strong>` + forumSaveErrorMarkup(lang, saveErr) + `</div>`)
-	}
-
 	taskTypes := forumTaskTypeLister(db, productionID)
 	statuses, statusErr := forumStatusLister(db)
 	var forums []forumChannelInfo
@@ -244,6 +240,15 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	for _, forum := range forums {
 		forumOptions = append(forumOptions, [2]string{forum.ID, forum.Name})
 		tagsByForum[forum.ID] = forum.Tags
+	}
+
+	forumNames := map[string]string{}
+	for _, forum := range forums {
+		forumNames[forum.ID] = forum.Name
+	}
+	errorHTML := ""
+	if saveErr != nil {
+		errorHTML = `<div class="notice notice-error" role="alert"><strong>` + esc(t(lang, "保存できませんでした", "Could not save")) + `</strong>` + forumSaveErrorMarkup(lang, saveErr, forumNames) + `</div>`
 	}
 
 	routeByTaskType := map[string]model.ProductionForumRoute{}
@@ -326,7 +331,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<section class="section-card glass"><h2>` + esc(t(lang, "役割 → フォーラムのタグ", "Role → forum tag")) + `</h2>` + tagSections.String() + `</section>` +
 		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
 
-	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + notices.String() + form + `</div>`
+	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`
 	return adminPage(lang, t(lang, "フォーラム通知の設定", "Forum notification settings"), r, body)
 }
 
@@ -356,7 +361,7 @@ func renderForumSettingsLink(db *gorm.DB, r *http.Request, p model.Project, lang
 
 // forumSaveErrorMarkup words a rejected save in the viewer's language. Internal
 // errors are not shown verbatim; the structured validation problems are.
-func forumSaveErrorMarkup(lang string, err error) string {
+func forumSaveErrorMarkup(lang string, err error, forumNames map[string]string) string {
 	var settingsErr *model.ForumSettingsError
 	if !errors.As(err, &settingsErr) {
 		return `<p>` + esc(t(lang, "設定を保存できませんでした。しばらくしてからもう一度お試しください。", "The settings could not be stored. Please try again in a moment.")) + `</p>`
@@ -364,13 +369,24 @@ func forumSaveErrorMarkup(lang string, err error) string {
 	var b strings.Builder
 	b.WriteString(`<ul>`)
 	for _, problem := range settingsErr.Problems {
-		b.WriteString(`<li>` + esc(forumProblemText(lang, problem)) + `</li>`)
+		b.WriteString(`<li>` + esc(forumProblemText(lang, problem, forumNames)) + `</li>`)
 	}
 	b.WriteString(`</ul>`)
 	return b.String()
 }
 
-func forumProblemText(lang string, problem model.ForumSettingsProblem) string {
+func forumProblemText(lang string, problem model.ForumSettingsProblem, forumNames map[string]string) string {
+	// Forum arguments are channel IDs; show the forum's name when it is known.
+	forumLabel := func(i int) string {
+		id := ""
+		if i < len(problem.Args) {
+			id = problem.Args[i]
+		}
+		if name := forumNames[id]; name != "" {
+			return name
+		}
+		return id
+	}
 	arg := func(i int) string {
 		if i < len(problem.Args) {
 			return problem.Args[i]
@@ -391,13 +407,13 @@ func forumProblemText(lang string, problem model.ForumSettingsProblem) string {
 	case model.ProblemStatusDuplicate:
 		return t(lang, "同じステータスが複数回設定されています: ", "The same status is set more than once: ") + arg(0)
 	case model.ProblemTagUnroutedForum:
-		return t(lang, "どのタスクタイプにも使われていないフォーラムのタグが設定されています: ", "Tags are set for a forum no Task Type uses: ") + arg(0)
+		return t(lang, "どのタスクタイプにも使われていないフォーラムのタグが設定されています: ", "Tags are set for a forum no Task Type uses: ") + forumLabel(0)
 	case model.ProblemTagInvalid:
-		return t(lang, "タグの設定が正しくありません（フォーラム: ", "A tag setting is not valid (forum: ") + arg(0) + t(lang, "）。", ").")
+		return t(lang, "タグの設定が正しくありません（フォーラム: ", "A tag setting is not valid (forum: ") + forumLabel(0) + t(lang, "）。", ").")
 	case model.ProblemTagRoleDuplicate:
-		return t(lang, "同じ役割のタグが複数あります（フォーラム: ", "A role has more than one tag (forum: ") + arg(0) + t(lang, "、役割: ", ", role: ") + forumRoleLabel(lang, arg(1)) + t(lang, "）。", ").")
+		return t(lang, "同じ役割のタグが複数あります（フォーラム: ", "A role has more than one tag (forum: ") + forumLabel(0) + t(lang, "、役割: ", ", role: ") + forumRoleLabel(lang, arg(1)) + t(lang, "）。", ").")
 	case model.ProblemTagReused:
-		return t(lang, "1つのタグが複数の役割に使われています（フォーラム: ", "One tag is used for more than one role (forum: ") + arg(0) + t(lang, "）。", ").")
+		return t(lang, "1つのタグが複数の役割に使われています（フォーラム: ", "One tag is used for more than one role (forum: ") + forumLabel(0) + t(lang, "）。", ").")
 	case model.ProblemGuildRequired:
 		return t(lang, "フォーラム方式にするには、DiscordサーバーIDが必要です。", "Forum mode needs the Discord server ID.")
 	case model.ProblemRoutesRequired:
@@ -405,7 +421,7 @@ func forumProblemText(lang string, problem model.ForumSettingsProblem) string {
 	case model.ProblemRoleStatusMissing:
 		return t(lang, "役割「", "No Kitsu status is assigned to the role \"") + forumRoleLabel(lang, arg(0)) + t(lang, "」に割り当てるステータスがありません。", "\".")
 	case model.ProblemForumTagMissing:
-		return t(lang, "フォーラム ", "Forum ") + arg(0) + t(lang, " に、役割「", " has no tag for the role \"") + forumRoleLabel(lang, arg(1)) + t(lang, "」のタグがありません。", "\".")
+		return t(lang, "フォーラム「", "Forum \"") + forumLabel(0) + t(lang, "」に、役割「", "\" has no tag for the role \"") + forumRoleLabel(lang, arg(1)) + t(lang, "」のタグがありません。", "\".")
 	}
 	return t(lang, "設定に問題があります。", "There is a problem with the settings.")
 }

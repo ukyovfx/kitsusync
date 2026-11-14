@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -302,7 +303,7 @@ func ForumSettingsProblems(settings ProductionForumSettings) []ForumSettingsProb
 			if _, ok := rolesInUse[role]; !ok {
 				add(ProblemRoleStatusMissing, role)
 			}
-			for forumID := range forums {
+			for _, forumID := range sortedKeys(forums) {
 				if _, ok := tagsByForum[forumID][role]; !ok {
 					add(ProblemForumTagMissing, forumID, role)
 				}
@@ -310,6 +311,16 @@ func ForumSettingsProblems(settings ProductionForumSettings) []ForumSettingsProb
 		}
 	}
 	return problems
+}
+
+// sortedKeys keeps problem lists in a stable order (map iteration is random).
+func sortedKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // SaveProductionForumSettings validates and replaces a Production's whole forum

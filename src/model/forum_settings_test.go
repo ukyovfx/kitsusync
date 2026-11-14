@@ -199,3 +199,15 @@ func TestDeleteProductionOperationalStateRemovesForumSettings(t *testing.T) {
 		t.Fatalf("forum tags must be removed with the Production, %d left", rows)
 	}
 }
+
+func TestForumSettingsProblemsKeepAStableOrder(t *testing.T) {
+	settings := completeForumSettings(NotificationModeForum)
+	settings.Tags = nil // every forum is missing every role tag
+	first := ValidateProductionForumSettings(settings)
+	for i := 0; i < 20; i++ {
+		again := ValidateProductionForumSettings(settings)
+		if strings.Join(again, "|") != strings.Join(first, "|") {
+			t.Fatalf("problem order changed between runs:\n%v\n%v", first, again)
+		}
+	}
+}

@@ -238,7 +238,7 @@ func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d", w.Code)
 	}
-	for _, want := range []string{"保存できませんでした", "役割「完了」に割り当てるステータスがありません。", "のタグがありません。"} {
+	for _, want := range []string{"保存できませんでした", "notice notice-error", "役割「完了」に割り当てるステータスがありません。", "のタグがありません。", "フォーラム「animation」に"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Japanese message missing %q", want)
 		}
@@ -255,7 +255,7 @@ func TestForumSettingsEveryProblemCodeHasLocalizedText(t *testing.T) {
 	for _, code := range codes {
 		problem := model.ForumSettingsProblem{Code: code, Args: []string{"x", "wfa"}}
 		for _, lang := range []string{"ja", "en"} {
-			got := forumProblemText(lang, problem)
+			got := forumProblemText(lang, problem, nil)
 			if strings.TrimSpace(got) == "" || got == problem.English() && lang == "ja" {
 				t.Fatalf("code %s has no %s text: %q", code, lang, got)
 			}
@@ -267,7 +267,7 @@ func TestForumSettingsEveryProblemCodeHasLocalizedText(t *testing.T) {
 }
 
 func TestForumSettingsInternalErrorsAreNotShownVerbatim(t *testing.T) {
-	got := forumSaveErrorMarkup("en", forumTestError("UNIQUE constraint failed: secret table detail"))
+	got := forumSaveErrorMarkup("en", forumTestError("UNIQUE constraint failed: secret table detail"), nil)
 	if strings.Contains(got, "UNIQUE") || strings.Contains(got, "secret") {
 		t.Fatalf("internal error leaked: %s", got)
 	}
