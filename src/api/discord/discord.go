@@ -541,6 +541,21 @@ func resolveAssigneeDiscordID(projectID string, person kitsu.Person, displayName
 	return ""
 }
 
+// ResolveAssigneeDiscordIDs maps Kitsu person IDs to Discord user IDs through
+// the project user map. Unknown people are dropped.
+func ResolveAssigneeDiscordIDs(projectID string, kitsuPersonIDs []string) []string {
+	ids := make([]string, 0, len(kitsuPersonIDs))
+	for _, personID := range kitsuPersonIDs {
+		if UserMapResolver == nil {
+			return nil
+		}
+		if id := UserMapResolver(projectID, personID, "", ""); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return uniqueDiscordIDs(ids)
+}
+
 func safeNotificationURL(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.Contains(raw, "YOUR_FOLDER_ID") {
@@ -1540,7 +1555,6 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 	result := make(map[string]SendResult)
 
 	for _, elem := range data {
-		var placeholders Template
 		notifLang := normalizeNotificationLang(projectNotificationLanguages[elem.Project.ID])
 		notificationRevision := ""
 		if db == nil {
@@ -1559,182 +1573,12 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 			continue
 		}
 
-		placeholders.ProjectName = sanitizeDiscordText(elem.Project.Name)
-		placeholders.GroupName = sanitizeDiscordText(elem.EntityType.Name)
-		placeholders.ParentName = sanitizeDiscordText(elem.Parent.Name)
-		placeholders.TaskName = sanitizeDiscordText(elem.Entity.Name)
-		placeholders.TaskType = sanitizeDiscordText(elem.TaskType.Name)
-		placeholders.CurrentStatus = sanitizeDiscordText(elem.TaskStatus.ShortName)
-		placeholders.StatusUpper = strings.ToUpper(elem.TaskStatus.ShortName)
-		placeholders.PreviousStatus = elem.PreviousStatusName
-		placeholders.CommentContent = sanitizeDiscordText(elem.LatestComment.Comment.Text)
-		placeholders.CommentAuthor = sanitizeDiscordText(elem.LatestComment.Author.FullName)
-		placeholders.EntityType = sanitizeDiscordText(elem.EntityType.EntityType.Name)
-		placeholders.ProcessEmoji = getProcessEmoji(elem.TaskType.Name)
-		if db != nil {
-			placeholders.ChannelName = model.FindChannelNameByWebhookURL(db, webHookURL)
+		placeholders, err := NotificationCardTemplate(conf, elem, webHookURL, notifLang, db)
+		if err != nil {
+			result[elem.Task.ID] = SendResult{FailureCategory: err.Error()}
+			continue
 		}
-
-		// Assignees を解決しつつ、アーティストの Discord ID も収集。
-		// 同じ Kitsu 名が userMap に複数行で書かれていても 1 回しか mention しないよう、
-		// 既に追加した DiscordID を seen で重複排除する。
-		var assigneeNames []string
-		var assigneeIDs []string
-		placeholders.Assignees = make([]Assignee, len(elem.Assignees))
-		for i := 0; i < len(elem.Assignees); i++ {
-			if elem.Assignees[i].IsBot {
-				slog.Info("Kitsu bot assignee excluded from Discord mention", "taskID", elem.Task.ID)
-				continue
-			}
-			fullName := elem.Assignees[i].FullName
-			displayPersonName := kitsuPersonDisplayName(elem.Assignees[i], notifLang)
-			if displayPersonName == "" {
-				displayPersonName = sanitizeDiscordText(fullName)
-			}
-			placeholders.Assignees[i].Fullname = displayPersonName
-			placeholders.Assignees[i].Email = elem.Assignees[i].Email
-			displayName := displayPersonName
-			assigneeNames = append(assigneeNames, displayName)
-			if id := resolveAssigneeDiscordID(elem.Project.ID, elem.Assignees[i], displayPersonName, conf); id != "" {
-				assigneeIDs = append(assigneeIDs, id)
-			}
-		}
-		if len(assigneeNames) > 0 {
-			placeholders.AssigneesStr = strings.Join(assigneeNames, ", ")
-		} else if normalizeNotificationLang(notifLang) == "en" {
-			placeholders.AssigneesStr = "Unassigned"
-		} else {
-			placeholders.AssigneesStr = "未割り当て"
-		}
-
-		currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
-
-		// WFA status notifications use the Reviewer precedence chain. Assignment
-		// and other status notifications keep the existing Checker resolution.
-		var checkerIDs []string
-		var reviewerTargets []ReviewerTarget
-		isWFAReviewer := !elem.IsAssignNotification && currentStatus == "WFA"
-		if isWFAReviewer {
-			if ReviewerResolver != nil {
-				rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name, webHookURL)
-				if resolveErr != nil {
-					slog.Warn("Reviewer lookup failed; WFA will be posted without targeted mentions",
-						"error_class", "reviewer_resolution_failed",
-						"taskType", elem.TaskType.Name,
-						"taskID", elem.Task.ID,
-					)
-				} else {
-					reviewerTargets = uniqueReviewerTargets(rawTargets)
-				}
-			}
-		} else if CheckerResolver != nil {
-			if dids := CheckerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name); len(dids) > 0 {
-				for _, did := range dids {
-					checkerIDs = append(checkerIDs, did)
-				}
-			}
-		}
-		if !isWFAReviewer && len(checkerIDs) == 0 && len(reviewerTargets) == 0 {
-			for _, c := range conf.Mention.Checkers {
-				if strings.EqualFold(c.TaskType, elem.TaskType.Name) {
-					checkerIDs = append(checkerIDs, c.DiscordID)
-				}
-			}
-		}
-
-		// ステータスごとのメンション対象を conf.Mention の設定から決める。
-		// CheckerStatuses に含まれるステータスではチェッカーをメンション、
-		// ArtistStatuses に含まれるステータスではアーティスト全員をメンションする。
-		// HereStatuses に含まれるステータスでは @here を追加（緊急通知）。
-		// 複数に含まれるステータスでは全てを併記する。
-		var recipientIDs []string
-		var recipientRoleIDs []string
-		if isWFAReviewer {
-			for _, target := range reviewerTargets {
-				if target.Kind == "user" {
-					recipientIDs = append(recipientIDs, target.ID)
-				} else if target.Kind == "role" {
-					recipientRoleIDs = append(recipientRoleIDs, target.ID)
-				}
-			}
-			recipientIDs = uniqueDiscordIDs(recipientIDs)
-			recipientRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
-		} else {
-			recipientIDs = notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
-		}
-		if !isWFAReviewer && len(recipientIDs) == 0 && len(recipientRoleIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
-			slog.Warn("No checker configured for task type; checker will not be @-mentioned",
-				"taskType", elem.TaskType.Name,
-				"status", currentStatus,
-				"taskID", elem.Task.ID,
-				"hint", "add this task type to [[mention.checkers]] in conf.toml")
-		}
-		// 緊急ステータスは @here でチャンネル全員に通知
-		// @here and @everyone are never emitted by KitsuSync.
-		mentionText := mentionContent(recipientIDs)
-		if isWFAReviewer {
-			mentionText = reviewerTargetMentions(reviewerTargets)
-		}
-		statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
-
-		placeholders.MentionContent = mentionText
-		placeholders.StatusMessage = statusMessage
-		placeholders.StatusEmoji = statusEmoji
-		// ストレージ URL はプロジェクト別 DB 優先、なければ conf.toml のグローバル値
-		if GoogleDriveURLResolver != nil {
-			if u := GoogleDriveURLResolver(elem.Project.Project.ID); u != "" {
-				placeholders.GoogleDriveURL = safeNotificationURL(u)
-			} else {
-				placeholders.GoogleDriveURL = safeNotificationURL(conf.GoogleDrive.URL)
-			}
-		} else {
-			placeholders.GoogleDriveURL = safeNotificationURL(conf.GoogleDrive.URL)
-		}
-		placeholders.IsCommentOnly = elem.IsCommentOnly
-		placeholders.IsAssignNotification = elem.IsAssignNotification
-		placeholders.CommentOnlyMessage = localizedCommentOnlyMessage(currentStatus, notifLang)
-		if normalizeNotificationLang(notifLang) == "en" {
-			placeholders.CommentLabel = "Comment"
-			placeholders.CommentAuthorLabel = "Comment by"
-			placeholders.AssigneeLabel = "Assignee"
-		} else {
-			placeholders.CommentLabel = "コメント"
-			placeholders.CommentAuthorLabel = "コメント投稿者"
-			placeholders.AssigneeLabel = "担当"
-		}
-		if elem.IsCommentOnly {
-			placeholders.StatusTransitionMessage = ""
-		} else {
-			placeholders.StatusTransitionMessage = localizedStatusTransitionMessage(elem.PreviousStatusName, elem.TaskStatus.ShortName, notifLang)
-		}
-
-		host := ""
-		if KitsuPublicURLResolver != nil {
-			host = safeNotificationURL(KitsuPublicURLResolver())
-		}
-		placeholders.TaskURL = KitsuTaskURL(host, elem.Project.ID, placeholders.EntityType, elem.Task.ID)
-
-		// Kitsu プレビュー画像 URL を組み立て
-		// Entity.PreviewFileID は interface{} なので string にキャストする
-		// パス: /api/pictures/thumbnails/preview-files/{id}.png
-		// nginx で認証バイパス設定が必要（README 参照）
-		if id, ok := elem.Entity.Entity.PreviewFileID.(string); ok && id != "" {
-			if host != "" {
-				placeholders.PreviewImageURL = fmt.Sprintf("%sapi/pictures/thumbnails/preview-files/%s.png", host, url.PathEscape(id))
-			}
-		}
-
-		// カラーコードを変換（ステータスカラー → フォールバック用）
-		intColor := notificationStatusColor(elem.TaskStatus.ShortName)
-
-		// テンプレートを展開
-		tplPreset := localizedTemplatePreset(conf.TplPreset, notifLang)
-
-		placeholders.NotificationLanguage = notifLang
-		placeholders.AllowedUserIDs = uniqueDiscordIDs(recipientIDs)
-		placeholders.AllowedRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
-		placeholders.Color = int(intColor)
-		payload := RenderNotificationPayload(placeholders, tplPreset)
+		payload := RenderNotificationPayload(placeholders, localizedTemplatePreset(conf.TplPreset, notifLang))
 
 		threadName := ""
 		if conf.Discord.UseThreads {
@@ -1764,6 +1608,169 @@ func SendMessageBunch(conf config.Config, data []kitsu.MessagePayload, webHookUR
 	}
 
 	return result
+}
+
+// NotificationCardTemplate builds the card template for one task: assignee
+// names, mention recipients, labels, links and colors. SendMessageBunch and the
+// forum first message share it so both render the identical card.
+func NotificationCardTemplate(conf config.Config, elem kitsu.MessagePayload, webHookURL, notifLang string, db *gorm.DB) (Template, error) {
+	var placeholders Template
+	placeholders.ProjectName = sanitizeDiscordText(elem.Project.Name)
+	placeholders.GroupName = sanitizeDiscordText(elem.EntityType.Name)
+	placeholders.ParentName = sanitizeDiscordText(elem.Parent.Name)
+	placeholders.TaskName = sanitizeDiscordText(elem.Entity.Name)
+	placeholders.TaskType = sanitizeDiscordText(elem.TaskType.Name)
+	placeholders.CurrentStatus = sanitizeDiscordText(elem.TaskStatus.ShortName)
+	placeholders.StatusUpper = strings.ToUpper(elem.TaskStatus.ShortName)
+	placeholders.PreviousStatus = elem.PreviousStatusName
+	placeholders.CommentContent = sanitizeDiscordText(elem.LatestComment.Comment.Text)
+	placeholders.CommentAuthor = sanitizeDiscordText(elem.LatestComment.Author.FullName)
+	placeholders.EntityType = sanitizeDiscordText(elem.EntityType.EntityType.Name)
+	placeholders.ProcessEmoji = getProcessEmoji(elem.TaskType.Name)
+	if db != nil {
+		placeholders.ChannelName = model.FindChannelNameByWebhookURL(db, webHookURL)
+	}
+
+	// Assignees を解決しつつ、アーティストの Discord ID も収集。
+	var assigneeNames []string
+	var assigneeIDs []string
+	placeholders.Assignees = make([]Assignee, len(elem.Assignees))
+	for i := 0; i < len(elem.Assignees); i++ {
+		if elem.Assignees[i].IsBot {
+			slog.Info("Kitsu bot assignee excluded from Discord mention", "taskID", elem.Task.ID)
+			continue
+		}
+		fullName := elem.Assignees[i].FullName
+		displayPersonName := kitsuPersonDisplayName(elem.Assignees[i], notifLang)
+		if displayPersonName == "" {
+			displayPersonName = sanitizeDiscordText(fullName)
+		}
+		placeholders.Assignees[i].Fullname = displayPersonName
+		placeholders.Assignees[i].Email = elem.Assignees[i].Email
+		assigneeNames = append(assigneeNames, displayPersonName)
+		if id := resolveAssigneeDiscordID(elem.Project.ID, elem.Assignees[i], displayPersonName, conf); id != "" {
+			assigneeIDs = append(assigneeIDs, id)
+		}
+	}
+	if len(assigneeNames) > 0 {
+		placeholders.AssigneesStr = strings.Join(assigneeNames, ", ")
+	} else if normalizeNotificationLang(notifLang) == "en" {
+		placeholders.AssigneesStr = "Unassigned"
+	} else {
+		placeholders.AssigneesStr = "未割り当て"
+	}
+
+	currentStatus := strings.ToUpper(elem.TaskStatus.ShortName)
+
+	// WFA status notifications use the Reviewer precedence chain. Assignment
+	// and other status notifications keep the existing Checker resolution.
+	var checkerIDs []string
+	var reviewerTargets []ReviewerTarget
+	isWFAReviewer := !elem.IsAssignNotification && currentStatus == "WFA"
+	if isWFAReviewer {
+		if ReviewerResolver != nil {
+			rawTargets, resolveErr := ReviewerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name, webHookURL)
+			if resolveErr != nil {
+				slog.Warn("Reviewer lookup failed; WFA will be posted without targeted mentions",
+					"error_class", "reviewer_resolution_failed",
+					"taskType", elem.TaskType.Name,
+					"taskID", elem.Task.ID,
+				)
+			} else {
+				reviewerTargets = uniqueReviewerTargets(rawTargets)
+			}
+		}
+	} else if CheckerResolver != nil {
+		checkerIDs = append(checkerIDs, CheckerResolver(elem.Project.ID, elem.TaskType.ID, elem.TaskType.Name)...)
+	}
+	if !isWFAReviewer && len(checkerIDs) == 0 && len(reviewerTargets) == 0 {
+		for _, c := range conf.Mention.Checkers {
+			if strings.EqualFold(c.TaskType, elem.TaskType.Name) {
+				checkerIDs = append(checkerIDs, c.DiscordID)
+			}
+		}
+	}
+
+	var recipientIDs []string
+	var recipientRoleIDs []string
+	if isWFAReviewer {
+		for _, target := range reviewerTargets {
+			if target.Kind == "user" {
+				recipientIDs = append(recipientIDs, target.ID)
+			} else if target.Kind == "role" {
+				recipientRoleIDs = append(recipientRoleIDs, target.ID)
+			}
+		}
+		recipientIDs = uniqueDiscordIDs(recipientIDs)
+		recipientRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
+	} else {
+		recipientIDs = notificationRecipientCandidates(currentStatus, elem.IsAssignNotification, assigneeIDs, checkerIDs, conf)
+	}
+	if !isWFAReviewer && len(recipientIDs) == 0 && len(recipientRoleIDs) == 0 && containsIgnoreCase(conf.Mention.CheckerStatuses, currentStatus) && len(conf.Mention.Checkers) > 0 {
+		slog.Warn("No checker configured for task type; checker will not be @-mentioned",
+			"taskType", elem.TaskType.Name,
+			"status", currentStatus,
+			"taskID", elem.Task.ID,
+			"hint", "add this task type to [[mention.checkers]] in conf.toml")
+	}
+	// @here and @everyone are never emitted by KitsuSync.
+	mentionText := mentionContent(recipientIDs)
+	if isWFAReviewer {
+		mentionText = reviewerTargetMentions(reviewerTargets)
+	}
+	statusMessage, statusEmoji := localizedStatusMessageInfo(currentStatus, notifLang)
+
+	placeholders.MentionContent = mentionText
+	placeholders.StatusMessage = statusMessage
+	placeholders.StatusEmoji = statusEmoji
+	// ストレージ URL はプロジェクト別 DB 優先、なければ conf.toml のグローバル値
+	if GoogleDriveURLResolver != nil {
+		if u := GoogleDriveURLResolver(elem.Project.Project.ID); u != "" {
+			placeholders.GoogleDriveURL = safeNotificationURL(u)
+		} else {
+			placeholders.GoogleDriveURL = safeNotificationURL(conf.GoogleDrive.URL)
+		}
+	} else {
+		placeholders.GoogleDriveURL = safeNotificationURL(conf.GoogleDrive.URL)
+	}
+	placeholders.IsCommentOnly = elem.IsCommentOnly
+	placeholders.IsAssignNotification = elem.IsAssignNotification
+	placeholders.CommentOnlyMessage = localizedCommentOnlyMessage(currentStatus, notifLang)
+	if normalizeNotificationLang(notifLang) == "en" {
+		placeholders.CommentLabel = "Comment"
+		placeholders.CommentAuthorLabel = "Comment by"
+		placeholders.AssigneeLabel = "Assignee"
+	} else {
+		placeholders.CommentLabel = "コメント"
+		placeholders.CommentAuthorLabel = "コメント投稿者"
+		placeholders.AssigneeLabel = "担当"
+	}
+	if elem.IsCommentOnly {
+		placeholders.StatusTransitionMessage = ""
+	} else {
+		placeholders.StatusTransitionMessage = localizedStatusTransitionMessage(elem.PreviousStatusName, elem.TaskStatus.ShortName, notifLang)
+	}
+
+	host := ""
+	if KitsuPublicURLResolver != nil {
+		host = safeNotificationURL(KitsuPublicURLResolver())
+	}
+	placeholders.TaskURL = KitsuTaskURL(host, elem.Project.ID, placeholders.EntityType, elem.Task.ID)
+
+	// Kitsu プレビュー画像 URL を組み立て
+	// Entity.PreviewFileID は interface{} なので string にキャストする
+	// パス: /api/pictures/thumbnails/preview-files/{id}.png
+	if id, ok := elem.Entity.Entity.PreviewFileID.(string); ok && id != "" {
+		if host != "" {
+			placeholders.PreviewImageURL = fmt.Sprintf("%sapi/pictures/thumbnails/preview-files/%s.png", host, url.PathEscape(id))
+		}
+	}
+
+	placeholders.NotificationLanguage = notifLang
+	placeholders.AllowedUserIDs = uniqueDiscordIDs(recipientIDs)
+	placeholders.AllowedRoleIDs = uniqueDiscordRoleIDs(recipientRoleIDs)
+	placeholders.Color = int(notificationStatusColor(elem.TaskStatus.ShortName))
+	return placeholders, nil
 }
 
 func parseTaskTemplate(tplFilePath string, data Template) string {
