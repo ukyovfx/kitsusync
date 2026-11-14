@@ -777,6 +777,10 @@ func DeleteProductionOperationalState(db *gorm.DB, productionID string) error {
 		&ProductionNotificationRoute{},
 		&ProductionNotificationConfig{},
 		&ProductionChannelMapping{},
+		&ProductionForumRoute{},
+		&ProductionForumStatusRole{},
+		&ProductionForumTag{},
+		&ProductionForumConfig{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			continue

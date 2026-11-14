@@ -1479,6 +1479,10 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.NotificationDeliveryEvent{},
 		&model.NotificationAggregationBuffer{},
 		&model.ManagedChannelDeletion{},
+		&model.ProductionForumConfig{},
+		&model.ProductionForumRoute{},
+		&model.ProductionForumStatusRole{},
+		&model.ProductionForumTag{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
 	}
