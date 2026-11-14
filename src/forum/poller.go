@@ -146,7 +146,20 @@ func taskInputFromPayload(payload kitsu.MessagePayload) TaskInput {
 		Assignees:    assignees,
 		CommentDate:  payload.Task.Task.LastCommentDate,
 		KitsuUpdated: payload.Task.Task.UpdatedAt,
+		Comment: CommentInput{
+			ID:          payload.LatestComment.Comment.ID,
+			Text:        payload.LatestComment.Comment.Text,
+			CreatedAt:   payload.LatestComment.Comment.CreatedAt,
+			Mentions:    commentMentionIDs(payload),
+			Unavailable: payload.CommentsUnavailable,
+		},
 	}
+}
+
+// commentMentionIDs returns the Kitsu person IDs named in the newest comment.
+// Kitsu exposes the mentions on the comment itself.
+func commentMentionIDs(payload kitsu.MessagePayload) []string {
+	return model.NormalizeForumAssigneeIDs(payload.LatestComment.Comment.Mentions)
 }
 
 // TaskURLFor builds the Kitsu task link for a ledger row.

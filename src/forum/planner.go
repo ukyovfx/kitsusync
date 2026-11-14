@@ -33,6 +33,19 @@ type TaskInput struct {
 	Assignees   []string
 	CommentDate string
 	KitsuUpdated string
+	// Comment is the newest Kitsu comment, used for RETAKE and comment signals.
+	Comment CommentInput
+}
+
+// CommentInput is the newest comment observed for a task.
+type CommentInput struct {
+	ID        string
+	Text      string
+	CreatedAt string
+	// Mentions are the Kitsu person IDs named in the comment.
+	Mentions []string
+	// Unavailable reports that the comment could not be read this poll.
+	Unavailable bool
 }
 
 // PlanResult summarises what the planner did for one task.
@@ -161,6 +174,11 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 			return result, err
 		}
 	}
+	if hasPost && !input.Comment.Unavailable && input.Comment.ID != "" && input.Comment.ID != commentIDFromDate(existing.LastCommentAt) {
+		if err := p.queueCommentSignal(input, existing); err != nil {
+			return result, err
+		}
+	}
 	if err := p.updateTaskRow(input, existing.StatusID, assignees); err != nil {
 		return result, err
 	}
@@ -200,7 +218,127 @@ func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, ro
 	if !IsTriggerRole(input.StatusRole) {
 		return nil
 	}
-	return p.queueStatusSignal(input, existing, result)
+	if err := p.queueStatusSignal(input, existing, result); err != nil {
+		return err
+	}
+	return p.maybeWarnFlap(input, existing)
+}
+
+// queueCommentSignal announces a new comment on a task that already has a post.
+// A task without a post is ignored, which keeps WIP chatter out of the forum.
+func (p Planner) queueCommentSignal(input TaskInput, existing model.ForumTask) error {
+	quote := commentQuote(input.Comment.Text)
+	payload, err := json.Marshal(model.ForumPostMessagePayload{
+		Intent:         model.ForumIntentComment,
+		WindowOpenedAt: p.Now,
+		Quote:          quote,
+		Mentions:       model.NormalizeForumAssigneeIDs(input.Comment.Mentions),
+	})
+	if err != nil {
+		return err
+	}
+	now := p.Now
+	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
+		TaskID:    input.TaskID,
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: model.ForumCommentCoalesceKey(input.Comment.ID, input.TaskID),
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: now,
+		CreatedAt: now,
+	})
+	if errors.Is(err, model.ErrForumOutboxDuplicate) {
+		return nil
+	}
+	return err
+}
+
+// maybeWarnFlap queues one warning per flap episode. The signal messages are
+// not suppressed: the warning only adds context.
+func (p Planner) maybeWarnFlap(input TaskInput, existing model.ForumTask) error {
+	episode, transitions, span, flapping, err := p.flapEpisode(input.TaskID, existing.StatusID, input.StatusID)
+	if err != nil || !flapping {
+		return err
+	}
+	taskID := input.TaskID
+	warned, err := model.ForumFlapWarned(p.DB, taskID, episode)
+	if err != nil || warned {
+		return err
+	}
+	now := p.Now
+	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
+		TaskID:    taskID,
+		Kind:      model.ForumOutboxWarnMessage,
+		DedupeKey: model.ForumWarnDedupeKey(taskID, episode),
+		Payload:   fmt.Sprintf(`{"transitions":%d,"span_seconds":%d}`, transitions, int(span.Seconds())),
+		State:     model.ForumOutboxPending,
+		NotBefore: now,
+		CreatedAt: now,
+	})
+	if err != nil && !errors.Is(err, model.ErrForumOutboxDuplicate) {
+		return err
+	}
+	return model.MarkForumFlapWarned(p.DB, taskID, episode)
+}
+
+// flapEpisode reports whether the recent transitions look like flapping. R1 is
+// a round trip inside the round-trip window, R2 is too many transitions inside
+// the flap period. The episode start is the first transition of the window.
+// The current change is passed in because the planner warns before the
+// transition row is written.
+func (p Planner) flapEpisode(taskID, fromStatusID, toStatusID string) (time.Time, int, time.Duration, bool, error) {
+	recent, err := model.RecentForumTransitions(p.DB, taskID, p.Now.Add(-model.ForumFlapPeriod))
+	if err != nil {
+		return time.Time{}, 0, 0, false, err
+	}
+	episode := p.Now
+	if len(recent) > 0 {
+		episode = recent[0].At
+	}
+	rows := append([]model.ForumTransition{{TaskID: taskID, At: p.Now, FromStatusID: fromStatusID, ToStatusID: toStatusID}}, recent...)
+	if len(rows) < 2 || fromStatusID == "" {
+		return time.Time{}, 0, 0, false, nil
+	}
+	span := p.Now.Sub(episode)
+	roundTrip := false
+	for i, row := range rows {
+		if row.At.Before(p.Now.Add(-model.ForumFlapRoundTripWindow)) {
+			continue
+		}
+		for _, earlier := range rows[:i] {
+			if earlier.ToStatusID != "" && earlier.ToStatusID == row.FromStatusID {
+				roundTrip = true
+				break
+			}
+		}
+		if roundTrip {
+			break
+		}
+	}
+	return episode, len(rows), span, roundTrip || len(rows) >= model.ForumFlapCount, nil
+}
+
+// commentQuote takes the first line of a comment, stripped of quoting markers
+// and truncated for a one-line quote.
+func commentQuote(text string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+		trimmed := strings.TrimLeft(strings.TrimSpace(line), "># ")
+		if trimmed == "" {
+			continue
+		}
+		runes := []rune(trimmed)
+		if len(runes) > model.ForumQuoteMaxRunes {
+			return string(runes[:model.ForumQuoteMaxRunes]) + "…"
+		}
+		return string(runes)
+	}
+	return ""
+}
+
+// commentIDFromDate is a placeholder for the stored comment marker: the ledger
+// keeps the Kitsu last_comment_date, so the marker is the date itself.
+func commentIDFromDate(lastCommentAt string) string {
+	return lastCommentAt
 }
 
 func (p Planner) queueCreateThread(input TaskInput, route model.ProductionForumRoute, role string, card func() (json.RawMessage, error), result *PlanResult) error {
@@ -263,6 +401,7 @@ func (p Planner) queueStatusSignal(input TaskInput, existing model.ForumTask, re
 		Intent:         intent,
 		WindowOpenedAt: p.Now,
 		BaseStatusID:   existing.StatusID,
+		Quote:          retakeQuote(intent, input.Comment),
 	})
 	if err != nil {
 		return err
@@ -350,6 +489,14 @@ func forumTaskRow(input TaskInput, now time.Time) model.ForumTask {
 		FirstSeenAt:    now,
 		LastSeenAt:     now,
 	}
+}
+
+// retakeQuote returns the comment excerpt a RETAKE signal quotes.
+func retakeQuote(intent string, comment CommentInput) string {
+	if intent != model.ForumIntentStatusRetake || comment.Unavailable {
+		return ""
+	}
+	return commentQuote(comment.Text)
 }
 
 func intentForRole(role string) string {

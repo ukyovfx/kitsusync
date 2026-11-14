@@ -127,14 +127,16 @@ type ForumCreateThreadPayload struct {
 	Card json.RawMessage `json:"card,omitempty"`
 }
 
-// ForumPostMessagePayload is the payload of a post_message row. Stage D sends
-// the signal immediately (after the mention window); stage E will aggregate
-// using the same fields.
+// ForumPostMessagePayload is the payload of a post_message row. The quote is
+// resolved when the row is queued so the executor never needs to read Kitsu.
 type ForumPostMessagePayload struct {
 	Intent         string    `json:"intent"`
 	WindowOpenedAt time.Time `json:"window_opened_at"`
 	BaseStatusID   string    `json:"base_status_id,omitempty"`
 	BaseAssignees  []string  `json:"base_assignees,omitempty"`
+	Quote          string    `json:"quote,omitempty"`
+	// Mentions are the Kitsu person IDs named in a comment.
+	Mentions []string `json:"mentions,omitempty"`
 }
 
 // ForumPostIntent values.
@@ -143,7 +145,38 @@ const (
 	ForumIntentStatusRetake = "retake"
 	ForumIntentStatusDone   = "done"
 	ForumIntentAssign       = "assign"
+	ForumIntentComment      = "comment"
 )
+
+// Stage E tuning values, fixed by the design.
+const (
+	ForumFlapRoundTripWindow = 3 * time.Minute
+	ForumFlapCount           = 4
+	ForumFlapPeriod          = time.Hour
+	ForumQuoteMaxRunes       = 70
+	// ForumCommentQuoteLookback is how far back a RETAKE quote may reach; it is
+	// twice the poll interval plus slack so a comment written just before the
+	// status change is still found.
+	ForumCommentQuoteLookback = 10 * time.Minute
+)
+
+// ForumFlapState remembers the last flap episode that was warned about.
+type ForumFlapState struct {
+	TaskID     string `gorm:"primaryKey;size:64"`
+	EpisodeAt  time.Time
+	WarnedAt   time.Time
+}
+
+func (ForumFlapState) TableName() string { return "forum_flap_states" }
+
+// ForumDMChannel caches the DM channel of a recipient for the morning digest.
+type ForumDMChannel struct {
+	DiscordUserID string `gorm:"primaryKey;size:32"`
+	ChannelID     string `gorm:"size:64;not null"`
+	CreatedAt     time.Time
+}
+
+func (ForumDMChannel) TableName() string { return "forum_dm_channels" }
 
 // ForumTaskState is the ledger view a planner needs.
 type ForumTaskState struct {
@@ -520,6 +553,81 @@ func ForumSyncThreadCoalesceKey(taskID string) string {
 // ForumPostMessageCoalesceKey builds the coalesce key for a signal message.
 func ForumPostMessageCoalesceKey(intent, taskID string) string {
 	return fmt.Sprintf("msg:%s:%s", intent, taskID)
+}
+
+// ForumCommentCoalesceKey builds the coalesce key for a comment signal. A
+// comment carries its own ID so two different comments are never merged.
+func ForumCommentCoalesceKey(commentID, taskID string) string {
+	return fmt.Sprintf("msg:comment:%s:%s", commentID, taskID)
+}
+
+// ForumWarnDedupeKey builds the dedupe key for a flap warning of one episode.
+func ForumWarnDedupeKey(taskID string, episode time.Time) string {
+	return fmt.Sprintf("warn:%s:%d", taskID, episode.Unix())
+}
+
+// RecentForumTransitions returns the transitions of a task since a point in time.
+func RecentForumTransitions(db *gorm.DB, taskID string, since time.Time) ([]ForumTransition, error) {
+	var rows []ForumTransition
+	err := db.Where("task_id = ? AND at >= ?", taskID, since).Order("at asc, id asc").Find(&rows).Error
+	return rows, err
+}
+
+// ForumFlapWarned reports whether the current episode was already warned about.
+// An episode ends after ForumFlapPeriod without a transition.
+func ForumFlapWarned(db *gorm.DB, taskID string, episode time.Time) (bool, error) {
+	var row ForumFlapState
+	err := db.Where("task_id = ?", taskID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !row.EpisodeAt.Before(episode), nil
+}
+
+// MarkForumFlapWarned records that an episode was warned about.
+func MarkForumFlapWarned(db *gorm.DB, taskID string, episode time.Time) error {
+	row := ForumFlapState{TaskID: taskID, EpisodeAt: episode, WarnedAt: time.Now().UTC()}
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "task_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"episode_at", "warned_at"}),
+	}).Create(&row).Error
+}
+
+// ForumTasksWithPosts lists the ledger rows that have a thread, optionally for
+// one production.
+func ForumTasksWithPosts(db *gorm.DB, projectID string) ([]ForumTask, error) {
+	var rows []ForumTask
+	query := db.Where("thread_id <> ''")
+	if projectID != "" {
+		query = query.Where("project_id = ?", projectID)
+	}
+	err := query.Order("task_id asc").Find(&rows).Error
+	return rows, err
+}
+
+// ForumDMChannelID returns the cached DM channel of a recipient.
+func ForumDMChannelID(db *gorm.DB, discordUserID string) (string, bool, error) {
+	var row ForumDMChannel
+	err := db.Where("discord_user_id = ?", discordUserID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return row.ChannelID, true, nil
+}
+
+// SaveForumDMChannel caches the DM channel of a recipient.
+func SaveForumDMChannel(db *gorm.DB, discordUserID, channelID string) error {
+	row := ForumDMChannel{DiscordUserID: discordUserID, ChannelID: channelID, CreatedAt: time.Now().UTC()}
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "discord_user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"channel_id", "created_at"}),
+	}).Create(&row).Error
 }
 
 // TruncateForumTitle caps a thread title at 100 runes with an ellipsis.

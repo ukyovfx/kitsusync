@@ -3,6 +3,7 @@ package discord
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Forum signal messages. The first message of a thread is the card; every later
@@ -17,10 +18,11 @@ type ForumSignal struct {
 }
 
 // RenderForumSignal renders the signal for a forum intent.
-//   - wfa:    reviewer mention + チェックをお願いします。
-//   - retake: assignee mention + リテイクです。 (+ optional quote)
-//   - done:   assignee mention + 完了しました。
-//   - assign: new assignee mention + このタスクの担当になりました。
+//   - wfa:     reviewer mention + チェックをお願いします。
+//   - retake:  assignee mention + リテイクです。 (+ optional quote)
+//   - done:    assignee mention + 完了しました。
+//   - assign:  new assignee mention + このタスクの担当になりました。
+//   - comment: mention + コメントがあります。 (+ optional quote)
 func RenderForumSignal(intent, taskURL, quote string, userIDs, roleIDs []string) ForumSignal {
 	mentions := forumMentionText(userIDs, roleIDs)
 	var line string
@@ -33,6 +35,8 @@ func RenderForumSignal(intent, taskURL, quote string, userIDs, roleIDs []string)
 		line = "完了しました。"
 	case "assign":
 		line = "このタスクの担当になりました。"
+	case "comment":
+		line = "コメントがあります。"
 	default:
 		line = "更新されました。"
 	}
@@ -41,7 +45,7 @@ func RenderForumSignal(intent, taskURL, quote string, userIDs, roleIDs []string)
 		parts = append(parts, mentions)
 	}
 	parts = append(parts, line)
-	if intent == "retake" {
+	if intent == "retake" || intent == "comment" {
 		if trimmed := strings.TrimSpace(quote); trimmed != "" {
 			parts = append(parts, "> "+sanitizeDiscordText(trimmed))
 		}
@@ -54,6 +58,27 @@ func RenderForumSignal(intent, taskURL, quote string, userIDs, roleIDs []string)
 		AllowedUserIDs: uniqueDiscordIDs(userIDs),
 		AllowedRoleIDs: uniqueDiscordRoleIDs(roleIDs),
 	}
+}
+
+// ForumFlapWarning renders the "state is flapping" warning. It carries no
+// mentions on purpose: the signal messages still ping, the warning only informs.
+func ForumFlapWarning(taskURL string, transitions int, span time.Duration) ForumSignal {
+	parts := []string{fmt.Sprintf("⚠️ 状態が短時間に何度も変わっています（%d 回 / %s）。タグは最新の状態を表しています。", transitions, forumSpanText(span))}
+	if taskURL != "" {
+		parts = append(parts, taskURL)
+	}
+	return ForumSignal{Content: strings.Join(parts, "\n")}
+}
+
+func forumSpanText(span time.Duration) string {
+	if span < time.Minute {
+		return "1分以内"
+	}
+	minutes := int(span.Round(time.Minute) / time.Minute)
+	if minutes >= 60 {
+		return fmt.Sprintf("%d時間", minutes/60)
+	}
+	return fmt.Sprintf("%d分", minutes)
 }
 
 // forumMentionText builds the leading mention text for a signal.
