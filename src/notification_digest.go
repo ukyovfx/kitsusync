@@ -42,6 +42,9 @@ func runMorningDigestIfDue(conf config.Config, db *gorm.DB) {
 	if err := sendMorningDigests(conf, db, now, now.Format("2006-01-02")); err != nil {
 		stdslog.Error("Morning digest partially failed; failed destinations retry next poll", "error_class", "digest_send_failed", "err", err)
 	}
+	if _, err := sendForumMorningDigests(conf, db, now, now.Format("2006-01-02")); err != nil {
+		stdslog.Error("Forum morning digest partially failed", "error_class", "forum_digest_send_failed", "err", err)
+	}
 }
 
 // productionDigest is one production's digest card content. Section entries

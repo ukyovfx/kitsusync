@@ -23,6 +23,7 @@ func newForumDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&model.ForumBaseline{}, &model.ForumTask{}, &model.ForumTransition{}, &model.ForumOutbox{},
+		&model.ForumFlapState{}, &model.ForumDMChannel{},
 		&model.ProductionForumConfig{}, &model.ProductionForumRoute{},
 		&model.ProductionForumStatusRole{}, &model.ProductionForumTag{},
 	); err != nil {

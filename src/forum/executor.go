@@ -75,6 +75,8 @@ func (e Executor) execute(row model.ForumOutbox) error {
 		return e.executeSyncThread(row, token)
 	case model.ForumOutboxPostMessage:
 		return e.executePostMessage(row, token)
+	case model.ForumOutboxWarnMessage:
+		return e.executeWarnMessage(row, token)
 	default:
 		return model.FailForumOutboxRow(e.DB, row.ID, "unsupported_kind", row.Kind)
 	}
@@ -161,7 +163,39 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if e.TaskURL != nil {
 		url = e.TaskURL(row.TaskID)
 	}
-	signal := discord.RenderForumSignal(payload.Intent, url, "", userIDs, roleIDs)
+	signal := discord.RenderForumSignal(payload.Intent, url, payload.Quote, userIDs, roleIDs)
+	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
+	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
+		return err
+	}
+	msg, err := discord.PostForumMessage(token, task.ThreadID, body)
+	if err != nil {
+		return e.handleFailure(row, err)
+	}
+	return model.FinishForumOutboxRow(e.DB, row.ID, "message="+msg.ID)
+}
+
+// executeWarnMessage posts the flap warning. It never mentions anyone.
+func (e Executor) executeWarnMessage(row model.ForumOutbox, token string) error {
+	task, err := model.FindForumTaskWithError(e.DB, row.TaskID)
+	if err != nil {
+		return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
+	}
+	if task.ThreadID == "" {
+		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
+	}
+	var payload struct {
+		Transitions  int `json:"transitions"`
+		SpanSeconds  int `json:"span_seconds"`
+	}
+	if err := json.Unmarshal([]byte(row.Payload), &payload); err != nil {
+		return model.FailForumOutboxRow(e.DB, row.ID, "invalid_payload", err.Error())
+	}
+	url := ""
+	if e.TaskURL != nil {
+		url = e.TaskURL(row.TaskID)
+	}
+	signal := discord.ForumFlapWarning(url, payload.Transitions, time.Duration(payload.SpanSeconds)*time.Second)
 	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
 		return err
