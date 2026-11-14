@@ -262,9 +262,20 @@ func TestFetchProjectTasksIsBoundedAndKeepsOrder(t *testing.T) {
 		mu.Lock()
 		inFlight--
 		mu.Unlock()
+		// Fixed bodies looked up by project ID: nothing taken from the request is
+		// echoed into the response.
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/data/projects/"), "/tasks")
+		bodies := map[string]string{
+			"a": `[{"id":"task-a","project_id":"a"}]`, "b": `[{"id":"task-b","project_id":"b"}]`,
+			"c": `[{"id":"task-c","project_id":"c"}]`, "d": `[{"id":"task-d","project_id":"d"}]`,
+			"e": `[{"id":"task-e","project_id":"e"}]`, "f": `[{"id":"task-f","project_id":"f"}]`,
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[{"id":"task-` + id + `","project_id":"` + id + `"}]`))
+		if body, ok := bodies[id]; ok {
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 	t.Setenv("KITSU_API_BASE_URL", server.URL+"/api/")
