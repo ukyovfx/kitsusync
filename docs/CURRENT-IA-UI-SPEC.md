@@ -14,6 +14,7 @@ This is the canonical visual and content contract for the accepted Current IA. I
 | User Linking | `/bot/admin/users` | Human Kitsu-to-Discord linking |
 | System Status | `/bot/admin/health` | Pipeline health, observations, and recent issues |
 | Audit Log | `/bot/admin/audit` | Operation and notification history |
+| Forum notification settings | `/bot/admin/forum?project=<id>` | One Production's forum notification mode, Task Type → forum, status → role, and role → forum tag mapping |
 | New Production setup | `/bot/setup` | First-time Production connection wizard |
 
 Current IA links stay within these routes. A legacy renderer must not be reached by a normal Current IA action.
@@ -164,6 +165,16 @@ The shared visual language for Production Detail and other Current IA pages is d
 `/bot/admin/users` links human Kitsu users to human Discord users. Missing Kitsu or Discord Bot configuration is a setup-readiness state: show one concise cause and one `接続設定` / `Connection settings` action, without a Discord server selector, mapping table, failure copy, or diagnostic disclosure. Configured lookups keep genuine request/auth/network failures distinct from successful empty Kitsu users, zero joined Discord servers, and a selected server with zero selectable human members. A failed Discord member lookup is a compact localized error state, never an empty-user list; it has one `Bot接続を確認` / `Check Bot Connection` action and collapsed technical details.
 
 The Discord server selector appears only when joined guild data is usable. Multiple joined servers require an explicit selection before members are loaded; this state uses a compact prompt and no bottom divider. When a server is selected, its identity remains in the selector and the mapping table begins after exactly one separator. The four-column mapping table (`Kitsu user | Discord user | state | action`) appears only when active non-bot Kitsu users and selectable non-bot Discord members are both available. Save starts disabled until the Discord selection changes; existing mappings expose their linked state and an Unlink action. Raw Discord IDs are not normal visible identity text. JP and EN preserve equivalent state, order, actions, and information density on desktop and mobile.
+
+## Forum notification settings
+
+The forum settings page is separate from the lane routing editor in Notifications; the two paths coexist until the lane path is removed. The Production's Notifications tab shows the current mode (`レーン（現行）` / `Lane (current)` or `フォーラム` / `Forum`) and one `フォーラム設定を開く` / `Open forum settings` action. A Production without saved forum settings is in lane mode.
+
+The page has four sections in this order: Notification mode (Lane or Forum, plus the Discord server ID), Task Type → forum, Kitsu status → role, and Role → forum tag (one group per routed forum, shown after a forum is chosen and saved once). Forum and tag choices are selects fed by the live Discord forum list; when that list cannot be read the page says so in one line, keeps every saved value selectable, and still saves. Status roles are Waiting (WFA), Retake, Done, and In progress (tag only).
+
+Forum mode is accepted only when the Discord server ID is set, at least one Task Type has a forum, Waiting, Retake and Done each have a status, and every routed forum has a tag for those three roles with no tag reused. Lane mode may hold a half-finished draft. A rejected save returns HTTP 400, keeps the submitted values on the page, and shows a bordered error notice (`notice notice-error`) listing each problem in the page language, with forum names rather than channel IDs when known, in a stable order. Internal errors are never shown verbatim. Saving stores settings only; sending to forums is not part of this page and the mode does not change delivery until the forum sender exists.
+
+Validation-only Productions are read-only. Kitsu and Discord names are HTML-escaped. The page has no horizontal scroll at phone width and keeps the same section order at every width.
 
 ## Source references
 

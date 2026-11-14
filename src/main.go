@@ -1479,6 +1479,10 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.NotificationDeliveryEvent{},
 		&model.NotificationAggregationBuffer{},
 		&model.ManagedChannelDeletion{},
+		&model.ProductionForumConfig{},
+		&model.ProductionForumRoute{},
+		&model.ProductionForumStatusRole{},
+		&model.ProductionForumTag{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
 	}
@@ -1816,6 +1820,13 @@ func main() {
 		mux.HandleFunc(prefix+"/admin/projects", setup.RequireSession(setup.ReadOnlyAuditRoute(runtime.ready, func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.AdminProjectsHandler(db, fallbackGuildID, botToken)(w, r)
+		})))
+		// Forum settings are local configuration: saving needs neither Kitsu nor the
+		// runtime to be ready, so this page is not behind the runtime-ready gate.
+		// A global validation-only profile still refuses writes.
+		mux.HandleFunc(prefix+"/admin/forum", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
+			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
+			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
