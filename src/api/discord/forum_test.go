@@ -108,8 +108,38 @@ func TestPatchForumThreadSendsOneChangePerCall(t *testing.T) {
 	}
 }
 
-func TestForumRequestClassifiesRateLimit(t *testing.T) {
+// Clearing every tag must send an empty array; omitting the field would leave
+// the stale tags on the thread.
+func TestForumSyncPatchClearsTagsWithEmptyArray(t *testing.T) {
+	var bodies []map[string]any
 	withForumAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		bodies = append(bodies, body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	if err := PatchForumThread("token-1", "thread-1", ForumSyncPatch(ForumSyncPlan{
+		ArchiveMinutes: 10080,
+		AppliedTags:    []string{},
+	})); err != nil {
+		t.Fatalf("retag: %v", err)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("patch calls = %d, want 1", len(bodies))
+	}
+	tags, has := bodies[0]["applied_tags"].([]any)
+	if !has {
+		t.Fatalf("patch must carry applied_tags: %v", bodies[0])
+	}
+	if len(tags) != 0 {
+		t.Fatalf("applied_tags = %v, want empty array", tags)
+	}
+}
+
+func TestForumRequestClassifiesRateLimit(t *testing.T) {	withForumAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "2.5")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"code":0,"message":"You are being rate limited.","retry_after":2.5}`))
@@ -184,7 +214,7 @@ func TestPostForumMessageCarriesNonceAndSuppressedMentions(t *testing.T) {
 	if msg.ID != "msg-1" {
 		t.Errorf("message id = %q", msg.ID)
 	}
-	if got["nonce"] != "kitsusync-task-1-7" {
+	if got["nonce"] != "kitsusync-7-task-1" {
 		t.Errorf("nonce = %v", got["nonce"])
 	}
 	if got["enforce_nonce"] != true {
@@ -201,6 +231,26 @@ func TestPostForumMessageCarriesNonceAndSuppressedMentions(t *testing.T) {
 	parse, _ := mentions["parse"].([]any)
 	if len(parse) != 0 {
 		t.Errorf("parse = %v, want empty", mentions["parse"])
+	}
+}
+
+func TestForumNonceFitsDiscordLimit(t *testing.T) {
+	cases := []struct{ taskID string; outboxID uint }{
+		{"", 1},
+		{"task-1", 7},
+		{"9b2f1c4e-8a3d-4f6b-9c1e-2d5a7b8c9d0e", 12345},
+		{"9b2f1c4e-8a3d-4f6b-9c1e-2d5a7b8c9d0e", 999999999},
+	}
+	seen := map[string]bool{}
+	for _, tc := range cases {
+		nonce := ForumNonce(tc.taskID, tc.outboxID)
+		if len(nonce) > 25 {
+			t.Errorf("nonce %q is %d chars, Discord allows 25", nonce, len(nonce))
+		}
+		if seen[nonce] {
+			t.Errorf("nonce %q is not unique across outbox rows", nonce)
+		}
+		seen[nonce] = true
 	}
 }
 

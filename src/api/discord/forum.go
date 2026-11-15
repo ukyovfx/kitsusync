@@ -44,10 +44,13 @@ type ForumThreadMessage struct {
 }
 
 // ForumThreadPatch is the request body for PATCH /channels/{thread}.
+// AppliedTags is a pointer so an empty slice still serialises: Discord clears
+// every tag when it receives `"applied_tags": []`, and omitting the field
+// would silently keep the stale tags.
 type ForumThreadPatch struct {
-	Archived            *bool    `json:"archived,omitempty"`
-	AutoArchiveDuration *int     `json:"auto_archive_duration,omitempty"`
-	AppliedTags         []string `json:"applied_tags,omitempty"`
+	Archived            *bool     `json:"archived,omitempty"`
+	AutoArchiveDuration *int      `json:"auto_archive_duration,omitempty"`
+	AppliedTags         *[]string `json:"applied_tags,omitempty"`
 }
 
 // ForumMessageCreate is the request body for POST /channels/{thread}/messages.

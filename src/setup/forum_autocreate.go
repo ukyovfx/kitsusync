@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -155,11 +154,19 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	}
 	routes := make([]model.ProductionForumRoute, 0, len(settings.Routes))
 	tags := make([]model.ProductionForumTag, 0, len(settings.Routes)*len(forumAutoTagNames))
+	// Keep the forums already created in the returned settings even when a later
+	// one fails, so the operator's retry does not orphan them.
+	keepCreated := func() (model.ProductionForumSettings, error) {
+		settings.Routes = routes
+		settings.Tags = tags
+		return settings, nil
+	}
 	for _, route := range settings.Routes {
 		if strings.TrimSpace(route.ForumChannelID) == "" {
 			forum, err := forumCreateChannel(guildID, route.TaskTypeName, tagNames, botToken)
 			if err != nil {
-				return settings, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
+				created, _ := keepCreated()
+				return created, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
 			}
 			route.ForumChannelID = forum.ID
 			route.ForumChannelName = forum.Name
@@ -221,25 +228,105 @@ var forumRequiredPermissions = []struct {
 // channel. It is a variable so tests can answer without Discord.
 var forumPermissionGetter = getBotChannelPermissions
 
+// getBotChannelPermissions returns the Bot's effective permission bits in a
+// channel. Discord has no endpoint that reports them directly, so they are
+// computed from the Bot's roles and the channel's permission overwrites.
 func getBotChannelPermissions(channelID, botToken string) (int64, error) {
-	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/channels/%s", discordAPI, url.PathEscape(channelID)), nil, botToken)
-	if err != nil {
-		return 0, err
+	channelID = strings.TrimSpace(channelID)
+	if !isDiscordSnowflake(channelID) || strings.TrimSpace(botToken) == "" {
+		return 0, errors.New("Discord channel permission context is incomplete")
 	}
-	if status >= 400 {
-		return 0, discordBotAPIError("discord channel permission read failed", status, body)
+	botBody, status, err := botDo(http.MethodGet, discordAPI+"/users/@me", nil, botToken)
+	if err != nil || status != http.StatusOK {
+		return 0, errors.New("Discord Bot identity could not be verified")
 	}
-	var raw struct {
-		Permissions string `json:"permissions"`
+	var bot struct {
+		ID string `json:"id"`
 	}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return 0, fmt.Errorf("discord channel permission response was invalid")
+	if json.Unmarshal(botBody, &bot) != nil || !isDiscordSnowflake(bot.ID) {
+		return 0, errors.New("Discord Bot identity response was invalid")
 	}
-	bits, err := strconv.ParseInt(strings.TrimSpace(raw.Permissions), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("discord channel permission response was invalid")
+	botID := strings.TrimSpace(bot.ID)
+	guildBody, status, err := botDo(http.MethodGet, discordAPI+"/users/@me/guilds", nil, botToken)
+	if err != nil || status != http.StatusOK {
+		return 0, errors.New("Discord Bot Guilds could not be verified")
 	}
-	return bits, nil
+	var guilds []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(guildBody, &guilds) != nil {
+		return 0, errors.New("Discord Bot Guilds response was invalid")
+	}
+	for _, guild := range guilds {
+		guildID := strings.TrimSpace(guild.ID)
+		if !isDiscordSnowflake(guildID) {
+			continue
+		}
+		bits, found, err := botChannelPermissionsInGuild(guildID, channelID, botID, botToken)
+		if err != nil {
+			return 0, err
+		}
+		if found {
+			return bits, nil
+		}
+	}
+	return 0, errors.New("Discord channel is not in a Guild this Bot is in")
+}
+
+func botChannelPermissionsInGuild(guildID, channelID, botID, botToken string) (int64, bool, error) {
+	roleBody, status, err := botDo(http.MethodGet, discordAPI+"/guilds/"+guildID+"/roles", nil, botToken)
+	if err != nil || status != http.StatusOK {
+		return 0, false, errors.New("Discord Bot roles could not be verified")
+	}
+	var roles []DiscordGuildRoleWithPermissions
+	if json.Unmarshal(roleBody, &roles) != nil {
+		return 0, false, errors.New("Discord Bot roles response was invalid")
+	}
+	memberBody, status, err := botDo(http.MethodGet, discordAPI+"/guilds/"+guildID+"/members/"+botID, nil, botToken)
+	if err != nil || status == http.StatusNotFound {
+		return 0, false, nil
+	}
+	if status != http.StatusOK {
+		return 0, false, errors.New("Discord Bot Guild membership could not be verified")
+	}
+	var member struct {
+		User struct {
+			ID string `json:"id"`
+		} `json:"user"`
+		Roles []string `json:"roles"`
+	}
+	if json.Unmarshal(memberBody, &member) != nil || strings.TrimSpace(member.User.ID) != botID {
+		return 0, false, errors.New("Discord Bot Guild membership response was invalid")
+	}
+	channelBody, status, err := botDo(http.MethodGet, discordAPI+"/guilds/"+guildID+"/channels", nil, botToken)
+	if err != nil || status != http.StatusOK {
+		return 0, false, errors.New("Discord channels could not be verified")
+	}
+	var channels []struct {
+		ID                   string                        `json:"id"`
+		GuildID              string                        `json:"guild_id"`
+		Type                 int                           `json:"type"`
+		PermissionOverwrites *[]DiscordPermissionOverwrite `json:"permission_overwrites"`
+	}
+	if json.Unmarshal(channelBody, &channels) != nil {
+		return 0, false, errors.New("Discord channel response was invalid")
+	}
+	for _, candidate := range channels {
+		if strings.TrimSpace(candidate.ID) != channelID {
+			continue
+		}
+		overwrites := []DiscordPermissionOverwrite{}
+		if candidate.PermissionOverwrites != nil {
+			overwrites = *candidate.PermissionOverwrites
+		}
+		channel := DiscordPermissionChannel{GuildID: strings.TrimSpace(candidate.GuildID), ID: strings.TrimSpace(candidate.ID), Type: candidate.Type, Overwrites: overwrites}
+		bits, err := effectiveDiscordChannelPermissionBits(guildID, roles, DiscordPermissionMember{ID: botID, RoleIDs: member.Roles}, channel)
+		if err != nil {
+			return 0, false, fmt.Errorf("Discord channel permissions could not be calculated: %w", err)
+		}
+		return int64(bits), true, nil
+	}
+	return 0, false, nil
 }
 
 // checkForumPermissions returns Japanese problems for the routed forums.

@@ -118,6 +118,10 @@ func seedForumSettings(t *testing.T, db *gorm.DB) {
 func seedForumTask(t *testing.T, db *gorm.DB, threadID, statusID string) {
 	t.Helper()
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	var thread *string
+	if threadID != "" {
+		thread = &threadID
+	}
 	row := model.ForumTask{
 		TaskID:      "task-1",
 		ProjectID:   "prod-1",
@@ -128,7 +132,7 @@ func seedForumTask(t *testing.T, db *gorm.DB, threadID, statusID string) {
 		StatusID:    statusID,
 		StatusSince: now,
 		ForumID:     "forum-1",
-		ThreadID:    threadID,
+		ThreadID:    thread,
 		FirstSeenAt: now,
 		LastSeenAt:  now,
 	}
@@ -186,8 +190,8 @@ func TestExecutorCreatesThreadAndStoresThreadID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load task: %v", err)
 	}
-	if task.ThreadID != "thread-1" {
-		t.Errorf("thread id = %q, want it stored immediately", task.ThreadID)
+	if task.ThreadID == nil || *task.ThreadID != "thread-1" {
+		t.Errorf("thread id = %v, want it stored immediately", task.ThreadID)
 	}
 	done, err := loadOutbox(db, row.ID)
 	if err != nil {
@@ -458,8 +462,8 @@ func TestExecutorRecreatesThreadOnMissingDestination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load task: %v", err)
 	}
-	if task.ThreadID != "" {
-		t.Errorf("thread id = %q, want cleared so a new post is created", task.ThreadID)
+	if task.ThreadID != nil && *task.ThreadID != "" {
+		t.Errorf("thread id = %v, want cleared so a new post is created", *task.ThreadID)
 	}
 	if task.ThreadGeneration != 1 {
 		t.Errorf("thread generation = %d, want 1", task.ThreadGeneration)
@@ -470,6 +474,126 @@ func TestExecutorRecreatesThreadOnMissingDestination(t *testing.T) {
 	}
 	if got.State != model.ForumOutboxCancelled {
 		t.Errorf("state = %q, want cancelled", got.State)
+	}
+}
+
+func TestExecutorQueuesReplacementThreadWhenThreadIsLost(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	fake.respond = func(r *http.Request) (int, string) {
+		return http.StatusNotFound, `{"code":10003,"message":"Unknown Channel"}`
+	}
+
+	payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA})
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: "post:replacement",
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+	// The task already had a thread, so its create payload is spent; the
+	// replacement must still carry a usable name and card.
+	createPayload, _ := json.Marshal(model.ForumCreateThreadPayload{
+		ForumID:        "forum-1",
+		Name:           "Compositing sq010 sh002",
+		Role:           model.ForumRoleWFA,
+		ArchiveMinutes: model.ForumArchiveOtherMinutes,
+		Card:           json.RawMessage(`{"embeds":[{"description":"card"}]}`),
+	})
+	enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxCreateThread,
+		DedupeKey: model.ForumCreateThreadDedupeKey("task-1", 0),
+		Payload:   string(createPayload),
+		State:     model.ForumOutboxDone,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	var replacement model.ForumOutbox
+	err := db.Where("task_id = ? AND kind = ? AND dedupe_key = ?", "task-1", model.ForumOutboxCreateThread, model.ForumCreateThreadDedupeKey("task-1", 1)).First(&replacement).Error
+	if err != nil {
+		t.Fatalf("no replacement create queued: %v", err)
+	}
+	if replacement.State != model.ForumOutboxFailed {
+		t.Errorf("replacement state = %q, want failed once its own create was refused", replacement.State)
+	}
+	if replacement.DedupeKey != model.ForumCreateThreadDedupeKey("task-1", 1) {
+		t.Errorf("dedupe key = %q, want the generation-1 create", replacement.DedupeKey)
+	}
+	var create model.ForumCreateThreadPayload
+	if err := json.Unmarshal([]byte(replacement.Payload), &create); err != nil {
+		t.Fatalf("decode replacement payload: %v", err)
+	}
+	if create.ForumID != "forum-1" || create.Name == "" || len(create.Card) == 0 {
+		t.Errorf("replacement payload = %+v", create)
+	}
+	got, err := loadOutbox(db, row.ID)
+	if err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if got.State != model.ForumOutboxCancelled {
+		t.Errorf("lost post state = %q, want cancelled", got.State)
+	}
+}
+
+func TestExecutorAdoptsExistingThreadBeforeRetryingCreate(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	fake.respond = func(r *http.Request) (int, string) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/threads/active"):
+			return http.StatusOK, `{"threads":[{"id":"thread-9","name":"Compositing sq010 sh002","parent_id":"forum-1"}]}`
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/threads"):
+			return http.StatusOK, `{"id":"thread-2","parent_id":"forum-1"}`
+		}
+		return http.StatusNotFound, `{"code":10003,"message":"Unknown Channel"}`
+	}
+
+	payload, _ := json.Marshal(model.ForumCreateThreadPayload{
+		ForumID:        "forum-1",
+		Name:           "Compositing sq010 sh002",
+		Role:           model.ForumRoleWFA,
+		ArchiveMinutes: model.ForumArchiveOtherMinutes,
+		Card:           json.RawMessage(`{"embeds":[{"description":"card"}]}`),
+	})
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxCreateThread,
+		DedupeKey: model.ForumCreateThreadDedupeKey("task-1", 0),
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+	if err := db.Model(&model.ForumOutbox{}).Where("id = ?", row.ID).Update("attempts", 1).Error; err != nil {
+		t.Fatalf("mark attempted: %v", err)
+	}
+
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	for _, request := range fake.snapshot() {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.Path, "/threads") {
+			t.Fatalf("a retried create posted a second thread: %+v", request)
+		}
+	}
+	task, err := model.FindForumTaskWithError(db, "task-1")
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if task.ThreadID == nil || *task.ThreadID != "thread-9" {
+		t.Errorf("thread id = %v, want the already-created thread", task.ThreadID)
 	}
 }
 

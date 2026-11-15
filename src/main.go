@@ -1099,16 +1099,25 @@ func isNotifiableStatus(status string) bool {
 // forumCardRenderer renders the first message of a forum post with the same
 // card the lane path posts. MentionContent and AllowedMentions are cleared
 // because the first message never mentions anyone (D-04).
-func forumCardRenderer(payload kitsu.MessagePayload) (json.RawMessage, error) {
-	return forum.RenderCard(payload, func(item kitsu.MessagePayload) (discord.Payload, error) {
-		return renderForumCard(item, config.Config{})
-	})
+func forumCardRenderer(conf config.Config, db *gorm.DB) func(kitsu.MessagePayload) (json.RawMessage, error) {
+	return func(payload kitsu.MessagePayload) (json.RawMessage, error) {
+		return forum.RenderCard(payload, func(item kitsu.MessagePayload) (discord.Payload, error) {
+			return renderForumCard(item, conf, db)
+		})
+	}
 }
 
-// renderForumCard builds the card for one task. It reuses the lane renderer so
-// the post looks exactly like the existing notification.
-func renderForumCard(payload kitsu.MessagePayload, conf config.Config) (discord.Payload, error) {
-	template, err := discord.NotificationCardTemplate(conf, payload, "", "ja", nil)
+// renderForumCard builds the card for one task. It reuses the lane renderer with
+// the same saved settings (template preset and the Production's notification
+// language) so the post looks exactly like the existing notification.
+func renderForumCard(payload kitsu.MessagePayload, conf config.Config, db *gorm.DB) (discord.Payload, error) {
+	language := "ja"
+	if db != nil {
+		if project := model.FindProjectByKitsuID(db, payload.Project.ID); project != nil {
+			language = discord.NotificationLanguage(project.Language)
+		}
+	}
+	template, err := discord.NotificationCardTemplate(conf, payload, "", language, nil)
 	if err != nil {
 		return discord.Payload{}, err
 	}
@@ -1129,7 +1138,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 	if db == nil || conf.SilentUpdateDB {
 		return
 	}
-	poller := forum.Poller{DB: db, RenderCard: forumCardRenderer}
+	poller := forum.Poller{DB: db, RenderCard: forumCardRenderer(conf, db)}
 	result, err := poller.PollProjects(data)
 	if err != nil {
 		slog.Error("Forum poll failed", "error_class", "forum_poll_failed", "err", err)
@@ -1152,7 +1161,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 			return discord.ResolveAssigneeDiscordIDs(projectID, kitsuPersonIDs)
 		},
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
-			return discord.ReviewerResolver(projectID, taskTypeID, taskTypeName, "")
+			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
 		},
 	}
 	executor := forum.Executor{
@@ -1168,8 +1177,47 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 	}
 }
 
+// forumReviewerTargets resolves WFA reviewers for a forum post: the Bot posts
+// into the forum channel, so there is no lane sender webhook to validate with.
+func forumReviewerTargets(db *gorm.DB, conf config.Config, botToken, projectID, taskTypeID string) ([]discord.ReviewerTarget, error) {
+	hostname, _, _ := getKitsuCreds(db, conf)
+	baseURL := ""
+	if connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); connectionErr == nil {
+		baseURL = connection.ResolvedAPIBaseURL
+	}
+	targets, err := setup.ResolveForumWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), botToken, projectID, taskTypeID)
+	resolved := make([]discord.ReviewerTarget, 0, len(targets))
+	for _, target := range targets {
+		resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
+	}
+	return resolved, err
+}
+
 // forumOutboxDrainLimit bounds one poll's Discord calls.
 const forumOutboxDrainLimit = 50
+
+// laneOnlyPayloads drops the productions whose forum settings select forum mode,
+// so the lane planner and the forum poller never notify the same task twice.
+func laneOnlyPayloads(db *gorm.DB, data []kitsu.MessagePayload) []kitsu.MessagePayload {
+	if db == nil {
+		return data
+	}
+	modes := make(map[string]string, len(data))
+	out := make([]kitsu.MessagePayload, 0, len(data))
+	for _, payload := range data {
+		productionID := payload.Project.ID
+		mode, seen := modes[productionID]
+		if !seen {
+			mode = model.NotificationModeForProduction(db, productionID)
+			modes[productionID] = mode
+		}
+		if mode == model.NotificationModeForum {
+			continue
+		}
+		out = append(out, payload)
+	}
+	return out
+}
 
 func DiscordQueueSend(data []kitsu.MessagePayload, conf config.Config, webhookURL string, db *gorm.DB, routeSource string, routeLabels []string) []kitsu.MessagePayload {
 	if webhookURL == "" {
@@ -1574,7 +1622,9 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 		slog.Warn("Stale unknown deliveries auto-resolved to terminal", "count", resolved)
 	}
 	runForumPoll(kitsuResponse, conf, db)
-	FilterTasks(kitsuResponse, conf, db)
+	// A production in forum mode is served only by the forum path above; the
+	// lane planner would send a second notification for the same task.
+	FilterTasks(laneOnlyPayloads(db, kitsuResponse), conf, db)
 	if conf.Log {
 		slog.Info("Done FilterTasks")
 	}

@@ -542,7 +542,9 @@ func resolveAssigneeDiscordID(projectID string, person kitsu.Person, displayName
 }
 
 // ResolveAssigneeDiscordIDs maps Kitsu person IDs to Discord user IDs through
-// the project user map. Unknown people are dropped.
+// the project user map. A person the project map cannot resolve is left out
+// rather than guessed from the global name map: forum assignee signals must not
+// mention whoever happens to share a display name.
 func ResolveAssigneeDiscordIDs(projectID string, kitsuPersonIDs []string) []string {
 	ids := make([]string, 0, len(kitsuPersonIDs))
 	for _, personID := range kitsuPersonIDs {

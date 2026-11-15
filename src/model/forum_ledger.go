@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -73,7 +74,9 @@ type ForumTask struct {
 	LastCommentAt    string `gorm:"size:64"`
 	KitsuUpdatedAt   string `gorm:"size:64"`
 	ForumID          string `gorm:"size:64"`
-	ThreadID         string `gorm:"size:64;uniqueIndex:idx_forum_task_thread"`
+	// NULL (not "") while no thread exists: the unique index must ignore
+	// every not-yet-posted task.
+	ThreadID         *string `gorm:"size:64;uniqueIndex:idx_forum_task_thread"`
 	ThreadGeneration int    `gorm:"not null;default:0"`
 	FirstSeenAt      time.Time
 	LastSeenAt       time.Time
@@ -228,7 +231,7 @@ func RecordForumBaselineTasks(db *gorm.DB, projectID, taskTypeID string, rows []
 		for _, row := range rows {
 			row.ProjectID = projectID
 			row.TaskTypeID = taskTypeID
-			row.ThreadID = ""
+			row.ThreadID = nil
 			row.ThreadGeneration = 0
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
 				return err
@@ -282,28 +285,43 @@ func CoalesceForumPostMessage(db *gorm.DB, row ForumOutbox) (uint, error) {
 	if row.CoalesceKey == "" {
 		return EnqueueForumOutbox(db, row)
 	}
-	err := db.Transaction(func(tx *gorm.DB) error {
-		var existing ForumOutbox
-		err := tx.Where("coalesce_key = ? AND state = ?", row.CoalesceKey, ForumOutboxPending).First(&existing).Error
-		if err == nil {
-			// Update the payload only; not_before stays at the window start.
-			return tx.Model(&ForumOutbox{}).Where("id = ?", existing.ID).
-				Update("payload", row.Payload).Error
+	// The caller may already hold a transaction; reuse it instead of opening a
+	// nested one, which would commit outside the caller's rollback.
+	tx := db
+	if conn, ok := db.Statement.ConnPool.(*sql.Tx); !ok || conn == nil {
+		tx = nil
+	}
+	if tx == nil {
+		err := db.Transaction(func(inner *gorm.DB) error {
+			return coalesceForumPostMessage(inner, row)
+		})
+		if err != nil {
+			return 0, err
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		_, err = EnqueueForumOutbox(tx, row)
-		return err
-	})
-	if err != nil {
+		tx = db
+	} else if err := coalesceForumPostMessage(tx, row); err != nil {
 		return 0, err
 	}
 	var saved ForumOutbox
-	if err := db.Where("coalesce_key = ? AND state = ?", row.CoalesceKey, ForumOutboxPending).First(&saved).Error; err != nil {
+	if err := tx.Where("coalesce_key = ? AND state = ?", row.CoalesceKey, ForumOutboxPending).First(&saved).Error; err != nil {
 		return 0, err
 	}
 	return saved.ID, nil
+}
+
+func coalesceForumPostMessage(tx *gorm.DB, row ForumOutbox) error {
+	var existing ForumOutbox
+	err := tx.Where("coalesce_key = ? AND state = ?", row.CoalesceKey, ForumOutboxPending).First(&existing).Error
+	if err == nil {
+		// Update the payload only; not_before stays at the window start.
+		return tx.Model(&ForumOutbox{}).Where("id = ?", existing.ID).
+			Update("payload", row.Payload).Error
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	_, err = EnqueueForumOutbox(tx, row)
+	return err
 }
 
 // ClaimNextForumOutboxRow selects the oldest due row whose task has no earlier
@@ -355,7 +373,8 @@ func ClaimNextForumOutboxRow(db *gorm.DB, now time.Time) (*ForumOutbox, error) {
 }
 
 // forumOutboxRowRunnable enforces the per-task ordering rules: nothing runs
-// until create_thread is done, and post/warn rows wait for pending sync rows.
+// until create_thread is done, and post/warn rows wait for the sync rows
+// queued before them.
 func forumOutboxRowRunnable(tx *gorm.DB, row ForumOutbox) (bool, error) {
 	if row.TaskID == "" {
 		return true, nil
@@ -374,9 +393,11 @@ func forumOutboxRowRunnable(tx *gorm.DB, row ForumOutbox) (bool, error) {
 		}
 	}
 	if row.Kind == ForumOutboxPostMessage || row.Kind == ForumOutboxWarnMessage {
+		// Only earlier syncs: a sync queued after this post waits for it via the
+		// rule above, so waiting on later syncs as well would deadlock both.
 		var pendingSyncs int64
 		if err := tx.Model(&ForumOutbox{}).
-			Where("task_id = ? AND kind IN ? AND state IN ?", row.TaskID, []string{ForumOutboxCreateThread, ForumOutboxSyncThread}, []string{ForumOutboxPending, ForumOutboxSending}).
+			Where("task_id = ? AND id < ? AND kind IN ? AND state IN ?", row.TaskID, row.ID, []string{ForumOutboxCreateThread, ForumOutboxSyncThread}, []string{ForumOutboxPending, ForumOutboxSending}).
 			Count(&pendingSyncs).Error; err != nil {
 			return false, err
 		}

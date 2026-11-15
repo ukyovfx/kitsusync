@@ -140,7 +140,7 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 	if err != nil {
 		return PlanResult{}, err
 	}
-	hasPost := (hasRow && existing.ThreadID != "") || pendingCreate
+	hasPost := (hasRow && existing.ThreadID != nil && *existing.ThreadID != "") || pendingCreate
 
 	if !hasRow {
 		return p.createTask(input, route, card)
@@ -168,21 +168,39 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 }
 
 // createTask handles the first observation of a task after the baseline: the
-// task is recorded, and a trigger status opens a thread.
+// task is recorded, and a trigger status opens a thread. The row and its
+// create outbox entry are written together: a row without the pending create
+// would look like a posted task and the thread would never open.
 func (p Planner) createTask(input TaskInput, route model.ProductionForumRoute, card func() (json.RawMessage, error)) (PlanResult, error) {
-	row := forumTaskRow(input, p.Now)
-	if err := p.DB.Create(&row).Error; err != nil {
-		return PlanResult{}, err
-	}
 	result := PlanResult{}
-	if !IsTriggerRole(input.StatusRole) {
-		return result, nil
-	}
-	if err := p.queueCreateThread(input, route, input.StatusRole, card, &result); err != nil {
-		return result, err
+	err := p.DB.Transaction(func(tx *gorm.DB) error {
+		row := forumTaskRow(input, p.Now)
+		if !IsTriggerRole(input.StatusRole) {
+			return tx.Create(&row).Error
+		}
+		// Render the card before the row exists so a render failure cannot
+		// leave a task that looks posted with no thread to post into.
+		rendered, err := card()
+		if err != nil {
+			return fmt.Errorf("render forum card: %w", err)
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		if err := p.queueCreateThreadIn(tx, input, route, input.StatusRole, rendered, &result); err != nil {
+			return fmt.Errorf("queue thread create: %w", err)
+		}
+		if err := p.queueStatusSignalIn(tx, input, model.ForumTask{StatusID: input.StatusID}, &result); err != nil {
+			return fmt.Errorf("queue status signal: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return PlanResult{}, err
 	}
 	return result, nil
 }
+
 func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, route model.ProductionForumRoute, hasPost bool, card func() (json.RawMessage, error), result *PlanResult) error {
 	if !hasPost {
 		if IsTriggerRole(input.StatusRole) {
@@ -208,6 +226,12 @@ func (p Planner) queueCreateThread(input TaskInput, route model.ProductionForumR
 	if err != nil {
 		return fmt.Errorf("render forum card: %w", err)
 	}
+	return p.queueCreateThreadIn(p.DB, input, route, role, rendered, result)
+}
+
+// queueCreateThreadIn queues the thread creation on the given connection so a
+// caller can keep it in the same transaction as the task row.
+func (p Planner) queueCreateThreadIn(db *gorm.DB, input TaskInput, route model.ProductionForumRoute, role string, rendered json.RawMessage, result *PlanResult) error {
 	title := model.TruncateForumTitle(input.Title)
 	payload, err := json.Marshal(model.ForumCreateThreadPayload{
 		ForumID:        route.ForumChannelID,
@@ -220,7 +244,7 @@ func (p Planner) queueCreateThread(input TaskInput, route model.ProductionForumR
 		return err
 	}
 	now := p.Now
-	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
+	_, err = model.EnqueueForumOutbox(db, model.ForumOutbox{
 		TaskID:    input.TaskID,
 		Kind:      model.ForumOutboxCreateThread,
 		DedupeKey: model.ForumCreateThreadDedupeKey(input.TaskID, 0),
@@ -233,10 +257,7 @@ func (p Planner) queueCreateThread(input TaskInput, route model.ProductionForumR
 		return err
 	}
 	result.Created = true
-	if err := p.queueStatusSignal(input, model.ForumTask{StatusID: input.StatusID}, result); err != nil {
-		return err
-	}
-	return p.updateTaskRow(input, input.StatusID, model.NormalizeForumAssigneeIDs(input.Assignees))
+	return p.updateTaskRowIn(db, input, input.StatusID, model.NormalizeForumAssigneeIDs(input.Assignees))
 }
 
 func (p Planner) queueSyncThread(taskID string) error {
@@ -255,6 +276,10 @@ func (p Planner) queueSyncThread(taskID string) error {
 }
 
 func (p Planner) queueStatusSignal(input TaskInput, existing model.ForumTask, result *PlanResult) error {
+	return p.queueStatusSignalIn(p.DB, input, existing, result)
+}
+
+func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing model.ForumTask, result *PlanResult) error {
 	intent := intentForRole(input.StatusRole)
 	if intent == "" {
 		return nil
@@ -268,7 +293,7 @@ func (p Planner) queueStatusSignal(input TaskInput, existing model.ForumTask, re
 		return err
 	}
 	now := p.Now
-	_, err = model.CoalesceForumPostMessage(p.DB, model.ForumOutbox{
+	_, err = model.CoalesceForumPostMessage(db, model.ForumOutbox{
 		TaskID:      input.TaskID,
 		Kind:        model.ForumOutboxPostMessage,
 		DedupeKey:   model.ForumPostMessageCoalesceKey(intent, input.TaskID) + ":" + now.UTC().Format(time.RFC3339Nano),
@@ -309,6 +334,10 @@ func (p Planner) queueAssigneeSignal(input TaskInput, existing model.ForumTask, 
 }
 
 func (p Planner) updateTaskRow(input TaskInput, fromStatusID string, assignees []string) error {
+	return p.updateTaskRowIn(p.DB, input, fromStatusID, assignees)
+}
+
+func (p Planner) updateTaskRowIn(db *gorm.DB, input TaskInput, fromStatusID string, assignees []string) error {
 	updates := map[string]interface{}{
 		"status_id":        input.StatusID,
 		"assignee_ids":     encodeIDs(assignees),
@@ -320,13 +349,13 @@ func (p Planner) updateTaskRow(input TaskInput, fromStatusID string, assignees [
 	if fromStatusID != input.StatusID {
 		updates["status_since"] = p.Now
 	}
-	if err := p.DB.Model(&model.ForumTask{}).Where("task_id = ?", input.TaskID).Updates(updates).Error; err != nil {
+	if err := db.Model(&model.ForumTask{}).Where("task_id = ?", input.TaskID).Updates(updates).Error; err != nil {
 		return err
 	}
 	if fromStatusID == input.StatusID {
 		return nil
 	}
-	return p.DB.Create(&model.ForumTransition{
+	return db.Create(&model.ForumTransition{
 		TaskID:       input.TaskID,
 		At:           p.Now,
 		FromStatusID: fromStatusID,

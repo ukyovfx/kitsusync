@@ -65,6 +65,13 @@ func (p Poller) PollProjects(payloads []kitsu.MessagePayload) (PollResult, error
 		for _, item := range items {
 			byType[item.TaskType.ID] = append(byType[item.TaskType.ID], item)
 		}
+		// A routed Task Type with no visible task still needs its baseline, or
+		// its first task would later be mistaken for a baseline and never post.
+		for _, route := range settings.Routes {
+			if _, seen := byType[route.TaskTypeID]; !seen {
+				byType[route.TaskTypeID] = nil
+			}
+		}
 		for taskTypeID, group := range byType {
 			seeded, err := model.ForumBaselineExists(p.DB, productionID, taskTypeID)
 			if err != nil {

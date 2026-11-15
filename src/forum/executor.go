@@ -102,6 +102,13 @@ func (e Executor) executeCreateThread(row model.ForumOutbox, token string) error
 	if tag := e.roleTag(payload.ForumID, payload.Role); tag != "" {
 		body.AppliedTags = []string{tag}
 	}
+	// A retried create may already have succeeded before the crash: adopt the
+	// existing thread instead of opening a duplicate.
+	if row.Attempts > 1 {
+		if existingID, found := e.findExistingThread(token, payload.ForumID, payload.Name); found {
+			return model.SetForumTaskThread(e.DB, row.TaskID, payload.ForumID, existingID, row.ID)
+		}
+	}
 	thread, err := discord.CreateForumThread(token, payload.ForumID, body)
 	if err != nil {
 		return e.handleFailure(row, err)
@@ -109,32 +116,56 @@ func (e Executor) executeCreateThread(row model.ForumOutbox, token string) error
 	return model.SetForumTaskThread(e.DB, row.TaskID, payload.ForumID, thread.ID, row.ID)
 }
 
+// findExistingThread looks for a thread this Bot already opened with the same
+// name, so a create retried after a crash does not post the card twice.
+func (e Executor) findExistingThread(token, forumID, name string) (string, bool) {
+	threads, err := discord.ListActiveGuildThreads(token, e.GuildID())
+	if err == nil {
+		for _, thread := range threads {
+			if thread.ParentID == forumID && thread.Name == name {
+				return thread.ID, true
+			}
+		}
+	}
+	archived, err := discord.ListArchivedForumThreads(token, forumID)
+	if err != nil {
+		return "", false
+	}
+	for _, thread := range archived {
+		if thread.Name == name {
+			return thread.ID, true
+		}
+	}
+	return "", false
+}
+
 func (e Executor) executeSyncThread(row model.ForumOutbox, token string) error {
 	task, err := model.FindForumTaskWithError(e.DB, row.TaskID)
 	if err != nil {
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
 	}
-	if task.ThreadID == "" {
+	if task.ThreadID == nil || *task.ThreadID == "" {
 		return model.FinishForumOutboxRow(e.DB, row.ID, "no_thread")
 	}
+	threadID := *task.ThreadID
 	// Re-read the ledger so a status change that arrived while the row waited is
 	// applied in one pass.
 	role, forumID, err := e.currentRoleAndForum(task)
 	if err != nil {
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_settings", err.Error())
 	}
-	thread, err := discord.GetForumThread(token, task.ThreadID)
+	thread, err := discord.GetForumThread(token, threadID)
 	if err != nil {
 		return e.handleFailure(row, err)
 	}
 	plan := discord.PlanForumSync(thread, e.managedTags(forumID), e.roleTag(forumID, role), role, nil)
 	if plan.NeedUnarchive {
-		if err := discord.PatchForumThread(token, task.ThreadID, discord.ForumUnarchivePatch()); err != nil {
+		if err := discord.PatchForumThread(token, threadID, discord.ForumUnarchivePatch()); err != nil {
 			return e.handleFailure(row, err)
 		}
 	}
 	if plan.NeedRetag {
-		if err := discord.PatchForumThread(token, task.ThreadID, discord.ForumSyncPatch(plan)); err != nil {
+		if err := discord.PatchForumThread(token, threadID, discord.ForumSyncPatch(plan)); err != nil {
 			return e.handleFailure(row, err)
 		}
 	}
@@ -150,7 +181,7 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if err != nil {
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
 	}
-	if task.ThreadID == "" {
+	if task.ThreadID == nil || *task.ThreadID == "" {
 		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
 	}
 	var userIDs, roleIDs []string
@@ -166,7 +197,7 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
 		return err
 	}
-	msg, err := discord.PostForumMessage(token, task.ThreadID, body)
+	msg, err := discord.PostForumMessage(token, *task.ThreadID, body)
 	if err != nil {
 		return e.handleFailure(row, err)
 	}
@@ -216,11 +247,74 @@ func (e Executor) recreateThread(row model.ForumOutbox, apiErr *discord.ForumAPI
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", "thread lost repeatedly")
 	}
 	if row.Kind == model.ForumOutboxPostMessage {
+		// The thread is gone, so the task needs a new one: queue a create for the
+		// new generation, then cancel this post. Without it the task would keep a
+		// cleared thread and never post again.
+		role, forumID, err := e.currentRoleAndForumFor(row.TaskID)
+		if err != nil {
+			return model.FailForumOutboxRow(e.DB, row.ID, "missing_settings", err.Error())
+		}
+		if err := e.queueReplacementThread(row, forumID, role, generation); err != nil {
+			return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
+		}
 		return model.CancelForumOutboxRow(e.DB, row.ID, "thread_lost")
 	}
 	return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", apiErr.Error())
 }
 
+func (e Executor) currentRoleAndForumFor(taskID string) (string, string, error) {
+	task, err := model.FindForumTaskWithError(e.DB, taskID)
+	if err != nil {
+		return "", "", err
+	}
+	return e.currentRoleAndForum(task)
+}
+
+// queueReplacementThread reuses the original create payload (card, name, forum)
+// for the next thread generation.
+func (e Executor) queueReplacementThread(row model.ForumOutbox, forumID, role string, generation int) error {
+	var payload model.ForumCreateThreadPayload
+	payload.ForumID = forumID
+	payload.Role = role
+	payload.ArchiveMinutes = model.ForumArchiveMinutesForRole(role)
+	if previous, ok := e.pendingCreatePayload(row.TaskID); ok {
+		payload.Name = previous.Name
+		payload.Card = previous.Card
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	now := e.Now()
+	_, err = model.EnqueueForumOutbox(e.DB, model.ForumOutbox{
+		TaskID:    row.TaskID,
+		Kind:      model.ForumOutboxCreateThread,
+		DedupeKey: model.ForumCreateThreadDedupeKey(row.TaskID, generation),
+		Payload:   string(encoded),
+		State:     model.ForumOutboxPending,
+		NotBefore: now,
+		CreatedAt: now,
+	})
+	if errors.Is(err, model.ErrForumOutboxDuplicate) {
+		return nil
+	}
+	return err
+}
+
+// pendingCreatePayload finds the newest create payload for a task so a
+// replacement thread keeps the original name and card.
+func (e Executor) pendingCreatePayload(taskID string) (model.ForumCreateThreadPayload, bool) {
+	var outbox model.ForumOutbox
+	if err := e.DB.Where("task_id = ? AND kind = ?", taskID, model.ForumOutboxCreateThread).
+		Order("id desc").First(&outbox).Error; err != nil {
+		return model.ForumCreateThreadPayload{}, false
+	}
+	var payload model.ForumCreateThreadPayload
+	if json.Unmarshal([]byte(outbox.Payload), &payload) != nil {
+		return model.ForumCreateThreadPayload{}, false
+	}
+	return payload, true
+}
 func (e Executor) retryLater(row model.ForumOutbox, class string, wait time.Duration) error {
 	if row.Attempts >= model.ForumMaxAttempts {
 		return model.FailForumOutboxRow(e.DB, row.ID, class, "retry budget exhausted")

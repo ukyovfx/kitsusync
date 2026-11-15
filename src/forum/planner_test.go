@@ -2,6 +2,7 @@ package forum
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -117,11 +118,35 @@ func TestPlannerBaselinesWithoutPosting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ledger row: %v", err)
 	}
-	if row.ThreadID != "" {
-		t.Errorf("baseline row has a thread: %q", row.ThreadID)
+	if row.ThreadID != nil {
+		t.Errorf("baseline row has a thread: %v", *row.ThreadID)
 	}
 	if row.Title != "Compositing sq010 sh002" {
 		t.Errorf("title = %q", row.Title)
+	}
+}
+
+// A task row written without its create outbox row would look like a posted
+// task and the thread would never open, so both are written in one transaction.
+func TestPlannerCreateTaskIsAtomicWithOutbox(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+
+	if err := planner.PlanBaseline("tt-comp", nil); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	failingCard := func() (json.RawMessage, error) {
+		return nil, errors.New("card render failed")
+	}
+	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA), failingCard); err == nil {
+		t.Fatal("PlanTask must fail when the card cannot be rendered")
+	}
+	if _, err := model.FindForumTaskWithError(db, "task-1"); err == nil {
+		t.Fatal("failed create left a task row")
+	}
+	if rows := outboxRows(t, db); len(rows) != 0 {
+		t.Fatalf("failed create left %d outbox rows", len(rows))
 	}
 }
 
@@ -130,7 +155,7 @@ func TestPlannerCreatesThreadOnFirstTriggerAfterBaseline(t *testing.T) {
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
 
-	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP), stubCard()); err != nil {
+	if err := planner.PlanBaseline("tt-comp", nil); err != nil {
 		t.Fatalf("baseline: %v", err)
 	}
 	result, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA), stubCard())
@@ -253,7 +278,7 @@ func TestPlannerCoalescesRepeatedSignalsWithoutExtendingWindow(t *testing.T) {
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
 
-	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP), stubCard()); err != nil {
+	if err := planner.PlanBaseline("tt-comp", nil); err != nil {
 		t.Fatalf("baseline: %v", err)
 	}
 	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA), stubCard()); err != nil {

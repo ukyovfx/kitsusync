@@ -96,17 +96,27 @@ func ForumSignalMessage(signal ForumSignal, nonce string) ForumMessageCreate {
 	}
 }
 
+// forumNonceMaxLen is Discord's limit for message nonces.
+const forumNonceMaxLen = 25
+
 // ForumNonce derives a deterministic nonce so a retried send is deduplicated by
-// Discord instead of creating a second message.
+// Discord instead of creating a second message. Discord rejects nonces longer
+// than 25 characters, so the outbox id carries the uniqueness and the task id is
+// only a readable suffix.
 func ForumNonce(taskID string, outboxID uint) string {
+	nonce := fmt.Sprintf("kitsusync-%d", outboxID)
 	if taskID == "" {
-		return fmt.Sprintf("kitsusync-%d", outboxID)
+		return nonce
+	}
+	room := forumNonceMaxLen - len(nonce) - 1
+	if room <= 0 {
+		return nonce
 	}
 	trimmed := taskID
-	if len(trimmed) > 20 {
-		trimmed = trimmed[len(trimmed)-20:]
+	if len(trimmed) > room {
+		trimmed = trimmed[len(trimmed)-room:]
 	}
-	return fmt.Sprintf("kitsusync-%s-%d", trimmed, outboxID)
+	return nonce + "-" + trimmed
 }
 
 // ForumArchiveMinutes returns the archive duration for a role.
@@ -175,9 +185,13 @@ func PlanForumSync(current ForumThread, managedTags []string, roleTag string, ro
 
 // ForumSyncPatch is the patch for the retag step.
 func ForumSyncPatch(plan ForumSyncPlan) ForumThreadPatch {
+	appliedTags := plan.AppliedTags
+	if appliedTags == nil {
+		appliedTags = []string{}
+	}
 	return ForumThreadPatch{
 		AutoArchiveDuration: &plan.ArchiveMinutes,
-		AppliedTags:         plan.AppliedTags,
+		AppliedTags:         &appliedTags,
 	}
 }
 

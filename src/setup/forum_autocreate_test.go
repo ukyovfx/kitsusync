@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -122,6 +123,41 @@ func TestForumAutoCreateNeedsBotToken(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "Botトークン") {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+func TestForumAutoCreateKeepsCreatedForumsWhenALaterCreateFails(t *testing.T) {
+	stubForumLookups(t, nil)
+	var created []string
+	old := forumCreateChannel
+	t.Cleanup(func() { forumCreateChannel = old })
+	forumCreateChannel = func(guildID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+		created = append(created, name)
+		if name == "Compositing" {
+			return forumChannelInfo{}, errors.New("discord unavailable")
+		}
+		forum := forumChannelInfo{ID: "new-" + name, Name: name}
+		for _, tag := range tags {
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag, Name: tag})
+		}
+		return forum, nil
+	}
+	db := newForumPageDB(t)
+
+	form := url.Values{"project": {"p1"}, "mode": {"forum"}, "guild_id": {"g1"}, "action": {"create_forums"}}
+	form["tt_id"], form["tt_name"], form["tt_forum"] = []string{"tt-anim", "tt-comp"}, []string{"Animation", "Compositing"}, []string{"", ""}
+	form["st_id"], form["st_name"], form["st_role"] = []string{"s-wfa"}, []string{"WFA"}, []string{"wfa"}
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if strings.Join(created, ",") != "Animation,Compositing" {
+		t.Fatalf("created forums = %v", created)
+	}
+	// The forum that was created before the failure must survive in the page,
+	// otherwise the retry creates a second Animation forum.
+	if !strings.Contains(w.Body.String(), "new-Animation") {
+		t.Fatalf("page dropped the created forum: %s", w.Body.String())
 	}
 }
 
