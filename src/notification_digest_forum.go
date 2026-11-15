@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -20,6 +21,9 @@ import (
 // person only hears about their own queue.
 const (
 	digestCatchupUntilHourJST = 12
+	// The forum digest marks its own day: the lane digest runs first for the
+	// same person and Production, and a shared marker would suppress this one.
+	forumDigestLastSentDateSettingKey = "digest.forum.last_sent_date."
 )
 
 // forumDigestItem is one unresolved item for one person.
@@ -64,8 +68,9 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 		// Past the catch-up hour a failed DM is dropped rather than retried
 		// all day: the digest is only useful in the morning (stage E spec).
 		dropAfter := now.Hour() >= digestCatchupUntilHourJST
+		projectErrs := 0
 		for _, recipient := range recipients {
-			marker := digestLastSentDateSettingKey + project.KitsuProjectID + "." + recipient.DiscordID
+			marker := forumDigestLastSentDateSettingKey + project.KitsuProjectID + "." + recipient.DiscordID
 			if model.GetSetting(db, marker) == today {
 				continue
 			}
@@ -74,6 +79,7 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 					model.SetSetting(db, marker, today)
 					continue
 				}
+				projectErrs++
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient.DiscordID, err))
 				continue
 			}
@@ -86,7 +92,7 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 			ProjectName: project.Name,
 			GuildID:     project.DiscordGuildID,
 			NewStatus:   fmt.Sprintf("mode=forum recipients=%d", len(recipients)),
-			Success:     true,
+			Success:     projectErrs == 0,
 			ActorKind:   "system",
 			ActorName:   "morning-digest",
 		})
@@ -97,9 +103,21 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 	return sent, nil
 }
 
+// forumDigestReviewerResolver returns the WFA reviewers of one Task Type. It is
+// a variable so tests can answer without Kitsu and Discord.
+var forumDigestReviewerResolver = resolveForumDigestReviewers
+
+// resolveForumDigestReviewers resolves the forum WFA reviewers of a Task Type
+// with the same rules as the runtime signal path: explicit targets plus the
+// automatic supervisors, with role targets proven against the Bot's forum
+// permissions.
+func resolveForumDigestReviewers(db *gorm.DB, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID string) ([]model.ProjectReviewerTarget, error) {
+	return setup.ResolveForumWFAReviewerTargets(db, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID)
+}
+
 // forumDigestRecipients builds each person's unresolved queue. A WFA item goes
-// to the Production's reviewer targets, a RETAKE item to the task's assignees.
-// Only items that opened before today and are still open count.
+// to the reviewers of the item's Task Type, a RETAKE item to the task's
+// assignees. Only items that opened before today and are still open count.
 func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.ProductionForumSettings, now time.Time) ([]forumDigestRecipient, error) {
 	tasks, err := model.ForumTasksWithPosts(db, project.KitsuProjectID)
 	if err != nil {
@@ -110,7 +128,33 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 	for _, row := range settings.StatusRoles {
 		roleByStatus[row.StatusID] = row.Role
 	}
-	reviewers := forumDigestReviewerIDs(db, project.ID)
+	// Reviewers are resolved per Task Type: a person only reviews the Task
+	// Types they are a reviewer for, and the automatic supervisors of a Task
+	// Type must be included. The resolver is memoised because it costs a few
+	// Discord and Kitsu reads per Task Type.
+	reviewersByTaskType := map[string][]string{}
+	reviewersFor := func(taskTypeID string) []string {
+		if ids, ok := reviewersByTaskType[taskTypeID]; ok {
+			return ids
+		}
+		ids := forumDigestReviewerIDs(db, project.ID)
+		hostname, _, _ := getKitsuCreds(db, config.Config{})
+		baseURL := ""
+		if connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey)); connectionErr == nil {
+			baseURL = connection.ResolvedAPIBaseURL
+		}
+		resolved, err := forumDigestReviewerResolver(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.RuntimeDiscordBotToken(db), project.KitsuProjectID, taskTypeID)
+		if err == nil && len(resolved) > 0 {
+			ids = nil
+			for _, target := range resolved {
+				if target.TargetKind == model.ReviewerTargetUser && target.DiscordID != "" {
+					ids = append(ids, target.DiscordID)
+				}
+			}
+		}
+		reviewersByTaskType[taskTypeID] = ids
+		return ids
+	}
 	byPerson := map[string]*forumDigestRecipient{}
 	ensure := func(id string) *forumDigestRecipient {
 		if recipient, ok := byPerson[id]; ok {
@@ -130,7 +174,7 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 		}
 		item := forumDigestItem{TaskID: task.TaskID, Title: task.Title, Role: role, Since: task.StatusSince}
 		if role == model.ForumRoleWFA {
-			for _, id := range reviewers {
+			for _, id := range reviewersFor(task.TaskTypeID) {
 				ensure(id).Waiting = append(ensure(id).Waiting, item)
 			}
 			continue

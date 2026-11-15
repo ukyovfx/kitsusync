@@ -141,7 +141,7 @@ func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 	if fixture.sendsFor("111111111111111111") != 1 {
 		t.Fatalf("sends = %d", fixture.sendsFor("111111111111111111"))
 	}
-	if model.GetSetting(db, digestLastSentDateSettingKey+"p1.111111111111111111") != today {
+	if model.GetSetting(db, forumDigestLastSentDateSettingKey+"p1.111111111111111111") != today {
 		t.Fatal("marker not set after a successful send")
 	}
 	if sent, _ := sendForumMorningDigests(pipelineConfig(), db, morning.Add(time.Hour), today); sent != 0 {
@@ -156,7 +156,7 @@ func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 	if _, err := sendForumMorningDigests(pipelineConfig(), db, nextDay, nextToday); err == nil {
 		t.Fatal("expected a send error before the catch-up deadline")
 	}
-	if model.GetSetting(db, digestLastSentDateSettingKey+"p1.111111111111111111") == nextToday {
+	if model.GetSetting(db, forumDigestLastSentDateSettingKey+"p1.111111111111111111") == nextToday {
 		t.Fatal("marker set despite a failed send before 12:00")
 	}
 
@@ -165,7 +165,7 @@ func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 	if _, err := sendForumMorningDigests(pipelineConfig(), db, afternoon, nextToday); err != nil {
 		t.Fatalf("unexpected error after catch-up: %v", err)
 	}
-	if model.GetSetting(db, digestLastSentDateSettingKey+"p1.111111111111111111") != nextToday {
+	if model.GetSetting(db, forumDigestLastSentDateSettingKey+"p1.111111111111111111") != nextToday {
 		t.Fatal("marker not set after the catch-up deadline")
 	}
 }

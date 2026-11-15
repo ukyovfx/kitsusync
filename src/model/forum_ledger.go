@@ -594,6 +594,42 @@ func RecentForumTransitions(db *gorm.DB, taskID string, since time.Time) ([]Foru
 	return rows, err
 }
 
+// LastForumTransitionBefore returns the newest transition of a task recorded at
+// or before a point in time, or the zero time when there is none.
+func LastForumTransitionBefore(db *gorm.DB, taskID string, before time.Time) (time.Time, error) {
+	var row ForumTransition
+	err := db.Where("task_id = ? AND at <= ?", taskID, before).Order("at desc, id desc").First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return row.At, nil
+}
+
+// CountForumTransitions returns how many transitions a task recorded since a
+// point in time.
+func CountForumTransitions(db *gorm.DB, taskID string, since time.Time) (int, error) {
+	var count int64
+	err := db.Model(&ForumTransition{}).Where("task_id = ? AND at >= ?", taskID, since).Count(&count).Error
+	return int(count), err
+}
+
+// ForumFlapEpisode returns the episode the task was last warned about, or the
+// zero time when it was never warned.
+func ForumFlapEpisode(db *gorm.DB, taskID string) (time.Time, error) {
+	var row ForumFlapState
+	err := db.Where("task_id = ?", taskID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return row.EpisodeAt, nil
+}
+
 // ForumFlapWarned reports whether the current episode was already warned about.
 // An episode ends after ForumFlapPeriod without a transition.
 func ForumFlapWarned(db *gorm.DB, taskID string, episode time.Time) (bool, error) {

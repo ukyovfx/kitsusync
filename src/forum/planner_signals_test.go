@@ -32,7 +32,7 @@ func seedPostedTask(t *testing.T, db *gorm.DB, planner *Planner) {
 }
 
 func commentInput(id, text string, mentions ...string) CommentInput {
-	return CommentInput{ID: id, Text: text, CreatedAt: "2026-11-15T09:00:00", Mentions: mentions}
+	return CommentInput{ID: id, Text: text, CreatedAt: "2026-11-15T09:00:00Z", Mentions: mentions}
 }
 
 func TestPlannerQueuesCommentSignalForPostedTask(t *testing.T) {
@@ -43,6 +43,7 @@ func TestPlannerQueuesCommentSignalForPostedTask(t *testing.T) {
 
 	planner.Now = now.Add(5 * time.Minute)
 	input := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
+	input.CommentDate = "2026-11-15T09:04:00.000Z"
 	input.Comment = commentInput("comment-1", "ここを直してください\n二行目", "person-2")
 	if _, err := planner.PlanTask(input, stubCard()); err != nil {
 		t.Fatalf("PlanTask: %v", err)
