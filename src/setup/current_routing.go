@@ -268,7 +268,7 @@ func currentRecipientComboboxScript() string {
   modal.addEventListener('cancel',function(){pickers.forEach(function(item){item.close()})});
   modal.addEventListener('close',function(){if(modal.open)return;pickers.forEach(function(item){item.close();item.sync()})});
   window.addEventListener('resize',function(){pickers.forEach(function(item){item.close()})});
-  window.addEventListener('scroll',function(){pickers.forEach(function(item){if(!item.picker.querySelector('[role="listbox"]').hidden)item.close()})},true)
+  window.addEventListener('scroll',function(event){var scrolled=event.target;pickers.forEach(function(item){var list=item.picker.querySelector('[role="listbox"]');if(list.hidden||list.contains(scrolled))return;item.close()})},true)
 })();
 </script>`
 }

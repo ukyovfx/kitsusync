@@ -207,7 +207,7 @@ func renderFirstTimeExecutionError(lang string, r *http.Request, message string)
 func rollbackFirstTimeConnection(db *gorm.DB, botToken string, ops firstTimeConnectionOps, plan firstTimeConnectionPlan, createdCategory bool) error {
 	if createdCategory && strings.TrimSpace(plan.CategoryID) != "" {
 		if err := ops.DeleteChannel(plan.CategoryID, botToken); err != nil && !isDiscordNotFoundDeleteError(err) {
-			slog.Warn("first-time setup category rollback failed", "category_id", plan.CategoryID, "error", err)
+			slog.Warn("first-time setup category rollback failed", "category_id", safeLogField(plan.CategoryID), "error", err)
 		}
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
@@ -248,7 +248,7 @@ func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, la
 		}
 	}
 	completed = true
-	slog.Info("first-time production connection completed (forum mode)", "project_id", plan.Project.ID, "guild_id", plan.GuildID, "category_id", plan.CategoryID)
+	slog.Info("first-time production connection completed (forum mode)", "project_id", plan.Project.ID, "guild_id", safeLogField(plan.GuildID), "category_id", safeLogField(plan.CategoryID))
 	return adminPage(lang, tr(lang, "wizard.complete_title"), r, renderWizardFrame(lang, 7, renderWizardComplete(lang, r, db, plan.Project.ID)))
 }
 
@@ -257,6 +257,17 @@ func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, la
 // must never be able to inject any.
 func appendFirstTimeRollbackNote(result string, err error) string {
 	return result + " " + html.EscapeString(err.Error())
+}
+
+// safeLogField strips control characters so form-supplied IDs cannot forge
+// log lines (ログ混入). IDs are opaque; control characters carry no signal.
+func safeLogField(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 // KitsuSyncCategoryName is the Discord category name that groups everything a

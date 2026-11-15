@@ -44,6 +44,9 @@ jobs:
           languages: go
           build-mode: manual
           queries: security-extended
+          # Test fixtures (fake APIs) are not production attack surface; skip them.
+          paths-ignore: |
+            - '**/*_test.go'
 
       - name: Build analyzed Go packages
         run: CGO_ENABLED=1 go test ./src/... -run '^$' -count=1

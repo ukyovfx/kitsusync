@@ -107,8 +107,8 @@ func TestProductionTeamCompactRows(t *testing.T) {
 func TestProductionTeamCompactRowStyles(t *testing.T) {
 	for _, expected := range []string{
 		`.production-team-table{width:100%;table-layout:fixed;`,
-		`.production-team-col-member{width:24%}`,
-		`.production-team-col-status{width:20%}`,
+		`.production-team-col-member{width:22%}`,
+		`.production-team-col-status{width:26%}`,
 		`.production-notification-col-task{width:26%}`,
 		`.production-wfa-kind{display:inline-flex;align-items:center;`,
 		`.production-team-row>th,.production-team-row>td{`,
