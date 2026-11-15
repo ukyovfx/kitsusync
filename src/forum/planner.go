@@ -19,29 +19,42 @@ import (
 
 // TaskInput is one task as observed by the poller.
 type TaskInput struct {
-	TaskID      string
-	ProjectID   string
-	TaskTypeID  string
-	EntityID    string
-	EntityKind  string
-	EntityName  string
-	ParentName  string
-	EntityType  string
-	Title       string
-	StatusID    string
-	StatusRole  string
-	Assignees   []string
-	CommentDate string
+	TaskID       string
+	ProjectID    string
+	TaskTypeID   string
+	EntityID     string
+	EntityKind   string
+	EntityName   string
+	ParentName   string
+	EntityType   string
+	Title        string
+	StatusID     string
+	StatusRole   string
+	Assignees    []string
+	CommentDate  string
 	KitsuUpdated string
+	// Comment is the newest Kitsu comment, used for RETAKE and comment signals.
+	Comment CommentInput
+}
+
+// CommentInput is the newest comment observed for a task.
+type CommentInput struct {
+	ID        string
+	Text      string
+	CreatedAt string
+	// Mentions are the Kitsu person IDs named in the comment.
+	Mentions []string
+	// Unavailable reports that the comment could not be read this poll.
+	Unavailable bool
 }
 
 // PlanResult summarises what the planner did for one task.
 type PlanResult struct {
-	Skipped    bool
-	Baselined  bool
-	Created    bool
-	Synced     bool
-	Signalled  string
+	Skipped   bool
+	Baselined bool
+	Created   bool
+	Synced    bool
+	Signalled string
 }
 
 // Planner holds the Production settings needed to plan.
@@ -161,6 +174,13 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 			return result, err
 		}
 	}
+	// The stored marker is the Kitsu last_comment_date, so a first poll after
+	// the baseline does not announce a comment the row already recorded.
+	if hasPost && !input.Comment.Unavailable && input.Comment.ID != "" && input.CommentDate != existing.LastCommentAt {
+		if err := p.queueCommentSignal(input, existing); err != nil {
+			return result, err
+		}
+	}
 	if err := p.updateTaskRow(input, existing.StatusID, assignees); err != nil {
 		return result, err
 	}
@@ -215,11 +235,157 @@ func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, ro
 		return err
 	}
 	result.Synced = true
+	// Flapping is a property of the transition, not of the role: a round trip
+	// that ends in WIP still flapped, so the check runs before the role gate.
+	if err := p.maybeWarnFlap(input, existing); err != nil {
+		return err
+	}
 	if !IsTriggerRole(input.StatusRole) {
 		return nil
 	}
 	return p.queueStatusSignal(input, existing, result)
 }
+
+// queueCommentSignal announces a new comment on a task that already has a post.
+// A task without a post is ignored, which keeps WIP chatter out of the forum.
+func (p Planner) queueCommentSignal(input TaskInput, existing model.ForumTask) error {
+	quote := commentQuote(input.Comment.Text)
+	payload, err := json.Marshal(model.ForumPostMessagePayload{
+		Intent:         model.ForumIntentComment,
+		WindowOpenedAt: p.Now,
+		Quote:          quote,
+		Mentions:       model.NormalizeForumAssigneeIDs(input.Comment.Mentions),
+	})
+	if err != nil {
+		return err
+	}
+	now := p.Now
+	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
+		TaskID:    input.TaskID,
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: model.ForumCommentCoalesceKey(input.Comment.ID, input.TaskID),
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: now,
+		CreatedAt: now,
+	})
+	if errors.Is(err, model.ErrForumOutboxDuplicate) {
+		return nil
+	}
+	return err
+}
+
+// maybeWarnFlap queues one warning per flap episode. The signal messages are
+// not suppressed: the warning only adds context.
+func (p Planner) maybeWarnFlap(input TaskInput, existing model.ForumTask) error {
+	episode, transitions, span, flapping, err := p.flapEpisode(input.TaskID, existing.StatusID, input.StatusID)
+	if err != nil || !flapping {
+		return err
+	}
+	taskID := input.TaskID
+	warned, err := model.ForumFlapWarned(p.DB, taskID, episode)
+	if err != nil || warned {
+		return err
+	}
+	now := p.Now
+	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
+		TaskID:    taskID,
+		Kind:      model.ForumOutboxWarnMessage,
+		DedupeKey: model.ForumWarnDedupeKey(taskID, episode),
+		Payload:   fmt.Sprintf(`{"transitions":%d,"span_seconds":%d}`, transitions, int(span.Seconds())),
+		State:     model.ForumOutboxPending,
+		NotBefore: now,
+		CreatedAt: now,
+	})
+	if err != nil && !errors.Is(err, model.ErrForumOutboxDuplicate) {
+		return err
+	}
+	return model.MarkForumFlapWarned(p.DB, taskID, episode)
+}
+
+// flapEpisode reports whether the recent transitions look like flapping. R1 is
+// a round trip inside the round-trip window, R2 is too many transitions inside
+// the flap period.
+//
+// The episode starts at the first transition after the last quiet period, i.e.
+// after the last gap of at least ForumFlapPeriod between two transitions. A
+// continuous run stays one episode however long it lasts, so the count rule
+// counts every transition of the episode, not only the ones still inside the
+// flap period.
+//
+// The current change is passed in because the planner warns before the
+// transition row is written.
+func (p Planner) flapEpisode(taskID, fromStatusID, toStatusID string) (time.Time, int, time.Duration, bool, error) {
+	// Everything ever recorded, oldest first: the episode boundary depends on
+	// gaps older than the flap period, so the window alone is not enough.
+	var recorded []model.ForumTransition
+	if err := p.DB.Where("task_id = ?", taskID).Order("at asc, id asc").Find(&recorded).Error; err != nil {
+		return time.Time{}, 0, 0, false, err
+	}
+	current := model.ForumTransition{TaskID: taskID, At: p.Now, FromStatusID: fromStatusID, ToStatusID: toStatusID}
+	rows := append(recorded, current)
+	if len(rows) < 2 || fromStatusID == "" {
+		return time.Time{}, 0, 0, false, nil
+	}
+	// Walk back from the current change while the gaps stay under the flap
+	// period. The first larger gap is the quiet period that started this
+	// episode.
+	start := len(rows) - 1
+	for start > 0 && rows[start].At.Sub(rows[start-1].At) < model.ForumFlapPeriod {
+		start--
+	}
+	episode := rows[start].At
+	episodeRows := rows[start:]
+	span := p.Now.Sub(episode)
+	// A round trip comes back to a status the task had already left, so the
+	// later transition lands on an earlier transition's source status. The
+	// current change is the newest row and is not in the database yet, so it is
+	// checked against every earlier row. Rows already recorded are checked
+	// against each other, skipping the immediately previous one because it is
+	// the same step of the run.
+	roundTrip := false
+	if !p.Now.Before(p.Now.Add(-model.ForumFlapRoundTripWindow)) {
+		for j := 0; j < len(episodeRows)-1; j++ {
+			if toStatusID != "" && toStatusID == episodeRows[j].FromStatusID {
+				roundTrip = true
+				break
+			}
+		}
+	}
+	for i := 1; i < len(episodeRows)-1 && !roundTrip; i++ {
+		row := episodeRows[i]
+		if row.At.Before(p.Now.Add(-model.ForumFlapRoundTripWindow)) {
+			continue
+		}
+		for j := 0; j < i-1; j++ {
+			if row.ToStatusID != "" && row.ToStatusID == episodeRows[j].FromStatusID {
+				roundTrip = true
+				break
+			}
+		}
+	}
+	return episode, len(episodeRows), span, roundTrip || len(episodeRows) >= model.ForumFlapCount, nil
+}
+
+// commentQuote takes the first line of a comment, stripped of quoting markers
+// and truncated for a one-line quote.
+func commentQuote(text string) string {
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
+		trimmed := strings.TrimLeft(strings.TrimSpace(line), "># ")
+		if trimmed == "" {
+			continue
+		}
+		runes := []rune(trimmed)
+		if len(runes) > model.ForumQuoteMaxRunes {
+			return string(runes[:model.ForumQuoteMaxRunes]) + "…"
+		}
+		return string(runes)
+	}
+	return ""
+}
+
+// commentIDFromDate is unused; the comment marker is the stored Kitsu
+// last_comment_date, compared directly in planChange.
 
 func (p Planner) queueCreateThread(input TaskInput, route model.ProductionForumRoute, role string, card func() (json.RawMessage, error), result *PlanResult) error {
 	rendered, err := card()
@@ -288,6 +454,7 @@ func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing mode
 		Intent:         intent,
 		WindowOpenedAt: p.Now,
 		BaseStatusID:   existing.StatusID,
+		Quote:          retakeQuote(intent, input.Comment, p.Now),
 	})
 	if err != nil {
 		return err
@@ -379,6 +546,23 @@ func forumTaskRow(input TaskInput, now time.Time) model.ForumTask {
 		FirstSeenAt:    now,
 		LastSeenAt:     now,
 	}
+}
+
+// retakeQuote returns the comment excerpt a RETAKE signal quotes. Only a
+// comment written inside the lookback window is quoted: a RETAKE fired long
+// after the comment would quote an unrelated one.
+func retakeQuote(intent string, comment CommentInput, now time.Time) string {
+	if intent != model.ForumIntentStatusRetake || comment.Unavailable {
+		return ""
+	}
+	created, err := time.Parse(time.RFC3339, comment.CreatedAt)
+	if err != nil {
+		return ""
+	}
+	if now.Sub(created) > model.ForumCommentQuoteLookback {
+		return ""
+	}
+	return commentQuote(comment.Text)
 }
 
 func intentForRole(role string) string {

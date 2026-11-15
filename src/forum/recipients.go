@@ -24,6 +24,9 @@ type Recipients struct {
 	ResolveReviewers func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error)
 	// TaskTypeName resolves a display name for the reviewer lookup.
 	TaskTypeName func(taskTypeID string) string
+	// NotifyAssigneesOnComment includes the current assignees in a comment
+	// signal (tuning.comment_notify_assignee, default true).
+	NotifyAssigneesOnComment bool
 }
 
 // ForTask returns the user and role IDs to mention.
@@ -43,9 +46,33 @@ func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload
 			return nil, nil
 		}
 		return r.mapAssignees(task.ProjectID, added), nil
+	case model.ForumIntentComment:
+		// Q-01: the comment's mentions plus the current assignees.
+		users := r.mapAssignees(task.ProjectID, payload.Mentions)
+		if r.NotifyAssigneesOnComment {
+			assigneeUsers, _ := r.assignees(task)
+			users = append(users, assigneeUsers...)
+		}
+		return uniqueIDs(users), nil
 	default:
 		return nil, nil
 	}
+}
+
+func uniqueIDs(ids []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (r Recipients) reviewers(projectID, taskTypeID string) ([]string, []string) {
