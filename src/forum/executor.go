@@ -199,7 +199,7 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
 		return err
 	}
-	msg, err := discord.PostForumMessage(token, task.ThreadID, body)
+	msg, err := discord.PostForumMessage(token, *task.ThreadID, body)
 	if err != nil {
 		return e.handleFailure(row, err)
 	}
@@ -212,7 +212,7 @@ func (e Executor) executeWarnMessage(row model.ForumOutbox, token string) error 
 	if err != nil {
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
 	}
-	if task.ThreadID == "" {
+	if task.ThreadID == nil || *task.ThreadID == "" {
 		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
 	}
 	var payload struct {
