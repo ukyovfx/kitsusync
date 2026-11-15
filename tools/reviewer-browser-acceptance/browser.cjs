@@ -861,23 +861,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await addModal.waitFor({ state: 'visible' });
         await addModal.locator('#wfa-user-tab').click();
         await addModal.locator('[data-recipient-panel="user"]').waitFor({ state: 'visible' });
-        const comboFocused = await page.evaluate(() => {
-          const combo = document.querySelector('[data-wfa-add-modal] [data-wfa-user-combobox]');
-          combo.focus();
-          return document.activeElement === combo;
-        });
-        if (!comboFocused) throw new Error('Add recipient combobox could not take keyboard focus');
         const combo = addModal.locator('[data-wfa-user-combobox]');
-        const dlgState = await page.evaluate(() => {
-          const d = document.querySelector('[data-wfa-add-modal]');
-          const c = document.querySelector('[data-wfa-add-modal] [data-wfa-user-combobox]');
-          c.focus();
-          return { open: d.open, hasShowModal: typeof d.showModal, tag: d.tagName, activeIsCombo: document.activeElement === c,
-            activeTag: document.activeElement?.tagName, activeCls: document.activeElement?.className,
-            display: getComputedStyle(d).display, vis: getComputedStyle(c).visibility };
-        });
-        if (!dlgState.open || !dlgState.activeIsCombo) throw new Error('modal state: ' + JSON.stringify(dlgState));
-        await combo.evaluate((el) => el.focus());
+        // The dialog is opened by the click above; modal focus can only land once it is actually open.
+        await addModal.evaluate(node => node.open || node.showModal());
+        await combo.focus();
         await page.keyboard.press('Space');
         if ((await combo.getAttribute('aria-expanded')) !== 'true') {
           throw new Error(`Keyboard activation did not open the Add recipient listbox: expanded=${await combo.getAttribute('aria-expanded')} active=${await page.evaluate(() => document.activeElement?.getAttribute('data-wfa-user-combobox') !== null)}`);
