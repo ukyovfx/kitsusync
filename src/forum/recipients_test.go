@@ -30,13 +30,14 @@ func commentRecipients(db *gorm.DB, notifyAssignees bool) Recipients {
 
 func seedRecipientTask(t *testing.T, db *gorm.DB, assignees ...string) {
 	t.Helper()
+	threadID := "thread-1"
 	row := model.ForumTask{
 		TaskID:      "task-1",
 		ProjectID:   "prod-1",
 		TaskTypeID:  "tt-comp",
 		StatusID:    "s-wfa",
 		AssigneeIDs: encodeIDs(model.NormalizeForumAssigneeIDs(assignees)),
-		ThreadID:    "thread-1",
+		ThreadID:    &threadID,
 		ForumID:     "forum-1",
 	}
 	if err := db.Create(&row).Error; err != nil {

@@ -48,6 +48,7 @@ func forumDigestDB(t *testing.T) *gorm.DB {
 
 func seedForumDigestTask(t *testing.T, db *gorm.DB, taskID, statusID string, since time.Time, assignees ...string) {
 	t.Helper()
+	threadID := "thread-" + taskID
 	row := model.ForumTask{
 		TaskID:      taskID,
 		ProjectID:   "p1",
@@ -57,7 +58,7 @@ func seedForumDigestTask(t *testing.T, db *gorm.DB, taskID, statusID string, sin
 		StatusID:    statusID,
 		StatusSince: since,
 		ForumID:     "forum-1",
-		ThreadID:    "thread-" + taskID,
+		ThreadID:    &threadID,
 	}
 	if len(assignees) > 0 {
 		encoded, err := json.Marshal(model.NormalizeForumAssigneeIDs(assignees))
