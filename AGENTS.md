@@ -46,6 +46,9 @@ Run these after meaningful repo changes when applicable:
 
 Never claim verification was run if it was not.
 
+## Issue and PR references
+- Bare `#123` only for real PR/Issue numbers in `ukyovfx/kitsusync`; forks share the parent's numbering, so a bare number can link to the wrong repository. Reference review findings as "PR #282 finding 3" or by title, never with a made-up `#` number.
+
 ## Knowledge write-back
 - Do not write back merely because something was discussed.
 - Record durable active-task state, blockers, verification results, and next actions in `docs/agent/plans/active/` when they must survive the current session.

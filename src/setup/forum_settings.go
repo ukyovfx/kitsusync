@@ -104,6 +104,22 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 			return
 		}
 		botToken, fallbackGuildID := discordSettings()
+		if r.Method == http.MethodPost && strings.TrimSpace(r.FormValue("action")) == "create_forums" {
+			if project.ValidationOnly || ValidationOnlyModeEnabled() {
+				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
+				return
+			}
+			submitted := parseForumSettingsForm(r, projectID)
+			created, err := createForumsForTaskTypes(db, projectID, botToken, fallbackGuildID, submitted)
+			if err == nil {
+				http.Redirect(w, r, withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)+"&msg=forums_created", http.StatusSeeOther)
+				return
+			}
+			// The forums may already exist, so show what was made and what is left.
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &created, err))
+			return
+		}
 		if r.Method == http.MethodPost {
 			if project.ValidationOnly || ValidationOnlyModeEnabled() {
 				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
@@ -248,7 +264,15 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	}
 	errorHTML := ""
 	if saveErr != nil {
-		errorHTML = `<div class="notice notice-error" role="alert"><strong>` + esc(t(lang, "保存できませんでした", "Could not save")) + `</strong>` + forumSaveErrorMarkup(lang, saveErr, forumNames) + `</div>`
+		if errors.Is(saveErr, errForumsCreatedNeedsRoles) {
+			// Not a failure: the forums exist and only the status mapping is left.
+			errorHTML = `<div class="notice" role="status">` + esc(saveErr.Error()) + `</div>`
+		} else if errors.Is(saveErr, errForumCreateAction) {
+			// Creation errors are already written for the operator in Japanese.
+			errorHTML = `<div class="notice notice-error" role="alert">` + esc(saveErr.Error()) + `</div>`
+		} else {
+			errorHTML = `<div class="notice notice-error" role="alert"><strong>` + esc(t(lang, "保存できませんでした", "Could not save")) + `</strong>` + forumSaveErrorMarkup(lang, saveErr, forumNames) + `</div>`
+		}
 	}
 
 	routeByTaskType := map[string]model.ProductionForumRoute{}
@@ -351,7 +375,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "確認待ち・リテイク・完了にそれぞれステータスを1つ以上割り当てます。", "Assign at least one status each to Waiting, Retake and Done.")) + `</p><table class="data-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "役割 → フォーラムのタグ", "Role → forum tag")) + `</h2>` + tagSections.String() + `</section>` +
-		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
+		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button> <button type="submit" name="action" value="create_forums" class="btn-ghost">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
 
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`
 	return adminPage(lang, t(lang, "フォーラム通知の設定", "Forum notification settings"), r, body)
