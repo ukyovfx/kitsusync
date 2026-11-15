@@ -204,7 +204,7 @@ func TestHandler_GetSetupUsesProductionAndServerSelectionFlow(t *testing.T) {
 	}
 
 	body := rr.Body.String()
-	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete"} {
+	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Forum", "Review", "Execute", "Complete"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected approved connection flow copy %q", want)
 		}
@@ -217,24 +217,3 @@ func TestHandler_GetSetupUsesProductionAndServerSelectionFlow(t *testing.T) {
 	}
 }
 
-func TestHandler_PostSetupRequiresProjectLevelGuildID(t *testing.T) {
-	db := newSetupStateTestDB(t)
-
-	form := url.Values{}
-	form.Set("kitsu_project_id", "proj-1")
-	form.Set("project_name", "Project One")
-	form.Set("project_type", "cg")
-	form.Set("language", "en")
-
-	req := httptest.NewRequest(http.MethodPost, "/bot/setup", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rr := httptest.NewRecorder()
-
-	Handler("http://kitsu.local/", "111111111111111111", "runtime-bot-token", db, func() bool { return true }, nil)(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 when guild_id is missing, got %d", rr.Code)
-	}
-	if !strings.Contains(rr.Body.String(), "project-level guild_id is required") {
-		t.Fatalf("expected missing guild_id error, got %q", rr.Body.String())
-	}
-}

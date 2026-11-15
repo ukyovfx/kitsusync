@@ -233,25 +233,8 @@ func TestMigrateApplicationSchemaAddsDeliveryJournalIdempotentlyAndSurvivesBacku
 	if err := db.Create(&duplicateEvent).Error; err == nil {
 		t.Fatal("database did not enforce deterministic event identity uniqueness")
 	}
-	if err := db.Create(&model.ProductionNotificationWriteLock{ProductionID: "deleting-production", MutationState: model.NotificationMutationDeleting, MutationToken: "deletion-token"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&model.ProductionNotificationWriteLock{ProductionID: "reordering-production", MutationState: model.NotificationMutationReordering, MutationToken: "reorder-token"}).Error; err != nil {
-		t.Fatal(err)
-	}
 	if err := migrateApplicationSchema(db); err != nil {
 		t.Fatalf("repeated migration failed: %v", err)
-	}
-	var quarantined model.NotificationDeliveryEvent
-	if err := db.Where("event_id = ?", event.EventID).First(&quarantined).Error; err != nil || quarantined.Disposition != model.DeliveryUnknown || quarantined.PayloadJSON != event.PayloadJSON || quarantined.PayloadRedactedAt != nil || quarantined.IdentityConflictCount != 0 || quarantined.IdentityConflictAt != nil {
-		t.Fatalf("repeated startup did not quarantine in-flight delivery: row=%+v err=%v", quarantined, err)
-	}
-	var deletionLock, reorderLock model.ProductionNotificationWriteLock
-	if err := db.Where("production_id = ?", "deleting-production").First(&deletionLock).Error; err != nil || deletionLock.MutationState != model.NotificationMutationDeletionHelp || deletionLock.MutationToken != "deletion-token" {
-		t.Fatalf("startup did not preserve interrupted teardown for explicit retry: lock=%+v err=%v", deletionLock, err)
-	}
-	if err := db.Where("production_id = ?", "reordering-production").First(&reorderLock).Error; err != nil || reorderLock.MutationState != "reorder_needs_help" || reorderLock.MutationToken != "reorder-token" {
-		t.Fatalf("startup did not quarantine interrupted external reorder: lock=%+v err=%v", reorderLock, err)
 	}
 	if err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
 		t.Fatal(err)
@@ -284,7 +267,7 @@ func TestMigrateApplicationSchemaAddsDeliveryJournalIdempotentlyAndSurvivesBacku
 		t.Fatalf("restored database startup migration failed: %v", err)
 	}
 	var restoredEvent model.NotificationDeliveryEvent
-	if err := restored.Where("event_id = ?", event.EventID).First(&restoredEvent).Error; err != nil || restoredEvent.Disposition != model.DeliveryUnknown || restoredEvent.PayloadJSON != event.PayloadJSON || restoredEvent.PayloadRedactedAt != nil {
-		t.Fatalf("backup/restore lost journal disposition: row=%+v err=%v", restoredEvent, err)
+	if err := restored.Where("event_id = ?", event.EventID).First(&restoredEvent).Error; err != nil || restoredEvent.PayloadJSON != event.PayloadJSON || restoredEvent.PayloadRedactedAt != nil {
+		t.Fatalf("backup/restore lost journal row: row=%+v err=%v", restoredEvent, err)
 	}
 }

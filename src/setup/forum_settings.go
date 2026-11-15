@@ -126,7 +126,7 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 				return
 			}
 			settings := parseForumSettingsForm(r, projectID)
-			if len(settings.Routes) > 0 || settings.Config.Mode == model.NotificationModeForum {
+			if len(settings.Routes) > 0 {
 				settings.Tags = tagsForRoutedForums(settings)
 			}
 			if err := model.SaveProductionForumSettings(db, settings); err != nil {
@@ -147,7 +147,6 @@ func parseForumSettingsForm(r *http.Request, productionID string) model.Producti
 	_ = r.ParseForm()
 	settings := model.ProductionForumSettings{Config: model.ProductionForumConfig{
 		ProductionID: productionID,
-		Mode:         strings.TrimSpace(r.FormValue("mode")),
 		GuildID:      strings.TrimSpace(r.FormValue("guild_id")),
 	}}
 	ids, names, forums := r.Form["tt_id"], r.Form["tt_name"], r.Form["tt_forum"]
@@ -224,7 +223,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	} else if loaded, ok, err := model.LoadProductionForumSettings(db, productionID); err == nil && ok {
 		current = loaded
 	} else {
-		current.Config = model.ProductionForumConfig{ProductionID: productionID, Mode: model.NotificationModeLane}
+		current.Config = model.ProductionForumConfig{ProductionID: productionID}
 	}
 	guildID := strings.TrimSpace(current.Config.GuildID)
 	if guildID == "" {
@@ -363,13 +362,9 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		tagSections.WriteString(`<p class="field-help">` + esc(t(lang, "タスクタイプにフォーラムを選んで一度保存すると、ここにタグの設定が出ます。", "Pick a forum for a Task Type and save once; the tag settings appear here.")) + `</p>`)
 	}
 
-	laneChecked, forumChecked := current.Config.Mode != model.NotificationModeForum, current.Config.Mode == model.NotificationModeForum
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/forum", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "通知の方式", "Notification mode")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "フォーラムにすると、このProductionの通知はレーン（チャンネル）ではなくフォーラム投稿になります。設定がそろうまでは「レーン」のままにしてください。いつでも戻せます。", "Forum mode sends this Production's notifications as forum posts instead of lane (channel) messages. Keep Lane until the settings are complete. You can switch back at any time.")) + `</p>` +
-		`<label><input type="radio" name="mode" value="lane"` + checkedAttr(laneChecked) + `> ` + esc(t(lang, "レーン（現行）", "Lane (current)")) + `</label> ` +
-		`<label><input type="radio" name="mode" value="forum"` + checkedAttr(forumChecked) + `> ` + esc(t(lang, "フォーラム", "Forum")) + `</label>` +
+		`<section class="section-card glass"><h2>` + esc(t(lang, "Discordサーバー", "Discord server")) + `</h2>` +
 		`<label class="field-label" for="forum-guild">` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</label><input id="forum-guild" name="guild_id" value="` + esc(guildID) + `" autocomplete="off"></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2><table class="data-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
@@ -395,22 +390,10 @@ func selectedOptionAttr(selected bool) string {
 	return ""
 }
 
-func checkedAttr(checked bool) string {
-	if checked {
-		return " checked"
-	}
-	return ""
-}
-
 // renderForumSettingsLink adds the entry to the forum settings page under the
-// Production's notifications tab, with the current mode.
+// Production's notifications tab.
 func renderForumSettingsLink(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
-	mode := t(lang, "レーン（現行）", "Lane (current)")
-	if model.NotificationModeForProduction(db, p.KitsuProjectID) == model.NotificationModeForum {
-		mode = t(lang, "フォーラム", "Forum")
-	}
 	return `<section class="section-card glass"><h2>` + esc(t(lang, "フォーラム通知", "Forum notifications")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "現在の方式", "Current mode")) + `: <strong>` + esc(mode) + `</strong></p>` +
 		`<div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/forum?project="+url.QueryEscape(p.KitsuProjectID), r)) + `">` + esc(t(lang, "フォーラム設定を開く", "Open forum settings")) + `</a></div></section>`
 }
 
@@ -449,8 +432,6 @@ func forumProblemText(lang string, problem model.ForumSettingsProblem, forumName
 		return ""
 	}
 	switch problem.Code {
-	case model.ProblemUnknownMode:
-		return t(lang, "通知の方式が正しくありません。", "The notification mode is not valid.")
 	case model.ProblemProductionRequired:
 		return t(lang, "プロダクションを特定できません。画面を開き直してください。", "The Production could not be identified. Reopen this page.")
 	case model.ProblemRouteIncomplete:

@@ -5,8 +5,10 @@ import (
 	"app/src/model"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -440,17 +442,9 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 		if handleCurrentProductionUserMutation(w, r, db, botToken) {
 			return
 		}
-		if handleCurrentIARoutingMutation(w, r, lang, db, botToken) {
+		if handleProductionNotificationApply(w, r, lang, db, botToken) {
 			return
 		}
-		if handleTaskTypeChannelPlanMutation(w, r, lang, botToken, db) {
-			return
-		}
-
-		if handleProjectRoutingMutation(w, r, lang, fallbackGuildID, botToken, db) {
-			return
-		}
-
 		if r.Method == http.MethodPost {
 			if hasValidationOnlyProject(db) {
 				http.Error(w, "validation-only profile is read-only", http.StatusForbidden)
@@ -577,536 +571,8 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 			return
 		}
 
-		allWebhooks := model.ListAllProjectWebhooks(db)
-		selectedProjectID := strings.TrimSpace(r.URL.Query().Get("project"))
-		if r.URL.Query().Get("legacy") != "1" && r.URL.Query().Get("danger_preview") == "" && r.URL.Query().Get("validated_channels") == "" {
-			renderIAProductionList(w, r, db, fallbackGuildID, botToken)
-			return
-		}
-		dangerPreviewProjectID := ""
-		if strings.TrimSpace(r.URL.Query().Get("danger_preview")) != "" {
-			dangerPreviewProjectID = selectedProjectID
-		}
-		validatedChannelProjectID := ""
-		if strings.TrimSpace(r.URL.Query().Get("validated_channels")) != "" {
-			validatedChannelProjectID = selectedProjectID
-		}
-		var blocks strings.Builder
-		for _, p := range model.ListProjects(db) {
-			projectTaskTypes := routingTaskTypesForProduction(p.KitsuProjectID)
-			effectiveGuildID := strings.TrimSpace(p.DiscordGuildID)
-			if effectiveGuildID == "" {
-				effectiveGuildID = fallbackGuildID
-			}
-			webhooks := model.ListProjectWebhooks(db, p.KitsuProjectID)
-			assignedCount := 0
-			assignedTaskTypes := map[string]bool{}
-			channelNames := map[string]bool{}
-			for _, wh := range webhooks {
-				if wh.TaskType != "" {
-					assignedTaskTypes[wh.TaskType] = true
-					assignedCount++
-				}
-				if strings.TrimSpace(wh.ChannelName) != "" {
-					channelNames[wh.ChannelName] = true
-				}
-			}
-			unassignedCount := 0
-			for _, tt := range projectTaskTypes {
-				if !assignedTaskTypes[tt.Name] {
-					unassignedCount++
-				}
-			}
-			channelCount := len(channelNames)
-			statusClass := "bad"
-			statusLabel := t(lang, "要確認", "Needs review")
-			switch {
-			case effectiveGuildID != "" && assignedCount > 0 && unassignedCount == 0:
-				statusClass = "ok"
-				statusLabel = t(lang, "接続済み", "Connected")
-			case effectiveGuildID != "" && (assignedCount > 0 || channelCount > 0):
-				statusClass = "warn"
-				statusLabel = t(lang, "確認中", "Review")
-			}
-			routingConfig := model.FindProductionNotificationConfig(db, p.KitsuProjectID)
-			routingIssues := []string{}
-			if routingConfig != nil {
-				routingIssues = model.ValidateProductionNotificationConfig(db, p.KitsuProjectID, model.ListProductionNotificationRoutes(db, p.KitsuProjectID))
-			}
-			statusHint := t(lang, "通知状態を確認してください。", "Review notification readiness.")
-			statusClass = "bad"
-			switch {
-			case routingConfig == nil:
-				statusLabel = t(lang, "未設定", "Incomplete")
-				statusHint = t(lang, "通知ルートを1件以上設定すると有効化できます。", "Add at least one valid notification route to activate notifications.")
-			case !routingConfig.Enabled:
-				statusClass = "warn"
-				statusLabel = t(lang, "一時停止中", "Paused")
-				statusHint = t(lang, "通知は一時停止中です。再開できます。", "Notifications are paused and can be resumed.")
-			case len(routingIssues) > 0:
-				statusLabel = t(lang, "要対応", "Needs attention")
-				statusHint = t(lang, "通知ルートに stale または未完了の項目があります。", "Notification routes contain stale or incomplete items.")
-			default:
-				statusClass = "ok"
-				statusLabel = t(lang, "有効", "Active")
-				statusHint = t(lang, "有効な通知ルートがあります。", "Valid notification routes are active.")
-			}
-			notificationSectionHTML := renderConnectedProductionNotificationSection(db, p, lang, r, statusClass, statusLabel, statusHint, routingIssues)
-			categoryID := strings.TrimSpace(p.DiscordCategoryID)
-			if categoryID == "" {
-				categoryID = "—"
-			}
-			projectLang := strings.TrimSpace(p.Language)
-			if projectLang == "" {
-				projectLang = "ja"
-			}
-			previewCategoryID := categoryID
-			previewChannelOrder := make([]string, 0)
-			previewChannelNames := map[string]map[string]bool{}
-			for _, wh := range webhooks {
-				channelID := strings.TrimSpace(wh.DiscordChannelID)
-				if channelID == "" {
-					continue
-				}
-				if _, ok := previewChannelNames[channelID]; !ok {
-					previewChannelOrder = append(previewChannelOrder, channelID)
-					previewChannelNames[channelID] = map[string]bool{}
-				}
-				channelName := strings.TrimSpace(wh.ChannelName)
-				if channelName != "" {
-					previewChannelNames[channelID][channelName] = true
-				}
-			}
-			sort.Strings(previewChannelOrder)
-			previewCount := len(previewChannelOrder)
-			var previewChannelsHTML strings.Builder
-			if previewCount == 0 {
-				previewChannelsHTML.WriteString(`<p class="field-help" style="margin:0">` + esc(t(lang, "保存済みの DiscordChannelID は見つかりませんでした。現時点では KitsuSync 側に記録された対象 channel はありません。", "No stored DiscordChannelID values were found. There are currently no recorded Discord-side channel targets in KitsuSync.")) + `</p>`)
-			} else {
-				previewChannelsHTML.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
-				for _, channelID := range previewChannelOrder {
-					names := make([]string, 0, len(previewChannelNames[channelID]))
-					for name := range previewChannelNames[channelID] {
-						names = append(names, name)
-					}
-					sort.Strings(names)
-					label := `<code>` + esc(channelID) + `</code>`
-					if len(names) > 0 {
-						label += ` <span class="hint">(` + esc(strings.Join(names, ", ")) + `)</span>`
-					}
-					previewChannelsHTML.WriteString(`<li>` + label + `</li>`)
-				}
-				previewChannelsHTML.WriteString(`</ul>`)
-			}
-			var validatedHTML string
-			if validatedChannelProjectID != "" && validatedChannelProjectID == p.KitsuProjectID {
-				candidates := buildConnectedProductionChannelCandidates(webhooks)
-				deletableCandidates, skippedCandidates, validationSummary, validationChecks := validateConnectedProductionChannelCandidates(lang, p, effectiveGuildID, botToken, allWebhooks, candidates)
-				validatedHTML = renderUnifiedConnectedProductionChannelValidationCard(lang, r, p, validationSummary, validationChecks, deletableCandidates, skippedCandidates)
-			}
-			dangerPreviewHTML := ""
-			if dangerPreviewProjectID != "" && dangerPreviewProjectID == p.KitsuProjectID {
-				dangerPreviewHTML = fmt.Sprintf(`
-    <div class="section-card glass" style="border-color:#ffb08f">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-        <span class="status-pill warn">%s</span>
-      </div>
-      <div class="metric-grid">
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host">%s</div></div>
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
-      </div>
-      <p class="field-help" style="margin:12px 0 0">%s</p>
-      <div class="section-stack" style="margin-top:12px">
-        <div>
-          <div class="eyebrow">%s</div>
-          %s
-        </div>
-      </div>
-      <div class="button-row" style="margin-top:14px">
-        <form method="POST" style="margin:0">
-          <input type="hidden" name="action" value="validate_remove_connection_channels">
-          <input type="hidden" name="project_id" value="%s">
-          <button type="submit" class="btn">%s</button>
-        </form>
-        <a class="btn-ghost" href="%s">%s</a>
-      </div>
-    </div>`,
-					esc(t(lang, "validated channel 削除候補のプレビュー", "Preview validated channel delete candidates")),
-					esc(t(lang, "これは確認用の dry-run です。この flow が今扱うのは validated channel-only deletion だけです。KitsuSync の連携解除、project row 削除、category 削除はまだ行いません。", "This preview is dry-run only. This flow currently covers validated channel-only deletion only. It does not remove the KitsuSync connection, project row, or category.")),
-					esc(t(lang, "PREVIEW ONLY", "PREVIEW ONLY")),
-					esc(t(lang, "Production", "Production")),
-					esc(p.Name),
-					esc(t(lang, "Project ID", "Project ID")),
-					esc(p.KitsuProjectID),
-					esc(t(lang, "Recorded Discord Category ID", "Recorded Discord Category ID")),
-					esc(previewCategoryID),
-					esc(t(lang, "Referenced channel IDs", "Referenced channel IDs")),
-					previewCount,
-					esc(t(lang, "現在の保存データだけでは ownership は確定できません。特に category 配下の channel 全体や、手動変更済み channel の安全削除はまだ判断していません。", "Current saved data does not prove ownership. In particular, this preview does not yet decide whether category-wide or manually edited channels would be safe to delete.")),
-					esc(t(lang, "Stored channel references", "Stored channel references")),
-					previewChannelsHTML.String(),
-					esc(p.KitsuProjectID),
-					esc(t(lang, "validated channel 候補を検証する", "Validate validated channel delete candidates")),
-					esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)),
-					esc(t(lang, "プレビューを閉じる", "Close preview")),
-				)
-			}
-			_ = dangerPreviewHTML
-			removeConnectionOnlyHTML := `<form method="POST" class="section-card glass delete-form" data-confirm="` +
-				esc(t(lang, p.Name+" の KitsuSync 連携だけを削除します。Discord channel / category は削除されません。", "Remove only the KitsuSync connection for "+p.Name+". Discord channels and category are not deleted.")) +
-				`" data-require-text="` + esc(t(lang, "削除", "delete")) + `">` +
-				`<input type="hidden" name="action" value="remove_connection">` +
-				`<input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `">` +
-				`<div class="page-heading" style="margin-bottom:14px"><div><h4 style="margin:0">` + esc(t(lang, "連携だけ削除", "Remove connection only")) + `</h4><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "KitsuSync 側の connection data だけを削除します。Discord channel / category はそのまま残します。", "Delete only the KitsuSync-side connection data. Discord channels and category stay as they are.")) + `</p></div></div>` +
-				`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "この action は KitsuSync の保存済み connection data だけを削除します。Discord 側の削除は一切行いません。", "This action deletes only KitsuSync's saved connection data. It does not perform any Discord-side deletion.")) + `</p>` +
-				`<div class="button-row"><button type="submit" class="btn-danger">` + esc(t(lang, "連携だけ削除", "Remove connection only")) + `</button></div></form>`
-			removeConnectionOnlyHTML = `<form method="POST" class="delete-form" style="margin:0;padding:16px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.02)" data-confirm="` +
-				esc(t(lang, "\u3053\u306e action \u3067\u306f "+p.Name+"\u306e KitsuSync \u9023\u643a\u3060\u3051\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord channel / category \u306f\u524a\u9664\u3055\u308c\u305a\u3001leftovers \u3068\u3057\u3066\u6b8b\u308b\u53ef\u80fd\u6027\u304c\u3042\u308a\u307e\u3059\u3002", "Remove only the KitsuSync connection for "+p.Name+". Discord channels and category are not deleted and may remain as leftovers.")) +
-				`" data-require-text="` + esc(t(lang, "\u524a\u9664", "delete")) + `">` +
-				`<input type="hidden" name="action" value="remove_connection">` +
-				`<input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `">` +
-				`<div class="page-heading" style="margin-bottom:14px"><div><h4 style="margin:0">` + esc(t(lang, "\u9023\u643a\u3092\u524a\u9664", "Remove connection")) + `</h4><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "KitsuSync 側の連携情報だけを削除します。Discord の channel / category は残ります。", "Delete only the KitsuSync-side connection data. Discord channels and category stay as they are.")) + `</p></div></div>` +
-				`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "Discord 側は削除しません。実行後も古い channel / category には自動で再接続しません。", "No Discord-side deletion runs here, and later setup will not automatically reconnect to older channels or category.")) + `</p>` +
-				`<div class="button-row"><button type="submit" class="btn-danger">` + esc(t(lang, "\u9023\u643a\u3092\u524a\u9664", "Remove connection")) + `</button></div></form>`
-			channelDeleteChoiceHTML := fmt.Sprintf(`
-    <div class="section-card glass" style="border-color:#ffd4a8">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h4 style="margin:0">%s</h4>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-        <span class="status-pill warn">%s</span>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <ul class="list-tight" style="margin:0;padding-left:18px">
-        <li>%s</li>
-        <li>%s</li>
-        <li>%s</li>
-      </ul>
-      <div class="button-row" style="margin-top:14px">
-        <form method="POST" style="margin:0">
-          <input type="hidden" name="action" value="validate_remove_connection_channels">
-          <input type="hidden" name="project_id" value="%s">
-          <button type="submit" class="btn-danger">%s</button>
-        </form>
-      </div>
-    </div>`,
-				esc(t(lang, "連携を削除し、削除可能な Discord チャンネルも削除", "Remove connection and delete validated Discord channels")),
-				esc(t(lang, "より強い guarded delete path です。まず削除可能な Discord channel だけを validation し、その結果を確認してから explicit に削除します。connection cleanup は安全条件を満たしたときだけ次の explicit step で完了します。", "This is the stronger guarded delete path. It first validates only the Discord channels that appear deletable, then lets you explicitly confirm that deletion. Connection cleanup finishes only in the next explicit step when the safety conditions are met.")),
-				esc(t(lang, "STRONGER DELETE", "STRONGER DELETE")),
-				esc(t(lang, "この path では validation を外しません。削除対象、削除しない対象、blocker を確認してから進みます。", "This path keeps the validation guard. Review what will be deleted, what will not be deleted, and any blockers before continuing.")),
-				esc(t(lang, "削除対象: validation で deletable と確認できた Discord channel だけ", "Will delete: only Discord channels that validation confirms as deletable")),
-				esc(t(lang, "削除しないもの: Discord category、global mapping、自動 connection cleanup", "Will not delete: the Discord category, global mappings, or any automatic connection cleanup")),
-				esc(t(lang, "blocker がある channel や ownership が弱い channel は削除されず、review に残ります", "Any blocked or uncertain channels stay undeleted and remain in the review state")),
-				esc(p.KitsuProjectID),
-				esc(t(lang, "強い削除 path を確認する", "Review stronger delete path")),
-			)
-			channelDeleteChoiceHTML = fmt.Sprintf(`
-    <div style="padding:16px;border:1px solid rgba(255,212,168,.35);border-radius:14px;background:rgba(255,212,168,.06)">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h4 style="margin:0">%s</h4>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-        <span class="status-pill warn">%s</span>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <ul class="list-tight" style="margin:0;padding-left:18px">
-        <li>%s</li>
-        <li>%s</li>
-        <li>%s</li>
-      </ul>
-      <div class="button-row" style="margin-top:14px">
-        <form method="POST" style="margin:0">
-          <input type="hidden" name="action" value="validate_remove_connection_channels">
-          <input type="hidden" name="project_id" value="%s">
-          <button type="submit" class="btn-danger">%s</button>
-        </form>
-      </div>
-    </div>`,
-				esc(t(lang, "\u9023\u643a\u3068 Discord \u30c1\u30e3\u30f3\u30cd\u30eb\u3092\u524a\u9664", "Remove connection and Discord channels")),
-				esc(t(lang, "Discord 側も含めて片付ける削除です。確認のあと、連携情報・Discord チャンネル・category をまとめて削除し、この production を再設定できる状態にします。", "This is the stronger delete. After confirmation, it removes the connection data, Discord channels, and the category so this production can be set up again.")),
-				esc(t(lang, "強い削除", "Stronger delete")),
-				esc(t(lang, "削除前に内容を確認してから実行します。", "Review the delete details before continuing.")),
-				esc(t(lang, "削除されるもの: KitsuSync 側の連携情報、Discord チャンネル、Discord category", "Will delete: KitsuSync connection data, Discord channels, and the Discord category")),
-				esc(t(lang, "削除されないもの: global user / checker mapping", "Will not delete: global user / checker mappings")),
-				esc(t(lang, "確認できなかった channel があっても、この production 専用の category ごと削除します。", "Even if some channels could not be confirmed individually, this production's dedicated category is deleted as part of the same action.")),
-				esc(p.KitsuProjectID),
-				esc(t(lang, "削除内容を確認する", "Review delete details")),
-			)
-			if validatedHTML != "" {
-				channelDeleteChoiceHTML = validatedHTML
-			}
-			unifiedDeleteSectionHTML := fmt.Sprintf(`
-    <div class="section-card glass">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <div class="section-stack">
-        %s
-        %s
-      </div>
-    </div>`,
-				esc(t(lang, "連携を削除", "Remove connection")),
-				esc(t(lang, "この production の delete mode をここで選びます。単純な connection removal と、validated Discord channel deletion を含む stronger path を分けて確認できます。", "Choose the delete mode for this production here. This section separates simple connection removal from the stronger path that includes validated Discord channel deletion.")),
-				esc(t(lang, "Discord channel を含む path でも validation と explicit confirmation を維持します。category deletion や broad automatic cleanup はこの flow に含めません。", "Even when Discord channels are included, this flow keeps validation and explicit confirmation. It does not include category deletion or broad automatic cleanup.")),
-				removeConnectionOnlyHTML,
-				channelDeleteChoiceHTML,
-			)
-			unifiedDeleteSectionHTML = fmt.Sprintf(`
-    <div class="section-card glass">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <div class="section-stack">
-        %s
-        %s
-      </div>
-    </div>`,
-				esc(t(lang, "\u9023\u643a\u3092\u524a\u9664", "Remove connection")),
-				esc(t(lang, "この production の削除方法をここで選びます。", "Choose how to delete this production here.")),
-				esc(t(lang, "連携だけ削除するか、Discord 側もまとめて削除するかを選べます。", "Choose whether to remove only the connection or also remove the Discord side.")),
-				removeConnectionOnlyHTML,
-				channelDeleteChoiceHTML,
-			)
-			removeConnectionOnlyHTML = `<form method="POST" class="delete-form" style="margin:0;padding:16px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.02)" data-confirm="` +
-				esc(t(lang, "\u3053\u306e production \u306e KitsuSync \u9023\u643a\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord \u306e channel \u3068 category \u306f\u6b8b\u308a\u307e\u3059\u3002", "Remove only the KitsuSync connection for this production. Discord channels and category stay as they are.")) +
-				`" data-require-text="` + esc(t(lang, "\u524a\u9664", "delete")) + `">` +
-				`<input type="hidden" name="action" value="remove_connection">` +
-				`<input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `">` +
-				`<div class="page-heading" style="margin-bottom:14px"><div><h4 style="margin:0">` + esc(t(lang, "\u9023\u643a\u3092\u524a\u9664", "Remove connection")) + `</h4><p class="hint" style="margin:6px 0 0">` + esc(t(lang, "KitsuSync \u5074\u306e\u9023\u643a\u60c5\u5831\u3060\u3051\u3092\u524a\u9664\u3057\u307e\u3059\u3002Discord \u5074\u306f\u524a\u9664\u3057\u307e\u305b\u3093\u3002", "Delete only the KitsuSync-side connection data. Nothing is deleted on Discord.")) + `</p></div></div>` +
-				`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "category \u3084 channel \u304c\u6b8b\u3063\u3066\u3044\u3066\u3082\u3001\u6b21\u56de setup \u3067\u53e4\u3044 Discord channel \u306b\u81ea\u52d5\u518d\u63a5\u7d9a\u306f\u3057\u307e\u305b\u3093\u3002", "Even if the old category or channels remain, the next setup does not automatically reconnect to them.")) + `</p>` +
-				`<div class="button-row"><button type="submit" class="btn-danger">` + esc(t(lang, "\u9023\u643a\u3092\u524a\u9664", "Remove connection")) + `</button></div></form>`
-			channelDeleteChoiceHTML = fmt.Sprintf(`
-    <div style="padding:16px;border:1px solid rgba(255,212,168,.35);border-radius:14px;background:rgba(255,212,168,.06)">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h4 style="margin:0">%s</h4>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-        <span class="status-pill warn">%s</span>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <ul class="list-tight" style="margin:0;padding-left:18px">
-        <li>%s</li>
-        <li>%s</li>
-        <li>%s</li>
-      </ul>
-      <div class="button-row" style="margin-top:14px">
-        <form method="POST" style="margin:0">
-          <input type="hidden" name="action" value="validate_remove_connection_channels">
-          <input type="hidden" name="project_id" value="%s">
-          <button type="submit" class="btn-danger">%s</button>
-        </form>
-      </div>
-    </div>`,
-				esc(t(lang, "\u9023\u643a\u3068 Discord \u30c1\u30e3\u30f3\u30cd\u30eb\u3092\u524a\u9664", "Remove connection and Discord channels")),
-				esc(t(lang, "KitsuSync \u5074\u306e\u9023\u643a\u60c5\u5831\u3068\u3001\u3053\u306e production \u7528\u306e Discord channel / category \u3092\u307e\u3068\u3081\u3066\u524a\u9664\u3057\u307e\u3059\u3002\u5b8c\u4e86\u5f8c\u306f\u518d\u8a2d\u5b9a\u3067\u304d\u307e\u3059\u3002", "Remove the KitsuSync connection data and this production's Discord channels/category together so it can be set up again.")),
-				esc(t(lang, "\u5f37\u3044\u524a\u9664", "Stronger delete")),
-				esc(t(lang, "\u5b9f\u884c\u524d\u306b\u524a\u9664\u5185\u5bb9\u3068\u6ce8\u610f\u70b9\u3092\u78ba\u8a8d\u3057\u307e\u3059\u3002", "Review what this stronger delete removes before continuing.")),
-				esc(t(lang, "\u524a\u9664\u3059\u308b\u3082\u306e: KitsuSync \u5074\u306e\u9023\u643a\u60c5\u5831\u3001Discord channel\u3001Discord category", "Will delete: KitsuSync connection data, Discord channels, and the Discord category")),
-				esc(t(lang, "\u524a\u9664\u3057\u306a\u3044\u3082\u306e: global user / checker mapping", "Will not delete: global user / checker mappings")),
-				esc(t(lang, "\u500b\u5225 channel \u306e\u78ba\u8a8d\u306f\u5185\u90e8\u3067\u7d9a\u3051\u307e\u3059\u304c\u3001UI \u4e0a\u306f 1 \u56de\u306e\u524a\u9664\u3068\u3057\u3066\u5b8c\u4e86\u3055\u305b\u307e\u3059\u3002", "Validation still runs internally, but the visible flow stays as one stronger delete.")),
-				esc(p.KitsuProjectID),
-				esc(t(lang, "\u524a\u9664\u5185\u5bb9\u3092\u78ba\u8a8d", "Review delete details")),
-			)
-			if validatedHTML != "" {
-				channelDeleteChoiceHTML = validatedHTML
-			}
-			unifiedDeleteSectionHTML = fmt.Sprintf(`
-    <div class="section-card glass">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-      </div>
-      <p class="field-help" style="margin:0 0 12px">%s</p>
-      <div class="section-stack">
-        %s
-        %s
-      </div>
-    </div>`,
-				esc(t(lang, "\u9023\u643a\u3092\u524a\u9664", "Remove connection")),
-				esc(t(lang, "\u3053\u306e production \u306e\u524a\u9664\u65b9\u6cd5\u3092\u9078\u3073\u307e\u3059\u3002", "Choose how to delete this production.")),
-				esc(t(lang, "\u9023\u643a\u3060\u3051\u524a\u9664\u3059\u308b\u304b\u3001Discord \u5074\u3082\u542b\u3081\u3066\u307e\u3068\u3081\u3066\u524a\u9664\u3059\u308b\u304b\u3092\u3053\u3053\u3067\u9078\u3079\u307e\u3059\u3002", "Choose whether to remove only the connection or delete the Discord side too.")),
-				removeConnectionOnlyHTML,
-				channelDeleteChoiceHTML,
-			)
-			openAttr := ""
-			if selectedProjectID != "" && p.KitsuProjectID == selectedProjectID {
-				openAttr = " open"
-			}
-			projectBlock := fmt.Sprintf(`
-<details class="accordion"%s>
-  <summary>
-    <div class="accordion-summary-main">
-      <div class="eyebrow">%s</div>
-      <div class="tile-title">%s</div>
-      <div class="tile-sub">%s</div>
-    </div>
-    <div class="accordion-summary-side">
-      <span class="status-pill %s">%s</span>
-      <span class="accordion-trigger"><span>%s</span><span class="accordion-caret">⌄</span></span>
-    </div>
-  </summary>
-  <div class="accordion-body section-stack" style="padding-top:16px">
-    <div class="section-card glass">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-        <span class="status-pill %s">%s</span>
-      </div>
-      <div class="metric-grid">
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value metric-value-host"><code>%s</code></div></div>
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%d</div></div>
-        <div class="metric-card"><div class="metric-label">%s</div><div class="metric-value">%s</div></div>
-      </div>
-      <p class="hint" style="margin:12px 0 0">%s <code>%s</code> ・ %s <code>%s</code></p>
-    </div>
-    <details class="advanced-details"><summary>%s</summary><form method="POST" class="section-card glass">
-      <input type="hidden" name="project_id" value="%s">
-      <div class="page-heading" style="margin-bottom:14px">
-        <div>
-          <h3 style="margin:0">%s</h3>
-          <p class="hint" style="margin:6px 0 0">%s</p>
-        </div>
-      </div>
-      <div class="form-grid">
-        <div>
-          <label>Discord Guild ID</label>
-          <input type="text" name="guild_id" value="%s" placeholder="123456789012345678">
-          <p class="field-help">%s</p>
-        </div>
-      </div>
-      <div class="button-row"><button type="submit" class="btn">%s</button></div>
-    </form></details>
-    <div style="display:none" aria-hidden="true">%s%s%s%s%s%s%s%s%s%s%s%s</div>
-    %s
-    %s
-    %s
-    %s
-    %s
-  </div>
-</details>`,
-				openAttr,
-				esc(t(lang, "CONNECTED PRODUCTION", "CONNECTED PRODUCTION")),
-				esc(p.Name),
-				esc(fmt.Sprintf("%s%d / %s%d / %s%d", t(lang, "割り当て済み ", "Assigned "), assignedCount, t(lang, "未割り当て ", "Unassigned "), unassignedCount, t(lang, "チャンネル ", "Channels "), channelCount)),
-				statusClass,
-				esc(statusLabel),
-				esc(t(lang, "詳細を見る", "Open details")),
-				esc(p.Name),
-				esc(t(lang, "この production の Discord 側 routing をここで確認・修正します。未割り当ての task type があれば、ここから channel 作成や割り当てを続けられます。", "Review and fix this production's Discord routing here. If task types are still unassigned, continue channel creation and assignment from here.")),
-				statusClass,
-				esc(statusLabel),
-				esc(t(lang, "Discord Guild ID", "Discord Guild ID")),
-				esc(fallbackText(effectiveGuildID, "—")),
-				esc(t(lang, "Assigned task types", "Assigned task types")),
-				assignedCount,
-				esc(t(lang, "Unassigned task types", "Unassigned task types")),
-				unassignedCount,
-				esc(t(lang, "Language", "Language")),
-				esc(strings.ToUpper(projectLang)),
-				esc(t(lang, "Project ID", "Project ID")),
-				esc(p.KitsuProjectID),
-				esc(t(lang, "Discord Category ID", "Discord Category ID")),
-				esc(categoryID),
-				esc(t(lang, "詳細設定", "Advanced details")),
-				esc(p.KitsuProjectID),
-				esc(t(lang, "Discord ID を編集", "Edit Discord ID")),
-				esc(t(lang, "この production が使う Discord Server / Guild ID をここで確認・更新します。", "Review or update the Discord Server / Guild ID used by this production here.")),
-				esc(effectiveGuildID),
-				esc(t(lang, "この保存は Discord ID のみを更新します。", "This save action updates only the Discord ID.")),
-				esc(t(lang, "保存", "Save")),
-				esc(t(lang, p.Name+" の KitsuSync 連携だけを削除します。Discord channel / category は削除されません。", "Remove only the KitsuSync connection for "+p.Name+". Discord channels and category are kept.")),
-				esc(t(lang, "削除", "delete")),
-				esc(p.KitsuProjectID),
-				esc(t(lang, "連携を削除", "Remove connection")),
-				esc(t(lang, "この production の KitsuSync 側の接続情報だけを解除します。Discord の channel / category はそのまま残ります。", "Remove only this production's KitsuSync-side connection records. Discord channels and category stay as they are.")),
-				esc(t(lang, "削除されるのは KitsuSync の保存データのみです。Discord 側の削除はこの操作では行いません。", "This deletes only KitsuSync's saved connection data. No Discord-side deletion happens in this action.")),
-				esc(t(lang, "連携を削除", "Remove connection")),
-				esc(p.KitsuProjectID),
-				esc(t(lang, "validated Discord channel の削除候補を確認", "Review validated Discord channel delete candidates")),
-				esc(t(lang, "この flow は現在、validated channel-only deletion だけを扱います。KitsuSync の連携解除、project row 削除、category 削除は自動では行わず、まず保存済みの category / channel 参照を preview 表示します。", "This flow currently covers validated channel-only deletion only. It does not automatically remove the KitsuSync connection, project row, or category. It starts by previewing the saved category / channel references.")),
-				esc(t(lang, "この preview は Discord 側を削除しません。ownership が十分に証明できていないため、今は dry-run の確認だけを行います。", "This preview does not execute Discord deletion. Ownership is not proven strongly enough yet, so this step is dry-run only.")),
-				esc(t(lang, "validated channel 削除候補を確認", "Review validated channel delete candidates")),
-				"",
-				`<details class="advanced-details danger-zone"><summary>`+esc(t(lang, "Danger Zone", "Danger Zone"))+`</summary>`+unifiedDeleteSectionHTML+`</details>`,
-				renderExplicitTaskTypeChannelPlan(p, projectTaskTypes, botToken, r, lang, db),
-				renderProjectChannels(p, webhooks, projectTaskTypes, lang, r),
-				"",
-			)
-			projectBlock = strings.Replace(projectBlock, "<p class=\"hint\" style=\"margin:12px 0 0\">", "<details class=\"advanced-details\"><summary>"+esc(t(lang, "詳細設定", "Advanced details"))+"</summary><p class=\"hint\" style=\"margin:12px 0 0\">", 1)
-			projectBlock = strings.Replace(projectBlock, "</p></div>\n    <details class=\"advanced-details\">", "</p></details></div>\n    <details class=\"advanced-details\">", 1)
-			advancedFormStart := `<details class="advanced-details"><summary>` + esc(t(lang, "詳細設定", "Advanced details")) + `</summary><form`
-			projectBlock = strings.Replace(projectBlock, advancedFormStart, notificationSectionHTML+advancedFormStart, 1)
-			blocks.WriteString(projectBlock)
-			blocks.WriteString(`<div id="troubleshooting" class="section-card glass"><h3>` + esc(t(lang, "トラブルシューティング", "Troubleshooting")) + `</h3><p class="hint">` + esc(t(lang, "現在の状態と次の対応を確認できます。詳細な診断情報は詳細設定で確認できます。", "Review the current issue and next action. Raw diagnostic details remain in Advanced settings.")) + `</p></div>`)
-		}
-		if blocks.Len() == 0 {
-			blocks.WriteString(emptyState("\U0001F5C2", t(lang, "まだ連携済みプロダクションがありません", "No connected productions yet."), t(lang, "先に新規連携セットアップで production connection を作成してから、ここで確認・編集してください。", "Create the first production connection in New Connection Setup, then review it here.")))
-		}
-		body := `<div class="section-stack"><div class="section-card glass"><p class="hint">` + esc(t(lang, "このページでは連携済み production ごとに Discord 側の接続情報と routing を管理します。新しい接続は新規連携セットアップから作成し、既存の見直しはここで行います。", "Use this page to manage Discord connection details and routing for each connected production. Create new connections in New Connection Setup, then review existing ones here.")) + `</p></div>` + blocks.String() + `</div>`
-		fmt.Fprint(w, adminPage(lang, t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u7ba1\u7406", "Connected Productions"), r, body))
+		renderIAProductionList(w, r, db, fallbackGuildID, botToken)
 	}
-}
-
-func renderConnectedProductionNotificationSection(db *gorm.DB, project model.Project, lang string, r *http.Request, statusClass, statusLabel, statusHint string, issues []string) string {
-	actionURL := withLang("/bot/admin/projects?project="+url.QueryEscape(project.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
-	config := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
-	taskTypes := routingTaskTypesForProduction(project.KitsuProjectID)
-	stateMessage := statusHint
-	if len(issues) > 0 {
-		stateMessage += " " + t(lang, "次の対応: ルートを確認してください。", "Next action: review the routing configuration.")
-	}
-	resourceReport := inspectProjectDiscordResources(project, db)
-	resourceNotice := ""
-	routingIncomplete := config == nil || len(model.ListProductionChannelMappings(db, project.KitsuProjectID)) == 0 || len(model.ListProductionNotificationRoutes(db, project.KitsuProjectID)) == 0
-	if resourceReport.Error != "" || resourceReport.HasStaleResources() || routingIncomplete {
-		resourceNotice = " " + t(lang, "Discord側の保存済みchannelを確認できません。修復計画を確認してください。", "Saved Discord channels could not be verified. Review the repair plan.")
-	}
-	var dryRunOptions strings.Builder
-	dryRunOptions.WriteString(`<option value="">` + esc(tr(lang, "production_routing.select_task_type")) + `</option>`)
-	for _, taskType := range taskTypes {
-		dryRunOptions.WriteString(`<option value="` + esc(taskType.ID) + `">` + esc(taskType.Name) + `</option>`)
-	}
-	var actionHTML string
-	if config != nil {
-		action := "pause"
-		label := t(lang, "通知を一時停止", "Pause notifications")
-		if !config.Enabled {
-			action = "resume"
-			label = t(lang, "通知を再開", "Resume notifications")
-		}
-		actionHTML = `<form method="post" action="` + esc(actionURL) + `"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="` + action + `"><button class="btn" type="submit">` + esc(label) + `</button></form>`
-	} else {
-		actionHTML = `<a class="btn" href="` + esc(actionURL) + `">` + esc(t(lang, "通知ルートを設定", "Configure notification routes")) + `</a>`
-	}
-	if resourceNotice != "" && strings.TrimSpace(project.DiscordGuildID) != "" {
-		repairURL := withLang("/bot/setup?wizard_step=4&repair=1&project="+url.QueryEscape(project.KitsuProjectID)+"&plan_guild="+url.QueryEscape(project.DiscordGuildID), r)
-		actionHTML += `<a class="btn-ghost" href="` + esc(repairURL) + `">` + esc(t(lang, "修復計画を確認", "Review repair plan")) + `</a>`
-	}
-	productionLanguage := normalizedProductionNotificationLanguage(project.Language)
-	languageForm := `<form method="post" action="` + esc(withLang("/bot/admin/projects", r)) + `" class="notification-language-form"><input type="hidden" name="project_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="save_notification_language"><label for="production-notification-language">` + esc(t(lang, "Discord通知の言語", "Discord notification language")) + `</label><select id="production-notification-language" name="notification_language"><option value="ja"` + selectedAttr(productionLanguage == "ja") + `>` + esc(t(lang, "日本語", "Japanese")) + `</option><option value="en"` + selectedAttr(productionLanguage == "en") + `>English</option></select><p class="field-help">` + esc(t(lang, "今後のDiscord通知に使う言語です。管理画面の言語とは別に設定されます。", "Applies to future Discord notifications and is independent of the admin UI language.")) + `</p><button class="btn-ghost" type="submit">` + esc(t(lang, "保存", "Save")) + `</button></form>`
-	return `<section class="section-card glass notification-controls" aria-labelledby="notification-controls-title"><div class="page-heading"><div><h3 id="notification-controls-title">` + esc(t(lang, "通知状態とテスト", "Notification state and testing")) + `</h3><p class="hint">` + esc(stateMessage+resourceNotice) + `</p></div><span class="status-pill ` + esc(statusClass) + `">` + esc(statusLabel) + `</span></div><div class="button-row">` + actionHTML + `</div>` + languageForm + `<form method="post" action="` + esc(actionURL) + `" class="section-card glass" style="margin-top:12px"><input type="hidden" name="production_id" value="` + esc(project.KitsuProjectID) + `"><input type="hidden" name="action" value="dry_run"><label for="connected-production-dry-run">` + esc(t(lang, "dry-run 用 Task Type", "Task Type for dry-run")) + `</label><select id="connected-production-dry-run" name="dry_run_task_type_id">` + dryRunOptions.String() + `</select><div class="button-row"><button class="btn secondary" type="submit">` + esc(tr(lang, "production_routing.dry_run")) + `</button></div><p class="field-help" role="note">` + esc(t(lang, "dry-run はネットワーク通信を行わず、Discord メッセージも送信しません。結果には Production、Task Type、対象 channel、実行予定、skip reason を表示します。", "Dry-run is network-free and sends no Discord message. The result shows Production, Task Type, mapped channel, intended action, and skip reason.")) + `</p></form></section>`
 }
 
 type connectedProductionChannelCandidate struct {
@@ -1677,9 +1143,62 @@ var (
 	strongDeleteValidateCandidates = validateConnectedProductionChannelCandidates
 	strongDeleteChannelDelete      = DeleteChannel
 	strongDeleteConnectionCleanup  = deleteProjectConnectionOnlyForMutation
-	strongDeleteInspectWebhook     = currentRoutingInspectWebhook
+	strongDeleteInspectWebhook     = inspectRoutingWebhook
 	strongDeleteInspectChannel     = inspectManagedDiscordChannel
 )
+
+type routingWebhookIdentity struct {
+	ID        string `json:"id"`
+	Type      int    `json:"type"`
+	GuildID   string `json:"guild_id"`
+	ChannelID string `json:"channel_id"`
+}
+
+func routingWebhookMatches(identity routingWebhookIdentity, id, guild, channel string) bool {
+	return identity.Type == 1 && strings.TrimSpace(identity.ID) == strings.TrimSpace(id) &&
+		strings.TrimSpace(identity.GuildID) == strings.TrimSpace(guild) && strings.TrimSpace(identity.ChannelID) == strings.TrimSpace(channel)
+}
+
+func discordWebhookID(raw string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "discord.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("Discord webhook response was not a trusted URL")
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "webhooks" || strings.TrimSpace(parts[2]) == "" || strings.TrimSpace(parts[3]) == "" {
+		return "", errors.New("Discord webhook response was incomplete")
+	}
+	return parts[2], nil
+}
+
+func inspectRoutingWebhook(raw string) (routingWebhookIdentity, bool, error) {
+	var identity routingWebhookIdentity
+	if _, err := discordWebhookID(raw); err != nil {
+		return identity, true, nil
+	}
+	request, err := http.NewRequest(http.MethodGet, strings.TrimSpace(raw), nil)
+	if err != nil {
+		return identity, false, errors.New("managed webhook read could not be prepared")
+	}
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	response, err := client.Do(request)
+	if err != nil {
+		return identity, false, errors.New("managed webhook could not be reached")
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusUnauthorized {
+		return identity, true, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return identity, false, errors.New("managed webhook read failed")
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 16<<10)).Decode(&identity); err != nil {
+		return routingWebhookIdentity{}, false, errors.New("managed webhook response was invalid")
+	}
+	return identity, false, nil
+}
 
 type managedDiscordChannelIdentity struct {
 	ID      string `json:"id"`

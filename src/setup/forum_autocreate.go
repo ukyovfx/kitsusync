@@ -114,7 +114,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 		// First run: seed the routes from the Kitsu Task Type list so the Bot has
 		// something to create forums for. Roles stay unset until the operator
 		// maps statuses, so nothing is routed yet.
-		settings.Config = model.ProductionForumConfig{ProductionID: productionID, Mode: model.NotificationModeLane}
+		settings.Config = model.ProductionForumConfig{ProductionID: productionID}
 		for _, taskType := range forumTaskTypeLister(db, productionID) {
 			settings.Routes = append(settings.Routes, model.ProductionForumRoute{ProductionID: productionID, TaskTypeID: taskType.ID, TaskTypeName: taskType.Name})
 		}
@@ -124,9 +124,6 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	}
 	if len(submitted.StatusRoles) > 0 {
 		settings.StatusRoles = submitted.StatusRoles
-	}
-	if submitted.Config.Mode != "" {
-		settings.Config.Mode = submitted.Config.Mode
 	}
 	if strings.TrimSpace(submitted.Config.GuildID) != "" {
 		settings.Config.GuildID = submitted.Config.GuildID
@@ -331,7 +328,7 @@ func botChannelPermissionsInGuild(guildID, channelID, botID, botToken string) (i
 
 // checkForumPermissions returns Japanese problems for the routed forums.
 func checkForumPermissions(settings model.ProductionForumSettings, botToken string) []string {
-	if settings.Config.Mode != model.NotificationModeForum || strings.TrimSpace(botToken) == "" {
+	if strings.TrimSpace(botToken) == "" {
 		return nil
 	}
 	seen := map[string]struct{}{}

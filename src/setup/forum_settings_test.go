@@ -79,7 +79,7 @@ func completeForumForm() url.Values {
 	return form
 }
 
-func TestForumSettingsPageRendersLookupsAndDefaultsToLane(t *testing.T) {
+func TestForumSettingsPageRendersLookups(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
 	w := httptest.NewRecorder()
@@ -88,7 +88,7 @@ func TestForumSettingsPageRendersLookupsAndDefaultsToLane(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	for _, want := range []string{"Animation", "Compositing", `value="f-anim"`, "Waiting For Approval", `name="mode" value="lane" checked`} {
+	for _, want := range []string{"Animation", "Compositing", `value="f-anim"`, "Waiting For Approval"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("page is missing %q", want)
 		}
@@ -101,9 +101,6 @@ func TestForumSettingsSaveStoresSettingsAndSwitchesMode(t *testing.T) {
 	w := forumPost(t, db, completeForumForm())
 	if w.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
-	}
-	if got := model.NotificationModeForProduction(db, "p1"); got != model.NotificationModeForum {
-		t.Fatalf("mode = %q, want forum", got)
 	}
 	loaded, ok, err := model.LoadProductionForumSettings(db, "p1")
 	if err != nil || !ok || len(loaded.Routes) != 2 || len(loaded.StatusRoles) != 4 || len(loaded.Tags) != 8 {
@@ -122,25 +119,6 @@ func TestForumSettingsIncompleteForumModeIsRejectedWithReasons(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "has no tag for the role") {
 		t.Fatal("the page must say what is missing")
-	}
-	if got := model.NotificationModeForProduction(db, "p1"); got != model.NotificationModeLane {
-		t.Fatalf("a rejected save must stay in lane mode, got %q", got)
-	}
-}
-
-func TestForumSettingsLaneDraftSavesWithoutTags(t *testing.T) {
-	stubForumLookups(t, nil)
-	db := newForumPageDB(t)
-	form := completeForumForm()
-	form.Set("mode", "lane")
-	delete(form, "tag_forum")
-	delete(form, "tag_role")
-	delete(form, "tag_id")
-	if w := forumPost(t, db, form); w.Code != http.StatusSeeOther {
-		t.Fatalf("a lane-mode draft must save, status = %d: %s", w.Code, w.Body.String())
-	}
-	if got := model.NotificationModeForProduction(db, "p1"); got != model.NotificationModeLane {
-		t.Fatalf("mode = %q, want lane", got)
 	}
 }
 
@@ -191,9 +169,6 @@ func TestForumSettingsRejectsUnknownProductionAndValidationOnly(t *testing.T) {
 	if w := forumPost(t, db, form); w.Code != http.StatusForbidden {
 		t.Fatalf("validation-only Production must be read-only, status = %d", w.Code)
 	}
-	if got := model.NotificationModeForProduction(db, "v1"); got != model.NotificationModeLane {
-		t.Fatalf("mode = %q", got)
-	}
 }
 
 func TestForumSettingsEscapesUntrustedNames(t *testing.T) {
@@ -215,8 +190,8 @@ func TestNotificationsTabLinksToForumSettings(t *testing.T) {
 	db.Where("kitsu_project_id = ?", "p1").First(&project)
 	r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=p1&tab=notifications&lang=en", nil)
 	got := renderForumSettingsLink(db, r, project, "en")
-	if !strings.Contains(got, "/bot/admin/forum?") || !strings.Contains(got, "project=p1") || !strings.Contains(got, "Lane (current)") {
-		t.Fatalf("link missing or wrong mode: %s", got)
+	if !strings.Contains(got, "/bot/admin/forum?") || !strings.Contains(got, "project=p1") {
+		t.Fatalf("link to forum settings missing: %s", got)
 	}
 }
 
@@ -251,7 +226,7 @@ func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
 }
 
 func TestForumSettingsEveryProblemCodeHasLocalizedText(t *testing.T) {
-	codes := []string{model.ProblemUnknownMode, model.ProblemProductionRequired, model.ProblemRouteIncomplete, model.ProblemTaskTypeDuplicate, model.ProblemStatusNoRole, model.ProblemStatusDuplicate, model.ProblemTagUnroutedForum, model.ProblemTagInvalid, model.ProblemTagRoleDuplicate, model.ProblemTagReused, model.ProblemGuildRequired, model.ProblemRoutesRequired, model.ProblemRoleStatusMissing, model.ProblemForumTagMissing}
+	codes := []string{model.ProblemProductionRequired, model.ProblemRouteIncomplete, model.ProblemTaskTypeDuplicate, model.ProblemStatusNoRole, model.ProblemStatusDuplicate, model.ProblemTagUnroutedForum, model.ProblemTagInvalid, model.ProblemTagRoleDuplicate, model.ProblemTagReused, model.ProblemGuildRequired, model.ProblemRoutesRequired, model.ProblemRoleStatusMissing, model.ProblemForumTagMissing}
 	for _, code := range codes {
 		problem := model.ForumSettingsProblem{Code: code, Args: []string{"x", "wfa"}}
 		for _, lang := range []string{"ja", "en"} {

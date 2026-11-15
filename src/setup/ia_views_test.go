@@ -27,7 +27,7 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.CheckerMap{}, &model.Setting{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.CheckerMap{}, &model.Setting{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -62,31 +62,6 @@ func TestProductionCenteredViewsExposeApprovedSections(t *testing.T) {
 	}
 	if strings.Contains(body, "name=\"guild_id\"") {
 		t.Fatal("selected Production view exposes manual server ID editing")
-	}
-}
-
-func TestProductionNotificationsShowsExplicitOrderRecoveryOnlyWhenNeeded(t *testing.T) {
-	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "order-recovery-ui", Name: "Order Recovery UI"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest("GET", "/bot/admin/projects?project=order-recovery-ui&tab=notifications&lang=en", nil)
-	withoutRecovery := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
-	if strings.Contains(withoutRecovery, "data-recover-routing-order") {
-		t.Fatal("order-recovery action must not render for an unblocked Production")
-	}
-	if err := db.Create(&model.ProductionNotificationWriteLock{ProductionID: project.KitsuProjectID, MutationState: model.NotificationMutationReorderHelp, MutationToken: "synthetic-recovery-token"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	withRecovery := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
-	for _, marker := range []string{"Discord channel order requires reconciliation.", "data-recover-routing-order", `name="project_id" value="order-recovery-ui"`, `name="action" value="recover_current_routing_order"`} {
-		if !strings.Contains(withRecovery, marker) {
-			t.Errorf("unresolved order recovery should render an explicit safe action: missing %q", marker)
-		}
-	}
-	if strings.Contains(withRecovery, "synthetic-recovery-token") {
-		t.Fatal("order recovery UI must not expose the internal mutation token")
 	}
 }
 
@@ -248,7 +223,7 @@ func TestPrimaryNavigationAndNewConnectionFlow(t *testing.T) {
 	w := httptest.NewRecorder()
 	renderIANewConnection(w, r, db)
 	setup := w.Body.String()
-	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Channel plan", "Review", "Execute", "Complete", "Configure the Kitsu connection"} {
+	for _, want := range []string{"Prerequisites", "Production", "Discord server", "Forum", "Review", "Execute", "Complete", "Configure the Kitsu connection"} {
 		if !strings.Contains(setup, want) {
 			t.Fatalf("new connection flow missing %q", want)
 		}
@@ -645,8 +620,8 @@ func TestLegacyPausedProductionIsReviewRequiredAndNotPaused(t *testing.T) {
 	db.Create(&p)
 	db.Create(&model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, Enabled: false})
 	class, label, hint := iaStatus(db, p, "en")
-	if class != "bad" || label != "Needs review" || strings.Contains(strings.ToLower(hint), "paused") {
-		t.Fatalf("legacy paused state was not converted to review-required state: %q %q %q", class, label, hint)
+	if class != "bad" || label != "Incomplete" || strings.Contains(strings.ToLower(hint), "paused") {
+		t.Fatalf("legacy paused state was not converted to an explicit review state: %q %q %q", class, label, hint)
 	}
 	w := httptest.NewRecorder()
 	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
@@ -666,7 +641,7 @@ func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 			t.Fatalf("normal Notifications UI exposes retired control %q", forbidden)
 		}
 	}
-	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "Edit"} {
+	for _, want := range []string{"Kitsu Task Type", "Forum", "Edit"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Notifications UI missing %q", want)
 		}
@@ -866,11 +841,10 @@ func TestSelectedProductionOverviewUsesCanonicalConnectionStatuses(t *testing.T)
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "canonical-status-p", Name: "Canonical Status Production", DiscordGuildID: "guild"}
 	db.Create(&p)
-	db.Create(&model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, Enabled: true})
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=canonical-status-p&lang=ja", nil), db, "")
 	body := w.Body.String()
-	for _, want := range []string{"接続済", "更新が必要", "プロダクション接続", "Discordリソース", "通知ルーティング"} {
+	for _, want := range []string{"接続済", "未設定", "プロダクション接続", "Discordリソース", "通知ルーティング"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("overview missing canonical status content %q", want)
 		}
@@ -1265,26 +1239,6 @@ func TestWizardProductionLookupStateDistinguishesEmptyAndFailure(t *testing.T) {
 	}
 }
 
-func TestConnectedProductionRepairLinkAllowsExistingProductionPlan(t *testing.T) {
-	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "stale-connected", Name: "Stale Connected", DiscordGuildID: "guild-1", DiscordCategoryID: "category-1"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	r := httptest.NewRequest("GET", "/bot/admin/projects?project=stale-connected&tab=notifications&lang=en", nil)
-	body := renderConnectedProductionNotificationSection(db, project, "en", r, "warning", "Needs review", "Saved Discord resources need review.", nil)
-	if !strings.Contains(body, "wizard_step=4") || !strings.Contains(body, "repair=1") {
-		t.Fatalf("stale connected Production did not expose the repair entry: %s", body)
-	}
-	repairRequest := httptest.NewRequest("GET", "/bot/setup?wizard_step=4&repair=1&project=stale-connected&plan_guild=guild-1&lang=en", nil)
-	if !productionRepairMode(repairRequest) {
-		t.Fatal("repair mode was not recognized")
-	}
-	if !strings.Contains(setupWizardURL(repairRequest, 4, project.KitsuProjectID, project.DiscordGuildID, false), "wizard_step=4") {
-		t.Fatal("repair mode did not preserve the plan step")
-	}
-}
-
 func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "language-production", Name: "Language Production", Language: "ja"}
@@ -1327,24 +1281,6 @@ func TestUserLinkingSaveStartsDisabledAndTracksChangedSelection(t *testing.T) {
 	}
 	if strings.Contains(body, ">123456789012345678<") {
 		t.Fatal("User Linking rendered a raw Discord ID as visible identity text")
-	}
-}
-
-func TestDuplicateTaskTypePlanRendersDistinctLabelsAndGuidance(t *testing.T) {
-	project := model.Project{KitsuProjectID: "production-1", DiscordGuildID: "guild-1", Name: "Live Production"}
-	types := []kitsu.TaskType{{ID: "tt-2", Name: "Concept"}, {ID: "tt-1", Name: "Concept"}}
-	jp := renderTaskTypeChannelPlanCard(project, nil, types, "ja")
-	en := renderTaskTypeChannelPlanCard(project, nil, types, "en")
-	for _, body := range []string{jp, en} {
-		if !strings.Contains(body, "Concept (1)") || !strings.Contains(body, "Concept (2)") {
-			t.Fatalf("duplicate Task Types were not distinguishable: %s", body)
-		}
-		if strings.Contains(body, "tt-1") || strings.Contains(body, "tt-2") {
-			t.Fatal("duplicate Task Type guidance exposed raw IDs")
-		}
-	}
-	if !strings.Contains(tr("ja", "channel_plan.duplicate_name"), "Discord") || !strings.Contains(tr("en", "channel_plan.duplicate_name"), "Multiple Task Types have the same name") {
-		t.Fatal("duplicate Task Type explanation is not localized")
 	}
 }
 
@@ -1436,17 +1372,14 @@ func TestProductionTeamShowsLinkedDiscordDisplayName(t *testing.T) {
 
 func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production", Language: "en"}
+	p := model.Project{KitsuProjectID: "routing-production", Name: "Routing Production", Language: "en", DiscordGuildID: "123456789012345678"}
 	db.Create(&p)
-	if err := model.CreateProjectWebhook(db, p.KitsuProjectID, "compositing", "", "https://example.invalid/1", "channel-1"); err != nil {
-		t.Fatal(err)
-	}
-	webhook := model.ListProjectWebhooks(db, p.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, ProductionName: p.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: p.KitsuProjectID, TaskTypeID: "compositing", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(p.KitsuProjectID, p.DiscordGuildID,
+		[]model.ProductionForumRoute{{ProductionID: p.KitsuProjectID, TaskTypeID: "compositing", TaskTypeName: "Compositing", ForumChannelID: "forum-comp", ForumChannelName: "compositing"}})); err != nil {
 		t.Fatal(err)
 	}
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=routing-production&tab=notifications&lang=en", nil), p, "en", "ok", "Active", "Ready")
-	for _, expected := range []string{"Kitsu Task Type", "Discord Channel", "Edit"} {
+	for _, expected := range []string{"Kitsu Task Type", "Forum", "Edit"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("notification IA missing %q: %s", expected, body)
 		}
@@ -1454,12 +1387,16 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 	if strings.Contains(body, "Notification routing") {
 		t.Fatal("Notifications read mode should not repeat the tab's routing heading")
 	}
-	for _, expected := range []string{"WFA recipients", "Unavailable", "Task Type", `data-wfa-recipients`} {
+	for _, expected := range []string{"WFA recipients", "Task Type", `data-wfa-recipients`} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("Notifications missing %q", expected)
 		}
 	}
-	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
+	visibleBody := body
+	if sourceStart := strings.Index(visibleBody, `<div hidden data-wfa-pending-source>`); sourceStart >= 0 {
+		visibleBody = visibleBody[:sourceStart]
+	}
+	if strings.Contains(visibleBody, `data-wfa-group`) || strings.Contains(visibleBody, `class="production-wfa-kind"`) {
 		t.Fatal("read mode must show effective recipients without Automatic/Additional provenance")
 	}
 	for _, forbidden := range []string{"Notification preview", "Task Type to preview", "Example task rendered", "Please review this task."} {
@@ -1475,12 +1412,12 @@ func TestProductionNotificationsUseStagedSetupStyleRouting(t *testing.T) {
 		t.Fatal("explicit routing edit mode did not expose one staged Apply flow with linked WFA panel")
 	}
 	body = editBody
-	for _, expected := range []string{"Apply", "Cancel", "Add Task Type", "data-routing-row", "data-routing-row-template"} {
+	for _, expected := range []string{"Apply", "Cancel", "data-routing-row", "data-wfa-add-target"} {
 		if !strings.Contains(editBody, expected) {
 			t.Fatalf("staged routing editor missing %q", expected)
 		}
 	}
-	for _, expected := range []string{"class=\"routing-task-type-name\">Compositing", "class=\"routing-row-menu\"", `data-task-type="compositing"`} {
+	for _, expected := range []string{"class=\"routing-task-type-name\">Compositing", `data-task-type="compositing"`} {
 		if !strings.Contains(editBody, expected) {
 			t.Fatalf("compact routing row missing %q: %s", expected, editBody)
 		}
@@ -2566,7 +2503,7 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 	if err := db.Create(&legacy).Error; err != nil {
 		t.Fatal(err)
 	}
-	oldTasks, oldRoles, oldGuildRoles, oldEvidence, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildRolesReader, reviewerRoleSendEvidenceReader, reviewerProductionTeamReader, reviewerGuildMembersForGuild
+	oldTasks, oldRoles, oldGuildRoles, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildRolesReader, reviewerProductionTeamReader, reviewerGuildMembersForGuild
 	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}
 	}
@@ -2580,16 +2517,15 @@ func TestProductionReviewerTargetMutationsValidateAndManageExplicitTargets(t *te
 		return []DiscordGuildRole{{ID: guildID, Name: "@everyone", Mentionable: true}, {ID: "123456789012345680", Name: "Reviewers", Mentionable: true}, {ID: "123456789012345681", Name: "Private", Mentionable: false}}, nil
 	}
 	reviewerGuildRolesReader = reviewerDiscordRolesForGuild
-	reviewerTestRoute(t, db, project, "task-comp")
-	reviewerRoleSendEvidenceReader = func(guildID, channelID, webhookURL, _ string) (reviewerRoleSendEvidence, error) {
-		webhookID, err := discordWebhookID(webhookURL)
-		if err != nil {
-			return reviewerRoleSendEvidence{}, err
-		}
-		return reviewerRoleSendEvidence{GuildID: guildID, ChannelID: channelID, WebhookID: webhookID, BotID: "123456789012345685", WebhookOwnerID: "123456789012345685", OwnershipVerified: true, PermissionsKnown: true}, nil
+	if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID,
+		[]model.ProductionForumRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "forum-comp", ForumChannelName: "Compositing"}})); err != nil {
+		t.Fatal(err)
+	}
+	forumReviewerRoleEvidenceReader = func(guildID, channelID, _ string) (reviewerRoleSendEvidence, error) {
+		return reviewerRoleSendEvidence{GuildID: guildID, ChannelID: channelID, BotID: "123456789012345685", PermissionsKnown: true}, nil
 	}
 	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildRolesReader, reviewerRoleSendEvidenceReader, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldGuildRoles, oldEvidence, oldTeam, oldGuildMembers
+		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildRolesReader, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldGuildRoles, oldTeam, oldGuildMembers
 	})
 	post := func(values string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/bot/admin/projects", strings.NewReader(values+"&project_id=reviewer-mutations"))

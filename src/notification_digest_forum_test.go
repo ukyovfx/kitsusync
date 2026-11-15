@@ -2,28 +2,38 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"app/src/api/discord"
 	"app/src/model"
+	"app/src/utils/config"
 
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
-// forumDigestDB is the pipeline DB plus the forum ledger tables, with one
-// forum-mode Production ("p1") whose reviewer is a user target.
+// forumDigestDB seeds one forum Production ("p1") whose reviewer is a user
+// target, with the forum ledger tables and the tables the digest touches.
 func forumDigestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db := newNotificationPipelineDB(t)
-	if err := db.AutoMigrate(&model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ForumBaseline{}, &model.ForumTask{}, &model.ForumTransition{}, &model.ForumOutbox{}, &model.ForumFlapState{}, &model.ForumDMChannel{}); err != nil {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Project{}, &model.Setting{}, &model.UserMap{}, &model.AuditLog{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ForumBaseline{}, &model.ForumTask{}, &model.ForumTransition{}, &model.ForumOutbox{}, &model.ForumFlapState{}, &model.ForumDMChannel{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.CreateProject(db, "p1", "Production", "", "guild-1", "category-1", "ja"); err != nil {
 		t.Fatal(err)
 	}
 	settings := model.ProductionForumSettings{
-		Config: model.ProductionForumConfig{ProductionID: "p1", Mode: model.NotificationModeForum, GuildID: "guild-1"},
+		Config: model.ProductionForumConfig{ProductionID: "p1", GuildID: "guild-1"},
 		Routes: []model.ProductionForumRoute{{ProductionID: "p1", TaskTypeID: "tt-comp", TaskTypeName: "Compositing", ForumChannelID: "forum-1", ForumChannelName: "Compositing"}},
 		StatusRoles: []model.ProductionForumStatusRole{
 			{ProductionID: "p1", StatusID: "s-wfa", StatusName: "WFA", Role: model.ForumRoleWFA},
@@ -44,6 +54,83 @@ func forumDigestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func closeForumDigestDB(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// digestTestConfig returns the minimal config the digest send path needs.
+func digestTestConfig() config.Config {
+	var conf config.Config
+	return conf
+}
+
+// dmFixture serves the Discord Bot API for digest DMs and counts sends per
+// recipient. Recipients in failingIDs get a 403 on the DM open.
+type dmFixture struct {
+	server     *httptest.Server
+	sends      map[string]*atomic.Int64
+	failingIDs map[string]bool
+	mu         atomic.Int64
+}
+
+func newDMFixture(t *testing.T, failingIDs ...string) *dmFixture {
+	t.Helper()
+	fixture := &dmFixture{sends: map[string]*atomic.Int64{}, failingIDs: map[string]bool{}}
+	for _, id := range failingIDs {
+		fixture.failingIDs[id] = true
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v10/users/@me/channels", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RecipientID string `json:"recipient_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if fixture.failingIDs[body.RecipientID] {
+			http.Error(w, `{"message":"DMs closed"}`, http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"dm-channel-` + body.RecipientID + `"}`))
+	})
+	mux.HandleFunc("POST /api/v10/channels/", func(w http.ResponseWriter, r *http.Request) {
+		fixture.mu.Add(1)
+		recipient := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v10/channels/dm-channel-"), "/messages")
+		if fixture.sends[recipient] == nil {
+			fixture.sends[recipient] = &atomic.Int64{}
+		}
+		fixture.sends[recipient].Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"dm-message-` + recipient + `","channel_id":"dm-channel-` + recipient + `"}`))
+	})
+	fixture.server = httptest.NewServer(mux)
+	t.Cleanup(fixture.server.Close)
+
+	oldAPI := discord.SetDiscordBotAPIBase(fixture.server.URL + "/api/v10")
+	oldToken := os.Getenv("DISCORD_BOT_TOKEN")
+	os.Setenv("DISCORD_BOT_TOKEN", "test-token")
+	discord.ResetDMChannelCache()
+	t.Cleanup(func() {
+		discord.SetDiscordBotAPIBase(oldAPI)
+		os.Setenv("DISCORD_BOT_TOKEN", oldToken)
+		discord.ResetDMChannelCache()
+	})
+	return fixture
+}
+
+func (f *dmFixture) sendsFor(recipient string) int64 {
+	if counter := f.sends[recipient]; counter != nil {
+		return counter.Load()
+	}
+	return 0
 }
 
 func seedForumDigestTask(t *testing.T, db *gorm.DB, taskID, statusID string, since time.Time, assignees ...string) {
@@ -77,7 +164,7 @@ func seedForumDigestTask(t *testing.T, db *gorm.DB, taskID, statusID string, sin
 // and tasks without a post never appear.
 func TestForumDigestGroupsByPerson(t *testing.T) {
 	db := forumDigestDB(t)
-	defer closeNotificationPipelineDB(t, db)
+	defer closeForumDigestDB(t, db)
 
 	now := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)
 	yesterday := now.AddDate(0, 0, -1)
@@ -127,14 +214,14 @@ func TestForumDigestGroupsByPerson(t *testing.T) {
 // for the next poll, and a failure after 12:00 is dropped.
 func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 	db := forumDigestDB(t)
-	defer closeNotificationPipelineDB(t, db)
+	defer closeForumDigestDB(t, db)
 	seedForumDigestTask(t, db, "task-wfa", "s-wfa", time.Date(2026, 11, 15, 9, 0, 0, 0, jst))
 
 	fixture := newDMFixture(t)
 	morning := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)
 	today := morning.Format("2006-01-02")
 
-	sent, err := sendForumMorningDigests(pipelineConfig(), db, morning, today)
+	sent, err := sendForumMorningDigests(digestTestConfig(), db, morning, today)
 	if err != nil || sent != 1 {
 		t.Fatalf("sent=%d err=%v", sent, err)
 	}
@@ -144,7 +231,7 @@ func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 	if model.GetSetting(db, forumDigestLastSentDateSettingKey+"p1.111111111111111111") != today {
 		t.Fatal("marker not set after a successful send")
 	}
-	if sent, _ := sendForumMorningDigests(pipelineConfig(), db, morning.Add(time.Hour), today); sent != 0 {
+	if sent, _ := sendForumMorningDigests(digestTestConfig(), db, morning.Add(time.Hour), today); sent != 0 {
 		t.Fatalf("digest repeated: sent=%d", sent)
 	}
 
@@ -153,7 +240,7 @@ func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 	nextToday := nextDay.Format("2006-01-02")
 	fixture.failingIDs["111111111111111111"] = true
 	discord.ResetDMChannelCache()
-	if _, err := sendForumMorningDigests(pipelineConfig(), db, nextDay, nextToday); err == nil {
+	if _, err := sendForumMorningDigests(digestTestConfig(), db, nextDay, nextToday); err == nil {
 		t.Fatal("expected a send error before the catch-up deadline")
 	}
 	if model.GetSetting(db, forumDigestLastSentDateSettingKey+"p1.111111111111111111") == nextToday {
@@ -162,7 +249,7 @@ func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 
 	// After 12:00 the failure is dropped so it does not retry all day.
 	afternoon := nextDay.Add(3 * time.Hour)
-	if _, err := sendForumMorningDigests(pipelineConfig(), db, afternoon, nextToday); err != nil {
+	if _, err := sendForumMorningDigests(digestTestConfig(), db, afternoon, nextToday); err != nil {
 		t.Fatalf("unexpected error after catch-up: %v", err)
 	}
 	if model.GetSetting(db, forumDigestLastSentDateSettingKey+"p1.111111111111111111") != nextToday {

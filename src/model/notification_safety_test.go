@@ -1,9 +1,17 @@
 package model
 
-import "testing"
+import (
+	"testing"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
 
 func TestWriteAuditLogDoesNotPersistWebhookURL(t *testing.T) {
-	db := newRoutingTestDB(t)
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := db.AutoMigrate(&AuditLog{}); err != nil {
 		t.Fatal(err)
 	}

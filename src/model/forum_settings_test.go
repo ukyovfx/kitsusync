@@ -22,9 +22,9 @@ func newForumSettingsTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func completeForumSettings(mode string) ProductionForumSettings {
+func completeForumSettings() ProductionForumSettings {
 	return ProductionForumSettings{
-		Config: ProductionForumConfig{ProductionID: "p1", Mode: mode, GuildID: "g1"},
+		Config: ProductionForumConfig{ProductionID: "p1", GuildID: "g1"},
 		Routes: []ProductionForumRoute{
 			{TaskTypeID: "tt-anim", TaskTypeName: "Animation", ForumChannelID: "f-anim"},
 			{TaskTypeID: "tt-comp", TaskTypeName: "Compositing", ForumChannelID: "f-comp"},
@@ -42,23 +42,10 @@ func completeForumSettings(mode string) ProductionForumSettings {
 	}
 }
 
-func TestNotificationModeDefaultsToLane(t *testing.T) {
-	db := newForumSettingsTestDB(t)
-	if got := NotificationModeForProduction(db, "p1"); got != NotificationModeLane {
-		t.Fatalf("a Production without a row must run in lane mode, got %q", got)
-	}
-	if got := NotificationModeForProduction(nil, "p1"); got != NotificationModeLane {
-		t.Fatalf("a nil database must fall back to lane mode, got %q", got)
-	}
-}
-
 func TestSaveAndLoadForumSettingsRoundTrip(t *testing.T) {
 	db := newForumSettingsTestDB(t)
-	if err := SaveProductionForumSettings(db, completeForumSettings(NotificationModeForum)); err != nil {
+	if err := SaveProductionForumSettings(db, completeForumSettings()); err != nil {
 		t.Fatalf("save: %v", err)
-	}
-	if got := NotificationModeForProduction(db, "p1"); got != NotificationModeForum {
-		t.Fatalf("mode = %q, want forum", got)
 	}
 	loaded, ok, err := LoadProductionForumSettings(db, "p1")
 	if err != nil || !ok {
@@ -71,15 +58,15 @@ func TestSaveAndLoadForumSettingsRoundTrip(t *testing.T) {
 
 func TestSaveForumSettingsReplacesPreviousRowsAndKeepsOtherProductions(t *testing.T) {
 	db := newForumSettingsTestDB(t)
-	other := completeForumSettings(NotificationModeForum)
+	other := completeForumSettings()
 	other.Config.ProductionID = "p2"
 	if err := SaveProductionForumSettings(db, other); err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveProductionForumSettings(db, completeForumSettings(NotificationModeForum)); err != nil {
+	if err := SaveProductionForumSettings(db, completeForumSettings()); err != nil {
 		t.Fatal(err)
 	}
-	smaller := completeForumSettings(NotificationModeLane)
+	smaller := completeForumSettings()
 	smaller.Routes = smaller.Routes[:1]
 	smaller.Tags = smaller.Tags[:4]
 	if err := SaveProductionForumSettings(db, smaller); err != nil {
@@ -88,9 +75,6 @@ func TestSaveForumSettingsReplacesPreviousRowsAndKeepsOtherProductions(t *testin
 	loaded, _, _ := LoadProductionForumSettings(db, "p1")
 	if len(loaded.Routes) != 1 || len(loaded.Tags) != 4 {
 		t.Fatalf("save must replace, not append: %d routes, %d tags", len(loaded.Routes), len(loaded.Tags))
-	}
-	if got := NotificationModeForProduction(db, "p1"); got != NotificationModeLane {
-		t.Fatalf("mode must follow the latest save, got %q", got)
 	}
 	untouched, _, _ := LoadProductionForumSettings(db, "p2")
 	if len(untouched.Routes) != 2 || len(untouched.Tags) != 8 {
@@ -105,11 +89,11 @@ func TestSaveForumSettingsReplacesPreviousRowsAndKeepsOtherProductions(t *testin
 
 func TestInvalidForumSettingsAreRejectedAndNotStored(t *testing.T) {
 	db := newForumSettingsTestDB(t)
-	bad := completeForumSettings(NotificationModeForum)
+	bad := completeForumSettings()
 	bad.Tags = bad.Tags[:7] // forum f-comp loses its wip tag, still has the trigger roles
 	bad.Tags = append(bad.Tags[:5], bad.Tags[6:]...)
 	if err := SaveProductionForumSettings(db, bad); err == nil {
-		t.Fatal("forum mode without a complete tag set must be rejected")
+		t.Fatal("settings without a complete tag set must be rejected")
 	}
 	if _, ok, _ := LoadProductionForumSettings(db, "p1"); ok {
 		t.Fatal("a rejected save must not leave a config row")
@@ -122,7 +106,6 @@ func TestValidateForumSettingsProblems(t *testing.T) {
 		mutate func(*ProductionForumSettings)
 		want   string
 	}{
-		{"unknown mode", func(s *ProductionForumSettings) { s.Config.Mode = "webhook" }, "unknown notification mode"},
 		{"missing guild", func(s *ProductionForumSettings) { s.Config.GuildID = "" }, "guild"},
 		{"no routes", func(s *ProductionForumSettings) { s.Routes = nil; s.Tags = nil }, "at least one Task Type"},
 		{"duplicate task type", func(s *ProductionForumSettings) { s.Routes[1].TaskTypeID = "tt-anim" }, "routed more than once"},
@@ -136,7 +119,7 @@ func TestValidateForumSettingsProblems(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			settings := completeForumSettings(NotificationModeForum)
+			settings := completeForumSettings()
 			tc.mutate(&settings)
 			problems := ValidateProductionForumSettings(settings)
 			for _, problem := range problems {
@@ -147,35 +130,18 @@ func TestValidateForumSettingsProblems(t *testing.T) {
 			t.Fatalf("want a problem containing %q, got %v", tc.want, problems)
 		})
 	}
-	if problems := ValidateProductionForumSettings(completeForumSettings(NotificationModeForum)); len(problems) != 0 {
+	if problems := ValidateProductionForumSettings(completeForumSettings()); len(problems) != 0 {
 		t.Fatalf("complete settings must validate, got %v", problems)
 	}
 }
 
-func TestLaneModeAllowsHalfFinishedForumSettings(t *testing.T) {
+func TestDeleteProductionForumSettingsRemovesRows(t *testing.T) {
 	db := newForumSettingsTestDB(t)
-	draft := ProductionForumSettings{
-		Config: ProductionForumConfig{ProductionID: "p1", Mode: NotificationModeLane},
-		Routes: []ProductionForumRoute{{TaskTypeID: "tt-anim", ForumChannelID: "f-anim"}},
-	}
-	if err := SaveProductionForumSettings(db, draft); err != nil {
-		t.Fatalf("a draft kept in lane mode must be saveable: %v", err)
-	}
-	if got := NotificationModeForProduction(db, "p1"); got != NotificationModeLane {
-		t.Fatalf("draft must stay in lane mode, got %q", got)
-	}
-}
-
-func TestDeleteProductionForumSettingsFallsBackToLane(t *testing.T) {
-	db := newForumSettingsTestDB(t)
-	if err := SaveProductionForumSettings(db, completeForumSettings(NotificationModeForum)); err != nil {
+	if err := SaveProductionForumSettings(db, completeForumSettings()); err != nil {
 		t.Fatal(err)
 	}
 	if err := DeleteProductionForumSettings(db, "p1"); err != nil {
 		t.Fatal(err)
-	}
-	if got := NotificationModeForProduction(db, "p1"); got != NotificationModeLane {
-		t.Fatalf("mode after delete = %q, want lane", got)
 	}
 	if _, ok, _ := LoadProductionForumSettings(db, "p1"); ok {
 		t.Fatal("settings must be gone")
@@ -184,14 +150,14 @@ func TestDeleteProductionForumSettingsFallsBackToLane(t *testing.T) {
 
 func TestDeleteProductionOperationalStateRemovesForumSettings(t *testing.T) {
 	db := newForumSettingsTestDB(t)
-	if err := SaveProductionForumSettings(db, completeForumSettings(NotificationModeForum)); err != nil {
+	if err := SaveProductionForumSettings(db, completeForumSettings()); err != nil {
 		t.Fatal(err)
 	}
 	if err := DeleteProductionOperationalState(db, "p1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := NotificationModeForProduction(db, "p1"); got != NotificationModeLane {
-		t.Fatalf("a deleted Production must not keep forum mode, got %q", got)
+	if _, ok, _ := LoadProductionForumSettings(db, "p1"); ok {
+		t.Fatal("a deleted Production must not keep forum settings")
 	}
 	var rows int64
 	db.Model(&ProductionForumTag{}).Count(&rows)
@@ -201,7 +167,7 @@ func TestDeleteProductionOperationalStateRemovesForumSettings(t *testing.T) {
 }
 
 func TestForumSettingsProblemsKeepAStableOrder(t *testing.T) {
-	settings := completeForumSettings(NotificationModeForum)
+	settings := completeForumSettings()
 	settings.Tags = nil // every forum is missing every role tag
 	first := ValidateProductionForumSettings(settings)
 	for i := 0; i < 20; i++ {

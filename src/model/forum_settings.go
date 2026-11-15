@@ -9,13 +9,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// Notification modes a Production can run in. Lane (text channel + webhook) is
-// the default; forum is opt-in per Production until the lane path is removed.
-const (
-	NotificationModeLane  = "lane"
-	NotificationModeForum = "forum"
-)
-
 // Forum roles a Kitsu status can play. Only wfa/retake/done trigger a post or a
 // mention; wip only moves the tag. A status without a role is unmanaged.
 const (
@@ -33,12 +26,11 @@ func validForumRole(role string) bool {
 	return false
 }
 
-// ProductionForumConfig is the per-Production switch between the lane and the
-// forum notification paths. A Production without a row runs in lane mode.
+// ProductionForumConfig is one Production's forum notification configuration
+// (guild + bookkeeping). Every production runs the forum path.
 type ProductionForumConfig struct {
 	ID           uint   `gorm:"primaryKey"`
 	ProductionID string `gorm:"uniqueIndex;not null"`
-	Mode         string `gorm:"not null;default:lane"`
 	GuildID      string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -86,23 +78,6 @@ type ProductionForumSettings struct {
 	Tags        []ProductionForumTag
 }
 
-// NotificationModeForProduction returns the Production's notification mode.
-// Anything other than an explicit forum row is lane, so an unconfigured or
-// unreadable Production never switches paths by accident.
-func NotificationModeForProduction(db *gorm.DB, productionID string) string {
-	if db == nil || strings.TrimSpace(productionID) == "" {
-		return NotificationModeLane
-	}
-	var config ProductionForumConfig
-	if err := db.Where("production_id = ?", strings.TrimSpace(productionID)).First(&config).Error; err != nil {
-		return NotificationModeLane
-	}
-	if config.Mode == NotificationModeForum {
-		return NotificationModeForum
-	}
-	return NotificationModeLane
-}
-
 // LoadProductionForumSettings reads a Production's forum configuration. ok is
 // false when the Production has no forum configuration row.
 func LoadProductionForumSettings(db *gorm.DB, productionID string) (settings ProductionForumSettings, ok bool, err error) {
@@ -144,8 +119,6 @@ func (p ForumSettingsProblem) English() string {
 		return ""
 	}
 	switch p.Code {
-	case ProblemUnknownMode:
-		return fmt.Sprintf("unknown notification mode %q", arg(0))
 	case ProblemProductionRequired:
 		return "production ID is required"
 	case ProblemRouteIncomplete:
@@ -178,7 +151,6 @@ func (p ForumSettingsProblem) English() string {
 
 // Problem codes of ForumSettingsProblem.
 const (
-	ProblemUnknownMode        = "unknown_mode"
 	ProblemProductionRequired = "production_required"
 	ProblemRouteIncomplete    = "route_incomplete"
 	ProblemTaskTypeDuplicate  = "task_type_duplicate"
@@ -217,16 +189,12 @@ func ValidateProductionForumSettings(settings ProductionForumSettings) []string 
 }
 
 // ForumSettingsProblems checks the configuration without touching Discord or
-// Kitsu (live ID checks happen at startup validation). A forum-mode Production
-// needs a complete configuration; a lane-mode one may be saved half-finished.
+// Kitsu (live ID checks happen at startup validation). A Production needs a
+// complete configuration before it can post.
 func ForumSettingsProblems(settings ProductionForumSettings) []ForumSettingsProblem {
 	var problems []ForumSettingsProblem
 	add := func(code string, args ...string) {
 		problems = append(problems, ForumSettingsProblem{Code: code, Args: args})
-	}
-	mode := settings.Config.Mode
-	if mode != NotificationModeLane && mode != NotificationModeForum {
-		add(ProblemUnknownMode, mode)
 	}
 	if strings.TrimSpace(settings.Config.ProductionID) == "" {
 		add(ProblemProductionRequired)
@@ -290,7 +258,7 @@ func ForumSettingsProblems(settings ProductionForumSettings) []ForumSettingsProb
 		tagIDs[forumID][tagID] = struct{}{}
 	}
 
-	if mode == NotificationModeForum {
+	{
 		if strings.TrimSpace(settings.Config.GuildID) == "" {
 			add(ProblemGuildRequired)
 		}
@@ -324,8 +292,7 @@ func sortedKeys(set map[string]struct{}) []string {
 }
 
 // SaveProductionForumSettings validates and replaces a Production's whole forum
-// configuration in one transaction. It only writes the forum tables; lane
-// routing state is untouched.
+// configuration in one transaction.
 func SaveProductionForumSettings(db *gorm.DB, settings ProductionForumSettings) error {
 	if db == nil {
 		return gorm.ErrInvalidDB
@@ -384,8 +351,7 @@ func deleteProductionForumChildren(tx *gorm.DB, productionID string) error {
 	return nil
 }
 
-// DeleteProductionForumSettings removes a Production's forum configuration,
-// including its mode row, so it falls back to lane mode.
+// DeleteProductionForumSettings removes a Production's forum configuration.
 func DeleteProductionForumSettings(db *gorm.DB, productionID string) error {
 	if db == nil || strings.TrimSpace(productionID) == "" {
 		return gorm.ErrInvalidData

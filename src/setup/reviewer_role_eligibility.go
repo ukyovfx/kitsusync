@@ -57,35 +57,8 @@ type effectiveDiscordChannelPermissionSet struct {
 	MentionEveryone bool
 }
 
-var reviewerRoleSendEvidenceReader = resolveReviewerRoleSendEvidence
 var errReviewerEligibilityUnavailable = errors.New("Reviewer eligibility could not be verified")
 
-func verifiedReviewerRolesForTaskType(db *gorm.DB, project model.Project, taskTypeID, botToken, senderWebhookURL string) (map[string]struct{}, error) {
-	if db == nil || !isDiscordSnowflake(project.DiscordGuildID) || strings.TrimSpace(senderWebhookURL) == "" {
-		return nil, errors.New("Reviewer sender context is unavailable")
-	}
-	var destination *model.ProjectWebhook
-	for _, route := range model.ListProductionNotificationRoutes(db, project.KitsuProjectID) {
-		if strings.TrimSpace(route.TaskTypeID) != strings.TrimSpace(taskTypeID) {
-			continue
-		}
-		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
-		if webhook == nil || strings.TrimSpace(webhook.KitsuProjectID) != strings.TrimSpace(project.KitsuProjectID) ||
-			strings.TrimSpace(webhook.WebhookURL) != strings.TrimSpace(senderWebhookURL) || strings.TrimSpace(webhook.DiscordChannelID) == "" {
-			return nil, errors.New("Reviewer sender does not match the current Task Type destination")
-		}
-		destination = webhook
-		break
-	}
-	if destination == nil {
-		return nil, errors.New("Reviewer Task Type has no current notification route")
-	}
-	return eligibleReviewerRolesForSender(project.DiscordGuildID, destination.DiscordChannelID, destination.WebhookURL, botToken)
-}
-
-// ForumReviewerRoles returns the roles that may be mentioned in a forum post for
-// the Task Type. The forum path posts as the Bot, not through a lane webhook, so
-// eligibility is proven by the Bot's own permissions on the forum channel
 // instead of by a sender webhook.
 func ForumReviewerRoles(db *gorm.DB, kitsuProjectID, taskTypeID, botToken string) (map[string]struct{}, error) {
 	if db == nil {
@@ -115,7 +88,7 @@ func ForumReviewerRoles(db *gorm.DB, kitsuProjectID, taskTypeID, botToken string
 	if channelID == "" {
 		return nil, errors.New("Reviewer Task Type has no forum channel")
 	}
-	evidence, err := forumReviewerRoleEvidence(project.DiscordGuildID, channelID, botToken)
+	evidence, err := forumReviewerRoleEvidenceReader(project.DiscordGuildID, channelID, botToken)
 	if err != nil {
 		return nil, fmt.Errorf("verify Bot forum permissions: %w", err)
 	}
@@ -146,37 +119,7 @@ func forumRoleCanBeMentioned(guildID, channelID string, role DiscordGuildRole, e
 	return role.Mentionable || evidence.CanMentionRoles
 }
 
-func currentReviewerRoleEligibility(db *gorm.DB, project model.Project, taskTypeID, botToken string) (map[string]struct{}, error) {
-	for _, route := range model.ListProductionNotificationRoutes(db, project.KitsuProjectID) {
-		if strings.TrimSpace(route.TaskTypeID) != strings.TrimSpace(taskTypeID) {
-			continue
-		}
-		webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
-		if webhook == nil || strings.TrimSpace(webhook.KitsuProjectID) != strings.TrimSpace(project.KitsuProjectID) {
-			return nil, errors.New("Reviewer route destination is unavailable")
-		}
-		return verifiedReviewerRolesForTaskType(db, project, taskTypeID, botToken, webhook.WebhookURL)
-	}
-	return nil, errors.New("Reviewer Task Type has no current notification route")
-}
 
-func eligibleReviewerRolesForSender(guildID, channelID, webhookURL, botToken string) (map[string]struct{}, error) {
-	evidence, err := reviewerRoleSendEvidenceReader(guildID, channelID, webhookURL, botToken)
-	if err != nil {
-		return nil, fmt.Errorf("verify Reviewer sender permissions: %w", err)
-	}
-	roles, err := reviewerGuildRolesReader(guildID, botToken)
-	if err != nil {
-		return nil, fmt.Errorf("verify Reviewer Guild roles: %w", err)
-	}
-	eligible := make(map[string]struct{})
-	for _, role := range reviewerRoleCatalog(guildID, roles) {
-		if reviewerRoleCanBeMentioned(guildID, channelID, webhookURL, role, evidence, nil) {
-			eligible[strings.TrimSpace(role.ID)] = struct{}{}
-		}
-	}
-	return eligible, nil
-}
 
 const (
 	discordPermissionAdministrator = uint64(1 << 3)
@@ -188,23 +131,6 @@ const (
 // reviewerRoleCanBeMentioned is the one role eligibility rule shared by the
 // UI, Apply validation, and delivery-time resolution. Evidence is always tied
 // to the exact linked Guild, destination channel, and Bot-owned webhook.
-func reviewerRoleCanBeMentioned(guildID, channelID, webhookURL string, role DiscordGuildRole, evidence reviewerRoleSendEvidence, evidenceErr error) bool {
-	guildID = strings.TrimSpace(guildID)
-	roleID := strings.TrimSpace(role.ID)
-	webhookID, webhookErr := discordWebhookID(webhookURL)
-	if !isDiscordSnowflake(guildID) || !isDiscordSnowflake(roleID) || roleID == guildID {
-		return false
-	}
-	if webhookErr != nil || evidenceErr != nil || !evidence.PermissionsKnown || strings.TrimSpace(evidence.GuildID) != guildID ||
-		strings.TrimSpace(evidence.ChannelID) != strings.TrimSpace(channelID) || strings.TrimSpace(evidence.WebhookID) != webhookID ||
-		!isDiscordSnowflake(evidence.BotID) || evidence.WebhookOwnerID != evidence.BotID || !evidence.OwnershipVerified {
-		return false
-	}
-	if role.Mentionable {
-		return true
-	}
-	return evidence.CanMentionRoles
-}
 
 func effectiveDiscordChannelPermissions(guildID string, roles []DiscordGuildRoleWithPermissions, member DiscordPermissionMember, channel DiscordPermissionChannel) (effectiveDiscordChannelPermissionSet, error) {
 	bits, err := effectiveDiscordChannelPermissionBits(guildID, roles, member, channel)
@@ -313,49 +239,11 @@ func permissionSetFromBits(bits uint64) effectiveDiscordChannelPermissionSet {
 	}
 }
 
-func resolveReviewerRoleSendEvidence(guildID, channelID, webhookURL, botToken string) (reviewerRoleSendEvidence, error) {
-	evidence := reviewerRoleSendEvidence{GuildID: strings.TrimSpace(guildID), ChannelID: strings.TrimSpace(channelID)}
-	webhookID, err := discordWebhookID(webhookURL)
-	if err != nil || !isDiscordSnowflake(evidence.GuildID) || !isDiscordSnowflake(evidence.ChannelID) || strings.TrimSpace(botToken) == "" {
-		return evidence, errors.New("Discord Reviewer destination could not be verified")
-	}
-	evidence.WebhookID = webhookID
-	botBody, status, err := botDo(http.MethodGet, discordAPI+"/users/@me", nil, botToken)
-	if err != nil || status != http.StatusOK {
-		return evidence, errors.New("Discord Bot identity could not be verified")
-	}
-	var bot struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(botBody, &bot) != nil || !isDiscordSnowflake(bot.ID) {
-		return evidence, errors.New("Discord Bot identity response was invalid")
-	}
-	evidence.BotID = strings.TrimSpace(bot.ID)
-	webhookBody, status, err := botDo(http.MethodGet, discordAPI+"/webhooks/"+webhookID, nil, botToken)
-	if err != nil || status != http.StatusOK {
-		return evidence, errors.New("Discord webhook ownership could not be verified")
-	}
-	var webhook struct {
-		ID        string `json:"id"`
-		Type      int    `json:"type"`
-		GuildID   string `json:"guild_id"`
-		ChannelID string `json:"channel_id"`
-		User      struct {
-			ID string `json:"id"`
-		} `json:"user"`
-	}
-	if json.Unmarshal(webhookBody, &webhook) != nil || webhook.Type != 1 || strings.TrimSpace(webhook.ID) != webhookID ||
-		strings.TrimSpace(webhook.GuildID) != evidence.GuildID || strings.TrimSpace(webhook.ChannelID) != evidence.ChannelID ||
-		strings.TrimSpace(webhook.User.ID) != evidence.BotID {
-		return evidence, errors.New("Discord webhook is not verified as owned by this Bot and destination")
-	}
-	evidence.WebhookOwnerID = strings.TrimSpace(webhook.User.ID)
-	evidence.OwnershipVerified = true
-	return verifyBotChannelEvidence(evidence, botToken)
-}
 
 // forumReviewerRoleEvidence proves the Bot's own access to a forum channel. The
 // forum path posts as the Bot, so no sender webhook is involved.
+var forumReviewerRoleEvidenceReader = forumReviewerRoleEvidence
+
 func forumReviewerRoleEvidence(guildID, channelID, botToken string) (reviewerRoleSendEvidence, error) {
 	evidence := reviewerRoleSendEvidence{GuildID: strings.TrimSpace(guildID), ChannelID: strings.TrimSpace(channelID)}
 	if !isDiscordSnowflake(evidence.GuildID) || !isDiscordSnowflake(evidence.ChannelID) || strings.TrimSpace(botToken) == "" {

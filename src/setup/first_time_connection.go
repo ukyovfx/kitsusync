@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"app/src/api/kitsu"
 	"app/src/model"
 	"gorm.io/gorm"
 )
@@ -19,7 +18,6 @@ type firstTimeDiscordCheck struct {
 	GuildValid     bool
 	GuildName      string
 	ManageChannels bool
-	ManageWebhooks bool
 	Reason         string
 }
 
@@ -35,12 +33,10 @@ func firstTimePermissionLabel(lang, permission string) string {
 	if lang == "ja" {
 		return map[string]string{
 			"manage_channels": "チャンネルの管理",
-			"manage_webhooks": "Webhookの管理",
 		}[permission]
 	}
 	return map[string]string{
 		"manage_channels": "Manage Channels",
-		"manage_webhooks": "Manage Webhooks",
 	}[permission]
 }
 
@@ -59,34 +55,24 @@ func firstTimeConnectionErrorMessage(lang string, err error) string {
 	return err.Error()
 }
 
+// firstTimeConnectionPlan is the forum-only connection plan: a Discord
+// category ("KitsuSync area"), the Kitsu Project row, and the notification
+// language. Forum channels themselves are created from the forum settings
+// page (自動作成), so the wizard provisions no channels or webhooks.
 type firstTimeConnectionPlan struct {
 	Project              KitsuProject
 	GuildID              string
 	GuildName            string
 	NotificationLanguage string
-	TaskTypes            []kitsu.TaskType
-	Plan                 TaskTypeChannelPlan
-	GuildChannel         []DiscordGuildChannel
-}
-
-type firstTimeOwnedResources struct {
-	ProductionID    string
-	OperationID     string
-	CreatedProject  bool
-	CategoryID      string
-	CreatedCategory bool
-	ChannelIDs      []string
+	CategoryID           string
+	CategoryIsNew        bool
 }
 
 type firstTimeConnectionOps struct {
 	Projects       func(string, *gorm.DB) []KitsuProject
-	TaskTypes      func(string, *gorm.DB) []kitsu.TaskType
 	DiscordCheck   func(string, string) firstTimeDiscordCheck
 	ListChannels   func(string, string) ([]DiscordGuildChannel, error)
 	CreateCategory func(string, string, string) (string, error)
-	CreateChannel  func(string, string, string, string) (string, error)
-	CreateWebhook  func(string, string, string) (string, error)
-	SetPosition    func(string, int, string) error
 	DeleteChannel  func(string, string) error
 }
 
@@ -95,133 +81,22 @@ var defaultFirstTimeConnectionOps = firstTimeConnectionOps{
 		projects, _ := setupKitsuProjects(db)
 		return projects
 	},
-	TaskTypes: func(projectID string, db *gorm.DB) []kitsu.TaskType {
-		return setupKitsuTaskTypes(db, projectID)
-	},
 	DiscordCheck: func(token, guild string) firstTimeDiscordCheck {
 		status := checkDiscordStatus(token, guild)
 		reason := ""
 		if status.Error != nil {
 			reason = *status.Error
 		}
-		return firstTimeDiscordCheck{BotValid: status.BotValid, GuildValid: status.GuildValid, GuildName: status.GuildName, ManageChannels: status.Permissions.ManageChannels, ManageWebhooks: status.Permissions.ManageWebhooks, Reason: reason}
+		return firstTimeDiscordCheck{BotValid: status.BotValid, GuildValid: status.GuildValid, GuildName: status.GuildName, ManageChannels: status.Permissions.ManageChannels, Reason: reason}
 	},
 	ListChannels:   ListGuildChannels,
 	CreateCategory: CreateCategory,
-	CreateChannel:  CreateTextChannel,
-	CreateWebhook:  CreateWebhook,
-	SetPosition:    SetGuildChannelPosition,
 	DeleteChannel:  DeleteChannel,
 }
 
 var firstTimeOps = defaultFirstTimeConnectionOps
 
-var firstTimeActivateRouting = model.ActivateProductionRoutingFromMappings
-
-// firstTimeFetchTasks returns the current Kitsu tasks; injectable for tests.
-var firstTimeFetchTasks = func() (kitsu.Tasks, error) { return kitsu.GetTasksWithError() }
-
-// firstTimeFetchTaskStatuses returns the Kitsu task statuses; injectable for tests.
-var firstTimeFetchTaskStatuses = func() (kitsu.TaskStatuses, error) { return kitsu.GetTaskStatusesWithError() }
-
-// firstTimeFetchComments returns the Kitsu comments; injectable for tests.
-var firstTimeFetchComments = func() (kitsu.Comments, error) { return kitsu.GetCommentsWithError() }
-
 var firstTimeExecutionMu sync.Mutex
-
-// checkpointPendingProductionIDs holds productions whose initial checkpoint has
-// not finished yet. Polling must not notify for them, otherwise the first poll
-// that races the connection would report pre-existing work.
-var checkpointPendingProductionIDs sync.Map
-
-// markInitialCheckpointPending suppresses notifications for a production until
-// its initial checkpoint completes (or fails).
-func markInitialCheckpointPending(productionID string) {
-	if productionID = strings.TrimSpace(productionID); productionID != "" {
-		checkpointPendingProductionIDs.Store(productionID, struct{}{})
-	}
-}
-
-// ClearInitialCheckpointPending ends the suppression for a production.
-func ClearInitialCheckpointPending(productionID string) {
-	checkpointPendingProductionIDs.Delete(strings.TrimSpace(productionID))
-}
-
-func clearInitialCheckpointPending(productionID string) {
-	ClearInitialCheckpointPending(productionID)
-}
-
-// MarkInitialCheckpointPending suppresses notifications for a production until
-// its initial checkpoint completes.
-func MarkInitialCheckpointPending(productionID string) {
-	markInitialCheckpointPending(productionID)
-}
-
-// InitialCheckpointPending reports whether a production still waits for its
-// initial silent checkpoint. The poll loop observes the same state instead of
-// notifying for work that existed before the connection.
-func InitialCheckpointPending(productionID string) bool {
-	_, pending := checkpointPendingProductionIDs.Load(strings.TrimSpace(productionID))
-	return pending
-}
-
-// checkpointInitialTaskStates silently records the task states that already
-// exist when a production is first connected, so the first poll does not
-// notify for work that was already waiting. Only later changes notify.
-// Best effort: a failure here must never fail the connection.
-func checkpointInitialTaskStates(db *gorm.DB, projectID string) {
-	defer clearInitialCheckpointPending(projectID)
-	tasks, err := firstTimeFetchTasks()
-	if err != nil {
-		slog.Warn("initial task checkpoint skipped", "project_id", projectID, "error", err)
-		return
-	}
-	statuses, err := firstTimeFetchTaskStatuses()
-	if err != nil {
-		slog.Warn("initial task checkpoint skipped", "project_id", projectID, "error", err)
-		return
-	}
-	shortNameByID := make(map[string]string, len(statuses.Each))
-	for _, status := range statuses.Each {
-		shortNameByID[status.ID] = status.ShortName
-	}
-	latestComment := latestCommentByTask(projectID)
-	for _, task := range tasks.Each {
-		if task.ProjectID != projectID || !isNotifiableTaskStatus(shortNameByID[task.TaskStatusID]) {
-			continue
-		}
-		commentID, commentUpdatedAt := latestComment[task.ID].ID, latestComment[task.ID].UpdatedAt
-		if err := model.MarkTaskObserved(db, task.ID, task.UpdatedAt, shortNameByID[task.TaskStatusID], commentID, commentUpdatedAt, projectID, ""); err != nil {
-			slog.Warn("initial task checkpoint failed", "project_id", projectID, "task_id", task.ID, "error", err)
-		}
-	}
-}
-
-// latestCommentByTask indexes the newest comment per task so the checkpoint
-// matches what the poll loop compares against. Comments are optional: without
-// them the checkpoint only covers task state.
-func latestCommentByTask(projectID string) map[string]kitsu.Comment {
-	comments, err := firstTimeFetchComments()
-	if err != nil {
-		slog.Warn("initial task checkpoint without comments", "project_id", projectID, "error", err)
-		return nil
-	}
-	latest := make(map[string]kitsu.Comment, len(comments.Each))
-	for _, comment := range comments.Each {
-		if current, ok := latest[comment.ObjectID]; !ok || comment.UpdatedAt > current.UpdatedAt {
-			latest[comment.ObjectID] = comment
-		}
-	}
-	return latest
-}
-
-func isNotifiableTaskStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "wfa", "retake", "done":
-		return true
-	}
-	return false
-}
 
 func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken string, db *gorm.DB) (firstTimeConnectionPlan, error) {
 	ops := firstTimeOps
@@ -234,7 +109,7 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 	if existingProject == nil && model.HasProductionOperationalState(db, projectID) {
 		return firstTimeConnectionPlan{}, fmt.Errorf("Production has incomplete setup state that requires cleanup before retry")
 	}
-	if existingProject != nil && !isIncompleteFirstTimeProject(db, projectID) {
+	if existingProject != nil && !productionRepairMode(r) {
 		return firstTimeConnectionPlan{}, fmt.Errorf("Production is already connected")
 	}
 	var project KitsuProject
@@ -255,100 +130,40 @@ func validateFirstTimeConnectionRequest(r *http.Request, kitsuHost, botToken str
 		return firstTimeConnectionPlan{}, fmt.Errorf("Discord Bot is not configured")
 	}
 	status := ops.DiscordCheck(botToken, guildID)
-	if !status.BotValid || !status.GuildValid || !status.ManageChannels || !status.ManageWebhooks {
-		if status.BotValid && status.GuildValid {
-			missing := make([]string, 0, 2)
-			if !status.ManageChannels {
-				missing = append(missing, "manage_channels")
-			}
-			if !status.ManageWebhooks {
-				missing = append(missing, "manage_webhooks")
-			}
-			if len(missing) > 0 {
-				return firstTimeConnectionPlan{}, firstTimePermissionError{Missing: missing}
-			}
+	if !status.BotValid || !status.GuildValid || !status.ManageChannels {
+		if status.BotValid && status.GuildValid && !status.ManageChannels {
+			return firstTimeConnectionPlan{}, firstTimePermissionError{Missing: []string{"manage_channels"}}
 		}
 		if status.Reason != "" {
 			return firstTimeConnectionPlan{}, fmt.Errorf("Discord validation failed: %s", status.Reason)
 		}
 		return firstTimeConnectionPlan{}, fmt.Errorf("Required Discord permissions are not available")
 	}
-	channels, err := ops.ListChannels(guildID, botToken)
-	if err != nil {
-		return firstTimeConnectionPlan{}, fmt.Errorf("Discord channel read failed")
+	categoryID := strings.TrimSpace(r.FormValue("category_id"))
+	categoryIsNew := categoryID == "" || categoryID == "__create__"
+	if !categoryIsNew {
+		channels, err := ops.ListChannels(guildID, botToken)
+		if err != nil {
+			return firstTimeConnectionPlan{}, fmt.Errorf("Discord channel read failed")
+		}
+		found := false
+		for _, channel := range channels {
+			if channel.Type == 4 && channel.ID == categoryID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return firstTimeConnectionPlan{}, fmt.Errorf("The selected Discord category was not found")
+		}
 	}
-	taskTypes := ops.TaskTypes(projectID, db)
-	if len(taskTypes) == 0 {
-		return firstTimeConnectionPlan{}, fmt.Errorf("No valid Task Types were found for this Production")
-	}
-	if err := validateSubmittedTaskTypeIDs(r, taskTypes); err != nil {
-		return firstTimeConnectionPlan{}, err
-	}
-	active, overrides := taskTypePlanRequest(r, taskTypes)
-	existing := map[string]string{}
 	if existingProject != nil {
-		existing = managedExistingChannelsForFirstTime(channels, model.ListProductionChannelMappings(db, projectID), model.ListProjectWebhooks(db, projectID))
-	}
-	plan := BuildTaskTypeChannelPlanWithOverrides(projectID, guildID, active, existing, overrides)
-	plan.CategoryID = strings.TrimSpace(r.FormValue("category_id"))
-	if plan.Fingerprint() != strings.TrimSpace(r.FormValue("plan_fingerprint")) {
-		return firstTimeConnectionPlan{}, fmt.Errorf("The reviewed plan is stale")
-	}
-	if !plan.Valid() {
-		return firstTimeConnectionPlan{}, fmt.Errorf("The reviewed plan is invalid")
-	}
-	for _, entry := range plan.Entries {
-		if entry.Action == "reuse" && existingProject == nil {
-			return firstTimeConnectionPlan{}, fmt.Errorf("An existing Discord channel has no provable KitsuSync ownership")
+		if stored := strings.TrimSpace(existingProject.DiscordCategoryID); stored != "" {
+			categoryID = stored
+			categoryIsNew = false
 		}
 	}
-	return firstTimeConnectionPlan{Project: project, GuildID: guildID, GuildName: status.GuildName, NotificationLanguage: notificationLanguage, TaskTypes: taskTypes, Plan: plan, GuildChannel: channels}, nil
-}
-
-func isIncompleteFirstTimeProject(db *gorm.DB, projectID string) bool {
-	project := model.FindProjectByKitsuID(db, projectID)
-	if project == nil || strings.TrimSpace(project.DiscordCategoryID) == "" {
-		return false
-	}
-	config := model.FindProductionNotificationConfig(db, projectID)
-	return config == nil || !config.Enabled || len(model.ListProductionChannelMappings(db, projectID)) == 0
-}
-
-func managedExistingChannelsForFirstTime(channels []DiscordGuildChannel, mappings []model.ProductionChannelMapping, legacy []model.ProjectWebhook) map[string]string {
-	owned := map[string]bool{}
-	for _, mapping := range mappings {
-		if strings.TrimSpace(mapping.ChannelID) != "" {
-			owned[strings.TrimSpace(mapping.ChannelID)] = true
-		}
-	}
-	for _, webhook := range legacy {
-		if strings.TrimSpace(webhook.DiscordChannelID) != "" {
-			owned[strings.TrimSpace(webhook.DiscordChannelID)] = true
-		}
-	}
-	result := map[string]string{}
-	for _, channel := range channels {
-		if channel.Type == 0 && owned[strings.TrimSpace(channel.ID)] {
-			result[NormalizeTaskTypeChannelName(channel.Name)] = strings.TrimSpace(channel.ID)
-		}
-	}
-	return result
-}
-
-func validateSubmittedTaskTypeIDs(r *http.Request, taskTypes []kitsu.TaskType) error {
-	valid := map[string]bool{}
-	for _, taskType := range taskTypes {
-		valid[strings.TrimSpace(taskType.ID)] = true
-	}
-	seen := map[string]bool{}
-	for _, raw := range r.Form["included_task_type_id"] {
-		id := strings.TrimSpace(raw)
-		if id == "" || !valid[id] || seen[id] {
-			return fmt.Errorf("Submitted Task Type selection is invalid")
-		}
-		seen[id] = true
-	}
-	return nil
+	return firstTimeConnectionPlan{Project: project, GuildID: guildID, GuildName: status.GuildName, NotificationLanguage: notificationLanguage, CategoryID: categoryID, CategoryIsNew: categoryIsNew}, nil
 }
 
 func renderFirstTimeExecutionPage(lang string, r *http.Request, plan firstTimeConnectionPlan) string {
@@ -370,11 +185,7 @@ func normalizedProductionNotificationLanguage(value string) string {
 }
 
 func renderWizardExecutionCard(lang string, r *http.Request, plan firstTimeConnectionPlan) string {
-	var hidden strings.Builder
-	for _, entry := range plan.Plan.Entries {
-		hidden.WriteString(`<input type="hidden" name="included_task_type_id" value="` + html.EscapeString(entry.TaskTypeID) + `"><input type="hidden" name="channel_name_` + html.EscapeString(entry.TaskTypeID) + `" value="` + html.EscapeString(entry.ChannelName) + `"><input type="hidden" name="channel_order_` + html.EscapeString(entry.TaskTypeID) + `" value="` + fmt.Sprint(entry.Order) + `">`)
-	}
-	form := `<form id="wizard-execution-form" method="POST" action="` + html.EscapeString(withLang("/bot/setup", r)) + `"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="confirm_plan" value="yes"><input type="hidden" name="project_id" value="` + html.EscapeString(plan.Project.ID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(plan.GuildID) + `"><input type="hidden" name="category_id" value="` + html.EscapeString(plan.Plan.CategoryID) + `"><input type="hidden" name="notification_language" value="` + html.EscapeString(normalizedProductionNotificationLanguage(plan.NotificationLanguage)) + `"><input type="hidden" name="plan_fingerprint" value="` + html.EscapeString(plan.Plan.Fingerprint()) + `">` + hidden.String() + `<noscript><div class="button-row"><a class="btn-ghost" href="` + html.EscapeString(setupWizardURL(r, 5, plan.Project.ID, plan.GuildID, true)) + `">` + html.EscapeString(tr(lang, "wizard.back_to_review")) + `</a><button class="btn" type="submit">` + html.EscapeString(tr(lang, "wizard.execute")) + `</button></div></noscript></form>`
+	form := `<form id="wizard-execution-form" method="POST" action="` + html.EscapeString(withLang("/bot/setup", r)) + `"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="confirm_plan" value="yes"><input type="hidden" name="project_id" value="` + html.EscapeString(plan.Project.ID) + `"><input type="hidden" name="guild_id" value="` + html.EscapeString(plan.GuildID) + `"><input type="hidden" name="category_id" value="` + html.EscapeString(plan.CategoryID) + `"><input type="hidden" name="notification_language" value="` + html.EscapeString(normalizedProductionNotificationLanguage(plan.NotificationLanguage)) + `"><noscript><div class="button-row"><a class="btn-ghost" href="` + html.EscapeString(setupWizardURL(r, 5, plan.Project.ID, plan.GuildID, true)) + `">` + html.EscapeString(tr(lang, "wizard.back_to_review")) + `</a><button class="btn" type="submit">` + html.EscapeString(tr(lang, "wizard.execute")) + `</button></div></noscript></form>`
 	targets := `<dl class="wizard-connection-summary"><div><dt>` + html.EscapeString(tr(lang, "wizard.production_summary")) + `</dt><dd>` + html.EscapeString(plan.Project.Name) + `</dd></div><div><dt>` + html.EscapeString(tr(lang, "wizard.server_summary")) + `</dt><dd>` + html.EscapeString(firstTimeGuildName(lang, plan.GuildName)) + `</dd></div><div><dt>` + html.EscapeString(tr(lang, "wizard.area_summary")) + `</dt><dd>` + html.EscapeString(KitsuSyncCategoryName(plan.Project.Name)) + `</dd></div></dl>`
 	return `<section class="section-card glass" aria-labelledby="wizard-execute-title" role="status" aria-live="polite"><h2 id="wizard-execute-title">` + html.EscapeString(tr(lang, "wizard.execute_title")) + `</h2><p class="hint">` + html.EscapeString(tr(lang, "wizard.execute_hint")) + `</p>` + targets + `<p class="field-help">` + html.EscapeString(tr(lang, "wizard.execute_started")) + `</p>` + form + `<script>(function(){var form=document.getElementById('wizard-execution-form');if(form){form.submit();}})();</script></section>`
 }
@@ -391,58 +202,54 @@ func renderFirstTimeExecutionError(lang string, r *http.Request, message string)
 	return adminPage(lang, tr(lang, "wizard.execute_title"), r, renderWizardFrame(lang, 6, body))
 }
 
-func markFirstTimeSetupReviewRequired(db *gorm.DB, productionID, operationID string) {
-	if db == nil || strings.TrimSpace(productionID) == "" {
-		return
+// rollbackFirstTimeConnection removes the resources this connection created.
+// The forum-only wizard creates at most one category and one Project row.
+func rollbackFirstTimeConnection(db *gorm.DB, botToken string, ops firstTimeConnectionOps, plan firstTimeConnectionPlan, createdCategory bool) error {
+	if createdCategory && strings.TrimSpace(plan.CategoryID) != "" {
+		if err := ops.DeleteChannel(plan.CategoryID, botToken); err != nil && !isDiscordNotFoundDeleteError(err) {
+			slog.Warn("first-time setup category rollback failed", "category_id", plan.CategoryID, "error", err)
+		}
 	}
-	query := db.Model(&model.ProductionChannelMapping{}).Where("production_id = ?", productionID)
-	if strings.TrimSpace(operationID) != "" {
-		query = query.Where("operation_id = ?", operationID)
-	}
-	_ = query.Updates(map[string]interface{}{
-		"active":          false,
-		"state":           model.ChannelMappingStateReviewRequired,
-		"migration_state": model.ChannelMappingStateReviewRequired,
-		"last_error":      "first-time setup cleanup requires review",
-	}).Error
-	_ = db.Model(&model.ProductionNotificationConfig{}).
-		Where("production_id = ?", productionID).
-		Update("enabled", false).Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := model.DeleteProductionOperationalState(tx, plan.Project.ID); err != nil {
+			return err
+		}
+		return tx.Where("kitsu_project_id = ?", plan.Project.ID).Delete(&model.Project{}).Error
+	})
 }
 
-func rollbackFirstTimeConnection(db *gorm.DB, botToken string, ops firstTimeConnectionOps, owned firstTimeOwnedResources) error {
-	cleanupFailed := false
-	for i := len(owned.ChannelIDs) - 1; i >= 0; i-- {
-		if err := ops.DeleteChannel(owned.ChannelIDs[i], botToken); err != nil && !isDiscordNotFoundDeleteError(err) {
-			cleanupFailed = true
+func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, lang string, r *http.Request, db *gorm.DB) (result string) {
+	ops := firstTimeOps
+	project := model.FindProjectByKitsuID(db, plan.Project.ID)
+	createdProject := project == nil
+	createdCategory := false
+	completed := false
+	defer func() {
+		if !completed && createdProject {
+			if err := rollbackFirstTimeConnection(db, botToken, ops, plan, createdCategory); err != nil {
+				result = appendFirstTimeRollbackNote(result, err)
+			}
+		}
+	}()
+	if project != nil {
+		// Repair mode: the Project row and its category already exist.
+	} else {
+		categoryID := plan.CategoryID
+		if plan.CategoryIsNew {
+			var err error
+			categoryID, err = ops.CreateCategory(plan.GuildID, KitsuSyncCategoryName(plan.Project.Name), botToken)
+			if err != nil {
+				return renderFirstTimeExecutionError(lang, r, "Discordカテゴリを作成できませんでした。変更は保存されていません。")
+			}
+			createdCategory = true
+		}
+		if err := model.CreateProject(db, plan.Project.ID, plan.Project.Name, "kitsu", plan.GuildID, categoryID, normalizedProductionNotificationLanguage(plan.NotificationLanguage)); err != nil {
+			return renderFirstTimeExecutionError(lang, r, "Production接続を保存できませんでした。作成したDiscordカテゴリは削除しました。")
 		}
 	}
-	if owned.CreatedCategory && strings.TrimSpace(owned.CategoryID) != "" {
-		if err := ops.DeleteChannel(owned.CategoryID, botToken); err != nil && !isDiscordNotFoundDeleteError(err) {
-			cleanupFailed = true
-		}
-	}
-	if cleanupFailed {
-		markFirstTimeSetupReviewRequired(db, owned.ProductionID, owned.OperationID)
-		return errors.New("first-time setup cleanup requires review")
-	}
-	if !owned.CreatedProject {
-		markFirstTimeSetupReviewRequired(db, owned.ProductionID, owned.OperationID)
-		return nil
-	}
-	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := model.DeleteProductionOperationalState(tx, owned.ProductionID); err != nil {
-			return err
-		}
-		if err := tx.Where("kitsu_project_id = ?", owned.ProductionID).Delete(&model.ProjectWebhook{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("kitsu_project_id = ?", owned.ProductionID).Delete(&model.Project{}).Error
-	})
-	if err != nil {
-		markFirstTimeSetupReviewRequired(db, owned.ProductionID, owned.OperationID)
-	}
-	return err
+	completed = true
+	slog.Info("first-time production connection completed (forum mode)", "project_id", plan.Project.ID, "guild_id", plan.GuildID, "category_id", plan.CategoryID)
+	return adminPage(lang, tr(lang, "wizard.complete_title"), r, renderWizardFrame(lang, 7, renderWizardComplete(lang, r, db, plan.Project.ID)))
 }
 
 // appendFirstTimeRollbackNote adds a rollback failure to the already-rendered
@@ -452,90 +259,20 @@ func appendFirstTimeRollbackNote(result string, err error) string {
 	return result + " " + html.EscapeString(err.Error())
 }
 
-func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, lang string, r *http.Request, db *gorm.DB) (result string) {
-	ops := firstTimeOps
-	project := model.FindProjectByKitsuID(db, plan.Project.ID)
-	createdProject := project == nil
-	categoryID := ""
-	operationID := fmt.Sprintf("first-time-%s", plan.Project.ID)
-	owned := firstTimeOwnedResources{ProductionID: plan.Project.ID, OperationID: operationID, CreatedProject: createdProject, CreatedCategory: createdProject}
-	completed := false
-	defer func() {
-		if !completed {
-			if err := rollbackFirstTimeConnection(db, botToken, ops, owned); err != nil {
-				result = appendFirstTimeRollbackNote(result, err)
-			}
-		}
-	}()
-	if project != nil {
-		categoryID = strings.TrimSpace(project.DiscordCategoryID)
-	} else {
-		var err error
-		categoryID, err = ops.CreateCategory(plan.GuildID, KitsuSyncCategoryName(plan.Project.Name), botToken)
-		if err != nil {
-			return renderFirstTimeExecutionError(lang, r, "Discordカテゴリを作成できませんでした。変更は保存されていません。")
-		}
-		owned.CategoryID = categoryID
-		if err := model.CreateProject(db, plan.Project.ID, plan.Project.Name, "kitsu", plan.GuildID, categoryID, normalizedProductionNotificationLanguage(plan.NotificationLanguage)); err != nil {
-			return renderFirstTimeExecutionError(lang, r, "Production接続を保存できませんでした。作成したDiscordカテゴリは削除しました。")
-		}
+// KitsuSyncCategoryName is the Discord category name that groups everything a
+// Production owns in the shared server.
+func KitsuSyncCategoryName(productionName string) string {
+	name := strings.TrimSpace(productionName)
+	if name == "" {
+		name = "Production"
 	}
-	rows := make([]model.ProductionChannelMapping, 0, len(plan.Plan.Entries))
-	projectWebhooks := model.ListProjectWebhooks(db, plan.Project.ID)
-	owned.CategoryID = categoryID
-	for _, entry := range plan.Plan.Entries {
-		channelID := strings.TrimSpace(entry.ExistingID)
-		if entry.Action == "create" {
-			var err error
-			channelID, err = ops.CreateChannel(plan.GuildID, categoryID, entry.ChannelName, botToken)
-			if err != nil {
-				markPendingChannelPlanFailure(db, rows, operationID, err.Error())
-				return renderFirstTimeExecutionError(lang, r, "一部のチャンネルを作成できませんでした。保存済みの状態を確認してから再試行してください。")
-			}
-			owned.ChannelIDs = append(owned.ChannelIDs, channelID)
-		}
-		row := model.ProductionChannelMapping{ProductionID: plan.Project.ID, GuildID: plan.GuildID, TaskTypeID: entry.TaskTypeID, TaskTypeName: entry.TaskTypeName, ChannelID: channelID, ChannelName: entry.ChannelName, Active: true, State: model.ChannelMappingStateCurrent, MigrationState: model.ChannelMappingStateCurrent, OperationID: operationID}
-		if err := model.SavePendingProductionChannelMapping(db, row); err != nil {
-			markPendingChannelPlanFailure(db, rows, operationID, err.Error())
-			return renderFirstTimeExecutionError(lang, r, "チャンネル設定の保存に失敗しました。保存済みの状態を確認してから再試行してください。")
-		}
-		rows = append(rows, row)
-		webhookURL := ""
-		hasExistingWebhook := false
-		for _, webhook := range projectWebhooks {
-			if strings.TrimSpace(webhook.DiscordChannelID) == channelID && strings.TrimSpace(webhook.WebhookURL) != "" {
-				hasExistingWebhook = true
-				break
-			}
-		}
-		if !hasExistingWebhook {
-			var err error
-			webhookURL, err = ops.CreateWebhook(channelID, entry.ChannelName, botToken)
-			if err != nil {
-				markPendingChannelPlanFailure(db, rows, operationID, err.Error())
-				return renderFirstTimeExecutionError(lang, r, "通知先を作成できませんでした。保存済みの状態を確認してから再試行してください。")
-			}
-			if err := model.CreateProjectWebhook(db, plan.Project.ID, entry.ChannelName, "", webhookURL, channelID); err != nil {
-				markPendingChannelPlanFailure(db, rows, operationID, err.Error())
-				return renderFirstTimeExecutionError(lang, r, "通知先の保存に失敗しました。保存済みの状態を確認してから再試行してください。")
-			}
-		}
-		if err := ops.SetPosition(channelID, entry.Order, botToken); err != nil {
-			markPendingChannelPlanFailure(db, rows, operationID, err.Error())
-			return renderFirstTimeExecutionError(lang, r, "チャンネル順を反映できませんでした。保存済みの状態を確認してから再試行してください。")
-		}
+	const prefix = "KitsuSync – "
+	result := prefix + name
+	if len([]rune(result)) <= 100 {
+		return result
 	}
-	// Suppress notifications for this production before its routing goes live:
-	// a poll that races the connection must not report pre-existing work.
-	markInitialCheckpointPending(plan.Project.ID)
-	if err := firstTimeActivateRouting(db, plan.Project.ID, plan.GuildID, rows); err != nil {
-		clearInitialCheckpointPending(plan.Project.ID)
-		markPendingChannelPlanFailure(db, rows, operationID, err.Error())
-		return renderFirstTimeExecutionError(lang, r, "接続を完了できませんでした。保存済みの状態を確認してから再試行してください。")
-	}
-	checkpointInitialTaskStates(db, plan.Project.ID)
-	completed = true
-	return adminPage(lang, tr(lang, "wizard.complete_title"), r, renderWizardFrame(lang, 7, renderWizardComplete(lang, r, db, plan)))
+	runes := []rune(result)
+	return strings.TrimRight(string(runes[:100]), " –")
 }
 
 func handleFirstTimeConnectionAction(w http.ResponseWriter, r *http.Request, lang, kitsuHost, botToken string, db *gorm.DB) bool {

@@ -57,7 +57,7 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 			continue
 		}
 		settings, ok, err := model.LoadProductionForumSettings(db, project.KitsuProjectID)
-		if err != nil || !ok || settings.Config.Mode != model.NotificationModeForum {
+		if err != nil || !ok {
 			continue
 		}
 		recipients, err := forumDigestRecipients(db, project, settings, now)

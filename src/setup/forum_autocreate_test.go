@@ -167,7 +167,7 @@ func TestForumPermissionCheckListsMissingPermissions(t *testing.T) {
 	// View Channel + Send Messages only.
 	forumPermissionGetter = func(string, string) (int64, error) { return (1 << 10) | (1 << 11), nil }
 	settings := model.ProductionForumSettings{
-		Config: model.ProductionForumConfig{Mode: model.NotificationModeForum},
+		Config: model.ProductionForumConfig{GuildID: "guild-1"},
 		Routes: []model.ProductionForumRoute{{TaskTypeName: "Compositing", ForumChannelID: "f1"}},
 	}
 	problems := checkForumPermissions(settings, "token")

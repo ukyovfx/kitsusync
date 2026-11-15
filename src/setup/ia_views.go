@@ -87,18 +87,14 @@ func iaStatus(db *gorm.DB, project model.Project, lang string) (string, string, 
 	if project.ValidationOnly {
 		return "warning", t(lang, "検証専用", "Validation only"), t(lang, "実データの表示確認用です。Discordサーバーは未接続で、通知は利用できません。", "Read-only Kitsu data for validation. No Discord server is connected and notifications are unavailable.")
 	}
-	cfg := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
-	if cfg == nil {
-		return "bad", t(lang, "未設定", "Incomplete"), t(lang, "通知先が設定されていません。通知先を1つ以上設定してください。", "No notification route is configured. Add at least one valid destination.")
+	settings, hasForum, err := model.LoadProductionForumSettings(db, project.KitsuProjectID)
+	if err != nil {
+		return "bad", t(lang, "更新が必要", "Needs attention"), t(lang, "フォーラム設定の読み込みに失敗しました。内容を確認してから修正してください。", "Forum settings could not be loaded. Review the details before changing them.")
 	}
-	if !cfg.Enabled {
-		return "bad", t(lang, "確認が必要", "Needs review"), t(lang, "以前の停止状態が保存されています。通知を再開せず、通知設定と安全性を確認してください。", "A legacy stopped state is saved. Notifications remain blocked until the configuration is reviewed safely.")
+	if !hasForum || len(settings.Routes) == 0 {
+		return "bad", t(lang, "未設定", "Incomplete"), t(lang, "フォーラム設定がありません。フォーラム設定でタスクタイプごとのフォーラムを設定してください。", "No forum settings found. Configure per-task-type forums in the forum settings.")
 	}
-	issues := model.ValidateProductionNotificationConfig(db, project.KitsuProjectID, model.ListProductionNotificationRoutes(db, project.KitsuProjectID))
-	if len(issues) > 0 {
-		return "bad", t(lang, "更新が必要", "Needs attention"), t(lang, "通知先の確認が必要です。内容を確認してから修正してください。", "Notification destinations need attention. Review the details before changing them.")
-	}
-	return "ok", t(lang, "有効", "Active"), t(lang, "通知先の設定が有効です。", "Notification destinations are active.")
+	return "ok", t(lang, "有効", "Active"), t(lang, "フォーラム通知の設定が有効です。", "Forum notification settings are active.")
 }
 
 func iaReadiness(db *gorm.DB, lang string) (string, string, string) {
@@ -1245,7 +1241,7 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	eligibleRoleIDs := map[string]struct{}{}
 	var roleEligibilityErr error
 	if selectedTaskType.ID != "" && botToken != "" {
-		eligibleRoleIDs, roleEligibilityErr = currentReviewerRoleEligibility(db, p, selectedTaskType.ID, botToken)
+		eligibleRoleIDs, roleEligibilityErr = ForumReviewerRoles(db, p.KitsuProjectID, selectedTaskType.ID, botToken)
 	}
 	var explicitRows []model.ProjectReviewerTarget
 	for _, target := range model.ListProjectReviewerTargets(db, p.ID) {
@@ -1469,7 +1465,7 @@ func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request,
 				if len(botTokens) > 0 {
 					botToken = botTokens[0]
 				}
-				eligibleRoles, err := currentReviewerRoleEligibility(db, *project, taskType.ID, botToken)
+				eligibleRoles, err := ForumReviewerRoles(db, project.KitsuProjectID, taskType.ID, botToken)
 				if err != nil {
 					writeReviewerMutationError()
 					return true
@@ -1530,7 +1526,8 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 		statusLabel = t(lang, "利用不可", "Unavailable")
 	}
 	editing := r != nil && r.URL.Query().Get("edit_routing") == "1"
-	routeCount := len(model.ListProductionNotificationRoutes(db, p.KitsuProjectID))
+	forumSettings, _, _ := model.LoadProductionForumSettings(db, p.KitsuProjectID)
+	routeCount := len(forumSettings.Routes)
 	data := loadProductionNotificationReviewerView(db, p, routeCount > 0 || editing, routeCount > 0 || editing, botTokens...)
 	readTable := renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 	var routing string
@@ -1592,14 +1589,15 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 					view.RoleSendEvidenceByTaskType = make(map[string]reviewerRoleSendEvidence)
 					view.RoleSendErrorsByTaskType = make(map[string]error)
 					view.RoleSendersByTaskType = make(map[string]reviewerRoleSender)
-					for _, route := range model.ListProductionNotificationRoutes(db, p.KitsuProjectID) {
-						webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID)
-						if webhook == nil || webhook.KitsuProjectID != p.KitsuProjectID || strings.TrimSpace(webhook.WebhookURL) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" {
-							view.RoleSendErrorsByTaskType[route.TaskTypeID] = errors.New("managed Reviewer sender is unavailable")
-							continue
+					forumSettings, _, settingsErr := model.LoadProductionForumSettings(db, p.KitsuProjectID)
+					if settingsErr != nil {
+						for _, taskType := range view.TaskTypes {
+							view.RoleSendErrorsByTaskType[strings.TrimSpace(taskType.ID)] = errors.New("forum settings are unavailable")
 						}
-						view.RoleSendersByTaskType[route.TaskTypeID] = reviewerRoleSender{WebhookURL: webhook.WebhookURL, ChannelID: webhook.DiscordChannelID}
-						evidence, evidenceErr := reviewerRoleSendEvidenceReader(p.DiscordGuildID, webhook.DiscordChannelID, webhook.WebhookURL, view.BotToken)
+					}
+					for _, route := range forumSettings.Routes {
+						view.RoleSendersByTaskType[route.TaskTypeID] = reviewerRoleSender{ChannelID: route.ForumChannelID}
+						evidence, evidenceErr := forumReviewerRoleEvidenceReader(p.DiscordGuildID, route.ForumChannelID, view.BotToken)
 						view.RoleSendEvidenceByTaskType[route.TaskTypeID] = evidence
 						if evidenceErr != nil {
 							view.RoleSendErrorsByTaskType[route.TaskTypeID] = evidenceErr
@@ -1615,16 +1613,17 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 }
 
 func renderProductionNotificationsReadTable(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, botTokens ...string) string {
-	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
-	data := loadProductionNotificationReviewerView(db, p, len(routes) > 0, len(routes) > 0, botTokens...)
+	forumSettings, _, _ := model.LoadProductionForumSettings(db, p.KitsuProjectID)
+	data := loadProductionNotificationReviewerView(db, p, len(forumSettings.Routes) > 0, len(forumSettings.Routes) > 0, botTokens...)
 	return renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 }
 
 func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, data productionNotificationReviewerView) string {
 	label := func(ja, en string) string { return t(lang, ja, en) }
-	channelLabel := label("Discordチャンネル", "Discord Channel")
+	channelLabel := label("フォーラム", "Forum")
 	editURL := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
-	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
+	forumSettings, _, _ := model.LoadProductionForumSettings(db, p.KitsuProjectID)
+	routes := forumSettings.Routes
 	taskTypes := data.TaskTypes
 	taskTypesByID := make(map[string]kitsu.TaskType, len(taskTypes))
 	for _, taskType := range taskTypes {
@@ -1638,8 +1637,8 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 	var rows strings.Builder
 	for _, route := range routes {
 		channel := label("未設定", "Not configured")
-		if webhook := model.FindProjectWebhookByID(db, route.DestinationWebhookID); webhook != nil && strings.TrimSpace(webhook.ChannelName) != "" {
-			channel = "#" + strings.TrimPrefix(strings.TrimSpace(webhook.ChannelName), "#")
+		if name := strings.TrimSpace(route.ForumChannelName); name != "" {
+			channel = "#" + strings.TrimPrefix(name, "#")
 		}
 		taskTypeID := strings.TrimSpace(route.TaskTypeID)
 		taskType := taskTypesByID[taskTypeID]
@@ -1654,7 +1653,8 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 			case model.ReviewerTargetRole:
 				if role, ok := roleNames[target.DiscordID]; data.RolesReady && ok {
 					sender := data.RoleSendersByTaskType[taskTypeID]
-					if reviewerRoleCanBeMentioned(p.DiscordGuildID, sender.ChannelID, sender.WebhookURL, role, data.RoleSendEvidenceByTaskType[taskTypeID], data.RoleSendErrorsByTaskType[taskTypeID]) {
+					evidenceErr := data.RoleSendErrorsByTaskType[taskTypeID]
+					if evidenceErr == nil && forumRoleCanBeMentioned(p.DiscordGuildID, sender.ChannelID, role, data.RoleSendEvidenceByTaskType[taskTypeID]) {
 						additional = append(additional, "@"+role.Name)
 					} else {
 						additional = append(additional, label("ロール利用不可", "Role unavailable"))
@@ -1681,37 +1681,7 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="3"><div class="production-detail-state-row">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</div></td></tr>`)
 	}
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, data, lang)
-	recoveryMarkup := renderProductionRoutingOrderRecovery(db, r, p, lang)
-	recoveryNotice := ""
-	if r != nil && r.URL != nil {
-		switch r.URL.Query().Get("routing_order_recovery") {
-		case "done":
-			recoveryNotice = `<div class="production-detail-state-row" role="status">` + esc(label("Discordチャンネル順を保存済みルーティングに合わせました。", "Discord channel order was reconciled to the saved routing.")) + `</div>`
-		case "failed":
-			recoveryNotice = `<div class="production-detail-state-row warning" role="alert">` + esc(label("Discordチャンネル順を確認・復旧できませんでした。状態は保護されています。", "Discord channel order could not be verified or reconciled. The configuration remains protected.")) + `</div>`
-		}
-	}
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div>` + recoveryNotice + recoveryMarkup + `<div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
-}
-
-func renderProductionRoutingOrderRecovery(db *gorm.DB, r *http.Request, p model.Project, lang string) string {
-	label := func(ja, en string) string { return t(lang, ja, en) }
-	if db == nil || strings.TrimSpace(p.KitsuProjectID) == "" {
-		return `<div class="production-detail-state-row warning" role="status">` + esc(label("Discordチャンネル順の復旧状態を確認できません。", "Channel-order recovery state is unavailable.")) + `</div>`
-	}
-	var lock model.ProductionNotificationWriteLock
-	err := db.Where("production_id = ?", strings.TrimSpace(p.KitsuProjectID)).First(&lock).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return ""
-	}
-	if err != nil {
-		return `<div class="production-detail-state-row warning" role="status">` + esc(label("Discordチャンネル順の復旧状態を確認できません。", "Channel-order recovery state is unavailable.")) + `</div>`
-	}
-	if lock.MutationState != model.NotificationMutationReorderHelp {
-		return ""
-	}
-	action := withLang("/bot/admin/projects", r)
-	return `<div class="production-detail-state-row warning production-order-recovery" role="status"><div><strong>` + esc(label("Discordのチャンネル順を再確認する必要があります。", "Discord channel order requires reconciliation.")) + `</strong><p class="field-help">` + esc(label("保存済みのTask Type順を再適用します。送信先が確認できない場合は変更しません。", "The saved Task Type order will be reapplied. No change is made if destinations cannot be verified.")) + `</p></div><form method="post" action="` + esc(action) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="recover_current_routing_order"><button class="btn-ghost" type="submit" data-recover-routing-order>` + esc(label("順序を再確認", "Reconcile order")) + `</button></form></div>`
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div><div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
 }
 
 func renderProductionWFATargetChips(values []string, emptyLabel, unavailableLabel string, automatic bool) string {
@@ -1880,8 +1850,11 @@ func renderCurrentProductionTroubleshooting(db *gorm.DB, p model.Project, lang s
 		problemClass, problemLabel = "warning", t(lang, "要確認", "Needs review")
 	}
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
-	routes := model.ListProductionNotificationRoutes(db, p.KitsuProjectID)
-	config := model.FindProductionNotificationConfig(db, p.KitsuProjectID)
+	forumSettings, hasForum, forumErr := model.LoadProductionForumSettings(db, p.KitsuProjectID)
+	routeCount := 0
+	if forumErr == nil && hasForum {
+		routeCount = len(forumSettings.Routes)
+	}
 	participantCount := len(ListKitsuProjectParticipants(p.KitsuProjectID))
 	linkedCount := len(model.ListProjectUserMaps(db, p.ID))
 	recentCount, recentFailures := 0, 0
@@ -1909,7 +1882,7 @@ func renderCurrentProductionTroubleshooting(db *gorm.DB, p model.Project, lang s
 		discordValue, discordClass = t(lang, "設定済", "Configured"), "success"
 	}
 	routingValue, routingClass := t(lang, "未設定", "Not configured"), "warning"
-	if config != nil && config.Enabled && len(routes) > 0 {
+	if forumErr == nil && hasForum && routeCount > 0 {
 		routingValue, routingClass = t(lang, "正常", "Healthy"), "success"
 	}
 	participantValue, participantClass := t(lang, "確認待", "Waiting"), "warning"
@@ -1946,7 +1919,7 @@ func renderCurrentProductionTroubleshooting(db *gorm.DB, p model.Project, lang s
 	diagnosticDetails.WriteString(`<div class="production-diagnostics-list">`)
 	diagnosticDetails.WriteString(item(t(lang, "Kitsu接続", "Kitsu connection"), kitsuValue, kitsuClass, t(lang, "現在のランタイム認証状態。", "Current runtime authentication state.")))
 	diagnosticDetails.WriteString(item(t(lang, "Discord Bot", "Discord Bot"), discordValue, discordClass, t(lang, "現在のBot設定。", "Current Bot configuration.")))
-	diagnosticDetails.WriteString(item(t(lang, "通知ルーティング", "Notification routing"), routingValue, routingClass, fmt.Sprintf(t(lang, "%d件のプロダクションルートと設定を確認しました。", "%d Production routes and the configuration were inspected."), len(routes))))
+	diagnosticDetails.WriteString(item(t(lang, "通知ルーティング", "Notification routing"), routingValue, routingClass, fmt.Sprintf(t(lang, "%d件のフォーラム通知設定を確認しました。", "%d forum notification routes were inspected."), routeCount)))
 	diagnosticDetails.WriteString(item(t(lang, "参加者取得", "Participant retrieval"), participantValue, participantClass, fmt.Sprintf(t(lang, "KitsuプロダクションのチームAPIから%d人を取得しました。", "The Kitsu Production team API returned %d people."), participantCount)))
 	diagnosticDetails.WriteString(item(t(lang, "ユーザー紐づけ", "User linking"), linkValue, linkClass, fmt.Sprintf(t(lang, "このプロダクションのユーザー割り当て%d件。", "User assignments recorded for this Production: %d."), linkedCount)))
 	diagnosticDetails.WriteString(item(t(lang, "最近の通知処理", "Recent notification processing"), processingValue, processingClass, processingExplanation))
@@ -2770,8 +2743,8 @@ func pipelineRoutingDetails(lang string, readiness SharedBotRuntimeReadiness, db
 	routeCount := 0
 	configCount := 0
 	for _, project := range projects {
-		routeCount += len(model.ListProductionNotificationRoutes(db, project.KitsuProjectID))
-		if model.FindProductionNotificationConfig(db, project.KitsuProjectID) != nil {
+		if settings, ok, err := model.LoadProductionForumSettings(db, project.KitsuProjectID); err == nil && ok {
+			routeCount += len(settings.Routes)
 			configCount++
 		}
 	}
@@ -3198,19 +3171,7 @@ func renderIANewConnection(w http.ResponseWriter, r *http.Request, db *gorm.DB) 
 			}
 			projectOptions.WriteString(`<option value="` + esc(p.ID) + `"` + selected + `>` + esc(p.Name) + `</option>`)
 		}
-		body := `<div class="section-stack"><section class="section-card glass"><h1>` + esc(tr(lang, "ia.new_connection")) + `</h1><p class="hint">` + esc(t(lang, "ProductionとDiscordサーバーを選び、作成または再利用するチャンネルを確認してから接続します。", "Select a Production and Discord server, review the create/reuse plan, then connect.")) + `</p><ol class="step-list"><li>` + esc(t(lang, "Kitsu Productionを選択", "Select a Kitsu Production")) + `</li><li>` + esc(t(lang, "Discordサーバーを選択", "Select a Discord server")) + `</li><li>` + esc(t(lang, "作成または再利用するチャンネルを確認", "Review channels to create or reuse")) + `</li><li>` + esc(t(lang, "内容を確認してから実行", "Confirm the exact plan before execution")) + `</li></ol><form method="GET" class="section-stack"><label for="new-connection-production">` + esc(t(lang, "Kitsu Production", "Kitsu Production")) + `</label><select id="new-connection-production" name="project">` + projectOptions.String() + `</select><button class="btn" type="submit">` + esc(t(lang, "次へ", "Continue")) + `</button></form></section>`
-		if projectID != "" {
-			selected := KitsuProject{}
-			for _, p := range projects {
-				if p.ID == projectID {
-					selected = p
-					break
-				}
-			}
-			if selected.ID != "" {
-				body += renderExplicitTaskTypeChannelPlan(model.Project{KitsuProjectID: selected.ID, Name: selected.Name}, setupKitsuTaskTypes(db, selected.ID), botToken, r, lang, db)
-			}
-		}
+		body := `<div class="section-stack"><section class="section-card glass"><h1>` + esc(tr(lang, "ia.new_connection")) + `</h1><p class="hint">` + esc(t(lang, "ProductionとDiscordサーバーを選び、接続内容を確認してから接続します。フォーラムは接続後にフォーラム設定で作成します。", "Select a Production and Discord server, review the connection, then connect. Forums are created afterwards in the forum settings.")) + `</p><ol class="step-list"><li>` + esc(t(lang, "Kitsu Productionを選択", "Select a Kitsu Production")) + `</li><li>` + esc(t(lang, "Discordサーバーを選択", "Select a Discord server")) + `</li><li>` + esc(t(lang, "カテゴリと通知言語を選択", "Choose the category and notification language")) + `</li><li>` + esc(t(lang, "内容を確認してから実行", "Confirm the exact plan before execution")) + `</li></ol><form method="GET" class="section-stack"><label for="new-connection-production">` + esc(t(lang, "Kitsu Production", "Kitsu Production")) + `</label><select id="new-connection-production" name="project">` + projectOptions.String() + `</select><button class="btn" type="submit">` + esc(t(lang, "次へ", "Continue")) + `</button></form></section>`
 		if strings.TrimSpace(botToken) == "" {
 			body += `<section class="section-card glass" role="status"><h2>` + esc(t(lang, "対応が必要", "Action required")) + `</h2><p class="hint">` + esc(t(lang, "Discordサーバーを読み込むにはBot接続が必要です。先にBot接続を設定してください。", "Bot Connection is required to read Discord servers. Complete Bot Connection first.")) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a></section>`
 		}
@@ -3448,10 +3409,22 @@ func wizardProject(projects []KitsuProject, id string) KitsuProject {
 	}
 	return KitsuProject{}
 }
-func wizardTaskTypes(db *gorm.DB, projectID string) []kitsu.TaskType {
-	return setupKitsuTaskTypes(db, projectID)
+func discordCategoryExists(channels []DiscordGuildChannel, categoryID string) bool {
+	categoryID = strings.TrimSpace(categoryID)
+	if categoryID == "" {
+		return false
+	}
+	for _, channel := range channels {
+		if channel.Type == 4 && channel.ID == categoryID {
+			return true
+		}
+	}
+	return false
 }
 
+// renderWizardPlan is the forum-only plan step: pick the Discord category and
+// the notification language. Forum channels are provisioned later from the
+// forum settings page, so there is no per-Task-Type channel plan anymore.
 func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string, projects []KitsuProject, projectID, guildID string, review bool) string {
 	project := wizardProject(projects, projectID)
 	if project.ID == "" || guildID == "" {
@@ -3470,114 +3443,33 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 			categoryID = "__create__"
 		}
 	}
-	allTaskTypes := wizardTaskTypes(db, project.ID)
-	if taskTypePlanRequestInvalid(r, allTaskTypes) {
-		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="state-explanation">` + esc(tr(lang, "wizard.plan_blocked")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, projectID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a></div></section>`
-	}
-	taskTypes, overrides := taskTypePlanRequest(r, allTaskTypes)
-	categoryChannels := channelsInCategory(channels, categoryID)
-	existing := existingChannelsForPlanWithLegacy(categoryChannels, liveProjectMappingsForCategory(model.ListProductionChannelMappings(db, project.ID), categoryChannels), liveProjectWebhooksForCategory(model.ListProjectWebhooks(db, project.ID), categoryChannels))
-	plan := BuildTaskTypeChannelPlanWithOverrides(project.ID, guildID, taskTypes, existing, overrides)
-	plan.CategoryID = categoryID
-	for _, channel := range channels {
-		if channel.Type == 4 && strings.TrimSpace(channel.ID) != "" {
-			plan.CategoryOptions = append(plan.CategoryOptions, channel)
-		}
-	}
 	updateWizardState(r, func(state *wizardState) {
 		state.ProductionID = project.ID
 		state.GuildID = guildID
-		state.PlanFingerprint = plan.Fingerprint()
 	})
 	if review {
-		return renderWizardPlanReview(lang, r, project, guildID, botToken, plan)
+		return renderWizardPlanReview(lang, r, project, guildID, botToken, categoryID, normalizedProductionNotificationLanguage(r.FormValue("notification_language")))
 	}
-	if r != nil {
-		return renderWizardPlanPolished(lang, r, project, projectID, guildID, allTaskTypes, plan)
-	}
-	showStatus := false
-	for _, entry := range plan.Entries {
-		if entry.Action != "create" {
-			showStatus = true
-		}
-	}
-	var rows strings.Builder
-	for _, entry := range plan.Entries {
-		status := ""
-		if showStatus {
-			status = `<span class="wizard-plan-status wizard-plan-status-` + esc(entry.Action) + `">` + esc(wizardPlanActionLabel(lang, entry.Action)) + `</span>`
-		}
-		rows.WriteString(`<tr draggable="true" data-task-type="` + esc(entry.TaskTypeID) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><span class="wizard-drag-handle" aria-hidden="true">↕</span><strong>` + esc(entry.DisplayName()) + `</strong><div class="wizard-move-controls"><button type="button" class="wizard-move" data-move="up" aria-label="` + esc(t(lang, "上へ移動", "Move up")) + `">↑</button><button type="button" class="wizard-move" data-move="down" aria-label="` + esc(t(lang, "下へ移動", "Move down")) + `">↓</button></div></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-control"><span class="wizard-channel-prefix" aria-hidden="true">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required></span>` + status + `<input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td></tr>`)
-	}
-	body := `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[plan.Valid()] + `">` + esc(wizardPlanStateLabel(lang, plan.Valid())) + `</span></div><form method="GET" action="` + esc(withLang("/bot/setup", r)) + `"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><div class="table-wrap wizard-plan-table"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th></tr></thead><tbody data-wizard-plan-sort>` + rows.String() + `</tbody></table></div>`
-	if !plan.Valid() {
-		duplicateNotice := ""
-		if len(plan.DuplicateNames) > 0 {
-			duplicateNotice = `<p class="state-explanation" role="alert">` + esc(tr(lang, "channel_plan.duplicate_name")) + `</p>`
-		}
-		return body + `</form>` + duplicateNotice + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, projectID, guildID, false) + `</section>`
-	}
-	return body + `<p class="field-help" role="status">` + esc(tr(lang, "wizard.no_write")) + `</p><div class="button-row wizard-plan-actions"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit" name="wizard_step" value="5">` + esc(tr(lang, "wizard.review")) + `</button></div><input type="hidden" name="review" value="1"></form><script>(function(){var body=document.querySelector('[data-wizard-plan-sort]');if(!body)return;var refresh=function(){Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row,index){var field=row.querySelector('input[type="hidden"][name^="channel_order_"]');if(field)field.value=String(index+1);});};var move=function(row,direction){var target=direction==='up'?row.previousElementSibling:row.nextElementSibling;if(!target)return;if(direction==='up')body.insertBefore(row,target);else body.insertBefore(target,row);refresh();row.querySelector('button[data-move="'+(direction==='up'?'up':'down')+'"]')?.focus();};Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row){row.addEventListener('dragstart',function(event){event.dataTransfer.setData('text/plain',row.dataset.taskType);row.classList.add('is-dragging');});row.addEventListener('dragend',function(){row.classList.remove('is-dragging');});row.addEventListener('dragover',function(event){event.preventDefault();});row.addEventListener('drop',function(event){event.preventDefault();var id=event.dataTransfer.getData('text/plain'),dragged=body.querySelector('tr[data-task-type="'+id+'"]');if(dragged&&dragged!==row){var rect=row.getBoundingClientRect();body.insertBefore(dragged,event.clientY<rect.top+rect.height/2?row:row.nextElementSibling);refresh();}});Array.prototype.forEach.call(row.querySelectorAll('button[data-move]'),function(button){button.addEventListener('click',function(){move(row,button.dataset.move);});});});refresh();})();</script></section>`
-}
-
-func renderWizardPlanPolished(lang string, r *http.Request, project KitsuProject, projectID, guildID string, allTaskTypes []kitsu.TaskType, plan TaskTypeChannelPlan) string {
-	var rows strings.Builder
-	included := map[string]bool{}
-	for _, entry := range plan.Entries {
-		included[entry.TaskTypeID] = true
-		rows.WriteString(`<tr draggable="true" tabindex="0" data-task-type="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(trf(lang, "wizard.row_move_hint", entry.DisplayName())) + `"><td data-label="` + esc(tr(lang, "wizard.task_type")) + `"><strong>` + esc(entry.DisplayName()) + `</strong><input type="hidden" name="included_task_type_id" value="` + esc(entry.TaskTypeID) + `"></td><td data-label="` + esc(tr(lang, "wizard.channel")) + `"><label class="sr-only" for="wizard-channel-` + esc(entry.TaskTypeID) + `">` + esc(entry.DisplayName()) + `</label><span class="wizard-channel-control"><span class="wizard-channel-prefix" aria-hidden="true">#</span><input id="wizard-channel-` + esc(entry.TaskTypeID) + `" class="wizard-channel-input" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `" maxlength="100" required></span><input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `"></td><td><button type="submit" name="action" value="exclude" class="wizard-exclude" data-exclude="` + esc(entry.TaskTypeID) + `" aria-label="` + esc(tr(lang, "wizard.exclude")) + `">×</button></td></tr>`)
-	}
-	var excluded strings.Builder
-	for _, taskType := range allTaskTypes {
-		id := strings.TrimSpace(taskType.ID)
-		if !included[id] {
-			excluded.WriteString(`<option value="` + esc(id) + `">` + esc(taskType.Name) + `</option>`)
-		}
-	}
-	statusBadge := ""
-	if !plan.Valid() {
-		statusBadge = `<span class="status-pill bad">` + esc(wizardPlanStateLabel(lang, false)) + `</span>`
-	}
-	categoryLabel := t(lang, "Discordカテゴリ", "Discord category")
-	categoryName := KitsuSyncCategoryName(project.Name)
 	categoryOptions := ""
-	for _, category := range plan.CategoryOptions {
-		selected := ""
-		if strings.TrimSpace(category.ID) == strings.TrimSpace(plan.CategoryID) {
-			selected = " selected"
+	for _, channel := range channels {
+		if channel.Type == 4 && strings.TrimSpace(channel.ID) != "" {
+			selected := ""
+			if channel.ID == categoryID {
+				selected = " selected"
+			}
+			categoryOptions += `<option value="` + esc(channel.ID) + `"` + selected + `>` + esc(channel.Name) + `</option>`
 		}
-		categoryOptions += `<option value="` + esc(category.ID) + `"` + selected + `>` + esc(category.Name) + `</option>`
 	}
-	if categoryOptions == "" && plan.CategoryID != "__create__" {
-		categoryOptions = `<option value="` + esc(plan.CategoryID) + `" selected>` + esc(categoryName) + `</option>`
+	if categoryID != "__create__" && categoryOptions == "" {
+		categoryOptions = `<option value="` + esc(categoryID) + `" selected>` + esc(KitsuSyncCategoryName(project.Name)) + `</option>`
 	}
-	categoryOptions += `<option value="__create__"` + map[bool]string{true: " selected", false: ""}[plan.CategoryID == "__create__"] + `>` + esc(t(lang, "新しいカテゴリを作成", "Create a new category")) + `</option>`
-	body := `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div>` + statusBadge + `</div><form method="GET" class="wizard-plan-form" action="` + esc(withLang("/bot/setup", r)) + `"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><input type="hidden" name="wizard_step" value="4"><input type="hidden" name="exclude_task_type_id" id="wizard-task-type-action"><label for="wizard-plan-category">` + esc(categoryLabel) + `</label><select id="wizard-plan-category" name="plan_category" onchange="this.form.submit()">` + categoryOptions + `</select><p class="field-help">` + esc(t(lang, "既存カテゴリを確認するか、新しい管理対象カテゴリを作成します。", "Choose an existing category or explicitly create a new managed category.")) + `</p><div class="table-wrap wizard-plan-table"><table><caption class="sr-only">` + esc(tr(lang, "wizard.plan_caption")) + `</caption><thead><tr><th>` + esc(tr(lang, "wizard.task_type")) + `</th><th>` + esc(tr(lang, "wizard.channel")) + `</th><th></th></tr></thead><tbody data-wizard-plan-sort>` + rows.String() + `</tbody></table></div>`
-	notificationLanguage := normalizedProductionNotificationLanguage(r.URL.Query().Get("notification_language"))
+	categoryOptions += `<option value="__create__"` + map[bool]string{true: " selected", false: ""}[categoryID == "__create__"] + `>` + esc(t(lang, "新しいカテゴリを作成", "Create a new category")) + `</option>`
+	notificationLanguage := normalizedProductionNotificationLanguage(r.FormValue("notification_language"))
 	languageControl := `<div class="wizard-notification-language"><label for="wizard-notification-language">` + esc(t(lang, "Discord通知の言語", "Discord notification language")) + `</label><select id="wizard-notification-language" name="notification_language"><option value="ja"` + selectedAttr(notificationLanguage == "ja") + `>` + esc(t(lang, "日本語", "Japanese")) + `</option><option value="en"` + selectedAttr(notificationLanguage == "en") + `>English</option></select><p class="field-help">` + esc(t(lang, "このProductionの今後のDiscord通知に使う言語です。管理画面の言語とは別に設定できます。", "Used for future Discord notifications for this Production. It is independent of the admin UI language.")) + `</p></div>`
-	body = strings.Replace(body, `<input type="hidden" name="exclude_task_type_id" id="wizard-task-type-action">`, `<input type="hidden" name="exclude_task_type_id" id="wizard-task-type-action">`+languageControl, 1)
-	addDisabled := excluded.Len() == 0
-	selectAttrs := ""
-	addAttrs := ""
-	selectOptions := `<option value="">` + esc(tr(lang, "wizard.select_task_type")) + `</option>` + excluded.String()
-	if addDisabled {
-		selectAttrs = ` disabled aria-disabled="true"`
-		addAttrs = ` disabled aria-disabled="true"`
-		selectOptions = `<option value="">` + esc(tr(lang, "wizard.all_task_types_included")) + `</option>`
-	}
-	selectWrapperClass := "wizard-add-task-type-select"
-	if addDisabled {
-		selectWrapperClass += " is-disabled"
-	}
-	body += `<div class="wizard-add-task-type" role="group" aria-labelledby="wizard-add-task-type-label"><label id="wizard-add-task-type-label" for="wizard-add-task-type">` + esc(tr(lang, "wizard.add_task_type")) + `</label><span class="` + selectWrapperClass + `"><select id="wizard-add-task-type" name="task_type_id"` + selectAttrs + `>` + selectOptions + `</select></span><button class="btn-ghost" type="submit" name="action" value="include"` + addAttrs + `>` + esc(tr(lang, "wizard.add")) + `</button></div>`
-	body = `<style>.wizard-add-task-type{display:grid;grid-template-columns:auto minmax(220px,1fr) auto;align-items:center;gap:8px;margin-top:12px}.wizard-add-task-type label{width:auto;margin:0}.wizard-add-task-type-select{position:relative;min-width:0}.wizard-add-task-type-select select{appearance:none;-webkit-appearance:none;width:100%;padding-right:36px}.wizard-add-task-type-select::after{content:"";position:absolute;right:14px;top:50%;width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;color:var(--muted);transform:translateY(-65%) rotate(45deg);pointer-events:none}.wizard-add-task-type-select.is-disabled::after{opacity:.55}.wizard-add-task-type button{white-space:nowrap}@media(max-width:640px){.wizard-add-task-type{grid-template-columns:1fr}.wizard-add-task-type label,.wizard-add-task-type-select,.wizard-add-task-type button{width:100%}}</style>` + body
-	if !plan.Valid() {
-		return body + `</form><p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, projectID, guildID, false) + `</section>`
-	}
-	return body + `<div class="button-row wizard-plan-actions"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit" name="action" value="review">` + esc(tr(lang, "wizard.review")) + `</button></div></form><script>(function(){var body=document.querySelector('[data-wizard-plan-sort]');if(!body)return;var actionField=document.getElementById('wizard-task-type-action');var refresh=function(){Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row,index){var field=row.querySelector('input[type="hidden"][name^="channel_order_"]');if(field)field.value=String(index+1);});};var move=function(row,direction){var target=direction==='up'?row.previousElementSibling:row.nextElementSibling;if(!target)return;if(direction==='up')body.insertBefore(row,target);else body.insertBefore(target,row);refresh();};Array.prototype.forEach.call(body.querySelectorAll('tr'),function(row){row.addEventListener('dragstart',function(event){event.dataTransfer.setData('text/plain',row.dataset.taskType);row.classList.add('is-dragging');});row.addEventListener('dragend',function(){row.classList.remove('is-dragging');});row.addEventListener('dragover',function(event){event.preventDefault();row.classList.add('drag-over');});row.addEventListener('dragleave',function(){row.classList.remove('drag-over');});row.addEventListener('drop',function(event){event.preventDefault();row.classList.remove('drag-over');var id=event.dataTransfer.getData('text/plain'),dragged=body.querySelector('tr[data-task-type="'+id+'"]');if(dragged&&dragged!==row){var rect=row.getBoundingClientRect();body.insertBefore(dragged,event.clientY<rect.top+rect.height/2?row:row.nextElementSibling);refresh();}});row.addEventListener('keydown',function(event){if(!event.altKey||!['ArrowUp','ArrowDown'].includes(event.key))return;event.preventDefault();move(row,event.key==='ArrowUp'?'up':'down');row.focus();});var exclude=row.querySelector('[data-exclude]');if(exclude)exclude.addEventListener('click',function(event){event.preventDefault();var id=exclude.getAttribute('data-exclude');var select=document.getElementById('wizard-add-task-type'),addButton=select&&select.form?select.form.querySelector('button[name="action"][value="include"]'):null;var name=row.querySelector('td strong');if(select){var option=document.createElement('option');option.value=id;option.textContent=name?name.textContent:id;select.appendChild(option);select.value=id;select.disabled=false;select.removeAttribute('aria-disabled');var wrapper=select.closest('.wizard-add-task-type-select');if(wrapper)wrapper.classList.remove('is-disabled');}if(addButton){addButton.disabled=false;addButton.removeAttribute('aria-disabled');}row.remove();refresh();if(select)select.focus();});});refresh();})();</script></section>`
+	return `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div></div><form method="GET" class="wizard-plan-form" action="` + esc(withLang("/bot/setup", r)) + `"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><input type="hidden" name="wizard_step" value="4"><label for="wizard-plan-category">` + esc(t(lang, "Discordカテゴリ", "Discord category")) + `</label><select id="wizard-plan-category" name="plan_category">` + categoryOptions + `</select><p class="field-help">` + esc(t(lang, "既存カテゴリを確認するか、新しい管理対象カテゴリを作成します。", "Choose an existing category or explicitly create a new managed category.")) + `</p>` + languageControl + `<div class="button-row wizard-plan-actions"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, project.ID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit" name="wizard_step" value="5">` + esc(tr(lang, "wizard.review")) + `</button></div></form></section>`
 }
 
-func renderWizardPlanReview(lang string, r *http.Request, project KitsuProject, guildID, botToken string, plan TaskTypeChannelPlan) string {
+func renderWizardPlanReview(lang string, r *http.Request, project KitsuProject, guildID, botToken, categoryID, notificationLanguage string) string {
 	guildName := t(lang, "選択したDiscordサーバー", "Selected Discord server")
 	if guilds, err := ListBotGuilds(botToken); err == nil {
 		for _, guild := range guilds {
@@ -3587,65 +3479,14 @@ func renderWizardPlanReview(lang string, r *http.Request, project KitsuProject, 
 			}
 		}
 	}
-	var ordered strings.Builder
-	showStatus := plan.ReuseCount() > 0 || plan.CreateCount() != len(plan.Entries)
-	for _, entry := range plan.Entries {
-		line := `<li><code>#` + esc(entry.ChannelName) + `</code>`
-		if showStatus {
-			line += ` <span class="wizard-plan-status wizard-plan-status-` + esc(entry.Action) + `">` + esc(wizardPlanActionLabel(lang, entry.Action)) + `</span>`
-		}
-		ordered.WriteString(line + `</li>`)
+	categoryLabel := t(lang, "新しいカテゴリを作成", "Create a new category")
+	if categoryID != "__create__" && strings.TrimSpace(categoryID) != "" {
+		categoryLabel = t(lang, "既存カテゴリを再利用", "Reuse an existing category")
 	}
-	var hidden strings.Builder
-	hidden.WriteString(`<input type="hidden" name="category_id" value="` + esc(plan.CategoryID) + `">`)
-	hidden.WriteString(`<input type="hidden" name="notification_language" value="` + esc(normalizedProductionNotificationLanguage(r.FormValue("notification_language"))) + `">`)
-	for _, entry := range plan.Entries {
-		hidden.WriteString(`<input type="hidden" name="included_task_type_id" value="` + esc(entry.TaskTypeID) + `"><input type="hidden" name="channel_name_` + esc(entry.TaskTypeID) + `" value="` + esc(entry.ChannelName) + `"><input type="hidden" name="channel_order_` + esc(entry.TaskTypeID) + `" value="` + strconv.Itoa(entry.Order) + `">`)
-	}
-	countSummary := trf(lang, "wizard.channels_create", plan.CreateCount())
-	if reused := plan.ReuseCount(); reused > 0 {
-		countSummary += ` ` + trf(lang, "wizard.channels_reuse", reused)
-	}
-	body := `<section class="section-card glass wizard-review-card" aria-labelledby="wizard-review-title"><div class="page-heading"><div><h2 id="wizard-review-title">` + esc(tr(lang, "wizard.review_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.review_hint")) + `</p></div></div><dl class="wizard-connection-summary"><div><dt>` + esc(tr(lang, "wizard.production_summary")) + `</dt><dd>` + esc(project.Name) + `</dd></div><div><dt>` + esc(tr(lang, "wizard.server_summary")) + `</dt><dd>` + esc(guildName) + `</dd></div><div><dt>` + esc(tr(lang, "wizard.area_summary")) + `</dt><dd>` + esc(KitsuSyncCategoryName(project.Name)) + `</dd></div></dl><p class="wizard-count-summary">` + esc(countSummary) + `</p><h3>` + esc(tr(lang, "wizard.order_title")) + `</h3><ol class="wizard-final-channel-list">` + ordered.String() + `</ol>`
-	if !plan.Valid() {
-		return body + `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</p>` + renderBlockedWizardPlanNavigation(lang, r, project.ID, guildID, true) + `</section>`
-	}
-	return body + `<p class="field-help">` + esc(tr(lang, "wizard.no_write")) + `</p><form method="POST" action="` + esc(withLang("/bot/setup", r)) + `" class="wizard-confirm-form"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="project_id" value="` + esc(project.ID) + `"><input type="hidden" name="guild_id" value="` + esc(guildID) + `"><input type="hidden" name="plan_fingerprint" value="` + esc(plan.Fingerprint()) + `">` + hidden.String() + `<label class="wizard-confirm-control" for="wizard-confirm"><input id="wizard-confirm" type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "wizard.confirm")) + `</label><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, project.ID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button id="wizard-execute" class="btn" type="submit" disabled>` + esc(tr(lang, "wizard.execute")) + `</button></div></form><script>(function(){var check=document.getElementById('wizard-confirm'),button=document.getElementById('wizard-execute');if(check&&button){var sync=function(){button.disabled=!check.checked;};check.addEventListener('change',sync);sync();}})();</script></section>`
+	body := `<section class="section-card glass wizard-review-card" aria-labelledby="wizard-review-title"><div class="page-heading"><div><h2 id="wizard-review-title">` + esc(tr(lang, "wizard.review_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.review_hint")) + `</p></div></div><dl class="wizard-connection-summary"><div><dt>` + esc(tr(lang, "wizard.production_summary")) + `</dt><dd>` + esc(project.Name) + `</dd></div><div><dt>` + esc(tr(lang, "wizard.server_summary")) + `</dt><dd>` + esc(guildName) + `</dd></div><div><dt>` + esc(tr(lang, "wizard.area_summary")) + `</dt><dd>` + esc(KitsuSyncCategoryName(project.Name)) + `</dd></div><div><dt>` + esc(t(lang, "Discordカテゴリ", "Discord category")) + `</dt><dd>` + esc(categoryLabel) + `</dd></div><div><dt>` + esc(t(lang, "Discord通知の言語", "Discord notification language")) + `</dt><dd>` + esc(strings.ToUpper(notificationLanguage)) + `</dd></div></dl><p class="field-help">` + esc(tr(lang, "wizard.no_write")) + `</p><form method="POST" action="` + esc(withLang("/bot/setup", r)) + `" class="wizard-confirm-form"><input type="hidden" name="action" value="execute_production_connection"><input type="hidden" name="project_id" value="` + esc(project.ID) + `"><input type="hidden" name="guild_id" value="` + esc(guildID) + `"><input type="hidden" name="category_id" value="` + esc(categoryID) + `"><input type="hidden" name="notification_language" value="` + esc(notificationLanguage) + `"><label class="wizard-confirm-control" for="wizard-confirm"><input id="wizard-confirm" type="checkbox" name="confirm_plan" value="yes" required> ` + esc(tr(lang, "wizard.confirm")) + `</label><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 4, project.ID, guildID, false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button id="wizard-execute" class="btn" type="submit" disabled>` + esc(tr(lang, "wizard.execute")) + `</button></div></form><script>(function(){var check=document.getElementById('wizard-confirm'),button=document.getElementById('wizard-execute');if(check&&button){var sync=function(){button.disabled=!check.checked;};check.addEventListener('change',sync);sync();}})();</script></section>`
+	return body
 }
 
-func wizardPlanActionLabel(lang, action string) string {
-	return map[string]string{"create": tr(lang, "wizard.create"), "reuse": tr(lang, "wizard.reuse"), "conflict": tr(lang, "wizard.conflict"), "blocked": tr(lang, "wizard.review_required")}[action]
-}
-
-func wizardPlanStateLabel(lang string, valid bool) string {
-	if valid {
-		return tr(lang, "wizard.plan_ready")
-	}
-	return tr(lang, "wizard.plan_needs_attention")
-}
-
-func renderBlockedWizardPlanNavigation(lang string, r *http.Request, projectID, guildID string, review bool) string {
-	forwardLabel := tr(lang, "wizard.review")
-	backURL := setupWizardURL(r, 3, projectID, "", false)
-	if review {
-		forwardLabel = tr(lang, "wizard.execute")
-		backURL = setupWizardURL(r, 4, projectID, guildID, false)
-	}
-	return `<div class="button-row"><a class="btn-ghost" href="` + esc(backURL) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="button" disabled aria-disabled="true">` + esc(forwardLabel) + `</button></div>`
-}
-
-func wizardPlanDetails(lang, action string) string {
-	switch action {
-	case "create":
-		return tr(lang, "wizard.detail_create")
-	case "reuse":
-		return tr(lang, "wizard.detail_reuse")
-	case "conflict":
-		return tr(lang, "wizard.detail_conflict")
-	default:
-		return tr(lang, "wizard.detail_review")
-	}
-}
 func renderWizardFrame(lang string, step int, body string) string {
 	return `<div class="section-stack"><section class="section-card glass">` + renderSetupSteps(lang, step, false) + `</section>` + body + `</div>`
 }
@@ -3673,19 +3514,12 @@ func renderSetupSteps(lang string, step int, blockFuture bool) string {
 	return `<div class="setup-steps" aria-label="` + esc(tr(lang, "wizard.progress")) + `">` + steps.String() + `</div>`
 }
 
-func renderWizardComplete(lang string, r *http.Request, db *gorm.DB, target interface{}) string {
-	projectID, name := "", ""
-	switch value := target.(type) {
-	case string:
-		projectID = value
-		if project := model.FindProjectByKitsuID(db, projectID); project != nil {
-			name = project.Name
-		}
-	case firstTimeConnectionPlan:
-		projectID, name = value.Project.ID, value.Project.Name
-		name += " " + value.GuildName
+func renderWizardComplete(lang string, r *http.Request, db *gorm.DB, projectID string) string {
+	name := ""
+	if project := model.FindProjectByKitsuID(db, projectID); project != nil {
+		name = project.Name
 	}
-	return `<section class="section-card glass" role="status" aria-live="polite"><h2>` + esc(tr(lang, "wizard.complete_title")) + `</h2><p>` + esc(trf(lang, "wizard.complete_message", name)) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(projectID), r)) + `">` + esc(tr(lang, "wizard.open_production")) + `</a></section>`
+	return `<section class="section-card glass" role="status" aria-live="polite"><h2>` + esc(tr(lang, "wizard.complete_title")) + `</h2><p>` + esc(trf(lang, "wizard.complete_message", name)) + `</p><p class="field-help">` + esc(t(lang, "次はフォーラム設定でタスクタイプごとのフォーラムを作成してください。", "Next, create the per-Task-Type forums in the forum settings.")) + `</p><div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)) + `">` + esc(t(lang, "フォーラム設定を開く", "Open forum settings")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(projectID), r)) + `">` + esc(tr(lang, "wizard.open_production")) + `</a></div></section>`
 }
 
 func renderDashboardMenuRefined(lang string, r *http.Request, db *gorm.DB, projects []model.Project, attentionCount int, readiness SharedBotRuntimeReadiness, runtimeHealthy func() bool) string {

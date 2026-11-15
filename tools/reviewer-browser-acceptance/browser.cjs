@@ -84,18 +84,6 @@ async function gotoProduction(page, locale, tab, extra = '') {
   await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${tab}&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
-async function chooseDraftTaskType(row, id) {
-  const combo = row.locator('[data-task-type-combobox]');
-  const listbox = row.locator('[data-task-type-listbox]');
-  if (!(await combo.isVisible()) || await row.locator('[data-select-task]').isVisible()) throw new Error('draft route displayed two Task Type controls before selection');
-  await combo.click();
-  if (!(await listbox.isVisible()) || await combo.getAttribute('aria-expanded') !== 'true') throw new Error('Task Type listbox did not open');
-  const option = listbox.locator(`[data-task-type-option="${id}"]`);
-  if (await option.getAttribute('aria-disabled') === 'true') throw new Error('available Task Type was disabled');
-  await option.click();
-  if (await combo.isVisible() || !(await row.locator('[data-select-task]').isVisible()) || await row.locator('[data-task-type-select]').inputValue() !== id) throw new Error('selected draft route did not become one visible Task Type row');
-}
-
 async function automaticGroup(page, locale) {
 	if (await page.locator('[data-current-routing-form]').count()) return page.locator('[data-wfa-automatic]');
 	return page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"] [data-wfa-recipients]');
@@ -453,7 +441,6 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       });
     });
     let expectedStaleApply = null;
-    let expectedChannelCreateFailure = null;
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {
       if (message.type() !== 'error') return;
@@ -461,11 +448,6 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       const isExpectedConflictConsole = /^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/.test(text);
       if (isExpectedConflictConsole && expectedStaleApply?.active && expectedStaleApply.requestSeen) {
         expectedStaleApply.console409Messages.push(text);
-        return;
-      }
-      const isExpectedChannelCreateConsole = /^Failed to load resource: the server responded with a status of 502 \(Bad Gateway\)$/.test(text);
-      if (isExpectedChannelCreateConsole && expectedChannelCreateFailure?.active && expectedChannelCreateFailure.requestSeen) {
-        expectedChannelCreateFailure.console502Messages.push(text);
         return;
       }
       errors.push(text);
@@ -477,12 +459,6 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       if (response.status() === 409 && staleScenario?.active && staleScenario.requestSeen && isNotificationsApplyRequest(request) && staleScenario.responseCount === 0) {
         staleScenario.responseCount += 1;
         staleScenario.responseStatus = response.status();
-        return;
-      }
-      const createScenario = expectedChannelCreateFailure;
-      if (response.status() === 502 && createScenario?.active && createScenario.requestSeen && isNotificationsApplyRequest(request) && createScenario.responseCount === 0) {
-        createScenario.responseCount += 1;
-        createScenario.responseStatus = response.status();
         return;
       }
       errors.push(`HTTP ${response.status()} ${request.method()} ${new URL(request.url()).pathname}`);
@@ -631,7 +607,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         await gotoProduction(page, locale, 'notifications');
         const routingHeadings = (await page.locator('.production-notification-table thead th').allTextContents()).map(text => text.trim());
-        if (JSON.stringify(routingHeadings) !== JSON.stringify(['Kitsu Task Type', locale.lang === 'ja' ? 'Discordチャンネル' : 'Discord Channel', locale.lang === 'ja' ? 'WFA通知先' : 'WFA recipients'])) {
+        if (JSON.stringify(routingHeadings) !== JSON.stringify(['Kitsu Task Type', locale.lang === 'ja' ? 'フォーラム' : 'Forum', locale.lang === 'ja' ? 'WFA通知先' : 'WFA recipients'])) {
           throw new Error(`Notifications routing columns are missing or concatenated in ${locale.lang}: ${JSON.stringify(routingHeadings)}`);
         }
         const compReadRow = page.locator('.production-notification-table tbody tr[data-task-type-id="task-comp"]');
@@ -702,66 +678,53 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         if ((await compReadRow.innerText()).includes(locale.lang === 'ja' ? '自動' : 'Automatic') || (await compReadRow.innerText()).includes(locale.lang === 'ja' ? '追加' : 'Additional')) throw new Error(`read mode exposes internal WFA provenance labels in ${locale.lang}`);
-        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Discord Channel → effective-recipient summary row; no synthetic Notification Preview');
+        await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Forum → effective-recipient summary row; no synthetic Notification Preview');
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
         const routingFormCount = await page.locator('[data-current-routing-form]').count();
         const routingFormText = routingFormCount === 1 ? await page.locator('[data-current-routing-form]').innerText() : '';
-        if (routingFormCount !== 1 || !routingFormText.includes(locale.lang === 'ja' ? '変更を適用' : 'Apply')) {
-          throw new Error(`explicit Notifications edit mode did not preserve the existing routing form in ${locale.lang}: count=${routingFormCount}, text=${JSON.stringify(routingFormText)}, url=${page.url()}`);
+        if (routingFormCount !== 1 || !routingFormText.includes(locale.lang === 'ja' ? '適用' : 'Apply')) {
+          throw new Error(`explicit Notifications edit mode did not render the reviewer form in ${locale.lang}: count=${routingFormCount}, text=${JSON.stringify(routingFormText)}, url=${page.url()}`);
         }
         const editForm = page.locator('[data-current-routing-form]');
         if (!(await editForm.locator('[data-apply-submit]').isDisabled()) || !(await editForm.locator('[data-pending-status]').innerText()).includes(locale.lang === 'ja' ? '変更はありません' : 'No pending changes')) {
-          throw new Error(`Notifications Apply is not disabled with a clean pending state in ${locale.lang}`);
+          throw new Error(`Notifications Apply is not disabled with a clean pending state in ${locale.lang}: disabled=${await editForm.locator('[data-apply-submit]').isDisabled()} status=${JSON.stringify(await editForm.locator('[data-pending-status]').innerText())} noPending=${JSON.stringify(await editForm.getAttribute('data-no-pending'))} rows=${await editForm.locator('[data-routing-row]').count()}`);
         }
-        const selectedRoute = editForm.locator('[data-routing-row].selected');
-        const panel = editForm.locator('[data-wfa-detail-panel]');
+        const panel = page.locator('#production-wfa-detail-panel');
         const initialEditState = {
-          selectedRoutes: await selectedRoute.count(),
+          selectedRoutes: await editForm.locator('[data-routing-row].selected').count(),
           panelVisible: await panel.isVisible(),
           legacyCardWrappers: await page.locator('.production-routing-editor.section-card,.production-routing-editor.glass').count(),
           panelHidden: await panel.getAttribute('hidden'),
-          panelParentHidden: await panel.evaluate(node => node.parentElement?.hidden ?? false),
-          routeClasses: await editForm.locator('[data-routing-row]').evaluateAll(rows => rows.map(row => row.className)),
         };
         if (initialEditState.selectedRoutes !== 0 || initialEditState.panelVisible || initialEditState.legacyCardWrappers !== 0) {
-          throw new Error(`Notifications edit must open with only routing rows and no selected WFA detail in ${locale.lang}: ${JSON.stringify(initialEditState)}`);
+          throw new Error(`Notifications edit must open with only forum rows and no selected WFA detail in ${locale.lang}: ${JSON.stringify(initialEditState)}`);
         }
         const editorStructure = await editForm.evaluate(form => ({
           routeCount: form.querySelectorAll('[data-routing-row]').length,
-          eachRouteHasDestination: [...form.querySelectorAll('[data-routing-row]')].every(row => !!row.querySelector('[data-destination-control]')),
-          panelAfterList: form.querySelector('[data-editor-parking]').compareDocumentPosition(form.querySelector('[data-routing-list-scroll]')) & Node.DOCUMENT_POSITION_PRECEDING,
-          panelInsideBottomDetail: !!form.querySelector('[data-editor-parking] [data-wfa-detail-panel]'),
-          routeRowsStayTogether: [...form.querySelectorAll('[data-routing-row]')].every(row => !row.nextElementSibling?.matches('[data-route-editor]')),
-          detailHasRouteControls: !!form.querySelector('[data-wfa-detail-panel] [data-destination-control], [data-wfa-detail-panel] [data-new-channel-name]'),
+          forumColumn: [...form.querySelectorAll('thead th')].map(th => th.textContent.trim()).join('|'),
+          eachRouteHasForumChannel: [...form.querySelectorAll('[data-routing-row]')].every(row => (row.children[1]?.textContent || '').trim().startsWith('#')),
+          panelAfterTable: !!(form.querySelector('table') && document.getElementById('production-wfa-detail-panel') && (form.querySelector('table').compareDocumentPosition(document.getElementById('production-wfa-detail-panel')) & Node.DOCUMENT_POSITION_FOLLOWING)),
+          laneControls: form.querySelectorAll('[data-destination-control],[data-new-channel-name],[data-routing-add],[data-routing-remove],.routing-row-menu').length,
+          detailHasRouteControls: !!document.querySelector('#production-wfa-detail-panel [data-destination-control], #production-wfa-detail-panel [data-new-channel-name]'),
         }));
-        if (!editorStructure.routeCount || !editorStructure.eachRouteHasDestination || !editorStructure.panelInsideBottomDetail || !editorStructure.routeRowsStayTogether || editorStructure.detailHasRouteControls) {
-          throw new Error(`Notifications routing rows and bottom WFA detail are not structurally separated in ${locale.lang}: ${JSON.stringify(editorStructure)}`);
+        if (!editorStructure.routeCount || !editorStructure.eachRouteHasForumChannel || !editorStructure.panelAfterTable || editorStructure.laneControls !== 0 || editorStructure.detailHasRouteControls) {
+          throw new Error(`Notifications editor is not a forum-only Task Type table with a shared WFA detail in ${locale.lang}: ${JSON.stringify(editorStructure)}`);
         }
         if (viewport.name === 'mobile') {
-          const routingTableOverflow = await editForm.locator('.routing-list-scroll').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, tableClient: node.querySelector('table').clientWidth, tableScroll: node.querySelector('table').scrollWidth }));
-          if (routingTableOverflow.scroll > routingTableOverflow.client + 1 || routingTableOverflow.tableScroll > routingTableOverflow.tableClient + 1) throw new Error(`Notifications editor has an internal horizontal route-table scroller on mobile in ${locale.lang}: ${JSON.stringify(routingTableOverflow)}`);
+          const routingTableOverflow = await editForm.locator('.wizard-plan-table').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, tableClient: node.querySelector('table').clientWidth, tableScroll: node.querySelector('table').scrollWidth }));
+          if (routingTableOverflow.scroll > routingTableOverflow.client + 1 || routingTableOverflow.tableScroll > routingTableOverflow.tableClient + 1) throw new Error(`Notifications editor has an internal horizontal scroller on mobile in ${locale.lang}: ${JSON.stringify(routingTableOverflow)}`);
         }
-        if (await editForm.locator('[data-routing-row] [data-destination-control]').count() !== editorStructure.routeCount) throw new Error('each routing row must own its editable destination control');
         await page.screenshot({ path: path.join(output, `production-notifications-edit-initial-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        const compRoute = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
-        const animationRoute = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
-        await animationRoute.dragTo(compRoute, { sourcePosition: { x: 30, y: 20 }, targetPosition: { x: 30, y: 20 } });
-        const reorderedIDs = await editForm.locator('[data-routing-row]').evaluateAll(rows => rows.map(row => row.dataset.taskType));
-        if (reorderedIDs[0] !== 'task-animation' || reorderedIDs[1] !== 'task-comp') throw new Error(`route drag did not reorder Task Types in ${locale.lang}/${viewport.name}: ${JSON.stringify(reorderedIDs)}`);
-        await page.screenshot({ path: path.join(output, `production-notifications-route-reordered-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await compRoute.dragTo(animationRoute, { sourcePosition: { x: 30, y: 20 }, targetPosition: { x: 30, y: 20 } });
-        const restoredIDs = await editForm.locator('[data-routing-row]').evaluateAll(rows => rows.map(row => row.dataset.taskType));
-        if (restoredIDs[0] !== 'task-comp' || restoredIDs[1] !== 'task-animation' || !(await editForm.locator('[data-apply-submit]').isDisabled())) throw new Error(`route order did not return to its clean state in ${locale.lang}/${viewport.name}: ${JSON.stringify(restoredIDs)}`);
         const automaticPanel = panel.locator('[data-wfa-automatic]');
         const selectedRouteForWFA = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
         if (await selectedRouteForWFA.getAttribute('aria-selected') !== 'false' || await panel.isVisible()) throw new Error(`routing editor should begin with no row selected in ${locale.lang}/${viewport.name}`);
-        const channelCell = selectedRouteForWFA.locator('td').nth(1);
+        const channelCell = selectedRouteForWFA.locator('td').nth(0);
         const channelCellBox = await channelCell.boundingBox();
-        if (!channelCellBox || channelCellBox.width < 12) throw new Error(`channel cell has no non-interactive hit area in ${locale.lang}/${viewport.name}`);
+        if (!channelCellBox || channelCellBox.width < 12) throw new Error(`forum cell has no non-interactive hit area in ${locale.lang}/${viewport.name}`);
         await channelCell.click({ position: { x: channelCellBox.width - 4, y: channelCellBox.height / 2 } });
-        if (!(await panel.isVisible()) || await panel.locator('[data-wfa-title]').innerText() !== 'Compositing') throw new Error(`Task Type row click did not open the bottom WFA detail panel in ${locale.lang}`);
-        if (await selectedRouteForWFA.getAttribute('aria-selected') !== 'true' || await selectedRouteForWFA.getAttribute('aria-expanded') !== 'true') throw new Error(`clicking the non-interactive channel cell did not expose selected/expanded state in ${locale.lang}`);
+        if (!(await panel.isVisible()) || await panel.locator('[data-wfa-title]').innerText() !== 'Compositing') throw new Error(`Task Type row click did not open the WFA detail panel in ${locale.lang}`);
+        if (await selectedRouteForWFA.getAttribute('aria-selected') !== 'true' || await selectedRouteForWFA.getAttribute('aria-expanded') !== 'true') throw new Error(`clicking the non-interactive forum cell did not expose selected/expanded state in ${locale.lang}`);
         const animationRowForKeyboard = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
         await animationRowForKeyboard.focus();
         await page.keyboard.press('Enter');
@@ -769,12 +732,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await selectedRouteForWFA.locator('[data-select-task]').click();
         const animationActionCell = animationRowForKeyboard.locator('td').last();
         const animationActionBox = await animationActionCell.boundingBox();
-        if (!animationActionBox || animationActionBox.width < 8) throw new Error(`route action cell has no empty row surface in ${locale.lang}/${viewport.name}`);
+        if (!animationActionBox || animationActionBox.width < 8) throw new Error(`route cell has no empty row surface in ${locale.lang}/${viewport.name}`);
         await animationActionCell.click({ position: { x: 2, y: animationActionBox.height / 2 } });
-        if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Animation')) throw new Error(`blank route action cell did not select its WFA detail in ${locale.lang}`);
-        await selectedRouteForWFA.locator('[data-destination-control]').click();
-        if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Animation')) throw new Error(`native channel select click changed routing row selection in ${locale.lang}`);
-        await page.keyboard.press('Escape');
+        if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Animation')) throw new Error(`blank route cell did not select its WFA detail in ${locale.lang}`);
         await selectedRouteForWFA.locator('[data-select-task]').click();
         if (!(await panel.locator('[data-wfa-title]').innerText()).includes('Compositing')) throw new Error(`Task Type selection button stopped selecting its own route in ${locale.lang}`);
         await selectedRouteForWFA.focus();
@@ -809,38 +769,24 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`WFA Automatic/Additional rows need one subtle readable separator without doubled borders in ${locale.lang}: ${JSON.stringify(recipientSeparation)}`);
         }
         const detailPlacement = await editForm.evaluate(form => {
-          const list = form.querySelector('[data-routing-list-scroll]').getBoundingClientRect();
-          const add = form.querySelector('[data-routing-add]').getBoundingClientRect();
-          const detail = form.querySelector('[data-wfa-detail-panel]').getBoundingClientRect();
-          const footer = form.querySelector('.production-routing-editor-footer').getBoundingClientRect();
-          const automatic = form.querySelector('[data-wfa-automatic]').getBoundingClientRect();
-          const additional = form.querySelector('[data-wfa-additional]').getBoundingClientRect();
-          return { addAfterList: add.top - list.bottom, detailAfterAdd: detail.top - add.bottom, detailBeforeFooter: footer.top - detail.bottom,
+          const table = form.querySelector('table').getBoundingClientRect();
+          const detail = document.getElementById('production-wfa-detail-panel').getBoundingClientRect();
+          const actions = form.querySelector('.production-routing-editor-actions').getBoundingClientRect();
+          const automatic = document.querySelector('#production-wfa-detail-panel [data-wfa-automatic]').getBoundingClientRect();
+          const additional = document.querySelector('#production-wfa-detail-panel [data-wfa-additional]').getBoundingClientRect();
+          return { detailAfterTable: detail.top - table.bottom, actionsAfterDetail: actions.top - detail.bottom,
             automaticLeft: automatic.left, additionalLeft: additional.left };
         });
-        if (detailPlacement.addAfterList < 8 || detailPlacement.detailAfterAdd < 8 || detailPlacement.detailBeforeFooter < 8 || Math.abs(detailPlacement.automaticLeft - detailPlacement.additionalLeft) > 2) throw new Error(`Bottom WFA detail spacing/alignment is incorrect in ${locale.lang}: ${JSON.stringify(detailPlacement)}`);
+        if (detailPlacement.detailAfterTable < 8 || detailPlacement.actionsAfterDetail < 8 || Math.abs(detailPlacement.automaticLeft - detailPlacement.additionalLeft) > 2) throw new Error(`WFA detail spacing/alignment is incorrect in ${locale.lang}: ${JSON.stringify(detailPlacement)}`);
         await panel.screenshot({ path: path.join(output, `production-notifications-wfa-selected-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await editForm.locator('[data-select-task]').filter({ hasText: 'Animation' }).click();
         if (!(await editForm.locator('[data-wfa-title]').innerText()).includes('Animation') || !(await automaticPanel.innerText()).includes(animationAutomatic[0])) {
           throw new Error(`selecting a route did not select its matching Automatic WFA summary in ${locale.lang}`);
         }
-        if (await editForm.locator('[data-routing-row][data-task-type="task-animation"] + [data-route-editor]').count() || !await panel.isVisible()) throw new Error('selecting another Task Type moved rows or hid the shared bottom WFA detail');
+        if (!await panel.isVisible()) throw new Error('selecting another Task Type hid the shared WFA detail');
         await page.screenshot({ path: path.join(output, `production-notifications-wfa-animation-selected-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await editForm.locator('[data-select-task]').filter({ hasText: 'Compositing' }).click();
         await assertAutomatic(page, locale, compositingAutomatic);
-
-        const savedRoute = editForm.locator('[data-routing-row][data-task-type="task-comp"]');
-        await savedRoute.locator('.routing-row-menu summary').click();
-        const savedRouteMenu = savedRoute.locator('.routing-row-menu-panel');
-        if (!(await savedRouteMenu.locator('.routing-delete-open').isVisible())) throw new Error(`Saved channel route does not expose the permitted Delete channel action in ${locale.lang}`);
-        const savedMenuGeometry = await savedRouteMenu.evaluate(node => {
-          const menu = node.getBoundingClientRect();
-          const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect();
-          return { position: getComputedStyle(node).position, top: menu.top, bottom: menu.bottom, viewport: innerHeight, right: menu.right, anchorBottom: summary.bottom, anchorRight: summary.right, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight };
-        });
-        if (!['absolute', 'fixed'].includes(savedMenuGeometry.position) || Math.abs(savedMenuGeometry.top - savedMenuGeometry.anchorBottom) > 14 || Math.abs(savedMenuGeometry.right - savedMenuGeometry.anchorRight) > 14 || savedMenuGeometry.bottom > savedMenuGeometry.viewport + 1 || savedMenuGeometry.scrollHeight > savedMenuGeometry.clientHeight + 1) throw new Error(`Saved route action menu is detached, clipped, or scrollable in ${locale.lang}: ${JSON.stringify(savedMenuGeometry)}`);
-        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await page.keyboard.press('Escape');
 
         await editForm.locator('[data-wfa-add-target]').click();
         const addModal = page.locator('[data-wfa-add-modal]');
@@ -912,10 +858,31 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const stagedRoleApplyDisabled = await editForm.locator('[data-apply-submit]').isDisabled();
         if (!stagedRoleStatus.includes(stagedInstruction) || stagedRoleApplyDisabled) throw new Error(`modal Add did not clearly stage the Role and enable the single Apply save in ${locale.lang}: status=${stagedRoleStatus} disabled=${stagedRoleApplyDisabled}`);
         await editForm.locator('[data-wfa-add-target]').click();
+        await addModal.waitFor({ state: 'visible' });
         await addModal.locator('#wfa-user-tab').click();
-        await addModal.locator('[data-wfa-user-combobox]').focus();
+        await addModal.locator('[data-recipient-panel="user"]').waitFor({ state: 'visible' });
+        const comboFocused = await page.evaluate(() => {
+          const combo = document.querySelector('[data-wfa-add-modal] [data-wfa-user-combobox]');
+          combo.focus();
+          return document.activeElement === combo;
+        });
+        if (!comboFocused) throw new Error('Add recipient combobox could not take keyboard focus');
+        const combo = addModal.locator('[data-wfa-user-combobox]');
+        const dlgState = await page.evaluate(() => {
+          const d = document.querySelector('[data-wfa-add-modal]');
+          const c = document.querySelector('[data-wfa-add-modal] [data-wfa-user-combobox]');
+          c.focus();
+          return { open: d.open, hasShowModal: typeof d.showModal, tag: d.tagName, activeIsCombo: document.activeElement === c,
+            activeTag: document.activeElement?.tagName, activeCls: document.activeElement?.className,
+            display: getComputedStyle(d).display, vis: getComputedStyle(c).visibility };
+        });
+        if (!dlgState.open || !dlgState.activeIsCombo) throw new Error('modal state: ' + JSON.stringify(dlgState));
+        await combo.evaluate((el) => el.focus());
         await page.keyboard.press('Space');
-        if (!(await userListbox.isVisible())) throw new Error(`Keyboard activation did not open the Add recipient listbox: expanded=${await addModal.locator('[data-wfa-user-combobox]').getAttribute('aria-expanded')} mode=${await addModal.getAttribute('data-recipient-mode')} userPanelHidden=${await addModal.locator('[data-recipient-panel="user"]').getAttribute('hidden')} active=${await page.evaluate(() => document.activeElement?.outerHTML?.slice(0,180))}`);
+        if ((await combo.getAttribute('aria-expanded')) !== 'true') {
+          throw new Error(`Keyboard activation did not open the Add recipient listbox: expanded=${await combo.getAttribute('aria-expanded')} active=${await page.evaluate(() => document.activeElement?.getAttribute('data-wfa-user-combobox') !== null)}`);
+        }
+        if (!(await userListbox.isVisible())) throw new Error('Add recipient listbox is expanded but not visible');
         await page.keyboard.press('Escape');
         if (await userListbox.isVisible() || await addModal.locator('[data-wfa-user-combobox]').getAttribute('aria-expanded') !== 'false') throw new Error('Escape did not close the Add recipient listbox');
         if (await addModal.isVisible()) await addModal.locator('[data-wfa-add-cancel]').click();
@@ -924,75 +891,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!additionalText.includes('Guild Nick Override') || !additionalText.includes('Artist Global') || !additionalText.includes('@Reviewers')) throw new Error(`Additional User/Role overrides were not presented together in ${locale.lang}`);
         if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 5) throw new Error('two staged additions and three existing targets were not all present');
 
-        const removedRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
-        const removedChannelID = await removedRouteRow.getAttribute('data-original-destination');
-        await editForm.locator('[data-routing-add]').click();
-        const firstDraftRow = editForm.locator('[data-routing-row]').last();
-        await page.screenshot({ path: path.join(output, `production-notifications-task-type-before-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        const taskCombo = firstDraftRow.locator('[data-task-type-combobox]');
-        await taskCombo.click();
-        const taskListbox = firstDraftRow.locator('[data-task-type-listbox]');
-        const taskTheme = await taskListbox.evaluate(node => ({ background: getComputedStyle(node).backgroundColor, color: getComputedStyle(node).color, disabled: [...node.querySelectorAll('[aria-disabled="true"]')].map(option => getComputedStyle(option).color) }));
-        if (!(await taskListbox.isVisible()) || taskTheme.background === 'rgb(255, 255, 255)' || taskTheme.color === 'rgba(0, 0, 0, 0)' || taskTheme.disabled.length < 2 || taskTheme.disabled.some(color => color === 'rgba(0, 0, 0, 0)')) throw new Error(`Task Type dropdown is light, unreadable, or missing unavailable options in ${locale.lang}: ${JSON.stringify(taskTheme)}`);
-        await page.screenshot({ path: path.join(output, `production-notifications-task-type-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
-        await page.keyboard.press('Escape');
-        if (await taskListbox.isVisible() || await taskCombo.getAttribute('aria-expanded') !== 'false') throw new Error('Escape did not close the Task Type listbox');
-        await chooseDraftTaskType(firstDraftRow, 'task-unassigned');
-        const pendingRow = editForm.locator('[data-routing-row][data-task-type="task-unassigned"]');
-        if (!(await pendingRow.isVisible()) || !await pendingRow.locator('[data-destination-control]').isVisible()) throw new Error(`Add Task Type did not add a routing row with its destination control in ${locale.lang}`);
-        if (await editForm.locator('[data-destination-control] option[value=""]').count()) throw new Error(`routing destination still exposes a redundant empty placeholder in ${locale.lang}`);
-        if (await pendingRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await pendingRow.locator('[data-custom-channel-field]').isVisible()) throw new Error(`new Task Type did not default to Automatic without exposing custom input in ${locale.lang}`);
-        await editForm.locator('[data-routing-add]').click();
-        await chooseDraftTaskType(editForm.locator('[data-routing-row]').last(), 'task-concept');
-        const secondPendingRow = editForm.locator('[data-routing-row][data-task-type="task-concept"]');
-        await editForm.locator('[data-routing-add]').click();
-        await chooseDraftTaskType(editForm.locator('[data-routing-row]').last(), 'task-modeling');
-        if (await editForm.locator('[data-routing-row][data-draft="true"]').count() !== 3) throw new Error('three Task Type rows could not remain browser-pending before a single Apply');
-        if (await editForm.locator('[data-routing-row][data-draft="true"] [data-task-type-combobox]:visible').count()) throw new Error('selected drafts still show a duplicate Task Type selector');
-        await page.screenshot({ path: path.join(output, `production-notifications-add-task-type-inline-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        const removableDraftRow = editForm.locator('[data-routing-row][data-task-type="task-modeling"]');
-        await removableDraftRow.locator('[data-select-task]').click();
-        await removableDraftRow.locator('.routing-row-menu summary').click();
-        await removableDraftRow.locator('[data-routing-remove]').click();
-        if (await removableDraftRow.count() || await editForm.locator('[data-wfa-detail-panel]').isVisible()) throw new Error('removing the selected draft route left a detached WFA detail panel');
-        await editForm.locator('[data-routing-add]').click();
-        await chooseDraftTaskType(editForm.locator('[data-routing-row]').last(), 'task-modeling');
-        await pendingRow.locator('[data-select-task]').click();
-        if (!(await automaticPanel.innerText()).includes(locale.lang === 'ja' ? 'Supervisorなし' : 'No Supervisor')) {
-          throw new Error(`new Task Type did not receive an immediate truthful Automatic summary in ${locale.lang}`);
-        }
-        if (!await editForm.locator('[data-wfa-detail-panel]').evaluate(node => node.compareDocumentPosition(node.closest('form').querySelector('[data-routing-list-scroll]')) & Node.DOCUMENT_POSITION_PRECEDING)) throw new Error('WFA detail is not below the complete Task Type list');
-        await pendingRow.locator('[data-destination-control]').selectOption(removedChannelID);
-        await pendingRow.locator('[data-destination-control]').selectOption('__auto__');
-        if (await pendingRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('Automatic destination incorrectly shows a custom channel input');
-        await pendingRow.locator('[data-destination-control]').selectOption('__custom__');
-        if (!await pendingRow.locator('[data-custom-channel-field]').isVisible() || await pendingRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('Custom destination did not reveal the normalized inline channel name');
-        await pendingRow.locator('[data-destination-control]').selectOption(removedChannelID);
-        if (await pendingRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('existing managed destination incorrectly shows a custom channel input');
-        await editForm.locator('[data-wfa-add-target]').click();
-        await addModal.waitFor({ state: 'visible' });
-        await page.screenshot({ path: path.join(output, `production-notifications-pending-route-recipient-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await addModal.locator('[data-wfa-user-combobox]').click();
-        await addModal.locator('[data-wfa-user-listbox] [data-wfa-option-value="22222222222222234"]').click();
-        await addModal.locator('[data-wfa-add-confirm]').click();
-        await removedRouteRow.locator('[data-select-task]').click();
+        const animationRouteRow = editForm.locator('[data-routing-row][data-task-type="task-animation"]');
+        await animationRouteRow.locator('[data-select-task]').click();
         if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 1) throw new Error('existing Animation route did not expose its seeded Reviewer target for pending-removal coverage');
         await additionalPanel.locator('[data-wfa-remove-target]').click();
-        await removedRouteRow.locator('.routing-row-menu summary').click();
-        const routeMenu = removedRouteRow.locator('.routing-row-menu-panel');
-        await page.waitForFunction(() => { const menu = document.querySelector('.routing-row-menu[open] .routing-row-menu-panel'); if (!menu) return false; const rect = menu.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight + 1; }, null, { timeout: 3000 });
-        const menuGeometry = await routeMenu.evaluate(node => { const rect = node.getBoundingClientRect(); const summary = node.closest('.routing-row-menu').querySelector('summary').getBoundingClientRect(); return { position: getComputedStyle(node).position, top: rect.top, bottom: rect.bottom, right: rect.right, viewport: innerHeight, summaryTop: summary.top, summaryBottom: summary.bottom, summaryRight: summary.right, scrollHeight: node.scrollHeight, clientHeight: node.clientHeight, bodyScrollWidth: document.body.scrollWidth, viewportWidth: document.documentElement.clientWidth }; });
-        if (!['absolute', 'fixed'].includes(menuGeometry.position) || menuGeometry.top < 0 || menuGeometry.bottom > menuGeometry.viewport + 1 || Math.abs(menuGeometry.top - menuGeometry.summaryBottom) > 14 || Math.abs(menuGeometry.right - menuGeometry.summaryRight) > 14 || menuGeometry.scrollHeight > menuGeometry.clientHeight + 1 || menuGeometry.bodyScrollWidth > menuGeometry.viewportWidth + 1) throw new Error(`route menu is detached, scrollable, clipped, or overflows when opened in ${locale.lang}: ${JSON.stringify(menuGeometry)}`);
-        await page.screenshot({ path: path.join(output, `production-notifications-route-menu-pending-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await page.keyboard.press('Escape');
-        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('Escape did not close the route action menu');
-        await removedRouteRow.locator('.routing-row-menu summary').click();
-        page.once('dialog', async dialog => { if (dialog.type() !== 'confirm') throw new Error(`unexpected ${dialog.type()} dialog for pending route removal`); await dialog.accept(); });
-        await removedRouteRow.locator('[data-routing-remove]').click();
-        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('route action menu stayed open after staging route removal');
-        if (await removedRouteRow.isVisible() || await removedRouteRow.locator('[data-routing-undo]').count() || await removedRouteRow.locator('[data-routing-remove-status]').count()) throw new Error('staged route removal left visible pending-removal/Undo UI');
+        if (await additionalPanel.locator('[data-wfa-remove-target]').count() !== 0) throw new Error('staged reviewer-target removal was not reflected in the detail list');
         await page.screenshot({ path: path.join(output, `production-notifications-pending-removal-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await page.keyboard.press('Escape');
+        await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
 
         let submittedApply = null;
         expectedStaleApply = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console409Messages: [] };
@@ -1014,12 +919,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (staleApplyResponse.status() !== 409 || expectedStaleApply.responseCount !== 1 || expectedStaleApply.responseStatus !== 409) {
           throw new Error(`Stale Notifications Apply did not produce exactly one expected HTTP 409 in ${locale.lang}: status=${staleApplyResponse.status()} tracked=${expectedStaleApply.responseCount}`);
         }
-        if (!submittedApply || submittedApply.reviewer_changes.some(change => change.task_type_id === 'task-animation')) {
-          throw new Error('Apply sent a reviewer delta for a persisted route pending removal');
+        if (!submittedApply || !Array.isArray(submittedApply.reviewer_changes) || Object.prototype.hasOwnProperty.call(submittedApply, 'routes')) {
+          throw new Error(`Apply did not send a reviewer-only payload in ${locale.lang}: ${JSON.stringify(submittedApply)}`);
         }
         const compReviewerDelta = submittedApply.reviewer_changes.find(change => change.task_type_id === 'task-comp');
         if (!compReviewerDelta || !compReviewerDelta.add_user_ids.includes('22222222222222223') || !compReviewerDelta.add_role_ids.includes('33333333333333333')) {
           throw new Error('the single Apply request did not include the staged User and Role additions for Compositing');
+        }
+        const animationReviewerDelta = submittedApply.reviewer_changes.find(change => change.task_type_id === 'task-animation');
+        if (!animationReviewerDelta || !animationReviewerDelta.remove_role_ids.includes('33333333333333331')) {
+          throw new Error('the single Apply request did not include the staged Reviewer Role removal for Animation');
         }
         const staleMessage = locale.lang === 'ja' ? '別の編集が保存されました' : 'Another edit was saved';
         await page.waitForFunction(({ selector, expected }) => document.querySelector(selector)?.textContent.includes(expected), {
@@ -1027,8 +936,6 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           expected: staleMessage,
         }, { timeout: 5000 });
         if (page.url() !== urlBeforeApply) throw new Error(`HTTP 409 navigated away from the pending editor in ${locale.lang}`);
-        if (await removedRouteRow.isVisible()) throw new Error(`HTTP 409 discarded the pending route removal in ${locale.lang}`);
-        await editForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
         const preservedTargets = await additionalPanel.innerText();
         for (const expected of ['Guild Nick Override', 'Artist Global', '@Reviewers', 'Departmentless Global', '@Review Leads']) {
           if (!preservedTargets.includes(expected)) throw new Error(`HTTP 409 discarded pending User/Role target ${expected} in ${locale.lang}`);
@@ -1038,126 +945,45 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         expectedStaleApply.console409Consumed = expectedStaleApply.console409Messages.length === 1;
         expectedStaleApply.active = false;
-        if (await removedRouteRow.locator('.routing-row-menu').getAttribute('open') !== null) throw new Error('route action menu unexpectedly opened while preserving stale-edit changes');
         await page.screenshot({ path: path.join(output, `production-notifications-edit-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.unroute(applyEndpoint);
-        await editForm.locator('[data-pending-cancel]').click();
-        if (await page.locator('.production-notification-table tbody tr[data-task-type-id="task-unassigned"]').count()) throw new Error('Cancel persisted the pending route addition');
-        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'pending routing/WFA edit and stale Apply', 'routing rows and WFA detail stayed separate; three route additions and a removal remained local; 409 retained pending state; Cancel discarded edits');
+        await editForm.locator('.production-routing-editor-actions a.btn-ghost').click();
+        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
+        if (await page.locator('[data-current-routing-form]').count()) throw new Error('Cancel did not return to the read-only Notifications view');
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'pending WFA edit and stale Apply', 'forum rows and shared WFA detail stayed separate; staged User/Role additions and a reviewer-target removal remained local; 409 retained pending state; Cancel discarded edits');
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
         const refreshForm = page.locator('[data-current-routing-form]');
-        await refreshForm.locator('[data-routing-add]').click();
-        const refreshRow = refreshForm.locator('[data-routing-row]').last();
-        await chooseDraftTaskType(refreshRow, 'task-unassigned');
-        if (await refreshRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await refreshRow.locator('[data-custom-channel-field]').isVisible()) throw new Error('Automatic destination is not the new route default');
-        await refreshRow.locator('[data-destination-control]').selectOption('__custom__');
-        if (!(await refreshRow.locator('[data-custom-channel-field]').isVisible()) || await refreshRow.locator('input[data-new-channel-name]').inputValue() !== 'unassigned') throw new Error('custom channel staging did not expose the normalized Task Type default inline');
-        await refreshRow.locator('input[data-new-channel-name]').fill('unassigned-custom');
-        await page.screenshot({ path: path.join(output, `production-notifications-add-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await refreshForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+        await refreshForm.locator('[data-wfa-add-target]').click();
+        const refreshModal = page.locator('[data-wfa-add-modal]');
+        await refreshModal.locator('[data-wfa-user-combobox]').click();
+        await refreshModal.locator('[data-wfa-user-listbox] [data-wfa-option-value="22222222222222223"]').click();
+        await refreshModal.locator('[data-wfa-add-confirm]').click();
+        if (await refreshForm.locator('[data-apply-submit]').isDisabled()) throw new Error('staged reviewer target did not enable Apply before reload');
         await page.reload({ waitUntil: 'networkidle' });
-        if (page.url().includes('edit_routing=1') && await page.locator('[data-current-routing-form] [data-routing-row][data-task-type="task-unassigned"]').count()) {
-          throw new Error('Refresh persisted a browser-only pending route addition');
+        if (await page.locator('[data-current-routing-form] [data-apply-submit]').isEnabled()) throw new Error('Refresh persisted a browser-only pending reviewer change');
+        if (!(await page.locator('[data-current-routing-form] [data-pending-status]').innerText()).includes(locale.lang === 'ja' ? '変更はありません' : 'No pending changes')) throw new Error('Refresh did not reset the pending reviewer state');
+
+        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
+        const applyForm = page.locator('[data-current-routing-form]');
+        let appliedPayload = null;
+        let appliedCount = 0;
+        await page.route(applyEndpoint, async route => { appliedCount++; appliedPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
+        await applyForm.locator('[data-routing-row][data-task-type="task-comp"] [data-select-task]').click();
+        await applyForm.locator('[data-wfa-add-target]').click();
+        await page.locator('[data-wfa-add-modal] [data-wfa-user-combobox]').click();
+        await page.locator('[data-wfa-add-modal] [data-wfa-user-listbox] [data-wfa-option-value="22222222222222223"]').click();
+        await page.locator('[data-wfa-add-modal] [data-wfa-add-confirm]').click();
+        const appliedResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
+        await applyForm.locator('[data-apply-submit]').click();
+        const appliedResponse = await appliedResponsePromise;
+        if (appliedResponse.status() !== 200 || appliedCount !== 1 || !appliedPayload?.expected_revision || appliedPayload.project_id !== 'reviewer-production' || appliedPayload.reviewer_changes?.length !== 1 || appliedPayload.reviewer_changes[0].task_type_id !== 'task-comp' || JSON.stringify(appliedPayload.reviewer_changes[0].add_user_ids) !== JSON.stringify(['22222222222222223'])) {
+          throw new Error(`Apply did not submit exactly one reviewer-only delta with the current revision: status=${appliedResponse.status()} count=${appliedCount} payload=${JSON.stringify(appliedPayload)}`);
         }
-
-        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
-        const reuseForm = page.locator('[data-current-routing-form]');
-        await reuseForm.locator('[data-routing-add]').click();
-        const reuseRow = reuseForm.locator('[data-routing-row]').last();
-        await chooseDraftTaskType(reuseRow, 'task-unassigned');
-        const reuseSelect = reuseRow.locator('[data-destination-control]');
-        const reusableWebhookID = removedChannelID;
-        if (!reusableWebhookID || !(await reuseSelect.locator(`option[value="${reusableWebhookID}"]`).innerText()).includes('#animation')) throw new Error('the removed route channel is unavailable for reuse by an unrouted Task Type');
-        await reuseSelect.click();
-        await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-selector-open-${locale.lang}-${viewport.name}.png`), fullPage: false });
-        await reuseSelect.selectOption(reusableWebhookID);
-        await page.screenshot({ path: path.join(output, `production-notifications-existing-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        let reusedPayload = null;
-        let reusedApplyCount = 0;
-        await page.route(applyEndpoint, async route => { reusedApplyCount++; reusedPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
-        const reusedResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
-        await reuseForm.locator('[data-apply-submit]').click();
-        const reusedResponse = await reusedResponsePromise;
-        if (reusedResponse.status() !== 200 || reusedApplyCount !== 1 || !reusedPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.destination_webhook_id === Number(reusableWebhookID) && !route.create_channel_name)) throw new Error('selecting an existing managed channel did not stay a single non-creating Apply route');
         await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
         await page.unroute(applyEndpoint);
-
-        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
-        const automaticCreateForm = page.locator('[data-current-routing-form]');
-        let automaticPayload = null;
-        let automaticApplyCount = 0;
-        await page.route(applyEndpoint, async route => { automaticApplyCount++; automaticPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
-        await automaticCreateForm.locator('[data-routing-add]').click();
-        const automaticRow = automaticCreateForm.locator('[data-routing-row]').last();
-        await chooseDraftTaskType(automaticRow, 'task-unassigned');
-        if (await automaticRow.locator('[data-destination-control]').inputValue() !== '__auto__' || await automaticRow.locator('[data-custom-channel-field]').isVisible() || automaticApplyCount !== 0) throw new Error('Automatic channel choice must remain pending and hide the custom name input until Apply');
-        const automaticResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
-        await automaticCreateForm.locator('[data-apply-submit]').click();
-        const automaticResponse = await automaticResponsePromise;
-        if (automaticResponse.status() !== 200 || automaticApplyCount !== 1 || !automaticPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.create_channel_name === 'unassigned' && !route.destination_webhook_id)) throw new Error('Automatic Task Type channel creation was not staged and submitted exactly once at Apply');
-        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
-        await page.unroute(applyEndpoint);
-
-        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
-        const createForm = page.locator('[data-current-routing-form]');
-        let createdPayload = null;
-        let createdApplyCount = 0;
-        await page.route(applyEndpoint, async route => { createdApplyCount++; createdPayload = route.request().postDataJSON(); await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"applied"}' }); });
-        await createForm.locator('[data-routing-add]').click();
-        const createRow = createForm.locator('[data-routing-row]').last();
-        await chooseDraftTaskType(createRow, 'task-unassigned');
-        const createDestination = createRow.locator('[data-destination-control]');
-        if (await createDestination.inputValue() !== '__auto__') throw new Error('new route must default to Automatic channel creation');
-        await createDestination.selectOption('__custom__');
-        const createName = createRow.locator('input[data-new-channel-name]');
-        if (!(await createName.isVisible()) || await createName.inputValue() !== 'unassigned') throw new Error('new channel default does not use the shared Task Type normalization');
-        await createName.fill('unassigned-custom');
-        if (createdApplyCount !== 0) throw new Error('new Discord resources were requested before Apply');
-        await page.screenshot({ path: path.join(output, `production-notifications-new-channel-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        const createdResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
-        await createForm.locator('[data-apply-submit]').click();
-        const createdResponse = await createdResponsePromise;
-        if (createdResponse.status() !== 200 || createdApplyCount !== 1 || !createdPayload?.routes?.some(route => route.task_type_id === 'task-unassigned' && route.create_channel_name === 'unassigned-custom' && !route.destination_webhook_id)) throw new Error('Apply did not submit exactly one staged new-channel route');
-        await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
-        await page.unroute(applyEndpoint);
-
-        await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
-        const failedCreateForm = page.locator('[data-current-routing-form]');
-        await failedCreateForm.locator('[data-routing-add]').click();
-        const failedCreateRow = failedCreateForm.locator('[data-routing-row]').last();
-        await chooseDraftTaskType(failedCreateRow, 'task-unassigned');
-        await failedCreateRow.locator('[data-destination-control]').selectOption('__custom__');
-        await failedCreateRow.locator('input[data-new-channel-name]').fill('unassigned-failure');
-        expectedChannelCreateFailure = { active: true, requestSeen: false, responseCount: 0, responseStatus: null, console502Messages: [] };
-        await page.route(applyEndpoint, async route => {
-          if (!expectedChannelCreateFailure?.active || !isNotificationsApplyRequest(route.request()) || expectedChannelCreateFailure.requestSeen) {
-            errors.push('Unexpected or duplicate route-create Apply was intercepted');
-            await route.abort();
-            return;
-          }
-          expectedChannelCreateFailure.requestSeen = true;
-          await route.fulfill({ status: 502, contentType: 'application/json', body: '{"error":"channel_create_failed","channel_creation":"outcome_unknown","resource_cleanup":"known_resources_complete"}' });
-        });
-        const failedCreateResponsePromise = page.waitForResponse(response => isNotificationsApplyRequest(response.request()));
-        const failedCreateURL = page.url();
-        await failedCreateForm.locator('[data-apply-submit]').click();
-        const failedCreateResponse = await failedCreateResponsePromise;
-        await page.waitForFunction(() => {
-          const message = document.querySelector('[data-current-routing-form] [data-apply-message]');
-          return !!message && message.textContent.trim().length > 0;
-        }, null, { timeout: 5000 });
-        const failedCreateMessage = (await failedCreateForm.locator('[data-apply-message]').textContent() || '').trim();
-        const createFailure = expectedChannelCreateFailure;
-        expectedChannelCreateFailure.active = false;
-        const failedCreateInputVisible = await failedCreateRow.locator('input[data-new-channel-name]').isVisible();
-        const failedCreateInputValue = failedCreateInputVisible ? await failedCreateRow.locator('input[data-new-channel-name]').inputValue() : '';
-        const failedCreateRowVisible = await failedCreateRow.isVisible();
-        if (failedCreateResponse.status() !== 502 || createFailure.responseCount !== 1 || createFailure.responseStatus !== 502 || page.url() !== failedCreateURL || !failedCreateInputVisible || failedCreateInputValue !== 'unassigned-failure' || !failedCreateMessage || !failedCreateRowVisible || createFailure.console502Messages.length > 1) {
-          await page.screenshot({ path: path.join(output, `production-notifications-new-channel-failure-${locale.lang}-${viewport.name}.png`), fullPage: true });
-          throw new Error(`failed new-channel Apply state mismatch: http=${failedCreateResponse.status()} tracked=${createFailure.responseCount}/${createFailure.responseStatus} urlUnchanged=${page.url() === failedCreateURL} inputVisible=${failedCreateInputVisible} inputValue=${failedCreateInputValue} message=${Boolean(failedCreateMessage)} rowVisible=${failedCreateRowVisible} console502=${createFailure.console502Messages.length}`);
-        }
-        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'channel creation failure', 'exact expected 502 retained browser-pending channel choice; no other error was ignored');
-        await page.unroute(applyEndpoint);
+        await record(page, '/bot/admin/projects?tab=notifications&edit_routing=1', locale.lang, viewport.name, 'reviewer delta Apply', 'one reviewer-only Apply with the rendered revision redirected to the read-only view');
 
         await gotoProduction(page, locale, 'team');
         const teamTab = page.locator('#panel-team');
@@ -1761,8 +1587,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       throw new Error('Japanese WFA regression fixture did not render Production aa / Storyboard / #storyboard');
     }
     await storyboardRow.locator('[data-select-task]').click();
-    const japaneseOriginalDestination = await storyboardRow.getAttribute('data-original-destination');
-    const japanesePanel = japaneseForm.locator('[data-wfa-detail-panel]');
+    const japanesePanel = page.locator('#production-wfa-detail-panel');
     // Older or malformed rendered rows may still carry JSON null. Exercise the
     // client-side normalization independently from the server's [] encoding.
     await storyboardRow.evaluate((row, encodedNull) => row.setAttribute('data-existing-targets', encodedNull), Buffer.from('null').toString('base64'));
@@ -1840,13 +1665,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       JSON.stringify(storyboardDelta.remove_user_ids) === JSON.stringify([]) &&
       JSON.stringify(storyboardDelta.add_role_ids) === JSON.stringify([expectedRoleID]) &&
       JSON.stringify(storyboardDelta.remove_role_ids) === JSON.stringify([]);
-    const exactRoute = japaneseApplyPayload?.routes?.length === 1 &&
-      japaneseApplyPayload.routes[0]?.task_type_id === 'task-storyboard' &&
-      Number(japaneseApplyPayload.routes[0]?.destination_webhook_id) === Number(japaneseOriginalDestination);
     if (japaneseApplyResult.status() !== 200 || japaneseApplyCount.value !== 1 ||
       japaneseApplyPayload?.project_id !== 'reviewer-production' ||
-      !japaneseApplyPayload?.expected_revision || !exactRoute || !exactReviewerDelta) {
-      throw new Error(`Japanese Storyboard Apply did not submit the exact route and User/Role delta once: status=${japaneseApplyResult.status()} error=${japaneseApplyError?.error || 'none'} payload=${JSON.stringify(japaneseApplyPayload)}`);
+      !japaneseApplyPayload?.expected_revision || Object.prototype.hasOwnProperty.call(japaneseApplyPayload, 'routes') || !exactReviewerDelta) {
+      throw new Error(`Japanese Storyboard Apply did not submit the exact reviewer User/Role delta once: status=${japaneseApplyResult.status()} error=${japaneseApplyError?.error || 'none'} payload=${JSON.stringify(japaneseApplyPayload)}`);
     }
     await page.waitForURL(url => url.pathname === '/bot/admin/projects' && url.searchParams.get('tab') === 'notifications' && !url.searchParams.has('edit_routing'));
     await page.unroute(japaneseApplyEndpoint);

@@ -55,7 +55,7 @@ func (p Poller) PollProjects(payloads []kitsu.MessagePayload) (PollResult, error
 		if err != nil {
 			return result, err
 		}
-		if !ok || settings.Config.Mode != model.NotificationModeForum {
+		if !ok {
 			continue
 		}
 		result.Productions++

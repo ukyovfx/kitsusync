@@ -41,7 +41,7 @@ func newForumDB(t *testing.T) *gorm.DB {
 
 func testSettings() model.ProductionForumSettings {
 	return model.ProductionForumSettings{
-		Config: model.ProductionForumConfig{ProductionID: "prod-1", Mode: model.NotificationModeForum, GuildID: "guild-1"},
+		Config: model.ProductionForumConfig{ProductionID: "prod-1", GuildID: "guild-1"},
 		Routes: []model.ProductionForumRoute{{
 			ProductionID:    "prod-1",
 			TaskTypeID:      "tt-comp",
