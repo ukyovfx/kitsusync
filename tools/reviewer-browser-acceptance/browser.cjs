@@ -746,6 +746,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `forum-settings-saved-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'one Save persisted the Animation forum mapping and the WFA status destination and both survived a reload');
         await fixture(page, 'ready');
+        // The seeded Production's routing is what the Notifications tab shows.
+        await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=notifications&lang=${locale.lang}`, { waitUntil: 'networkidle' });
 
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
         const routingFormCount = await page.locator('[data-current-routing-form]').count();
