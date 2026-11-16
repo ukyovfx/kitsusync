@@ -194,7 +194,7 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if e.TaskURL != nil {
 		url = e.TaskURL(row.TaskID)
 	}
-	signal := discord.RenderForumSignal(payload.Intent, url, payload.Quote, userIDs, roleIDs)
+	signal := discord.RenderForumSignal(payload.Intent, url, payload.Quote, payload.Submitter, userIDs, roleIDs)
 	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
 		return err

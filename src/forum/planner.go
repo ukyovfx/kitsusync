@@ -455,6 +455,7 @@ func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing mode
 		WindowOpenedAt: p.Now,
 		BaseStatusID:   existing.StatusID,
 		Quote:          retakeQuote(intent, input.Comment, p.Now),
+		Submitter:      submitterMarker(intent, input.Comment, p.Now),
 	})
 	if err != nil {
 		return err
@@ -563,6 +564,37 @@ func retakeQuote(intent string, comment CommentInput, now time.Time) string {
 		return ""
 	}
 	return commentQuote(comment.Text)
+}
+
+// submitterMarkerPrefix starts the machine-readable submitter line a Web
+// publish writes into its comment: "kitsusync-submitter: <display name>".
+const submitterMarkerPrefix = "kitsusync-submitter:"
+
+// submitterMarker returns the display name of the newest comment's submitter
+// line. It follows the same lookback as retakeQuote, and returns "" for a
+// missing or malformed marker so the signal keeps its usual shape.
+func submitterMarker(intent string, comment CommentInput, now time.Time) string {
+	if intent != model.ForumIntentStatusWFA || comment.Unavailable {
+		return ""
+	}
+	created, err := time.Parse(time.RFC3339, comment.CreatedAt)
+	if err != nil {
+		return ""
+	}
+	if now.Sub(created) > model.ForumCommentQuoteLookback {
+		return ""
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(comment.Text, "\r", ""), "\n") {
+		if !strings.HasPrefix(line, submitterMarkerPrefix) {
+			continue
+		}
+		name := strings.TrimSpace(strings.TrimPrefix(line, submitterMarkerPrefix))
+		if name == "" {
+			return ""
+		}
+		return name
+	}
+	return ""
 }
 
 func intentForRole(role string) string {

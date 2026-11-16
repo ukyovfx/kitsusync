@@ -140,6 +140,9 @@ type ForumPostMessagePayload struct {
 	Quote          string    `json:"quote,omitempty"`
 	// Mentions are the Kitsu person IDs named in a comment.
 	Mentions []string `json:"mentions,omitempty"`
+	// Submitter is the display name read from the submitter marker in the
+	// task's newest comment. Display only: it is never used as a mention.
+	Submitter string `json:"submitter,omitempty"`
 }
 
 // ForumPostIntent values.
