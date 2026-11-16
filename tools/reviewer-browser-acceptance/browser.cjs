@@ -698,7 +698,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('#forum-guild').inputValue() !== guildID) throw new Error(`Forum settings did not load the Production Discord server in ${locale.lang}`);
         const forumTaskTypeRows = forumForm.locator('tbody tr').filter({ has: page.locator('select[name="tt_forum"]') });
         if (await forumTaskTypeRows.count() !== 5) throw new Error(`Forum settings Task Type rows are not the five Kitsu Task Types in ${locale.lang}`);
-        const forumRow = label => forumTaskTypeRows.filter({ has: page.locator('td', { hasText: label }) });
+        const forumRow = label => forumTaskTypeRows.filter({ has: page.locator('td', { hasText: new RegExp(`^${label}$`) }) });
         const compForumSelect = forumRow('Compositing').locator('select[name="tt_forum"]');
         if (await compForumSelect.inputValue() !== '66666666666666661') throw new Error(`Forum settings lost the saved Compositing forum in ${locale.lang}`);
         const forumOptions = await compForumSelect.locator('option').evaluateAll(nodes => nodes.map(node => node.value));
@@ -719,14 +719,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // Save one more Task Type → forum mapping and the WFA destination, then
         // reload to prove both came back from storage.
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
-        const wfaStatusSelect = forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: 'Waiting For Approval' }) }).locator('select[name="st_role"]');
+        const wfaStatusSelect = forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
         if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not show the saved WFA destination in ${locale.lang}`);
         await Promise.all([page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved'), forumSaveButton.click()]);
         await page.reload({ waitUntil: 'networkidle' });
         if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
         }
-        if (await forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: 'Waiting For Approval' }) }).locator('select[name="st_role"]').inputValue() !== 'wfa') {
+        if (await forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]').inputValue() !== 'wfa') {
           throw new Error(`Forum settings did not persist the Waiting For Approval WFA destination in ${locale.lang}`);
         }
         if (await page.locator('form.section-stack h3', { hasText: 'storyboard' }).count() !== 1) {
