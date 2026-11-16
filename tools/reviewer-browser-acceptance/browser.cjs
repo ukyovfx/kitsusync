@@ -720,10 +720,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
 
         // Save one more Task Type → forum mapping and the WFA destination, then
         // reload to prove both came back from storage.
-        await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         // The page only offers Role → forum tag rows for forums it already has
         // tags for, so route the new forum's four tags from the live Discord
         // tag list before saving; an unrouted state tag is a rejected save.
+        await Promise.all([page.waitForLoadState('networkidle'), forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666662')]);
+        await Promise.all([page.waitForLoadState('networkidle'), forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664')]);
         const storyboardTags = forumForm.locator('tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
         if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()}`);
         for (const role of ['wfa', 'retake', 'done', 'wip']) {
