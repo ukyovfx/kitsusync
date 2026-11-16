@@ -680,6 +680,62 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if ((await compReadRow.innerText()).includes(locale.lang === 'ja' ? '自動' : 'Automatic') || (await compReadRow.innerText()).includes(locale.lang === 'ja' ? '追加' : 'Additional')) throw new Error(`read mode exposes internal WFA provenance labels in ${locale.lang}`);
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Forum → effective-recipient summary row; no synthetic Notification Preview');
 
+        // Forum settings page: the notifications tab links to it, it saves the
+        // Task Type → forum mapping and the WFA destination, and it offers the
+        // Bot auto-create action.
+        await fixture(page, 'forum-settings');
+        const forumLink = page.getByRole('link', { name: locale.lang === 'ja' ? 'フォーラム設定を開く' : 'Open forum settings', exact: true });
+        if (await forumLink.count() !== 1) throw new Error(`Notifications tab should expose one forum settings entry in ${locale.lang}`);
+        await forumLink.click();
+        await page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('project') === 'reviewer-production');
+        await page.waitForLoadState('networkidle');
+        const forumForm = page.locator('form.section-stack');
+        if (await forumForm.count() !== 1) throw new Error(`Forum settings form missing in ${locale.lang}`);
+        const forumHeadings = (await page.locator('form.section-stack > section.section-card > h2').allTextContents()).map(text => text.trim());
+        if (JSON.stringify(forumHeadings) !== JSON.stringify(['Discord server', 'Task Type → forum', 'Kitsu status → role', 'Role → forum tag'])) {
+          throw new Error(`Forum settings sections are missing in ${locale.lang}: ${JSON.stringify(forumHeadings)}`);
+        }
+        if (await page.locator('#forum-guild').inputValue() !== guildID) throw new Error(`Forum settings did not load the Production Discord server in ${locale.lang}`);
+        const forumTaskTypeRows = forumForm.locator('tbody tr').filter({ has: page.locator('select[name="tt_forum"]') });
+        if (await forumTaskTypeRows.count() !== 5) throw new Error(`Forum settings Task Type rows are not the five Kitsu Task Types in ${locale.lang}`);
+        const forumRow = label => forumTaskTypeRows.filter({ has: page.locator('td', { hasText: label }) });
+        const compForumSelect = forumRow('Compositing').locator('select[name="tt_forum"]');
+        if (await compForumSelect.inputValue() !== '66666666666666661') throw new Error(`Forum settings lost the saved Compositing forum in ${locale.lang}`);
+        const forumOptions = await compForumSelect.locator('option').evaluateAll(nodes => nodes.map(node => node.value));
+        if (JSON.stringify(forumOptions) !== JSON.stringify(['', '66666666666666661', '66666666666666662', '66666666666666663', '66666666666666664'])) {
+          throw new Error(`Forum settings Task Type select does not offer the live Discord forums in ${locale.lang}: ${JSON.stringify(forumOptions)}`);
+        }
+        const forumOptionLabels = await compForumSelect.locator('option').evaluateAll(nodes => nodes.map(node => node.textContent));
+        if (!forumOptionLabels.includes('storyboard')) throw new Error(`Forum settings Task Type select does not label the live Discord forums in ${locale.lang}: ${JSON.stringify(forumOptionLabels)}`);
+        const autoCreate = forumForm.getByRole('button', { name: 'Create forums and tags with the Bot', exact: true });
+        if (await autoCreate.count() !== 1 || !(await autoCreate.isVisible()) || !(await autoCreate.isEnabled()) || await autoCreate.getAttribute('name') !== 'action' || await autoCreate.getAttribute('value') !== 'create_forums') {
+          throw new Error(`Forum settings auto-create action is missing or disabled in ${locale.lang}`);
+        }
+        const forumSaveButton = forumForm.getByRole('button', { name: 'Save', exact: true });
+        if (await forumSaveButton.count() !== 1 || !(await forumSaveButton.isVisible())) throw new Error(`Forum settings Save action is missing in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `forum-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'server, Task Type → forum, Kitsu status → role and Role → forum tag sections with Save and Bot auto-create');
+
+        // Save one more Task Type → forum mapping and the WFA destination, then
+        // reload to prove both came back from storage.
+        await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
+        const wfaStatusSelect = forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: 'Waiting For Approval' }) }).locator('select[name="st_role"]');
+        if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not show the saved WFA destination in ${locale.lang}`);
+        await Promise.all([page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved'), forumSaveButton.click()]);
+        await page.reload({ waitUntil: 'networkidle' });
+        if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
+          throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
+        }
+        if (await forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: 'Waiting For Approval' }) }).locator('select[name="st_role"]').inputValue() !== 'wfa') {
+          throw new Error(`Forum settings did not persist the Waiting For Approval WFA destination in ${locale.lang}`);
+        }
+        if (await page.locator('form.section-stack h3', { hasText: 'storyboard' }).count() !== 1) {
+          throw new Error(`Forum settings did not add the Role → forum tag section for the newly routed forum in ${locale.lang}`);
+        }
+        await page.screenshot({ path: path.join(output, `forum-settings-saved-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'one Save persisted the Animation forum mapping and the WFA status destination and both survived a reload');
+        await fixture(page, 'ready');
+
         await gotoProduction(page, locale, 'notifications', '&edit_routing=1');
         const routingFormCount = await page.locator('[data-current-routing-form]').count();
         const routingFormText = routingFormCount === 1 ? await page.locator('[data-current-routing-form]').innerText() : '';
