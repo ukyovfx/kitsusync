@@ -185,6 +185,21 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := setRuntimeDiscordBotToken(db, reviewerBrowserBot); err != nil {
 		t.Fatal("store synthetic Discord token")
 	}
+	// The forum page's status lister must read the live Kitsu status list
+	// through the runtime credential source the same way the Task Type lister
+	// does. Its default reads the cleared legacy KitsuJWTToken environment, so
+	// without this override the page silently falls back to saved statuses.
+	oldForumStatusLister := forumStatusLister
+	t.Cleanup(func() { forumStatusLister = oldForumStatusLister })
+	forumStatusLister = func(db *gorm.DB) ([]kitsu.TaskStatus, error) {
+		baseURL, token, ok := runtimeKitsuDataSource(db)
+		if !ok {
+			return nil, fmt.Errorf("Kitsu runtime data source is unavailable")
+		}
+		statuses := []kitsu.TaskStatus{}
+		_, err := request.DoWithError(token, http.MethodGet, strings.TrimSuffix(baseURL, "/")+"/data/task-status/", nil, &statuses)
+		return statuses, err
+	}
 	project := model.Project{KitsuProjectID: "reviewer-production", Name: "Synthetic Review Production", DiscordGuildID: reviewerBrowserGuild, DiscordCategoryID: reviewerBrowserCategory, StorageURL: "https://storage.synthetic.invalid"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
@@ -326,16 +341,15 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case "forum-settings":
 			// Start from one routed forum so the page shows a real saved value
-			// and a forum left unrouted that the browser run can fill in. Every
-			// status carries a role and the routed forum carries all four tags,
-			// so the page's own Save re-passes validation after the edit.
-			// The fixture answers the live Discord channel list from the same
-			// forums, so the page offers the unrouted forum's tags too.
+			// and the Animation row left unrouted for the browser run to fill
+			// in. Every status carries a role and the routed forum carries all
+			// four tags, so the page's own Save re-passes validation after the
+			// edit. The fixture answers the live Discord channel list from the
+			// same forums, so the page offers the unrouted forum's tags too.
 			settings := model.ProductionForumSettings{
 				Config: model.ProductionForumConfig{ProductionID: project.KitsuProjectID, GuildID: project.DiscordGuildID},
 				Routes: []model.ProductionForumRoute{
 					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
-					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", ForumChannelID: "66666666666666662", ForumChannelName: "animation"},
 				},
 				StatusRoles: []model.ProductionForumStatusRole{
 					{ProductionID: project.KitsuProjectID, StatusID: "status-wfa", StatusName: "Waiting For Approval", Role: model.ForumRoleWFA},
@@ -347,10 +361,6 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleRetake, TagID: "66666666666666661-retake"},
 					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleDone, TagID: "66666666666666661-done"},
 					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWIP, TagID: "66666666666666661-wip"},
-					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWFA, TagID: "66666666666666662-wfa"},
-					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleRetake, TagID: "66666666666666662-retake"},
-					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleDone, TagID: "66666666666666662-done"},
-					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWIP, TagID: "66666666666666662-wip"},
 				},
 			}
 			if err := model.SaveProductionForumSettings(db, settings); err != nil {
