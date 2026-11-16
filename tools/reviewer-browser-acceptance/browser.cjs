@@ -730,8 +730,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         try {
           await routingNavigation;
         } catch (error) {
-          const rejection = (await page.locator('body').innerText()).split('\n').map(line => line.trim()).filter(Boolean).slice(-12).join(' | ');
-          throw new Error(`Forum settings refused the Task Type → forum save in ${locale.lang}: ${rejection}`);
+          const rejection = (await page.locator('body').innerText()).split('\n').map(line => line.trim()).filter(Boolean);
+          const settingsStart = rejection.findIndex(line => line === 'Discord server');
+          throw new Error(`Forum settings refused the Task Type → forum save in ${locale.lang}: ${rejection.slice(Math.max(0, settingsStart - 8), settingsStart).join(' | ')}`);
         }
         await page.reload({ waitUntil: 'networkidle' });
         const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
