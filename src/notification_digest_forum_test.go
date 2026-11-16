@@ -99,7 +99,9 @@ func newDMFixture(t *testing.T, failingIDs ...string) *dmFixture {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"dm-channel-` + body.RecipientID + `"}`))
+		// json.Marshal keeps user input out of hand-built JSON (CodeQL reflected-xss).
+		payload, _ := json.Marshal(map[string]string{"id": "dm-channel-" + body.RecipientID})
+		_, _ = w.Write(payload)
 	})
 	mux.HandleFunc("POST /api/v10/channels/", func(w http.ResponseWriter, r *http.Request) {
 		fixture.mu.Add(1)
@@ -109,7 +111,8 @@ func newDMFixture(t *testing.T, failingIDs ...string) *dmFixture {
 		}
 		fixture.sends[recipient].Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"dm-message-` + recipient + `","channel_id":"dm-channel-` + recipient + `"}`))
+		payload, _ := json.Marshal(map[string]string{"id": "dm-message-" + recipient, "channel_id": "dm-channel-" + recipient})
+		_, _ = w.Write(payload)
 	})
 	fixture.server = httptest.NewServer(mux)
 	t.Cleanup(fixture.server.Close)
