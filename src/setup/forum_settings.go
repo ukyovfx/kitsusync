@@ -126,9 +126,10 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 				return
 			}
 			settings := parseForumSettingsForm(r, projectID)
-			if len(settings.Routes) > 0 {
-				settings.Tags = tagsForRoutedForums(settings)
-			}
+			// The page only renders tag rows for already-routed forums, so a Task
+			// Type pointed at a new forum arrives without that forum's tags. Keep
+			// them: validation then refuses the save with the missing roles, and
+			// the re-render below shows the rows the user needs to fill in.
 			if err := model.SaveProductionForumSettings(db, settings); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
@@ -179,22 +180,6 @@ func parseForumSettingsForm(r *http.Request, productionID string) model.Producti
 		settings.Tags = append(settings.Tags, model.ProductionForumTag{ForumChannelID: strings.TrimSpace(tagForums[i]), Role: strings.TrimSpace(tagRoles[i]), TagID: strings.TrimSpace(tagIDs[i])})
 	}
 	return settings
-}
-
-// tagsForRoutedForums drops tag rows of forums no Task Type routes to any more,
-// so re-pointing a Task Type does not leave stale tags that fail validation.
-func tagsForRoutedForums(settings model.ProductionForumSettings) []model.ProductionForumTag {
-	routed := map[string]struct{}{}
-	for _, route := range settings.Routes {
-		routed[route.ForumChannelID] = struct{}{}
-	}
-	var kept []model.ProductionForumTag
-	for _, tag := range settings.Tags {
-		if _, ok := routed[tag.ForumChannelID]; ok {
-			kept = append(kept, tag)
-		}
-	}
-	return kept
 }
 
 func forumSelect(name, selected string, options [][2]string, emptyLabel string) string {
