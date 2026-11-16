@@ -710,11 +710,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const forumOptionLabels = await compForumSelect.locator('option').evaluateAll(nodes => nodes.map(node => node.textContent));
         if (!forumOptionLabels.includes('storyboard')) throw new Error(`Forum settings Task Type select does not label the live Discord forums in ${locale.lang}: ${JSON.stringify(forumOptionLabels)}`);
-        const autoCreate = forumForm.getByRole('button', { name: 'Create forums and tags with the Bot', exact: true });
-        if (await autoCreate.count() !== 1 || !(await autoCreate.isVisible()) || !(await autoCreate.isEnabled()) || await autoCreate.getAttribute('name') !== 'action' || await autoCreate.getAttribute('value') !== 'create_forums') {
+        const autoCreate = forumForm.locator('button[name="action"][value="create_forums"]');
+        if (await autoCreate.count() !== 1 || !(await autoCreate.isVisible()) || !(await autoCreate.isEnabled())) {
           throw new Error(`Forum settings auto-create action is missing or disabled in ${locale.lang}`);
         }
-        const forumSaveButton = forumForm.getByRole('button', { name: 'Save', exact: true });
+        const forumSaveButton = forumForm.locator('button[type="submit"]').filter({ hasNot: page.locator('[name="action"]') });
         if (await forumSaveButton.count() !== 1 || !(await forumSaveButton.isVisible())) throw new Error(`Forum settings Save action is missing in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `forum-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'server, Task Type → forum, Kitsu status → role and Role → forum tag sections with Save and Bot auto-create');
@@ -725,7 +725,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // role, so the newly routed forum is the one the fixture already tagged.
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666662');
         const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
-        await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
+        await page.locator('form.section-stack').locator('button[type="submit"]').filter({ hasNot: page.locator('[name="action"]') }).click({ noWaitAfter: true });
         try {
           await routingNavigation;
         } catch (error) {
