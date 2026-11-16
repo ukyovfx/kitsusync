@@ -718,15 +718,19 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `forum-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'server, Task Type → forum, Kitsu status → role and Role → forum tag sections with Save and Bot auto-create');
 
-        // Save one more Task Type → forum mapping and the WFA destination, then
-        // reload to prove both came back from storage. The page only offers
-        // Role → forum tag rows for forums it has tags for, so the fixture
-        // seeds the routed forums' tags and the run tags the new forum first.
+        // Save one more Task Type → forum mapping and keep the WFA destination,
+        // then reload to prove both came back from storage. The page only offers
+        // Role → forum tag rows for forums it has tags for, so the fixture seeds
+        // the routed forums' tags. The Task Type select is a plain form field:
+        // pick the forum, Save once so the new forum's tag rows appear, tag them,
+        // then Save again to persist the mapping and its tags together.
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
-        await page.waitForLoadState('networkidle');
-        await page.waitForTimeout(2000);
+        const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
+        await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
+        await routingNavigation;
+        await page.reload({ waitUntil: 'networkidle' });
         const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
-        if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack input[name="tag_forum"]').evaluateAll(nodes => nodes.map(node => node.value)))} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())} / ${page.url()} / ${JSON.stringify(await page.locator('form.section-stack').count())} / ${JSON.stringify((await page.content()).replace(/\s+/g, ' ').slice(0, 3000))}`);
+        if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())}`);
         for (const role of ['wfa', 'retake', 'done', 'wip']) {
           const tagSelect = storyboardTags.filter({ has: page.locator(`input[name="tag_role"][value="${role}"]`) }).locator('select[name="tag_id"]');
           await tagSelect.selectOption(`66666666666666664-${role}`);
