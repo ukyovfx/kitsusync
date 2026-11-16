@@ -496,7 +496,7 @@ type reviewerBrowserDiscordTransport struct {
 }
 
 func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && r.URL.Path == "/api/" && r.URL.RawQuery == "" {
+	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/") {
 		return d.baseTransport.RoundTrip(r)
 	}
 	if r.URL.Host != "discord.com" || r.Header.Get("Authorization") != "Bot "+reviewerBrowserBot {
