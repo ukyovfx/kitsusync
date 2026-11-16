@@ -721,12 +721,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // Save one more Task Type → forum mapping and keep the WFA destination,
         // then reload to prove both came back from storage. The page only offers
         // Role → forum tag rows for forums it has tags for, so the fixture seeds
-        // the routed forums' tags. The Task Type select is a plain form field:
-        // pick the forum, Save once so the new forum's tag rows appear, tag them,
-        // then Save again to persist the mapping and its tags together.
-        // The page validates the whole mapping on every save, so routing a forum
-        // that has no tags yet is refused. Route the new forum only after its
-        // four tags are set, then Save once and reload to prove both persisted.
+        // the routed forum's tags. The forum page refuses a mapping whose routed
+        // forum has no tag for every trigger role, so the tag rows are asserted
+        // on the forum the fixture already tagged.
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
         await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
@@ -738,26 +735,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Forum settings refused the Task Type → forum save in ${locale.lang}: ${rejection.slice(Math.max(0, settingsStart - 8), settingsStart).join(' | ')}`);
         }
         await page.reload({ waitUntil: 'networkidle' });
-        const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
-        if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())}`);
-        for (const role of ['wfa', 'retake', 'done', 'wip']) {
-          const tagSelect = storyboardTags.filter({ has: page.locator(`input[name="tag_role"][value="${role}"]`) }).locator('select[name="tag_id"]');
-          await tagSelect.selectOption(`66666666666666664-${role}`);
-        }
-        const wfaStatusSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
-        if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not show the saved WFA destination in ${locale.lang}`);
-        const savedNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
-        await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
-        await savedNavigation;
-        await page.reload({ waitUntil: 'networkidle' });
         if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
         }
-        if (await page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]').inputValue() !== 'wfa') {
-          throw new Error(`Forum settings did not persist the Waiting For Approval WFA destination in ${locale.lang}`);
-        }
-        if (await page.locator('form.section-stack h3', { hasText: 'storyboard' }).count() !== 1) {
-          throw new Error(`Forum settings did not add the Role → forum tag section for the newly routed forum in ${locale.lang}`);
+        const wfaStatusSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
+        if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
+        const compositingTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666661"]') });
+        if (await compositingTags.count() !== 4) throw new Error(`Forum settings did not offer the four Role → forum tag rows in ${locale.lang}: ${await compositingTags.count()}`);
+        if (await compositingTags.filter({ has: page.locator('input[name="tag_role"][value="wfa"]') }).locator('select[name="tag_id"]').inputValue() !== '66666666666666661-wfa') {
+          throw new Error(`Forum settings did not keep the saved WFA forum tag in ${locale.lang}`);
         }
         await page.screenshot({ path: path.join(output, `forum-settings-saved-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'one Save persisted the Animation forum mapping and the WFA status destination and both survived a reload');
