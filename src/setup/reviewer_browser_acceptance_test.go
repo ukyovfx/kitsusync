@@ -359,6 +359,38 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			}
 			scenario.Store("ready")
 			w.WriteHeader(http.StatusNoContent)
+		case "restore-routing":
+			// The forum settings page replaces the Production's whole routing, so
+			// the browser run puts the seeded mapping back before it re-reads the
+			// Notifications tab.
+			settings := model.ProductionForumSettings{
+				Config: model.ProductionForumConfig{ProductionID: project.KitsuProjectID, GuildID: project.DiscordGuildID},
+				Routes: []model.ProductionForumRoute{
+					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
+					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", ForumChannelID: "66666666666666662", ForumChannelName: "animation"},
+				},
+				StatusRoles: []model.ProductionForumStatusRole{
+					{ProductionID: project.KitsuProjectID, StatusID: "status-wfa", StatusName: "Waiting For Approval", Role: model.ForumRoleWFA},
+					{ProductionID: project.KitsuProjectID, StatusID: "status-retake", StatusName: "Retake", Role: model.ForumRoleRetake},
+					{ProductionID: project.KitsuProjectID, StatusID: "status-done", StatusName: "Done", Role: model.ForumRoleDone},
+				},
+				Tags: []model.ProductionForumTag{
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWFA, TagID: "66666666666666661-wfa"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleRetake, TagID: "66666666666666661-retake"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleDone, TagID: "66666666666666661-done"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWIP, TagID: "66666666666666661-wip"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWFA, TagID: "66666666666666662-wfa"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleRetake, TagID: "66666666666666662-retake"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleDone, TagID: "66666666666666662-done"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWIP, TagID: "66666666666666662-wip"},
+				},
+			}
+			if err := model.SaveProductionForumSettings(db, settings); err != nil {
+				http.Error(w, "could not restore the seeded routing", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store("ready")
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "unknown isolated fixture state", http.StatusBadRequest)
 		}
