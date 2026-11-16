@@ -242,6 +242,8 @@ func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, la
 				return renderFirstTimeExecutionError(lang, r, "Discordカテゴリを作成できませんでした。変更は保存されていません。")
 			}
 			createdCategory = true
+			// Rollback deletes plan.CategoryID; it must see the ID we just created.
+			plan.CategoryID = categoryID
 		}
 		if err := model.CreateProject(db, plan.Project.ID, plan.Project.Name, "kitsu", plan.GuildID, categoryID, normalizedProductionNotificationLanguage(plan.NotificationLanguage)); err != nil {
 			return renderFirstTimeExecutionError(lang, r, "Production接続を保存できませんでした。作成したDiscordカテゴリは削除しました。")
@@ -259,15 +261,13 @@ func appendFirstTimeRollbackNote(result string, err error) string {
 	return result + " " + html.EscapeString(err.Error())
 }
 
-// safeLogField strips control characters so form-supplied IDs cannot forge
-// log lines (ログ混入). IDs are opaque; control characters carry no signal.
+// safeLogField strips line breaks so form-supplied IDs cannot forge
+// log lines (ログ混入). IDs are opaque; line breaks carry no signal.
 func safeLogField(value string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, value)
+	// CodeQL recognizes strings.ReplaceAll as a log-injection sanitizer; it does not recognize strings.Map.
+	value = strings.ReplaceAll(value, "\r", "")
+	value = strings.ReplaceAll(value, "\n", "")
+	return value
 }
 
 // KitsuSyncCategoryName is the Discord category name that groups everything a

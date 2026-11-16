@@ -58,6 +58,11 @@ func (p Poller) PollProjects(payloads []kitsu.MessagePayload) (PollResult, error
 		if !ok {
 			continue
 		}
+		if problems := model.ForumSettingsProblems(settings); len(problems) > 0 {
+			// Incomplete draft settings (e.g. leftovers from old Mode=lane data) must
+			// not be acted on; the old poller skipped them.
+			continue
+		}
 		result.Productions++
 		planner := Planner{DB: p.DB, Production: productionID, Settings: settings, Now: now}
 		// Group by task type so a new task type is baselined in one transaction.

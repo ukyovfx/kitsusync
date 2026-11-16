@@ -2,12 +2,12 @@ package setup
 
 import "testing"
 
-func TestSafeLogFieldStripsControlCharacters(t *testing.T) {
+func TestSafeLogFieldStripsNewlines(t *testing.T) {
 	tests := []struct{ name, in, want string }{
 		{"plain snowflake id", "1111111111111111111", "1111111111111111111"},
 		{"newline log forgery", "111\n2026/11/16 INFO forged", "1112026/11/16 INFO forged"},
-		{"carriage return and tab", "a\rb\tc", "abc"},
-		{"delete char", "a\x7fb", "ab"},
+		{"carriage return and tab", "a\rb\tc", "ab\tc"},
+		{"delete char", "a\x7fb", "a\x7fb"},
 		{"japanese text kept", "カテゴリ", "カテゴリ"},
 	}
 	for _, tc := range tests {

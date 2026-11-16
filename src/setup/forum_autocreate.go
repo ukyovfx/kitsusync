@@ -33,7 +33,7 @@ var forumAutoTagNames = []struct {
 // variable so tests can answer without Discord.
 var forumCreateChannel = createGuildForumChannel
 
-func createGuildForumChannel(guildID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+func createGuildForumChannel(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
 	payload := map[string]any{"name": name, "type": discordChannelTypeForum}
 	if len(tags) > 0 {
 		available := make([]map[string]any, 0, len(tags))
@@ -41,6 +41,9 @@ func createGuildForumChannel(guildID, name string, tags []string, botToken strin
 			available = append(available, map[string]any{"name": tag})
 		}
 		payload["available_tags"] = available
+	}
+	if strings.TrimSpace(parentID) != "" {
+		payload["parent_id"] = parentID
 	}
 	body, status, err := botDo(http.MethodPost, fmt.Sprintf("%s/guilds/%s/channels", discordAPI, url.PathEscape(strings.TrimSpace(guildID))), payload, botToken)
 	if err != nil {
@@ -144,6 +147,11 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 		return settings, fmt.Errorf("%w: DiscordサーバーIDが未設定です。サーバーIDを入力して保存してから実行してください。", errForumCreateAction)
 	}
 	settings.Config.GuildID = guildID
+	// Forums are created under the Production's own Discord category.
+	parentID := ""
+	if project := model.FindProjectByKitsuID(db, productionID); project != nil {
+		parentID = strings.TrimSpace(project.DiscordCategoryID)
+	}
 
 	tagNames := make([]string, 0, len(forumAutoTagNames))
 	for _, tag := range forumAutoTagNames {
@@ -160,7 +168,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	}
 	for _, route := range settings.Routes {
 		if strings.TrimSpace(route.ForumChannelID) == "" {
-			forum, err := forumCreateChannel(guildID, route.TaskTypeName, tagNames, botToken)
+			forum, err := forumCreateChannel(guildID, parentID, route.TaskTypeName, tagNames, botToken)
 			if err != nil {
 				created, _ := keepCreated()
 				return created, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)

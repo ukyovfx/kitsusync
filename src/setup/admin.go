@@ -1741,8 +1741,8 @@ func compactSortedStrings(values []string) []string {
 
 // HealthHandler shows the runtime health dashboard.
 // Level 1 (default): overall status + last sync.
-// Level 2 (details accordion): polling, sends, webhook table, resource usage.
-// Broken webhooks auto-expand the details accordion.
+// Level 2 (details accordion): polling, sends, forum settings table, resource usage.
+// Forum settings issues auto-expand the details accordion.
 // Legacy POST action=reconnect_webhook is rejected so repairs stay inside Notifications Apply.
 func HealthHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -1760,7 +1760,6 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 		}
 
 		snap := Stats.Snapshot()
-		unhealthy := Stats.WebhookHealthList()
 		uptime := time.Since(snap.StartTime).Round(time.Second)
 
 		// Memory usage via runtime stats
@@ -1783,10 +1782,33 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			return ago.String() + " " + t(lang, "\u524d", "ago")
 		}
 
-		// Overall health determination
-		hasBrokenWebhook := len(unhealthy) > 0
+		// Overall health determination. Forum settings per Production replace the
+		// old per-webhook health: /bot/admin/health must not assume ProjectWebhooks.
+		type forumHealthRow struct {
+			name     string
+			routes   int
+			roles    int
+			tags     int
+			missing  bool
+			problems []model.ForumSettingsProblem
+		}
+		var forumRows []forumHealthRow
+		forumIssueCount := 0
+		for _, p := range model.ListProjects(db) {
+			settings, ok, err := model.LoadProductionForumSettings(db, p.KitsuProjectID)
+			if err != nil || !ok {
+				forumIssueCount++
+				forumRows = append(forumRows, forumHealthRow{name: p.Name, missing: true})
+				continue
+			}
+			problems := model.ForumSettingsProblems(settings)
+			if len(problems) > 0 {
+				forumIssueCount++
+			}
+			forumRows = append(forumRows, forumHealthRow{name: p.Name, routes: len(settings.Routes), roles: len(settings.StatusRoles), tags: len(settings.Tags), problems: problems})
+		}
 		pollingActive := !snap.LastPollTime.IsZero()
-		isHealthy := pollingActive && !hasBrokenWebhook
+		isHealthy := pollingActive && forumIssueCount == 0
 
 		overallBadge := func() string {
 			if isHealthy {
@@ -1850,80 +1872,45 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			esc(t(lang, "\u6700\u7d42\u9001\u4fe1", "Last send")), esc(fmtTime(snap.LastSendTime)),
 		)
 
-		// Webhook health table
-		allWebhooks := model.ListAllProjectWebhooks(db)
-		projects := model.ListProjects(db)
-		projectNames := make(map[string]string)
-		for _, p := range projects {
-			projectNames[p.KitsuProjectID] = p.Name
-		}
-		failedURLs := make(map[string]WebhookHealthEntry)
-		for _, e := range unhealthy {
-			failedURLs[e.URL] = e
-		}
-
-		var webhookRows strings.Builder
-		healthyWebhookCount := 0
-		warnWebhookCount := 0
-		failedWebhookCount := 0
-		for _, wh := range allWebhooks {
-			projName := projectNames[wh.KitsuProjectID]
-			if projName == "" {
-				projName = wh.KitsuProjectID
-			}
-			lastSend := Stats.WebhookLastSend(wh.WebhookURL)
-			lastSendCell := `<span style="color:var(--muted-2)">\u2014</span>`
-			if !lastSend.IsZero() {
-				lastSendCell = esc(fmtAgo(lastSend))
-			}
-
-			var statusCell string
-			var actionCell string
-			if entry, bad := failedURLs[wh.WebhookURL]; bad {
-				failedWebhookCount++
-				statusCell = fmt.Sprintf(`<span class="status-pill bad">%s %d</span>`,
-					esc(t(lang, "\u5931\u6557:", "Failed:")), entry.FailureCount)
-				if entry.LastError != "" {
-					statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + html.EscapeString(entry.LastError) + `</div>`
-				}
-				// Webhook repair is only available from the unified Production Apply flow.
-				if wh.DiscordChannelID != "" {
-					values := url.Values{"project": {wh.KitsuProjectID}, "tab": {"notifications"}, "edit_routing": {"1"}}
-					actionCell = `<a class="btn-sm" href="` + esc(withLang("/bot/admin/projects?"+values.Encode(), r)) + `">` + esc(t(lang, "\u901a\u77e5\u8a2d\u5b9a\u3092\u958b\u304f", "Open Notifications")) + `</a>`
-				}
-			} else if Stats.WebhookInactive(wh.WebhookURL, 7*24*time.Hour) {
-				warnWebhookCount++
-				statusCell = `<span class="status-pill" style="background:rgba(255,200,80,.14);color:#ffc850;border-color:rgba(255,200,80,.3)">` +
-					esc(t(lang, "\u26a0\ufe0f 7\u65e5\u4ee5\u4e0a\u672a\u9001\u4fe1", "\u26a0\ufe0f No activity 7d+")) + `</span>`
-			} else {
-				healthyWebhookCount++
-				statusCell = `<span class="status-pill ok">` + esc(t(lang, "\u6b63\u5e38", "OK")) + `</span>`
-			}
-			webhookRows.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>#%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-				esc(projName), esc(wh.ChannelName), esc(wh.TaskType), statusCell, lastSendCell, actionCell))
-		}
-
-		var webhookTableHTML string
-		if len(allWebhooks) == 0 {
-			webhookTableHTML = `<p class="hint">` + esc(t(lang, "Webhook\u306a\u3057\uff08\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u8a2d\u5b9a\u5f8c\u306b\u8868\u793a\uff09", "No webhooks configured (shown after project setup).")) + `</p>`
+		// Forum settings health table
+		var forumTableHTML string
+		if len(forumRows) == 0 {
+			forumTableHTML = `<p class="hint">` + esc(t(lang, "接続済みProductionなし（接続後に表示されます）。", "No connected productions (shown after connection).")) + `</p>`
 		} else {
-			webhookTableHTML = `<div class="button-row" style="margin:0 0 14px 0">` +
-				`<span class="status-pill ok">` + esc(fmt.Sprintf(t(lang, "正常: %d", "Healthy: %d"), healthyWebhookCount)) + `</span>` +
-				`<span class="status-pill warn">` + esc(fmt.Sprintf(t(lang, "警告: %d", "Warning: %d"), warnWebhookCount)) + `</span>` +
-				`<span class="status-pill bad">` + esc(fmt.Sprintf(t(lang, "失敗: %d", "Failed: %d"), failedWebhookCount)) + `</span>` +
+			var forumRowsHTML strings.Builder
+			okForumCount := 0
+			for _, row := range forumRows {
+				var statusCell string
+				if row.missing || len(row.problems) > 0 {
+					statusCell = `<span class="status-pill bad">` + esc(t(lang, "要確認", "Attention")) + `</span>`
+					if row.missing {
+						statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + esc(t(lang, "フォーラム設定が未保存です。Productionのフォーラム設定を保存してください。", "Forum settings are not saved yet. Save the Production's forum settings.")) + `</div>`
+					}
+					for _, problem := range row.problems {
+						statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + esc(forumProblemText(lang, problem, nil)) + `</div>`
+					}
+				} else {
+					okForumCount++
+					statusCell = `<span class="status-pill ok">` + esc(t(lang, "\u6b63\u5e38", "OK")) + `</span>`
+				}
+				forumRowsHTML.WriteString(fmt.Sprintf(`<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td></tr>`,
+					esc(row.name), row.routes, row.roles, row.tags, statusCell))
+			}
+			forumTableHTML = `<div class="button-row" style="margin:0 0 14px 0">` +
+				`<span class="status-pill ok">` + esc(fmt.Sprintf(t(lang, "正常: %d", "Healthy: %d"), okForumCount)) + `</span>` +
+				`<span class="status-pill bad">` + esc(fmt.Sprintf(t(lang, "要確認: %d", "Attention: %d"), forumIssueCount)) + `</span>` +
 				`</div>` +
 				`<div class="table-wrap"><table><thead><tr>` +
 				`<th>` + esc(t(lang, "\u30d7\u30ed\u30b8\u30a7\u30af\u30c8", "Project")) + `</th>` +
-				`<th>` + esc(t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb", "Channel")) + `</th>` +
-				`<th>` + esc(t(lang, "\u30bf\u30b9\u30af\u7a2e\u5225", "Task type")) + `</th>` +
+				`<th>` + esc(t(lang, "フォーラム数", "Forums")) + `</th>` +
+				`<th>` + esc(t(lang, "ステータス役割", "Status roles")) + `</th>` +
+				`<th>` + esc(t(lang, "タグ", "Tags")) + `</th>` +
 				`<th>` + esc(t(lang, "\u72b6\u614b", "Status")) + `</th>` +
-				`<th>` + esc(t(lang, "\u6700\u7d42\u9001\u4fe1", "Last send")) + `</th>` +
-				`<th></th>` +
-				`</tr></thead><tbody>` + webhookRows.String() + `</tbody></table></div>`
-			if hasBrokenWebhook {
-				webhookTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">` +
-					esc(t(lang, "\u5931\u6557\u4e2d\u306eWebhook\u304c\u3042\u308a\u307e\u3059\u3002Production\u306eNotifications\u3067\u72b6\u614b\u3092\u78ba\u8a8d\u3057\u3066Apply\u3057\u3066\u304f\u3060\u3055\u3044\u3002",
-						"Some webhooks are failing. Review the route in Production Notifications and use Apply to repair it.")) + `</p>`
+				`</tr></thead><tbody>` + forumRowsHTML.String() + `</tbody></table></div>`
+			if forumIssueCount > 0 {
+				forumTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">` +
+					esc(t(lang, "確認が必要なフォーラム設定があります。Productionのフォーラム設定を確認して保存してください。",
+						"Some forum settings need attention. Review and save them in the Production forum settings.")) + `</p>`
 			}
 		}
 
@@ -1939,7 +1926,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 
 		// auto-open accordion when broken
 		detailsOpen := ""
-		if hasBrokenWebhook || !pollingActive {
+		if forumIssueCount > 0 || !pollingActive {
 			detailsOpen = " open"
 		}
 
@@ -1975,10 +1962,10 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 </details>`,
 			detailsOpen,
 			esc(t(lang, "ランタイム詳細", "Runtime Details")),
-			esc(t(lang, "Polling / Discord 送信 / Webhook ヘルス / リソース", "Polling / Discord Sends / Webhook Health / Resources")),
+			esc(t(lang, "Polling / Discord 送信 / フォーラム設定 / リソース", "Polling / Discord Sends / Forum Settings / Resources")),
 			esc(t(lang, "\u30dd\u30fc\u30ea\u30f3\u30b0", "Polling")), pollRows,
 			esc(t(lang, "Discord \u9001\u4fe1", "Discord Sends")), sendRows,
-			esc(t(lang, "Webhook \u30d8\u30eb\u30b9", "Webhook Health")), webhookTableHTML,
+			esc(t(lang, "フォーラム設定", "Forum Settings")), forumTableHTML,
 			esc(t(lang, "\u30ea\u30bd\u30fc\u30b9", "Resources")), resourceRows,
 		)
 
