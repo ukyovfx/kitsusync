@@ -723,7 +723,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         const wfaStatusSelect = forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
         if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not show the saved WFA destination in ${locale.lang}`);
-        await Promise.all([page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit' }), forumSaveButton.click()]);
+        const savedNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
+        await forumSaveButton.click({ noWaitAfter: true });
+        await savedNavigation;
         await page.reload({ waitUntil: 'networkidle' });
         if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
