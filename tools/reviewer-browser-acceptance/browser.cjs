@@ -727,13 +727,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
         await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
-        await routingNavigation;
+        try {
+          await routingNavigation;
+        } catch (error) {
+          const rejection = (await page.locator('body').innerText()).split('\n').map(line => line.trim()).filter(Boolean).slice(-12).join(' | ');
+          throw new Error(`Forum settings refused the Task Type → forum save in ${locale.lang}: ${rejection}`);
+        }
         await page.reload({ waitUntil: 'networkidle' });
         const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
-        if (await storyboardTags.count() !== 4) {
-          const problems = (await page.locator('body').innerText()).split('\n').filter(line => line.trim() !== '').slice(-15).join(' | ');
-          throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())} / ${problems}`);
-        }
+        if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())}`);
         for (const role of ['wfa', 'retake', 'done', 'wip']) {
           const tagSelect = storyboardTags.filter({ has: page.locator(`input[name="tag_role"][value="${role}"]`) }).locator('select[name="tag_id"]');
           await tagSelect.selectOption(`66666666666666664-${role}`);
