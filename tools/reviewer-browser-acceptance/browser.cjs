@@ -722,7 +722,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // reload to prove both came back from storage. The page only offers
         // Role → forum tag rows for forums it has tags for, so the fixture
         // seeds the routed forums' tags and the run tags the new forum first.
-        await Promise.all([page.waitForLoadState('networkidle'), forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664')]);
+        await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
+        await page.waitForLoadState('networkidle');
+        await page.waitForTimeout(2000);
         const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
         if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack input[name="tag_forum"]').evaluateAll(nodes => nodes.map(node => node.value)))} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())} / ${page.url()} / ${JSON.stringify(await page.locator('form.section-stack').count())} / ${JSON.stringify((await page.content()).replace(/\s+/g, ' ').slice(0, 3000))}`);
         for (const role of ['wfa', 'retake', 'done', 'wip']) {
