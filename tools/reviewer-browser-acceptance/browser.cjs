@@ -725,14 +725,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // pick the forum, Save once so the new forum's tag rows appear, tag them,
         // then Save again to persist the mapping and its tags together.
         // The page validates the whole mapping on every save, so routing a forum
-        // that has no tags yet is refused until its tags are set. Save the
-        // mapping with the forum tagged first, then Save again with the new
-        // forum routed and its tags chosen.
-        const tagForm = () => page.locator('form.section-stack');
-        await tagForm().locator('tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666662"]') }).filter({ has: page.locator('input[name="tag_role"][value="wfa"]') }).locator('select[name="tag_id"]').selectOption('66666666666666662-wfa');
+        // that has no tags yet is refused. Route the new forum only after its
+        // four tags are set, then Save once and reload to prove both persisted.
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
-        await tagForm().getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
+        await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
         try {
           await routingNavigation;
         } catch (error) {
