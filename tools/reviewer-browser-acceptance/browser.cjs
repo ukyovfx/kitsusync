@@ -719,28 +719,26 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'server, Task Type → forum, Kitsu status → role and Role → forum tag sections with Save and Bot auto-create');
 
         // Save one more Task Type → forum mapping and the WFA destination, then
-        // reload to prove both came back from storage.
-        // The page only offers Role → forum tag rows for forums it already has
-        // tags for, so route the new forum's four tags from the live Discord
-        // tag list before saving; an unrouted state tag is a rejected save.
-        await Promise.all([page.waitForLoadState('networkidle'), forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666662')]);
+        // reload to prove both came back from storage. The page only offers
+        // Role → forum tag rows for forums it has tags for, so the fixture
+        // seeds the routed forums' tags and the run tags the new forum first.
         await Promise.all([page.waitForLoadState('networkidle'), forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664')]);
-        const storyboardTags = forumForm.locator('tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
+        const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
         if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()}`);
         for (const role of ['wfa', 'retake', 'done', 'wip']) {
           const tagSelect = storyboardTags.filter({ has: page.locator(`input[name="tag_role"][value="${role}"]`) }).locator('select[name="tag_id"]');
           await tagSelect.selectOption(`66666666666666664-${role}`);
         }
-        const wfaStatusSelect = forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
+        const wfaStatusSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
         if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not show the saved WFA destination in ${locale.lang}`);
         const savedNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
-        await forumSaveButton.click({ noWaitAfter: true });
+        await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
         await savedNavigation;
         await page.reload({ waitUntil: 'networkidle' });
         if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
         }
-        if (await forumForm.locator('tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]').inputValue() !== 'wfa') {
+        if (await page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]').inputValue() !== 'wfa') {
           throw new Error(`Forum settings did not persist the Waiting For Approval WFA destination in ${locale.lang}`);
         }
         if (await page.locator('form.section-stack h3', { hasText: 'storyboard' }).count() !== 1) {

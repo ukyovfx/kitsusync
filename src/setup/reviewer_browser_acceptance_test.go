@@ -329,10 +329,13 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			// and a forum left unrouted that the browser run can fill in. Every
 			// status carries a role and the routed forum carries all four tags,
 			// so the page's own Save re-passes validation after the edit.
+			// The fixture answers the live Discord channel list from the same
+			// forums, so the page offers the unrouted forum's tags too.
 			settings := model.ProductionForumSettings{
 				Config: model.ProductionForumConfig{ProductionID: project.KitsuProjectID, GuildID: project.DiscordGuildID},
 				Routes: []model.ProductionForumRoute{
 					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
+					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", ForumChannelID: "66666666666666662", ForumChannelName: "animation"},
 				},
 				StatusRoles: []model.ProductionForumStatusRole{
 					{ProductionID: project.KitsuProjectID, StatusID: "status-wfa", StatusName: "Waiting For Approval", Role: model.ForumRoleWFA},
@@ -344,6 +347,10 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleRetake, TagID: "66666666666666661-retake"},
 					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleDone, TagID: "66666666666666661-done"},
 					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWIP, TagID: "66666666666666661-wip"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWFA, TagID: "66666666666666662-wfa"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleRetake, TagID: "66666666666666662-retake"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleDone, TagID: "66666666666666662-done"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWIP, TagID: "66666666666666662-wip"},
 				},
 			}
 			if err := model.SaveProductionForumSettings(db, settings); err != nil {
