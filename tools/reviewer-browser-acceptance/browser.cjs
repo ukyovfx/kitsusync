@@ -724,9 +724,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // the routed forums' tags. The Task Type select is a plain form field:
         // pick the forum, Save once so the new forum's tag rows appear, tag them,
         // then Save again to persist the mapping and its tags together.
+        // The page validates the whole mapping on every save, so routing a forum
+        // that has no tags yet is refused until its tags are set. Save the
+        // mapping with the forum tagged first, then Save again with the new
+        // forum routed and its tags chosen.
+        const tagForm = () => page.locator('form.section-stack');
+        await tagForm().locator('tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666662"]') }).filter({ has: page.locator('input[name="tag_role"][value="wfa"]') }).locator('select[name="tag_id"]').selectOption('66666666666666662-wfa');
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
-        await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
+        await tagForm().getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
         try {
           await routingNavigation;
         } catch (error) {
