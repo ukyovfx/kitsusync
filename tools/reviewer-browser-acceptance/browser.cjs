@@ -746,14 +746,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         expectedForumTagRefusal = { active: true, responseCount: 0, console400Messages: [] };
         const refusedSave = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.request().url()).pathname === '/bot/admin/forum');
+        // The 400 body is a full document, so the response is followed by a
+        // navigation. waitForLoadState('load') returns at once because the
+        // current document is already loaded, so wait for that navigation.
+        const refusalNavigation = page.waitForNavigation({ waitUntil: 'load' });
         await page.locator('form.section-stack').locator('button[type="submit"]:not([name="action"])').click({ noWaitAfter: true });
         const refusal = await refusedSave;
         if (refusal.status() !== 400 || expectedForumTagRefusal.responseCount !== 1) {
           throw new Error(`the first forum save was expected to be refused for the storyboard forum's missing tags in ${locale.lang}: HTTP ${refusal.status()}`);
         }
-        // waitForResponse resolves on the response headers; the 400 re-render
-        // replaces the document afterwards, so wait for it before counting rows.
-        await page.waitForLoadState('load');
+        await refusalNavigation;
         const storyboardTagRows = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
         if (await storyboardTagRows.count() !== 4) throw new Error(`the refused forum save did not re-render the storyboard tag rows in ${locale.lang}: ${await storyboardTagRows.count()}`);
         for (const [role, tagID] of [['wfa', '66666666666666664-wfa'], ['retake', '66666666666666664-retake'], ['done', '66666666666666664-done']]) {
