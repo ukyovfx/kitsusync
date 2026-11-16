@@ -107,8 +107,8 @@ func TestProductionTeamCompactRows(t *testing.T) {
 func TestProductionTeamCompactRowStyles(t *testing.T) {
 	for _, expected := range []string{
 		`.production-team-table{width:100%;table-layout:fixed;`,
-		`.production-team-col-member{width:24%}`,
-		`.production-team-col-status{width:20%}`,
+		`.production-team-col-member{width:22%}`,
+		`.production-team-col-status{width:26%}`,
 		`.production-notification-col-task{width:26%}`,
 		`.production-wfa-kind{display:inline-flex;align-items:center;`,
 		`.production-team-row>th,.production-team-row>td{`,
@@ -352,26 +352,26 @@ func TestProductionNotificationHeaderActionsShareDenseControlHeight(t *testing.T
 }
 func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "preview-production", Name: "Preview Production", Language: "en"}
+	p := model.Project{KitsuProjectID: "preview-production", Name: "Preview Production", Language: "en", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&p).Error; err != nil {
 		t.Fatal(err)
 	}
-	const webhookSecret = "synthetic-webhook-secret-must-not-render"
-	if err := model.CreateProjectWebhook(db, p.KitsuProjectID, "compositing", "", webhookSecret, "channel-comp"); err != nil {
-		t.Fatal(err)
-	}
-	webhook := model.ListProjectWebhooks(db, p.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, ProductionName: p.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: p.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(p.KitsuProjectID, p.DiscordGuildID,
+		[]model.ProductionForumRoute{{ProductionID: p.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "forum-comp", ForumChannelName: "compositing"}})); err != nil {
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest("GET", "/bot/admin/projects?project=preview-production&tab=notifications&lang=en", nil)
 	body := renderSelectedProductionNotifications(db, r, p, "en", "success", "Healthy", "")
+	visibleBody := body
+	if sourceStart := strings.Index(visibleBody, `<div hidden data-wfa-pending-source>`); sourceStart >= 0 {
+		visibleBody = visibleBody[:sourceStart]
+	}
 	for _, expected := range []string{"WFA recipients", "Unavailable", "Compositing", "#compositing", `data-wfa-recipients`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("Notifications missing %q", expected)
 		}
 	}
-	if strings.Contains(body, `data-wfa-group`) || strings.Contains(body, `class="production-wfa-kind"`) {
+	if strings.Contains(visibleBody, `data-wfa-group`) || strings.Contains(visibleBody, `class="production-wfa-kind"`) {
 		t.Fatal("read mode must summarize the effective recipient set without category rows")
 	}
 	if strings.Contains(body, "Notification routing") {
@@ -382,8 +382,8 @@ func TestProductionNotificationsHasWFARecipientsAndNoPreview(t *testing.T) {
 			t.Fatalf("Notifications retained removed preview content %q", forbidden)
 		}
 	}
-	if strings.Contains(body, webhookSecret) || strings.Contains(body, "channel-comp") {
-		t.Fatal("Notifications exposed a webhook secret or internal channel ID")
+	if strings.Contains(body, "channel-comp") {
+		t.Fatal("Notifications exposed an internal channel ID")
 	}
 }
 
@@ -395,17 +395,12 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	for _, route := range []struct{ taskID, taskName, channel, channelID, webhookURL string }{
-		{"task-comp", "Compositing", "comp", "55555555555555551", "https://discord.com/api/webhooks/44444444444444441/synthetic-token"},
-		{"task-anim", "Animation", "anim", "55555555555555552", "https://discord.com/api/webhooks/44444444444444442/synthetic-token"},
-	} {
-		if err := model.CreateProjectWebhook(db, project.KitsuProjectID, route.channel, route.taskName, route.webhookURL, route.channelID); err != nil {
-			t.Fatal(err)
-		}
-		webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[len(model.ListProjectWebhooks(db, project.KitsuProjectID))-1]
-		if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, append(model.ListProductionNotificationRoutes(db, project.KitsuProjectID), model.ProductionNotificationRoute{ProductionID: project.KitsuProjectID, TaskTypeID: route.taskID, TaskTypeName: route.taskName, DestinationWebhookID: webhook.ID})); err != nil {
-			t.Fatal(err)
-		}
+	if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID,
+		[]model.ProductionForumRoute{
+			{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "forum-comp", ForumChannelName: "Compositing"},
+			{ProductionID: project.KitsuProjectID, TaskTypeID: "task-anim", TaskTypeName: "Animation", ForumChannelID: "forum-anim", ForumChannelName: "Animation"},
+		})); err != nil {
+		t.Fatal(err)
 	}
 	if err := db.Create(&model.UserMap{KitsuID: "artist-person", KitsuName: "Linked Artist", DiscordID: "123456789012345680", DiscordDisplayName: "linked-artist"}).Error; err != nil {
 		t.Fatal(err)
@@ -428,7 +423,7 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 		t.Fatal(err)
 	}
 	oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors := reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam
-	oldEvidence := reviewerRoleSendEvidenceReader
+	oldEvidence := forumReviewerRoleEvidenceReader
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"}, {ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"}}
 	}
@@ -441,12 +436,8 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) {
 		return []DiscordGuildRole{{ID: "123456789012345681", Name: "Leads", Mentionable: true}, {ID: "123456789012345684", Name: "Quiet", Mentionable: false}}, nil
 	}
-	reviewerRoleSendEvidenceReader = func(guildID, channelID, webhookURL, _ string) (reviewerRoleSendEvidence, error) {
-		webhookID, err := discordWebhookID(webhookURL)
-		if err != nil {
-			return reviewerRoleSendEvidence{}, err
-		}
-		return reviewerRoleSendEvidence{GuildID: guildID, ChannelID: channelID, WebhookID: webhookID, BotID: "123456789012345685", WebhookOwnerID: "123456789012345685", OwnershipVerified: true, PermissionsKnown: true}, nil
+	forumReviewerRoleEvidenceReader = func(guildID, channelID, _ string) (reviewerRoleSendEvidence, error) {
+		return reviewerRoleSendEvidence{GuildID: guildID, ChannelID: channelID, BotID: "123456789012345685", PermissionsKnown: true}, nil
 	}
 	reviewerDepartmentSupervisorsForTeam = func(_, _, departmentID string, _ []kitsu.Person) ([]kitsu.Person, error) {
 		if departmentID == "dept-comp" {
@@ -458,10 +449,10 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 		return nil, nil
 	}
 	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam, reviewerRoleSendEvidenceReader = oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors, oldEvidence
+		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam, forumReviewerRoleEvidenceReader = oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors, oldEvidence
 	})
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=notifications-read-table&tab=notifications&lang=en", nil), project, "en", "success", "Healthy", "", "synthetic-discord-token")
-	for _, want := range []string{"Kitsu Task Type", "Discord Channel", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@Artist Nick", "@Leads", "Role unavailable", "task-comp", "task-anim"} {
+	for _, want := range []string{"Kitsu Task Type", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@Artist Nick", "@Leads", "Role unavailable", "task-comp", "task-anim", "#Compositing", "#Animation"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Notifications read table missing %q: %s", want, body)
 		}
@@ -661,11 +652,8 @@ func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *t
 		if !strings.Contains(empty, tc.empty) {
 			t.Errorf("%s empty route state missing %q: %s", tc.lang, tc.empty, empty)
 		}
-		if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "synthetic-webhook", "channel-comp"); err != nil {
-			t.Fatal(err)
-		}
-		webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
-		if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+		if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID,
+			[]model.ProductionForumRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "forum-comp", ForumChannelName: "compositing"}})); err != nil {
 			t.Fatal(err)
 		}
 		oldTeam, oldMembers, oldRoles := reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild
@@ -682,17 +670,14 @@ func TestProductionNotificationsReadTableLocalizesEmptyAndTeamFailureStates(t *t
 	}
 }
 
-func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
+func TestProductionRoutingEditStagesWFAInOneAsyncApply(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "pending-apply-production", Name: "Pending Apply", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "comp", "Compositing", "synthetic-webhook", "channel-comp"); err != nil {
-		t.Fatal(err)
-	}
-	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID,
+		[]model.ProductionForumRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "forum-comp", ForumChannelName: "compositing"}})); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345680"); err != nil {
@@ -704,7 +689,7 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 			t.Errorf("explicit User/Role chooser or empty state is missing %q", required)
 		}
 	}
-	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "data-routing-remove", "fetch(", "safeApplyErrors[code]", "stale_edit:", "response.ok", "live.has(id)", "data-stale-message", `data-destination-control`, `data-wfa-automatic-value`, `production-routing-editor-footer"`} {
+	for _, required := range []string{"data-async-notification-apply", "expected_revision", "reviewer_changes", "data-wfa-detail-panel", "data-wfa-add-target", "fetch(", "safeApplyErrors[code]", "stale_edit:", "response.ok", "data-stale-message", "data-wfa-automatic-value"} {
 		if !strings.Contains(body, required) {
 			t.Errorf("unified pending Apply editor missing %q", required)
 		}
@@ -712,32 +697,23 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 	if strings.Count(body, `data-async-notification-apply`) != 1 || strings.Contains(body, `action="save_current_production_routing"`) {
 		t.Fatalf("Notifications edit must expose one async Apply and no independent route save: %s", body)
 	}
-	if !strings.Contains(body, `<section class="production-routing-editor"`) || strings.Contains(body, `class="section-card glass production-routing-editor"`) {
+	if !strings.Contains(body, `<section class="production-routing-editor"`) {
 		t.Fatal("routing list must stay a flat selector around one contained selected-task editor")
 	}
 	if strings.Contains(body, `method="post"`) && !strings.Contains(body, `event.preventDefault()`) {
 		t.Fatal("Apply form must not submit as a full-page request")
 	}
-	if !strings.Contains(body, `data-destination-control`) || !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) || strings.Contains(body, `data-wfa-channel-control`) || strings.Contains(body, `data-routing-undo`) {
-		t.Fatal("selected Task Type editor must preserve route summary and secondary Add recipient control")
+	if !strings.Contains(body, `class="btn-ghost production-wfa-add-target" data-wfa-add-target`) || strings.Contains(body, `data-wfa-channel-control`) || strings.Contains(body, `data-routing-undo`) || strings.Contains(body, `data-destination-control`) {
+		t.Fatal("selected Task Type editor must preserve the secondary Add recipient control without lane destination controls")
 	}
 	panelCount := strings.Count(body, `<section id="production-wfa-detail-panel" class="production-wfa-edit-panel" data-wfa-detail-panel`)
 	if panelCount != 1 {
 		t.Fatalf("Notifications must render one shared WFA detail panel element, got %d", panelCount)
 	}
-	tableEnd := strings.Index(body, `</table></div></div>`)
-	addAction := strings.Index(body, `data-routing-add`)
+	tableEnd := strings.Index(body, `</table></div>`)
 	panel := strings.Index(body, `data-wfa-detail-panel`)
-	footer := strings.Index(body, `production-routing-editor-footer`)
-	if tableEnd < 0 || addAction < tableEnd || panel < addAction || footer < panel {
-		t.Fatalf("shared WFA-only panel must follow the complete routing list/Add action and precede Apply footer: table=%d add=%d panel=%d footer=%d", tableEnd, addAction, panel, footer)
-	}
-	panelEnd := strings.Index(body[panel:], `</section>`)
-	if panelEnd < 0 || strings.Contains(body[panel:panel+panelEnd], `data-destination-control`) {
-		t.Fatal("shared panel must contain WFA details only; Discord destination editing stays inline")
-	}
-	if !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-wfa-edit-panel .production-wfa-edit-heading{padding-bottom:0;border-bottom:0}`) || !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-automatic]{border-block:0}`) {
-		t.Fatal("Supervisor row must not be bracketed by redundant horizontal dividers")
+	if tableEnd < 0 || panel < tableEnd {
+		t.Fatalf("shared WFA-only panel must follow the routing list: table=%d panel=%d", tableEnd, panel)
 	}
 	attribute := `data-existing-targets="`
 	start := strings.Index(body, attribute)
@@ -761,15 +737,12 @@ func TestProductionRoutingEditStagesRoutingAndWFAInOneAsyncApply(t *testing.T) {
 
 func TestProductionRoutingEditorProvidesAutomaticSummaryForAllTaskTypes(t *testing.T) {
 	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "pending-new-task-type", Name: "Pending New Task Type"}
+	project := model.Project{KitsuProjectID: "pending-new-task-type", Name: "Pending New Task Type", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "existing", "Existing", "synthetic-webhook", "channel-existing"); err != nil {
-		t.Fatal(err)
-	}
-	webhook := model.ListProjectWebhooks(db, project.KitsuProjectID)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-existing", TaskTypeName: "Existing", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID,
+		[]model.ProductionForumRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-existing", TaskTypeName: "Existing", ForumChannelID: "forum-existing", ForumChannelName: "existing"}})); err != nil {
 		t.Fatal(err)
 	}
 	view := productionNotificationReviewerView{
@@ -797,28 +770,6 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForAllTaskTypes(t *testi
 	}
 	if !strings.Contains(pendingSource[newTask:], "Unavailable") {
 		t.Fatal("unrouted Task Type must show a concise truthful Automatic-recipient state")
-	}
-}
-
-func TestProductionRoutingEditorStagesNewChannelChoiceUntilApply(t *testing.T) {
-	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "stage-channel-choice", Name: "Stage Channel Choice"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	view := productionNotificationReviewerView{TaskTypes: []kitsu.TaskType{{ID: "task-comp", Name: "Compositing"}}}
-	request := httptest.NewRequest("GET", "/bot/admin/projects?project=stage-channel-choice&tab=notifications&edit_routing=1&lang=en", nil)
-	body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, "en", "", view)
-	for _, marker := range []string{`value="__auto__"`, `value="__custom__"`, `data-default-channel-name="compositing"`, `data-new-channel-name`, `data-custom-channel-field`, `data-apply-endpoint="/bot/admin/projects?apply_notifications=1"`} {
-		if !strings.Contains(body, marker) {
-			t.Errorf("routing editor is missing staged channel creation control %q", marker)
-		}
-	}
-	script := currentRoutingEditorScript()
-	for _, marker := range []string{"window.confirm(form.dataset.removeConfirm", "route.create_channel_name=", "route.destination_webhook_id=", "credentials:'same-origin'", "querySelector('[data-wfa-source] [data-wfa-pending-source]'", "body.appendChild(row)"} {
-		if !strings.Contains(script, marker) {
-			t.Errorf("routing editor script is missing pending/safe Apply behavior %q", marker)
-		}
 	}
 }
 
@@ -925,7 +876,7 @@ func TestProductionDetailTabsShareOpenCurrentIAGrammar(t *testing.T) {
 	}
 
 	routes := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
-	if !strings.Contains(routes, `production-notification-table production-detail-surface`) || !strings.Contains(routes, `data-label="Discord Channel"`) || !strings.Contains(routes, `data-label="WFA recipients"`) || strings.Contains(routes, `<div class="production-notifications"><h2>Notifications</h2>`) {
+	if !strings.Contains(routes, `production-notification-table production-detail-surface`) || !strings.Contains(routes, `data-label="Forum"`) || !strings.Contains(routes, `data-label="WFA recipients"`) || strings.Contains(routes, `<div class="production-notifications"><h2>Notifications</h2>`) {
 		t.Fatal("Notifications read mode must keep the shared responsive table semantics without a duplicate tab heading")
 	}
 }
@@ -1032,15 +983,12 @@ func TestProductionOverviewExcludesSuccessfulNotificationAndShowsFailure(t *test
 
 func createHealthyOverviewProject(t *testing.T, db *gorm.DB, id string) model.Project {
 	t.Helper()
-	project := model.Project{KitsuProjectID: id, Name: "Healthy Overview", DiscordGuildID: "synthetic-guild"}
+	project := model.Project{KitsuProjectID: id, Name: "Healthy Overview", DiscordGuildID: "123456789012345678"}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := model.CreateProjectWebhook(db, id, "channel", "concept", "synthetic-webhook-secret", "synthetic-channel"); err != nil {
-		t.Fatal(err)
-	}
-	webhook := model.ListProjectWebhooks(db, id)[0]
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: id, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: id, TaskTypeID: "concept", TaskTypeName: "Concept", DestinationWebhookID: webhook.ID}}); err != nil {
+	if err := model.SaveProductionForumSettings(db, reviewerBrowserForumSettings(id, project.DiscordGuildID,
+		[]model.ProductionForumRoute{{ProductionID: id, TaskTypeID: "concept", TaskTypeName: "Concept", ForumChannelID: "forum-concept", ForumChannelName: "concept"}})); err != nil {
 		t.Fatal(err)
 	}
 	return project
@@ -1054,7 +1002,7 @@ func TestProductionOverviewDoesNotCallUnconfiguredRoutingHealthy(t *testing.T) {
 	}
 	statusClass, statusLabel, statusHint := iaStatus(db, project, "en")
 	body := renderCurrentProductionOverview(db, httptest.NewRequest("GET", "/bot/admin/projects?project=overview-unconfigured-production&lang=en", nil), project, "en", statusClass, statusLabel, statusHint)
-	if strings.Contains(body, "No current issues") || !strings.Contains(body, "No notification route is configured.") {
+	if strings.Contains(body, "No current issues") || !strings.Contains(body, "No forum settings found.") {
 		t.Fatal("Overview reported no issues while notification routing is unconfigured")
 	}
 	if !strings.Contains(body, "tab=notifications") {

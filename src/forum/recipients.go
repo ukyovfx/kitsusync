@@ -147,7 +147,7 @@ func RenderCard(payload kitsu.MessagePayload, build func(kitsu.MessagePayload) (
 // in the guild. Problems are returned as human-readable Japanese messages.
 func ValidateForumTargets(db *gorm.DB, productionID, guildID string, lister func(guildID, botToken string) ([]ForumChannel, error), botToken string) []string {
 	settings, ok, err := model.LoadProductionForumSettings(db, productionID)
-	if err != nil || !ok || settings.Config.Mode != model.NotificationModeForum {
+	if err != nil || !ok {
 		return nil
 	}
 	channels, err := lister(guildID, botToken)

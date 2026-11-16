@@ -81,6 +81,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		&model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{},
 		&model.UserMap{}, &model.CheckerMap{}, &model.Setting{}, &model.AdminSession{}, &model.AuditLog{},
 		&model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProjectSetting{},
+		&model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{},
 	); err != nil {
 		t.Fatal("migrate disposable acceptance database")
 	}
@@ -183,21 +184,12 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "compositing", "compositing", "https://discord.com/api/webhooks/44444444444444441/synthetic-compositing-token", "55555555555555551"); err != nil {
-		t.Fatal("seed synthetic routing destination")
-	}
-	if err := model.CreateProjectWebhook(db, project.KitsuProjectID, "animation", "animation", "https://discord.com/api/webhooks/44444444444444442/synthetic-animation-token", "55555555555555552"); err != nil {
-		t.Fatal("seed second synthetic routing destination")
-	}
-	webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
-	if len(webhooks) != 2 {
-		t.Fatal("expected two synthetic routing destinations")
-	}
-	if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{
-		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID},
-		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", DestinationWebhookID: webhooks[1].ID},
-	}); err != nil {
-		t.Fatal("seed synthetic notification route")
+	settings := reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID, []model.ProductionForumRoute{
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
+		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", ForumChannelID: "66666666666666662", ForumChannelName: "animation"},
+	})
+	if err := model.SaveProductionForumSettings(db, settings); err != nil {
+		t.Fatal("seed synthetic forum routing")
 	}
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now()})
 	model.WriteAuditLog(db, model.AuditLog{ProjectID: "other-production", ProjectName: project.Name, EntityName: "Must not leak", Success: true, CreatedAt: time.Now()})
@@ -245,14 +237,8 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
 	scenario.Store("japanese-wfa-add")
 	preflight := checkDiscordStatus(reviewerBrowserBot, reviewerBrowserGuild)
-	if !routingDiscordStatusReady(preflight) {
-		t.Fatalf("Japanese WFA synthetic Bot cannot validate the already-configured destination: bot=%t guild=%t manage_channels=%t manage_webhooks=%t", preflight.BotValid, preflight.GuildValid, preflight.Permissions.ManageChannels, preflight.Permissions.ManageWebhooks)
-	}
-	if _, _, err := currentRoutingInspectWebhook(webhooks[0].WebhookURL); err != nil {
-		t.Fatalf("Japanese WFA synthetic webhook inspection failed: %v", err)
-	}
-	if repairs, err := validateCurrentRoutingDestinations(project, model.ListProductionNotificationRoutes(db, project.KitsuProjectID), db); err != nil || len(repairs) != 0 {
-		t.Fatalf("Japanese WFA synthetic routes are not verified and reusable: repairs=%d error=%v", len(repairs), err)
+	if !preflight.BotValid || !preflight.GuildValid {
+		t.Fatalf("Japanese WFA synthetic Bot cannot validate the forum destination: bot=%t guild=%t", preflight.BotValid, preflight.GuildValid)
 	}
 	scenario.Store("ready")
 
@@ -290,22 +276,16 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "japanese-wfa-add":
-			webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
-			if len(webhooks) == 0 {
-				http.Error(w, "Japanese WFA fixture has no routing webhook", http.StatusInternalServerError)
-				return
-			}
 			if err := db.Model(&project).Updates(map[string]interface{}{"name": "aa"}).Error; err != nil {
 				http.Error(w, "could not rename synthetic Production", http.StatusInternalServerError)
 				return
 			}
 			project.Name = "aa"
-			if err := db.Model(&model.ProjectWebhook{}).Where("id = ?", webhooks[0].ID).Updates(map[string]interface{}{"channel_name": "storyboard", "task_type": "Storyboard"}).Error; err != nil {
-				http.Error(w, "could not rename synthetic routing destination", http.StatusInternalServerError)
-				return
-			}
-			if err := model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: "aa", Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-storyboard", TaskTypeName: "Storyboard", DestinationWebhookID: webhooks[0].ID}}); err != nil {
-				http.Error(w, "could not configure Japanese WFA route", http.StatusInternalServerError)
+			settings := reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID, []model.ProductionForumRoute{
+				{ProductionID: project.KitsuProjectID, TaskTypeID: "task-storyboard", TaskTypeName: "Storyboard", ForumChannelID: "66666666666666663", ForumChannelName: "storyboard"},
+			})
+			if err := model.SaveProductionForumSettings(db, settings); err != nil {
+				http.Error(w, "could not configure Japanese WFA forum route", http.StatusInternalServerError)
 				return
 			}
 			if err := db.Where("project_id = ?", project.ID).Delete(&model.ProjectReviewerTarget{}).Error; err != nil {
@@ -315,8 +295,10 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "sparse-production":
-			webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
-			if len(webhooks) == 0 || model.SaveProductionNotificationConfig(db, &model.ProductionNotificationConfig{ProductionID: project.KitsuProjectID, ProductionName: project.Name, Enabled: true}, []model.ProductionNotificationRoute{{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", DestinationWebhookID: webhooks[0].ID}}) != nil {
+			settings := reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID, []model.ProductionForumRoute{
+				{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
+			})
+			if model.SaveProductionForumSettings(db, settings) != nil {
 				http.Error(w, "could not configure sparse Production fixture", http.StatusInternalServerError)
 				return
 			}
@@ -356,9 +338,13 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	}
 	if err != nil {
 		if scenario.Load().(string) == "japanese-wfa-add" {
-			routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
-			_, destinationErr := validateCurrentRoutingDestinations(project, routes, db)
-			t.Fatalf("isolated Chromium acceptance failed: %s; Japanese WFA destination preflight: %v", safeOutput, destinationErr)
+			t.Fatalf("isolated Chromium acceptance failed: %s; Japanese WFA forum route: %s", safeOutput, func() string {
+				settings, ok, loadErr := model.LoadProductionForumSettings(db, project.KitsuProjectID)
+				if loadErr != nil || !ok {
+					return "forum settings unavailable"
+				}
+				return fmt.Sprintf("%d routes", len(settings.Routes))
+			}())
 		}
 		t.Fatalf("isolated Chromium acceptance failed: %s", safeOutput)
 	}
@@ -372,6 +358,19 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if len(unexpectedDiscord) != 0 {
 		t.Fatalf("synthetic Discord fixture blocked an unexpected route: %s", <-unexpectedDiscord)
 	}
+}
+
+// reviewerBrowserForumSettings builds a complete, validatable forum settings
+// fixture (SaveProductionForumSettings rejects incomplete configurations).
+func reviewerBrowserForumSettings(projectID, guildID string, routes []model.ProductionForumRoute) model.ProductionForumSettings {
+	settings := model.ProductionForumSettings{Config: model.ProductionForumConfig{ProductionID: projectID, GuildID: guildID}, Routes: routes}
+	for _, route := range routes {
+		for _, role := range []string{model.ForumRoleWFA, model.ForumRoleRetake, model.ForumRoleDone, model.ForumRoleWIP} {
+			settings.StatusRoles = append(settings.StatusRoles, model.ProductionForumStatusRole{ProductionID: projectID, StatusID: route.ForumChannelID + "-" + role, StatusName: role, Role: role})
+			settings.Tags = append(settings.Tags, model.ProductionForumTag{ProductionID: projectID, ForumChannelID: route.ForumChannelID, Role: role, TagID: route.ForumChannelID + "-" + role})
+		}
+	}
+	return settings
 }
 
 func reviewerBrowserTeam() []kitsu.Person {
@@ -464,22 +463,6 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && r.URL.Path == "/api/" && r.URL.RawQuery == "" {
 		return d.baseTransport.RoundTrip(r)
 	}
-	if r.URL.Scheme == "https" && r.URL.Host == "discord.com" && r.Method == http.MethodGet && r.Header.Get("Authorization") == "" {
-		var body string
-		switch r.URL.Path {
-		case "/api/webhooks/44444444444444441/synthetic-compositing-token":
-			body = `{"id":"44444444444444441","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555551","user":{"id":"11111111111111113"}}`
-		case "/api/webhooks/44444444444444442/synthetic-animation-token":
-			body = `{"id":"44444444444444442","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555552","user":{"id":"11111111111111113"}}`
-		default:
-			select {
-			case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
-			default:
-			}
-			return nil, fmt.Errorf("blocked unowned synthetic webhook inspection")
-		}
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
-	}
 	if r.URL.Host != "discord.com" || r.Header.Get("Authorization") != "Bot "+reviewerBrowserBot {
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
@@ -493,10 +476,6 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 		body = `{"id":"11111111111111113","username":"Synthetic KitsuSync Bot"}`
 	case r.URL.Path == "/api/v10/guilds/"+d.expectedGuild:
 		body = `{"id":"` + d.expectedGuild + `","name":"Synthetic Discord"}`
-	case r.URL.Path == "/api/v10/webhooks/44444444444444441":
-		body = `{"id":"44444444444444441","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555551","user":{"id":"11111111111111113"}}`
-	case r.URL.Path == "/api/v10/webhooks/44444444444444442":
-		body = `{"id":"44444444444444442","type":1,"guild_id":"` + d.expectedGuild + `","channel_id":"55555555555555552","user":{"id":"11111111111111113"}}`
 	case r.URL.Path == "/api/v10/users/@me/guilds":
 		body = `[{"id":"11111111111111111","name":"Synthetic Discord"},{"id":"11111111111111112","name":"Other Synthetic Discord"}]`
 	case r.URL.Path == "/api/v10/guilds/"+d.expectedGuild+"/members/11111111111111113":
@@ -540,7 +519,7 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			}
 		}
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
-		body = `[{"id":"55555555555555551","guild_id":"` + d.expectedGuild + `","type":0,"parent_id":"` + reviewerBrowserCategory + `","permission_overwrites":[]},{"id":"55555555555555552","guild_id":"` + d.expectedGuild + `","type":0,"parent_id":"` + reviewerBrowserCategory + `","permission_overwrites":[]}]`
+		body = `[{"id":"66666666666666661","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666662","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666663","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]}]`
 	default:
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:

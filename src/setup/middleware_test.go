@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -611,7 +612,11 @@ func TestLoginHandlerAcceptsStudioManagerAndHigherRoles(t *testing.T) {
 			resetSessions()
 			kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%q}}`, role)
+				payload, err := json.Marshal(map[string]any{"access_token": "browser-session-token", "user": map[string]any{"role": role}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.Write(payload)
 			})))
 			defer kitsu.Close()
 
@@ -802,12 +807,16 @@ func TestLoginHandlerWithDiscoveryHidesManualHostWhenEndpointIsAvailable(t *test
 }
 
 func TestLoginHandlerRejectsMissingOrBelowManagerRole(t *testing.T) {
-	for _, roleJSON := range []string{`"supervisor"`, `"user"`, `""`, `null`} {
-		t.Run(strings.Trim(roleJSON, `"`), func(t *testing.T) {
+	for _, role := range []any{"supervisor", "user", "", nil} {
+		t.Run(fmt.Sprintf("%v", role), func(t *testing.T) {
 			resetSessions()
 			kitsu := httptest.NewServer(zouFixture(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"access_token":"browser-session-token","user":{"role":%s}}`, roleJSON)
+				payload, err := json.Marshal(map[string]any{"access_token": "browser-session-token", "user": map[string]any{"role": role}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				w.Write(payload)
 			})))
 			defer kitsu.Close()
 
@@ -817,7 +826,7 @@ func TestLoginHandlerRejectsMissingOrBelowManagerRole(t *testing.T) {
 			rr := httptest.NewRecorder()
 			LoginHandler(kitsu.URL)(rr, req)
 			if rr.Code != http.StatusUnauthorized {
-				t.Fatalf("expected role %s to be rejected, got %d", roleJSON, rr.Code)
+				t.Fatalf("expected role %v to be rejected, got %d", role, rr.Code)
 			}
 		})
 	}

@@ -50,12 +50,11 @@ func TestSetupJSONWriteHandlersRejectGETWithBody(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://saved-kitsu.test:8080")
 	handlers := map[string]http.HandlerFunc{
-		"test-kitsu":    TestKitsuHandler(db),
-		"test-discord":  TestDiscordHandler(db),
-		"apply-project": ApplyProjectHandler(db, nil),
-		"notification":  TestNotificationHandler(db, nil),
-		"users":         SaveUserMappingHandler(db),
-		"checkers":      SaveCheckerMappingHandler(db),
+		"test-kitsu":   TestKitsuHandler(db),
+		"test-discord": TestDiscordHandler(db),
+		"notification": TestNotificationHandler(db, nil),
+		"users":        SaveUserMappingHandler(db),
+		"checkers":     SaveCheckerMappingHandler(db),
 	}
 	body := `{"hostname":"http://attacker.test","email":"a@b.test","password":"pw","project_id":"p1"}`
 	for name, h := range handlers {

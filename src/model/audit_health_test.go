@@ -3,7 +3,28 @@ package model
 import (
 	"testing"
 	"time"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+func newAuditHealthTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared&_busy_timeout=5000"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
 
 func TestRecentAuditHealthUsesTwentyFourHourSeverityPrecedence(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
@@ -23,7 +44,7 @@ func TestRecentAuditHealthUsesTwentyFourHourSeverityPrecedence(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			db := newRoutingTestDB(t)
+			db := newAuditHealthTestDB(t)
 			if err := db.AutoMigrate(&AuditLog{}); err != nil {
 				t.Fatal(err)
 			}

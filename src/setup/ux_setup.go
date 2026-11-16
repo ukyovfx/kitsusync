@@ -489,9 +489,7 @@ func isSetupComplete(diag SetupDiagnostics) bool {
 
 func hasReadyProductionRouting(db *gorm.DB) bool {
 	for _, project := range model.ListProjects(db) {
-		routes := model.ListProductionNotificationRoutes(db, project.KitsuProjectID)
-		config := model.FindProductionNotificationConfig(db, project.KitsuProjectID)
-		if config != nil && config.Enabled && len(model.ValidateProductionNotificationConfig(db, project.KitsuProjectID, routes)) == 0 {
+		if settings, ok, err := model.LoadProductionForumSettings(db, project.KitsuProjectID); err == nil && ok && len(settings.Routes) > 0 {
 			return true
 		}
 	}

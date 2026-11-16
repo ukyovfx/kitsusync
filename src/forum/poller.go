@@ -55,7 +55,12 @@ func (p Poller) PollProjects(payloads []kitsu.MessagePayload) (PollResult, error
 		if err != nil {
 			return result, err
 		}
-		if !ok || settings.Config.Mode != model.NotificationModeForum {
+		if !ok {
+			continue
+		}
+		if problems := model.ForumSettingsProblems(settings); len(problems) > 0 {
+			// Incomplete draft settings (e.g. leftovers from old Mode=lane data) must
+			// not be acted on; the old poller skipped them.
 			continue
 		}
 		result.Productions++

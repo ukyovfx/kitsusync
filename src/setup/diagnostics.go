@@ -166,10 +166,6 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		"Discord Bot Token が設定されるまでこの確認は保留されます。",
 		"This check is blocked until a Discord bot token is configured.",
 	)
-	projectWebhookFix := t(lang,
-		"まず Project Management で project routing と webhook を確認してください。",
-		"Review the project routing and webhook setup in Project Management, then rerun Diagnostics.",
-	)
 
 	if kitsuHost == "" {
 		checks = append(checks, diagCheck{
@@ -234,10 +230,6 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		})
 	}
 
-	botUserID := ""
-	webhookPermissionDetail := ""
-	webhookPermissionFix := ""
-	webhookPermissionMissing := false
 	if !botTokenMissing {
 		body, status, err := botDo("GET", discordAPI+"/users/@me", nil, botToken)
 		if err != nil {
@@ -253,7 +245,6 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 				Username string `json:"username"`
 			}
 			if json.Unmarshal(body, &result) == nil {
-				botUserID = result.ID
 				checks = append(checks, diagCheck{
 					Label:  t(lang, "Discord Botの有効性", "Discord bot valid"),
 					Status: "ok",
@@ -294,7 +285,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		checks = append(checks, diagCheck{
 			Label:  "Discord guild fallback (compatibility)",
 			Status: "ok",
-			Detail: t(lang, "互換用 fallback として設定されています。通常の通知経路は project-level Discord ID / webhook です。", "Configured as a compatibility fallback. The normal notification path uses project-level Discord IDs and webhooks."),
+			Detail: t(lang, "互換用 fallback として設定されています。通常の通知経路は Production ごとのフォーラム設定です。", "Configured as a compatibility fallback. The normal notification path is each Production's forum settings."),
 		})
 	}
 
@@ -302,13 +293,9 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		if botTokenBlocked {
 			checks = append(checks, diagCheck{Label: "Discord guild accessible", Status: "warn", Detail: blockedByBotToken, Fix: botSettingsFix})
 			checks = append(checks, diagCheck{Label: "Discord permissions (channels)", Status: "warn", Detail: blockedByBotToken, Fix: botSettingsFix})
-			webhookPermissionDetail = blockedByBotToken
-			webhookPermissionFix = botSettingsFix
 		} else if botTokenMissing {
 			checks = append(checks, diagCheck{Label: "Discord guild accessible", Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix})
 			checks = append(checks, diagCheck{Label: "Discord permissions (channels)", Status: "warn", Detail: blockedByMissingBotToken, Fix: configureBotSettingsFix})
-			webhookPermissionDetail = blockedByMissingBotToken
-			webhookPermissionFix = configureBotSettingsFix
 		} else {
 			_, status, err := botDo("GET", discordAPI+"/guilds/"+guildID, nil, botToken)
 			if err != nil {
@@ -373,32 +360,10 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 				})
 			}
 
-			if botUserID != "" {
-				permissions, permissionErr := fetchDiscordEffectivePermissions(guildID, botUserID, botToken)
-				if permissionErr == nil {
-					if permissions.ManageChannels && permissions.ManageWebhooks {
-						webhookPermissionDetail = "Discord role permissions include MANAGE_CHANNELS and MANAGE_WEBHOOKS."
-					} else {
-						missing := []string{}
-						if !permissions.ManageChannels {
-							missing = append(missing, "MANAGE_CHANNELS")
-						}
-						if !permissions.ManageWebhooks {
-							missing = append(missing, "MANAGE_WEBHOOKS")
-						}
-						webhookPermissionMissing = true
-						webhookPermissionDetail = "Discord role permissions are missing: " + strings.Join(missing, ", ")
-						webhookPermissionFix = "In Discord Developer Portal -> Bot, grant these permissions and re-invite the bot."
-					}
-				} else {
-					webhookPermissionDetail = "Could not retrieve Discord roles and bot membership to verify permissions."
-					webhookPermissionFix = t(lang, "permission bits を取得できなくても、必要なら Bot設定と Discord 権限を確認してください。", "Review Bot Settings and confirm the Discord server permissions manually.")
-				}
-			}
 		}
 	}
 
-	checks = append(checks, buildProjectWebhookCheck(
+	checks = append(checks, buildForumSettingsCheck(
 		lang,
 		db,
 		botTokenMissing,
@@ -407,10 +372,6 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		blockedByBotToken,
 		configureBotSettingsFix,
 		botSettingsFix,
-		projectWebhookFix,
-		webhookPermissionDetail,
-		webhookPermissionFix,
-		webhookPermissionMissing,
 	))
 	checks = append(checks, buildProjectDiscordResourceCheck(lang, db, botToken))
 
@@ -468,7 +429,7 @@ func buildProjectDiscordResourceCheck(lang string, db *gorm.DB, botToken string)
 	return diagCheck{Label: label, Status: "ok", Detail: t(lang, "各ProductionのGuild、category、保存済みchannel ownershipを確認しました。", "Each Production Guild, category, and saved channel ownership was verified.")}
 }
 
-func buildProjectWebhookCheck(
+func buildForumSettingsCheck(
 	lang string,
 	db *gorm.DB,
 	botTokenMissing bool,
@@ -477,12 +438,8 @@ func buildProjectWebhookCheck(
 	blockedByBotToken string,
 	configureBotSettingsFix string,
 	botSettingsFix string,
-	projectWebhookFix string,
-	webhookPermissionDetail string,
-	webhookPermissionFix string,
-	webhookPermissionMissing bool,
 ) diagCheck {
-	label := t(lang, "Discord project webhook", "Discord project webhooks")
+	label := t(lang, "フォーラム設定", "Forum settings")
 
 	if botTokenBlocked {
 		return diagCheck{Label: label, Status: "warn", Detail: blockedByBotToken, Fix: botSettingsFix}
@@ -496,65 +453,36 @@ func buildProjectWebhookCheck(
 		return diagCheck{
 			Label:  label,
 			Status: "warn",
-			Detail: t(lang, "project がまだないため、project-level webhook の準備状態は確認できません。", "Project webhook readiness cannot be confirmed yet because no project is configured."),
-			Fix:    projectWebhookFix,
+			Detail: t(lang, "project がまだないため、フォーラム設定の準備状態は確認できません。", "Forum settings readiness cannot be confirmed yet because no project is configured."),
+			Fix:    t(lang, "Productionを接続してから再確認してください。", "Connect a Production, then rerun Diagnostics."),
 		}
 	}
 
 	incompleteProjects := []string{}
 	missingProjects := []string{}
 	for _, project := range projects {
-		webhooks := model.ListProjectWebhooks(db, project.KitsuProjectID)
-		if len(webhooks) == 0 {
+		settings, ok, err := model.LoadProductionForumSettings(db, project.KitsuProjectID)
+		if err != nil || !ok {
 			missingProjects = append(missingProjects, project.Name)
 			continue
 		}
-
-		hasReady := false
-		hasIncomplete := false
-		for _, webhook := range webhooks {
-			if strings.TrimSpace(webhook.WebhookURL) != "" && strings.TrimSpace(webhook.DiscordChannelID) != "" {
-				hasReady = true
-				break
-			}
-			if strings.TrimSpace(webhook.WebhookURL) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" {
-				hasIncomplete = true
-			}
-		}
-
-		switch {
-		case hasReady:
-		case hasIncomplete:
+		if problems := model.ForumSettingsProblems(settings); len(problems) > 0 {
 			incompleteProjects = append(incompleteProjects, project.Name)
-		default:
-			missingProjects = append(missingProjects, project.Name)
 		}
 	}
 
 	if len(incompleteProjects) > 0 || len(missingProjects) > 0 {
-		detail := t(lang, "project webhook の設定が不足している project があります。", "Some projects still need project webhook setup.")
+		detail := t(lang, "フォーラム設定が不足している project があります。", "Some projects still need forum settings setup.")
 		if len(incompleteProjects) > 0 {
 			detail += " " + fmt.Sprintf(t(lang, "不完全な project: %s", "Incomplete projects: %s"), strings.Join(incompleteProjects, ", "))
 		}
 		if len(missingProjects) > 0 {
-			detail += " " + fmt.Sprintf(t(lang, "webhook 未設定の project: %s", "Projects without webhooks: %s"), strings.Join(missingProjects, ", "))
+			detail += " " + fmt.Sprintf(t(lang, "フォーラム設定未保存の project: %s", "Projects without forum settings: %s"), strings.Join(missingProjects, ", "))
 		}
-		return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: projectWebhookFix}
+		return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: t(lang, "Productionのフォーラム設定を開いて内容を確認し、保存してください。", "Open the Production's forum settings, review them, and save.")}
 	}
 
-	detail := t(lang, "Project webhook は作成済みです。通知配信は project-level webhook を使用します。", "Project webhooks are configured. Delivery uses project-level webhooks.")
-	if webhookPermissionDetail != "" {
-		detail += " " + webhookPermissionDetail
-	}
-
-	status := "ok"
-	fix := ""
-	if webhookPermissionMissing {
-		status = "warn"
-		fix = webhookPermissionFix
-	}
-
-	return diagCheck{Label: label, Status: status, Detail: detail, Fix: fix}
+	return diagCheck{Label: label, Status: "ok", Detail: t(lang, "各Productionのフォーラム設定は完了しています。", "Every Production's forum settings are complete.")}
 }
 
 func buildKitsuRuntimeCheck(lang string, db *gorm.DB, kitsuHost, kitsuSettingsFix string) diagCheck {

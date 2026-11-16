@@ -1,8 +1,6 @@
 package setup
 
 import (
-	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -50,24 +48,4 @@ func TestNormalizeKitsuURLInsecureFlagOverride(t *testing.T) {
 	}
 }
 
-// TestRenderFormEscapesKitsuProjectNames reproduces the round-3 stored-XSS
-// finding: /bot/setup?legacy=1 rendered Kitsu project names unescaped, so a
-// malicious project name could inject <script> and break out of the
-// data-name attribute with <svg onload>.
-func TestRenderFormEscapesKitsuProjectNames(t *testing.T) {
-	db := newIAViewDB(t)
-	malicious := `<script>alert(1)</script><svg onload=alert(2) data-x="`
-	kitsuProjects := []KitsuProject{{ID: `p"><svg onload=alert(3)>`, Name: malicious}}
 
-	html := renderForm(httptest.NewRequest("GET", "/bot/setup?legacy=1", nil), nil, kitsuProjects, map[string]bool{}, db, "", "", "", "", "")
-
-	if strings.Contains(html, malicious) {
-		t.Fatal("project name was rendered unescaped (script/svg injection)")
-	}
-	if strings.Contains(html, `p"><svg onload=alert(3)>`) {
-		t.Fatal("project ID broke out of the value attribute")
-	}
-	if !strings.Contains(html, `&lt;script&gt;`) {
-		t.Fatal("expected HTML-escaped project name in the output")
-	}
-}

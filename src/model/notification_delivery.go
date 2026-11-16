@@ -2,9 +2,7 @@ package model
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -27,17 +25,6 @@ const (
 	DeliveryLegacyUnknown   = "legacy_unknown"
 	DeliveryRecorded        = "recorded"
 
-	// Notification lane kinds. Empty means the legacy channel webhook lane.
-	LaneChannel    = "channel"
-	LaneDM         = "dm"
-	LaneRecordOnly = "record_only"
-
-	// NotificationUnknownAutoResolveAfter is how long an unknown delivery row
-	// may block its task before it is resolved to terminal. It must stay far
-	// above the Discord send timeout (15s) plus 429 backoff so a genuinely
-	// in-flight send is never resolved out from under itself.
-	NotificationUnknownAutoResolveAfter = 10 * time.Minute
-
 	ChannelDeletionPending   = "pending"
 	ChannelDeletionComplete  = "complete"
 	ChannelDeletionNeedsHelp = "needs_help"
@@ -48,37 +35,7 @@ const (
 	NotificationMutationReorderHelp  = "reorder_needs_help"
 )
 
-// laneTypeOrDefault normalizes the delivery lane. Empty means the legacy
-// channel webhook lane, so existing callers keep their behavior.
-func laneTypeOrDefault(lane string) string {
-	lane = strings.TrimSpace(strings.ToLower(lane))
-	switch lane {
-	case LaneDM, LaneRecordOnly:
-		return lane
-	default:
-		return LaneChannel
-	}
-}
-
-// NormalizeLaneKind maps any submitted lane value onto the stored lane kinds.
-// Empty and unknown values keep the legacy channel lane.
-func NormalizeLaneKind(lane string) string {
-	return laneTypeOrDefault(lane)
-}
-
-// destinationGuildForLane returns the guild ID for channel lanes and the
-// empty string for DM and record-only lanes, which have no guild scope.
-func destinationGuildForLane(intent NotificationDeliveryIntent) string {
-	if laneTypeOrDefault(intent.LaneType) == "channel" {
-		return strings.TrimSpace(intent.GuildID)
-	}
-	return ""
-}
-
 var (
-	ErrDeliveryIdentityConflict             = errors.New("notification delivery identity conflict")
-	ErrDeliveryUnavailable                  = errors.New("notification delivery is not safely dispatchable")
-	ErrDeliveryAttemptConflict              = errors.New("notification delivery attempt conflict")
 	ErrChannelDeletionConflict              = errors.New("managed channel deletion conflict")
 	ErrNotificationDeliveryInFlight         = errors.New("notification delivery is in flight")
 	ErrNotificationMutationRecoveryRequired = errors.New("production notification mutation requires recovery")
@@ -124,8 +81,8 @@ type NotificationDeliveryEvent struct {
 	// Lifecycle cleanup implements the channel-as-queue rule: when a task
 	// leaves WFA, its waiting-for-check post is deleted. The flags mirror the
 	// prior-message cleanup machinery so the sweeper can claim work safely.
-	LifecycleCleanupPending  bool       `gorm:"not null;default:false;index"`
-	LifecycleCleanupInFlight bool       `gorm:"not null;default:false;index"`
+	LifecycleCleanupPending  bool `gorm:"not null;default:false;index"`
+	LifecycleCleanupInFlight bool `gorm:"not null;default:false;index"`
 	LifecycleDeletedAt       *time.Time
 	FailureClass             string
 	SupersededByEventID      string `gorm:"size:64;index"`
@@ -171,6 +128,31 @@ func (ProductionNotificationWriteLock) TableName() string {
 	return "production_notification_write_locks"
 }
 
+func EnsureNoInFlightNotificationDeliveries(tx *gorm.DB, productionID string) error {
+	var count int64
+	if err := tx.Model(&NotificationDeliveryEvent{}).Where("production_id = ? AND disposition = ?", strings.TrimSpace(productionID), DeliveryInFlight).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrNotificationDeliveryInFlight
+	}
+	return nil
+}
+
+// notificationWebhookID extracts the webhook snowflake from a trusted
+// discord.com webhook URL; empty when the URL is not a canonical webhook URL.
+func notificationWebhookID(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host != "discord.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(parts) != 4 || parts[0] != "api" || parts[1] != "webhooks" || parts[2] == "" || parts[3] == "" {
+		return ""
+	}
+	return strings.TrimSpace(parts[2])
+}
+
 func AcquireProductionNotificationWriteLock(tx *gorm.DB, productionID string) error {
 	productionID = strings.TrimSpace(productionID)
 	if tx == nil || productionID == "" {
@@ -189,18 +171,6 @@ func AcquireProductionNotificationWriteLock(tx *gorm.DB, productionID string) er
 	}
 	return nil
 }
-
-func EnsureNoInFlightNotificationDeliveries(tx *gorm.DB, productionID string) error {
-	var count int64
-	if err := tx.Model(&NotificationDeliveryEvent{}).Where("production_id = ? AND disposition = ?", strings.TrimSpace(productionID), DeliveryInFlight).Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return ErrNotificationDeliveryInFlight
-	}
-	return nil
-}
-
 func EnsureNoUnresolvedNotificationDeliveries(tx *gorm.DB, productionID string) error {
 	var count int64
 	if err := tx.Model(&NotificationDeliveryEvent{}).Where("production_id = ? AND disposition IN ?", strings.TrimSpace(productionID), []string{DeliveryPending, DeliveryRetryable, DeliveryInFlight, DeliveryUnknown}).Count(&count).Error; err != nil {
@@ -211,7 +181,6 @@ func EnsureNoUnresolvedNotificationDeliveries(tx *gorm.DB, productionID string) 
 	}
 	return nil
 }
-
 func EnsureProductionNotificationMutationIdle(tx *gorm.DB, productionID, allowedToken string) error {
 	var row ProductionNotificationWriteLock
 	err := tx.Where("production_id = ?", strings.TrimSpace(productionID)).First(&row).Error
@@ -284,59 +253,6 @@ func BeginProductionDeletionMutation(db *gorm.DB, productionID string) (string, 
 // reorder so callers can reconcile Discord to the current durable route order.
 // The caller must verify every destination and complete or re-quarantine the
 // operation with FinishProductionNotificationExternalMutation.
-func BeginProductionNotificationOrderRecovery(db *gorm.DB, productionID string) (string, error) {
-	if db == nil || strings.TrimSpace(productionID) == "" {
-		return "", gorm.ErrInvalidData
-	}
-	token, err := NewProductionNotificationMutationToken()
-	if err != nil {
-		return "", err
-	}
-	productionID = strings.TrimSpace(productionID)
-	var claimedToken string
-	err = db.Transaction(func(tx *gorm.DB) error {
-		if err := AcquireProductionNotificationWriteLock(tx, productionID); err != nil {
-			return err
-		}
-		// Reconciliation changes channel positions only; pending/unknown delivery
-		// intents keep their original destinations. An actively executing send is
-		// the only delivery state that must block this operation.
-		if err := EnsureNoInFlightNotificationDeliveries(tx, productionID); err != nil {
-			return err
-		}
-		var lock ProductionNotificationWriteLock
-		if err := tx.Where("production_id = ?", productionID).First(&lock).Error; err != nil {
-			return err
-		}
-		if lock.MutationState != NotificationMutationReorderHelp {
-			return ErrNotificationMutationRecoveryRequired
-		}
-		claim := tx.Model(&ProductionNotificationWriteLock{}).Where("production_id = ? AND mutation_state = ?", productionID, NotificationMutationReorderHelp)
-		if strings.TrimSpace(lock.MutationToken) == "" {
-			// Older quarantines may have been persisted before the mutation token
-			// was retained. Claim only that exact help state with an empty/NULL
-			// token, then replace it atomically with a fresh recovery token.
-			claim = claim.Where("mutation_token = '' OR mutation_token IS NULL")
-		} else {
-			claim = claim.Where("mutation_token = ?", lock.MutationToken)
-		}
-		result := claim.Updates(map[string]any{
-			"mutation_state": NotificationMutationReordering,
-			"mutation_token": token,
-			"mutation_at":    time.Now().UTC(),
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrNotificationMutationRecoveryRequired
-		}
-		claimedToken = token
-		return nil
-	})
-	return claimedToken, err
-}
-
 func FinishProductionDeletionMutation(db *gorm.DB, productionID, token string, needsHelp bool) error {
 	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(token) == "" {
 		return gorm.ErrInvalidData
@@ -361,7 +277,6 @@ func FinishProductionDeletionMutation(db *gorm.DB, productionID, token string, n
 		return nil
 	})
 }
-
 func EnsureNoUnresolvedManagedChannelDeletions(tx *gorm.DB, productionID string) error {
 	var count int64
 	if err := tx.Model(&ManagedChannelDeletion{}).Where("production_id = ? AND disposition <> ?", strings.TrimSpace(productionID), ChannelDeletionComplete).Count(&count).Error; err != nil {
@@ -372,7 +287,6 @@ func EnsureNoUnresolvedManagedChannelDeletions(tx *gorm.DB, productionID string)
 	}
 	return nil
 }
-
 func FindManagedChannelDeletion(db *gorm.DB, webhookRowID uint) (*ManagedChannelDeletion, error) {
 	if db == nil || webhookRowID == 0 {
 		return nil, gorm.ErrInvalidData
@@ -388,47 +302,6 @@ func FindManagedChannelDeletion(db *gorm.DB, webhookRowID uint) (*ManagedChannel
 	return &row, nil
 }
 
-func CanDeleteProjectWebhookWithoutRemovingLastRoute(db *gorm.DB, productionID string, webhookRowID uint) (bool, error) {
-	if db == nil || strings.TrimSpace(productionID) == "" || webhookRowID == 0 {
-		return false, gorm.ErrInvalidData
-	}
-	var total, affected int64
-	if err := db.Model(&ProductionNotificationRoute{}).Where("production_id = ?", strings.TrimSpace(productionID)).Count(&total).Error; err != nil {
-		return false, err
-	}
-	if err := db.Model(&ProductionNotificationRoute{}).Where("production_id = ? AND destination_webhook_id = ?", strings.TrimSpace(productionID), webhookRowID).Count(&affected).Error; err != nil {
-		return false, err
-	}
-	return affected == 0 || total > affected, nil
-}
-
-type NotificationDeliveryIntent struct {
-	TaskID               string
-	ProductionID         string
-	TaskTypeID           string
-	TaskStatus           string
-	TaskUpdatedAt        string
-	CommentID            string
-	CommentUpdatedAt     string
-	IsAssignNotification bool
-	LaneType             string
-	DestinationTarget    string
-	Payload              []byte
-	WebhookRowID         uint
-	GuildID              string
-	ChannelID            string
-	DiscordWebhookID     string
-	NotificationRevision string
-	ThreadName           string
-	PriorMessageID       string
-	PriorThreadID        string
-}
-
-type DeliveryAttempt struct {
-	Event NotificationDeliveryEvent
-	ID    string
-}
-
 type DeliveryDiagnostic struct {
 	EventID          string    `json:"event_id"`
 	SuccessorEventID string    `json:"successor_event_id,omitempty"`
@@ -439,267 +312,6 @@ type DeliveryDiagnostic struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-type NotificationDestinationIdentity struct {
-	WebhookRowID uint
-	GuildID      string
-	ChannelID    string
-	WebhookID    string
-	LaneType     string
-}
-
-func NotificationEventIdentity(intent NotificationDeliveryIntent) string {
-	data, _ := json.Marshal([]string{
-		strings.TrimSpace(intent.ProductionID), strings.TrimSpace(intent.TaskID), strings.TrimSpace(intent.TaskTypeID),
-		strings.ToUpper(strings.TrimSpace(intent.TaskStatus)), strings.TrimSpace(intent.TaskUpdatedAt), strings.TrimSpace(intent.CommentID),
-		strings.TrimSpace(intent.CommentUpdatedAt), fmt.Sprint(intent.IsAssignNotification),
-		// Normalized lane and resolved target separate journal rows per delivery
-		// lane so a DM fallback after a failed primary send never collides with
-		// it. Normalization keeps content-only callers (which pass no lane) on
-		// the same identity as channel-lane rows.
-		laneTypeOrDefault(intent.LaneType), strings.TrimSpace(intent.DestinationTarget),
-	})
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-// MigrateLegacyNotificationEventIdentities re-derives the event ID of every
-// still-resumable delivery row (pending/retryable) that was written before the
-// lane-aware identity scheme. Without this, a v0.5.4 ledger's rows would never
-// match a fresh lookup and would permanently block newer intents for the same
-// task. Rows whose recomputed ID is already taken are retired as terminal so
-// they cannot block deliveries. In-flight and unknown rows are deliberately
-// left untouched: startup quarantines them to unknown and their evidence must
-// keep its original identity for reconciliation.
-func MigrateLegacyNotificationEventIdentities(db *gorm.DB) error {
-	if db == nil {
-		return gorm.ErrInvalidDB
-	}
-	var rows []NotificationDeliveryEvent
-	if err := db.Where("disposition IN ?", []string{DeliveryPending, DeliveryRetryable}).Find(&rows).Error; err != nil {
-		return err
-	}
-	for _, row := range rows {
-		intent := NotificationDeliveryIntent{
-			TaskID: row.TaskID, ProductionID: row.ProductionID, TaskTypeID: row.TaskTypeID, TaskStatus: row.TaskStatus,
-			TaskUpdatedAt: row.TaskUpdatedAt, CommentID: row.CommentID, CommentUpdatedAt: row.CommentUpdatedAt,
-			IsAssignNotification: row.IsAssignNotification, LaneType: row.LaneType, DestinationTarget: row.DestinationTarget,
-		}
-		newID := NotificationEventIdentity(intent)
-		if newID == row.EventID {
-			continue
-		}
-		err := db.Transaction(func(tx *gorm.DB) error {
-			var taken int64
-			if err := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ?", newID).Count(&taken).Error; err != nil {
-				return err
-			}
-			if taken > 0 {
-				return tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ?", row.ID, row.EventID).
-					Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "superseded_by_lane_aware_identity"}).Error
-			}
-			return tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ?", row.ID, row.EventID).
-				Update("event_id", newID).Error
-		})
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func notificationEventTime(taskUpdatedAt, commentUpdatedAt string) (time.Time, bool) {
-	var latest time.Time
-	for _, raw := range []string{taskUpdatedAt, commentUpdatedAt} {
-		if strings.TrimSpace(raw) == "" {
-			continue
-		}
-		var parsed time.Time
-		var err error
-		for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05.999999999"} {
-			parsed, err = time.Parse(layout, strings.TrimSpace(raw))
-			if err == nil {
-				break
-			}
-		}
-		if err != nil {
-			continue
-		}
-		if latest.IsZero() || parsed.After(latest) {
-			latest = parsed
-		}
-	}
-	return latest, !latest.IsZero()
-}
-
-func supersedeKnownRejectedNotificationEvents(tx *gorm.DB, intent NotificationDeliveryIntent, now time.Time) (int64, error) {
-	if tx == nil || strings.TrimSpace(intent.TaskID) == "" || strings.TrimSpace(intent.ProductionID) == "" {
-		return 0, gorm.ErrInvalidData
-	}
-	observedAt, ok := notificationEventTime(intent.TaskUpdatedAt, intent.CommentUpdatedAt)
-	if !ok {
-		return 0, nil
-	}
-	newEventID := NotificationEventIdentity(intent)
-	var retryable []NotificationDeliveryEvent
-	if err := tx.Where("task_id = ? AND production_id = ? AND event_id <> ? AND disposition = ? AND failure_class = ? AND attempt_count > 0 AND attempt_id <> ? AND discord_message_id = '' AND delivered_at IS NULL AND payload_redacted_at IS NULL",
-		strings.TrimSpace(intent.TaskID), strings.TrimSpace(intent.ProductionID), newEventID, DeliveryRetryable, "rate_limited", "").Find(&retryable).Error; err != nil {
-		return 0, err
-	}
-	var count int64
-	for _, prior := range retryable {
-		priorAt, valid := notificationEventTime(prior.TaskUpdatedAt, prior.CommentUpdatedAt)
-		if !valid || !observedAt.After(priorAt) {
-			continue
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).
-			Where("id = ? AND event_id = ? AND disposition = ? AND failure_class = ?", prior.ID, prior.EventID, DeliveryRetryable, "rate_limited").
-			UpdateColumns(map[string]any{
-				"disposition":            DeliveryTerminalFailure,
-				"failure_class":          "superseded_by_newer_kitsu_event",
-				"superseded_by_event_id": newEventID,
-				"updated_at":             now.UTC(),
-			})
-		if result.Error != nil {
-			return count, result.Error
-		}
-		count += result.RowsAffected
-	}
-	return count, nil
-}
-
-// SupersedeObsoleteKnownRejectedNotificationDeliveries records a later Kitsu
-// event as the explicit terminal successor to any older, known-rejected (429)
-// event for that task. It never resends stale content and never discards the
-// prior payload or attempt evidence. Unparseable timestamps fail closed.
-func SupersedeObsoleteKnownRejectedNotificationDeliveries(db *gorm.DB, intent NotificationDeliveryIntent) (int64, error) {
-	if db == nil {
-		return 0, gorm.ErrInvalidDB
-	}
-	var count int64
-	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := AcquireProductionNotificationWriteLock(tx, intent.ProductionID); err != nil {
-			return err
-		}
-		if err := EnsureProductionNotificationMutationIdle(tx, intent.ProductionID, ""); err != nil {
-			return err
-		}
-		var err error
-		count, err = supersedeKnownRejectedNotificationEvents(tx, intent, time.Now().UTC())
-		return err
-	})
-	return count, err
-}
-
-func notificationDestinationFingerprint(guildID, channelID, webhookID string) string {
-	data, _ := json.Marshal([]string{strings.TrimSpace(guildID), strings.TrimSpace(channelID), strings.TrimSpace(webhookID)})
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
-func notificationWebhookID(raw string) string {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Scheme != "https" || parsed.Host != "discord.com" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return ""
-	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) != 4 || parts[0] != "api" || parts[1] != "webhooks" || parts[2] == "" || parts[3] == "" {
-		return ""
-	}
-	return strings.TrimSpace(parts[2])
-}
-
-func ResolveNotificationDestination(db *gorm.DB, productionID, taskTypeID, webhookURL, discordWebhookID string) (NotificationDestinationIdentity, error) {
-	var identity NotificationDestinationIdentity
-	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(taskTypeID) == "" || strings.TrimSpace(webhookURL) == "" || strings.TrimSpace(discordWebhookID) == "" {
-		return identity, gorm.ErrInvalidData
-	}
-	var project Project
-	if err := db.Where("kitsu_project_id = ?", strings.TrimSpace(productionID)).First(&project).Error; err != nil {
-		return identity, err
-	}
-	var route ProductionNotificationRoute
-	if err := db.Where("production_id = ? AND task_type_id = ?", strings.TrimSpace(productionID), strings.TrimSpace(taskTypeID)).First(&route).Error; err != nil {
-		return identity, err
-	}
-	var webhook ProjectWebhook
-	if err := db.Where("id = ? AND kitsu_project_id = ? AND webhook_url = ?", route.DestinationWebhookID, strings.TrimSpace(productionID), strings.TrimSpace(webhookURL)).First(&webhook).Error; err != nil {
-		return identity, err
-	}
-	if project.ValidationOnly || strings.TrimSpace(project.DiscordGuildID) == "" || strings.TrimSpace(webhook.DiscordChannelID) == "" ||
-		(route.DestinationChannelID != "" && strings.TrimSpace(route.DestinationChannelID) != strings.TrimSpace(webhook.DiscordChannelID)) {
-		return identity, ErrDeliveryUnavailable
-	}
-	var count int64
-	if err := db.Model(&ManagedChannelDeletion{}).Where("webhook_row_id = ? AND disposition <> ?", webhook.ID, ChannelDeletionComplete).Count(&count).Error; err != nil {
-		return identity, err
-	}
-	if count != 0 {
-		return identity, ErrDeliveryUnavailable
-	}
-	return NotificationDestinationIdentity{WebhookRowID: webhook.ID, GuildID: strings.TrimSpace(project.DiscordGuildID), ChannelID: strings.TrimSpace(webhook.DiscordChannelID), WebhookID: strings.TrimSpace(discordWebhookID), LaneType: laneTypeOrDefault(route.DestinationKind)}, nil
-}
-
-func LatestDeliveredNotificationForDestination(db *gorm.DB, taskID string, identity NotificationDestinationIdentity) (*NotificationDeliveryEvent, error) {
-	if db == nil {
-		return nil, gorm.ErrInvalidDB
-	}
-	var event NotificationDeliveryEvent
-	err := db.Where("task_id = ? AND destination_fingerprint = ? AND disposition = ?", strings.TrimSpace(taskID), notificationDestinationFingerprint(identity.GuildID, identity.ChannelID, identity.WebhookID), DeliveryDelivered).Order("delivered_at desc, id desc").First(&event).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &event, nil
-}
-
-func NotificationDeliveryDisposition(db *gorm.DB, eventID string) (string, error) {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return "", gorm.ErrInvalidData
-	}
-	var event NotificationDeliveryEvent
-	err := db.Select("disposition").Where("event_id = ?", eventID).First(&event).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", nil
-	}
-	return event.Disposition, err
-}
-
-// HasUnresolvedNotificationDeliveryForTask reports whether the task still has
-// a pending or retryable delivery on any lane. The poll loop re-offers such
-// tasks so the delivery resumes at the lane it failed on, regardless of which
-// lane identity the row was written under.
-func HasUnresolvedNotificationDeliveryForTask(db *gorm.DB, taskID string) (bool, error) {
-	if db == nil {
-		return false, gorm.ErrInvalidDB
-	}
-	var count int64
-	err := db.Model(&NotificationDeliveryEvent{}).Where("task_id = ? AND disposition IN ?", strings.TrimSpace(taskID), []string{DeliveryPending, DeliveryRetryable}).Count(&count).Error
-	return count > 0, err
-}
-
-func ListPendingNotificationDeliveries(db *gorm.DB, limit int) ([]NotificationDeliveryEvent, error) {
-	if db == nil {
-		return nil, gorm.ErrInvalidDB
-	}
-	var rows []NotificationDeliveryEvent
-	query := db.Where("disposition IN ?", []string{DeliveryPending, DeliveryRetryable}).Order("created_at asc, id asc")
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-	if err := query.Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	return rows, nil
-}
-
-// RedactDeliveredNotificationPayloads clears only old, successfully delivered
-// payload bodies whose prior-message cleanup has completed. Event identity,
-// payload hash, destination identity, disposition and Discord message/thread
-// checkpoints remain durable so a repeated Kitsu observation cannot resend.
-// The bounded conditional update is safe to run repeatedly and never loads or
-// logs the payload text.
 func RedactDeliveredNotificationPayloads(db *gorm.DB, deliveredBefore, redactedAt time.Time, limit int) (int64, error) {
 	if db == nil || deliveredBefore.IsZero() || redactedAt.IsZero() || limit <= 0 {
 		return 0, gorm.ErrInvalidData
@@ -730,849 +342,6 @@ func RedactDeliveredNotificationPayloads(db *gorm.DB, deliveredBefore, redactedA
 	})
 	return rowsAffected, err
 }
-
-func FindNotificationDeliveryByID(db *gorm.DB, eventID string) (*NotificationDeliveryEvent, error) {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return nil, gorm.ErrInvalidData
-	}
-	var row NotificationDeliveryEvent
-	err := db.Where("event_id = ?", eventID).First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &row, nil
-}
-
-// FindProductionGlobalWebhook returns the production-wide ("*") webhook row,
-// which serves as the global-channel fallback destination. Returns nil when
-// the production has no global webhook configured.
-func FindProductionGlobalWebhook(db *gorm.DB, productionID string) *ProjectWebhook {
-	if db == nil || strings.TrimSpace(productionID) == "" {
-		return nil
-	}
-	var wh ProjectWebhook
-	if err := db.Where("kitsu_project_id = ? AND task_type = ?", strings.TrimSpace(productionID), "*").First(&wh).Error; err != nil {
-		return nil
-	}
-	return &wh
-}
-
-// RetargetNotificationDelivery moves a pending or retryable delivery that has
-// never been accepted by Discord to the next fallback destination. It keeps
-// the same content identity so retries resume at the current stage.
-func RetargetNotificationDelivery(db *gorm.DB, eventID, lane, target string, webhookRowID uint, guildID, channelID, discordWebhookID string) error {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var event NotificationDeliveryEvent
-		if err := tx.Where("event_id = ?", strings.TrimSpace(eventID)).First(&event).Error; err != nil {
-			return err
-		}
-		if event.Disposition != DeliveryPending && event.Disposition != DeliveryRetryable || event.DiscordMessageID != "" || event.DeliveredAt != nil {
-			return ErrDeliveryAttemptConflict
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ? AND disposition IN ?", event.ID, strings.TrimSpace(eventID), []string{DeliveryPending, DeliveryRetryable}).Updates(map[string]any{
-			"lane_type": laneTypeOrDefault(lane), "destination_target": strings.TrimSpace(target),
-			"webhook_row_id": webhookRowID, "destination_guild_id": strings.TrimSpace(guildID),
-			"destination_channel_id": strings.TrimSpace(channelID), "destination_webhook_id": strings.TrimSpace(discordWebhookID),
-			"destination_fingerprint": notificationDestinationFingerprint(guildID, channelID, discordWebhookID),
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-}
-
-// RecordGlobalFallbackOutcome records the outcome of the single-shot
-// global-channel fallback on the still-pending delivery event.
-func RecordGlobalFallbackOutcome(db *gorm.DB, eventID string, webhookRowID uint, channelID string, delivered bool, messageID string) error {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var event NotificationDeliveryEvent
-		if err := tx.Where("event_id = ?", strings.TrimSpace(eventID)).First(&event).Error; err != nil {
-			return err
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
-			return err
-		}
-		updates := map[string]any{
-			"lane_type": "channel", "destination_target": strings.TrimSpace(channelID),
-			"webhook_row_id": webhookRowID, "destination_guild_id": event.DestinationGuildID,
-			"destination_channel_id": strings.TrimSpace(channelID), "destination_webhook_id": event.DestinationWebhookID,
-			"destination_fingerprint": notificationDestinationFingerprint(event.DestinationGuildID, strings.TrimSpace(channelID), event.DestinationWebhookID),
-		}
-		if delivered {
-			updates["disposition"] = DeliveryDelivered
-			updates["discord_message_id"] = strings.TrimSpace(messageID)
-			updates["delivered_at"] = time.Now().UTC()
-		} else {
-			updates["disposition"] = DeliveryTerminalFailure
-			updates["failure_class"] = "delivery_fallback_exhausted"
-		}
-		result2 := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ? AND disposition IN ?", event.ID, strings.TrimSpace(eventID), []string{DeliveryPending, DeliveryRetryable}).Updates(updates)
-		if result2.Error != nil {
-			return result2.Error
-		}
-		if result2.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-}
-
-func PrepareNotificationDelivery(db *gorm.DB, intent NotificationDeliveryIntent) (*NotificationDeliveryEvent, error) {
-	lane := laneTypeOrDefault(intent.LaneType)
-	if db == nil || strings.TrimSpace(intent.TaskID) == "" || strings.TrimSpace(intent.ProductionID) == "" ||
-		strings.TrimSpace(intent.TaskTypeID) == "" || len(intent.Payload) == 0 {
-		return nil, gorm.ErrInvalidData
-	}
-	if lane == "channel" && (intent.WebhookRowID == 0 || strings.TrimSpace(intent.GuildID) == "" ||
-		strings.TrimSpace(intent.ChannelID) == "" || strings.TrimSpace(intent.DiscordWebhookID) == "") {
-		return nil, gorm.ErrInvalidData
-	}
-	if lane == "dm" && (strings.TrimSpace(intent.ChannelID) == "" || strings.TrimSpace(intent.DestinationTarget) == "") {
-		return nil, gorm.ErrInvalidData
-	}
-	var payload any
-	if err := json.Unmarshal(intent.Payload, &payload); err != nil {
-		return nil, gorm.ErrInvalidData
-	}
-	eventID := NotificationEventIdentity(intent)
-	payloadSum := sha256.Sum256(intent.Payload)
-	row := NotificationDeliveryEvent{
-		EventID: eventID, TaskID: strings.TrimSpace(intent.TaskID), ProductionID: strings.TrimSpace(intent.ProductionID),
-		TaskTypeID: strings.TrimSpace(intent.TaskTypeID), TaskStatus: strings.TrimSpace(intent.TaskStatus),
-		TaskUpdatedAt: intent.TaskUpdatedAt, CommentID: intent.CommentID, CommentUpdatedAt: intent.CommentUpdatedAt,
-		IsAssignNotification: intent.IsAssignNotification, LaneType: lane, DestinationTarget: strings.TrimSpace(intent.DestinationTarget),
-		PayloadJSON: string(intent.Payload), PayloadSHA256: hex.EncodeToString(payloadSum[:]),
-		WebhookRowID: intent.WebhookRowID, DestinationGuildID: strings.TrimSpace(intent.GuildID),
-		DestinationChannelID: strings.TrimSpace(intent.ChannelID), DestinationWebhookID: strings.TrimSpace(intent.DiscordWebhookID),
-		DestinationFingerprint: notificationDestinationFingerprint(intent.GuildID, intent.ChannelID, intent.DiscordWebhookID),
-		NotificationRevision:   strings.TrimSpace(intent.NotificationRevision),
-		Disposition:            DeliveryPending, ThreadName: intent.ThreadName, PriorMessageID: intent.PriorMessageID, PriorThreadID: intent.PriorThreadID,
-	}
-	var identityConflict bool
-	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := AcquireProductionNotificationWriteLock(tx, intent.ProductionID); err != nil {
-			return err
-		}
-		if err := EnsureProductionNotificationMutationIdle(tx, intent.ProductionID, ""); err != nil {
-			return err
-		}
-		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, intent.ProductionID); err != nil {
-			return err
-		}
-		if _, err := supersedeKnownRejectedNotificationEvents(tx, intent, time.Now().UTC()); err != nil {
-			return err
-		}
-		var existing NotificationDeliveryEvent
-		err := tx.Where("event_id = ?", eventID).First(&existing).Error
-		if err == nil {
-			if existing.DestinationFingerprint != row.DestinationFingerprint || existing.WebhookRowID != row.WebhookRowID || existing.PayloadSHA256 != row.PayloadSHA256 || existing.NotificationRevision != row.NotificationRevision {
-				conflictAt := time.Now().UTC()
-				update := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND event_id = ?", existing.ID, eventID).
-					UpdateColumns(map[string]any{"identity_conflict_count": gorm.Expr("identity_conflict_count + 1"), "identity_conflict_at": conflictAt})
-				if update.Error != nil {
-					return update.Error
-				}
-				if update.RowsAffected != 1 {
-					return ErrProductionNotificationRevisionConflict
-				}
-				// A rate-limit response is an explicit Discord rejection. It is safe
-				// to refresh that never-accepted intent from the current Kitsu render
-				// and currently resolved destination. Unknown, in-flight, delivered,
-				// and other terminal records retain their immutable delivery evidence.
-				if existing.Disposition == DeliveryRetryable && existing.FailureClass == "rate_limited" &&
-					existing.AttemptCount > 0 && existing.AttemptID != "" && existing.DiscordMessageID == "" && existing.DeliveredAt == nil && existing.PayloadRedactedAt == nil {
-					result := tx.Model(&NotificationDeliveryEvent{}).
-						Where("id = ? AND event_id = ? AND disposition = ? AND failure_class = ? AND discord_message_id = ?", existing.ID, eventID, DeliveryRetryable, "rate_limited", "").
-						UpdateColumns(map[string]any{
-							"task_id": row.TaskID, "production_id": row.ProductionID, "task_type_id": row.TaskTypeID,
-							"task_status": row.TaskStatus, "task_updated_at": row.TaskUpdatedAt, "comment_id": row.CommentID,
-							"comment_updated_at": row.CommentUpdatedAt, "is_assign_notification": row.IsAssignNotification,
-							"payload_json": row.PayloadJSON, "payload_sha256": row.PayloadSHA256, "payload_redacted_at": nil,
-							"webhook_row_id": row.WebhookRowID, "destination_guild_id": row.DestinationGuildID,
-							"destination_channel_id": row.DestinationChannelID, "destination_webhook_id": row.DestinationWebhookID,
-							"destination_fingerprint": row.DestinationFingerprint, "notification_revision": row.NotificationRevision,
-							"thread_name": row.ThreadName, "prior_message_id": row.PriorMessageID, "prior_thread_id": row.PriorThreadID,
-							"disposition": DeliveryPending, "failure_class": "fresh_intent_after_known_rejection", "updated_at": conflictAt,
-						})
-					if result.Error != nil {
-						return result.Error
-					}
-					if result.RowsAffected != 1 {
-						return ErrProductionNotificationRevisionConflict
-					}
-					if err := tx.Where("id = ?", existing.ID).First(&row).Error; err != nil {
-						return err
-					}
-					return nil
-				}
-				identityConflict = true
-				row = existing
-				return nil
-			}
-			row = existing
-			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		var count int64
-		if err := tx.Model(&ManagedChannelDeletion{}).Where("guild_id = ? AND channel_id = ? AND discord_webhook_id = ? AND disposition <> ?", row.DestinationGuildID, row.DestinationChannelID, row.DestinationWebhookID, ChannelDeletionComplete).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
-			return ErrDeliveryUnavailable
-		}
-		return tx.Create(&row).Error
-	})
-	if err != nil {
-		return nil, err
-	}
-	if identityConflict {
-		return &row, ErrDeliveryIdentityConflict
-	}
-	return &row, nil
-}
-
-func BeginNotificationDelivery(db *gorm.DB, eventID string, now time.Time) (*DeliveryAttempt, bool, error) {
-	return beginNotificationDelivery(db, eventID, nil, now)
-}
-
-// BeginNotificationDeliveryForEvent atomically verifies that the event read
-// and destination-checked by the caller is still the durable intent being
-// claimed. A known-rejected refresh racing the external webhook identity read
-// therefore cannot make the caller send a replacement payload to the old URL.
-func BeginNotificationDeliveryForEvent(db *gorm.DB, expected NotificationDeliveryEvent, now time.Time) (*DeliveryAttempt, bool, error) {
-	return beginNotificationDelivery(db, expected.EventID, &expected, now)
-}
-
-func beginNotificationDelivery(db *gorm.DB, eventID string, expected *NotificationDeliveryEvent, now time.Time) (*DeliveryAttempt, bool, error) {
-	if db == nil {
-		return nil, false, gorm.ErrInvalidDB
-	}
-	var attempt DeliveryAttempt
-	var unavailable bool
-	err := db.Transaction(func(tx *gorm.DB) error {
-		var row NotificationDeliveryEvent
-		if err := tx.Where("event_id = ?", eventID).First(&row).Error; err != nil {
-			return err
-		}
-		if expected != nil && (row.EventID != expected.EventID || row.PayloadSHA256 != expected.PayloadSHA256 ||
-			row.DestinationFingerprint != expected.DestinationFingerprint || row.WebhookRowID != expected.WebhookRowID ||
-			row.NotificationRevision != expected.NotificationRevision) {
-			unavailable = true
-			return nil
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, row.ProductionID); err != nil {
-			return err
-		}
-		if err := EnsureProductionNotificationMutationIdle(tx, row.ProductionID, ""); err != nil {
-			return err
-		}
-		if row.Disposition == DeliveryInFlight {
-			if row.AttemptStartedAt == nil || now.Sub(*row.AttemptStartedAt) > 2*time.Minute {
-				if err := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ?", row.ID, DeliveryInFlight).Updates(map[string]any{"disposition": DeliveryUnknown, "failure_class": "expired_in_flight"}).Error; err != nil {
-					return err
-				}
-			}
-			unavailable = true
-			return nil
-		}
-		if row.Disposition != DeliveryPending && row.Disposition != DeliveryRetryable {
-			unavailable = true
-			return nil
-		}
-		if err := EnsureProductionNotificationMutationIdle(tx, row.ProductionID, ""); err != nil {
-			if errors.Is(err, ErrNotificationMutationRecoveryRequired) {
-				unavailable = true
-				return nil
-			}
-			return err
-		}
-		if err := EnsureNoInFlightNotificationDeliveries(tx, row.ProductionID); err != nil {
-			if errors.Is(err, ErrNotificationDeliveryInFlight) {
-				unavailable = true
-				return nil
-			}
-			return err
-		}
-		var earlierUnresolved int64
-		if err := tx.Model(&NotificationDeliveryEvent{}).Where("task_id = ? AND id < ? AND disposition IN ?", row.TaskID, row.ID, []string{DeliveryPending, DeliveryRetryable, DeliveryUnknown, DeliveryInFlight}).Count(&earlierUnresolved).Error; err != nil {
-			return err
-		}
-		if earlierUnresolved != 0 {
-			unavailable = true
-			return nil
-		}
-		var count int64
-		if err := tx.Model(&ManagedChannelDeletion{}).Where("guild_id = ? AND channel_id = ? AND discord_webhook_id = ? AND disposition <> ?", row.DestinationGuildID, row.DestinationChannelID, row.DestinationWebhookID, ChannelDeletionComplete).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
-			unavailable = true
-			return nil
-		}
-		var project Project
-		if err := tx.Where("kitsu_project_id = ?", row.ProductionID).First(&project).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				unavailable = true
-				return tx.Model(&NotificationDeliveryEvent{}).Where("id = ?", row.ID).Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "production_removed"}).Error
-			}
-			return err
-		}
-		if laneTypeOrDefault(row.LaneType) == "dm" {
-			// DM destinations have no webhook row or route row. The recorded DM
-			// channel identity is the durable destination; a closed DM is a
-			// transport failure, not a destination change.
-		} else {
-			var webhook ProjectWebhook
-			if err := tx.Where("id = ? AND kitsu_project_id = ? AND discord_channel_id = ?", row.WebhookRowID, row.ProductionID, row.DestinationChannelID).First(&webhook).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					unavailable = true
-					return tx.Model(&NotificationDeliveryEvent{}).Where("id = ?", row.ID).Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "destination_removed"}).Error
-				}
-				return err
-			}
-			var route ProductionNotificationRoute
-			if err := tx.Where("production_id = ? AND task_type_id = ? AND destination_webhook_id = ?", row.ProductionID, row.TaskTypeID, row.WebhookRowID).First(&route).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					unavailable = true
-					return tx.Model(&NotificationDeliveryEvent{}).Where("id = ?", row.ID).Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "route_removed"}).Error
-				}
-				return err
-			}
-			if strings.TrimSpace(project.DiscordGuildID) != row.DestinationGuildID || (route.DestinationChannelID != "" && route.DestinationChannelID != row.DestinationChannelID) {
-				unavailable = true
-				return nil
-			}
-		}
-		if row.NotificationRevision != "" {
-			revision, err := productionNotificationRevision(tx, project.ID, row.ProductionID)
-			if err != nil {
-				return err
-			}
-			if revision != row.NotificationRevision {
-				unavailable = true
-				return tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ?", row.ID, row.Disposition).Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "notification_state_changed_before_dispatch"}).Error
-			}
-		}
-		var raw [16]byte
-		if _, err := rand.Read(raw[:]); err != nil {
-			return err
-		}
-		attempt.ID = hex.EncodeToString(raw[:])
-		attempt.Event = row
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition IN ?", row.ID, []string{DeliveryPending, DeliveryRetryable}).Updates(map[string]any{
-			"disposition": DeliveryInFlight, "attempt_id": attempt.ID, "attempt_count": row.AttemptCount + 1, "attempt_started_at": now,
-			"failure_class": "",
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	if unavailable {
-		return nil, false, ErrDeliveryUnavailable
-	}
-	return &attempt, true, nil
-}
-
-func CompleteNotificationDelivery(db *gorm.DB, attempt DeliveryAttempt, messageID, threadID string, now time.Time) error {
-	if db == nil || attempt.ID == "" || strings.TrimSpace(messageID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := AcquireProductionNotificationWriteLock(tx, attempt.Event.ProductionID); err != nil {
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{
-			"disposition": DeliveryDelivered, "discord_message_id": messageID, "discord_thread_id": threadID, "delivered_at": now,
-			"prior_cleanup_pending": attempt.Event.PriorMessageID != "",
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return updateTaskDeliveryCheckpoint(tx, attempt.Event, messageID, threadID)
-	})
-}
-
-func updateTaskDeliveryCheckpoint(tx *gorm.DB, event NotificationDeliveryEvent, messageID, threadID string) error {
-	var task Task
-	err := tx.Where("task_id = ?", event.TaskID).First(&task).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return tx.Create(&Task{TaskID: event.TaskID, TaskUpdatedAt: event.TaskUpdatedAt, TaskStatus: event.TaskStatus, LastObservedStatus: event.TaskStatus, CommentID: event.CommentID, CommentUpdatedAt: event.CommentUpdatedAt, DiscordMessageID: messageID, DiscordThreadID: threadID, DeliveredTaskUpdatedAt: event.TaskUpdatedAt, DeliveredTaskStatus: event.TaskStatus, DeliveredCommentID: event.CommentID, DeliveredCommentUpdatedAt: event.CommentUpdatedAt}).Error
-	}
-	if err != nil {
-		return err
-	}
-	result := tx.Model(&Task{}).Where("id = ?", task.ID).Updates(map[string]any{
-		"task_status": event.TaskStatus, "discord_message_id": messageID, "discord_thread_id": threadID,
-		"delivered_task_updated_at": event.TaskUpdatedAt, "delivered_task_status": event.TaskStatus,
-		"delivered_comment_id": event.CommentID, "delivered_comment_updated_at": event.CommentUpdatedAt,
-	})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
-}
-
-func SetNotificationDeliveryDisposition(db *gorm.DB, attempt DeliveryAttempt, disposition, failureClass string) error {
-	if db == nil || (disposition != DeliveryRetryable && disposition != DeliveryUnknown && disposition != DeliveryTerminalFailure) {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := AcquireProductionNotificationWriteLock(tx, attempt.Event.ProductionID); err != nil {
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{"disposition": disposition, "failure_class": failureClass})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-}
-
-// ReleaseNotificationDeliveryForFallback returns a claimed in-flight delivery
-// to the pending state after a permanent failure on the current lane, keeping
-// the failure class as evidence. The fallback chain can then retarget the
-// still-pending intent to the next destination; only an exhausted chain turns
-// the row terminal.
-func ReleaseNotificationDeliveryForFallback(db *gorm.DB, attempt DeliveryAttempt, failureClass string) error {
-	if db == nil || attempt.ID == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := AcquireProductionNotificationWriteLock(tx, attempt.Event.ProductionID); err != nil {
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{"disposition": DeliveryPending, "failure_class": failureClass})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-}
-
-// QuarantineAcceptedButUnpersisted retains the durable pre-send attempt while
-// recording that Discord may have accepted a message whose checkpoint failed.
-// It never makes the event automatically retryable.
-func QuarantineAcceptedButUnpersisted(db *gorm.DB, attempt DeliveryAttempt) error {
-	if db == nil || attempt.ID == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := AcquireProductionNotificationWriteLock(tx, attempt.Event.ProductionID); err != nil {
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("event_id = ? AND attempt_id = ? AND disposition = ?", attempt.Event.EventID, attempt.ID, DeliveryInFlight).Updates(map[string]any{"disposition": DeliveryUnknown, "failure_class": "discord_accepted_checkpoint_uncommitted"})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-}
-
-func SetUnstartedNotificationDeliveryDisposition(db *gorm.DB, eventID, disposition, failureClass string) error {
-	if db == nil || strings.TrimSpace(eventID) == "" || disposition != DeliveryTerminalFailure && disposition != DeliveryUnknown {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var event NotificationDeliveryEvent
-		if err := tx.Where("event_id = ?", eventID).First(&event).Error; err != nil {
-			return err
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition IN ?", event.ID, []string{DeliveryPending, DeliveryRetryable}).Updates(map[string]any{"disposition": disposition, "failure_class": failureClass})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-}
-
-// RecordPriorMessageCleanup tracks best-effort replacement cleanup without
-// changing the durable outcome of the newly delivered notification.
-func RecordPriorMessageCleanup(db *gorm.DB, eventID string, succeeded bool, failureClass string) error {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var event NotificationDeliveryEvent
-		if err := tx.Where("event_id = ?", eventID).First(&event).Error; err != nil {
-			return err
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
-			return err
-		}
-		updates := map[string]any{"prior_cleanup_pending": !succeeded, "prior_cleanup_in_flight": false, "cleanup_failure_class": ""}
-		if !succeeded {
-			updates["cleanup_failure_class"] = strings.TrimSpace(failureClass)
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ? AND prior_cleanup_pending = ?", event.ID, DeliveryDelivered, true).Updates(updates)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return ErrDeliveryAttemptConflict
-		}
-		return nil
-	})
-}
-
-// FindLatestDeliveredChannelEventForTask returns the most recent delivered
-// channel-lane event that produced a Discord post for the task. The lifecycle
-// sweeper uses it to find the waiting-for-check post to delete.
-func FindLatestDeliveredChannelEventForTask(db *gorm.DB, taskID, productionID string) (*NotificationDeliveryEvent, error) {
-	if db == nil || strings.TrimSpace(taskID) == "" {
-		return nil, gorm.ErrInvalidData
-	}
-	var row NotificationDeliveryEvent
-	query := db.Where("task_id = ? AND lane_type = ? AND disposition = ? AND discord_message_id <> ''", strings.TrimSpace(taskID), LaneChannel, DeliveryDelivered)
-	if productionID = strings.TrimSpace(productionID); productionID != "" {
-		query = query.Where("production_id = ?", productionID)
-	}
-	err := query.Order("id desc").First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &row, nil
-}
-
-// MarkNotificationLifecycleCleanupPending flags the task's latest delivered
-// channel post for deletion because the task left WFA. Idempotent: rows
-// already pending or already deleted are left untouched.
-func MarkNotificationLifecycleCleanupPending(db *gorm.DB, eventID string) error {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return gorm.ErrInvalidData
-	}
-	result := db.Model(&NotificationDeliveryEvent{}).
-		Where("event_id = ? AND disposition IN ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ? AND lifecycle_deleted_at IS NULL", eventID, []string{DeliveryDelivered, DeliveryRecorded}, false, false).
-		Update("lifecycle_cleanup_pending", true)
-	if result.Error != nil {
-		return result.Error
-	}
-	return nil
-}
-
-// ListPendingLifecycleCleanups returns delivered channel events whose post
-// still waits for lifecycle deletion, oldest first.
-func ListPendingLifecycleCleanups(db *gorm.DB, limit int) ([]NotificationDeliveryEvent, error) {
-	if db == nil {
-		return nil, gorm.ErrInvalidDB
-	}
-	var rows []NotificationDeliveryEvent
-	query := db.Where("disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ? AND discord_message_id <> ''", DeliveryDelivered, true, false).Order("id asc")
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
-	if err := query.Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	return rows, nil
-}
-
-// ClaimNotificationLifecycleCleanup atomically moves a pending lifecycle
-// cleanup into flight after re-verifying the webhook ownership, exactly like
-// BeginPriorMessageCleanup. claimed=false means the row is not dispatchable
-// right now (missing ownership evidence, mutation in progress, or lost race).
-func ClaimNotificationLifecycleCleanup(db *gorm.DB, eventID string) (*NotificationDeliveryEvent, bool, error) {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return nil, false, gorm.ErrInvalidData
-	}
-	var event NotificationDeliveryEvent
-	var claimed bool
-	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("event_id = ?", strings.TrimSpace(eventID)).First(&event).Error; err != nil {
-			return err
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
-			return err
-		}
-		if err := EnsureProductionNotificationMutationIdle(tx, event.ProductionID, ""); err != nil {
-			return err
-		}
-		if !event.LifecycleCleanupPending || event.Disposition != DeliveryDelivered || event.DiscordMessageID == "" {
-			return nil
-		}
-		var tombstoneCount int64
-		if err := tx.Model(&ManagedChannelDeletion{}).Where("webhook_row_id = ? AND disposition <> ?", event.WebhookRowID, ChannelDeletionComplete).Count(&tombstoneCount).Error; err != nil {
-			return err
-		}
-		if tombstoneCount != 0 {
-			return nil
-		}
-		var webhook ProjectWebhook
-		if err := tx.Where("id = ? AND kitsu_project_id = ? AND discord_channel_id = ?", event.WebhookRowID, event.ProductionID, event.DestinationChannelID).First(&webhook).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				// Ownership evidence is gone; record why the row stays pending.
-				return tx.Model(&NotificationDeliveryEvent{}).Where("id = ?", event.ID).Update("cleanup_failure_class", "destination_identity_changed").Error
-			}
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ?", event.ID, DeliveryDelivered, true, false).Update("lifecycle_cleanup_in_flight", true)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return nil
-		}
-		event.LifecycleCleanupInFlight = true
-		claimed = true
-		return nil
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	if !claimed {
-		return nil, false, nil
-	}
-	return &event, true, nil
-}
-
-// CompleteNotificationLifecycleCleanup records the sweeper outcome. Success
-// stamps the deletion time and clears the pending flag; failure keeps the row
-// pending so the next poll retries, and stores the failure class.
-func CompleteNotificationLifecycleCleanup(db *gorm.DB, eventID string, succeeded bool, failureClass string) error {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return gorm.ErrInvalidData
-	}
-	updates := map[string]any{"lifecycle_cleanup_pending": !succeeded, "lifecycle_cleanup_in_flight": false, "cleanup_failure_class": ""}
-	if succeeded {
-		updates["lifecycle_deleted_at"] = time.Now().UTC()
-	} else {
-		updates["cleanup_failure_class"] = strings.TrimSpace(failureClass)
-	}
-	result := db.Model(&NotificationDeliveryEvent{}).
-		Where("event_id = ? AND disposition = ? AND lifecycle_cleanup_pending = ? AND lifecycle_cleanup_in_flight = ?", eventID, DeliveryDelivered, true, true).
-		Updates(updates)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return ErrDeliveryAttemptConflict
-	}
-	return nil
-}
-
-// ReleaseStuckNotificationLifecycleCleanups returns lifecycle claims left
-// in-flight by a process restart to the pending state, mirroring the delivery
-// quarantine. Without this, a restart during a claim would leave the channel
-// post undeletable forever.
-func ReleaseStuckNotificationLifecycleCleanups(db *gorm.DB) (int64, error) {
-	if db == nil {
-		return 0, gorm.ErrInvalidDB
-	}
-	result := db.Model(&NotificationDeliveryEvent{}).
-		Where("lifecycle_cleanup_in_flight = ?", true).
-		Update("lifecycle_cleanup_in_flight", false)
-	return result.RowsAffected, result.Error
-}
-
-// FindSummaryMemberEventForTask returns the task's aggregated-summary member
-// row: a record-only ledger row that carries the summary message ID. Tasks
-// delivered inside a bulk summary have no individual channel post, so their
-// lifecycle cleanup targets the summary message instead.
-func FindSummaryMemberEventForTask(db *gorm.DB, taskID, productionID string) (*NotificationDeliveryEvent, error) {
-	if db == nil || strings.TrimSpace(taskID) == "" {
-		return nil, gorm.ErrInvalidData
-	}
-	var event NotificationDeliveryEvent
-	err := db.Where("task_id = ? AND production_id = ? AND lane_type = ? AND disposition = ? AND discord_message_id != '' AND lifecycle_deleted_at IS NULL",
-		strings.TrimSpace(taskID), strings.TrimSpace(productionID), LaneRecordOnly, DeliveryRecorded).
-		Order("id desc").First(&event).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &event, nil
-}
-
-// CompleteSummaryLifecycleCleanup closes the summary reconciliation for every
-// member row of one aggregated summary message. Failures keep the rows pending
-// so the next poll retries; the edit and delete are idempotent. deleted_at is
-// stamped only when the summary message itself was deleted — after a partial
-// edit the summary still exists and future resolutions must keep reconciling.
-func CompleteSummaryLifecycleCleanup(db *gorm.DB, summaryMessageID string, succeeded, deleted bool, failureClass string) error {
-	if db == nil || strings.TrimSpace(summaryMessageID) == "" {
-		return gorm.ErrInvalidData
-	}
-	updates := map[string]any{"lifecycle_cleanup_in_flight": false, "cleanup_failure_class": ""}
-	if succeeded {
-		updates["lifecycle_cleanup_pending"] = false
-		if deleted {
-			updates["lifecycle_deleted_at"] = time.Now().UTC()
-		}
-	} else {
-		updates["cleanup_failure_class"] = strings.TrimSpace(failureClass)
-	}
-	return db.Model(&NotificationDeliveryEvent{}).
-		Where("discord_message_id = ? AND lane_type = ? AND disposition = ?", strings.TrimSpace(summaryMessageID), LaneRecordOnly, DeliveryRecorded).
-		Updates(updates).Error
-}
-
-func BeginPriorMessageCleanup(db *gorm.DB, eventID string) (*NotificationDeliveryEvent, bool, error) {
-	if db == nil || strings.TrimSpace(eventID) == "" {
-		return nil, false, gorm.ErrInvalidData
-	}
-	var event NotificationDeliveryEvent
-	var unavailable bool
-	err := db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("event_id = ?", strings.TrimSpace(eventID)).First(&event).Error; err != nil {
-			return err
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, event.ProductionID); err != nil {
-			return err
-		}
-		if err := EnsureProductionNotificationMutationIdle(tx, event.ProductionID, ""); err != nil {
-			return err
-		}
-		if !event.PriorCleanupPending || event.Disposition != DeliveryDelivered || event.PriorMessageID == "" {
-			unavailable = true
-			return nil
-		}
-		var tombstoneCount int64
-		if err := tx.Model(&ManagedChannelDeletion{}).Where("webhook_row_id = ? AND disposition <> ?", event.WebhookRowID, ChannelDeletionComplete).Count(&tombstoneCount).Error; err != nil {
-			return err
-		}
-		if tombstoneCount != 0 {
-			unavailable = true
-			return nil
-		}
-		var webhook ProjectWebhook
-		if err := tx.Where("id = ? AND kitsu_project_id = ? AND discord_channel_id = ?", event.WebhookRowID, event.ProductionID, event.DestinationChannelID).First(&webhook).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				unavailable = true
-				return nil
-			}
-			return err
-		}
-		result := tx.Model(&NotificationDeliveryEvent{}).Where("id = ? AND disposition = ? AND prior_cleanup_pending = ? AND prior_cleanup_in_flight = ?", event.ID, DeliveryDelivered, true, false).Update("prior_cleanup_in_flight", true)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			unavailable = true
-			return nil
-		}
-		event.PriorCleanupInFlight = true
-		return nil
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	if unavailable {
-		return nil, false, ErrDeliveryUnavailable
-	}
-	return &event, true, nil
-}
-
-func QuarantineInflightNotificationDeliveries(db *gorm.DB) error {
-	if db == nil {
-		return gorm.ErrInvalidDB
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		quarantined := tx.Model(&NotificationDeliveryEvent{}).Where("disposition = ?", DeliveryInFlight).Updates(map[string]any{"disposition": DeliveryUnknown, "failure_class": "process_restart_during_delivery"})
-		if quarantined.Error != nil {
-			return quarantined.Error
-		}
-		// External operations interrupted by a process restart must stay fenced.
-		// A human may explicitly retry a channel teardown from its tombstones, but
-		// neither teardown nor Discord reordering resumes automatically.
-		if err := tx.Model(&ProductionNotificationWriteLock{}).Where("mutation_state = ?", NotificationMutationDeleting).Updates(map[string]any{"mutation_state": NotificationMutationDeletionHelp, "mutation_at": nil}).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&ProductionNotificationWriteLock{}).Where("mutation_state = ?", NotificationMutationReordering).Updates(map[string]any{"mutation_state": NotificationMutationReorderHelp, "mutation_at": nil}).Error; err != nil {
-			return err
-		}
-		// Message deletion is idempotent for the exact stored message ID; a
-		// restart may safely release its claim and retry after re-verifying the
-		// original webhook identity.
-		return tx.Model(&NotificationDeliveryEvent{}).Where("prior_cleanup_in_flight = ? AND prior_cleanup_pending = ?", true, true).Update("prior_cleanup_in_flight", false).Error
-	})
-}
-
-// ResolveStaleUnknownNotificationDeliveries ends the permanent per-task stall
-// caused by unknown ledger rows. A row becomes unknown when the send outcome
-// could not be observed (send timeout exceeded, process death mid-delivery);
-// such a row blocks every later notification for the same task. Once the row
-// has been stale past the cutoff, no in-flight send can still be racing it
-// (the HTTP send timeout is far shorter), so it is resolved to terminal and
-// the task is unblocked. The row itself is never re-dispatched, so a message
-// Discord may actually have delivered is not duplicated.
-func ResolveStaleUnknownNotificationDeliveries(db *gorm.DB, cutoff time.Time) (int64, error) {
-	if db == nil {
-		return 0, gorm.ErrInvalidDB
-	}
-	// Compare instants in Go instead of letting SQLite compare timestamp
-	// strings: rows are stored with the writer's local offset, so a string
-	// comparison against a UTC cutoff silently mis-orders them on non-UTC
-	// hosts and the auto-resolution never fires (Muse VM, TZ=+09:00).
-	var rows []NotificationDeliveryEvent
-	if err := db.Where("disposition = ?", DeliveryUnknown).Find(&rows).Error; err != nil {
-		return 0, err
-	}
-	var resolved int64
-	for _, row := range rows {
-		if !row.UpdatedAt.Before(cutoff) {
-			continue
-		}
-		result := db.Model(&NotificationDeliveryEvent{}).
-			Where("id = ? AND disposition = ?", row.ID, DeliveryUnknown).
-			Updates(map[string]any{"disposition": DeliveryTerminalFailure, "failure_class": "unknown_auto_resolved"})
-		if result.Error != nil {
-			return resolved, result.Error
-		}
-		resolved += result.RowsAffected
-	}
-	return resolved, nil
-}
-
 func ListUnresolvedNotificationDeliveries(db *gorm.DB, limit int) ([]DeliveryDiagnostic, error) {
 	if db == nil {
 		return nil, gorm.ErrInvalidDB
@@ -1648,11 +417,11 @@ func ListUnresolvedNotificationDeliveries(db *gorm.DB, limit int) ([]DeliveryDia
 	}
 	return out, nil
 }
-
 func BeginManagedChannelDeletion(db *gorm.DB, productionID string, webhookRowID uint, guildID, channelID, discordWebhookID string, now time.Time) error {
 	return BeginManagedChannelDeletionBatch(db, productionID, []ManagedChannelDeletionTarget{{WebhookRowID: webhookRowID, GuildID: guildID, ChannelID: channelID, DiscordWebhookID: discordWebhookID}}, now, false)
 }
 
+// ManagedChannelDeletionTarget identifies one Discord destination to tombstone.
 type ManagedChannelDeletionTarget struct {
 	WebhookRowID     uint
 	GuildID          string
@@ -1660,10 +429,6 @@ type ManagedChannelDeletionTarget struct {
 	DiscordWebhookID string
 }
 
-// BeginManagedChannelDeletionBatch tombstones every exact destination in one
-// transaction before any external DELETE. allowLastRoute is reserved for an
-// explicit whole-Production teardown and requires the batch to cover every
-// current notification route.
 func BeginManagedChannelDeletionBatch(db *gorm.DB, productionID string, targets []ManagedChannelDeletionTarget, now time.Time, allowLastRoute bool) error {
 	return beginManagedChannelDeletionBatch(db, productionID, targets, now, allowLastRoute, "")
 }
@@ -1677,7 +442,6 @@ func BeginManagedChannelDeletionBatchForProductionTeardown(db *gorm.DB, producti
 	}
 	return beginManagedChannelDeletionBatch(db, productionID, targets, now, allowLastRoute, token)
 }
-
 func beginManagedChannelDeletionBatch(db *gorm.DB, productionID string, targets []ManagedChannelDeletionTarget, now time.Time, allowLastRoute bool, mutationToken string) error {
 	if db == nil || strings.TrimSpace(productionID) == "" || len(targets) == 0 {
 		return gorm.ErrInvalidData
@@ -1765,7 +529,6 @@ func beginManagedChannelDeletionBatch(db *gorm.DB, productionID string, targets 
 		return nil
 	})
 }
-
 func RecordManagedChannelDeletionFailure(db *gorm.DB, webhookRowID uint, class string) error {
 	if db == nil || webhookRowID == 0 || strings.TrimSpace(class) == "" {
 		return gorm.ErrInvalidData
@@ -1792,48 +555,15 @@ func RecordManagedChannelDeletionFailure(db *gorm.DB, webhookRowID uint, class s
 // RecordNotificationOnlyDelivery writes a record-only lane entry to the
 // delivery journal. Nothing is sent; the row documents that the notification
 // was intentionally recorded without delivery.
-func RecordNotificationOnlyDelivery(db *gorm.DB, taskID, productionID, taskTypeID, taskStatus, taskUpdatedAt, commentID, commentUpdatedAt string, isAssign bool) error {
-	if db == nil || strings.TrimSpace(taskID) == "" || strings.TrimSpace(productionID) == "" || strings.TrimSpace(taskTypeID) == "" {
-		return gorm.ErrInvalidData
-	}
-	intent := NotificationDeliveryIntent{
-		TaskID: taskID, ProductionID: productionID, TaskTypeID: taskTypeID, TaskStatus: taskStatus,
-		TaskUpdatedAt: taskUpdatedAt, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt,
-		IsAssignNotification: isAssign, LaneType: LaneRecordOnly,
-	}
-	eventID := NotificationEventIdentity(intent)
-	row := NotificationDeliveryEvent{
-		EventID: eventID, TaskID: strings.TrimSpace(taskID), ProductionID: strings.TrimSpace(productionID),
-		TaskTypeID: strings.TrimSpace(taskTypeID), TaskStatus: strings.TrimSpace(taskStatus),
-		TaskUpdatedAt: taskUpdatedAt, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt,
-		IsAssignNotification: isAssign, LaneType: LaneRecordOnly, DestinationTarget: "",
-		PayloadJSON: "", PayloadSHA256: "",
-		Disposition: DeliveryRecorded,
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var existing NotificationDeliveryEvent
-		err := tx.Where("event_id = ?", eventID).First(&existing).Error
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		return tx.Create(&row).Error
-	})
-}
-
 func FinalizeManagedChannelDeletion(db *gorm.DB, webhookRowID uint, now time.Time) error {
 	return finalizeManagedChannelDeletion(db, webhookRowID, now, "")
 }
-
 func FinalizeManagedChannelDeletionForProductionTeardown(db *gorm.DB, webhookRowID uint, now time.Time, token string) error {
 	if strings.TrimSpace(token) == "" {
 		return gorm.ErrInvalidData
 	}
 	return finalizeManagedChannelDeletion(db, webhookRowID, now, token)
 }
-
 func finalizeManagedChannelDeletion(db *gorm.DB, webhookRowID uint, now time.Time, mutationToken string) error {
 	if db == nil || webhookRowID == 0 {
 		return gorm.ErrInvalidData

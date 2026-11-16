@@ -14,7 +14,7 @@ import (
 // own Task Type, including the automatic supervisors the runtime resolver adds.
 func TestForumDigestResolvesReviewersPerTaskType(t *testing.T) {
 	db := forumDigestDB(t)
-	defer closeNotificationPipelineDB(t, db)
+	defer closeForumDigestDB(t, db)
 
 	// A second routed Task Type with its own automatic supervisor.
 	settings, ok, err := model.LoadProductionForumSettings(db, "p1")

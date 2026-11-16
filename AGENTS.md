@@ -47,7 +47,7 @@ Run these after meaningful repo changes when applicable:
 Never claim verification was run if it was not.
 
 ## Issue and PR references
-- Bare `#123` only for real PR/Issue numbers in `ukyovfx/kitsusync`; forks share the parent's numbering, so a bare number can link to the wrong repository. Reference review findings as "PR #282 finding 3" or by title, never with a made-up `#` number.
+- Never write bare `#123` references on GitHub (PRs, Issues, code-scanning alerts): forks share the parent's numbering, so a bare number links to the fork parent (`keshon/kitsu-to-discord-task-notification`). Always write the full URL starting with `https://github.com/ukyovfx/kitsusync/` (e.g. `https://github.com/ukyovfx/kitsusync/pull/284`, `https://github.com/ukyovfx/kitsusync/security/code-scanning/128`). Reference review findings by title or as "PR 284 finding 3" (no `#`), never with a made-up number.
 
 ## Knowledge write-back
 - Do not write back merely because something was discussed.

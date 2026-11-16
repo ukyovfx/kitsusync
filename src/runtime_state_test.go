@@ -146,18 +146,3 @@ func TestHealthHandlerDoesNotWaitForSlowExternalDependency(t *testing.T) {
 		t.Fatalf("health must not invoke external dependency probes: %d %s", rr.Code, rr.Body.String())
 	}
 }
-
-func TestOverallNotificationReadinessUsesDiscordValidation(t *testing.T) {
-	if got := overallNotificationReadiness(true, true, true, true); got != "ready" {
-		t.Fatalf("fully validated runtime = %q, want ready", got)
-	}
-	if got := overallNotificationReadiness(true, true, false, true); got != "ready_pending_discord_validation" {
-		t.Fatalf("unvalidated Discord runtime = %q, want pending", got)
-	}
-	if got := overallNotificationReadiness(true, true, true, false); got != "blocked" {
-		t.Fatalf("unconfigured routing = %q, want blocked", got)
-	}
-	if got := overallNotificationReadiness(false, true, true, true); got != "blocked" {
-		t.Fatalf("unavailable Kitsu dependency = %q, want blocked", got)
-	}
-}

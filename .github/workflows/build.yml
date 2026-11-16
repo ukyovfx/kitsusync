@@ -335,9 +335,6 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
         run: go test ./src/setup -run '^TestReviewerBrowserAcceptance$' -count=1 -timeout=240s -v
 
-      - name: Verify synthetic WFA delivery and exact mention allowlist
-        run: go test ./src/api/discord -run '^TestStatusChangeDeliverySerializesTheCanonicalCard$' -count=1 -timeout=120s
-
       - name: Upload synthetic browser screenshots and result summary
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

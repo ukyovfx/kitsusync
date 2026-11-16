@@ -15,21 +15,16 @@ var reviewerProductionResolutionReader = kitsu.GetProjectTaskTypeSupervisorResol
 var reviewerGuildMembersReader = ListGuildMembers
 var reviewerGuildRolesReader = ListGuildRoles
 
-// ResolveProductionWFAReviewerTargets combines current automatic Supervisors
+// ResolveForumWFAReviewerTargets combines current automatic Supervisors
 // with explicit targets, validating every Discord target against the live
-// Production Team and linked Guild immediately before delivery.
-func ResolveProductionWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID string, senderWebhookURLs ...string) ([]model.ProjectReviewerTarget, error) {
-	return resolveWFAReviewerTargets(db, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID, false, senderWebhookURLs...)
-}
-
-// ResolveForumWFAReviewerTargets is the forum-mode variant: posts are sent by the
-// Bot into the Task Type's forum channel, so role targets are proven against the
-// Bot's forum permissions instead of a lane sender webhook.
+// Production Team and linked Guild immediately before delivery. Posts are
+// sent by the Bot into the Task Type's forum channel, so role targets are
+// proven against the Bot's forum permissions.
 func ResolveForumWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID string) ([]model.ProjectReviewerTarget, error) {
-	return resolveWFAReviewerTargets(db, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID, true)
+	return resolveWFAReviewerTargets(db, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID)
 }
 
-func resolveWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID string, forumMode bool, senderWebhookURLs ...string) ([]model.ProjectReviewerTarget, error) {
+func resolveWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordToken, kitsuProjectID, taskTypeID string) ([]model.ProjectReviewerTarget, error) {
 	if db == nil {
 		return nil, gorm.ErrInvalidDB
 	}
@@ -98,19 +93,9 @@ func resolveWFAReviewerTargets(db *gorm.DB, kitsuBaseURL, kitsuToken, discordTok
 	}
 	allowedRoles := map[string]struct{}{}
 	if roleTargetsExist {
-		if forumMode {
-			allowedRoles, err = ForumReviewerRoles(db, project.KitsuProjectID, taskTypeID, discordToken)
-			if err != nil {
-				return nil, fmt.Errorf("verify linked Discord Reviewer roles: %w", err)
-			}
-		} else {
-			if len(senderWebhookURLs) == 0 || strings.TrimSpace(senderWebhookURLs[0]) == "" {
-				return nil, errors.New("current Discord Reviewer sender is unavailable")
-			}
-			allowedRoles, err = verifiedReviewerRolesForTaskType(db, project, taskTypeID, discordToken, senderWebhookURLs[0])
-			if err != nil {
-				return nil, fmt.Errorf("verify linked Discord Reviewer roles: %w", err)
-			}
+		allowedRoles, err = ForumReviewerRoles(db, project.KitsuProjectID, taskTypeID, discordToken)
+		if err != nil {
+			return nil, fmt.Errorf("verify linked Discord Reviewer roles: %w", err)
 		}
 	}
 

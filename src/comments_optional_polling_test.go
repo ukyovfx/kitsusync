@@ -2,7 +2,6 @@ package main
 
 import (
 	"app/src/api/kitsu"
-	"app/src/model"
 	"app/src/utils/config"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +12,6 @@ import (
 	"testing"
 
 	"app/src/utils/request"
-
-	"gorm.io/gorm"
 )
 
 func configureMainTestOrigin(t *testing.T, raw string) {
@@ -160,67 +157,6 @@ func TestMakeKitsuResponseFailsWhenEveryProjectFails(t *testing.T) {
 	}
 }
 
-func TestFilterTasksSkipsCommentDiffWhenCommentsUnavailable(t *testing.T) {
-	db := newNotificationPipelineDB(t)
-	if err := model.MarkTaskObserved(db, "task-1", "2026-08-07T00:00:00", "WFA", "c1", "2026-08-01T00:00:00", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	original := notificationDispatch
-	t.Cleanup(func() { notificationDispatch = original })
-	dispatched := 0
-	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
-		dispatched += len(data)
-		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
-		}
-		return data
-	}
-
-	// Comments could not be fetched, so the payload arrives with empty comment
-	// data even though the delivered snapshot already has comment c1.
-	payload := pipelinePayload("WFA")
-	payload.CommentsUnavailable = true
-	FilterTasks([]kitsu.MessagePayload{payload}, pipelineConfig(), db)
-
-	if dispatched != 0 {
-		t.Fatalf("comment-only change must not dispatch while comments are unavailable, got %d dispatches", dispatched)
-	}
-	row := model.FindTask(db, "task-1")
-	if row.DeliveredCommentID != "c1" || row.DeliveredCommentUpdatedAt != "2026-08-01T00:00:00" {
-		t.Fatalf("delivered comment checkpoint must be preserved, got %q / %q", row.DeliveredCommentID, row.DeliveredCommentUpdatedAt)
-	}
-	if row.CommentID != "c1" || row.CommentUpdatedAt != "2026-08-01T00:00:00" {
-		t.Fatalf("observed comment checkpoint must be preserved, got %q / %q", row.CommentID, row.CommentUpdatedAt)
-	}
-}
-
-func TestFilterTasksDispatchesCommentOnlyWhenCommentsAvailable(t *testing.T) {
-	withImmediateAggregation(t)
-	db := newNotificationPipelineDB(t)
-	if err := model.MarkTaskObserved(db, "task-1", "2026-08-07T00:00:00", "WFA", "c1", "2026-08-01T00:00:00", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	configurePipelineRoute(t, db)
-	original := notificationDispatch
-	t.Cleanup(func() { notificationDispatch = original })
-	dispatched := 0
-	notificationDispatch = func(data []kitsu.MessagePayload, _ config.Config, _ string, _ *gorm.DB, _ string, _ []string) []kitsu.MessagePayload {
-		dispatched += len(data)
-		for _, payload := range data {
-			model.UpdateTaskWithDiscord(db, payload.Task.ID, payload.Task.UpdatedAt, payload.TaskStatus.ShortName, "", "", "discord-message", "", "", "", "")
-		}
-		return data
-	}
-
-	// Same fixture without the outage flag: the (empty) latest comment still
-	// differs from the stored checkpoint so a comment-only event dispatches.
-	payload := pipelinePayload("WFA")
-	FilterTasks([]kitsu.MessagePayload{payload}, pipelineConfig(), db)
-
-	if dispatched != 1 {
-		t.Fatalf("expected comment-only event to dispatch when comments are readable, got %d", dispatched)
-	}
-}
 
 func TestTaskCommentCacheDoesNotCrossConnections(t *testing.T) {
 	reads := 0

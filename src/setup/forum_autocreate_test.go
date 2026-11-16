@@ -8,14 +8,16 @@ import (
 	"strings"
 	"testing"
 
+	"app/src/api/kitsu"
 	"app/src/model"
+	"gorm.io/gorm"
 )
 
 func stubForumCreate(t *testing.T, created *[]string) {
 	t.Helper()
 	old := forumCreateChannel
 	t.Cleanup(func() { forumCreateChannel = old })
-	forumCreateChannel = func(guildID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+	forumCreateChannel = func(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
 		*created = append(*created, name)
 		forum := forumChannelInfo{ID: "new-" + name, Name: name}
 		for _, tag := range tags {
@@ -131,7 +133,7 @@ func TestForumAutoCreateKeepsCreatedForumsWhenALaterCreateFails(t *testing.T) {
 	var created []string
 	old := forumCreateChannel
 	t.Cleanup(func() { forumCreateChannel = old })
-	forumCreateChannel = func(guildID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+	forumCreateChannel = func(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
 		created = append(created, name)
 		if name == "Compositing" {
 			return forumChannelInfo{}, errors.New("discord unavailable")
@@ -161,13 +163,50 @@ func TestForumAutoCreateKeepsCreatedForumsWhenALaterCreateFails(t *testing.T) {
 	}
 }
 
+func TestForumAutoCreateCreatesForumUnderProductionCategory(t *testing.T) {
+	stubForumLookups(t, nil)
+	// Auto-create runs over the seeded Task Type list (empty tt_forum rows are
+	// dropped from the form), so keep the list at one type for one create call.
+	oldTypes := forumTaskTypeLister
+	t.Cleanup(func() { forumTaskTypeLister = oldTypes })
+	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType {
+		return []kitsu.TaskType{{ID: "tt-anim", Name: "Animation"}}
+	}
+	var parents []string
+	old := forumCreateChannel
+	t.Cleanup(func() { forumCreateChannel = old })
+	forumCreateChannel = func(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+		parents = append(parents, parentID)
+		forum := forumChannelInfo{ID: "new-" + name, Name: name}
+		for _, tag := range tags {
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag, Name: tag})
+		}
+		return forum, nil
+	}
+	db := newForumPageDB(t)
+	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "cat-1").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"project": {"p1"}, "mode": {"forum"}, "guild_id": {"g1"}, "action": {"create_forums"}}
+	form["tt_id"], form["tt_name"], form["tt_forum"] = []string{"tt-anim"}, []string{"Animation"}, []string{""}
+	form["st_id"], form["st_name"], form["st_role"] = []string{"s-wfa", "s-retake", "s-done"}, []string{"WFA", "Retake", "Done"}, []string{"wfa", "retake", "done"}
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if strings.Join(parents, ",") != "cat-1" {
+		t.Fatalf("created forums under parents %v, want cat-1", parents)
+	}
+}
+
 func TestForumPermissionCheckListsMissingPermissions(t *testing.T) {
 	old := forumPermissionGetter
 	t.Cleanup(func() { forumPermissionGetter = old })
 	// View Channel + Send Messages only.
 	forumPermissionGetter = func(string, string) (int64, error) { return (1 << 10) | (1 << 11), nil }
 	settings := model.ProductionForumSettings{
-		Config: model.ProductionForumConfig{Mode: model.NotificationModeForum},
+		Config: model.ProductionForumConfig{GuildID: "guild-1"},
 		Routes: []model.ProductionForumRoute{{TaskTypeName: "Compositing", ForumChannelID: "f1"}},
 	}
 	problems := checkForumPermissions(settings, "token")
