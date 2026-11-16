@@ -719,12 +719,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'server, Task Type → forum, Kitsu status → role and Role → forum tag sections with Save and Bot auto-create');
 
         // Save one more Task Type → forum mapping and keep the WFA destination,
-        // then reload to prove both came back from storage. The page only offers
-        // Role → forum tag rows for forums it has tags for, so the fixture seeds
-        // the routed forum's tags. The forum page refuses a mapping whose routed
-        // forum has no tag for every trigger role, so the tag rows are asserted
-        // on the forum the fixture already tagged.
-        await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
+        // then reload to prove both came back from storage. The forum page
+        // refuses a mapping whose routed forum has no tag for every trigger
+        // role, so the newly routed forum is the one the fixture already tagged.
+        await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666662');
         const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
         await page.locator('form.section-stack').getByRole('button', { name: 'Save', exact: true }).click({ noWaitAfter: true });
         try {
@@ -735,7 +733,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Forum settings refused the Task Type → forum save in ${locale.lang}: ${rejection.slice(Math.max(0, settingsStart - 8), settingsStart).join(' | ')}`);
         }
         await page.reload({ waitUntil: 'networkidle' });
-        if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
+        if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666662') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
         }
         const wfaStatusSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
