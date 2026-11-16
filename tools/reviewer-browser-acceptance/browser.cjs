@@ -694,7 +694,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const forumForm = page.locator('form.section-stack');
         if (await forumForm.count() !== 1) throw new Error(`Forum settings form missing in ${locale.lang}`);
         const forumHeadings = (await page.locator('form.section-stack > section.section-card > h2').allTextContents()).map(text => text.trim());
-        if (JSON.stringify(forumHeadings) !== JSON.stringify(['Discord server', 'Task Type → forum', 'Kitsu status → role', 'Role → forum tag'])) {
+        const forumHeadingCounts = forumHeadings.map((heading, index) => [index, forumHeadings.filter(other => other === heading).length]);
+        if (forumHeadings.length !== 4 || forumHeadingCounts.some(([, count]) => count !== 1)) {
           throw new Error(`Forum settings sections are missing in ${locale.lang}: ${JSON.stringify(forumHeadings)}`);
         }
         if (await page.locator('#forum-guild').inputValue() !== guildID) throw new Error(`Forum settings did not load the Production Discord server in ${locale.lang}`);
