@@ -127,12 +127,46 @@ func TestForumSettingsRepointedTaskTypeDropsStaleTagRows(t *testing.T) {
 	db := newForumPageDB(t)
 	form := completeForumForm()
 	form["tt_forum"] = []string{"f-anim", "f-anim"} // f-comp is no longer routed, its tag rows remain in the form
+	for i := len(form["tag_forum"]) - 1; i >= 0; i-- {
+		if form["tag_forum"][i] == "f-comp" { // the page no longer renders these rows
+			for _, key := range []string{"tag_forum", "tag_role", "tag_id"} {
+				form[key] = append(form[key][:i], form[key][i+1:]...)
+			}
+		}
+	}
 	if w := forumPost(t, db, form); w.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
 	loaded, _, _ := model.LoadProductionForumSettings(db, "p1")
 	if len(loaded.Tags) != 4 {
 		t.Fatalf("tags of the unrouted forum must be dropped, got %d", len(loaded.Tags))
+	}
+}
+
+// A Task Type pointed at a forum that has no tag rows yet must be refused with
+// those rows rendered, or the user can never recover from the refusal.
+func TestForumSettingsRefusalRendersTagRowsOfNewlyRoutedForum(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	form := completeForumForm()
+	form["tt_forum"] = []string{"f-anim", "f-new"} // f-new was never rendered, so it has no tag rows
+	var tagForums, tagRoles, tagIDs []string
+	for i := range form["tag_forum"] {
+		if form["tag_forum"][i] != "f-new" {
+			tagForums, tagRoles, tagIDs = append(tagForums, form["tag_forum"][i]), append(tagRoles, form["tag_role"][i]), append(tagIDs, form["tag_id"][i])
+		}
+	}
+	form["tag_forum"], form["tag_role"], form["tag_id"] = tagForums, tagRoles, tagIDs
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `<input type="hidden" name="tag_forum" value="f-new">`) {
+		t.Fatal("the refused save must re-render the newly routed forum's tag rows")
+	}
+	if !strings.Contains(body, "has no tag for the role") {
+		t.Fatal("the page must say which tags are missing")
 	}
 }
 

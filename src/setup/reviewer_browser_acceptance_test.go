@@ -102,6 +102,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/api/", "/api/auth/authenticated":
+			// Kitsu host discovery probes these unauthenticated endpoints.
+			_, _ = io.WriteString(w, `{"name":"Zou"}`)
 		case "/api/status":
 			_, _ = io.WriteString(w, `{"name":"Zou","database-up":true,"event-stream-up":true,"key-value-store-up":true,"version":"synthetic"}`)
 		case "/api/auth/login":
@@ -153,6 +156,8 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			}
 		case "/api/data/projects/reviewer-unconnected/task-types":
 			_, _ = io.WriteString(w, `[{"id":"task-live","name":"Live Task Type","active":true}]`)
+		case "/api/data/task-status/":
+			_, _ = io.WriteString(w, `[{"id":"status-wfa","name":"Waiting For Approval","short_name":"WFA","is_retake":false,"is_done":false},{"id":"status-retake","name":"Retake","short_name":"Retake","is_retake":true,"is_done":false},{"id":"status-done","name":"Done","short_name":"Done","is_retake":false,"is_done":true},{"id":"status-wip","name":"Work In Progress","short_name":"WIP","is_retake":false,"is_done":false}]`)
 		default:
 			if strings.HasPrefix(r.URL.Path, "/api/data/persons/") {
 				personID := strings.TrimPrefix(r.URL.Path, "/api/data/persons/")
@@ -179,6 +184,21 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	}
 	if err := setRuntimeDiscordBotToken(db, reviewerBrowserBot); err != nil {
 		t.Fatal("store synthetic Discord token")
+	}
+	// The forum page's status lister must read the live Kitsu status list
+	// through the runtime credential source the same way the Task Type lister
+	// does. Its default reads the cleared legacy KitsuJWTToken environment, so
+	// without this override the page silently falls back to saved statuses.
+	oldForumStatusLister := forumStatusLister
+	t.Cleanup(func() { forumStatusLister = oldForumStatusLister })
+	forumStatusLister = func(db *gorm.DB) ([]kitsu.TaskStatus, error) {
+		baseURL, token, ok := runtimeKitsuDataSource(db)
+		if !ok {
+			return nil, fmt.Errorf("Kitsu runtime data source is unavailable")
+		}
+		statuses := []kitsu.TaskStatus{}
+		_, err := request.DoWithError(token, http.MethodGet, strings.TrimSuffix(baseURL, "/")+"/data/task-status/", nil, &statuses)
+		return statuses, err
 	}
 	project := model.Project{KitsuProjectID: "reviewer-production", Name: "Synthetic Review Production", DiscordGuildID: reviewerBrowserGuild, DiscordCategoryID: reviewerBrowserCategory, StorageURL: "https://storage.synthetic.invalid"}
 	if err := db.Create(&project).Error; err != nil {
@@ -260,6 +280,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.Handle("/bot/admin/bot", RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true })))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
 	mux.HandleFunc("/bot/admin/audit", RequireSession(AuditLogHandler(db)))
+	mux.HandleFunc("/bot/admin/forum", RequireSession(ForumSettingsHandler(db, func() (string, string) {
+		return reviewerBrowserBot, reviewerBrowserGuild
+	})))
 	health := HealthHandler(db)
 	mux.HandleFunc("/bot/admin/health", RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The browser suite visits several pages before System Status; reseed
@@ -315,6 +338,68 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				return
 			}
 			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "forum-settings":
+			// Start from one routed forum so the page shows a real saved value
+			// and the Animation row left unrouted for the browser run to fill
+			// in. Every status carries a role and the routed forum carries all
+			// four tags, so the page's own Save re-passes validation after the
+			// edit. The fixture answers the live Discord channel list from the
+			// same forums, so the page offers the unrouted forum's tags too.
+			settings := model.ProductionForumSettings{
+				Config: model.ProductionForumConfig{ProductionID: project.KitsuProjectID, GuildID: project.DiscordGuildID},
+				Routes: []model.ProductionForumRoute{
+					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
+				},
+				StatusRoles: []model.ProductionForumStatusRole{
+					{ProductionID: project.KitsuProjectID, StatusID: "status-wfa", StatusName: "Waiting For Approval", Role: model.ForumRoleWFA},
+					{ProductionID: project.KitsuProjectID, StatusID: "status-retake", StatusName: "Retake", Role: model.ForumRoleRetake},
+					{ProductionID: project.KitsuProjectID, StatusID: "status-done", StatusName: "Done", Role: model.ForumRoleDone},
+				},
+				Tags: []model.ProductionForumTag{
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWFA, TagID: "66666666666666661-wfa"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleRetake, TagID: "66666666666666661-retake"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleDone, TagID: "66666666666666661-done"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWIP, TagID: "66666666666666661-wip"},
+				},
+			}
+			if err := model.SaveProductionForumSettings(db, settings); err != nil {
+				http.Error(w, "could not configure forum settings fixture", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store("ready")
+			w.WriteHeader(http.StatusNoContent)
+		case "restore-routing":
+			// The forum settings page replaces the Production's whole routing, so
+			// the browser run puts the seeded mapping back before it re-reads the
+			// Notifications tab.
+			settings := model.ProductionForumSettings{
+				Config: model.ProductionForumConfig{ProductionID: project.KitsuProjectID, GuildID: project.DiscordGuildID},
+				Routes: []model.ProductionForumRoute{
+					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
+					{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", ForumChannelID: "66666666666666662", ForumChannelName: "animation"},
+				},
+				StatusRoles: []model.ProductionForumStatusRole{
+					{ProductionID: project.KitsuProjectID, StatusID: "status-wfa", StatusName: "Waiting For Approval", Role: model.ForumRoleWFA},
+					{ProductionID: project.KitsuProjectID, StatusID: "status-retake", StatusName: "Retake", Role: model.ForumRoleRetake},
+					{ProductionID: project.KitsuProjectID, StatusID: "status-done", StatusName: "Done", Role: model.ForumRoleDone},
+				},
+				Tags: []model.ProductionForumTag{
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWFA, TagID: "66666666666666661-wfa"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleRetake, TagID: "66666666666666661-retake"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleDone, TagID: "66666666666666661-done"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666661", Role: model.ForumRoleWIP, TagID: "66666666666666661-wip"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWFA, TagID: "66666666666666662-wfa"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleRetake, TagID: "66666666666666662-retake"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleDone, TagID: "66666666666666662-done"},
+					{ProductionID: project.KitsuProjectID, ForumChannelID: "66666666666666662", Role: model.ForumRoleWIP, TagID: "66666666666666662-wip"},
+				},
+			}
+			if err := model.SaveProductionForumSettings(db, settings); err != nil {
+				http.Error(w, "could not restore the seeded routing", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store("ready")
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "unknown isolated fixture state", http.StatusBadRequest)
@@ -460,7 +545,7 @@ type reviewerBrowserDiscordTransport struct {
 }
 
 func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && r.URL.Path == "/api/" && r.URL.RawQuery == "" {
+	if r.URL.Scheme == "http" && r.URL.Host == d.kitsuHost && r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/") {
 		return d.baseTransport.RoundTrip(r)
 	}
 	if r.URL.Host != "discord.com" || r.Header.Get("Authorization") != "Bot "+reviewerBrowserBot {
@@ -519,7 +604,7 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			}
 		}
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
-		body = `[{"id":"66666666666666661","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666662","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666663","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]}]`
+		body = `[{"id":"66666666666666661","name":"compositing","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666662","name":"animation","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666663","name":"review","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666664","name":"storyboard","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666664-wfa","name":"Waiting for approval"},{"id":"66666666666666664-retake","name":"Retake"},{"id":"66666666666666664-done","name":"Done"},{"id":"66666666666666664-wip","name":"In progress"}]}]`
 	default:
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
