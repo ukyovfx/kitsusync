@@ -730,7 +730,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await routingNavigation;
         await page.reload({ waitUntil: 'networkidle' });
         const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
-        if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())}`);
+        if (await storyboardTags.count() !== 4) {
+          const problems = (await page.locator('body').innerText()).split('\n').filter(line => line.trim() !== '').slice(-15).join(' | ');
+          throw new Error(`Forum settings did not offer the Role → forum tag rows for the newly routed forum in ${locale.lang}: ${await storyboardTags.count()} / ${JSON.stringify(await page.locator('form.section-stack h3').allTextContents())} / ${problems}`);
+        }
         for (const role of ['wfa', 'retake', 'done', 'wip']) {
           const tagSelect = storyboardTags.filter({ has: page.locator(`input[name="tag_role"][value="${role}"]`) }).locator('select[name="tag_id"]');
           await tagSelect.selectOption(`66666666666666664-${role}`);
