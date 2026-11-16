@@ -102,6 +102,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/api/", "/api/auth/authenticated":
+			// Kitsu host discovery probes these unauthenticated endpoints.
+			_, _ = io.WriteString(w, `{"name":"Zou"}`)
 		case "/api/status":
 			_, _ = io.WriteString(w, `{"name":"Zou","database-up":true,"event-stream-up":true,"key-value-store-up":true,"version":"synthetic"}`)
 		case "/api/auth/login":
