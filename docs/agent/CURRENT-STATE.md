@@ -2,44 +2,45 @@
 
 ## Verification basis
 
-Verified against GitHub accepted `master` at `fe293f1f2b8858cf0625d903e2249fce8c209967` on 2026-10-12. PRs #233, #234, and #235 are merged. PR #235 exact-head `a8d4eb4f2c9c993ff03fda2289bf2e97d2084a36` passed CI run `38211376994` and Security Audit run `38211376990`. Those are PR-head checks, not a claim that post-merge `master` checks or a live deployment passed. Recheck exact-head CI/Security before any further acceptance or promotion.
+Verified against GitHub accepted `master` at `0f2e346f00a9f3b794c2a6243d39f681e661d68a` on 2026-11-18. The forum-notification renovation and its follow-up fix batches are merged (see below); each PR head passed the full CI and Security Audit check suites before merge. Those are PR-head checks, not a claim that a live deployment of this code exists.
 
 Repository, Git, CI, tests, configuration, and verified live runtime evidence override this summary when they disagree. An open PR or release candidate is not accepted implementation.
 
 ## Accepted repository and release state
 
-- `master` at `fe293f1f2b8858cf0625d903e2249fce8c209967` is the accepted code state. `VERSION` is `0.5.1`.
-- The latest published GitHub release is `v0.5.1`, created from `f8a32bbba94d84068d9e96c18554ac4ab7b24540` (annotated release tag). This immutable release predates the merged #233, #234, and #235 changes. Neither a later `master` nor a passing CI run updates the published v0.5.1 bundle or proves a new release.
-- Accepted recent changes:
-  - #233 — read-only Production preflight collector.
-  - #234 — historical repository documentation organization.
-  - #235 — Production deployment recovery, fixed-path deployment-helper maintenance support, runtime reconstruction identity checks, and related regressions.
-- Previously merged UI and reviewer functionality, including #219 and #225, remains accepted; consult Git history and `docs/CURRENT-IA-UI-SPEC.md` for exact behavior.
+- `master` at `0f2e346f00a9f3b794c2a6243d39f681e661d68a` is the accepted code state. `VERSION` is `0.7.1`.
+- The latest published GitHub release is `v0.7.1`. Production runs v0.7.1 (read-only inspect on 2026-11-17: OCI version `0.7.1`, image revision `7b6e7679`). No later code is deployed to Production.
+- The forum-notification renovation (the current system kept as the base; notifications moved from text-channel lanes to per-task-type forum channels, one post per task, status as forum tags, signals as mention messages inside the post, DM reduced to a morning digest) is fully merged:
+  - Stage B (Kitsu fetch swap) #279, Stage C (forum settings + admin UI) #280, Stage D (forum sending + ledger + forum/tag auto-create) #282, Stage E (aggregation, flap warnings, comments, digest) #283, Stage F (lane removal) #284.
+  - Acceptance coverage #285; submitter-marker reading side #286 (the Web Publisher writer side shipped separately in that product's 5.31).
+  - Forum zero-touch auto-setup #292; per-forum tag-assignment settings abolished #295 (tags stay fixed/common, bound to roles by name).
+- Follow-up fixes merged on top: staging deploy script file list #287, browser-acceptance stabilization #288, staging script UTF-8 pinning #289, System Status button wrap #290, connection-wizard step-4 button #291, wizard/URL fixes #293/#298/#299, scale-audit pre-release fixes #294/#296/#297/#300/#301/#303, log rotation and configured log level #302.
+- Current IA UI decisions remain in `docs/CURRENT-IA-UI-SPEC.md`; browser-rendered output is the final source of truth for visual acceptance.
 
 ## Staging boundary
 
-- The documented Staging contract is `staging-v10` (merged in https://github.com/ukyovfx/kitsusync/pull/268): the helper, installer and bootstrap read the operator and emergency account names from the root-owned `/etc/kitsusync-staging/operators.conf` instead of fixed names, and fail closed when it is missing or invalid. v10 keeps v9's isolation of the helper's Python via `cd /` and `python3 -I`. Installed-host adoption requires creating `operators.conf` first and then running `scripts/upgrade-kitsusync-staging-helper.ps1`; installed-host identity is not established by this document. The previously operator-reported helper SHA-256 `c2e8b1b8dda50357909e2b5f8081560c262cff30e0107958ab85b9366a726490` is historical evidence, not proof of current installed identity.
-- Staging is designed as a separate Compose project on `127.0.0.1:8091`, with isolated state and polling disabled. Production follows the separate release-only path on `127.0.0.1:8090`.
-- `scripts/deploy-kitsusync-staging-candidate.ps1 -CommitSha <sha>` is the documented candidate path. Confirm actual Staging identity, helper version, and checks when needed; a workflow marked skipped does not establish a deployed candidate.
+- The documented Staging contract is `staging-v10`: the helper, installer and bootstrap read the operator and emergency account names from the root-owned `/etc/kitsusync-staging/operators.conf` and fail closed when it is missing or invalid. The installed helper was upgraded on 2026-11-17 (`STAGING_HELPER_UPGRADE=PASS`, source `7045ddb1`).
+- Staging is a separate Compose project on `127.0.0.1:8091` with isolated state. Production follows the separate release-only path on `127.0.0.1:8090`.
+- `scripts/deploy-kitsusync-staging-candidate.ps1 -CommitSha <sha>` is the documented candidate path; the candidate must be a merged PR head with successful pull-request-event CI and Security Audit runs and an unexpired deployment artifact.
+- Staging is currently used for the forum-notification smoke (production connection, forum auto-setup, user mapping, status cycle) against the latest merged candidate.
 
 ## Production status and blocking gates
 
-- **No present Production KitsuSync revision, readiness, or deployment is verified by this document.** A historical 2026-09-28 read-only review reported revision `3d4dafc7d75658a5877d2e2332266c8e6145163d`; this is not current-state proof. Merging #235 did not install the helper or deploy any application.
-- The preflight collector reports Production capacity as `unknown/BLOCKED` whenever any relevant filesystem's simultaneous peak requirement or available capacity cannot be established. The new deployment wrapper mitigates backup ENOSPC and retains fail-closed rollback protections; **it does not prove sufficient Production capacity**. An administrator must attest the exact installed-wrapper/runtime filesystem requirements and capacity, provision insufficient filesystems, and rerun the check. Old backup sizes and a single free-space snapshot are not substitutes.
-- The one-time root-owned, fixed-path deployment-helper maintenance artifact is distinct from the published app release. Installing it requires an exact-predecessor and artifact-identity check plus separate operator authorization. There has been no authorized Production helper installation in this verification.
-- Before separately authorizing any Production application deployment, establish current artifact/provenance, live backup/rollback capacity and integrity, and `/ready=ready`; `setup_required`, capacity unknown/insufficient, or a failed check must block deployment. Use the supported installed fixed-path controls; do not bypass gates, directly modify Production Compose, or claim rollback guarantees for unmeasured conditions.
-- After an explicitly authorized and successful deployment, verify the actual running version/revision, health/readiness, Kitsu connection scope and Discord integration with runtime evidence. The accepted GitHub code state is not proof of these outcomes.
+- Production still runs the pre-renovation v0.7.1 lane model. The forum model reaches Production only through the release path: VERSION bump, release tag, release bundle, and the fixed-path deployment contract. Direct Compose changes are prohibited.
+- Blocking gates before the forum-model production release:
+  - Staging smoke completion (user mapping, baseline observation, a full WIP → WFA → RETAKE → WFA → DONE cycle, card/thumbnail/submitter-marker checks).
+  - Poll-interval decision: `kitsu_fetch_timing` measurements from staging decide between the current 10 s default and the designed 60 s.
+  - Gate A remainder: comment-fetch verification against the production Kitsu with the production account (team-membership check) is still open.
+- Known production behaviour of v0.7.1 that the renovation removes: the comments list endpoint returns 403 for the service account, so comment/mention detection is ineffective in v0.7.1; lane settings are abolished by the forum model.
 
 ## Current / Next / Pending
 
-- As checked immediately after #235 merged and before opening this documentation update, GitHub had no other open PRs. PR #220 remains closed as superseded.
-- Next: independently verify post-merge master checks; obtain the filesystem-specific Production capacity attestation without exposing secrets; prepare the separately reviewed one-time helper maintenance; then check readiness and request an exact, scoped deployment approval only when all gates pass.
-- Pending: current Production KitsuSync runtime identity, Production backup/capacity attestation, helper maintenance operation, `/ready` status and authorized deployment. None of these is implied complete by #235's merge.
-- The original dirty local checkout and the #235 PR worktree's test-generated `__pycache__` were not modified by the GitHub merge or this documentation work.
+- Current: staging smoke on the latest master candidate; small pre-release fix batches (scale-audit remainder, admin-UI findings from the smoke) land as separate PRs.
+- Next: finish the smoke and the poll-interval measurement, then cut the forum-model release (working version number 0.8.0) and deploy to Production under the contract, including the Kitsu preview-thumbnail proxy for Discord cards.
+- Pending: security-disposition implementation from the 2026-11-10 penetration-test rounds (Medium 8 / Low 10) is a separate track, not on the release critical path.
 
 ## Repository guidance
 
 - `docs/agent/START-HERE.md` points here for accepted `master` state and to `docs/agent/plans/active/` for durable active-task plans. Do not create duplicate plans when no further active repository implementation is needed.
 - Follow `AGENTS.md`, `docs/PRODUCTION_BOOTSTRAP.md`, and the relevant in-repo deployment contracts before scoped operations.
-- Current IA UI decisions remain in `docs/CURRENT-IA-UI-SPEC.md`; browser-rendered output is the final source of truth for visual acceptance.
 - Keep Production, Staging, and server administration acceptance boundaries distinct.
