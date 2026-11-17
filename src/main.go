@@ -1195,6 +1195,13 @@ func main() {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))
+		// Manual refetch of a guild's channel list, bypassing the admin pages'
+		// cache. A plain GET link (PRG): the operator explicitly asked to wait
+		// for Discord's answer, so botDo's retries run synchronously here.
+		mux.HandleFunc("GET "+prefix+"/admin/refresh-discord-channels", setup.RequireSession(setup.RefreshDiscordChannelsHandler(func() string {
+			botToken, _, _ := getDiscordSettings(db, conf)
+			return botToken
+		})))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
 		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
 	}

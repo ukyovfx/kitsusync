@@ -25,7 +25,12 @@ type ProjectDiscordResourceHealth struct {
 	LiveSavedChannelCount      int
 	StaleChannelCount          int
 	DuplicateSavedChannelCount int
-	Error                      string
+	// ChannelsStale means the report was summarized from a cached channel list
+	// past its TTL whose refresh failed; the display uses it to warn instead
+	// of failing the production.
+	ChannelsStale      bool
+	ChannelsRateLimited bool
+	Error              string
 }
 
 func (h ProjectDiscordResourceHealth) Healthy() bool {
@@ -101,12 +106,25 @@ func inspectProjectDiscordResources(project model.Project, db *gorm.DB) ProjectD
 		report.Error = "project Discord guild is not accessible"
 		return report
 	}
-	channels, err := ListGuildChannels(report.GuildID, token)
-	if err != nil {
+	// The channel list comes from the cache, so a rate limit cannot block the
+	// page: with cached data the report is summarized and flagged stale, and
+	// only a cold cache reports the read failure.
+	view := guildChannelListCache.view(report.GuildID, token)
+	if !view.hasData() {
 		report.Error = "project Discord channels could not be read"
 		return report
 	}
-	return mergeDiscordStatus(summarizeProjectDiscordResources(project, model.ListProjectWebhooks(db, project.KitsuProjectID), channels), status)
+	channels, decodeErr := decodeGuildChannelsBody(view.body)
+	if decodeErr != nil {
+		report.Error = "project Discord channels could not be read"
+		return report
+	}
+	report = mergeDiscordStatus(summarizeProjectDiscordResources(project, model.ListProjectWebhooks(db, project.KitsuProjectID), channels), status)
+	if !view.fresh && view.fetchFailed {
+		report.ChannelsStale = true
+		report.ChannelsRateLimited = view.rateLimited
+	}
+	return report
 }
 
 func renderProjectDiscordResourceNotice(db *gorm.DB, r *http.Request, project model.Project, lang string) string {

@@ -421,6 +421,9 @@ func buildProjectDiscordResourceCheck(lang string, db *gorm.DB, botToken string)
 		if report.Error != "" {
 			return diagCheck{Label: label, Status: "fail", Detail: fmt.Sprintf(t(lang, "%s: %s", "%s: %s"), project.Name, report.Error), Fix: t(lang, "このProductionのDiscord GuildとBot権限を確認してください。", "Review this Production's Discord Guild and bot permissions.")}
 		}
+		if report.ChannelsStale {
+			return diagCheck{Label: label, Status: "warn", Detail: fmt.Sprintf(t(lang, "%s: Discordの制限中(または再取得失敗)のため、少し古いチャンネル情報を確認しています。", "%s: Discord rate limiting (or a failed refetch) means the channel information checked is slightly old."), project.Name), Fix: t(lang, "フォーラム設定ページの「チャンネル情報を再取得」から取り直してください。", "Use \"Refresh channel info\" on the forum settings page to refetch.")}
+		}
 		if report.HasStaleResources() {
 			detail := fmt.Sprintf(t(lang, "%s: 保存channel %d件、Discord上で確認できるchannel %d件、stale %d件、重複 %d件です。", "%s: %d saved channel(s), %d live channel(s), %d stale, %d duplicate."), project.Name, report.SavedChannelCount, report.LiveSavedChannelCount, report.StaleChannelCount, report.DuplicateSavedChannelCount)
 			return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: t(lang, "Production詳細の通知ルーティングから、既存Guildを再検証し、不足channelだけを明示確認して修復してください。", "Open this Production's notification routing, revalidate the linked Guild, and explicitly repair only missing channels.")}

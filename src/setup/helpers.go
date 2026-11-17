@@ -621,6 +621,7 @@ func CreateCategory(guildID, name, botToken string) (string, error) {
 	if result.ID == "" {
 		return "", fmt.Errorf("discord category id was empty")
 	}
+	guildChannelListCache.invalidate(guildID)
 	return result.ID, nil
 }
 
@@ -645,6 +646,7 @@ func CreateTextChannel(guildID, categoryID, name, botToken string) (string, erro
 	if result.ID == "" {
 		return "", fmt.Errorf("discord channel id was empty")
 	}
+	guildChannelListCache.invalidate(guildID)
 	return result.ID, nil
 }
 
@@ -759,13 +761,19 @@ func ListBotGuilds(botToken string) ([]DiscordGuild, error) {
 }
 
 func ListGuildChannels(guildID, botToken string) ([]DiscordGuildChannel, error) {
-	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/channels", discordAPI, strings.TrimSpace(guildID)), nil, botToken)
+	body, status, err := guildChannelListCache.refresh(guildID, botToken)
 	if err != nil {
 		return nil, err
 	}
 	if status >= 400 {
 		return nil, discordBotAPIError("discord guild channel list failed", status, body)
 	}
+	return decodeGuildChannelsBody(body)
+}
+
+// decodeGuildChannelsBody reads the channel list from a raw guild channel
+// list body, which may come from the cache.
+func decodeGuildChannelsBody(body []byte) ([]DiscordGuildChannel, error) {
 	var channels []DiscordGuildChannel
 	if err := json.Unmarshal(body, &channels); err != nil {
 		return nil, fmt.Errorf("discord guild channel list response was invalid")
