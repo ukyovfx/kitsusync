@@ -135,6 +135,134 @@ func TestPlannerQuotesLatestCommentOnRetake(t *testing.T) {
 	}
 }
 
+// The RETAKE quote shares the timestamp parsing, so a zone-less created_at must
+// quote too instead of silently going empty.
+func TestPlannerQuotesRetakeCommentWithoutTimezone(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	planner.Now = now.Add(5 * time.Minute)
+	input := taskInput("s-retake", model.ForumRoleRetake, "person-1")
+	input.Comment = commentInput("comment-1", "## 修正してください\n詳細")
+	input.Comment.CreatedAt = "2026-11-15T09:04:00"
+	if _, err := planner.PlanTask(input, stubCard()); err != nil {
+		t.Fatalf("PlanTask: %v", err)
+	}
+
+	var row model.ForumOutbox
+	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:retake:%").
+		First(&row).Error; err != nil {
+		t.Fatalf("no retake signal: %v", err)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(row.Payload), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Quote != "修正してください" {
+		t.Errorf("retake quote = %q, want a quote for a zone-less created_at", payload.Quote)
+	}
+}
+
+func wfaSignalPayload(t *testing.T, db *gorm.DB) model.ForumPostMessagePayload {
+	t.Helper()
+	var row model.ForumOutbox
+	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:wfa:%").
+		First(&row).Error; err != nil {
+		t.Fatalf("no wfa signal: %v", err)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(row.Payload), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	return payload
+}
+
+// planWFAFromWIP seeds a posted task at WIP and moves it to WFA with comment,
+// so the WFA signal is a real transition.
+func planWFAFromWIP(t *testing.T, db *gorm.DB, planner *Planner, comment CommentInput) {
+	t.Helper()
+	seedPostedTask(t, db, planner)
+	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP, "person-1"), stubCard()); err != nil {
+		t.Fatalf("back to wip: %v", err)
+	}
+	planner.Now = planner.Now.Add(5 * time.Minute)
+	input := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
+	input.Comment = comment
+	input.CommentDate = "2026-11-15T09:04:00.000Z"
+	if _, err := planner.PlanTask(input, stubCard()); err != nil {
+		t.Fatalf("PlanTask: %v", err)
+	}
+}
+
+func TestPlannerReadsSubmitterMarkerOnWFA(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	comment := commentInput("comment-1", "提出しました\nkitsusync-submitter: 山田 太郎")
+	comment.AuthorName = "Web Publisher"
+	planWFAFromWIP(t, db, &planner, comment)
+
+	if got := wfaSignalPayload(t, db).Submitter; got != "山田 太郎" {
+		t.Errorf("submitter = %q, want the marker name", got)
+	}
+}
+
+// A marker written by anyone but the web publisher must not be trusted: it
+// would let a member fake who submitted the work.
+func TestPlannerIgnoresSubmitterMarkerFromAnotherAuthor(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	comment := commentInput("comment-1", "提出しました\nkitsusync-submitter: 山田 太郎")
+	comment.AuthorID = "person-9"
+	comment.AuthorName = "鈴木 一郎"
+	planWFAFromWIP(t, db, &planner, comment)
+
+	if got := wfaSignalPayload(t, db).Submitter; got != "" {
+		t.Errorf("submitter = %q, want empty for a non-service author", got)
+	}
+}
+
+// Kitsu sometimes omits the zone; that form must still resolve, not silently
+// disable the marker.
+func TestPlannerReadsSubmitterMarkerWithoutTimezone(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	comment := commentInput("comment-1", "提出しました\nkitsusync-submitter: 山田 太郎")
+	comment.CreatedAt = "2026-11-15T09:04:00"
+	comment.AuthorName = "Web Publisher"
+	planWFAFromWIP(t, db, &planner, comment)
+
+	if got := wfaSignalPayload(t, db).Submitter; got != "山田 太郎" {
+		t.Errorf("submitter = %q, want the marker name for a zone-less created_at", got)
+	}
+}
+
+func TestPlannerOmitsSubmitterWithoutMarker(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	planWFAFromWIP(t, db, &planner, commentInput("comment-1", "提出しました"))
+
+	if got := wfaSignalPayload(t, db).Submitter; got != "" {
+		t.Errorf("submitter = %q, want empty without a marker", got)
+	}
+}
+
+func TestPlannerIgnoresMalformedSubmitterMarker(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	planWFAFromWIP(t, db, &planner, commentInput("comment-1", "提出しました\n kitsusync-submitter: 山田\nkitsusync-submitter:   "))
+
+	if got := wfaSignalPayload(t, db).Submitter; got != "" {
+		t.Errorf("submitter = %q, want empty for a malformed marker", got)
+	}
+}
+
 func TestPlannerWarnsOncePerFlapEpisode(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)

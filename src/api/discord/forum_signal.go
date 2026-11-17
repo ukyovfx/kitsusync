@@ -18,12 +18,15 @@ type ForumSignal struct {
 }
 
 // RenderForumSignal renders the signal for a forum intent.
-//   - wfa:     reviewer mention + チェックをお願いします。
+//   - wfa:     reviewer mention + チェックをお願いします。 (+ optional 提出 line)
 //   - retake:  assignee mention + リテイクです。 (+ optional quote)
 //   - done:    assignee mention + 完了しました。
 //   - assign:  new assignee mention + このタスクの担当になりました。
 //   - comment: mention + コメントがあります。 (+ optional quote)
-func RenderForumSignal(intent, taskURL, quote string, userIDs, roleIDs []string) ForumSignal {
+//
+// submitter is the display name from the submitter marker. It is shown as text
+// only: the mention list stays exactly what the caller computed.
+func RenderForumSignal(intent, taskURL, quote, submitter string, userIDs, roleIDs []string) ForumSignal {
 	mentions := forumMentionText(userIDs, roleIDs)
 	var line string
 	switch intent {
@@ -45,6 +48,11 @@ func RenderForumSignal(intent, taskURL, quote string, userIDs, roleIDs []string)
 		parts = append(parts, mentions)
 	}
 	parts = append(parts, line)
+	if intent == "wfa" {
+		if trimmed := strings.TrimSpace(submitter); trimmed != "" {
+			parts = append(parts, "提出："+sanitizeDiscordText(trimmed))
+		}
+	}
 	if intent == "retake" || intent == "comment" {
 		if trimmed := strings.TrimSpace(quote); trimmed != "" {
 			parts = append(parts, "> "+sanitizeDiscordText(trimmed))

@@ -206,7 +206,7 @@ func TestPostForumMessageCarriesNonceAndSuppressedMentions(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"msg-1","channel_id":"thread-1"}`))
 	})
 
-	signal := RenderForumSignal("wfa", "https://kitsu/productions/1/shots/tasks/2", "", []string{"111111111111111111"}, nil)
+	signal := RenderForumSignal("wfa", "https://kitsu/productions/1/shots/tasks/2", "", "", []string{"111111111111111111"}, nil)
 	msg, err := PostForumMessage("token-1", "thread-1", ForumSignalMessage(signal, ForumNonce("task-1", 7)))
 	if err != nil {
 		t.Fatalf("PostForumMessage: %v", err)
@@ -268,7 +268,7 @@ func TestRenderForumSignalTemplates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.intent, func(t *testing.T) {
-			signal := RenderForumSignal(tc.intent, url, tc.quote, []string{"111111111111111111"}, nil)
+			signal := RenderForumSignal(tc.intent, url, tc.quote, "", []string{"111111111111111111"}, nil)
 			for _, want := range tc.want {
 				if !strings.Contains(signal.Content, want) {
 					t.Errorf("content %q missing %q", signal.Content, want)
@@ -282,7 +282,7 @@ func TestRenderForumSignalTemplates(t *testing.T) {
 }
 
 func TestRenderForumSignalWithoutRecipientsKeepsURL(t *testing.T) {
-	signal := RenderForumSignal("done", "https://kitsu.example/t/1", "", nil, nil)
+	signal := RenderForumSignal("done", "https://kitsu.example/t/1", "", "", nil, nil)
 	if signal.Content != "完了しました。\nhttps://kitsu.example/t/1" {
 		t.Errorf("content = %q", signal.Content)
 	}

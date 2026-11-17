@@ -8,7 +8,7 @@ import (
 
 func TestRenderForumSignalCommentCarriesQuote(t *testing.T) {
 	const url = "https://kitsu.example/productions/1/shots/tasks/2"
-	signal := RenderForumSignal("comment", url, "ここを直してください", []string{"111111111111111111"}, nil)
+	signal := RenderForumSignal("comment", url, "ここを直してください", "", []string{"111111111111111111"}, nil)
 	for _, want := range []string{"<@111111111111111111>", "コメントがあります。", "> ここを直してください", url} {
 		if !strings.Contains(signal.Content, want) {
 			t.Errorf("content %q missing %q", signal.Content, want)
@@ -20,7 +20,7 @@ func TestRenderForumSignalCommentCarriesQuote(t *testing.T) {
 }
 
 func TestRenderForumSignalCommentWithoutQuote(t *testing.T) {
-	signal := RenderForumSignal("comment", "https://kitsu.example/t/1", "", nil, nil)
+	signal := RenderForumSignal("comment", "https://kitsu.example/t/1", "", "", nil, nil)
 	if strings.Contains(signal.Content, ">") {
 		t.Errorf("content must not quote an empty comment: %q", signal.Content)
 	}
@@ -30,9 +30,29 @@ func TestRenderForumSignalCommentWithoutQuote(t *testing.T) {
 }
 
 func TestRenderForumSignalIgnoresQuoteForOtherIntents(t *testing.T) {
-	signal := RenderForumSignal("done", "https://kitsu.example/t/1", "余計な引用", nil, nil)
+	signal := RenderForumSignal("done", "https://kitsu.example/t/1", "余計な引用", "", nil, nil)
 	if strings.Contains(signal.Content, "余計な引用") {
 		t.Errorf("only retake and comment quote: %q", signal.Content)
+	}
+}
+
+func TestRenderForumSignalShowsSubmitterWithoutMentioning(t *testing.T) {
+	signal := RenderForumSignal("wfa", "https://kitsu.example/t/1", "", "山田 太郎", []string{"222222222222222222"}, nil)
+	if !strings.Contains(signal.Content, "提出：山田 太郎") {
+		t.Errorf("content %q missing the submitter line", signal.Content)
+	}
+	if strings.Count(signal.Content, "<@") != 1 {
+		t.Errorf("submitter must not become a mention: %q", signal.Content)
+	}
+	if len(signal.AllowedUserIDs) != 1 || signal.AllowedUserIDs[0] != "222222222222222222" {
+		t.Errorf("allowed users = %v, want the reviewer only", signal.AllowedUserIDs)
+	}
+}
+
+func TestRenderForumSignalWithoutSubmitterKeepsShape(t *testing.T) {
+	signal := RenderForumSignal("wfa", "https://kitsu.example/t/1", "", "", []string{"222222222222222222"}, nil)
+	if strings.Contains(signal.Content, "提出：") {
+		t.Errorf("content must not carry an empty submitter line: %q", signal.Content)
 	}
 }
 
