@@ -816,6 +816,34 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         await page.screenshot({ path: path.join(output, `forum-settings-saved-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'the Animation → storyboard assignment was refused once for its missing trigger tags, then the filled tag rows persisted the mapping and the WFA status destination; both survived a reload');
+        // Zero-touch setup: from an untouched forum setup, one press of the Bot
+        // auto-create button seeds one route per Kitsu Task Type, creates a
+        // forum with the role tags under the Production's Discord category and
+        // saves the template status roles.
+        await fixture(page, 'forum-zero-touch');
+        const zeroTouchURL = new URL(page.url());
+        zeroTouchURL.searchParams.delete('msg');
+        await page.goto(zeroTouchURL.href, { waitUntil: 'networkidle' });
+        for (const [statusName, role] of [['Waiting For Approval', 'wfa'], ['Retake', 'retake'], ['Done', 'done']]) {
+          const templateSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: new RegExp(`^${statusName}$`) }) }).locator('select[name="st_role"]');
+          if (await templateSelect.inputValue() !== role) throw new Error(`Forum settings did not pre-fill the ${statusName} template role in ${locale.lang}`);
+        }
+        const zeroTouchNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'forums_created', { waitUntil: 'load', timeout: 15000 });
+        await page.locator('form.section-stack').locator('button[name="action"][value="create_forums"]').click({ noWaitAfter: true });
+        try {
+          await zeroTouchNavigation;
+        } catch (error) {
+          const refusal = (await page.locator('body').innerText()).split('\n').map(line => line.trim()).filter(Boolean).join(' | ');
+          throw new Error(`the zero-touch auto-create was refused in ${locale.lang}: ${refusal}`);
+        }
+        const routedSelects = await page.locator('select[name="tt_forum"]').evaluateAll(nodes => nodes.map(node => node.value));
+        if (routedSelects.some(value => !value)) throw new Error(`the Bot auto-create left a Task Type unrouted in ${locale.lang}: ${JSON.stringify(routedSelects)}`);
+        const zeroTouchReload = await page.reload({ waitUntil: 'networkidle' });
+        if (new URL(zeroTouchReload.url()).searchParams.get('msg') !== 'forums_created') throw new Error(`zero-touch reload lost the success state in ${locale.lang}: ${zeroTouchReload.url()}`);
+        const persistedSelects = await page.locator('select[name="tt_forum"]').evaluateAll(nodes => nodes.map(node => node.value));
+        if (JSON.stringify(persistedSelects) !== JSON.stringify(routedSelects)) throw new Error(`zero-touch state did not survive a reload in ${locale.lang}: ${JSON.stringify(persistedSelects)}`);
+        await page.screenshot({ path: path.join(output, `forum-zero-touch-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/forum?project=reviewer-production&msg=forums_created', locale.lang, viewport.name, 'zero-touch forum setup', 'one press of the Bot auto-create button created a forum with tags per Task Type, applied the template status roles and saved');
         // Put the seeded routing back for the Notifications checks that follow.
         await fixture(page, 'restore-routing');
 

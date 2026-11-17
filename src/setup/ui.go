@@ -1172,7 +1172,9 @@ func baseAdminJS(lang string) string {
         return;
       }
       form.dataset.submitting = '1';
+      var submitter = event.submitter;
       form.querySelectorAll('button[type="submit"], input[type="submit"]').forEach(function(button){
+        if(button === submitter){ return; }
         button.disabled = true;
         if(button.tagName === 'BUTTON'){
           button.dataset.originalText = button.textContent;

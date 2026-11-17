@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"net/http"
@@ -389,6 +390,23 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			}
 			scenario.Store("ready")
 			w.WriteHeader(http.StatusNoContent)
+		case "forum-zero-touch":
+			// A Production whose forum setup was never finished: no saved forum
+			// settings at all, so the browser run proves one press of the Bot
+			// auto-create button finishes the whole setup from template defaults.
+			for _, table := range []any{
+				&model.ProductionForumConfig{},
+				&model.ProductionForumRoute{},
+				&model.ProductionForumStatusRole{},
+				&model.ProductionForumTag{},
+			} {
+				if err := db.Where("production_id = ?", project.KitsuProjectID).Delete(table).Error; err != nil {
+					http.Error(w, "could not clear the forum zero-touch fixture", http.StatusInternalServerError)
+					return
+				}
+			}
+			scenario.Store("ready")
+			w.WriteHeader(http.StatusNoContent)
 		case "restore-routing":
 			// The forum settings page replaces the Production's whole routing, so
 			// the browser run puts the seeded mapping back before it re-reads the
@@ -463,6 +481,14 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if len(unexpectedDiscord) != 0 {
 		t.Fatalf("synthetic Discord fixture blocked an unexpected route: %s", <-unexpectedDiscord)
 	}
+}
+
+// reviewerBrowserChannelID derives a stable synthetic Discord channel id from
+// a name, so a retried create for the same forum reuses the same id.
+func reviewerBrowserChannelID(name string) string {
+	sum := fnv.New32a()
+	sum.Write([]byte(name))
+	return "77777777777777" + fmt.Sprintf("%05d", sum.Sum32()%100000)
 }
 
 // reviewerBrowserForumSettings builds a complete, validatable forum settings
@@ -623,6 +649,21 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 				body = strings.TrimSuffix(body, `]`) + `,{"id":"33333333333333334","name":"KitsuSync Bot","position":10,"mentionable":false,"permissions":"536874000"}]`
 			}
 		}
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
+		var payload struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || strings.TrimSpace(payload.Name) == "" {
+			select {
+			case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:
+			default:
+			}
+			return nil, fmt.Errorf("blocked synthetic Discord channel create with an invalid payload")
+		}
+		// The created forum id is derived from the name, so the same forum name
+		// always maps to the same synthetic channel and a retry reuses it.
+		id := reviewerBrowserChannelID(payload.Name)
+		body = `{"id":"` + id + `","name":"` + payload.Name + `","guild_id":"` + d.expectedGuild + `","type":15,"parent_id":"` + reviewerBrowserCategory + `","available_tags":[{"id":"` + id + `-wfa","name":"WFA"},{"id":"` + id + `-retake","name":"RETAKE"},{"id":"` + id + `-done","name":"DONE"},{"id":"` + id + `-wip","name":"WIP"}]}`
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
 		body = `[{"id":"66666666666666661","name":"compositing","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666662","name":"animation","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666663","name":"review","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666664","name":"storyboard","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666664-wfa","name":"Waiting for approval"},{"id":"66666666666666664-retake","name":"Retake"},{"id":"66666666666666664-done","name":"Done"},{"id":"66666666666666664-wip","name":"In progress"}]}]`
 	default:
