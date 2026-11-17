@@ -462,3 +462,28 @@ func TestForumSettingsSavesWithoutAnyKitsuOrDiscordLookup(t *testing.T) {
 		t.Fatalf("re-save with every lookup down lost settings: %+v", loaded)
 	}
 }
+
+func TestForumSettingsOfflineReuseRefusedAfterGuildChange(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
+		t.Fatalf("seed save failed: %d", w.Code)
+	}
+	// Discord is unreachable and the operator changes the server ID in the
+	// same save. The saved tag rows belong to the old guild, so they must not
+	// be reused under the new guild ID.
+	stubForumLookups(t, forumTestError("discord down"))
+	form := completeForumForm()
+	form.Set("guild_id", "g2")
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	loaded, ok, _ := model.LoadProductionForumSettings(db, "p1")
+	if !ok {
+		t.Fatal("the refused save must not delete the saved settings")
+	}
+	if loaded.Config.GuildID != "g1" {
+		t.Fatalf("saved guild = %q, want g1: the refused save must not store the new guild with the old guild's tags", loaded.Config.GuildID)
+	}
+}

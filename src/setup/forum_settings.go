@@ -244,7 +244,7 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 				for _, route := range settings.Routes {
 					routed[route.ForumChannelID] = struct{}{}
 				}
-				if saved, ok, err := model.LoadProductionForumSettings(db, projectID); err == nil && ok {
+				if saved, ok, err := model.LoadProductionForumSettings(db, projectID); err == nil && ok && strings.TrimSpace(saved.Config.GuildID) == guildID {
 					for _, tag := range saved.Tags {
 						if _, keep := routed[tag.ForumChannelID]; keep {
 							settings.Tags = append(settings.Tags, tag)
