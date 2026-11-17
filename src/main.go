@@ -31,6 +31,7 @@ import (
 
 	"github.com/gookit/slog"
 	"github.com/gookit/slog/handler"
+	"github.com/gookit/slog/rotatefile"
 
 	"github.com/pieterclaerhout/go-waitgroup"
 	"github.com/robfig/cron/v3"
@@ -837,6 +838,15 @@ func newApplicationHTTPServer(handler http.Handler) *http.Server {
 	}
 }
 
+// logLevelForEnv maps APP_ENV to the log level: development opts into DEBUG,
+// everything else (production, staging, unset) stays at INFO.
+func logLevelForEnv(appEnv string) slog.Level {
+	if appEnv == "development" {
+		return slog.DebugLevel
+	}
+	return slog.InfoLevel
+}
+
 func main() {
 	// The standard library logger writes to stderr and is used by the CLI
 	// paths. Keep it on the same redacting boundary as the application logger.
@@ -851,25 +861,37 @@ func main() {
 		logger.Output = logutil.NewRedactingWriter(os.Stdout)
 	})
 
-	// Ensure file logging survives fresh containers where ./logs may not exist yet.
-	logFile, err := logutil.OpenAppendFile("./logs/all-levels.log")
+	// Log level: default INFO, APP_ENV=development opts into DEBUG. The file
+	// handler needs the level explicitly: gookit/slog applies SetLogLevel only
+	// to the std handler, a handler built with AllLevels ignores it.
+	appEnv := os.Getenv("APP_ENV")
+	logLevel := logLevelForEnv(appEnv)
+
+	rotateW, err := rotatefile.NewWriter(&rotatefile.Config{
+		Filepath:   "./logs/all-levels.log",
+		MaxSize:    10 * rotatefile.OneMByte,
+		BackupNum:  5,
+		FilePerm:   rotatefile.DefaultFilePerm,
+		RenameFunc: rotatefile.DefaultFilenameFn,
+	})
 	if err != nil {
 		log.Fatalf("failed to open log file: %v", err)
 	}
-	defer logFile.Close()
+	// The rotate writer is intentionally not closed: gookit/slog v0.5.5's
+	// rotatefile races Writer.Close against the clean-up goroutine it starts
+	// on the first write (both touch the stop-channel fields without
+	// synchronization). Writes go straight to the file, so process exit
+	// loses nothing.
 
-	redactingWriter := logutil.NewRedactingWriter(logFile)
-	h1 := handler.NewIOWriterHandler(redactingWriter, slog.AllLevels)
+	redactingWriter := logutil.NewRedactingWriter(rotateW)
+	h1 := handler.NewSimpleHandler(redactingWriter, logLevel)
 	slog.PushHandler(h1)
+	slog.SetLogLevel(logLevel)
 
-	// Set log level based on APP_ENV (production = INFO, development = DEBUG)
-	appEnv := os.Getenv("APP_ENV")
-	if appEnv == "production" {
-		slog.SetLogLevel(slog.InfoLevel)
-		slog.Info("App started", "env", appEnv, "log_level", "INFO")
-	} else {
-		slog.SetLogLevel(slog.DebugLevel)
+	if logLevel == slog.DebugLevel {
 		slog.Debug("App started", "env", appEnv, "log_level", "DEBUG")
+	} else {
+		slog.Info("App started", "env", appEnv, "log_level", "INFO")
 	}
 
 	start := time.Now()
