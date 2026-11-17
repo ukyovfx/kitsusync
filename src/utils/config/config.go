@@ -67,6 +67,8 @@ type Config struct {
 		SkipComments        bool
 		RequestInterval     int
 		PollIntervalSeconds int `toml:"pollIntervalSeconds"`
+		// MaxResponseMB は Kitsu 応答本文の上限（MiB）。0 なら既定（64 MiB）。
+		MaxResponseMB int `toml:"maxResponseMB"`
 	}
 	Discord struct {
 		EmbedsPerRequests int
@@ -174,6 +176,9 @@ func (c *Config) Validate() []string {
 	}
 	if c.Kitsu.PollIntervalSeconds != 0 && (c.Kitsu.PollIntervalSeconds < minPollIntervalSeconds || c.Kitsu.PollIntervalSeconds > maxPollIntervalSeconds) {
 		issues = append(issues, fmt.Sprintf("[FATAL] kitsu.pollIntervalSeconds must be between %d and %d", minPollIntervalSeconds, maxPollIntervalSeconds))
+	}
+	if c.Kitsu.MaxResponseMB < 0 {
+		issues = append(issues, "[FATAL] kitsu.maxResponseMB must be zero (default) or a positive number of MiB")
 	}
 	if c.Notification.DeliveryPayloadRetentionDays < 0 || c.Notification.DeliveryPayloadRetentionDays > maxDeliveryPayloadRetentionDays {
 		issues = append(issues, fmt.Sprintf("[FATAL] notification.deliveryPayloadRetentionDays must be between 0 and %d", maxDeliveryPayloadRetentionDays))

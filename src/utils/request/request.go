@@ -121,6 +121,24 @@ func DoWithError(token, method, url string, payload, unmarshal interface{}) (str
 // retryDelays は試行間の待機時間（2s → 6s）。テストから短縮できるよう var にしている。
 var retryDelays = []time.Duration{2 * time.Second, 6 * time.Second}
 
+// DefaultMaxResponseBodyBytes はレスポンス本文の既定上限（64 MiB）。
+// 大規模プロジェクトでは全エンティティ/全タスクの JSON が 4 MiB を超えるため、
+// 旧来の 4 MiB 固定値では切り捨てられた JSON が decode エラーになっていた（F1）。
+const DefaultMaxResponseBodyBytes int64 = 64 << 20
+
+var maxResponseBodyBytes = DefaultMaxResponseBodyBytes
+
+// ConfigureMaxResponseBodyLimit はレスポンス本文の上限（バイト）を上書きする。
+// conf.toml の kitsu.maxResponseMB（MiB 単位）を main から反映するためのもの。
+// 非正の値は拒否し、既定値のままにする。
+func ConfigureMaxResponseBodyLimit(maxBytes int64) error {
+	if maxBytes <= 0 {
+		return fmt.Errorf("response body limit must be positive, got %d", maxBytes)
+	}
+	maxResponseBodyBytes = maxBytes
+	return nil
+}
+
 // isIdempotentMethod は自動リトライしても書き込みが重複しないメソッドかを返す。
 func isIdempotentMethod(method string) bool {
 	switch strings.ToUpper(method) {
@@ -214,7 +232,7 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 		return attemptResult{status: statusPermanent, err: fmt.Errorf("verified Kitsu origin required")}
 	}
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
 		Transport: pinnedTransport(origin.PinnedIPs),
 		// Legacy Kitsu callers must never replay bearer credentials to a
 		// redirect target. Callers receive the original 3xx as a failure.
@@ -246,10 +264,20 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	limit := maxResponseBodyBytes
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		slog.Error("request.Do: read body failed", "err", err, "url", redactURL(url))
 		return attemptResult{status: statusTransient, err: fmt.Errorf("read response: %w", err)}
+	}
+	if int64(len(respBody)) > limit {
+		// 上限超過は同じ URL では再試行しても無駄なので永続エラー扱いにする。
+		// 旧来は黙って切り捨てて decode エラーになっていた（F1）。
+		slog.Error("request.Do: response too large",
+			"error_class", "response_too_large",
+			"limit", limit,
+			"url", redactURL(url))
+		return attemptResult{status: statusPermanent, err: fmt.Errorf("response too large (limit=%d bytes)", limit)}
 	}
 
 	if os.Getenv("Debug") == "true" {
