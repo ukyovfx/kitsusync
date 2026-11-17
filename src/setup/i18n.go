@@ -21,6 +21,14 @@ func withLang(path string, r *http.Request) string {
 	return appendLang(path, currentLang(r))
 }
 
+// langURL keeps only the page-state query keys, so a language toggle drops
+// one-shot flash and validation parameters instead of replaying them.
+var langURLKeptKeys = []string{
+	"project", "tab", "wizard_step", "plan_guild", "plan_category",
+	"notification_language", "repair", "edit", "reviewer", "reviewer_task_type",
+	"edit_routing", "legacy", "wizard", "apply_notifications", "discord_guild_id",
+}
+
 func langURL(r *http.Request, lang string) string {
 	if r == nil || r.URL == nil {
 		return "/?lang=" + lang
@@ -29,8 +37,14 @@ func langURL(r *http.Request, lang string) string {
 	if target == "" {
 		target = "/"
 	}
-	if raw := r.URL.RawQuery; raw != "" {
-		target += "?" + raw
+	kept := url.Values{}
+	for _, key := range langURLKeptKeys {
+		if value := r.URL.Query().Get(key); value != "" {
+			kept.Set(key, value)
+		}
+	}
+	if encoded := kept.Encode(); encoded != "" {
+		target += "?" + encoded
 	}
 	return appendLang(target, lang)
 }
