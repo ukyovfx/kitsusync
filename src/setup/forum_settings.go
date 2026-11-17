@@ -26,9 +26,10 @@ type forumTagInfo struct {
 }
 
 type forumChannelInfo struct {
-	ID   string
-	Name string
-	Tags []forumTagInfo
+	ID       string
+	Name     string
+	ParentID string
+	Tags     []forumTagInfo
 }
 
 // Lookups are variables so tests run without Kitsu or Discord.
@@ -54,6 +55,7 @@ func listGuildForumChannels(guildID, botToken string) ([]forumChannelInfo, error
 		ID            string `json:"id"`
 		Name          string `json:"name"`
 		Type          int    `json:"type"`
+		ParentID      string `json:"parent_id"`
 		AvailableTags []struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
@@ -67,7 +69,7 @@ func listGuildForumChannels(guildID, botToken string) ([]forumChannelInfo, error
 		if channel.Type != discordChannelTypeForum {
 			continue
 		}
-		forum := forumChannelInfo{ID: channel.ID, Name: channel.Name}
+		forum := forumChannelInfo{ID: channel.ID, Name: channel.Name, ParentID: strings.TrimSpace(channel.ParentID)}
 		for _, tag := range channel.AvailableTags {
 			forum.Tags = append(forum.Tags, forumTagInfo{ID: tag.ID, Name: tag.Name})
 		}
@@ -90,6 +92,43 @@ func forumRoleLabel(lang, role string) string {
 		return t(lang, "作業中（タグのみ）", "In progress (tag only)")
 	}
 	return role
+}
+
+// forumTemplateRoleForStatus maps a Kitsu status name to the default forum
+// role. Owner decision 2026-11-18: the mapping is decided by the status name,
+// so it is applied as a template instead of being typed by the operator.
+func forumTemplateRoleForStatus(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "waiting for approval":
+		return model.ForumRoleWFA
+	case "retake":
+		return model.ForumRoleRetake
+	case "done", "approved":
+		return model.ForumRoleDone
+	case "work in progress":
+		return model.ForumRoleWIP
+	}
+	return ""
+}
+
+// forumTemplateStatusRoles builds the default status → role rows from the live
+// Kitsu status list. Statuses the template does not name stay unmapped.
+func forumTemplateStatusRoles(db *gorm.DB) []model.ProductionForumStatusRole {
+	statuses, err := forumStatusLister(db)
+	if err != nil {
+		return nil
+	}
+	var rows []model.ProductionForumStatusRole
+	for _, status := range statuses {
+		name := strings.TrimSpace(status.Name)
+		if name == "" {
+			name = status.ShortName
+		}
+		if role := forumTemplateRoleForStatus(name); role != "" {
+			rows = append(rows, model.ProductionForumStatusRole{StatusID: status.ID, StatusName: name, Role: role})
+		}
+	}
+	return rows
 }
 
 // ForumSettingsHandler serves /admin/forum?project=<Kitsu project ID>.
@@ -219,6 +258,12 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	}
 
 	var notices strings.Builder
+	switch msg := r.FormValue("msg"); msg {
+	case "forums_created":
+		notices.WriteString(`<div class="notice" role="status">` + esc(t(lang, "フォーラムとタグを作成し、設定を保存しました。", "Created the forums and tags and saved the settings.")) + `</div>`)
+	case "saved":
+		notices.WriteString(`<div class="notice" role="status">` + esc(t(lang, "設定を保存しました。", "Settings saved.")) + `</div>`)
+	}
 	taskTypes := forumTaskTypeLister(db, productionID)
 	statuses, statusErr := forumStatusLister(db)
 	var forums []forumChannelInfo
@@ -248,10 +293,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	}
 	errorHTML := ""
 	if saveErr != nil {
-		if errors.Is(saveErr, errForumsCreatedNeedsRoles) {
-			// Not a failure: the forums exist and only the status mapping is left.
-			errorHTML = `<div class="notice" role="status">` + esc(saveErr.Error()) + `</div>`
-		} else if errors.Is(saveErr, errForumCreateAction) {
+		if errors.Is(saveErr, errForumCreateAction) {
 			// Creation errors are already written for the operator in Japanese.
 			errorHTML = `<div class="notice notice-error" role="alert">` + esc(saveErr.Error()) + `</div>`
 		} else {
@@ -278,6 +320,14 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	roleByStatus := map[string]string{}
 	for _, row := range current.StatusRoles {
 		roleByStatus[row.StatusID] = row.Role
+	}
+	if submitted == nil && len(current.StatusRoles) == 0 {
+		// First look at an unmapped Production: show the template defaults so the
+		// operator adjusts instead of typing. Saved values always win once they
+		// exist, and the create action saves the same template.
+		for _, row := range forumTemplateStatusRoles(db) {
+			roleByStatus[row.StatusID] = row.Role
+		}
 	}
 	roleOptions := make([][2]string, 0, len(forumRoleOptions))
 	for _, role := range forumRoleOptions {
@@ -344,7 +394,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		tagSections.WriteString(`</tbody></table>`)
 	}
 	if tagSections.Len() == 0 {
-		tagSections.WriteString(`<p class="field-help">` + esc(t(lang, "タスクタイプにフォーラムを選んで一度保存すると、ここにタグの設定が出ます。", "Pick a forum for a Task Type and save once; the tag settings appear here.")) + `</p>`)
+		tagSections.WriteString(`<p class="field-help">` + esc(t(lang, "「Botでフォーラムとタグを作成」を押すと、タスクタイプごとのフォーラムとタグが作られ、ここに設定が出ます。", "Press \"Create forums and tags with the Bot\"; it makes a forum and tags per Task Type and the settings appear here.")) + `</p>`)
 	}
 
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/forum", r)) + `" class="section-stack">` +
@@ -353,9 +403,9 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<label class="field-label" for="forum-guild">` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</label><input id="forum-guild" name="guild_id" value="` + esc(guildID) + `" autocomplete="off"></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2><table class="data-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "確認待ち・リテイク・完了にそれぞれステータスを1つ以上割り当てます。", "Assign at least one status each to Waiting, Retake and Done.")) + `</p><table class="data-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
+		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p><table class="data-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "役割 → フォーラムのタグ", "Role → forum tag")) + `</h2>` + tagSections.String() + `</section>` +
-		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button> <button type="submit" name="action" value="create_forums" class="btn-ghost">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
+		`<div class="button-row"><button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button> <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
 
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`
 	return adminPage(lang, t(lang, "フォーラム通知の設定", "Forum notification settings"), r, body)

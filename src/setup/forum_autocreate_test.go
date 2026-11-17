@@ -27,8 +27,18 @@ func stubForumCreate(t *testing.T, created *[]string) {
 	}
 }
 
+// stubNoExistingForums empties the Discord forum list, so the auto-create
+// action creates every forum instead of reusing one that is already there.
+func stubNoExistingForums(t *testing.T) {
+	t.Helper()
+	old := forumChannelLister
+	t.Cleanup(func() { forumChannelLister = old })
+	forumChannelLister = func(string, string) ([]forumChannelInfo, error) { return nil, nil }
+}
+
 func TestForumAutoCreateMakesForumAndTagsPerTaskType(t *testing.T) {
 	stubForumLookups(t, nil)
+	stubNoExistingForums(t)
 	var created []string
 	stubForumCreate(t, &created)
 	db := newForumPageDB(t)
@@ -86,26 +96,113 @@ func TestForumAutoCreateDoesNotDuplicateExistingForums(t *testing.T) {
 	}
 }
 
-func TestForumAutoCreateWithoutStatusRolesKeepsCreatedForums(t *testing.T) {
+func TestForumAutoCreateWithoutStatusRolesAppliesTemplateRoles(t *testing.T) {
 	stubForumLookups(t, nil)
+	stubNoExistingForums(t)
 	var created []string
 	stubForumCreate(t, &created)
 	db := newForumPageDB(t)
 
-	form := url.Values{"project": {"p1"}, "mode": {"forum"}, "guild_id": {"g1"}, "action": {"create_forums"}}
-	form["tt_id"], form["tt_name"], form["tt_forum"] = []string{"tt-anim"}, []string{"Animation"}, []string{""}
+	// One press with nothing mapped: the Bot seeds the routes from the Kitsu
+	// Task Type list, creates the forums and tags, applies the template status
+	// roles and saves — no dead end asking for roles.
+	form := url.Values{"project": {"p1"}, "guild_id": {"g1"}, "action": {"create_forums"}}
 	w := forumPost(t, db, form)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d", w.Code)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "new-Animation") {
-		t.Fatalf("page does not show the created forum: %s", w.Body.String())
+	if strings.Join(created, ",") != "Animation,Compositing" {
+		t.Fatalf("created forums = %v", created)
 	}
-	if !strings.Contains(w.Body.String(), "Kitsuのステータス") {
-		t.Fatalf("page does not say what is left to do: %s", w.Body.String())
+	loaded, ok, err := model.LoadProductionForumSettings(db, "p1")
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
 	}
-	if len(created) != 2 {
-		t.Fatalf("created = %v", created)
+	roles := map[string]string{}
+	for _, row := range loaded.StatusRoles {
+		roles[row.StatusID] = row.Role
+	}
+	if len(roles) != 3 || roles["s-wfa"] != "wfa" || roles["s-retake"] != "retake" || roles["s-done"] != "done" {
+		t.Fatalf("template status roles = %v", roles)
+	}
+	if len(loaded.Tags) != 8 {
+		t.Fatalf("tags = %+v", loaded.Tags)
+	}
+}
+
+func TestForumAutoCreateFromBrowserFormShape(t *testing.T) {
+	// The zero-touch browser POST carries the whole rendered form: Task Type
+	// rows with no forum chosen yet, and the template status roles pre-filled.
+	stubForumLookups(t, nil)
+	stubNoExistingForums(t)
+	var created []string
+	stubForumCreate(t, &created)
+	db := newForumPageDB(t)
+
+	form := url.Values{
+		"project":  {"p1"},
+		"guild_id": {""},
+		"action":   {"create_forums"},
+		"tt_id":    {"tt-anim", "tt-comp"},
+		"tt_name":  {"Animation", "Compositing"},
+		"tt_forum": {"", ""},
+		"st_id":    {"s-wfa", "s-retake", "s-done", "s-wip"},
+		"st_name":  {"Waiting For Approval", "Retake", "Done", "WIP"},
+		"st_role":  {"wfa", "retake", "done", ""},
+	}
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if strings.Join(created, ",") != "Animation,Compositing" {
+		t.Fatalf("created forums = %v", created)
+	}
+	loaded, ok, err := model.LoadProductionForumSettings(db, "p1")
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
+	}
+	if len(loaded.Routes) != 2 || len(loaded.Tags) != 8 {
+		t.Fatalf("routes = %+v tags = %+v", loaded.Routes, loaded.Tags)
+	}
+}
+
+func TestForumAutoCreateResumesFromCreatedButUnsavedForums(t *testing.T) {
+	stubForumLookups(t, nil)
+	var created []string
+	stubForumCreate(t, &created)
+	// Discord already has both forums (an earlier run was interrupted before the
+	// save), so the retry must reuse them instead of creating duplicates.
+	oldLister := forumChannelLister
+	t.Cleanup(func() { forumChannelLister = oldLister })
+	forumChannelLister = func(string, string) ([]forumChannelInfo, error) {
+		tags := []forumTagInfo{{ID: "t1", Name: "WFA"}, {ID: "t2", Name: "RETAKE"}, {ID: "t3", Name: "DONE"}, {ID: "t4", Name: "WIP"}}
+		return []forumChannelInfo{
+			{ID: "f-anim", Name: "animation", ParentID: "cat-1", Tags: tags},
+			{ID: "f-comp", Name: "compositing", ParentID: "cat-1", Tags: tags},
+		}, nil
+	}
+	db := newForumPageDB(t)
+	if err := db.Model(&model.Project{}).Where("kitsu_project_id = ?", "p1").Update("discord_category_id", "cat-1").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	form := url.Values{"project": {"p1"}, "guild_id": {"g1"}, "action": {"create_forums"}}
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	if len(created) != 0 {
+		t.Fatalf("retry created = %v, want no duplicates", created)
+	}
+	loaded, ok, err := model.LoadProductionForumSettings(db, "p1")
+	if err != nil || !ok {
+		t.Fatalf("load: ok=%v err=%v", ok, err)
+	}
+	if len(loaded.Routes) != 2 || loaded.Routes[0].ForumChannelID != "f-anim" || loaded.Routes[1].ForumChannelID != "f-comp" {
+		t.Fatalf("routes = %+v", loaded.Routes)
+	}
+	if len(loaded.Tags) != 8 {
+		t.Fatalf("tags = %+v", loaded.Tags)
 	}
 }
 
@@ -130,6 +227,7 @@ func TestForumAutoCreateNeedsBotToken(t *testing.T) {
 
 func TestForumAutoCreateKeepsCreatedForumsWhenALaterCreateFails(t *testing.T) {
 	stubForumLookups(t, nil)
+	stubNoExistingForums(t)
 	var created []string
 	old := forumCreateChannel
 	t.Cleanup(func() { forumCreateChannel = old })
@@ -165,6 +263,7 @@ func TestForumAutoCreateKeepsCreatedForumsWhenALaterCreateFails(t *testing.T) {
 
 func TestForumAutoCreateCreatesForumUnderProductionCategory(t *testing.T) {
 	stubForumLookups(t, nil)
+	stubNoExistingForums(t)
 	// Auto-create runs over the seeded Task Type list (empty tt_forum rows are
 	// dropped from the form), so keep the list at one type for one create call.
 	oldTypes := forumTaskTypeLister

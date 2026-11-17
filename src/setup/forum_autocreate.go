@@ -70,9 +70,11 @@ func createGuildForumChannel(guildID, parentID, name string, tags []string, botT
 	return forum, nil
 }
 
-// errForumsCreatedNeedsRoles is not a save failure: the forums exist, only the
-// status mapping is still missing.
-var errForumsCreatedNeedsRoles = errors.New("フォーラムとタグは作成しました。続けて「Kitsuのステータス → 役割」を設定して保存してください。")
+// forumChannelNameKey normalizes a channel name the way Discord does, so an
+// earlier run's forum is found again instead of duplicated.
+func forumChannelNameKey(name string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), " ", "-")
+}
 
 // errForumCreateAction marks a failure of the "create forums" action whose
 // message is already written for the operator.
@@ -166,12 +168,34 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 		settings.Tags = tags
 		return settings, nil
 	}
+	var existingForums map[string]forumChannelInfo
+	existingLoaded := false
 	for _, route := range settings.Routes {
 		if strings.TrimSpace(route.ForumChannelID) == "" {
-			forum, err := forumCreateChannel(guildID, parentID, route.TaskTypeName, tagNames, botToken)
-			if err != nil {
-				created, _ := keepCreated()
-				return created, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
+			if !existingLoaded {
+				existingLoaded = true
+				// A forum of the same name under the same category is reused, so
+				// retrying from a partial state never duplicates channels.
+				existing, err := forumChannelLister(guildID, botToken)
+				if err != nil {
+					return settings, fmt.Errorf("%w: Discordのフォーラム一覧を取得できませんでした: %w", errForumCreateAction, err)
+				}
+				existingForums = map[string]forumChannelInfo{}
+				for _, forum := range existing {
+					if forum.ParentID != parentID {
+						continue
+					}
+					existingForums[forumChannelNameKey(forum.Name)] = forum
+				}
+			}
+			forum, found := existingForums[forumChannelNameKey(route.TaskTypeName)]
+			if !found {
+				var err error
+				forum, err = forumCreateChannel(guildID, parentID, route.TaskTypeName, tagNames, botToken)
+				if err != nil {
+					created, _ := keepCreated()
+					return created, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
+				}
 			}
 			route.ForumChannelID = forum.ID
 			route.ForumChannelName = forum.Name
@@ -202,14 +226,13 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	}
 	settings.Routes = routes
 	settings.Tags = tags
+	// The status → role mapping is decided from the Kitsu status names, so the
+	// template fills it in and the one press finishes the whole setup.
 	if len(settings.StatusRoles) == 0 {
-		// The operator still has to map Kitsu statuses to roles; saving now would
-		// fail validation and throw away the forums just created, so show the
-		// created mapping unsaved and say what is left.
-		return settings, errForumsCreatedNeedsRoles
+		settings.StatusRoles = forumTemplateStatusRoles(db)
 	}
 	if err := model.SaveProductionForumSettings(db, settings); err != nil {
-		return settings, fmt.Errorf("%w: %w", errForumCreateAction, err)
+		return settings, err
 	}
 	return settings, nil
 }

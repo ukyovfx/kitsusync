@@ -95,6 +95,22 @@ func TestForumSettingsPageRendersLookups(t *testing.T) {
 	}
 }
 
+func TestForumSettingsPagePreFillsTemplateStatusRoles(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, role := range []string{"wfa", "retake", "done"} {
+		if !strings.Contains(body, `<option value="`+role+`" selected>`) {
+			t.Fatalf("page does not pre-fill the template role %q", role)
+		}
+	}
+}
+
 func TestForumSettingsSaveStoresSettingsAndSwitchesMode(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
