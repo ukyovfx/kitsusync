@@ -1531,6 +1531,39 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-selected.png`), fullPage: true });
         await record(page, '/bot/admin/users', locale.lang, viewport.name, 'ready', 'four-column User Linking table rendered');
 
+        await fixture(page, 'user-linking-long-label');
+        await page.goto(`${base}/bot/admin/users?lang=${locale.lang}&discord_guild_id=${guildID}`, { waitUntil: 'networkidle' });
+        const longLabelLayout = await page.evaluate(() => {
+          const actions = [...document.querySelectorAll('.user-link-actions')].find((node) => {
+            const select = node.querySelector('select');
+            return select && [...select.selectedOptions].some((option) => (option.textContent || '').includes('佐々木さんとピーちゃん'));
+          });
+          if (!actions) return null;
+          const select = actions.querySelector('select');
+          const button = actions.querySelector('button');
+          const selectBox = select.getBoundingClientRect();
+          const buttonBox = button ? button.getBoundingClientRect() : null;
+          const midDiff = buttonBox ? Math.abs((selectBox.top + selectBox.height / 2) - (buttonBox.top + buttonBox.height / 2)) : null;
+          return {
+            selectWidth: Math.round(selectBox.width),
+            buttonWidth: buttonBox ? Math.round(buttonBox.width) : null,
+            midDiff: midDiff === null ? null : Math.round(midDiff * 10) / 10,
+            buttonBelow: buttonBox ? buttonBox.top >= selectBox.bottom - 2 : null,
+            overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          };
+        });
+        if (!longLabelLayout) throw new Error(`long Discord nickname row missing in ${locale.lang}/${viewport.name}`);
+        if (longLabelLayout.overflow > 1) throw new Error(`long-label actions overflow ${longLabelLayout.overflow}px in ${locale.lang}/${viewport.name}`);
+        if (viewport.name === 'desktop') {
+          if (longLabelLayout.buttonBelow) throw new Error(`Unlink button dropped below the select with a long label on desktop in ${locale.lang}: ${JSON.stringify(longLabelLayout)}`);
+          if (longLabelLayout.midDiff > 3) throw new Error(`long-label select and Unlink button not on one line on desktop in ${locale.lang}: ${JSON.stringify(longLabelLayout)}`);
+        } else if (!longLabelLayout.buttonBelow) {
+          throw new Error(`long-label mobile stacking regressed in ${locale.lang}: ${JSON.stringify(longLabelLayout)}`);
+        }
+        await page.screenshot({ path: path.join(output, `user-linking-${locale.lang}-${viewport.name}-long-label.png`), fullPage: true });
+        await record(page, '/bot/admin/users', locale.lang, viewport.name, 'long label', viewport.name === 'desktop' ? 'long Discord nickname ellipsized inside the select beside the Unlink button' : 'long Discord nickname keeps mobile stacking without horizontal overflow');
+        await fixture(page, 'ready');
+
         await fixture(page, 'discord-failure');
         await page.goto(`${base}/bot/admin/users?lang=${locale.lang}&discord_guild_id=${guildID}`, { waitUntil: 'networkidle' });
         const lookupFailure = page.locator('.user-linking-lookup-error');
