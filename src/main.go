@@ -768,6 +768,14 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	if err := db.Exec("DROP INDEX IF EXISTS idx_checker_maps_task_type").Error; err != nil {
 		return fmt.Errorf("remove legacy checker map index: %w", err)
 	}
+	// The outbox claim query filters on next_attempt_at (not not_before) and
+	// orders rows within a task. Drop the old indexes so AutoMigrate rebuilds
+	// them as (state, next_attempt_at, id) and (task_id, state, id).
+	for _, idx := range []string{"idx_forum_outbox_due", "idx_forum_outbox_task"} {
+		if err := db.Exec("DROP INDEX IF EXISTS " + idx).Error; err != nil {
+			return fmt.Errorf("remove legacy forum outbox index: %w", err)
+		}
+	}
 	if err := db.AutoMigrate(
 		&model.Task{},
 		&model.Project{},

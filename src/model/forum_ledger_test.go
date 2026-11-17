@@ -108,3 +108,45 @@ func TestClaimForumOutboxRunsEarlierPostBeforeLaterSync(t *testing.T) {
 		t.Fatalf("claimed id = %d, want the earlier post %d", claimed.ID, postID)
 	}
 }
+
+// A runnable row behind 50 blocked rows must still be claimed: the head of the
+// queue must not hide later rows.
+func TestClaimForumOutboxSkipsBlockedHeadOfLine(t *testing.T) {
+	db := newForumLedgerTestDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	// Each blocked post waits for its task's create_thread, which is pending
+	// but not due yet (retrying later), so nothing in front can be claimed.
+	for i := 0; i < 50; i++ {
+		task := fmt.Sprintf("task-%d", i)
+		if _, err := EnqueueForumOutbox(db, ForumOutbox{
+			TaskID: task, Kind: ForumOutboxCreateThread, DedupeKey: "create:" + task,
+			Payload: "{}", NotBefore: now.Add(10 * time.Minute),
+		}); err != nil {
+			t.Fatalf("enqueue create %d: %v", i, err)
+		}
+		if _, err := EnqueueForumOutbox(db, ForumOutbox{
+			TaskID: task, Kind: ForumOutboxPostMessage, DedupeKey: "msg:wfa:" + task,
+			Payload: "{}", NotBefore: now,
+		}); err != nil {
+			t.Fatalf("enqueue post %d: %v", i, err)
+		}
+	}
+	normalID, err := EnqueueForumOutbox(db, ForumOutbox{
+		TaskID: "task-normal", Kind: ForumOutboxCreateThread, DedupeKey: "create:task-normal",
+		Payload: "{}", NotBefore: now,
+	})
+	if err != nil {
+		t.Fatalf("enqueue normal create: %v", err)
+	}
+
+	claimed, err := ClaimNextForumOutboxRow(db, now)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if claimed == nil {
+		t.Fatal("nothing was claimed: the blocked head of the line hid the normal row")
+	}
+	if claimed.ID != normalID {
+		t.Fatalf("claimed id = %d, want the normal row %d", claimed.ID, normalID)
+	}
+}
