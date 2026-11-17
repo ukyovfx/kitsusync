@@ -24,6 +24,10 @@ const (
 	// The forum digest marks its own day: the lane digest runs first for the
 	// same person and Production, and a shared marker would suppress this one.
 	forumDigestLastSentDateSettingKey = "digest.forum.last_sent_date."
+	// digest.forum.done.<project> = today marks the whole day as finished for
+	// a Production so a poll after 09:00 neither recomputes the recipients
+	// (external reads) nor writes an audit row.
+	forumDigestDoneSettingKey = "digest.forum.done."
 )
 
 // forumDigestItem is one unresolved item for one person.
@@ -56,6 +60,16 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 		if project.KitsuProjectID == "" || project.ValidationOnly || strings.TrimSpace(project.DiscordGuildID) == "" {
 			continue
 		}
+		doneKey := forumDigestDoneSettingKey + project.KitsuProjectID
+		if model.GetSetting(db, doneKey) == today {
+			continue
+		}
+		// Past the catch-up hour the day is done without sending: the digest
+		// is only useful in the morning (stage E spec).
+		if now.Hour() >= digestCatchupUntilHourJST {
+			model.SetSetting(db, doneKey, today)
+			continue
+		}
 		settings, ok, err := model.LoadProductionForumSettings(db, project.KitsuProjectID)
 		if err != nil || !ok {
 			continue
@@ -65,37 +79,40 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 			digestErrs = append(digestErrs, fmt.Sprintf("%s: %v", project.KitsuProjectID, err))
 			continue
 		}
-		// Past the catch-up hour a failed DM is dropped rather than retried
-		// all day: the digest is only useful in the morning (stage E spec).
-		dropAfter := now.Hour() >= digestCatchupUntilHourJST
 		projectErrs := 0
+		projectSent := 0
 		for _, recipient := range recipients {
 			marker := forumDigestLastSentDateSettingKey + project.KitsuProjectID + "." + recipient.DiscordID
 			if model.GetSetting(db, marker) == today {
 				continue
 			}
 			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, renderForumDigestCard(project.Name, recipient)); err != nil {
-				if dropAfter {
-					model.SetSetting(db, marker, today)
-					continue
-				}
 				projectErrs++
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient.DiscordID, err))
 				continue
 			}
 			model.SetSetting(db, marker, today)
-			sent++
+			projectSent++
 		}
-		model.WriteAuditLog(db, model.AuditLog{
-			TaskID:      "morning-digest",
-			ProjectID:   project.KitsuProjectID,
-			ProjectName: project.Name,
-			GuildID:     project.DiscordGuildID,
-			NewStatus:   fmt.Sprintf("mode=forum recipients=%d", len(recipients)),
-			Success:     projectErrs == 0,
-			ActorKind:   "system",
-			ActorName:   "morning-digest",
-		})
+		// The day is done when every recipient was served; a failed
+		// destination retries on the next poll until the catch-up deadline.
+		if projectErrs == 0 {
+			model.SetSetting(db, doneKey, today)
+		}
+		// A quiet poll (nothing sent, nothing failed) writes no audit row.
+		if projectSent > 0 || projectErrs > 0 {
+			model.WriteAuditLog(db, model.AuditLog{
+				TaskID:      "morning-digest",
+				ProjectID:   project.KitsuProjectID,
+				ProjectName: project.Name,
+				GuildID:     project.DiscordGuildID,
+				NewStatus:   fmt.Sprintf("mode=forum recipients=%d sent=%d", len(recipients), projectSent),
+				Success:     projectErrs == 0,
+				ActorKind:   "system",
+				ActorName:   "morning-digest",
+			})
+		}
+		sent += projectSent
 	}
 	if len(digestErrs) > 0 {
 		return sent, fmt.Errorf("%s", strings.Join(digestErrs, "; "))
