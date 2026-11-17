@@ -7,12 +7,22 @@ $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion -lt [Version]'7.4') { throw 'PowerShell 7.4 or newer is required for byte-preserving artifact ZIP hashing.' }
 $repo = 'ukyovfx/kitsusync'
 $artifactName = "kitsusync-deployment-$CommitSha"
+# Mirrors deploy/release_zip.py REQUIRED (the production release file set).
 $expectedFiles = @(
+    'deployment-mode', 'docker-compose.yml', 'kitsusync-bootstrap', 'kitsusync-deploy',
+    'kitsusync-image-identity', 'kitsusync-image.tar', 'kitsusync-inspect', 'kitsusync-preflight-collect',
+    'kitsusync-release-apply', 'kitsusync-restore-state', 'kitsusync-runtime-state', 'kitsusync-sqlite-backup',
+    'provenance.txt', 'release_registration.py', 'release_zip.py'
+)
+$expectedArchiveEntries = @('provenance.txt') + @($expectedFiles | ForEach-Object { "deployment-bundle/$_" })
+# Must equal the `allowed` array in deploy/kitsusync-staging-deploy: the helper
+# rejects the candidate directory unless it holds exactly these files, and it
+# deliberately excludes the production-release-only tools.
+$candidateFiles = @(
     'deployment-mode', 'docker-compose.yml', 'kitsusync-bootstrap', 'kitsusync-deploy',
     'kitsusync-image-identity', 'kitsusync-image.tar', 'kitsusync-inspect', 'kitsusync-preflight-collect', 'kitsusync-restore-state',
     'kitsusync-runtime-state', 'kitsusync-sqlite-backup', 'provenance.txt'
 )
-$expectedArchiveEntries = @('provenance.txt') + @($expectedFiles | ForEach-Object { "deployment-bundle/$_" })
 $digestMap = @{
     'kitsusync-image.tar' = 'image_archive_sha256'
     'docker-compose.yml' = 'compose_sha256'
@@ -319,19 +329,19 @@ try {
     Write-Output 'CANDIDATE_FILE_DIGESTS=PASS'
 
     $stage = "/var/tmp/kitsusync-staging-candidate-$CommitSha"
-    Invoke-RemotePreflight $script:remoteHost $stage $expectedFiles @{} 'candidate-before-upload' $true $false
+    Invoke-RemotePreflight $script:remoteHost $stage $candidateFiles @{} 'candidate-before-upload' $true $false
 
-    foreach ($name in $expectedFiles) {
+    foreach ($name in $candidateFiles) {
         & $script:scp @script:scpOptions -- (Join-Path $bundle $name) "${script:remoteTarget}:${stage}/${name}"
         if ($LASTEXITCODE -ne 0) { throw "Candidate upload failed: $name" }
     }
     & $script:ssh @script:sshOptions $script:remoteHost "chmod 600 $stage/*"
     if ($LASTEXITCODE -ne 0) { throw 'Could not secure staged candidate file permissions.' }
     $candidateHashes = @{}
-    foreach ($name in $expectedFiles) {
+    foreach ($name in $candidateFiles) {
         $candidateHashes[$name] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $bundle $name)).Hash.ToLowerInvariant()
     }
-    Invoke-RemotePreflight $script:remoteHost $stage $expectedFiles $candidateHashes 'candidate-before-deploy' $false $true
+    Invoke-RemotePreflight $script:remoteHost $stage $candidateFiles $candidateHashes 'candidate-before-deploy' $false $true
     & $script:ssh @script:sshOptions $script:remoteHost "sudo -n /usr/local/sbin/kitsusync-staging-deploy $CommitSha"
     if ($LASTEXITCODE -ne 0) { throw 'Staging deployment or post-deployment verification failed.' }
 } finally {
