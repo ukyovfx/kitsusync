@@ -298,6 +298,23 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production":
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
+		case "no-connected-production":
+			// Readiness derives ProductionRequired from the absence of connected
+			// Production rows, so remove the seeded row to render the unconnected
+			// System Status state and restore it with the next fixture call.
+			if err := db.Delete(&project).Error; err != nil {
+				http.Error(w, "could not remove the seeded Production", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "restore-connected-production":
+			if err := db.Create(&project).Error; err != nil {
+				http.Error(w, "could not restore the seeded Production", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store("ready")
+			w.WriteHeader(http.StatusNoContent)
 		case "japanese-wfa-add":
 			if err := db.Model(&project).Updates(map[string]interface{}{"name": "aa"}).Error; err != nil {
 				http.Error(w, "could not rename synthetic Production", http.StatusInternalServerError)

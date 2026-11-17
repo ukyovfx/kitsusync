@@ -1266,6 +1266,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (configuredShellWidth !== unconfiguredShellWidth || unconfiguredOverflow || unconfiguredBackground.color !== 'rgb(7, 7, 7)' || unconfiguredBackground.image !== 'none' || unconfiguredBackground.symbol !== 'plus' || !(await page.locator('.production-unconfigured-state a[href*="/bot/setup"]').count()) || unconfiguredSurface.background !== 'rgba(0, 0, 0, 0)' || unconfiguredSurface.paddingInline !== '0px' || unconfiguredSurface.statusBackground === 'rgba(0, 0, 0, 0)') throw new Error(`Unconfigured Production must reuse the shared shell/background without a separate setup card in ${locale.lang}: ${JSON.stringify({ unconfiguredBackground, unconfiguredSurface })}`);
         await page.screenshot({ path: path.join(output, `production-unconfigured-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?project=reviewer-unconnected', locale.lang, viewport.name, 'unconfigured Production', 'shared identity/workbench shell with clear connect action and no fabricated configured-only data');
+        await fixture(page, 'no-connected-production');
+        await page.goto(`${base}/bot/admin/health?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        const unconnectedActions = await page.locator('.pipeline-health-action').evaluateAll(nodes => nodes.map(node => `${Math.round(node.getBoundingClientRect().width)}x${Math.round(node.getBoundingClientRect().height)}`));
+        if (!unconnectedActions.length) throw new Error(`System Status unconnected state did not render a pipeline health action in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `system-status-unconnected-${locale.lang}-${viewport.name}.png`), fullPage: true });
+        await record(page, '/bot/admin/health', locale.lang, viewport.name, 'unconnected Production action', `pipeline actions ${unconnectedActions.join(', ')}`);
+        await fixture(page, 'restore-connected-production');
         await fixture(page, 'ready');
 
         const legacyCases = [
