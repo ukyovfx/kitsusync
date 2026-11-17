@@ -17,6 +17,9 @@ log = true
     password = "${KITSU_RUNTIME_PASSWORD}"
     skipComments = false
     requestInterval = 1
+    # Upper limit for one Kitsu response body in MiB (default 64). Large studios
+    # can exceed 4 MiB with all-entities/all-tasks JSON; 0 keeps the default.
+    maxResponseMB = 64
 
 [discord]
     embedsPerRequests = 10

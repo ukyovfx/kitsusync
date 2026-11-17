@@ -8,6 +8,7 @@ import (
 	"app/src/setup"
 	"app/src/utils/config"
 	logutil "app/src/utils/log"
+	"app/src/utils/request"
 	"app/src/utils/safego"
 	"context"
 	"database/sql"
@@ -326,7 +327,6 @@ func timestampsEqual(left, right string) bool {
 	return false
 }
 
-
 // forumCardRenderer renders the first message of a forum post with the same
 // card the lane path posts. MentionContent and AllowedMentions are cleared
 // because the first message never mentions anyone (D-04).
@@ -399,7 +399,9 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 	executor := forum.Executor{
 		DB:       db,
 		BotToken: func() string { return botToken },
-		TaskURL:  func(taskID string) string { return forum.TaskURLFor(db, func() string { return setup.PublicKitsuURL(db) }, taskID) },
+		TaskURL: func(taskID string) string {
+			return forum.TaskURLFor(db, func() string { return setup.PublicKitsuURL(db) }, taskID)
+		},
 		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string) {
 			return recipients.ForTask(taskID, payload)
 		},
@@ -427,7 +429,6 @@ func forumReviewerTargets(db *gorm.DB, conf config.Config, botToken, projectID, 
 
 // forumOutboxDrainLimit bounds one poll's Discord calls.
 const forumOutboxDrainLimit = 50
-
 
 // Kitsu credentials/settings helpers.
 // Prefer DB settings, then environment variables, then conf.toml.
@@ -482,6 +483,7 @@ func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, web
 var pollMu sync.Mutex
 
 var makeKitsuResponse = MakeKitsuResponse
+
 func redactExpiredNotificationPayloads(conf config.Config, db *gorm.DB, now time.Time) {
 	days := conf.Notification.DeliveryPayloadRetentionDays
 	if db == nil || days <= 0 {
@@ -864,6 +866,13 @@ func main() {
 	// path without overriding an explicitly saved SQLite endpoint.
 	if strings.TrimSpace(os.Getenv("KITSU_HOSTNAME")) == "" && strings.TrimSpace(conf.Kitsu.Hostname) != "" {
 		setup.SetAppManagedKitsuHostname(conf.Kitsu.Hostname)
+	}
+
+	// Kitsu 応答本文の上限を反映（F1）。未設定（0）なら既定の 64 MiB のまま。
+	if conf.Kitsu.MaxResponseMB > 0 {
+		if err := request.ConfigureMaxResponseBodyLimit(int64(conf.Kitsu.MaxResponseMB) << 20); err != nil {
+			slog.Warn("config validation: kitsu.maxResponseMB ignored", "error_class", "invalid_max_response_mb", "err", err)
+		}
 	}
 
 	if issues := conf.Validate(); len(issues) > 0 {
