@@ -168,9 +168,12 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 	assigneesChanged := !sameIDs(model.ForumAssigneeIDs(existing), assignees)
 
 	result := PlanResult{}
-	// A status change must reach the thread, and so must a task whose thread
-	// was lost: without a post it would stay silent forever.
-	if statusChanged || !hasPost {
+	// A status change must reach the thread. A task whose thread was lost
+	// (generation advanced by ClearForumTaskThread) also needs its create
+	// re-queued; a baselined task without a thread must stay quiet until its
+	// status actually changes.
+	threadLost := !hasPost && existing.ThreadGeneration > 0
+	if statusChanged || threadLost {
 		if err := p.applyStatusChange(input, existing, route, hasPost, card, &result); err != nil {
 			return result, err
 		}
@@ -230,6 +233,15 @@ func (p Planner) createTask(input TaskInput, route model.ProductionForumRoute, c
 func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, route model.ProductionForumRoute, hasPost bool, card func() (json.RawMessage, error), result *PlanResult) error {
 	if !hasPost {
 		if IsTriggerRole(input.StatusRole) {
+			// A create that already failed permanently must not be re-queued
+			// every poll: it would fail the same way again.
+			failed, err := model.ForumCreateThreadFailed(p.DB, input.TaskID, existing.ThreadGeneration)
+			if err != nil {
+				return err
+			}
+			if failed {
+				return nil
+			}
 			return p.queueCreateThread(input, route, input.StatusRole, existing.ThreadGeneration, card, result)
 		}
 		return nil

@@ -234,6 +234,74 @@ func TestPlannerQueuesCreateAfterThreadLost(t *testing.T) {
 	}
 }
 
+// A task baselined in a trigger status must stay quiet on the next poll while
+// its status is unchanged: only a thread that was actually lost (generation
+// advanced by ClearForumTaskThread) re-queues its create.
+func TestPlannerDoesNotPostForUnchangedBaselinedTask(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+
+	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA), stubCard()); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	planner.Now = now.Add(time.Minute)
+	result, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA), stubCard())
+	if err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	if result.Created || result.Baselined {
+		t.Fatalf("unchanged baselined task must not post: %+v", result)
+	}
+	if rows := outboxRows(t, db); len(rows) != 0 {
+		t.Fatalf("outbox rows = %d, want 0 for an unchanged baselined task", len(rows))
+	}
+}
+
+// A create that already failed permanently must not be re-queued on every
+// poll: it would fail the same way again.
+func TestPlannerDoesNotRequeuePermanentlyFailedCreate(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	if _, err := model.ClearForumTaskThread(db, "task-1"); err != nil {
+		t.Fatalf("clear thread: %v", err)
+	}
+	// The recovery create for generation 1 is queued and then fails for good.
+	planner.Now = now.Add(time.Minute)
+	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA, "person-1"), stubCard()); err != nil {
+		t.Fatalf("recovery poll: %v", err)
+	}
+	if err := db.Model(&model.ForumOutbox{}).
+		Where("task_id = ? AND kind = ? AND dedupe_key = ?", "task-1", model.ForumOutboxCreateThread,
+			model.ForumCreateThreadDedupeKey("task-1", 1)).
+		Update("state", model.ForumOutboxFailed).Error; err != nil {
+		t.Fatalf("fail create: %v", err)
+	}
+	var before int64
+	if err := db.Model(&model.ForumOutbox{}).Where("task_id = ? AND kind = ?", "task-1", model.ForumOutboxCreateThread).Count(&before).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+
+	planner.Now = now.Add(2 * time.Minute)
+	result, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA, "person-1"), stubCard())
+	if err != nil {
+		t.Fatalf("poll after permanent failure: %v", err)
+	}
+	if result.Created {
+		t.Fatalf("a permanently failed create must not be re-queued: %+v", result)
+	}
+	var after int64
+	if err := db.Model(&model.ForumOutbox{}).Where("task_id = ? AND kind = ?", "task-1", model.ForumOutboxCreateThread).Count(&after).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if after != before {
+		t.Fatalf("create rows = %d, want %d (no re-queue)", after, before)
+	}
+}
+
 func TestPlannerDoesNotPostForNonTriggerStatus(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)

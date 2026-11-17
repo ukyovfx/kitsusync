@@ -250,6 +250,18 @@ func ForumTaskHasPendingCreate(db *gorm.DB, taskID string) (bool, error) {
 	return count > 0, err
 }
 
+// ForumCreateThreadFailed reports whether the create_thread row of this thread
+// generation already failed permanently. Re-queueing it would fail the same
+// way again, so the planner must not retry it every poll.
+func ForumCreateThreadFailed(db *gorm.DB, taskID string, generation int) (bool, error) {
+	var count int64
+	err := db.Model(&ForumOutbox{}).
+		Where("task_id = ? AND kind = ? AND dedupe_key = ? AND state = ?",
+			taskID, ForumOutboxCreateThread, ForumCreateThreadDedupeKey(taskID, generation), ForumOutboxFailed).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // ForumBaselineExists reports whether the (project, task type) pair is seeded.
 func ForumBaselineExists(db *gorm.DB, projectID, taskTypeID string) (bool, error) {
 	var count int64
