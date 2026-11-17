@@ -250,12 +250,62 @@ func TestForumDigestSendsOncePerDayAndDropsAfterCatchup(t *testing.T) {
 		t.Fatal("marker set despite a failed send before 12:00")
 	}
 
-	// After 12:00 the failure is dropped so it does not retry all day.
+	// After 12:00 the day is done without sending so it does not retry all
+	// day. The per-recipient marker stays unset; the project marker ends it.
 	afternoon := nextDay.Add(3 * time.Hour)
 	if _, err := sendForumMorningDigests(digestTestConfig(), db, afternoon, nextToday); err != nil {
 		t.Fatalf("unexpected error after catch-up: %v", err)
 	}
-	if model.GetSetting(db, forumDigestLastSentDateSettingKey+"p1.111111111111111111") != nextToday {
-		t.Fatal("marker not set after the catch-up deadline")
+	if model.GetSetting(db, forumDigestDoneSettingKey+"p1") != nextToday {
+		t.Fatal("project done marker not set after the catch-up deadline")
 	}
+}
+
+// A quiet poll must not write audit rows: the F4 symptom was one morning-digest
+// audit row per project per poll (5,400 rows/day) once the day was under way.
+func TestForumDigestQuietPollWritesNoAuditRow(t *testing.T) {
+	db := forumDigestDB(t)
+	defer closeForumDigestDB(t, db)
+
+	newDMFixture(t)
+	morning := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)
+	today := morning.Format("2006-01-02")
+
+	// No unresolved items: nothing sent, no audit row, day marked done.
+	if sent, err := sendForumDigestsForTest(db, morning, today); err != nil || sent != 0 {
+		t.Fatalf("sent=%d err=%v", sent, err)
+	}
+	var audits []model.AuditLog
+	if err := db.Where("task_id = ?", "morning-digest").Find(&audits).Error; err != nil {
+		t.Fatalf("load audit: %v", err)
+	}
+	if len(audits) != 0 {
+		t.Fatalf("audit rows = %d, want 0 without sends", len(audits))
+	}
+	if model.GetSetting(db, forumDigestDoneSettingKey+"p1") != today {
+		t.Fatal("done marker not set for an empty digest")
+	}
+
+	// With items, the first poll sends and audits once; the second poll is a
+	// done-marker skip and must not audit again.
+	seedForumDigestTask(t, db, "task-wfa", "s-wfa", morning.AddDate(0, 0, -1))
+	db.Delete(&model.Setting{}, "key = ?", forumDigestDoneSettingKey+"p1")
+	if sent, err := sendForumDigestsForTest(db, morning, today); err != nil || sent != 1 {
+		t.Fatalf("sent=%d err=%v", sent, err)
+	}
+	if sent, err := sendForumDigestsForTest(db, morning.Add(time.Minute), today); err != nil || sent != 0 {
+		t.Fatalf("repeat sent=%d err=%v", sent, err)
+	}
+	audits = nil
+	if err := db.Where("task_id = ?", "morning-digest").Find(&audits).Error; err != nil {
+		t.Fatalf("load audit: %v", err)
+	}
+	if len(audits) != 1 {
+		t.Fatalf("audit rows = %d, want exactly 1 for the day", len(audits))
+	}
+}
+
+// sendForumDigestsForTest wraps sendForumMorningDigests with the test config.
+func sendForumDigestsForTest(db *gorm.DB, now time.Time, today string) (int, error) {
+	return sendForumMorningDigests(digestTestConfig(), db, now, today)
 }
