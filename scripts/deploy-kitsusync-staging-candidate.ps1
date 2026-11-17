@@ -7,10 +7,12 @@ $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion -lt [Version]'7.4') { throw 'PowerShell 7.4 or newer is required for byte-preserving artifact ZIP hashing.' }
 $repo = 'ukyovfx/kitsusync'
 $artifactName = "kitsusync-deployment-$CommitSha"
+# Mirrors deploy/release_zip.py REQUIRED (the production release file set).
 $expectedFiles = @(
     'deployment-mode', 'docker-compose.yml', 'kitsusync-bootstrap', 'kitsusync-deploy',
-    'kitsusync-image-identity', 'kitsusync-image.tar', 'kitsusync-inspect', 'kitsusync-preflight-collect', 'kitsusync-restore-state',
-    'kitsusync-runtime-state', 'kitsusync-sqlite-backup', 'provenance.txt'
+    'kitsusync-image-identity', 'kitsusync-image.tar', 'kitsusync-inspect', 'kitsusync-preflight-collect',
+    'kitsusync-release-apply', 'kitsusync-restore-state', 'kitsusync-runtime-state', 'kitsusync-sqlite-backup',
+    'provenance.txt', 'release_registration.py', 'release_zip.py'
 )
 $expectedArchiveEntries = @('provenance.txt') + @($expectedFiles | ForEach-Object { "deployment-bundle/$_" })
 $digestMap = @{
