@@ -42,6 +42,10 @@ type CommentInput struct {
 	ID        string
 	Text      string
 	CreatedAt string
+	// AuthorID and AuthorName are the comment's author. They decide whether a
+	// submitter marker is trusted.
+	AuthorID   string
+	AuthorName string
 	// Mentions are the Kitsu person IDs named in the comment.
 	Mentions []string
 	// Unavailable reports that the comment could not be read this poll.
@@ -556,32 +560,49 @@ func retakeQuote(intent string, comment CommentInput, now time.Time) string {
 	if intent != model.ForumIntentStatusRetake || comment.Unavailable {
 		return ""
 	}
-	created, err := time.Parse(time.RFC3339, comment.CreatedAt)
-	if err != nil {
-		return ""
-	}
-	if now.Sub(created) > model.ForumCommentQuoteLookback {
+	created, ok := commentCreatedAt(comment.CreatedAt)
+	if !ok || now.Sub(created) > model.ForumCommentQuoteLookback {
 		return ""
 	}
 	return commentQuote(comment.Text)
+}
+
+// commentCreatedAt parses a Kitsu comment timestamp. Kitsu sometimes omits the
+// zone ("2026-08-07T00:00:00"); that form is read as UTC so the comment is not
+// silently dropped from the lookback.
+func commentCreatedAt(value string) (time.Time, bool) {
+	created, err := time.Parse(time.RFC3339, value)
+	if err == nil {
+		return created, true
+	}
+	created, err = time.Parse("2006-01-02T15:04:05", value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return created, true
 }
 
 // submitterMarkerPrefix starts the machine-readable submitter line a Web
 // publish writes into its comment: "kitsusync-submitter: <display name>".
 const submitterMarkerPrefix = "kitsusync-submitter:"
 
+// submitterServiceAuthor is the Kitsu account that publishes through the web
+// form. Only its comments may carry a trusted submitter marker.
+const submitterServiceAuthor = "Web Publisher"
+
 // submitterMarker returns the display name of the newest comment's submitter
 // line. It follows the same lookback as retakeQuote, and returns "" for a
-// missing or malformed marker so the signal keeps its usual shape.
+// missing or malformed marker, or for a comment the service account did not
+// write, so the signal keeps its usual shape.
 func submitterMarker(intent string, comment CommentInput, now time.Time) string {
 	if intent != model.ForumIntentStatusWFA || comment.Unavailable {
 		return ""
 	}
-	created, err := time.Parse(time.RFC3339, comment.CreatedAt)
-	if err != nil {
+	if comment.AuthorName != submitterServiceAuthor {
 		return ""
 	}
-	if now.Sub(created) > model.ForumCommentQuoteLookback {
+	created, ok := commentCreatedAt(comment.CreatedAt)
+	if !ok || now.Sub(created) > model.ForumCommentQuoteLookback {
 		return ""
 	}
 	for _, line := range strings.Split(strings.ReplaceAll(comment.Text, "\r", ""), "\n") {

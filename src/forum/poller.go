@@ -162,6 +162,8 @@ func taskInputFromPayload(payload kitsu.MessagePayload) TaskInput {
 			ID:          payload.LatestComment.Comment.ID,
 			Text:        payload.LatestComment.Comment.Text,
 			CreatedAt:   payload.LatestComment.Comment.CreatedAt,
+			AuthorID:    payload.LatestComment.Author.Person.ID,
+			AuthorName:  payload.LatestComment.Author.Person.FullName,
 			Mentions:    commentMentionIDs(payload),
 			Unavailable: payload.CommentsUnavailable,
 		},
