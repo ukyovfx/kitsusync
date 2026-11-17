@@ -36,6 +36,7 @@ type wizardState struct {
 	GuildID         string
 	PlanFingerprint string
 	Confirmed       bool
+	Repair          bool
 }
 
 var (

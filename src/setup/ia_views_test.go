@@ -1243,6 +1243,33 @@ func TestWizardGetFormsCarryLanguage(t *testing.T) {
 	}
 }
 
+// F2: the repair link only sets repair on its first GET, so every wizard form
+// and the wizard links must carry it forward or the repair falls back to step 1.
+func TestWizardRepairModeCarriesThroughFormsAndLinks(t *testing.T) {
+	db := newIAViewDB(t)
+	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=4&repair=1&project=live-production-id&plan_guild=123456789012345678", nil)
+	production := KitsuProject{ID: "live-production-id", Name: "Live Production"}
+	forms := map[string]string{
+		"production": renderWizardProductionLocalized("en", r, db, []KitsuProject{production}, nil),
+		"server":     renderWizardServer("en", r, "", production.ID),
+	}
+	for name, body := range forms {
+		if !strings.Contains(body, `<input type="hidden" name="repair" value="1">`) {
+			t.Fatalf("%s form did not carry repair mode", name)
+		}
+	}
+	if link := setupWizardURL(r, 3, production.ID, "", false); !strings.Contains(link, "repair=1") {
+		t.Fatalf("wizard link dropped repair mode: %s", link)
+	}
+	plain := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=4&project=live-production-id", nil)
+	if strings.Contains(renderWizardServer("en", plain, "", production.ID), `name="repair"`) {
+		t.Fatal("repair input leaked into a normal wizard run")
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.Close()
+	}
+}
+
 func TestWizardProductionLookupStateDistinguishesEmptyAndFailure(t *testing.T) {
 	db := newIAViewDB(t)
 	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=2", nil)
