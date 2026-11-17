@@ -807,6 +807,11 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	if err := forum.ReconcileSendingRows(db); err != nil {
 		return fmt.Errorf("reconcile forum outbox: %w", err)
 	}
+	// Legacy rows written with "" instead of NULL collide on the thread unique
+	// index; move them once at startup.
+	if err := model.MigrateLegacyEmptyForumThreadIDs(db); err != nil {
+		return fmt.Errorf("migrate forum thread ids: %w", err)
+	}
 	return nil
 }
 

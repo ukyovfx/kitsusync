@@ -204,6 +204,36 @@ func TestPlannerCreatesThreadOnFirstTriggerAfterBaseline(t *testing.T) {
 	}
 }
 
+// After a thread is lost and cleared, the next status change must queue a
+// fresh create for the new generation instead of being swallowed as a
+// duplicate of the spent generation-0 key.
+func TestPlannerQueuesCreateAfterThreadLost(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	if _, err := model.ClearForumTaskThread(db, "task-1"); err != nil {
+		t.Fatalf("clear thread: %v", err)
+	}
+	planner.Now = now.Add(time.Minute)
+	result, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA, "person-1"), stubCard())
+	if err != nil {
+		t.Fatalf("PlanTask after loss: %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("expected a replacement create, got %+v", result)
+	}
+	var row model.ForumOutbox
+	if err := db.Where("kind = ? AND dedupe_key = ?", model.ForumOutboxCreateThread,
+		model.ForumCreateThreadDedupeKey("task-1", 1)).First(&row).Error; err != nil {
+		t.Fatalf("no create row for generation 1: %v", err)
+	}
+	if row.TaskID != "task-1" {
+		t.Errorf("create row task id = %q", row.TaskID)
+	}
+}
+
 func TestPlannerDoesNotPostForNonTriggerStatus(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
