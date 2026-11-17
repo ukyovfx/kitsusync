@@ -97,16 +97,18 @@ func (ForumTransition) TableName() string { return "forum_task_transitions" }
 
 // ForumOutbox is the durable send queue.
 type ForumOutbox struct {
-	ID             uint      `gorm:"primaryKey;autoIncrement"`
-	TaskID         string    `gorm:"index:idx_forum_outbox_task,priority:1;size:64"`
-	Kind           string    `gorm:"size:32;not null"`
-	DedupeKey      string    `gorm:"size:191;uniqueIndex;not null"`
-	CoalesceKey    string    `gorm:"size:191"`
-	Payload        string    `gorm:"type:text"`
-	State          string    `gorm:"size:16;not null;index:idx_forum_outbox_due,priority:1"`
-	NotBefore      time.Time `gorm:"index:idx_forum_outbox_due,priority:2"`
-	Attempts       int
-	NextAttemptAt  time.Time
+	ID        uint   `gorm:"primaryKey;autoIncrement;index:idx_forum_outbox_claim,priority:3;index:idx_forum_outbox_task_claim,priority:3"`
+	TaskID    string `gorm:"index:idx_forum_outbox_task_claim,priority:1;size:64"`
+	Kind      string `gorm:"size:32;not null"`
+	DedupeKey string `gorm:"size:191;uniqueIndex;not null"`
+	CoalesceKey string `gorm:"size:191"`
+	Payload     string `gorm:"type:text"`
+	State       string `gorm:"size:16;not null;index:idx_forum_outbox_claim,priority:1"`
+	NotBefore   time.Time
+	Attempts    int
+	// NextAttemptAt is what the claim query filters on, so the claim index
+	// leads with (state, next_attempt_at, id).
+	NextAttemptAt  time.Time `gorm:"index:idx_forum_outbox_claim,priority:2"`
 	ClaimedAt      *time.Time
 	Rendered       string `gorm:"type:text"`
 	Result         string `gorm:"type:text"`
@@ -361,43 +363,51 @@ func coalesceForumPostMessage(tx *gorm.DB, row ForumOutbox) error {
 }
 
 // ClaimNextForumOutboxRow selects the oldest due row whose task has no earlier
-// unfinished work. It returns nil when nothing is runnable.
+// unfinished work. It returns nil when nothing is runnable. The ordering rules
+// are enforced in SQL so a blocked head of the queue cannot hide later rows.
 func ClaimNextForumOutboxRow(db *gorm.DB, now time.Time) (*ForumOutbox, error) {
 	var row ForumOutbox
 	err := db.Transaction(func(tx *gorm.DB) error {
-		var candidates []ForumOutbox
-		if err := tx.Where("state = ? AND next_attempt_at <= ?", ForumOutboxPending, now).
-			Order("id asc").Limit(50).Find(&candidates).Error; err != nil {
+		err := tx.Raw(`
+			SELECT o.* FROM forum_outbox o
+			WHERE o.state = ? AND o.next_attempt_at <= ?
+			  AND NOT EXISTS (
+			      SELECT 1 FROM forum_outbox e
+			      WHERE e.task_id = o.task_id AND e.id < o.id
+			        AND e.state IN (?, ?))
+			  AND NOT EXISTS (
+			      SELECT 1 FROM forum_outbox e
+			      WHERE e.task_id = o.task_id AND e.id < o.id
+			        AND e.kind IN (?, ?) AND e.state IN (?, ?))
+			ORDER BY o.id
+			LIMIT 1`,
+			ForumOutboxPending, now,
+			ForumOutboxPending, ForumOutboxSending,
+			ForumOutboxPostMessage, ForumOutboxWarnMessage,
+			ForumOutboxCreateThread, ForumOutboxSyncThread,
+			ForumOutboxPending, ForumOutboxSending,
+		).Scan(&row).Error
+		if err != nil {
 			return err
 		}
-		for _, candidate := range candidates {
-			runnable, err := forumOutboxRowRunnable(tx, candidate)
-			if err != nil {
-				return err
-			}
-			if !runnable {
-				continue
-			}
-			claimedAt := now
-			res := tx.Model(&ForumOutbox{}).
-				Where("id = ? AND state = ?", candidate.ID, ForumOutboxPending).
-				Updates(map[string]interface{}{
-					"state":      ForumOutboxSending,
-					"claimed_at": claimedAt,
-					"attempts":   gorm.Expr("attempts + 1"),
-				})
-			if res.Error != nil {
-				return res.Error
-			}
-			if res.RowsAffected == 0 {
-				continue
-			}
-			if err := tx.Where("id = ?", candidate.ID).First(&row).Error; err != nil {
-				return err
-			}
+		if row.ID == 0 {
 			return nil
 		}
-		return nil
+		res := tx.Model(&ForumOutbox{}).
+			Where("id = ? AND state = ?", row.ID, ForumOutboxPending).
+			Updates(map[string]interface{}{
+				"state":      ForumOutboxSending,
+				"claimed_at": now,
+				"attempts":   gorm.Expr("attempts + 1"),
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			row = ForumOutbox{}
+			return nil
+		}
+		return tx.Where("id = ?", row.ID).First(&row).Error
 	})
 	if err != nil {
 		return nil, err
@@ -406,42 +416,6 @@ func ClaimNextForumOutboxRow(db *gorm.DB, now time.Time) (*ForumOutbox, error) {
 		return nil, nil
 	}
 	return &row, nil
-}
-
-// forumOutboxRowRunnable enforces the per-task ordering rules: nothing runs
-// until create_thread is done, and post/warn rows wait for the sync rows
-// queued before them.
-func forumOutboxRowRunnable(tx *gorm.DB, row ForumOutbox) (bool, error) {
-	if row.TaskID == "" {
-		return true, nil
-	}
-	if row.Kind != ForumOutboxCreateThread {
-		// Any earlier row of the same task must finish first (id order), so a
-		// post can never overtake the create_thread or sync_thread before it.
-		var earlier int64
-		if err := tx.Model(&ForumOutbox{}).
-			Where("task_id = ? AND id < ? AND state IN ?", row.TaskID, row.ID, []string{ForumOutboxPending, ForumOutboxSending}).
-			Count(&earlier).Error; err != nil {
-			return false, err
-		}
-		if earlier > 0 {
-			return false, nil
-		}
-	}
-	if row.Kind == ForumOutboxPostMessage || row.Kind == ForumOutboxWarnMessage {
-		// Only earlier syncs: a sync queued after this post waits for it via the
-		// rule above, so waiting on later syncs as well would deadlock both.
-		var pendingSyncs int64
-		if err := tx.Model(&ForumOutbox{}).
-			Where("task_id = ? AND id < ? AND kind IN ? AND state IN ?", row.TaskID, row.ID, []string{ForumOutboxCreateThread, ForumOutboxSyncThread}, []string{ForumOutboxPending, ForumOutboxSending}).
-			Count(&pendingSyncs).Error; err != nil {
-			return false, err
-		}
-		if pendingSyncs > 0 {
-			return false, nil
-		}
-	}
-	return true, nil
 }
 
 // FinishForumOutboxRow marks a row done.
