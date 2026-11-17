@@ -1223,6 +1223,26 @@ func TestWizardLiveProductionSelectionTargetsServerStep(t *testing.T) {
 	}
 }
 
+// F1: GET wizard forms must carry lang, otherwise the browser drops the query
+// and shellHeadExtras() re-adds it with a full page reload.
+func TestWizardGetFormsCarryLanguage(t *testing.T) {
+	db := newIAViewDB(t)
+	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=4&project=live-production-id&plan_guild=123456789012345678", nil)
+	production := KitsuProject{ID: "live-production-id", Name: "Live Production"}
+	forms := map[string]string{
+		"production": renderWizardProductionLocalized("en", r, db, []KitsuProject{production}, nil),
+		"server":     renderWizardServer("en", r, "", production.ID),
+	}
+	for name, body := range forms {
+		if !strings.Contains(body, `<input type="hidden" name="lang" value="en">`) {
+			t.Fatalf("%s form did not carry the current language", name)
+		}
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.Close()
+	}
+}
+
 func TestWizardProductionLookupStateDistinguishesEmptyAndFailure(t *testing.T) {
 	db := newIAViewDB(t)
 	r := httptest.NewRequest("GET", "/bot/setup?lang=en&wizard_step=2", nil)
