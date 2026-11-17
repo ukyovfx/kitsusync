@@ -46,13 +46,6 @@ func TestForumAutoCreateMakesForumAndTagsPerTaskType(t *testing.T) {
 	form := url.Values{"project": {"p1"}, "mode": {"forum"}, "guild_id": {"g1"}, "action": {"create_forums"}}
 	form["tt_id"], form["tt_name"], form["tt_forum"] = []string{"tt-anim", "tt-comp"}, []string{"Animation", "Compositing"}, []string{"", ""}
 	form["st_id"], form["st_name"], form["st_role"] = []string{"s-wfa", "s-retake", "s-done"}, []string{"WFA", "Retake", "Done"}, []string{"wfa", "retake", "done"}
-	for _, forum := range []string{"f-anim", "f-comp"} {
-		for i, role := range []string{"wfa", "retake", "done"} {
-			form.Add("tag_forum", forum)
-			form.Add("tag_role", role)
-			form.Add("tag_id", []string{"t1", "t2", "t3"}[i])
-		}
-	}
 	w := forumPost(t, db, form)
 	if w.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())

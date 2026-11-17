@@ -69,17 +69,10 @@ func completeForumForm() url.Values {
 	form["st_id"] = []string{"s-wfa", "s-retake", "s-done", "s-wip"}
 	form["st_name"] = []string{"WFA", "Retake", "Done", "WIP"}
 	form["st_role"] = []string{"wfa", "retake", "done", "wip"}
-	for _, forum := range []string{"f-anim", "f-comp"} {
-		for i, role := range []string{"wfa", "retake", "done", "wip"} {
-			form.Add("tag_forum", forum)
-			form.Add("tag_role", role)
-			form.Add("tag_id", []string{"t1", "t2", "t3", "t4"}[i])
-		}
-	}
 	return form
 }
 
-func TestForumSettingsPageRendersLookups(t *testing.T) {
+func TestForumSettingsPageRendersTwoSectionsWithoutTagAssignment(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
 	w := httptest.NewRecorder()
@@ -88,10 +81,16 @@ func TestForumSettingsPageRendersLookups(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	for _, want := range []string{"Animation", "Compositing", `value="f-anim"`, "Waiting For Approval"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("page is missing %q", want)
+	for _, heading := range []string{"Task Type → forum", "Kitsu status → role"} {
+		if !strings.Contains(body, "<h2>"+heading+"</h2>") {
+			t.Fatalf("page is missing the %q section", heading)
 		}
+	}
+	if strings.Contains(body, "Role → forum tag") || strings.Contains(body, `name="tag_id"`) || strings.Contains(body, `name="tag_forum"`) {
+		t.Fatal("the per-forum tag assignment section must be gone from the page")
+	}
+	if !strings.Contains(body, `name="guild_id"`) {
+		t.Fatal("the Discord server ID field must stay on the page")
 	}
 }
 
@@ -145,19 +144,46 @@ func TestForumSettingsSaveStoresSettingsAndSwitchesMode(t *testing.T) {
 	if err != nil || !ok || len(loaded.Routes) != 2 || len(loaded.StatusRoles) != 4 || len(loaded.Tags) != 8 {
 		t.Fatalf("unexpected stored settings: ok=%v err=%v %+v", ok, err, loaded)
 	}
+	// The tag mapping is derived from the forums' own tag names, not the form.
+	got := map[string]string{}
+	for _, tag := range loaded.Tags {
+		got[tag.ForumChannelID+"|"+tag.Role] = tag.TagID
+	}
+	for _, forum := range []string{"f-anim", "f-comp"} {
+		for role, tagID := range map[string]string{"wfa": "t1", "retake": "t2", "done": "t3", "wip": "t4"} {
+			if got[forum+"|"+role] != tagID {
+				t.Fatalf("derived tag %s|%s = %q, want %q", forum, role, got[forum+"|"+role], tagID)
+			}
+		}
+	}
 }
 
-func TestForumSettingsIncompleteForumModeIsRejectedWithReasons(t *testing.T) {
+func TestForumSettingsForumMissingStandardTagsIsRejectedWithReasons(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
-	form := completeForumForm()
-	form["tag_id"] = make([]string, len(form["tag_id"])) // no tags chosen
-	w := forumPost(t, db, form)
+	// The compositing forum only carries a WFA tag, so the Retake and Done
+	// mappings cannot be derived from its tag names.
+	oldForums := forumChannelLister
+	t.Cleanup(func() { forumChannelLister = oldForums })
+	forumChannelLister = func(string, string) ([]forumChannelInfo, error) {
+		return []forumChannelInfo{
+			{ID: "f-anim", Name: "animation", Tags: []forumTagInfo{{ID: "t1", Name: "WFA"}, {ID: "t2", Name: "Retake"}, {ID: "t3", Name: "Done"}, {ID: "t4", Name: "WIP"}}},
+			{ID: "f-comp", Name: "compositing", Tags: []forumTagInfo{{ID: "c1", Name: "WFA"}}},
+		}, nil
+	}
+	w := forumPost(t, db, completeForumForm())
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "has no tag for the role") {
-		t.Fatal("the page must say what is missing")
+	body := w.Body.String()
+	if !strings.Contains(body, "has no tag for the role") || !strings.Contains(body, "compositing") {
+		t.Fatal("the page must say which forum is missing which role's tag")
+	}
+	if strings.Contains(body, `name="tag_id"`) {
+		t.Fatal("the refusal must not bring the tag assignment inputs back")
+	}
+	if _, ok, _ := model.LoadProductionForumSettings(db, "p1"); ok {
+		t.Fatal("a refused save must not store anything")
 	}
 }
 
@@ -165,14 +191,7 @@ func TestForumSettingsRepointedTaskTypeDropsStaleTagRows(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
 	form := completeForumForm()
-	form["tt_forum"] = []string{"f-anim", "f-anim"} // f-comp is no longer routed, its tag rows remain in the form
-	for i := len(form["tag_forum"]) - 1; i >= 0; i-- {
-		if form["tag_forum"][i] == "f-comp" { // the page no longer renders these rows
-			for _, key := range []string{"tag_forum", "tag_role", "tag_id"} {
-				form[key] = append(form[key][:i], form[key][i+1:]...)
-			}
-		}
-	}
+	form["tt_forum"] = []string{"f-anim", "f-anim"} // f-comp is no longer routed
 	if w := forumPost(t, db, form); w.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
@@ -182,47 +201,64 @@ func TestForumSettingsRepointedTaskTypeDropsStaleTagRows(t *testing.T) {
 	}
 }
 
-// A Task Type pointed at a forum that has no tag rows yet must be refused with
-// those rows rendered, or the user can never recover from the refusal.
-func TestForumSettingsRefusalRendersTagRowsOfNewlyRoutedForum(t *testing.T) {
+// A Task Type pointed at a forum without the standard tags must be refused
+// with the forum and roles named; the page offers no tag inputs to fill.
+func TestForumSettingsRefusalNamesNewlyRoutedForumTags(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
 	form := completeForumForm()
-	form["tt_forum"] = []string{"f-anim", "f-new"} // f-new was never rendered, so it has no tag rows
-	var tagForums, tagRoles, tagIDs []string
-	for i := range form["tag_forum"] {
-		if form["tag_forum"][i] != "f-new" {
-			tagForums, tagRoles, tagIDs = append(tagForums, form["tag_forum"][i]), append(tagRoles, form["tag_role"][i]), append(tagIDs, form["tag_id"][i])
-		}
-	}
-	form["tag_forum"], form["tag_role"], form["tag_id"] = tagForums, tagRoles, tagIDs
+	form["tt_forum"] = []string{"f-anim", "f-new"} // f-new has no standard tags
 	w := forumPost(t, db, form)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `<input type="hidden" name="tag_forum" value="f-new">`) {
-		t.Fatal("the refused save must re-render the newly routed forum's tag rows")
+	if !strings.Contains(body, "has no tag for the role") || !strings.Contains(body, "f-new") {
+		t.Fatal("the page must say which forum's tags are missing")
 	}
-	if !strings.Contains(body, "has no tag for the role") {
-		t.Fatal("the page must say which tags are missing")
+	if strings.Contains(body, `name="tag_id"`) {
+		t.Fatal("the page must not render tag assignment inputs")
 	}
 }
 
 func TestForumSettingsSaveWorksWhenDiscordLookupFails(t *testing.T) {
-	stubForumLookups(t, forumTestError("discord down"))
+	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
 	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
-		t.Fatalf("saving must not depend on the Discord lookup, status = %d", w.Code)
+		t.Fatalf("seed save failed: %d", w.Code)
 	}
+	// Discord is now unreachable. Re-saving the page exactly as it is rendered
+	// must keep the saved tag mapping instead of refusing the save.
+	stubForumLookups(t, forumTestError("discord down"))
 	w := httptest.NewRecorder()
 	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
-	body := w.Body.String()
-	if !strings.Contains(body, "Could not read the Discord forum list") {
+	if !strings.Contains(w.Body.String(), "Could not read the Discord forum list") {
 		t.Fatal("the page must explain the failed Discord lookup")
 	}
-	if !strings.Contains(body, `<option value="f-anim" selected>f-anim</option>`) {
+	if !strings.Contains(w.Body.String(), `<option value="f-anim" selected>f-anim</option>`) {
 		t.Fatal("a saved forum must stay selected even when the live list is unavailable")
+	}
+	if resp := forumPost(t, db, completeForumForm()); resp.Code != http.StatusSeeOther {
+		t.Fatalf("re-save with Discord down must keep the saved tags, status = %d: %s", resp.Code, resp.Body.String())
+	}
+	loaded, _, _ := model.LoadProductionForumSettings(db, "p1")
+	if len(loaded.Tags) != 8 {
+		t.Fatalf("saved tags were lost: %d left", len(loaded.Tags))
+	}
+}
+
+func TestForumSettingsSaveWithoutDiscordListAndNoSavedTagsIsRefused(t *testing.T) {
+	stubForumLookups(t, forumTestError("discord down"))
+	db := newForumPageDB(t)
+	w := forumPost(t, db, completeForumForm())
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{"Could not read the Discord forum list", "needs the Discord forum list"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the refusal must explain the missing forum list, missing %q in: %s", want, body)
+		}
 	}
 }
 
@@ -274,9 +310,18 @@ func (e forumTestError) Error() string { return string(e) }
 
 func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
 	stubForumLookups(t, nil)
+	// The compositing forum only carries a WFA tag, so deriving its Retake and
+	// Done mappings fails alongside the missing Done status role.
+	oldForums := forumChannelLister
+	t.Cleanup(func() { forumChannelLister = oldForums })
+	forumChannelLister = func(string, string) ([]forumChannelInfo, error) {
+		return []forumChannelInfo{
+			{ID: "f-anim", Name: "animation", Tags: []forumTagInfo{{ID: "t1", Name: "WFA"}, {ID: "t2", Name: "Retake"}, {ID: "t3", Name: "Done"}, {ID: "t4", Name: "WIP"}}},
+			{ID: "f-comp", Name: "compositing", Tags: []forumTagInfo{{ID: "c1", Name: "WFA"}}},
+		}, nil
+	}
 	db := newForumPageDB(t)
 	form := completeForumForm()
-	form["tag_id"] = make([]string, len(form["tag_id"]))
 	form["st_role"] = []string{"wfa", "retake", "", ""} // no status for Done
 	r := httptest.NewRequest(http.MethodPost, "/bot/admin/forum?lang=ja", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -286,7 +331,7 @@ func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d", w.Code)
 	}
-	for _, want := range []string{"保存できませんでした", "notice notice-error", "役割「完了」に割り当てるステータスがありません。", "のタグがありません。", "フォーラム「animation」に"} {
+	for _, want := range []string{"保存できませんでした", "notice notice-error", "役割「完了」に割り当てるステータスがありません。", "のタグがありません。", "フォーラム「compositing」に"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Japanese message missing %q", want)
 		}
@@ -299,7 +344,7 @@ func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
 }
 
 func TestForumSettingsEveryProblemCodeHasLocalizedText(t *testing.T) {
-	codes := []string{model.ProblemProductionRequired, model.ProblemRouteIncomplete, model.ProblemTaskTypeDuplicate, model.ProblemStatusNoRole, model.ProblemStatusDuplicate, model.ProblemTagUnroutedForum, model.ProblemTagInvalid, model.ProblemTagRoleDuplicate, model.ProblemTagReused, model.ProblemGuildRequired, model.ProblemRoutesRequired, model.ProblemRoleStatusMissing, model.ProblemForumTagMissing}
+	codes := []string{model.ProblemProductionRequired, model.ProblemRouteIncomplete, model.ProblemTaskTypeDuplicate, model.ProblemStatusNoRole, model.ProblemStatusDuplicate, model.ProblemTagUnroutedForum, model.ProblemTagInvalid, model.ProblemTagRoleDuplicate, model.ProblemTagReused, model.ProblemGuildRequired, model.ProblemRoutesRequired, model.ProblemRoleStatusMissing, model.ProblemForumTagMissing, model.ProblemForumListUnavailable}
 	for _, code := range codes {
 		problem := model.ForumSettingsProblem{Code: code, Args: []string{"x", "wfa"}}
 		for _, lang := range []string{"ja", "en"} {
@@ -391,19 +436,54 @@ func TestForumSettingsGlobalValidationOnlyFlagRefusesWrites(t *testing.T) {
 }
 
 func TestForumSettingsSavesWithoutAnyKitsuOrDiscordLookup(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
+		t.Fatalf("seed save failed: %d", w.Code)
+	}
+	// Every lookup is now down. Re-saving the page exactly as it is rendered
+	// must keep the saved routes, status roles and derived tags.
 	oldTypes, oldStatuses, oldForums := forumTaskTypeLister, forumStatusLister, forumChannelLister
 	t.Cleanup(func() { forumTaskTypeLister, forumStatusLister, forumChannelLister = oldTypes, oldStatuses, oldForums })
 	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType { return nil }
 	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) { return nil, forumTestError("not connected") }
 	forumChannelLister = func(string, string) ([]forumChannelInfo, error) { return nil, forumTestError("not connected") }
-	db := newForumPageDB(t)
-	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
-		t.Fatalf("saving must not need Kitsu or Discord, status = %d: %s", w.Code, w.Body.String())
+	if resp := forumPost(t, db, completeForumForm()); resp.Code != http.StatusSeeOther {
+		t.Fatalf("re-saving must not need Kitsu or Discord, status = %d: %s", resp.Code, resp.Body.String())
 	}
 	w := httptest.NewRecorder()
 	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
 	body := w.Body.String()
 	if w.Code != http.StatusOK || !strings.Contains(body, `name="tt_id" value="tt-anim"`) || !strings.Contains(body, `name="st_id" value="s-done"`) {
 		t.Fatalf("saved rows must render with every lookup down (status %d)", w.Code)
+	}
+	loaded, _, _ := model.LoadProductionForumSettings(db, "p1")
+	if len(loaded.Routes) != 2 || len(loaded.StatusRoles) != 4 || len(loaded.Tags) != 8 {
+		t.Fatalf("re-save with every lookup down lost settings: %+v", loaded)
+	}
+}
+
+func TestForumSettingsOfflineReuseRefusedAfterGuildChange(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
+		t.Fatalf("seed save failed: %d", w.Code)
+	}
+	// Discord is unreachable and the operator changes the server ID in the
+	// same save. The saved tag rows belong to the old guild, so they must not
+	// be reused under the new guild ID.
+	stubForumLookups(t, forumTestError("discord down"))
+	form := completeForumForm()
+	form.Set("guild_id", "g2")
+	w := forumPost(t, db, form)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	loaded, ok, _ := model.LoadProductionForumSettings(db, "p1")
+	if !ok {
+		t.Fatal("the refused save must not delete the saved settings")
+	}
+	if loaded.Config.GuildID != "g1" {
+		t.Fatalf("saved guild = %q, want g1: the refused save must not store the new guild with the old guild's tags", loaded.Config.GuildID)
 	}
 }

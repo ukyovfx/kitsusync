@@ -253,14 +253,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 				// add them while keeping its existing tags, so the retry completes.
 				var missing []string
 				for _, want := range forumAutoTagNames {
-					have := false
-					for _, got := range forum.Tags {
-						if strings.EqualFold(strings.TrimSpace(got.Name), want.Name) {
-							have = true
-							break
-						}
-					}
-					if !have {
+					if forumTagIDForRole(forum.Tags, want.Role) == "" {
 						missing = append(missing, want.Name)
 					}
 				}
@@ -275,12 +268,9 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 			}
 			route.ForumChannelID = forum.ID
 			route.ForumChannelName = forum.Name
-			for _, want := range forumAutoTagNames {
-				for _, got := range forum.Tags {
-					if strings.EqualFold(strings.TrimSpace(got.Name), want.Name) {
-						tags = append(tags, model.ProductionForumTag{ProductionID: productionID, ForumChannelID: forum.ID, Role: want.Role, TagID: got.ID})
-						break
-					}
+			for _, role := range forumRoleOptions {
+				if tagID := forumTagIDForRole(forum.Tags, role); tagID != "" {
+					tags = append(tags, model.ProductionForumTag{ProductionID: productionID, ForumChannelID: forum.ID, Role: role, TagID: tagID})
 				}
 			}
 		}

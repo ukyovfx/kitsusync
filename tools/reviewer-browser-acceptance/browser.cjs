@@ -21,11 +21,11 @@ function isNotificationsApplyRequest(request) {
 const locales = [
   {
     lang: 'en', automatic: 'Automatic', overrides: 'Additional', tabs: ['Overview', 'Notifications', 'Team', 'Settings'],
-    forumHeadings: ['Discord server', 'Task Type → forum', 'Kitsu status → role', 'Role → forum tag'],
+    forumHeadings: ['Task Type → forum', 'Kitsu status → role'],
   },
   {
     lang: 'ja', automatic: '自動', overrides: '追加', tabs: ['概要', '通知', 'チーム', '設定'],
-    forumHeadings: ['Discordサーバー', 'タスクタイプ → フォーラム', 'Kitsuのステータス → 役割', '役割 → フォーラムのタグ'],
+    forumHeadings: ['タスクタイプ → フォーラム', 'Kitsuのステータス → 役割'],
   },
 ];
 const compositingAutomatic = ['@Guild Nick Supervisor', '@Global Name Fallback', '@username-fallback'];
@@ -731,7 +731,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await forumForm.count() !== 1) throw new Error(`Forum settings form missing in ${locale.lang}`);
         const forumHeadings = (await page.locator('form.section-stack > section.section-card > h2').allTextContents()).map(text => text.trim());
         if (JSON.stringify(forumHeadings) !== JSON.stringify(locale.forumHeadings)) {
-          throw new Error(`Forum settings sections are not the four ${locale.lang} headings: ${JSON.stringify(forumHeadings)}`);
+          throw new Error(`Forum settings sections are not the two ${locale.lang} headings: ${JSON.stringify(forumHeadings)}`);
+        }
+        if (await page.locator('form.section-stack select[name="tag_id"]').count() || await page.locator('form.section-stack input[name="tag_forum"]').count()) {
+          throw new Error(`Forum settings still renders tag assignment inputs in ${locale.lang}`);
         }
         if (await page.locator('#forum-guild').inputValue() !== guildID) throw new Error(`Forum settings did not load the Production Discord server in ${locale.lang}`);
         // status-wip exists only in the live Kitsu status list, never in the
@@ -756,13 +759,15 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const forumSaveButton = forumForm.locator('button[type="submit"]:not([name="action"])');
         if (await forumSaveButton.count() !== 1 || !(await forumSaveButton.isVisible())) throw new Error(`Forum settings Save action is missing in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `forum-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'server, Task Type → forum, Kitsu status → role and Role → forum tag sections with Save and Bot auto-create');
+        await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'Task Type → forum and Kitsu status → role sections with the server field, Save and Bot auto-create; the tag mapping is derived from the forum tag names on save');
 
-        // Assign the unrouted Animation row to the storyboard forum. The page
-        // only renders tag rows for already-routed forums, so the first Save is
-        // refused for the storyboard forum's missing trigger tags and the
-        // re-rendered form then offers its tag rows; fill WFA/Retake/Done and
-        // save again, then reload to prove everything came back from storage.
+        // Assign the unrouted Animation row to the storyboard forum, whose
+        // tags do not use the standard names. The save is refused, naming the
+        // storyboard forum and the missing role tag, and the form still has no
+        // tag assignment inputs. Re-point Animation to the animation forum,
+        // whose tags use the standard names, save, then reload to prove the
+        // derived mapping and the WFA status destination came back from
+        // storage.
         await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666664');
         expectedForumTagRefusal = { active: true, responseCount: 0, console400Messages: [] };
         const refusedSave = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.request().url()).pathname === '/bot/admin/forum');
@@ -776,15 +781,19 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`the first forum save was expected to be refused for the storyboard forum's missing tags in ${locale.lang}: HTTP ${refusal.status()}`);
         }
         await refusalNavigation;
-        const storyboardTagRows = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
-        if (await storyboardTagRows.count() !== 4) throw new Error(`the refused forum save did not re-render the storyboard tag rows in ${locale.lang}: ${await storyboardTagRows.count()}`);
-        for (const [role, tagID] of [['wfa', '66666666666666664-wfa'], ['retake', '66666666666666664-retake'], ['done', '66666666666666664-done']]) {
-          await storyboardTagRows.filter({ has: page.locator(`input[name="tag_role"][value="${role}"]`) }).locator('select[name="tag_id"]').selectOption(tagID);
+        const refusalBody = await page.locator('body').innerText();
+        const refusalNeedle = locale.lang === 'ja' ? 'のタグがありません。' : 'has no tag for the role';
+        if (!refusalBody.includes('storyboard') || !refusalBody.includes(refusalNeedle)) {
+          throw new Error(`the refused forum save did not name the storyboard forum's missing tag in ${locale.lang}: ${JSON.stringify(refusalBody.slice(0, 400))}`);
+        }
+        if (await page.locator('form.section-stack select[name="tag_id"]').count() || await page.locator('form.section-stack input[name="tag_forum"]').count()) {
+          throw new Error(`the refused forum save re-rendered tag assignment inputs in ${locale.lang}`);
         }
         // Wait for the saved page to finish loading, not just commit: a reload
         // issued before then reloads the previous history entry, which is the
         // refused POST, and resubmits it.
         const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'load', timeout: 15000 });
+        await forumRow('Animation').locator('select[name="tt_forum"]').selectOption('66666666666666662');
         await page.locator('form.section-stack').locator('button[type="submit"]:not([name="action"])').click({ noWaitAfter: true });
         try {
           await routingNavigation;
@@ -799,23 +808,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (reloadResponse.request().method() !== 'GET' || new URL(reloadResponse.url()).searchParams.get('msg') !== 'saved') {
           throw new Error(`Forum settings reload did not return to the saved page in ${locale.lang}: ${reloadResponse.request().method()} ${reloadResponse.url()}`);
         }
-        if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
+        if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666662') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
         }
         const wfaStatusSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
         if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
-        const compositingTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666661"]') });
-        if (await compositingTags.count() !== 4) throw new Error(`Forum settings did not offer the four Role → forum tag rows in ${locale.lang}: ${await compositingTags.count()}`);
-        if (await compositingTags.filter({ has: page.locator('input[name="tag_role"][value="wfa"]') }).locator('select[name="tag_id"]').inputValue() !== '66666666666666661-wfa') {
-          throw new Error(`Forum settings did not keep the saved WFA forum tag in ${locale.lang}`);
-        }
-        const storyboardTags = page.locator('form.section-stack tr').filter({ has: page.locator('input[name="tag_forum"][value="66666666666666664"]') });
-        if (await storyboardTags.count() !== 4) throw new Error(`Forum settings did not offer the storyboard tag rows after the save in ${locale.lang}: ${await storyboardTags.count()}`);
-        if (await storyboardTags.filter({ has: page.locator('input[name="tag_role"][value="wfa"]') }).locator('select[name="tag_id"]').inputValue() !== '66666666666666664-wfa') {
-          throw new Error(`Forum settings did not persist the storyboard WFA tag in ${locale.lang}`);
-        }
         await page.screenshot({ path: path.join(output, `forum-settings-saved-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'the Animation → storyboard assignment was refused once for its missing trigger tags, then the filled tag rows persisted the mapping and the WFA status destination; both survived a reload');
+        await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'the Animation → storyboard assignment was refused because the storyboard forum lacks the standard trigger tags, then Animation → animation saved the derived tag mapping and the WFA status destination; both survived a reload');
         // Zero-touch setup: from an untouched forum setup, one press of the Bot
         // auto-create button seeds one route per Kitsu Task Type, creates a
         // forum with the role tags under the Production's Discord category and
