@@ -30,6 +30,7 @@ import (
 
 	"github.com/gookit/slog"
 	"github.com/gookit/slog/handler"
+	"github.com/gookit/slog/rotatefile"
 
 	"github.com/pieterclaerhout/go-waitgroup"
 	"github.com/robfig/cron/v3"
@@ -326,7 +327,6 @@ func timestampsEqual(left, right string) bool {
 	return false
 }
 
-
 // forumCardRenderer renders the first message of a forum post with the same
 // card the lane path posts. MentionContent and AllowedMentions are cleared
 // because the first message never mentions anyone (D-04).
@@ -399,7 +399,9 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 	executor := forum.Executor{
 		DB:       db,
 		BotToken: func() string { return botToken },
-		TaskURL:  func(taskID string) string { return forum.TaskURLFor(db, func() string { return setup.PublicKitsuURL(db) }, taskID) },
+		TaskURL: func(taskID string) string {
+			return forum.TaskURLFor(db, func() string { return setup.PublicKitsuURL(db) }, taskID)
+		},
 		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string) {
 			return recipients.ForTask(taskID, payload)
 		},
@@ -427,7 +429,6 @@ func forumReviewerTargets(db *gorm.DB, conf config.Config, botToken, projectID, 
 
 // forumOutboxDrainLimit bounds one poll's Discord calls.
 const forumOutboxDrainLimit = 50
-
 
 // Kitsu credentials/settings helpers.
 // Prefer DB settings, then environment variables, then conf.toml.
@@ -482,6 +483,7 @@ func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, web
 var pollMu sync.Mutex
 
 var makeKitsuResponse = MakeKitsuResponse
+
 func redactExpiredNotificationPayloads(conf config.Config, db *gorm.DB, now time.Time) {
 	days := conf.Notification.DeliveryPayloadRetentionDays
 	if db == nil || days <= 0 {
@@ -822,6 +824,15 @@ func newApplicationHTTPServer(handler http.Handler) *http.Server {
 	}
 }
 
+// logLevelForEnv maps APP_ENV to the log level: development opts into DEBUG,
+// everything else (production, staging, unset) stays at INFO.
+func logLevelForEnv(appEnv string) slog.Level {
+	if appEnv == "development" {
+		return slog.DebugLevel
+	}
+	return slog.InfoLevel
+}
+
 func main() {
 	// The standard library logger writes to stderr and is used by the CLI
 	// paths. Keep it on the same redacting boundary as the application logger.
@@ -836,25 +847,33 @@ func main() {
 		logger.Output = logutil.NewRedactingWriter(os.Stdout)
 	})
 
-	// Ensure file logging survives fresh containers where ./logs may not exist yet.
-	logFile, err := logutil.OpenAppendFile("./logs/all-levels.log")
+	// Log level: default INFO, APP_ENV=development opts into DEBUG. The file
+	// handler needs the level explicitly: gookit/slog applies SetLogLevel only
+	// to the std handler, a handler built with AllLevels ignores it.
+	appEnv := os.Getenv("APP_ENV")
+	logLevel := logLevelForEnv(appEnv)
+
+	rotateW, err := rotatefile.NewWriter(&rotatefile.Config{
+		Filepath:   "./logs/all-levels.log",
+		MaxSize:    10 * rotatefile.OneMByte,
+		BackupNum:  5,
+		FilePerm:   rotatefile.DefaultFilePerm,
+		RenameFunc: rotatefile.DefaultFilenameFn,
+	})
 	if err != nil {
 		log.Fatalf("failed to open log file: %v", err)
 	}
-	defer logFile.Close()
+	defer rotateW.Close()
 
-	redactingWriter := logutil.NewRedactingWriter(logFile)
-	h1 := handler.NewIOWriterHandler(redactingWriter, slog.AllLevels)
+	redactingWriter := logutil.NewRedactingWriter(rotateW)
+	h1 := handler.NewSimpleHandler(redactingWriter, logLevel)
 	slog.PushHandler(h1)
+	slog.SetLogLevel(logLevel)
 
-	// Set log level based on APP_ENV (production = INFO, development = DEBUG)
-	appEnv := os.Getenv("APP_ENV")
-	if appEnv == "production" {
-		slog.SetLogLevel(slog.InfoLevel)
-		slog.Info("App started", "env", appEnv, "log_level", "INFO")
-	} else {
-		slog.SetLogLevel(slog.DebugLevel)
+	if logLevel == slog.DebugLevel {
 		slog.Debug("App started", "env", appEnv, "log_level", "DEBUG")
+	} else {
+		slog.Info("App started", "env", appEnv, "log_level", "INFO")
 	}
 
 	start := time.Now()

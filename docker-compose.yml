@@ -12,6 +12,11 @@ services:
         BUILD_SOURCE_ID: "${KITSUSYNC_BUILD_SOURCE_ID:-unknown}"
         IMAGE_REVISION: "${KITSUSYNC_IMAGE_REVISION:-unknown}"
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     env_file:
       - .env.local
     volumes:
