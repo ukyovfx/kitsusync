@@ -761,7 +761,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         for (const [role, tagID] of [['wfa', '66666666666666664-wfa'], ['retake', '66666666666666664-retake'], ['done', '66666666666666664-done']]) {
           await storyboardTagRows.filter({ has: page.locator(`input[name="tag_role"][value="${role}"]`) }).locator('select[name="tag_id"]').selectOption(tagID);
         }
-        const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'commit', timeout: 15000 });
+        // Wait for the saved page to finish loading, not just commit: a reload
+        // issued before then reloads the previous history entry, which is the
+        // refused POST, and resubmits it.
+        const routingNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'saved', { waitUntil: 'load', timeout: 15000 });
         await page.locator('form.section-stack').locator('button[type="submit"]:not([name="action"])').click({ noWaitAfter: true });
         try {
           await routingNavigation;
@@ -772,7 +775,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         if (expectedForumTagRefusal.console400Messages.length > 1) errors.push(...expectedForumTagRefusal.console400Messages.slice(1));
         expectedForumTagRefusal.active = false;
-        await page.reload({ waitUntil: 'networkidle' });
+        const reloadResponse = await page.reload({ waitUntil: 'networkidle' });
+        if (reloadResponse.request().method() !== 'GET' || new URL(reloadResponse.url()).searchParams.get('msg') !== 'saved') {
+          throw new Error(`Forum settings reload did not return to the saved page in ${locale.lang}: ${reloadResponse.request().method()} ${reloadResponse.url()}`);
+        }
         if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666664') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
         }
