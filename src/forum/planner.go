@@ -168,7 +168,12 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 	assigneesChanged := !sameIDs(model.ForumAssigneeIDs(existing), assignees)
 
 	result := PlanResult{}
-	if statusChanged {
+	// A status change must reach the thread. A task whose thread was lost
+	// (generation advanced by ClearForumTaskThread) also needs its create
+	// re-queued; a baselined task without a thread must stay quiet until its
+	// status actually changes.
+	threadLost := !hasPost && existing.ThreadGeneration > 0
+	if statusChanged || threadLost {
 		if err := p.applyStatusChange(input, existing, route, hasPost, card, &result); err != nil {
 			return result, err
 		}
@@ -211,7 +216,7 @@ func (p Planner) createTask(input TaskInput, route model.ProductionForumRoute, c
 		if err := tx.Create(&row).Error; err != nil {
 			return err
 		}
-		if err := p.queueCreateThreadIn(tx, input, route, input.StatusRole, rendered, &result); err != nil {
+		if err := p.queueCreateThreadIn(tx, input, route, input.StatusRole, 0, rendered, &result); err != nil {
 			return fmt.Errorf("queue thread create: %w", err)
 		}
 		if err := p.queueStatusSignalIn(tx, input, model.ForumTask{StatusID: input.StatusID}, &result); err != nil {
@@ -228,7 +233,16 @@ func (p Planner) createTask(input TaskInput, route model.ProductionForumRoute, c
 func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, route model.ProductionForumRoute, hasPost bool, card func() (json.RawMessage, error), result *PlanResult) error {
 	if !hasPost {
 		if IsTriggerRole(input.StatusRole) {
-			return p.queueCreateThread(input, route, input.StatusRole, card, result)
+			// A create that already failed permanently must not be re-queued
+			// every poll: it would fail the same way again.
+			failed, err := model.ForumCreateThreadFailed(p.DB, input.TaskID, existing.ThreadGeneration)
+			if err != nil {
+				return err
+			}
+			if failed {
+				return nil
+			}
+			return p.queueCreateThread(input, route, input.StatusRole, existing.ThreadGeneration, card, result)
 		}
 		return nil
 	}
@@ -391,17 +405,17 @@ func commentQuote(text string) string {
 // commentIDFromDate is unused; the comment marker is the stored Kitsu
 // last_comment_date, compared directly in planChange.
 
-func (p Planner) queueCreateThread(input TaskInput, route model.ProductionForumRoute, role string, card func() (json.RawMessage, error), result *PlanResult) error {
+func (p Planner) queueCreateThread(input TaskInput, route model.ProductionForumRoute, role string, generation int, card func() (json.RawMessage, error), result *PlanResult) error {
 	rendered, err := card()
 	if err != nil {
 		return fmt.Errorf("render forum card: %w", err)
 	}
-	return p.queueCreateThreadIn(p.DB, input, route, role, rendered, result)
+	return p.queueCreateThreadIn(p.DB, input, route, role, generation, rendered, result)
 }
 
 // queueCreateThreadIn queues the thread creation on the given connection so a
 // caller can keep it in the same transaction as the task row.
-func (p Planner) queueCreateThreadIn(db *gorm.DB, input TaskInput, route model.ProductionForumRoute, role string, rendered json.RawMessage, result *PlanResult) error {
+func (p Planner) queueCreateThreadIn(db *gorm.DB, input TaskInput, route model.ProductionForumRoute, role string, generation int, rendered json.RawMessage, result *PlanResult) error {
 	title := model.TruncateForumTitle(input.Title)
 	payload, err := json.Marshal(model.ForumCreateThreadPayload{
 		ForumID:        route.ForumChannelID,
@@ -417,7 +431,7 @@ func (p Planner) queueCreateThreadIn(db *gorm.DB, input TaskInput, route model.P
 	_, err = model.EnqueueForumOutbox(db, model.ForumOutbox{
 		TaskID:    input.TaskID,
 		Kind:      model.ForumOutboxCreateThread,
-		DedupeKey: model.ForumCreateThreadDedupeKey(input.TaskID, 0),
+		DedupeKey: model.ForumCreateThreadDedupeKey(input.TaskID, generation),
 		Payload:   string(payload),
 		State:     model.ForumOutboxPending,
 		NotBefore: now,

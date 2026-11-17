@@ -252,6 +252,18 @@ func ForumTaskHasPendingCreate(db *gorm.DB, taskID string) (bool, error) {
 	return count > 0, err
 }
 
+// ForumCreateThreadFailed reports whether the create_thread row of this thread
+// generation already failed permanently. Re-queueing it would fail the same
+// way again, so the planner must not retry it every poll.
+func ForumCreateThreadFailed(db *gorm.DB, taskID string, generation int) (bool, error) {
+	var count int64
+	err := db.Model(&ForumOutbox{}).
+		Where("task_id = ? AND kind = ? AND dedupe_key = ? AND state = ?",
+			taskID, ForumOutboxCreateThread, ForumCreateThreadDedupeKey(taskID, generation), ForumOutboxFailed).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // ForumBaselineExists reports whether the (project, task type) pair is seeded.
 func ForumBaselineExists(db *gorm.DB, projectID, taskTypeID string) (bool, error) {
 	var count int64
@@ -531,11 +543,22 @@ func ClearForumTaskThread(db *gorm.DB, taskID string) (int, error) {
 		}
 		generation = row.ThreadGeneration + 1
 		return tx.Model(&ForumTask{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
-			"thread_id":         "",
+			"thread_id":         gorm.Expr("NULL"),
 			"thread_generation": generation,
 		}).Error
 	})
 	return generation, err
+}
+
+// MigrateLegacyEmptyForumThreadIDs moves legacy empty thread ids to NULL once
+// at startup. ClearForumTaskThread used to write "" into the nullable
+// thread_id column; SQLite treats '' as a real value, so every later task with
+// a thread collided on the unique index until the id was cleared again.
+func MigrateLegacyEmptyForumThreadIDs(db *gorm.DB) error {
+	if err := db.Exec("UPDATE forum_tasks SET thread_id = NULL WHERE thread_id = ''").Error; err != nil {
+		return fmt.Errorf("migrate legacy empty forum thread ids: %w", err)
+	}
+	return nil
 }
 
 // ForumCreateThreadDedupeKey builds the dedupe key for a thread creation.

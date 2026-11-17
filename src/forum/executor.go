@@ -280,20 +280,16 @@ func (e Executor) recreateThread(row model.ForumOutbox, apiErr *discord.ForumAPI
 	if generation > 3 {
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", "thread lost repeatedly")
 	}
-	if row.Kind == model.ForumOutboxPostMessage {
-		// The thread is gone, so the task needs a new one: queue a create for the
-		// new generation, then cancel this post. Without it the task would keep a
-		// cleared thread and never post again.
-		role, forumID, err := e.currentRoleAndForumFor(row.TaskID)
-		if err != nil {
-			return model.FailForumOutboxRow(e.DB, row.ID, "missing_settings", err.Error())
-		}
-		if err := e.queueReplacementThread(row, forumID, role, generation); err != nil {
-			return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
-		}
-		return model.CancelForumOutboxRow(e.DB, row.ID, "thread_lost")
+	// A sync row whose thread is gone needs a replacement too: without it the
+	// task keeps a cleared thread and never posts again.
+	role, forumID, err := e.currentRoleAndForumFor(row.TaskID)
+	if err != nil {
+		return model.FailForumOutboxRow(e.DB, row.ID, "missing_settings", err.Error())
 	}
-	return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", apiErr.Error())
+	if err := e.queueReplacementThread(row, forumID, role, generation); err != nil {
+		return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
+	}
+	return model.CancelForumOutboxRow(e.DB, row.ID, "thread_lost")
 }
 
 func (e Executor) currentRoleAndForumFor(taskID string) (string, string, error) {

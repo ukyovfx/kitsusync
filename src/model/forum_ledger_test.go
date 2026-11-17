@@ -79,6 +79,47 @@ func TestForumTaskThreadIDStaysUnique(t *testing.T) {
 	}
 }
 
+// A thread that is lost a second time must clear again: the first clear
+// bumps the generation, so the second clear must not collide on the unique
+// index or fail with UNIQUE constraint failed: forum_tasks.thread_id.
+func TestClearForumTaskThreadTwice(t *testing.T) {
+	db := newForumLedgerTestDB(t)
+	thread := "thread-1"
+	row := baselineRow("task-1")
+	row.ThreadID = &thread
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	first, err := ClearForumTaskThread(db, "task-1")
+	if err != nil {
+		t.Fatalf("first clear: %v", err)
+	}
+	if first != 1 {
+		t.Fatalf("first generation = %d, want 1", first)
+	}
+	// The replacement thread arrives and is lost too.
+	if err := db.Model(&ForumTask{}).Where("task_id = ?", "task-1").Update("thread_id", &thread).Error; err != nil {
+		t.Fatalf("store replacement thread: %v", err)
+	}
+	second, err := ClearForumTaskThread(db, "task-1")
+	if err != nil {
+		t.Fatalf("second clear: %v", err)
+	}
+	if second != 2 {
+		t.Fatalf("second generation = %d, want 2", second)
+	}
+	var stored ForumTask
+	if err := db.Where("task_id = ?", "task-1").First(&stored).Error; err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if stored.ThreadID != nil && *stored.ThreadID != "" {
+		t.Fatalf("thread id = %q, want cleared again", *stored.ThreadID)
+	}
+	if stored.ThreadGeneration != 2 {
+		t.Fatalf("generation = %d, want 2", stored.ThreadGeneration)
+	}
+}
+
 // A post queued before a sync must not wait for it: the sync waits for the post.
 func TestClaimForumOutboxRunsEarlierPostBeforeLaterSync(t *testing.T) {
 	db := newForumLedgerTestDB(t)
