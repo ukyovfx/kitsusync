@@ -863,7 +863,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open log file: %v", err)
 	}
-	defer rotateW.Close()
+	// The rotate writer is intentionally not closed: gookit/slog v0.5.5's
+	// rotatefile races Writer.Close against the clean-up goroutine it starts
+	// on the first write (both touch the stop-channel fields without
+	// synchronization). Writes go straight to the file, so process exit
+	// loses nothing.
 
 	redactingWriter := logutil.NewRedactingWriter(rotateW)
 	h1 := handler.NewSimpleHandler(redactingWriter, logLevel)

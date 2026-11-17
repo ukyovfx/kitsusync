@@ -26,8 +26,8 @@ func TestLogLevelForEnv(t *testing.T) {
 }
 
 // Pins the F13 wiring: the file handler must honor the configured level
-// (AllLevels would let DEBUG through) and rotate the file when MaxSize is hit.
-func TestFileLogHandlerFiltersLevelAndRotates(t *testing.T) {
+// (AllLevels would let DEBUG through).
+func TestFileLogHandlerFiltersLevel(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "test.log")
 	rw, err := rotatefile.NewWriter(&rotatefile.Config{
@@ -40,7 +40,7 @@ func TestFileLogHandlerFiltersLevelAndRotates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create rotate writer: %v", err)
 	}
-	defer rw.Close()
+	// The writer is not closed on purpose; see TestLogRotationCreatesBackup.
 
 	logger := slog.New()
 	logger.PushHandler(handler.NewSimpleHandler(rw, slog.InfoLevel))
@@ -58,11 +58,38 @@ func TestFileLogHandlerFiltersLevelAndRotates(t *testing.T) {
 	if !strings.Contains(string(data), "info should be kept") {
 		t.Error("INFO line missing from the file")
 	}
+}
 
-	// Force a size rotation: 10MB + 1 more write must produce a backup file.
-	big := strings.Repeat("x", 1024*1024)
-	for i := 0; i < 11; i++ {
-		logger.Info(big)
+// Rotation must produce a backup file once MaxSize is exceeded. The writer
+// is deliberately not closed: gookit/slog v0.5.5's rotatefile races Writer
+// .Close against the clean-up goroutine it starts on the first write
+// (both touch the stop-channel fields without synchronization), which the
+// race detector flags. Leaving the handle open is safe here: writes go
+// straight to the file, and the temp dir is removed best-effort.
+func TestLogRotationCreatesBackup(t *testing.T) {
+	dir, err := os.MkdirTemp("", "kitsusync-log-rotation")
+	if err != nil {
+		t.Fatalf("create temp dir: %v", err)
+	}
+	defer os.RemoveAll(dir) // best-effort; the writer stays open on purpose
+
+	logPath := filepath.Join(dir, "test.log")
+	rw, err := rotatefile.NewWriter(&rotatefile.Config{
+		Filepath:   logPath,
+		MaxSize:    1024,
+		BackupNum:  5,
+		FilePerm:   rotatefile.DefaultFilePerm,
+		RenameFunc: rotatefile.DefaultFilenameFn,
+	})
+	if err != nil {
+		t.Fatalf("create rotate writer: %v", err)
+	}
+
+	logger := slog.New()
+	logger.PushHandler(handler.NewSimpleHandler(rw, slog.InfoLevel))
+	line := strings.Repeat("x", 200)
+	for i := 0; i < 20; i++ {
+		logger.Info(line)
 	}
 
 	backups, err := filepath.Glob(logPath + ".*")
