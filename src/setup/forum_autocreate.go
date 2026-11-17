@@ -70,6 +70,44 @@ func createGuildForumChannel(guildID, parentID, name string, tags []string, botT
 	return forum, nil
 }
 
+// forumTagUpdater adds missing tags to an existing forum channel. It is a
+// variable so tests can answer without Discord.
+var forumTagUpdater = addForumTags
+
+// addForumTags PATCHes the forum's available_tags with its existing tags kept
+// (Discord preserves their IDs) plus the missing ones, and returns the tag list
+// Discord reports afterwards, so the new tags' IDs can be mapped.
+func addForumTags(channelID string, existing []forumTagInfo, missing []string, botToken string) ([]forumTagInfo, error) {
+	available := make([]map[string]any, 0, len(existing)+len(missing))
+	for _, tag := range existing {
+		available = append(available, map[string]any{"id": tag.ID, "name": tag.Name})
+	}
+	for _, name := range missing {
+		available = append(available, map[string]any{"name": name})
+	}
+	body, status, err := botDo(http.MethodPatch, fmt.Sprintf("%s/channels/%s", discordAPI, url.PathEscape(strings.TrimSpace(channelID))), map[string]any{"available_tags": available}, botToken)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, discordBotAPIError("discord forum tag update failed", status, body)
+	}
+	var raw struct {
+		AvailableTags []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"available_tags"`
+	}
+	if json.Unmarshal(body, &raw) != nil {
+		return nil, fmt.Errorf("discord forum tag update response was invalid")
+	}
+	var tags []forumTagInfo
+	for _, tag := range raw.AvailableTags {
+		tags = append(tags, forumTagInfo{ID: tag.ID, Name: tag.Name})
+	}
+	return tags, nil
+}
+
 // forumChannelNameKey normalizes a channel name the way Discord does, so an
 // earlier run's forum is found again instead of duplicated.
 func forumChannelNameKey(name string) string {
@@ -170,6 +208,15 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	}
 	var existingForums map[string]forumChannelInfo
 	existingLoaded := false
+	// Forums already routed (an earlier save) are never offered for reuse
+	// again, and each match is consumed after one route, so Task Types whose
+	// normalized names collide do not share one forum.
+	usedForums := map[string]struct{}{}
+	for _, route := range settings.Routes {
+		if id := strings.TrimSpace(route.ForumChannelID); id != "" {
+			usedForums[id] = struct{}{}
+		}
+	}
 	for _, route := range settings.Routes {
 		if strings.TrimSpace(route.ForumChannelID) == "" {
 			if !existingLoaded {
@@ -185,16 +232,45 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 					if forum.ParentID != parentID {
 						continue
 					}
+					if _, used := usedForums[forum.ID]; used {
+						continue
+					}
 					existingForums[forumChannelNameKey(forum.Name)] = forum
 				}
 			}
-			forum, found := existingForums[forumChannelNameKey(route.TaskTypeName)]
+			nameKey := forumChannelNameKey(route.TaskTypeName)
+			forum, found := existingForums[nameKey]
 			if !found {
 				var err error
 				forum, err = forumCreateChannel(guildID, parentID, route.TaskTypeName, tagNames, botToken)
 				if err != nil {
 					created, _ := keepCreated()
 					return created, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
+				}
+			} else {
+				delete(existingForums, nameKey)
+				// A reused forum may be missing the role tags a save requires;
+				// add them while keeping its existing tags, so the retry completes.
+				var missing []string
+				for _, want := range forumAutoTagNames {
+					have := false
+					for _, got := range forum.Tags {
+						if strings.EqualFold(strings.TrimSpace(got.Name), want.Name) {
+							have = true
+							break
+						}
+					}
+					if !have {
+						missing = append(missing, want.Name)
+					}
+				}
+				if len(missing) > 0 {
+					updated, err := forumTagUpdater(forum.ID, forum.Tags, missing, botToken)
+					if err != nil {
+						created, _ := keepCreated()
+						return created, fmt.Errorf("%w: フォーラム「%s」に足りないタグを追加できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
+					}
+					forum.Tags = updated
 				}
 			}
 			route.ForumChannelID = forum.ID

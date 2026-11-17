@@ -118,6 +118,12 @@ func forumTemplateStatusRoles(db *gorm.DB) []model.ProductionForumStatusRole {
 	if err != nil {
 		return nil
 	}
+	return forumTemplateStatusRolesFrom(statuses)
+}
+
+// forumTemplateStatusRolesFrom derives the same template from a status list
+// already fetched, so callers do not request the list a second time.
+func forumTemplateStatusRolesFrom(statuses []kitsu.TaskStatus) []model.ProductionForumStatusRole {
 	var rows []model.ProductionForumStatusRole
 	for _, status := range statuses {
 		name := strings.TrimSpace(status.Name)
@@ -321,11 +327,12 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	for _, row := range current.StatusRoles {
 		roleByStatus[row.StatusID] = row.Role
 	}
-	if submitted == nil && len(current.StatusRoles) == 0 {
+	if submitted == nil && len(current.StatusRoles) == 0 && statusErr == nil {
 		// First look at an unmapped Production: show the template defaults so the
 		// operator adjusts instead of typing. Saved values always win once they
-		// exist, and the create action saves the same template.
-		for _, row := range forumTemplateStatusRoles(db) {
+		// exist, and the create action saves the same template. The status list
+		// fetched above is reused, so the page does not ask Kitsu twice.
+		for _, row := range forumTemplateStatusRolesFrom(statuses) {
 			roleByStatus[row.StatusID] = row.Role
 		}
 	}

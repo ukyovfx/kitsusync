@@ -111,6 +111,29 @@ func TestForumSettingsPagePreFillsTemplateStatusRoles(t *testing.T) {
 	}
 }
 
+func TestForumSettingsPageFetchesStatusesOnce(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+	calls := 0
+	oldStatuses := forumStatusLister
+	t.Cleanup(func() { forumStatusLister = oldStatuses })
+	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) {
+		calls++
+		return []kitsu.TaskStatus{{ID: "s-wfa", Name: "Waiting For Approval"}, {ID: "s-retake", Name: "Retake"}, {ID: "s-done", Name: "Done"}}, nil
+	}
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("status list fetched %d times, want 1", calls)
+	}
+	if !strings.Contains(w.Body.String(), `<option value="wfa" selected>`) {
+		t.Fatalf("template defaults not applied from the fetched list: %s", w.Body.String())
+	}
+}
+
 func TestForumSettingsSaveStoresSettingsAndSwitchesMode(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
