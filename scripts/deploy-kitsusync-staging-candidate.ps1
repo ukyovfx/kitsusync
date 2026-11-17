@@ -4,6 +4,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# gh api returns UTF-8 JSON; pin the native-output decoding to UTF-8 so non-ASCII (e.g. Japanese PR titles) survive ConvertFrom-Json on a legacy-codepage console.
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$OutputEncoding = [Text.Encoding]::UTF8
 if ($PSVersionTable.PSVersion -lt [Version]'7.4') { throw 'PowerShell 7.4 or newer is required for byte-preserving artifact ZIP hashing.' }
 $repo = 'ukyovfx/kitsusync'
 $artifactName = "kitsusync-deployment-$CommitSha"
