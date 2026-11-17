@@ -209,9 +209,34 @@ func TestPlannerWarnsOnceAcrossALongFlapEpisode(t *testing.T) {
 	}
 }
 
-// A genuine quiet period starts a new episode, which may warn again.
-func TestPlannerWarnsAgainAfterAQuietPeriod(t *testing.T) {
+// The round-trip rule only sees transitions inside the round-trip window: a
+// normal WFA -> RETAKE (+10 min) -> WFA (+50 min) round trip is not a flap.
+func TestPlannerDoesNotWarnForSlowRoundTrip(t *testing.T) {
 	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	planner.Now = now.Add(10 * time.Minute)
+	if _, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake, "person-1"), stubCard()); err != nil {
+		t.Fatalf("retake: %v", err)
+	}
+	planner.Now = now.Add(60 * time.Minute)
+	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA, "person-1"), stubCard()); err != nil {
+		t.Fatalf("wfa: %v", err)
+	}
+
+	var count int64
+	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("warnings = %d, want 0 for a round trip slower than the window", count)
+	}
+}
+
+// A genuine quiet period starts a new episode, which may warn again.
+func TestPlannerWarnsAgainAfterAQuietPeriod(t *testing.T) {	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
 	seedPostedTask(t, db, &planner)
