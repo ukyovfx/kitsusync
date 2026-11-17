@@ -144,7 +144,12 @@ func (e Executor) findExistingThread(token, forumID, name string) (string, bool)
 func (e Executor) executeSyncThread(row model.ForumOutbox, token string) error {
 	task, err := model.FindForumTaskWithError(e.DB, row.TaskID)
 	if err != nil {
-		return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
+		// Only a task that is really gone is missing_task: a transient error
+		// (SQLITE_BUSY and friends) must be retried, not failed forever.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
+		}
+		return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
 	}
 	if task.ThreadID == nil || *task.ThreadID == "" {
 		return model.FinishForumOutboxRow(e.DB, row.ID, "no_thread")
@@ -181,7 +186,12 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	}
 	task, err := model.FindForumTaskWithError(e.DB, row.TaskID)
 	if err != nil {
-		return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
+		// Only a task that is really gone is missing_task: a transient error
+		// (SQLITE_BUSY and friends) must be retried, not failed forever.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
+		}
+		return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
 	}
 	if task.ThreadID == nil || *task.ThreadID == "" {
 		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
@@ -210,7 +220,12 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 func (e Executor) executeWarnMessage(row model.ForumOutbox, token string) error {
 	task, err := model.FindForumTaskWithError(e.DB, row.TaskID)
 	if err != nil {
-		return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
+		// Only a task that is really gone is missing_task: a transient error
+		// (SQLITE_BUSY and friends) must be retried, not failed forever.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
+		}
+		return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
 	}
 	if task.ThreadID == nil || *task.ThreadID == "" {
 		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
