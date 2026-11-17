@@ -362,12 +362,16 @@ func (p Planner) flapEpisode(taskID, fromStatusID, toStatusID string) (time.Time
 	// against each other, skipping the immediately previous one because it is
 	// the same step of the run.
 	roundTrip := false
-	if !p.Now.Before(p.Now.Add(-model.ForumFlapRoundTripWindow)) {
-		for j := 0; j < len(episodeRows)-1; j++ {
-			if toStatusID != "" && toStatusID == episodeRows[j].FromStatusID {
-				roundTrip = true
-				break
-			}
+	windowStart := p.Now.Add(-model.ForumFlapRoundTripWindow)
+	for j := 0; j < len(episodeRows)-1; j++ {
+		// Only a transition inside the round-trip window can be the return
+		// leg: an older row is a separate episode, not this one.
+		if episodeRows[j].At.Before(windowStart) {
+			continue
+		}
+		if toStatusID != "" && toStatusID == episodeRows[j].FromStatusID {
+			roundTrip = true
+			break
 		}
 	}
 	for i := 1; i < len(episodeRows)-1 && !roundTrip; i++ {
