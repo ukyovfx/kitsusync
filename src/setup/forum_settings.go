@@ -80,6 +80,56 @@ func listGuildForumChannels(guildID, botToken string) ([]forumChannelInfo, error
 
 var forumRoleOptions = []string{model.ForumRoleWFA, model.ForumRoleRetake, model.ForumRoleDone, model.ForumRoleWIP}
 
+// forumTagIDForRole returns the ID of the forum's tag named after the role's
+// standard tag name (WFA / RETAKE / DONE / WIP, case-insensitive), or "" when
+// the forum has no such tag.
+func forumTagIDForRole(tags []forumTagInfo, role string) string {
+	for _, want := range forumAutoTagNames {
+		if want.Role != role {
+			continue
+		}
+		for _, got := range tags {
+			if strings.EqualFold(strings.TrimSpace(got.Name), want.Name) {
+				return got.ID
+			}
+		}
+	}
+	return ""
+}
+
+// deriveForumTagsFromChannels builds the tag mapping for every routed forum
+// from the forum's own tag names. Owner decision 2026-11-18: every forum uses
+// the same four standard tags, so the mapping is derived at save time instead
+// of being assigned per forum on the page.
+func deriveForumTagsFromChannels(productionID string, routes []model.ProductionForumRoute, forums []forumChannelInfo) []model.ProductionForumTag {
+	byID := make(map[string]forumChannelInfo, len(forums))
+	for _, forum := range forums {
+		byID[forum.ID] = forum
+	}
+	var tags []model.ProductionForumTag
+	derived := map[string]struct{}{}
+	for _, route := range routes {
+		forumID := strings.TrimSpace(route.ForumChannelID)
+		if forumID == "" {
+			continue
+		}
+		if _, done := derived[forumID]; done {
+			continue
+		}
+		derived[forumID] = struct{}{}
+		forum, ok := byID[forumID]
+		if !ok {
+			continue
+		}
+		for _, role := range forumRoleOptions {
+			if tagID := forumTagIDForRole(forum.Tags, role); tagID != "" {
+				tags = append(tags, model.ProductionForumTag{ProductionID: productionID, ForumChannelID: forumID, Role: role, TagID: tagID})
+			}
+		}
+	}
+	return tags
+}
+
 func forumRoleLabel(lang, role string) string {
 	switch role {
 	case model.ForumRoleWFA:
@@ -171,10 +221,43 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 				return
 			}
 			settings := parseForumSettingsForm(r, projectID)
-			// The page only renders tag rows for already-routed forums, so a Task
-			// Type pointed at a new forum arrives without that forum's tags. Keep
-			// them: validation then refuses the save with the missing roles, and
-			// the re-render below shows the rows the user needs to fill in.
+			// The tag mapping is derived from each routed forum's own tag names,
+			// so the save needs the live forum list. While Discord is unreachable
+			// the saved mapping is kept, and a save with nothing to derive from is
+			// refused instead of storing a configuration that cannot tag posts.
+			guildID := strings.TrimSpace(settings.Config.GuildID)
+			if guildID == "" {
+				guildID = strings.TrimSpace(project.DiscordGuildID)
+			}
+			if guildID == "" {
+				guildID = strings.TrimSpace(fallbackGuildID)
+			}
+			var forums []forumChannelInfo
+			forumErr := fmt.Errorf("no Discord bot token or server ID")
+			if strings.TrimSpace(botToken) != "" && guildID != "" {
+				forums, forumErr = forumChannelLister(guildID, botToken)
+			}
+			if forumErr == nil {
+				settings.Tags = deriveForumTagsFromChannels(projectID, settings.Routes, forums)
+			} else if len(settings.Routes) > 0 {
+				routed := map[string]struct{}{}
+				for _, route := range settings.Routes {
+					routed[route.ForumChannelID] = struct{}{}
+				}
+				if saved, ok, err := model.LoadProductionForumSettings(db, projectID); err == nil && ok {
+					for _, tag := range saved.Tags {
+						if _, keep := routed[tag.ForumChannelID]; keep {
+							settings.Tags = append(settings.Tags, tag)
+						}
+					}
+				}
+				if len(settings.Tags) == 0 {
+					err := &model.ForumSettingsError{Problems: []model.ForumSettingsProblem{{Code: model.ProblemForumListUnavailable}}}
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
+					return
+				}
+			}
 			if err := model.SaveProductionForumSettings(db, settings); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
@@ -216,13 +299,6 @@ func parseForumSettingsForm(r *http.Request, productionID string) model.Producti
 			row.StatusName = strings.TrimSpace(stNames[i])
 		}
 		settings.StatusRoles = append(settings.StatusRoles, row)
-	}
-	tagForums, tagRoles, tagIDs := r.Form["tag_forum"], r.Form["tag_role"], r.Form["tag_id"]
-	for i := range tagForums {
-		if i >= len(tagRoles) || i >= len(tagIDs) || strings.TrimSpace(tagIDs[i]) == "" {
-			continue
-		}
-		settings.Tags = append(settings.Tags, model.ProductionForumTag{ForumChannelID: strings.TrimSpace(tagForums[i]), Role: strings.TrimSpace(tagRoles[i]), TagID: strings.TrimSpace(tagIDs[i])})
 	}
 	return settings
 }
@@ -287,10 +363,8 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	}
 
 	forumOptions := make([][2]string, 0, len(forums))
-	tagsByForum := map[string][]forumTagInfo{}
 	for _, forum := range forums {
 		forumOptions = append(forumOptions, [2]string{forum.ID, forum.Name})
-		tagsByForum[forum.ID] = forum.Tags
 	}
 
 	forumNames := map[string]string{}
@@ -372,46 +446,14 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 			forumSelect("st_role", roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</td></tr>`)
 	}
 
-	tagByKey := map[string]string{}
-	for _, tag := range current.Tags {
-		tagByKey[tag.ForumChannelID+"|"+tag.Role] = tag.TagID
-	}
-	var tagSections strings.Builder
-	shownForums := map[string]struct{}{}
-	for _, route := range current.Routes {
-		if _, done := shownForums[route.ForumChannelID]; done {
-			continue
-		}
-		shownForums[route.ForumChannelID] = struct{}{}
-		forumLabel := route.ForumChannelID
-		tagOptions := make([][2]string, 0)
-		for _, tag := range tagsByForum[route.ForumChannelID] {
-			tagOptions = append(tagOptions, [2]string{tag.ID, tag.Name})
-		}
-		for _, forum := range forums {
-			if forum.ID == route.ForumChannelID {
-				forumLabel = forum.Name
-			}
-		}
-		tagSections.WriteString(`<h3>` + esc(forumLabel) + `</h3><table class="data-table"><tbody>`)
-		for _, role := range forumRoleOptions {
-			tagSections.WriteString(`<tr><td>` + esc(forumRoleLabel(lang, role)) + `<input type="hidden" name="tag_forum" value="` + esc(route.ForumChannelID) + `"><input type="hidden" name="tag_role" value="` + esc(role) + `"></td><td>` +
-				forumSelect("tag_id", tagByKey[route.ForumChannelID+"|"+role], tagOptions, t(lang, "（タグなし）", "(no tag)")) + `</td></tr>`)
-		}
-		tagSections.WriteString(`</tbody></table>`)
-	}
-	if tagSections.Len() == 0 {
-		tagSections.WriteString(`<p class="field-help">` + esc(t(lang, "「Botでフォーラムとタグを作成」を押すと、タスクタイプごとのフォーラムとタグが作られ、ここに設定が出ます。", "Press \"Create forums and tags with the Bot\"; it makes a forum and tags per Task Type and the settings appear here.")) + `</p>`)
-	}
-
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/forum", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "Discordサーバー", "Discord server")) + `</h2>` +
-		`<label class="field-label" for="forum-guild">` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</label><input id="forum-guild" name="guild_id" value="` + esc(guildID) + `" autocomplete="off"></section>` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2><table class="data-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
+		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2>` +
+		`<label class="field-label" for="forum-guild">` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</label><input id="forum-guild" name="guild_id" value="` + esc(guildID) + `" autocomplete="off">` +
+		`<p class="field-help">` + esc(t(lang, "保存時に、フォーラムが持つ標準名のタグ（WFA / RETAKE / DONE / WIP）から役割の紐づけを自動で作ります。", "On save, the role mapping is derived automatically from each forum's standard tags (WFA / RETAKE / DONE / WIP).")) + `</p>` +
+		`<table class="data-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p><table class="data-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "役割 → フォーラムのタグ", "Role → forum tag")) + `</h2>` + tagSections.String() + `</section>` +
 		`<div class="button-row"><button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button> <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
 
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`
@@ -500,6 +542,8 @@ func forumProblemText(lang string, problem model.ForumSettingsProblem, forumName
 		return t(lang, "役割「", "No Kitsu status is assigned to the role \"") + forumRoleLabel(lang, arg(0)) + t(lang, "」に割り当てるステータスがありません。", "\".")
 	case model.ProblemForumTagMissing:
 		return t(lang, "フォーラム「", "Forum \"") + forumLabel(0) + t(lang, "」に、役割「", "\" has no tag for the role \"") + forumRoleLabel(lang, arg(1)) + t(lang, "」のタグがありません。", "\".")
+	case model.ProblemForumListUnavailable:
+		return t(lang, "タグの名前から紐づけを作るにはDiscordのフォーラム一覧が必要です。Bot設定とサーバーIDを確認し、接続できてから保存してください。", "Deriving the tag mapping from the tag names needs the Discord forum list. Check the Bot settings and the server ID, then save once Discord is reachable.")
 	}
 	return t(lang, "設定に問題があります。", "There is a problem with the settings.")
 }

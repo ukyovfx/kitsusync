@@ -145,6 +145,8 @@ func (p ForumSettingsProblem) English() string {
 		return fmt.Sprintf("forum mode needs a Kitsu status mapped to role %s", arg(0))
 	case ProblemForumTagMissing:
 		return fmt.Sprintf("forum %s has no tag for role %s", arg(0), arg(1))
+	case ProblemForumListUnavailable:
+		return "the Discord forum list is needed to derive the tag mapping from the tag names"
 	}
 	return p.Code
 }
@@ -164,6 +166,10 @@ const (
 	ProblemRoutesRequired     = "routes_required"
 	ProblemRoleStatusMissing  = "role_status_missing"
 	ProblemForumTagMissing    = "forum_tag_missing"
+	// ProblemForumListUnavailable marks a save that could not read the Discord
+	// forum list and has no saved tag mapping to keep, so the tag names the
+	// mapping is derived from are unreachable.
+	ProblemForumListUnavailable = "forum_list_unavailable"
 )
 
 // ForumSettingsError carries the structured problems of a rejected save.
