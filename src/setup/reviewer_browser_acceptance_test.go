@@ -275,6 +275,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	}, nil, nil)))
 	mux.Handle("/bot/login", login)
 	ready := func() bool { return true }
+	mux.HandleFunc("/bot/setup", RequireSession(ReadOnlyAuditRoute(ready, func(w http.ResponseWriter, r *http.Request) {
+		renderIANewConnection(w, r, db)
+	})))
 	mux.HandleFunc("/bot/admin", RequireSession(AdminIndexWithRuntime(db, ready)))
 	mux.HandleFunc("/bot/admin/users", RequireSession(ReadOnlyAuditRoute(ready, UsersHandler(db, kitsuFixture.URL))))
 	mux.Handle("/bot/admin/bot", RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true })))

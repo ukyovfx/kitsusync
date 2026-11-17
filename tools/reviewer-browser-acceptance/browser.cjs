@@ -563,6 +563,26 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
     records.push({ route: '/bot/login', locale: 'en', viewport: 'desktop', state: 'synthetic manager login', detail: 'normal form authenticated against the isolated Kitsu fixture and received a server-created HttpOnly session' });
 
+    // Production connection wizard click-through: drive the real GET forms
+    // 2→3→4→5 inside the same authenticated context.
+    await fixture(page, 'unconnected-production');
+    await page.goto(`${base}/bot/setup?wizard_step=2&lang=en`, { waitUntil: 'networkidle' });
+    await page.locator('#wizard-production').selectOption('reviewer-unconnected');
+    await page.locator('form.section-stack button[type="submit"]').click();
+    await page.waitForURL(url => url.searchParams.get('wizard_step') === '3' && url.searchParams.get('project') === 'reviewer-unconnected', { timeout: 10000 });
+    await page.locator('#wizard-server').selectOption(guildID);
+    await page.locator('form.section-stack button[type="submit"]').click();
+    await page.waitForURL(url => url.searchParams.get('wizard_step') === '4', { timeout: 10000 });
+    await page.locator('.wizard-plan-form button[type="submit"]').click();
+    await page.waitForURL(url => url.searchParams.get('wizard_step') === '5', { timeout: 10000 });
+    const reviewSummary = await page.locator('.wizard-connection-summary').innerText();
+    for (const expected of ['Synthetic Unconnected Production', 'Synthetic Discord']) {
+      if (!reviewSummary.includes(expected)) throw new Error(`review summary is missing ${expected}`);
+    }
+    await page.screenshot({ path: path.join(output, 'wizard-review-desktop.png'), fullPage: true });
+    records.push({ route: '/bot/setup', locale: 'en', viewport: 'desktop', state: 'wizard click-through 2→3→4→5', detail: `review summary showed ${JSON.stringify(reviewSummary.slice(0, 120))}` });
+    await fixture(page, 'ready');
+
     // Production-detail IA acceptance: this stays in the same authenticated
     // Chromium context and uses only the isolated fixture database/services.
     for (const locale of locales) {
