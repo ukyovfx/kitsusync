@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
 
+	"app/src/api/kitsu"
 	"app/src/forum"
 	"app/src/model"
 )
@@ -29,18 +31,129 @@ var forumAutoTagNames = []struct {
 	{model.ForumRoleWIP, "WIP"},
 }
 
+// forumAutoTag is one tag to create or patch, with the emoji that colors it.
+type forumAutoTag struct {
+	Name  string
+	Emoji string
+}
+
+// Owner decision 2026-11-19: Discord forum tags have no color property, so the
+// tag emoji carries the color. Each role tag gets the colored circle emoji
+// closest to the color of the Kitsu status the saved status_roles maps to it.
+var forumTagEmojiCandidates = []struct {
+	Emoji   string
+	R, G, B int
+}{
+	{"🔴", 221, 46, 68},
+	{"🟠", 244, 144, 12},
+	{"🟡", 255, 196, 12},
+	{"🟢", 119, 178, 85},
+	{"🔵", 85, 172, 238},
+	{"🟣", 170, 141, 216},
+	{"🟤", 165, 121, 57},
+	{"⚫", 0, 0, 0},
+	{"⚪", 255, 255, 255},
+}
+
+// nearestForumTagEmoji maps a Kitsu status hex color to the closest colored
+// circle emoji by RGB distance. It returns "" when the color is missing or
+// unreadable, so the tag keeps the no-emoji look.
+func nearestForumTagEmoji(color string) string {
+	hex := strings.TrimPrefix(strings.TrimSpace(color), "#")
+	if len(hex) != 6 {
+		return ""
+	}
+	var rgb [3]int
+	for i := range rgb {
+		value, err := strconv.ParseUint(hex[i*2:i*2+2], 16, 8)
+		if err != nil {
+			return ""
+		}
+		rgb[i] = int(value)
+	}
+	best, bestDistance := "", -1
+	for _, candidate := range forumTagEmojiCandidates {
+		distance := (candidate.R-rgb[0])*(candidate.R-rgb[0]) + (candidate.G-rgb[1])*(candidate.G-rgb[1]) + (candidate.B-rgb[2])*(candidate.B-rgb[2])
+		if bestDistance < 0 || distance < bestDistance {
+			best, bestDistance = candidate.Emoji, distance
+		}
+	}
+	return best
+}
+
+// forumRoleTagEmojis derives each role's tag emoji from the color of the Kitsu
+// status mapped to the role in the saved status_roles (role ← status name is
+// what the mapping means) and the Kitsu status list's colors. Roles without a
+// mapped status, or whose status color is unreadable, get no emoji.
+func forumRoleTagEmojis(statusRoles []model.ProductionForumStatusRole, statuses []kitsu.TaskStatus) map[string]string {
+	colors := make(map[string]string, len(statuses))
+	for _, status := range statuses {
+		for _, name := range []string{status.Name, status.ShortName} {
+			if key := strings.ToLower(strings.TrimSpace(name)); key != "" {
+				colors[key] = status.Color
+			}
+		}
+	}
+	emojis := make(map[string]string, len(statusRoles))
+	for _, row := range statusRoles {
+		if emoji := nearestForumTagEmoji(colors[strings.ToLower(strings.TrimSpace(row.StatusName))]); emoji != "" {
+			if _, dup := emojis[row.Role]; !dup {
+				emojis[row.Role] = emoji
+			}
+		}
+	}
+	return emojis
+}
+
+// forumRoleTags builds the tags to create or patch: the standard names in
+// creation order, each with its color emoji when one is known.
+func forumRoleTags(emojis map[string]string) []forumAutoTag {
+	tags := make([]forumAutoTag, 0, len(forumAutoTagNames))
+	for _, tag := range forumAutoTagNames {
+		tags = append(tags, forumAutoTag{Name: tag.Name, Emoji: emojis[tag.Role]})
+	}
+	return tags
+}
+
+// forumTagPatchList renders the available_tags entries both the create and the
+// patch request send: existing tags keep their ID and their exact name (the ID
+// is what Discord preserves, so posts already wearing the tag keep it), every
+// desired tag carries its color emoji, and new tags arrive with the name only.
+func forumTagPatchList(existing []forumTagInfo, desired []forumAutoTag) []map[string]any {
+	available := make([]map[string]any, 0, len(existing)+len(desired))
+	matched := make([]bool, len(existing))
+	for _, want := range desired {
+		entry := map[string]any{"name": want.Name}
+		for i, tag := range existing {
+			if matched[i] || !strings.EqualFold(strings.TrimSpace(tag.Name), want.Name) {
+				continue
+			}
+			entry["id"] = tag.ID
+			entry["name"] = tag.Name
+			matched[i] = true
+			break
+		}
+		if want.Emoji != "" {
+			entry["emoji_name"] = want.Emoji
+		}
+		available = append(available, entry)
+	}
+	for i, tag := range existing {
+		if !matched[i] {
+			available = append(available, map[string]any{"id": tag.ID, "name": tag.Name})
+		}
+	}
+	return available
+}
+
 // forumCreateChannel is the Bot API call that creates a forum channel. It is a
 // variable so tests can answer without Discord.
 var forumCreateChannel = createGuildForumChannel
 
-func createGuildForumChannel(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+func createGuildForumChannel(guildID, parentID, name string, tags []forumAutoTag, botToken string) (forumChannelInfo, error) {
 	payload := map[string]any{"name": name, "type": discordChannelTypeForum}
 	if len(tags) > 0 {
-		available := make([]map[string]any, 0, len(tags))
-		for _, tag := range tags {
-			available = append(available, map[string]any{"name": tag})
-		}
-		payload["available_tags"] = available
+		payload["available_tags"] = forumTagPatchList(nil, tags)
 	}
 	if strings.TrimSpace(parentID) != "" {
 		payload["parent_id"] = parentID
@@ -75,17 +188,11 @@ func createGuildForumChannel(guildID, parentID, name string, tags []string, botT
 var forumTagUpdater = addForumTags
 
 // addForumTags PATCHes the forum's available_tags with its existing tags kept
-// (Discord preserves their IDs) plus the missing ones, and returns the tag list
-// Discord reports afterwards, so the new tags' IDs can be mapped.
-func addForumTags(channelID string, existing []forumTagInfo, missing []string, botToken string) ([]forumTagInfo, error) {
-	available := make([]map[string]any, 0, len(existing)+len(missing))
-	for _, tag := range existing {
-		available = append(available, map[string]any{"id": tag.ID, "name": tag.Name})
-	}
-	for _, name := range missing {
-		available = append(available, map[string]any{"name": name})
-	}
-	body, status, err := botDo(http.MethodPatch, fmt.Sprintf("%s/channels/%s", discordAPI, url.PathEscape(strings.TrimSpace(channelID))), map[string]any{"available_tags": available}, botToken)
+// (Discord preserves their IDs) plus the missing ones, and refreshes the color
+// emoji on the role tags it carries, then returns the tag list Discord reports
+// afterwards, so the tags' IDs can be mapped.
+func addForumTags(channelID string, existing []forumTagInfo, desired []forumAutoTag, botToken string) ([]forumTagInfo, error) {
+	body, status, err := botDo(http.MethodPatch, fmt.Sprintf("%s/channels/%s", discordAPI, url.PathEscape(strings.TrimSpace(channelID))), map[string]any{"available_tags": forumTagPatchList(existing, desired)}, botToken)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +213,28 @@ func addForumTags(channelID string, existing []forumTagInfo, missing []string, b
 		tags = append(tags, forumTagInfo{ID: tag.ID, Name: tag.Name})
 	}
 	return tags, nil
+}
+
+// forumTagsNeedUpdate reports whether a forum is missing one of the desired
+// role tags, or carries one without the color emoji it should have.
+func forumTagsNeedUpdate(existing []forumTagInfo, desired []forumAutoTag) bool {
+	for _, want := range desired {
+		found := false
+		for _, tag := range existing {
+			if !strings.EqualFold(strings.TrimSpace(tag.Name), want.Name) {
+				continue
+			}
+			found = true
+			if want.Emoji != "" && tag.Emoji != want.Emoji {
+				return true
+			}
+			break
+		}
+		if !found {
+			return true
+		}
+	}
+	return false
 }
 
 // forumChannelNameKey normalizes a channel name the way Discord does, so an
@@ -193,10 +322,15 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 		parentID = strings.TrimSpace(project.DiscordCategoryID)
 	}
 
-	tagNames := make([]string, 0, len(forumAutoTagNames))
-	for _, tag := range forumAutoTagNames {
-		tagNames = append(tagNames, tag.Name)
+	// The status → role mapping is decided from the Kitsu status names, so the
+	// template fills it in before the tags are created and one press finishes
+	// the whole setup — the color emojis included. A failed status list keeps
+	// the saved mapping and leaves the tags without emojis.
+	statuses, statusErr := forumStatusLister(db)
+	if len(settings.StatusRoles) == 0 && statusErr == nil {
+		settings.StatusRoles = forumTemplateStatusRolesFrom(statuses)
 	}
+	tagPlan := forumRoleTags(forumRoleTagEmojis(settings.StatusRoles, statuses))
 	routes := make([]model.ProductionForumRoute, 0, len(settings.Routes))
 	tags := make([]model.ProductionForumTag, 0, len(settings.Routes)*len(forumAutoTagNames))
 	// Keep the forums already created in the returned settings even when a later
@@ -242,7 +376,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 			forum, found := existingForums[nameKey]
 			if !found {
 				var err error
-				forum, err = forumCreateChannel(guildID, parentID, route.TaskTypeName, tagNames, botToken)
+				forum, err = forumCreateChannel(guildID, parentID, route.TaskTypeName, tagPlan, botToken)
 				if err != nil {
 					created, _ := keepCreated()
 					return created, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
@@ -250,16 +384,11 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 				guildChannelListCache.invalidate(guildID)
 			} else {
 				delete(existingForums, nameKey)
-				// A reused forum may be missing the role tags a save requires;
-				// add them while keeping its existing tags, so the retry completes.
-				var missing []string
-				for _, want := range forumAutoTagNames {
-					if forumTagIDForRole(forum.Tags, want.Role) == "" {
-						missing = append(missing, want.Name)
-					}
-				}
-				if len(missing) > 0 {
-					updated, err := forumTagUpdater(forum.ID, forum.Tags, missing, botToken)
+				// A reused forum may be missing the role tags a save requires,
+				// or carry them without their color emoji; refresh them while
+				// keeping its existing tags and their IDs.
+				if forumTagsNeedUpdate(forum.Tags, tagPlan) {
+					updated, err := forumTagUpdater(forum.ID, forum.Tags, tagPlan, botToken)
 					if err != nil {
 						created, _ := keepCreated()
 						return created, fmt.Errorf("%w: フォーラム「%s」に足りないタグを追加できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
@@ -294,11 +423,6 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	}
 	settings.Routes = routes
 	settings.Tags = tags
-	// The status → role mapping is decided from the Kitsu status names, so the
-	// template fills it in and the one press finishes the whole setup.
-	if len(settings.StatusRoles) == 0 {
-		settings.StatusRoles = forumTemplateStatusRoles(db)
-	}
 	if err := model.SaveProductionForumSettings(db, settings); err != nil {
 		return settings, err
 	}

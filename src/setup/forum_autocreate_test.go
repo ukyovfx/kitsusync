@@ -17,11 +17,11 @@ func stubForumCreate(t *testing.T, created *[]string) {
 	t.Helper()
 	old := forumCreateChannel
 	t.Cleanup(func() { forumCreateChannel = old })
-	forumCreateChannel = func(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+	forumCreateChannel = func(guildID, parentID, name string, tags []forumAutoTag, botToken string) (forumChannelInfo, error) {
 		*created = append(*created, name)
 		forum := forumChannelInfo{ID: "new-" + name, Name: name}
 		for _, tag := range tags {
-			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag, Name: tag})
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag.Name, Name: tag.Name})
 		}
 		return forum, nil
 	}
@@ -214,18 +214,29 @@ func TestForumAutoCreateAddsMissingTagsToReusedForum(t *testing.T) {
 			{ID: "f-comp", Name: "Compositing", ParentID: "cat-1", Tags: []forumTagInfo{{ID: "t1", Name: "WFA"}, {ID: "t2", Name: "RETAKE"}, {ID: "t3", Name: "DONE"}, {ID: "t4", Name: "WIP"}}},
 		}, nil
 	}
-	var patchedForums, keptTags, addedTags []string
+	var patchedForums, keptTags, desiredTags []string
 	oldUpdater := forumTagUpdater
 	t.Cleanup(func() { forumTagUpdater = oldUpdater })
-	forumTagUpdater = func(channelID string, existing []forumTagInfo, missing []string, botToken string) ([]forumTagInfo, error) {
+	forumTagUpdater = func(channelID string, existing []forumTagInfo, desired []forumAutoTag, botToken string) ([]forumTagInfo, error) {
 		patchedForums = append(patchedForums, channelID)
 		for _, tag := range existing {
 			keptTags = append(keptTags, tag.ID)
 		}
-		addedTags = append(addedTags, missing...)
+		for _, tag := range desired {
+			desiredTags = append(desiredTags, tag.Name)
+		}
 		tags := append([]forumTagInfo{}, existing...)
-		for _, name := range missing {
-			tags = append(tags, forumTagInfo{ID: "added-" + name, Name: name})
+		for _, tag := range desired {
+			added := true
+			for _, have := range existing {
+				if strings.EqualFold(have.Name, tag.Name) {
+					added = false
+					break
+				}
+			}
+			if added {
+				tags = append(tags, forumTagInfo{ID: "added-" + tag.Name, Name: tag.Name})
+			}
 		}
 		return tags, nil
 	}
@@ -245,8 +256,8 @@ func TestForumAutoCreateAddsMissingTagsToReusedForum(t *testing.T) {
 	if strings.Join(patchedForums, ",") != "f-anim" {
 		t.Fatalf("patched forums = %v", patchedForums)
 	}
-	if strings.Join(addedTags, ",") != "WFA,RETAKE,DONE" {
-		t.Fatalf("added tags = %v", addedTags)
+	if strings.Join(desiredTags, ",") != "WFA,RETAKE,DONE,WIP" {
+		t.Fatalf("desired tags sent to Discord = %v", desiredTags)
 	}
 	if strings.Join(keptTags, ",") != "t4" {
 		t.Fatalf("existing tags sent to Discord = %v, want kept", keptTags)
@@ -336,14 +347,14 @@ func TestForumAutoCreateKeepsCreatedForumsWhenALaterCreateFails(t *testing.T) {
 	var created []string
 	old := forumCreateChannel
 	t.Cleanup(func() { forumCreateChannel = old })
-	forumCreateChannel = func(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+	forumCreateChannel = func(guildID, parentID, name string, tags []forumAutoTag, botToken string) (forumChannelInfo, error) {
 		created = append(created, name)
 		if name == "Compositing" {
 			return forumChannelInfo{}, errors.New("discord unavailable")
 		}
 		forum := forumChannelInfo{ID: "new-" + name, Name: name}
 		for _, tag := range tags {
-			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag, Name: tag})
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag.Name, Name: tag.Name})
 		}
 		return forum, nil
 	}
@@ -379,11 +390,11 @@ func TestForumAutoCreateCreatesForumUnderProductionCategory(t *testing.T) {
 	var parents []string
 	old := forumCreateChannel
 	t.Cleanup(func() { forumCreateChannel = old })
-	forumCreateChannel = func(guildID, parentID, name string, tags []string, botToken string) (forumChannelInfo, error) {
+	forumCreateChannel = func(guildID, parentID, name string, tags []forumAutoTag, botToken string) (forumChannelInfo, error) {
 		parents = append(parents, parentID)
 		forum := forumChannelInfo{ID: "new-" + name, Name: name}
 		for _, tag := range tags {
-			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag, Name: tag})
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: "newtag-" + tag.Name, Name: tag.Name})
 		}
 		return forum, nil
 	}
