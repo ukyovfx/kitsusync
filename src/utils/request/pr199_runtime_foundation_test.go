@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -17,7 +18,7 @@ func TestPR199Transient5xxPreservesError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := attemptOnce("runtime-token", http.MethodGet, server.URL, nil, nil)
+	result := attemptOnce(context.Background(), "runtime-token", http.MethodGet, server.URL, nil, nil)
 	if result.status != statusTransient {
 		t.Fatalf("status=%v, want transient", result.status)
 	}

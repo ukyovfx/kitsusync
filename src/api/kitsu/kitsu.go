@@ -4,6 +4,7 @@ package kitsu
 import (
 	"app/src/utils/config"
 	"app/src/utils/request"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -241,9 +242,13 @@ func GetComments() Comments {
 }
 
 func GetCommentsWithError() (Comments, error) {
+	return GetCommentsWithContext(context.Background())
+}
+
+func GetCommentsWithContext(ctx context.Context) (Comments, error) {
 	path := kitsuBase() + "api/data/comments"
 	response := Comments{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -268,18 +273,26 @@ func ConnectionKey() string {
 // endpoint (admin only on Zou 1.1.x), this one works for any account on the
 // task's project team.
 func GetTaskCommentsWithError(taskID string) (Comments, error) {
+	return GetTaskCommentsWithContext(context.Background(), taskID)
+}
+
+func GetTaskCommentsWithContext(ctx context.Context, taskID string) (Comments, error) {
 	path := kitsuBase() + "api/data/tasks/" + url.PathEscape(taskID) + "/comments"
 	response := Comments{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
 
 // GetProjectTasksWithError reads one project's tasks, with assignees.
 func GetProjectTasksWithError(projectID string) (Tasks, error) {
+	return GetProjectTasksWithContext(context.Background(), projectID)
+}
+
+func GetProjectTasksWithContext(ctx context.Context, projectID string) (Tasks, error) {
 	path := kitsuBase() + "api/data/projects/" + url.PathEscape(projectID) + "/tasks?relations=true"
 	response := Tasks{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -290,9 +303,13 @@ func GetTasks() Tasks {
 }
 
 func GetTasksWithError() (Tasks, error) {
+	return GetTasksWithContext(context.Background())
+}
+
+func GetTasksWithContext(ctx context.Context) (Tasks, error) {
 	path := kitsuBase() + "api/data/tasks?relations=true"
 	response := Tasks{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -319,7 +336,11 @@ func GetPersons() Persons {
 }
 
 func GetPersonsWithError() (Persons, error) {
-	return GetPersonsWithCredentials("", os.Getenv("KitsuJWTToken"))
+	return GetPersonsWithContext(context.Background())
+}
+
+func GetPersonsWithContext(ctx context.Context) (Persons, error) {
+	return getPersonsWithContext(ctx, "", os.Getenv("KitsuJWTToken"))
 }
 
 // GetPersonsWithCredentials reads the global person directory using the
@@ -327,9 +348,13 @@ func GetPersonsWithError() (Persons, error) {
 // persisted runtime credentials authoritative without copying them into the
 // legacy KitsuJWTToken environment variable.
 func GetPersonsWithCredentials(baseURL, token string) (Persons, error) {
+	return getPersonsWithContext(context.Background(), baseURL, token)
+}
+
+func getPersonsWithContext(ctx context.Context, baseURL, token string) (Persons, error) {
 	path := kitsuBaseFor(baseURL) + "api/data/persons/"
 	response := Persons{}
-	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, token, http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -340,9 +365,13 @@ func GetEntities() Entities {
 }
 
 func GetEntitiesWithError() (Entities, error) {
+	return GetEntitiesWithContext(context.Background())
+}
+
+func GetEntitiesWithContext(ctx context.Context) (Entities, error) {
 	path := kitsuBase() + "api/data/entities/"
 	response := Entities{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -361,9 +390,13 @@ func GetEntityTypes() EntityTypes {
 }
 
 func GetEntityTypesWithError() (EntityTypes, error) {
+	return GetEntityTypesWithContext(context.Background())
+}
+
+func GetEntityTypesWithContext(ctx context.Context) (EntityTypes, error) {
 	path := kitsuBase() + "api/data/entity-types/"
 	response := EntityTypes{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -382,9 +415,13 @@ func GetTaskStatuses() TaskStatuses {
 }
 
 func GetTaskStatusesWithError() (TaskStatuses, error) {
+	return GetTaskStatusesWithContext(context.Background())
+}
+
+func GetTaskStatusesWithContext(ctx context.Context) (TaskStatuses, error) {
 	path := kitsuBase() + "api/data/task-status/"
 	response := TaskStatuses{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -411,9 +448,13 @@ func GetTaskTypes() TaskTypes {
 }
 
 func GetTaskTypesWithError() (TaskTypes, error) {
+	return GetTaskTypesWithContext(context.Background())
+}
+
+func GetTaskTypesWithContext(ctx context.Context) (TaskTypes, error) {
 	path := kitsuBase() + "api/data/task-types/"
 	response := TaskTypes{}
-	_, err := request.DoWithError(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -473,7 +514,7 @@ func GetProjectTeamWithCredentialsAndError(baseURL, token, projectID string) ([]
 	}
 	var response []Person
 	path := kitsuBaseFor(baseURL) + "api/data/projects/" + url.PathEscape(projectID) + "/team"
-	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response)
+	_, err := request.DoWithError(context.Background(), token, http.MethodGet, path, nil, &response)
 	return response, err
 }
 
@@ -483,15 +524,23 @@ func GetProjects() Projects {
 }
 
 func GetProjectsWithError() (Projects, error) {
-	return GetProjectsWithCredentials("", os.Getenv("KitsuJWTToken"))
+	return GetProjectsWithContext(context.Background())
+}
+
+func GetProjectsWithContext(ctx context.Context) (Projects, error) {
+	return getProjectsWithContext(ctx, "", os.Getenv("KitsuJWTToken"))
 }
 
 // GetProjectsWithCredentials reads live Productions using the caller's
 // already-validated runtime endpoint and credential.
 func GetProjectsWithCredentials(baseURL, token string) (Projects, error) {
+	return getProjectsWithContext(context.Background(), baseURL, token)
+}
+
+func getProjectsWithContext(ctx context.Context, baseURL, token string) (Projects, error) {
 	path := kitsuBaseFor(baseURL) + "api/data/projects/"
 	response := Projects{}
-	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(ctx, token, http.MethodGet, path, nil, &response.Each)
 
 	return response, err
 }
@@ -523,7 +572,7 @@ func GetProjectTaskTypesWithCredentialsAndError(baseURL, token, projectID string
 		return response, errors.New("Kitsu Production ID is required")
 	}
 	path := kitsuBaseFor(baseURL) + "api/data/projects/" + url.PathEscape(projectID) + "/task-types"
-	_, err := request.DoWithError(token, http.MethodGet, path, nil, &response.Each)
+	_, err := request.DoWithError(context.Background(), token, http.MethodGet, path, nil, &response.Each)
 	return response, err
 }
 
@@ -536,7 +585,7 @@ func GetPersonWithCredentials(baseURL, token, personID string) (Person, error) {
 		return person, errors.New("Kitsu person ID is required")
 	}
 	path := kitsuBaseFor(baseURL) + "api/data/persons/" + url.PathEscape(personID) + "?relations=true"
-	_, err := request.DoWithError(token, http.MethodGet, path, nil, &person)
+	_, err := request.DoWithError(context.Background(), token, http.MethodGet, path, nil, &person)
 	return person, err
 }
 

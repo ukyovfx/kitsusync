@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -201,7 +202,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			return nil, fmt.Errorf("Kitsu runtime data source is unavailable")
 		}
 		statuses := []kitsu.TaskStatus{}
-		_, err := request.DoWithError(token, http.MethodGet, strings.TrimSuffix(baseURL, "/")+"/data/task-status/", nil, &statuses)
+		_, err := request.DoWithError(context.Background(), token, http.MethodGet, strings.TrimSuffix(baseURL, "/")+"/data/task-status/", nil, &statuses)
 		return statuses, err
 	}
 	project := model.Project{KitsuProjectID: "reviewer-production", Name: "Synthetic Review Production", DiscordGuildID: reviewerBrowserGuild, DiscordCategoryID: reviewerBrowserCategory, StorageURL: "https://storage.synthetic.invalid"}
