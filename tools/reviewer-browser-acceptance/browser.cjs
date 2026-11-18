@@ -2306,7 +2306,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       // letting the page show through its translucent glass panel.
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: 900 });
-        await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        // Stay on a production surface: /bot/admin/users starts a background
+        // guild-directory fetch that races with the test transport stubs.
+        await gotoProduction(page, locale, 'notifications');
         const box = await page.evaluate(() => {
           const modal = document.getElementById('deleteModal');
           if (!modal) return null;
@@ -2325,7 +2327,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (!box) throw new Error(`confirmation dialog missing at ${width}px (${locale.lang})`);
         if (box.alpha < 1) throw new Error(`confirmation dialog surface is translucent at ${width}px (${locale.lang}): ${box.background}`);
         await page.screenshot({ path: path.join(output, `batch3-delete-dialog-${locale.lang}-${width}.png`), fullPage: false });
-        await record(page, '/bot/admin', locale.lang, 'band-' + width, 'confirmation dialog', 'opaque ' + box.background + ' surface at ' + box.width + 'px wide');
+        await record(page, '/bot/admin/projects?project=reviewer-production', locale.lang, 'band-' + width, 'confirmation dialog', 'opaque ' + box.background + ' surface at ' + box.width + 'px wide');
       }
     }
     await page.setViewportSize({ width: 1440, height: 900 });
