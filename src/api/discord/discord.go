@@ -496,12 +496,11 @@ func mentionContent(ids []string) string {
 }
 
 func kitsuPersonDisplayName(person kitsu.Person, lang string) string {
+	// Names keep the order registered in Kitsu; reordering for ja display was
+	// dropped (fixed on the Kitsu input side). lang is kept for the signature.
 	first := strings.TrimSpace(person.FirstName)
 	last := strings.TrimSpace(person.LastName)
-	if normalizeNotificationLang(lang) == "ja" && first != "" && last != "" {
-		return sanitizeDiscordText(last + " " + first)
-	}
-	if normalizeNotificationLang(lang) == "en" && first != "" && last != "" && strings.TrimSpace(person.FullName) == "" {
+	if first != "" && last != "" {
 		return sanitizeDiscordText(first + " " + last)
 	}
 	return sanitizeDiscordText(person.FullName)
