@@ -1963,6 +1963,149 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
       }
     }
+    // Overflow/clip acceptance: the six fixed overflow/clip findings (A3, A4, A5,
+    // A13, A14, A15) plus the User Linking grid band (761–880px), measured in
+    // both languages across the audited width bands.
+    await fixture(page, 'overflow-clip-audit');
+    for (const locale of locales) {
+      for (const width of [761, 820, 880]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const parentRoute of [
+          { route: `/bot/setup?wizard_step=1&lang=${locale.lang}`, label: 'wizard step 1', rows: '.status-row', cards: '.section-card' },
+          { route: `/bot/admin/users?lang=${locale.lang}&discord_guild_id=${guildID}`, label: 'User Linking grid', rows: '.user-link-actions', cards: '.table-wrap' },
+        ]) {
+          await page.goto(base + parentRoute.route, { waitUntil: 'networkidle' });
+          const containment = await page.evaluate(probe => {
+            const doc = document.documentElement;
+            const rows = [...document.querySelectorAll(probe.rows)].map(row => {
+              const card = row.closest(probe.cards);
+              return {
+                right: Math.round(row.getBoundingClientRect().right),
+                cardRight: card ? Math.round(card.getBoundingClientRect().right) : 0,
+                scroll: card ? card.scrollWidth - card.clientWidth : 0,
+              };
+            });
+            return { overflow: doc.scrollWidth - doc.clientWidth, rows };
+          }, { rows: parentRoute.rows, cards: parentRoute.cards });
+          if (containment.overflow > 1) throw new Error(`${parentRoute.label} overflows the document at ${width}px (${locale.lang}): ${JSON.stringify(containment)}`);
+          if (containment.rows.length < 2) throw new Error(`${parentRoute.label} has no measurable rows at ${width}px (${locale.lang})`);
+          if (containment.rows.some(row => row.scroll > 1)) throw new Error(`${parentRoute.label} scroll-clips inside its card at ${width}px (${locale.lang}): ${JSON.stringify(containment.rows.filter(row => row.scroll > 1))}`);
+          if (containment.rows.some(row => row.right > row.cardRight + 1)) throw new Error(`${parentRoute.label} content escapes its card at ${width}px (${locale.lang}): ${JSON.stringify(containment.rows.filter(row => row.right > row.cardRight + 1))}`);
+          if (width === 761) await page.screenshot({ path: path.join(output, `overflow-clip-${parentRoute.label.replace(/[^a-z0-9]+/gi, '-')}-${locale.lang}-${width}.png`), fullPage: true });
+          await record(page, parentRoute.route, locale.lang, 'band-' + width, parentRoute.label + ' containment', 'rows, selects and status cells stay inside their cards');
+        }
+      }
+      // 641–760px: with the administrative mobile menu open the language toggle
+      // tops-aligns with the expanded menu summary.
+      for (const width of [641, 700, 760]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        const menu = page.locator('.primary-nav>.mobile-nav');
+        if (!(await menu.count())) throw new Error(`administrative mobile menu missing at ${width}px in ${locale.lang}`);
+        await menu.locator('summary').click();
+        const alignment = await page.evaluate(() => {
+          const menu = document.querySelector('.primary-nav>.mobile-nav');
+          const summary = menu ? menu.querySelector('summary') : null;
+          const toggle = document.querySelector('.top-actions .lang-toggle');
+          return {
+            open: !!(menu && menu.open),
+            summaryTop: summary ? Math.round(summary.getBoundingClientRect().top) : -1,
+            toggleTop: toggle ? Math.round(toggle.getBoundingClientRect().top) : -1,
+          };
+        });
+        if (!alignment.open || alignment.summaryTop < 0 || alignment.toggleTop < 0) throw new Error(`administrative mobile menu did not open at ${width}px in ${locale.lang}: ${JSON.stringify(alignment)}`);
+        if (Math.abs(alignment.toggleTop - alignment.summaryTop) > 2) throw new Error(`language toggle clears the open administrative menu top by ${alignment.toggleTop - alignment.summaryTop}px at ${width}px in ${locale.lang}`);
+        if (width === 700) await page.screenshot({ path: path.join(output, `overflow-clip-admin-menu-open-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin', locale.lang, 'band-' + width, 'mobile menu open', 'language toggle tops-aligns with the expanded administrative menu summary');
+      }
+      // 320–360px: the Production tab scrolls with a sticky fade cue at its right
+      // edge instead of clipping the Settings tab.
+      for (const width of [320, 360]) {
+        await page.setViewportSize({ width, height: 844 });
+        await gotoProduction(page, locale, 'overview');
+        const cue = await page.evaluate(() => {
+          const doc = document.documentElement;
+          const tabs = document.querySelector('.production-context .production-tabs');
+          if (!tabs) return null;
+          return {
+            overflow: doc.scrollWidth - doc.clientWidth,
+            client: doc.clientWidth,
+            fade: (getComputedStyle(tabs, '::after').backgroundImage || '').includes('linear-gradient'),
+            gap: parseFloat(getComputedStyle(tabs).gap),
+            scroll: tabs.scrollWidth - tabs.clientWidth,
+            right: Math.round(tabs.getBoundingClientRect().right),
+          };
+        });
+        if (!cue) throw new Error(`production tabs missing at ${width}px in ${locale.lang}`);
+        if (cue.overflow > 1 || cue.right > cue.client + 1) throw new Error(`production overview clips at ${width}px in ${locale.lang}: ${JSON.stringify(cue)}`);
+        if (!cue.fade) throw new Error(`production tabs miss the sticky fade cue at ${width}px in ${locale.lang}`);
+        if (cue.gap > 10) throw new Error(`production tabs keep the compact gap ${cue.gap} at ${width}px in ${locale.lang}`);
+        if (locale.lang === 'en' && cue.scroll <= 0) throw new Error(`production tabs do not scroll at ${width}px in ${locale.lang} — the fade cue has no scroll`);
+        await page.evaluate(() => {
+          const tabs = document.querySelector('.production-context .production-tabs');
+          if (tabs) tabs.scrollLeft = tabs.scrollWidth;
+        });
+        if (locale.lang === 'en') await page.screenshot({ path: path.join(output, `overflow-clip-production-tabs-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-production', locale.lang, 'band-' + width, 'tiny band', 'Production tab scrolls with a sticky fade cue at its right edge');
+      }
+      // 1024–1440px: dashboard status chips wrap inside the menu card, and the
+      // production overview activity badges end-align across rows.
+      for (const width of [1024, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${base}/bot/admin?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        const chips = await page.evaluate(() => [...document.querySelectorAll('.dashboard-menu-status')].map(group => {
+          const card = group.closest('.dashboard-menu-card');
+          return {
+            wrap: getComputedStyle(group).flexWrap,
+            right: Math.round(Math.max(...[...group.children].map(child => child.getBoundingClientRect().right))),
+            cardRight: card ? Math.round(card.getBoundingClientRect().right) : 0,
+          };
+        }));
+        if (!chips.length) throw new Error(`dashboard menu status chips missing at ${width}px in ${locale.lang}`);
+        if (chips.some(chip => chip.wrap !== 'wrap')) throw new Error(`dashboard menu status chips do not wrap at ${width}px in ${locale.lang}`);
+        if (chips.some(chip => chip.right > chip.cardRight - 2)) throw new Error(`dashboard menu status chips bleed their card at ${width}px (${locale.lang}): ${JSON.stringify(chips)}`);
+        if (width !== 1440) continue;
+        await gotoProduction(page, locale, 'overview');
+        const rows = await page.evaluate(() => [...document.querySelectorAll('.activity-list .activity-row')].map(row => {
+          const result = row.querySelector('.activity-result');
+          return {
+            columns: row.children.length,
+            task: row.children[2] ? Math.round(row.children[2].getBoundingClientRect().left) : -1,
+            badge: result ? Math.round(result.getBoundingClientRect().right) : -1,
+            rowRight: Math.round(row.getBoundingClientRect().right),
+          };
+        }));
+        if (rows.length < 3 || rows.some(row => row.badge < 0)) throw new Error(`production overview activity rows missing at ${width}px in ${locale.lang}`);
+        const taskLefts = rows.map(row => row.task);
+        const badgeRights = rows.map(row => row.badge);
+        if (Math.max(...taskLefts) - Math.min(...taskLefts) > 1) throw new Error(`production overview activity task column start misaligns across rows at ${width}px (${locale.lang}): ${JSON.stringify(rows)}`);
+        if (Math.max(...badgeRights) - Math.min(...badgeRights) > 1) throw new Error(`production overview activity badges do not end-align across rows at ${width}px (${locale.lang}): ${JSON.stringify(rows)}`);
+        if (rows.some(row => row.badge > row.rowRight - 2)) throw new Error(`production overview activity badges clip their row at ${width}px in ${locale.lang}`);
+        await page.screenshot({ path: path.join(output, `overflow-clip-production-overview-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-production', locale.lang, 'band-' + width, 'overview activity', 'task column and end-aligned result badges hold across rows');
+      }
+      // A4: the Recent system issues long-URL failure wraps inside its card and
+      // never clips at any audited band.
+      for (const width of [320, 390, 760, 761, 880]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${base}/bot/admin/health?lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        const issues = await page.evaluate(() => {
+          const spans = [...document.querySelectorAll('.pipeline-issues li>span')];
+          return {
+            count: spans.length,
+            spans: spans.map(span => {
+              const card = span.closest('.section-card');
+              return {
+                right: Math.round(span.getBoundingClientRect().right),
+                cardRight: card ? Math.round(card.getBoundingClientRect().right) : 0,
+              };
+            }),
+          };
+        });
+        if (issues.count < 1) throw new Error(`recent system issues missing at ${width}px in ${locale.lang}`);
+        if (issues.spans.some(span => span.right > span.cardRight + 1)) throw new Error(`recent system issue URL clips its card at ${width}px (${locale.lang}): ${JSON.stringify(issues.spans)}`);
+      }
+    }
     await page.setViewportSize({ width: 1440, height: 900 });
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };
     fs.writeFileSync(path.join(output, 'browser-results.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
