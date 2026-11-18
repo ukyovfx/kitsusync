@@ -33,38 +33,14 @@ func productionNotificationRoleAvailability(project model.Project, view producti
 	if strings.TrimSpace(view.BotToken) == "" {
 		return reviewerRolesNoBot
 	}
-	if !view.RolesReady || view.RolesErr != nil {
+	if !view.RolesReady || view.RolesErr != nil || view.RolesPending {
 		return reviewerRolesUnavailable
 	}
 	if len(view.RoleCatalog) == 0 {
 		return reviewerRolesEmpty
 	}
-	if view.RoleSendEvidenceRequested || len(view.RoleSendEvidenceByTaskType) > 0 || len(view.RoleSendErrorsByTaskType) > 0 {
-		evidenceUnavailable := false
-		for _, evidenceErr := range view.RoleSendErrorsByTaskType {
-			if evidenceErr != nil {
-				evidenceUnavailable = true
-			}
-		}
-		for taskTypeID, evidence := range view.RoleSendEvidenceByTaskType {
-			if view.RoleSendErrorsByTaskType[taskTypeID] != nil {
-				continue
-			}
-			sender := view.RoleSendersByTaskType[taskTypeID]
-			for _, role := range view.RoleCatalog {
-				if forumRoleCanBeMentioned(project.DiscordGuildID, sender.ChannelID, role, evidence) {
-					return reviewerRolesAvailable
-				}
-			}
-		}
-		if len(view.RoleSendEvidenceByTaskType) == 0 && !evidenceUnavailable {
-			return reviewerRolesUnavailable
-		}
-		if evidenceUnavailable {
-			return reviewerRolesUnavailable
-		}
-		return reviewerRolesNonMentionable
-	}
+	// Send access is verified when a target is applied, so display only uses
+	// the role list's own mentionable flag.
 	if len(view.Roles) == 0 {
 		return reviewerRolesNonMentionable
 	}
@@ -137,33 +113,49 @@ func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request
 	}
 	roleCatalog := reviewerRoleCatalog(p.DiscordGuildID, view.RoleCatalog)
 	sort.Slice(roleCatalog, func(i, j int) bool { return roleCatalog[i].Name < roleCatalog[j].Name })
+	// Role send access is verified when a target is applied, so display only
+	// relies on the role list's mentionable flag.
+	roleMentionable := map[string]bool{}
 	var roleListboxOptions strings.Builder
 	for _, role := range roleCatalog {
+		roleMentionable[role.ID] = role.Mentionable
 		label := "@" + role.Name
-		disabledLabel := t(lang, "送信先を確認できません", "Destination could not be verified")
+		disabledLabel := ""
 		if !role.Mentionable {
-			disabledLabel = t(lang, "メンション不可・Bot権限を確認できません", "Not mentionable; Bot permission is unavailable")
+			disabledLabel = t(lang, "メンション不可（適用時に確認）", "Not mentionable (verified on apply)")
 		}
-		roleOptions.WriteString(`<option value="` + esc(role.ID) + `" disabled>@` + esc(role.Name) + `</option>`)
-		roleListboxOptions.WriteString(`<button type="button" role="option" tabindex="-1" aria-selected="false" aria-disabled="true" class="recipient-option-disabled" data-role-mentionable="` + strconv.FormatBool(role.Mentionable) + `" data-role-name="` + esc(label) + `" data-role-disabled-label="` + esc(disabledLabel) + `" data-wfa-option-value="` + esc(role.ID) + `">` + esc(label+" — "+disabledLabel) + `</button>`)
+		disabledAttr := ""
+		if !role.Mentionable {
+			disabledAttr = ` disabled`
+		}
+		roleOptionDisabled := strconv.FormatBool(!role.Mentionable)
+		roleOptionClass := "recipient-option"
+		if !role.Mentionable {
+			roleOptionClass = "recipient-option-disabled"
+		}
+		roleOptions.WriteString(`<option value="` + esc(role.ID) + `"` + disabledAttr + `>@` + esc(role.Name) + `</option>`)
+		roleListboxOptions.WriteString(`<button type="button" role="option" tabindex="-1" aria-selected="false" aria-disabled="` + roleOptionDisabled + `" class="` + roleOptionClass + `" data-role-mentionable="` + strconv.FormatBool(role.Mentionable) + `" data-role-name="` + esc(label) + `" data-role-disabled-label="` + esc(disabledLabel) + `" data-wfa-option-value="` + esc(role.ID) + `">` + esc(label+map[bool]string{true: " — " + disabledLabel}[disabledLabel != ""]) + `</button>`)
 	}
 	userAvailability, roleAvailability := "", ""
 	if view.TeamErr != nil {
 		userAvailability = `<p class="field-help" role="status">` + esc(t(lang, "Production Teamを読み込めないため、ユーザーを確認できません。", "Production Team could not be verified, so User targets are unavailable.")) + `</p>`
+	} else if view.GuildPending {
+		userAvailability = `<p class="field-help" role="status">` + esc(t(lang, "Discordメンバーを背景で取得中です。取得が終わるまでユーザーを選択できません。", "Discord membership is loading in the background, so User targets are unavailable until it finishes.")) + `</p>`
 	} else if view.GuildErr != nil || view.BotToken == "" {
 		userAvailability = `<p class="field-help" role="status">` + esc(t(lang, "Discordメンバーを確認できないため、ユーザーを選択できません。", "Discord membership could not be verified, so User targets are unavailable.")) + `</p>`
 	} else if len(userIDs) == 0 {
 		userAvailability = `<p class="field-help" role="status">` + esc(t(lang, "現在リンク可能なDiscordユーザーはいません。", "No linked Production Team users are currently available.")) + `</p>`
 	}
 	roleAvailability = reviewerRoleAvailabilityMessage(lang, p, view)
+	if view.RolesReady {
+		roleAvailability += `<p class="field-help guild-directory-notice">` + esc(t(lang, "ロールの送信可否は表示時に確認しません。適用時に確認します。", "Role send access is not verified for display; it is verified when applied.")) + `</p>`
+	}
 	formAction := withLang("/bot/admin/projects", r) + "&project=" + url.QueryEscape(p.KitsuProjectID) + "&tab=notifications&edit_routing=1"
 	successURL := withLang("/bot/admin/projects", r) + "&project=" + url.QueryEscape(p.KitsuProjectID) + "&tab=notifications"
 	revision, _ := model.ProductionNotificationRevisionWithError(db, p.ID, p.KitsuProjectID)
 	var rows strings.Builder
 	for _, route := range settings.Routes {
 		targets, _, _ := model.ListProjectReviewerTargetsForTaskType(db, p.ID, route.TaskTypeID)
-		evidence := view.RoleSendEvidenceByTaskType[route.TaskTypeID]
-		evidenceErr := view.RoleSendErrorsByTaskType[route.TaskTypeID]
 		targetViews := make([]reviewerTargetView, 0, len(targets))
 		for _, target := range targets {
 			label := target.DiscordID
@@ -174,11 +166,7 @@ func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request
 					label = t(lang, "リンクまたはメンバーを確認できません", "User is no longer verified")
 				}
 			} else if role, ok := roleLabels[target.DiscordID]; ok {
-				if evidenceErr == nil && forumRoleCanBeMentioned(p.DiscordGuildID, route.ForumChannelID, role, evidence) {
-					label = "@" + role.Name
-				} else {
-					label = t(lang, "ロール利用不可", "Role unavailable")
-				}
+				label = "@" + role.Name
 			} else {
 				label = t(lang, "ロールを確認できません", "Role is no longer verified")
 			}
@@ -188,12 +176,11 @@ func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request
 		targetsAttribute := base64.StdEncoding.EncodeToString(encodedTargets)
 		eligibleRoleIDs := make([]string, 0, len(roleCatalog))
 		for _, role := range roleCatalog {
-			if evidenceErr == nil && forumRoleCanBeMentioned(p.DiscordGuildID, route.ForumChannelID, role, evidence) {
+			if roleMentionable[role.ID] {
 				eligibleRoleIDs = append(eligibleRoleIDs, role.ID)
 			}
 		}
-		evidenceVerified := evidenceErr == nil && evidence.PermissionsKnown
-		rows.WriteString(`<tr data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-existing-targets="` + targetsAttribute + `" data-role-sender-verified="` + strconv.FormatBool(evidenceVerified) + `" data-bot-can-mention-roles="` + strconv.FormatBool(evidence.CanMentionRoles) + `" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `" tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"><th scope="row"><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></th><td>#` + esc(strings.TrimPrefix(route.ForumChannelName, "#")) + `</td></tr>`)
+		rows.WriteString(`<tr data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-existing-targets="` + targetsAttribute + `" data-role-sender-verified="true" data-bot-can-mention-roles="false" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `" tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"><th scope="row"><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></th><td>#` + esc(strings.TrimPrefix(route.ForumChannelName, "#")) + `</td></tr>`)
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="2">` + esc(t(lang, "フォーラムがまだ設定されていません。先にフォーラム設定を完了してください。", "No forums are configured yet. Finish the forum settings first.")) + `</td></tr>`)

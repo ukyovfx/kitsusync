@@ -39,6 +39,32 @@ const (
 	userLinkingLongNickname = "TVアニメ『佐々木さんとピーちゃんSeason2』第1話は1時間"
 )
 
+// expireReviewerBrowserDirectory ages both cached directory snapshots past
+// their TTL, so the next display render treats them as stale.
+func expireReviewerBrowserDirectory() {
+	expired := time.Now().Add(-guildDirectoryCacheTTL - time.Minute)
+	for _, cache := range []*guildDirectoryCache{guildMemberListCache, guildRoleListCache} {
+		cache.mu.Lock()
+		if entry := cache.entries[reviewerBrowserGuild]; entry != nil {
+			entry.fetchedAt = expired
+		}
+		cache.mu.Unlock()
+	}
+}
+
+// markReviewerBrowserDirectoryRateLimited records the failure a 429 refresh
+// leaves behind, without spending botDo's 15s retry chain.
+func markReviewerBrowserDirectoryRateLimited() {
+	for _, cache := range []*guildDirectoryCache{guildMemberListCache, guildRoleListCache} {
+		cache.mu.Lock()
+		if entry := cache.entries[reviewerBrowserGuild]; entry != nil {
+			entry.lastErr = discordBotAPIError("synthetic rate limit", http.StatusTooManyRequests, nil)
+			entry.rateLimited = true
+		}
+		cache.mu.Unlock()
+	}
+}
+
 // TestReviewerBrowserAcceptance uses normal KitsuSync login/session routes,
 // disposable SQLite state, synthetic Kitsu/Discord services, and real Chromium.
 func TestReviewerBrowserAcceptance(t *testing.T) {
@@ -310,6 +336,49 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		switch mode {
 		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "user-linking-long-label":
 			scenario.Store(mode)
+			// Each scenario serves different synthetic members and roles, so the
+			// cached directory snapshot has to be re-read for the new one.
+			invalidateGuildDirectory(reviewerBrowserGuild)
+			// Warm it so the read paths see the scenario's data on first paint.
+			_, _, _ = guildMemberListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot)
+			_, _, _ = guildRoleListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot)
+			w.WriteHeader(http.StatusNoContent)
+		case "directory-rate-limited", "directory-stale-rate-limited":
+			// Warm the directory snapshot first, then make Discord answer every
+			// member/role read with a long Retry-After rate limit. The stale
+			// variant additionally expires the snapshot, so the display paths
+			// have to paint from the expired copy without waiting for a refresh.
+			scenario.Store("ready")
+			invalidateGuildDirectory(reviewerBrowserGuild)
+			if _, _, err := guildMemberListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not prefetch the synthetic member list", http.StatusInternalServerError)
+				return
+			}
+			if _, _, err := guildRoleListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not prefetch the synthetic role list", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store(mode)
+			if mode == "directory-stale-rate-limited" {
+				// Record a rate-limited refresh failure without running botDo's
+				// 15s retry chain, then expire the snapshot: the first render
+				// already carries the stale notice.
+				markReviewerBrowserDirectoryRateLimited()
+				expireReviewerBrowserDirectory()
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "directory-warm":
+			// Restore healthy Discord answers and a current directory snapshot.
+			scenario.Store("ready")
+			invalidateGuildDirectory(reviewerBrowserGuild)
+			if _, _, err := guildMemberListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not prefetch the synthetic member list", http.StatusInternalServerError)
+				return
+			}
+			if _, _, err := guildRoleListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not prefetch the synthetic role list", http.StatusInternalServerError)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case "overflow-clip-audit":
 			// The overflow/clip sweep reseeds the long-URL failure and badges of
@@ -363,6 +432,12 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				return
 			}
 			scenario.Store(mode)
+			// Each scenario serves different synthetic members and roles, so the
+			// cached directory snapshot has to be re-read for the new one.
+			invalidateGuildDirectory(reviewerBrowserGuild)
+			// Warm it so the read paths see the scenario's data on first paint.
+			_, _, _ = guildMemberListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot)
+			_, _, _ = guildRoleListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot)
 			w.WriteHeader(http.StatusNoContent)
 		case "sparse-production":
 			settings := reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID, []model.ProductionForumRoute{
@@ -682,6 +757,8 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/members"):
 		if d.scenario.Load().(string) == "discord-failure" {
 			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`
+		} else if d.scenario.Load().(string) == "directory-rate-limited" || d.scenario.Load().(string) == "directory-stale-rate-limited" {
+			status, body = http.StatusTooManyRequests, `{"message":"You are being rate limited.","retry_after":900}`
 		} else {
 			body = `[{"user":{"id":"22222222222222222","username":"project-supervisor","global_name":"Global Supervisor Name"},"nick":"Guild Nick Supervisor"},{"user":{"id":"22222222222222223","username":"departmentless","global_name":"Departmentless Global"}},{"user":{"id":"22222222222222224","username":"wrong-department","global_name":"Wrong Department Global"}},{"user":{"id":"22222222222222225","username":"artist","global_name":"Artist Global"}},{"user":{"id":"22222222222222226","username":"manager","global_name":"Manager Global"}},{"user":{"id":"22222222222222227","username":"admin","global_name":"Admin Global"}},{"user":{"id":"22222222222222228","username":"demoted","global_name":"Demoted Global"}},{"user":{"id":"22222222222222229","username":"project-manager","global_name":"Project Manager Global"}},{"user":{"id":"22222222222222230","username":"position-only"}},{"user":{"id":"22222222222222231","username":"inactive"}},{"user":{"id":"22222222222222232","username":"kitsu-bot","bot":true}},{"user":{"id":"22222222222222234","username":"override-candidate","global_name":"Override Global"},"nick":"Guild Nick Override"},{"user":{"id":"22222222222222236","username":"global-name-fallback","global_name":"Global Name Fallback"}},{"user":{"id":"22222222222222237","username":"username-fallback"}}]`
 			if d.scenario.Load().(string) == "japanese-wfa-add" {
@@ -710,6 +787,8 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			status, body = http.StatusForbidden, `{"message":"synthetic failure"}`
 		case "roles-rate-limited":
 			status, body = http.StatusTooManyRequests, `{"message":"synthetic failure"}`
+		case "directory-rate-limited", "directory-stale-rate-limited":
+			status, body = http.StatusTooManyRequests, `{"message":"You are being rate limited.","retry_after":900}`
 		default:
 			body = `[{"id":"11111111111111111","name":"@everyone","position":0,"mentionable":true,"permissions":"3072"},{"id":"33333333333333331","name":"Reviewers","position":5,"mentionable":true,"permissions":"0"},{"id":"33333333333333332","name":"Private","position":4,"mentionable":false,"permissions":"0"},{"id":"33333333333333333","name":"Review Leads","position":6,"mentionable":true,"permissions":"0"}]`
 			if d.scenario.Load().(string) == "japanese-wfa-add" {
@@ -748,7 +827,13 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 	}
 	header := http.Header{"Content-Type": []string{"application/json"}}
 	if status == http.StatusTooManyRequests {
-		header.Set("Retry-After", "0.001")
+		retryAfter := "0.001"
+		if mode := d.scenario.Load().(string); mode == "directory-rate-limited" || mode == "directory-stale-rate-limited" {
+			// A long Retry-After keeps the background refresh sleeping for the
+			// whole assertion window, so a blocking display path would be caught.
+			retryAfter = "900"
+		}
+		header.Set("Retry-After", retryAfter)
 	}
 	return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
 }

@@ -892,9 +892,15 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 	var guildMembers []DiscordGuildMember
 	var teamGuildErr error
 	guildReadOK := false
+	guildNotice := ""
+	guildMembersPending := false
 	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		guildMembers, teamGuildErr = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
-		guildReadOK = teamGuildErr == nil
+		guildView := guildMemberListCache.view(p.DiscordGuildID, botToken)
+		guildNotice = guildDirectoryNotice(lang, guildView)
+		var status guildDirectoryStatus
+		guildMembers, status, teamGuildErr = cachedGuildMembers(p.DiscordGuildID, botToken)
+		guildMembersPending = status == guildDirectoryPending
+		guildReadOK = teamGuildErr == nil && !guildMembersPending
 	}
 	guildMemberNames := make(map[string]string, len(guildMembers))
 	guildMemberIDs := make(map[string]bool, len(guildMembers))
@@ -954,6 +960,9 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			statusCell := `<span class="status-pill warning" role="status">` + esc(userText("未リンク", "Not linked")) + `</span>`
 			if guildReadOK {
 				statusCell += userLinkingAction + linkButton
+			} else if guildMembersPending {
+				discordCell += `<span class="field-help">` + esc(userText("Discord所属を取得中", "Guild membership is loading")) + `</span>`
+				statusCell += userLinkingAction
 			} else {
 				discordCell += `<span class="field-help">` + esc(userText("Discord所属を確認できません", "Guild membership could not be verified")) + `</span>`
 				statusCell += userLinkingAction
@@ -993,7 +1002,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 	if guildReadOK && linkOptions.Len() > 0 {
 		modal = `<dialog data-team-link-modal><form method="post" action="` + esc(withLang("/bot/admin/users", r)) + `"><h3>` + esc(userText("Discordユーザーをリンク", "Link Discord user")) + `</h3><p data-team-link-person-label></p><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="team_link_project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="kitsu_id" data-team-link-person-id><input type="hidden" name="kitsu_name" data-team-link-person-name><input type="hidden" name="kitsu_email" data-team-link-person-email><input type="hidden" name="discord_guild_id" value="` + esc(p.DiscordGuildID) + `"><label>` + esc(userText("Discordユーザー", "Discord user")) + `<select name="discord_user_id" required><option value="">` + esc(userText("選択", "Select")) + `</option>` + linkOptions.String() + `</select></label><div class="button-row"><button type="button" class="btn-ghost" data-team-link-cancel>` + esc(userText("キャンセル", "Cancel")) + `</button><button type="submit" class="btn">` + esc(userText("保存", "Save")) + `</button></div></form></dialog><script>(function(){var dialog=document.querySelector('[data-team-link-modal]');if(!dialog)return;document.querySelectorAll('[data-open-team-link]').forEach(function(button){button.addEventListener('click',function(){dialog.querySelector('[data-team-link-person-id]').value=button.dataset.personId||'';dialog.querySelector('[data-team-link-person-name]').value=button.dataset.personName||'';dialog.querySelector('[data-team-link-person-email]').value=button.dataset.personEmail||'';dialog.querySelector('[data-team-link-person-label]').textContent=button.dataset.personName||'';dialog.showModal()})});dialog.querySelector('[data-team-link-cancel]')?.addEventListener('click',function(){dialog.close()})})();</script>`
 	}
-	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p><div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態 / 操作", "Status / action")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>` + modal + `</section>`
+	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p>` + guildNoticeMarkup(guildNotice) + `<div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態 / 操作", "Status / action")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>` + modal + `</section>`
 }
 
 func productionDepartmentNames(taskTypes []kitsu.TaskType) map[string]string {
@@ -1025,7 +1034,11 @@ func productionPersonDepartmentSummary(person kitsu.Person, departmentNames map[
 	return strings.Join(names, ", ")
 }
 
-var reviewerGuildMembersForGuild = ListGuildMembers
+// reviewerGuildMembersForGuild and reviewerDiscordRolesForGuild are the live
+// readers. Writes, delivery and the directory cache's fetch go through them, so
+// a test that replaces the seam also feeds the cache. They are bound in init so
+// the cache and the readers do not form an initialization cycle.
+var reviewerGuildMembersForGuild func(string, string) ([]DiscordGuildMember, error)
 
 func renderCurrentProductionWFARecipients(db *gorm.DB, r *http.Request, p model.Project, lang string, botTokens ...string) string {
 	var team []kitsu.Person
@@ -1045,10 +1058,15 @@ func renderCurrentProductionWFARecipients(db *gorm.DB, r *http.Request, p model.
 	}
 	var guildMembers []DiscordGuildMember
 	var guildMembersErr error
+	guildMembersPending := false
+	guildNotice := ""
 	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		guildMembers, guildMembersErr = reviewerGuildMembersForGuild(p.DiscordGuildID, botToken)
+		var status guildDirectoryStatus
+		guildMembers, status, guildMembersErr = cachedGuildMembers(p.DiscordGuildID, botToken)
+		guildMembersPending = status == guildDirectoryPending
+		guildNotice = guildDirectoryNotice(lang, guildMemberListCache.view(p.DiscordGuildID, botToken))
 	}
-	return renderProductionReviewerManager(db, r, p, lang, botToken, team, teamErr, globalUsers, taskTypes, guildMembers, guildMembersErr)
+	return renderProductionReviewerManager(db, r, p, lang, botToken, team, teamErr, globalUsers, taskTypes, guildMembers, guildMembersErr, guildMembersPending, guildNotice)
 }
 
 func productionSupervisorTaskTypeSummaries(team []kitsu.Person, taskTypes []kitsu.TaskType) map[string]string {
@@ -1184,7 +1202,7 @@ func discordGuildMemberDisplayName(member DiscordGuildMember) string {
 }
 
 var reviewerTaskTypesForProduction = setupKitsuTaskTypes
-var reviewerDiscordRolesForGuild = ListGuildRoles
+var reviewerDiscordRolesForGuild func(string, string) ([]DiscordGuildRole, error)
 var reviewerDepartmentSupervisorsForTeam = kitsu.GetDepartmentSupervisorsForProductionTeamWithCredentials
 
 func currentProductionLinkedHumanDiscordIDs(team []kitsu.Person, globalUsers []model.UserMap, guildMembers []DiscordGuildMember) map[string]string {
@@ -1211,7 +1229,7 @@ func currentProductionLinkedHumanDiscordIDs(team []kitsu.Person, globalUsers []m
 	return linked
 }
 
-func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, team []kitsu.Person, teamErr error, globalUsers []model.UserMap, taskTypes []kitsu.TaskType, guildMembers []DiscordGuildMember, guildMembersErr error) string {
+func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, team []kitsu.Person, teamErr error, globalUsers []model.UserMap, taskTypes []kitsu.TaskType, guildMembers []DiscordGuildMember, guildMembersErr error, guildMembersPending bool, guildNotice string) string {
 	label := func(ja, en string) string { return t(lang, ja, en) }
 	selectedID := strings.TrimSpace(r.URL.Query().Get("reviewer_task_type"))
 	selectedTaskType := kitsu.TaskType{}
@@ -1232,16 +1250,25 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	}
 	postURL := withLang("/bot/admin/projects", r)
 	roles, rolesReady := []DiscordGuildRole{}, false
+	rolesPending := false
 	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		if listed, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, botToken); err == nil {
+		var status guildDirectoryStatus
+		var err error
+		var listed []DiscordGuildRole
+		listed, status, err = cachedGuildRoles(p.DiscordGuildID, botToken)
+		rolesPending = status == guildDirectoryPending
+		if err == nil && !rolesPending {
 			roles = reviewerRoleCatalog(p.DiscordGuildID, listed)
 			rolesReady = true
 		}
 	}
+	// Role send access is verified when the target is applied, not here, so the
+	// display only relies on what the role list already says (mentionable).
 	eligibleRoleIDs := map[string]struct{}{}
-	var roleEligibilityErr error
-	if selectedTaskType.ID != "" && botToken != "" {
-		eligibleRoleIDs, roleEligibilityErr = ForumReviewerRoles(db, p.KitsuProjectID, selectedTaskType.ID, botToken)
+	for _, role := range roles {
+		if role.Mentionable {
+			eligibleRoleIDs[role.ID] = struct{}{}
+		}
 	}
 	var explicitRows []model.ProjectReviewerTarget
 	for _, target := range model.ListProjectReviewerTargets(db, p.ID) {
@@ -1250,9 +1277,11 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		}
 	}
 	var overrides, automatic strings.Builder
-	membershipWarning := ""
-	if guildMembersErr != nil {
-		membershipWarning = `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを確認できません。自動ReviewerとUser Overrideの対象者は確認できません。Bot接続とメンバー閲覧権限を確認してください。", "Discord server membership could not be verified. Automatic eligibility and User Override candidates are unavailable. Check the Bot connection and member access.")) + `</p>`
+	membershipWarning := guildNoticeMarkup(guildNotice)
+	if guildMembersPending {
+		membershipWarning += `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを背景で取得中です。取得が終わるまで自動ReviewerとUser Overrideの対象者は表示されません。", "Discord server membership is loading in the background. Automatic eligibility and User Override candidates stay hidden until it finishes.")) + `</p>`
+	} else if guildMembersErr != nil {
+		membershipWarning += `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを確認できません。自動ReviewerとUser Overrideの対象者は確認できません。Bot接続とメンバー閲覧権限を確認してください。", "Discord server membership could not be verified. Automatic eligibility and User Override candidates are unavailable. Check the Bot connection and member access.")) + `</p>`
 	}
 	if len(explicitRows) > 0 {
 		for _, target := range explicitRows {
@@ -1289,7 +1318,9 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 		}
 	}
 	if selectedTaskType.ID != "" {
-		if guildMembersErr != nil {
+		if guildMembersPending {
+			automatic.WriteString(`<li class="field-help">` + esc(label("Discordメンバーを背景で取得中です。", "Discord membership is loading in the background.")) + `</li>`)
+		} else if guildMembersErr != nil {
 			automatic.WriteString(`<li class="field-help">` + esc(label("Discordメンバーの確認が必要です。", "Discord membership verification required.")) + `</li>`)
 		} else if teamErr != nil {
 			automatic.WriteString(`<li class="field-help">` + esc(label("Production Teamを読み込めません。", "Production Team unavailable.")) + `</li>`)
@@ -1339,7 +1370,9 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 	addForm := `<p class="field-help">` + esc(label("Kitsu接続からTask Typeを選択してください。", "Load available Task Types from Kitsu.")) + `</p>`
 	if selectedTaskType.ID != "" {
 		addForm = ""
-		if guildMembersErr != nil {
+		if guildMembersPending {
+			addForm = `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを背景で取得中です。取得が終わるまでUser Overrideを追加できません。", "Discord server membership is loading in the background. User Overrides cannot be added until it finishes.")) + `</p>`
+		} else if guildMembersErr != nil {
 			addForm = `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを確認できないため、User Overrideを追加できません。", "User Overrides cannot be added until Discord server membership can be verified.")) + `</p>`
 		} else if teamErr != nil {
 			addForm = `<p class="field-help" role="status">` + esc(label("Kitsu Production Teamを取得できないため、Discordユーザーを選択できません。", "Discord users cannot be selected because the Kitsu Production Team could not be loaded.")) + `</p>`
@@ -1358,11 +1391,7 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 				disabled, reason := "", ""
 				if !eligible {
 					disabled = ` disabled`
-					if roleEligibilityErr != nil {
-						reason = label("送信先の権限を確認できません", "Destination permissions could not be verified")
-					} else {
-						reason = label("メンション不可・Bot権限なし", "Not mentionable; Bot lacks permission")
-					}
+					reason = label("メンション不可（適用時に確認）", "Not mentionable (verified on apply)")
 				} else {
 					eligibleCount++
 				}
@@ -1377,6 +1406,8 @@ func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Proje
 				disabled = ` disabled`
 			}
 			addForm += `<form method="post" class="reviewer-target-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="action" value="add_production_reviewer_target"><input type="hidden" name="target_kind" value="role"><label>` + esc(label("Discordロール", "Discord role")) + `<select name="target_id" required>` + roleOptions.String() + `</select></label><button class="btn" type="submit"` + disabled + `>` + esc(label("ロールを追加", "Add role")) + `</button></form>`
+		} else if rolesPending {
+			addForm += `<p class="field-help" role="status">` + esc(label("Discordロールを背景で取得中です。", "Discord roles are loading in the background.")) + `</p>`
 		} else {
 			addForm += `<p class="field-help">` + esc(label("メンション可能なDiscordロールはありません。", "No mentionable Discord roles are available.")) + `</p>`
 		}
@@ -1450,6 +1481,8 @@ func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request,
 				if len(botTokens) > 0 {
 					botToken = botTokens[0]
 				}
+				// ListGuildMembers refreshes the directory cache, so this write
+				// path still reads live members.
 				guildMembers, membersErr := reviewerGuildMembersForGuild(project.DiscordGuildID, botToken)
 				if membersErr != nil {
 					writeReviewerMutationError()
@@ -1551,13 +1584,19 @@ type productionNotificationReviewerView struct {
 	RoleCatalog                []DiscordGuildRole
 	RolesErr                   error
 	RolesReady                 bool
+	RolesPending               bool
+	GuildPending               bool
 	RoleSendEvidenceByTaskType map[string]reviewerRoleSendEvidence
 	RoleSendErrorsByTaskType   map[string]error
 	RoleSendersByTaskType      map[string]reviewerRoleSender
 	RoleSendEvidenceRequested  bool
-	KitsuBase                  string
-	KitsuToken                 string
-	KitsuReady                 bool
+	// AutomaticReviewersByTaskType is filled by the loader so rendering never
+	// re-queries Kitsu per row.
+	AutomaticReviewersByTaskType map[string][]string
+	AutomaticStatesByTaskType    map[string]string
+	KitsuBase                    string
+	KitsuToken                   string
+	KitsuReady                   bool
 }
 
 func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includeAutomatic, includeRoleSendEvidence bool, botTokens ...string) productionNotificationReviewerView {
@@ -1571,39 +1610,37 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 	if stored := storedRuntimeDiscordBotToken(db); stored != "" {
 		view.BotToken = stored
 	}
-	view.RoleSendEvidenceRequested = includeRoleSendEvidence
+	view.RoleSendEvidenceRequested = false
 	if includeAutomatic {
 		view.Team, view.TeamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
 		if view.BotToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-			view.GuildUsers, view.GuildErr = reviewerGuildMembersForGuild(p.DiscordGuildID, view.BotToken)
-			// User eligibility needs the current Guild member list, but Role
-			// candidates come from a separate Guild roles endpoint. Keep those
-			// reads independent so a member-list failure does not hide usable Roles.
-			roles, err := reviewerDiscordRolesForGuild(p.DiscordGuildID, view.BotToken)
-			view.RolesErr = err
-			if err == nil {
-				view.RoleCatalog = reviewerRoleCatalog(p.DiscordGuildID, roles)
+			// Display only reads cached snapshots: member and role lists are
+			// refreshed in the background, and per-route send access is
+			// verified when a target is applied, not while rendering.
+			var memberStatus guildDirectoryStatus
+			view.GuildUsers, memberStatus, view.GuildErr = cachedGuildMembers(p.DiscordGuildID, view.BotToken)
+			view.GuildPending = memberStatus == guildDirectoryPending
+			var roleStatus guildDirectoryStatus
+			view.Roles, roleStatus, view.RolesErr = cachedGuildRoles(p.DiscordGuildID, view.BotToken)
+			view.RolesPending = roleStatus == guildDirectoryPending
+			if view.RolesErr == nil && !view.RolesPending {
+				view.RoleCatalog = reviewerRoleCatalog(p.DiscordGuildID, view.Roles)
 				view.Roles = mentionableReviewerRoles(p.DiscordGuildID, view.RoleCatalog)
 				view.RolesReady = true
-				if includeRoleSendEvidence {
-					view.RoleSendEvidenceByTaskType = make(map[string]reviewerRoleSendEvidence)
-					view.RoleSendErrorsByTaskType = make(map[string]error)
-					view.RoleSendersByTaskType = make(map[string]reviewerRoleSender)
-					forumSettings, _, settingsErr := model.LoadProductionForumSettings(db, p.KitsuProjectID)
-					if settingsErr != nil {
-						for _, taskType := range view.TaskTypes {
-							view.RoleSendErrorsByTaskType[strings.TrimSpace(taskType.ID)] = errors.New("forum settings are unavailable")
-						}
-					}
-					for _, route := range forumSettings.Routes {
-						view.RoleSendersByTaskType[route.TaskTypeID] = reviewerRoleSender{ChannelID: route.ForumChannelID}
-						evidence, evidenceErr := forumReviewerRoleEvidenceReader(p.DiscordGuildID, route.ForumChannelID, view.BotToken)
-						view.RoleSendEvidenceByTaskType[route.TaskTypeID] = evidence
-						if evidenceErr != nil {
-							view.RoleSendErrorsByTaskType[route.TaskTypeID] = evidenceErr
-							continue
-						}
-					}
+			}
+			forumSettings, _, _ := model.LoadProductionForumSettings(db, p.KitsuProjectID)
+			view.RoleSendersByTaskType = make(map[string]reviewerRoleSender, len(forumSettings.Routes))
+			for _, route := range forumSettings.Routes {
+				view.RoleSendersByTaskType[route.TaskTypeID] = reviewerRoleSender{ChannelID: route.ForumChannelID}
+			}
+			// Resolve department supervisors from the cached snapshot so the
+			// read table is complete on the first render, while the directory
+			// is still being fetched in the background.
+			if !view.GuildPending && view.TeamErr == nil && view.KitsuReady {
+				view.AutomaticReviewersByTaskType = make(map[string][]string, len(view.TaskTypes))
+				view.AutomaticStatesByTaskType = make(map[string]string, len(view.TaskTypes))
+				for _, taskType := range view.TaskTypes {
+					view.AutomaticReviewersByTaskType[taskType.ID], view.AutomaticStatesByTaskType[taskType.ID] = productionAutomaticReviewerRecipients(taskType, view)
 				}
 			}
 		}
@@ -1651,14 +1688,10 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 					additional = append(additional, name)
 				}
 			case model.ReviewerTargetRole:
-				if role, ok := roleNames[target.DiscordID]; data.RolesReady && ok {
-					sender := data.RoleSendersByTaskType[taskTypeID]
-					evidenceErr := data.RoleSendErrorsByTaskType[taskTypeID]
-					if evidenceErr == nil && forumRoleCanBeMentioned(p.DiscordGuildID, sender.ChannelID, role, data.RoleSendEvidenceByTaskType[taskTypeID]) {
-						additional = append(additional, "@"+role.Name)
-					} else {
-						additional = append(additional, label("ロール利用不可", "Role unavailable"))
-					}
+				// Send access is verified when the target is applied, so the
+				// table shows the role from the cached role list.
+				if role, ok := roleNames[target.DiscordID]; ok && data.RolesReady {
+					additional = append(additional, "@"+role.Name)
 				} else {
 					additional = append(additional, label("ロール利用不可", "Role unavailable"))
 				}
@@ -1681,7 +1714,13 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="3"><div class="production-detail-state-row">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</div></td></tr>`)
 	}
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, data, lang)
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div><div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+	var directoryNotice strings.Builder
+	if data.GuildPending || data.RolesPending {
+		directoryNotice.WriteString(`<p class="field-help guild-directory-notice" role="status">` + esc(label("Discordのメンバー・ロールは未取得（背景で取得中）です。取得が終わるまで一部の通知先は確認できません。", "Discord members and roles are not loaded yet (fetching in the background). Some recipients stay unverified until it finishes.")) + `</p>`)
+	}
+	directoryNotice.WriteString(guildNoticeMarkup(guildDirectoryNotice(lang, guildMemberListCache.view(p.DiscordGuildID, data.BotToken))))
+	roleApplyNotice := `<p class="field-help guild-directory-notice">` + esc(label("ロールの送信可否は表示時に確認しません。適用時に確認します。", "Role send access is not verified for display; it is verified when applied.")) + `</p>`
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div>` + directoryNotice.String() + roleApplyNotice + `<div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
 }
 
 func renderProductionWFATargetChips(values []string, emptyLabel, unavailableLabel string, automatic bool) string {
@@ -1717,6 +1756,7 @@ func compactAutomaticReviewerLabel(value, lang string) string {
 	case "No matching Supervisor.", "該当するSupervisorはいません。":
 		return t(lang, "Supervisorなし", "No Supervisor")
 	case "Discord membership could not be verified.", "Discordメンバーを確認できません。",
+		"Discord membership is loading.", "Discordメンバーを取得中です。",
 		"Production Team unavailable.", "Production Teamを読み込めません。",
 		"Kitsu connection required.", "Kitsu接続が必要です。",
 		"Task Type data unavailable.", "Task Type情報を読み込めません。",
@@ -1731,6 +1771,8 @@ func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNo
 	label := func(ja, en string) string { return t(lang, ja, en) }
 	names, state := productionAutomaticReviewerRecipients(taskType, data)
 	switch state {
+	case "discord-pending":
+		return label("Discordメンバーを取得中です。", "Discord membership is loading.")
 	case "discord-unavailable":
 		return label("Discordメンバーを確認できません。", "Discord membership could not be verified.")
 	case "team-unavailable":
@@ -1749,7 +1791,12 @@ func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNo
 }
 
 func productionAutomaticReviewerRecipients(taskType kitsu.TaskType, data productionNotificationReviewerView) ([]string, string) {
+	if names, ok := data.AutomaticReviewersByTaskType[taskType.ID]; ok {
+		return names, data.AutomaticStatesByTaskType[taskType.ID]
+	}
 	switch {
+	case data.GuildPending:
+		return nil, "discord-pending"
 	case data.GuildErr != nil || data.BotToken == "":
 		return nil, "discord-unavailable"
 	case data.TeamErr != nil:

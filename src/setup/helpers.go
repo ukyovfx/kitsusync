@@ -781,12 +781,29 @@ func decodeGuildChannelsBody(body []byte) ([]DiscordGuildChannel, error) {
 	return channels, nil
 }
 
-func ListGuildRoles(guildID, botToken string) ([]DiscordGuildRole, error) {
+// guildRoleListBody performs the same GET the list readers used to do inline.
+func guildRoleListBody(guildID, botToken string) ([]byte, int, error) {
 	guildID = strings.TrimSpace(guildID)
 	if !isDiscordSnowflake(guildID) {
-		return nil, errors.New("Discord guild ID is not a valid snowflake")
+		return nil, 0, errors.New("Discord guild ID is not a valid snowflake")
 	}
-	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/roles", discordAPI, guildID), nil, botToken)
+	return botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/roles", discordAPI, guildID), nil, botToken)
+}
+
+// decodeGuildRoleListBody reads the role list from a raw guild role list
+// body, which may come from the cache.
+func decodeGuildRoleListBody(body []byte) ([]DiscordGuildRole, error) {
+	var roles []DiscordGuildRole
+	if err := json.Unmarshal(body, &roles); err != nil {
+		return nil, errors.New("Discord guild role list response was invalid")
+	}
+	return roles, nil
+}
+
+// ListGuildRoles reads the role list through the cache, refreshing it first so
+// callers that need current data (saves, delivery) never see a stale entry.
+func ListGuildRoles(guildID, botToken string) ([]DiscordGuildRole, error) {
+	body, status, err := guildRoleListCache.refresh(guildID, botToken)
 	if err != nil {
 		if status == http.StatusTooManyRequests {
 			return nil, &discordGuildRoleListError{StatusCode: status}
@@ -796,11 +813,7 @@ func ListGuildRoles(guildID, botToken string) ([]DiscordGuildRole, error) {
 	if status >= 400 {
 		return nil, &discordGuildRoleListError{StatusCode: status}
 	}
-	var roles []DiscordGuildRole
-	if err := json.Unmarshal(body, &roles); err != nil {
-		return nil, errors.New("Discord guild role list response was invalid")
-	}
-	return roles, nil
+	return decodeGuildRoleListBody(body)
 }
 
 func reviewerRoleCatalog(guildID string, roles []DiscordGuildRole) []DiscordGuildRole {
@@ -845,17 +858,19 @@ func mentionableReviewerRoles(guildID string, roles []DiscordGuildRole) []Discor
 	return filtered
 }
 
-func ListGuildMembers(guildID, botToken string) ([]DiscordGuildMember, error) {
+// guildMemberListBody pages the member list and returns the concatenated JSON
+// array, which is what the cache stores.
+func guildMemberListBody(guildID, botToken string) ([]byte, int, error) {
 	guildID = strings.TrimSpace(guildID)
 	if !isDiscordSnowflake(guildID) {
 		kind := discordMemberFailureMalformed
 		if isSyntheticDiscordID(guildID) {
 			kind = discordMemberFailureFixture
 		}
-		return nil, &discordMemberListFailure{Kind: kind, Technical: "Discord guild member list was not requested because the server ID is not a valid Discord snowflake"}
+		return nil, 0, &discordMemberListFailure{Kind: kind, Technical: "Discord guild member list was not requested because the server ID is not a valid Discord snowflake"}
 	}
 	if strings.TrimSpace(botToken) == "" {
-		return nil, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord Bot token is not configured"}
+		return nil, 0, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord Bot token is not configured"}
 	}
 	const pageLimit = 1000
 	const maxPages = 100
@@ -864,30 +879,65 @@ func ListGuildMembers(guildID, botToken string) ([]DiscordGuildMember, error) {
 	for page := 0; page < maxPages; page++ {
 		endpoint, endpointErr := discordGuildMembersEndpoint(guildID, after)
 		if endpointErr != nil {
-			return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Technical: endpointErr.Error()}
+			return nil, 0, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Technical: endpointErr.Error()}
 		}
 		body, status, err := botDo(http.MethodGet, endpoint, nil, botToken)
 		if err != nil {
-			return nil, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord guild member list request failed"}
+			return nil, status, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord guild member list request failed"}
 		}
 		if status >= 400 {
-			return nil, classifyDiscordMemberListFailure(status, body)
+			return body, status, classifyDiscordMemberListFailure(status, body)
 		}
 		var members []DiscordGuildMember
 		if err := json.Unmarshal(body, &members); err != nil {
-			return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord returned an invalid member list response"}
+			return nil, status, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord returned an invalid member list response"}
 		}
 		all = append(all, members...)
 		if len(members) < pageLimit {
-			return all, nil
+			body, err := json.Marshal(all)
+			if err != nil {
+				return nil, status, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord returned an invalid member list response"}
+			}
+			return body, http.StatusOK, nil
 		}
 		lastID := strings.TrimSpace(members[len(members)-1].User.ID)
 		if !isDiscordSnowflake(lastID) || lastID == after {
-			return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord member list pagination returned an invalid cursor"}
+			return nil, status, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord member list pagination returned an invalid cursor"}
 		}
 		after = lastID
 	}
-	return nil, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord member list pagination exceeded the safe page limit"}
+	return nil, 0, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord member list pagination exceeded the safe page limit"}
+}
+
+// decodeGuildMemberListBody reads the member list from a raw body produced by
+// guildMemberListBody, which may come from the cache.
+func decodeGuildMemberListBody(guildID string, body []byte, status int) ([]DiscordGuildMember, error) {
+	if !isDiscordSnowflake(strings.TrimSpace(guildID)) {
+		return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Technical: "Discord guild member list was not requested because the server ID is not a valid Discord snowflake"}
+	}
+	if status >= 400 {
+		return nil, classifyDiscordMemberListFailure(status, body)
+	}
+	var members []DiscordGuildMember
+	if err := json.Unmarshal(body, &members); err != nil {
+		return nil, &discordMemberListFailure{Kind: discordMemberFailureMalformed, Status: status, Technical: "Discord returned an invalid member list response"}
+	}
+	return members, nil
+}
+
+// ListGuildMembers reads the member list through the cache, refreshing it
+// first so callers that need current data (saves, delivery) never see a stale
+// entry.
+func ListGuildMembers(guildID, botToken string) ([]DiscordGuildMember, error) {
+	guildID = strings.TrimSpace(guildID)
+	if isDiscordSnowflake(guildID) && strings.TrimSpace(botToken) == "" {
+		return nil, &discordMemberListFailure{Kind: discordMemberFailureUnavailable, Technical: "Discord Bot token is not configured"}
+	}
+	body, status, err := guildMemberListCache.refresh(guildID, botToken)
+	if err != nil {
+		return nil, err
+	}
+	return decodeGuildMemberListBody(guildID, body, status)
 }
 
 func isSyntheticDiscordID(id string) bool {
