@@ -15,7 +15,7 @@ func TestHasReadyProductionRoutingRequiresForumRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ForumBaseline{}, &model.ForumTask{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.CreateProject(db, "p1", "Same name", "", "", "", ""); err != nil {
@@ -43,7 +43,7 @@ func TestSharedBotRuntimeReadinessIsSharedBySetupAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Setting{}, &model.Project{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}); err != nil {
+	if err := db.AutoMigrate(&model.Setting{}, &model.Project{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ForumBaseline{}, &model.ForumTask{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(RuntimeSecretKeyFileEnv, filepath.Join(t.TempDir(), "runtime-secret.key"))

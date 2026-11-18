@@ -298,7 +298,9 @@ func sortedKeys(set map[string]struct{}) []string {
 }
 
 // SaveProductionForumSettings validates and replaces a Production's whole forum
-// configuration in one transaction.
+// configuration in one transaction. A Task Type that loses its route also loses
+// its baseline, so re-routing it later seeds from the tasks of that moment
+// instead of replaying everything that changed meanwhile.
 func SaveProductionForumSettings(db *gorm.DB, settings ProductionForumSettings) error {
 	if db == nil {
 		return gorm.ErrInvalidDB
@@ -318,6 +320,9 @@ func SaveProductionForumSettings(db *gorm.DB, settings ProductionForumSettings) 
 		}
 		settings.Config.ID = existing.ID
 		if err := tx.Save(&settings.Config).Error; err != nil {
+			return err
+		}
+		if err := deleteProductionForumBaselinesOutside(tx, productionID, routedTaskTypeIDs(settings.Routes)); err != nil {
 			return err
 		}
 		if err := deleteProductionForumChildren(tx, productionID); err != nil {
@@ -357,13 +362,41 @@ func deleteProductionForumChildren(tx *gorm.DB, productionID string) error {
 	return nil
 }
 
-// DeleteProductionForumSettings removes a Production's forum configuration.
+func routedTaskTypeIDs(routes []ProductionForumRoute) []string {
+	ids := make([]string, 0, len(routes))
+	for _, route := range routes {
+		ids = append(ids, route.TaskTypeID)
+	}
+	return ids
+}
+
+// deleteProductionForumBaselinesOutside drops the baseline and ledger rows of
+// Task Types that are no longer routed. Rows of still-routed Task Types are
+// kept: they carry the threads already posted and must not be recreated.
+func deleteProductionForumBaselinesOutside(tx *gorm.DB, productionID string, keep []string) error {
+	baselines := tx.Where("project_id = ?", productionID)
+	tasks := tx.Where("project_id = ?", productionID)
+	if len(keep) > 0 {
+		baselines = baselines.Where("task_type_id NOT IN ?", keep)
+		tasks = tasks.Where("task_type_id NOT IN ?", keep)
+	}
+	if err := baselines.Delete(&ForumBaseline{}).Error; err != nil {
+		return err
+	}
+	return tasks.Delete(&ForumTask{}).Error
+}
+
+// DeleteProductionForumSettings removes a Production's forum configuration and
+// its baseline/ledger rows, so a re-added configuration starts from scratch.
 func DeleteProductionForumSettings(db *gorm.DB, productionID string) error {
 	if db == nil || strings.TrimSpace(productionID) == "" {
 		return gorm.ErrInvalidData
 	}
 	productionID = strings.TrimSpace(productionID)
 	return db.Transaction(func(tx *gorm.DB) error {
+		if err := deleteProductionForumBaselinesOutside(tx, productionID, nil); err != nil {
+			return err
+		}
 		if err := deleteProductionForumChildren(tx, productionID); err != nil {
 			return err
 		}

@@ -87,6 +87,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		&model.UserMap{}, &model.CheckerMap{}, &model.Setting{}, &model.AdminSession{}, &model.AuditLog{},
 		&model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.ProjectSetting{},
 		&model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{},
+		&model.ForumBaseline{}, &model.ForumTask{},
 	); err != nil {
 		t.Fatal("migrate disposable acceptance database")
 	}
