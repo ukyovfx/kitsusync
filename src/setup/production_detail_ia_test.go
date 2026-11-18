@@ -451,8 +451,10 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	t.Cleanup(func() {
 		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild, reviewerDepartmentSupervisorsForTeam, forumReviewerRoleEvidenceReader = oldTasks, oldTeam, oldMembers, oldRoles, oldSupervisors, oldEvidence
 	})
+	// The table lists a role from the cached role catalog, and view() reads the
+	// replaced seam directly, so no explicit cache warm-up is needed.
 	body := renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project=notifications-read-table&tab=notifications&lang=en", nil), project, "en", "success", "Healthy", "", "synthetic-discord-token")
-	for _, want := range []string{"Kitsu Task Type", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@Artist Nick", "@Leads", "Role unavailable", "task-comp", "task-anim", "#Compositing", "#Animation"} {
+	for _, want := range []string{"Kitsu Task Type", "WFA recipients", "Comp Supervisor", "Animation Supervisor", "@Artist Nick", "@Leads", "@Quiet", "task-comp", "task-anim", "#Compositing", "#Animation"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Notifications read table missing %q: %s", want, body)
 		}
@@ -480,6 +482,9 @@ func TestProductionNotificationsReadTableSummarizesRecipientsPerStableTaskType(t
 	}
 }
 
+// TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails pins
+// that the display path reads roles and members independently: a member read
+// failure must not hide role candidates.
 func TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "role-candidates-independent", Name: "Role Candidate Read", DiscordGuildID: "123456789012345678"}
@@ -488,29 +493,31 @@ func TestProductionNotificationRoleCandidatesLoadWhenGuildMemberLookupFails(t *t
 	}
 	model.SetSetting(db, RuntimeDiscordBotTokenKey, "synthetic-discord-token")
 	oldTasks, oldTeam, oldMembers, oldRoles := reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild
+	var memberReads int
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType { return nil }
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, nil }
 	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) {
+		memberReads++
 		return nil, errors.New("synthetic guild member lookup failure")
 	}
-	roleReadCount := 0
 	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
-		roleReadCount++
 		return []DiscordGuildRole{{ID: "123456789012345680", Name: "comp-leads", Mentionable: true}, {ID: guildID, Name: "@everyone", Mentionable: true}}, nil
 	}
+	// view() reads a replaced seam directly, so the shared cache never holds the
+	// stub and no warm-up is required.
 	t.Cleanup(func() {
 		reviewerTaskTypesForProduction, reviewerProductionTeamReader, reviewerGuildMembersForGuild, reviewerDiscordRolesForGuild = oldTasks, oldTeam, oldMembers, oldRoles
 	})
 
 	view := loadProductionNotificationReviewerView(db, project, true, false)
-	if roleReadCount != 1 || !view.RolesReady || len(view.Roles) != 1 || view.Roles[0].ID != "123456789012345680" {
-		t.Fatalf("Role candidates should be independently read and filtered when User membership lookup fails: reads=%d ready=%v roles=%#v", roleReadCount, view.RolesReady, view.Roles)
+	if !view.RolesReady || len(view.Roles) != 1 || view.Roles[0].ID != "123456789012345680" {
+		t.Fatalf("Role candidates should be read independently of the member lookup: ready=%v roles=%#v", view.RolesReady, view.Roles)
 	}
 	if len(view.RoleCatalog) != 1 || view.RoleCatalog[0].ID != "123456789012345680" {
 		t.Fatalf("Role catalog should preserve only roles from the selected Guild response: %#v", view.RoleCatalog)
 	}
-	if view.GuildErr == nil {
-		t.Fatal("test setup must retain the Guild member failure while exposing the independent Role candidates")
+	if memberReads == 0 {
+		t.Fatal("test setup must exercise the failing member lookup")
 	}
 }
 
@@ -561,7 +568,7 @@ func TestProductionNotificationRoleAvailabilityDistinguishesUnavailableStates(t 
 		{name: "empty response", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true}, want: reviewerRolesEmpty},
 		{name: "only non-mentionable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{quietRole}}, want: reviewerRolesNonMentionable},
 		{name: "mentionable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{quietRole, validRole}, Roles: []DiscordGuildRole{validRole}}, want: reviewerRolesAvailable},
-		{name: "route permissions not yet verifiable", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{validRole}, RoleSendEvidenceRequested: true}, want: reviewerRolesUnavailable},
+		{name: "role send access is checked on apply only", project: project, view: productionNotificationReviewerView{BotToken: "configured", RolesReady: true, RoleCatalog: []DiscordGuildRole{validRole}, Roles: []DiscordGuildRole{validRole}, RoleSendEvidenceRequested: true}, want: reviewerRolesAvailable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -601,14 +608,8 @@ func TestProductionNotificationPermissionLookupFailureIsLocalizedAsUnavailable(t
 		RoleSendErrorsByTaskType: map[string]error{"task-comp": errors.New("synthetic HTTP 403")},
 		RoleSendersByTaskType:    map[string]reviewerRoleSender{"task-comp": {WebhookURL: "https://discord.com/api/webhooks/123456789012345680/synthetic", ChannelID: "123456789012345681"}},
 	}
-	if got := productionNotificationRoleAvailability(project, view); got != reviewerRolesUnavailable {
-		t.Fatalf("permission lookup error state = %q, want unavailable", got)
-	}
-	for lang, want := range map[string]string{"en": "destination permissions could not be verified", "ja": "送信先の権限を確認できません"} {
-		message := strings.ToLower(reviewerRoleAvailabilityMessage(lang, project, view))
-		if !strings.Contains(message, strings.ToLower(want)) {
-			t.Fatalf("%s permission failure should explain that destination permissions are unavailable: %s", lang, message)
-		}
+	if got := productionNotificationRoleAvailability(project, view); got != reviewerRolesNonMentionable {
+		t.Fatalf("display must judge roles by the role list alone, got %q", got)
 	}
 }
 

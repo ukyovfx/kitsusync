@@ -2386,8 +2386,8 @@ func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *te
 	})
 
 	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole, wantRoleDisabled string }{
-		{"ja", "自動通知先", "追加通知先", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加", "送信先の権限を確認できません"},
-		{"en", "Automatic recipients", "Additional recipients", "None", "Add user", "Discord user", "Add role", "Destination permissions could not be verified"},
+		{"ja", "自動通知先", "追加通知先", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加", "メンション不可（適用時に確認）"},
+		{"en", "Automatic recipients", "Additional recipients", "None", "Add user", "Discord user", "Add role", "Not mentionable (verified on apply)"},
 	} {
 		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
 		body := renderCurrentProductionWFARecipients(db, request, project, tc.lang, "bot-token")
@@ -2438,7 +2438,9 @@ func TestReviewerManagerExplainsGuildMembershipLookupFailure(t *testing.T) {
 	})
 
 	body := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-guild-failure&tab=reviewers&lang=en", nil), project, "en", "bot-token")
-	for _, want := range []string{"Discord server membership could not be verified", "Automatic eligibility", "User Override candidates", "@Reviewers"} {
+	// A plain (non-rate-limit) member read failure leaves no cached snapshot, so
+	// the screen stays immediately renderable and says membership is loading.
+	for _, want := range []string{"Discord server membership is loading in the background", "Automatic eligibility", "User Override candidates", "@Reviewers"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Guild-member lookup failure missing safe Reviewer state %q: %s", want, body)
 		}
