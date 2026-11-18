@@ -40,20 +40,24 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-func MakeKitsuResponse(conf config.Config) ([]kitsu.MessagePayload, error) {
+// MakeKitsuResponse returns the payloads to notify on, and separately the
+// payloads to baseline on. The baseline set skips the ignoreMessagesDaysOld
+// filter: a task older than the notification window still has to be recorded
+// as existing, or forum mode would later treat it as new and post it.
+func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, baseline []kitsu.MessagePayload, err error) {
 	return MakeKitsuResponseContext(context.Background(), conf)
 }
 
 // MakeKitsuResponseContext is MakeKitsuResponse with a cancellation root: when
 // ctx is cancelled every Kitsu read in flight is aborted so a shutdown does not
 // wait on the request timeouts.
-func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.MessagePayload, error) {
+func MakeKitsuResponseContext(ctx context.Context, conf config.Config) (notifiable []kitsu.MessagePayload, baseline []kitsu.MessagePayload, err error) {
 	pollFetchStart := time.Now()
 	taskCommentReads.Store(0)
 
 	projects, err := kitsu.GetProjectsWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch projects: %w", err)
+		return nil, nil, fmt.Errorf("fetch projects: %w", err)
 	}
 	if conf.Log {
 		slog.Info("Got projects: " + strconv.Itoa(len(projects.Each)))
@@ -80,7 +84,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 		tasks.Each = append(tasks.Each, result.tasks...)
 	}
 	if len(projects.Each) > 0 && len(failedProjects) == len(projects.Each) {
-		return nil, fmt.Errorf("fetch tasks: all %d projects failed", len(projects.Each))
+		return nil, nil, fmt.Errorf("fetch tasks: all %d projects failed", len(projects.Each))
 	}
 	lastPollFailedProjects = failedProjects
 	tasksFetchElapsed := time.Since(tasksFetchStart)
@@ -90,7 +94,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 
 	taskStatuses, err := kitsu.GetTaskStatusesWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch task statuses: %w", err)
+		return nil, nil, fmt.Errorf("fetch task statuses: %w", err)
 	}
 	if conf.Log {
 		slog.Info("Got taskStatuses: " + strconv.Itoa(len(taskStatuses.Each)))
@@ -98,7 +102,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 
 	entities, err := kitsu.GetEntitiesWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch entities: %w", err)
+		return nil, nil, fmt.Errorf("fetch entities: %w", err)
 	}
 	if conf.Log {
 		slog.Info("Got entities: " + strconv.Itoa(len(entities.Each)))
@@ -106,7 +110,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 
 	enitityTypes, err := kitsu.GetEntityTypesWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch entity types: %w", err)
+		return nil, nil, fmt.Errorf("fetch entity types: %w", err)
 	}
 	if conf.Log {
 		slog.Info("Got enitityTypes: " + strconv.Itoa(len(enitityTypes.Each)))
@@ -114,7 +118,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 
 	taskTypes, err := kitsu.GetTaskTypesWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch task types: %w", err)
+		return nil, nil, fmt.Errorf("fetch task types: %w", err)
 	}
 	if conf.Log {
 		slog.Info("Got taskTypes: " + strconv.Itoa(len(taskTypes.Each)))
@@ -132,7 +136,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 
 	persons, err := kitsu.GetPersonsWithContext(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch persons: %w", err)
+		return nil, nil, fmt.Errorf("fetch persons: %w", err)
 	}
 	if conf.Log {
 		slog.Info("Got persons: " + strconv.Itoa(len(persons.Each)))
@@ -149,6 +153,9 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 	start := time.Now()
 
 	response := make([]kitsu.MessagePayload, len(tasks.Each))
+	// baselineIndex marks the slots that were only filled for the baseline
+	// set (too old to notify on).
+	baselineIndex := make([]bool, len(tasks.Each))
 
 	wg := waitgroup.NewWaitGroup(conf.Threads)
 
@@ -164,7 +171,11 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 			}
 			daysCount := int(start.Sub(taskDate).Hours() / 24)
 
+			// The ledger still gets this task (see baselineOut below); only the
+			// notification path drops it.
 			if conf.IgnoreMessagesDaysOld != 0 && daysCount > conf.IgnoreMessagesDaysOld {
+				baselineIndex[i] = true
+				response[i].Task.Task = tasks.Each[i]
 				return
 			}
 
@@ -273,10 +284,17 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 	}
 
 	var out []kitsu.MessagePayload
-	for _, elem := range response {
-		if len(elem.Task.Task.ID) > 0 {
-			out = append(out, elem)
+	var baselineOut []kitsu.MessagePayload
+	for i, elem := range response {
+		if len(elem.Task.Task.ID) == 0 {
+			continue
 		}
+		if baselineIndex[i] {
+			baselineOut = append(baselineOut, elem)
+			continue
+		}
+		out = append(out, elem)
+		baselineOut = append(baselineOut, elem)
 	}
 	replaceTaskCommentCache(connectionKey, nextComments)
 	// One line per poll: the data for choosing the polling interval. Counts and
@@ -295,7 +313,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) ([]kitsu.
 		log.Printf("Done secondary loop in %s", time.Since(start))
 	}
 
-	return out, nil
+return out, baselineOut, nil
 }
 
 // statusChangeComment returns only a comment that Zou deterministically ties
@@ -701,7 +719,7 @@ func runOnePollContext(ctx context.Context, conf config.Config, db *gorm.DB) {
 	started := time.Now()
 
 	// Poll Kitsu with runtime credentials from DB/env/conf priority.
-	kitsuResponse, err := makeKitsuResponse(ctx, conf)
+	kitsuResponse, baselineResponse, err := makeKitsuResponse(ctx, conf)
 	if err != nil {
 		setup.Stats.RecordPollError(err.Error())
 		slog.Error("Kitsu poll failed", "error_class", "kitsu_fetch_failed", "err", err)
@@ -711,7 +729,7 @@ func runOnePollContext(ctx context.Context, conf config.Config, db *gorm.DB) {
 		slog.Info("Done MakeKitsuResponse")
 	}
 	taskCount := len(kitsuResponse)
-	runForumPoll(kitsuResponse, conf, db)
+	runForumPoll(baselineResponse, conf, db)
 	// Daily 09:00 JST digest DMs to configured reviewers.
 	runMorningDigestIfDue(conf, db)
 	// Per-production visibility and liveness: raw task counts (before age

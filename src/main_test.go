@@ -34,12 +34,12 @@ func TestRunOnePollRecordsFailureAndRecoversOnSuccessfulEmptyPoll(t *testing.T) 
 
 	setup.Stats = &setup.RuntimeStats{}
 	call := 0
-	makeKitsuResponse = func(context.Context, config.Config) ([]kitsu.MessagePayload, error) {
+	makeKitsuResponse = func(context.Context, config.Config) ([]kitsu.MessagePayload, []kitsu.MessagePayload, error) {
 		call++
 		if call == 1 {
-			return nil, errors.New("Kitsu unavailable")
+			return nil, nil, errors.New("Kitsu unavailable")
 		}
-		return []kitsu.MessagePayload{}, nil
+		return []kitsu.MessagePayload{}, nil, nil
 	}
 
 	runOnePoll(config.Config{}, nil)
@@ -62,8 +62,8 @@ func TestRunOnePollCountsLegitimateEmptyPollAsSuccess(t *testing.T) {
 	}()
 
 	setup.Stats = &setup.RuntimeStats{}
-	makeKitsuResponse = func(context.Context, config.Config) ([]kitsu.MessagePayload, error) {
-		return []kitsu.MessagePayload{}, nil
+	makeKitsuResponse = func(context.Context, config.Config) ([]kitsu.MessagePayload, []kitsu.MessagePayload, error) {
+		return []kitsu.MessagePayload{}, nil, nil
 	}
 
 	runOnePoll(config.Config{}, nil)
@@ -84,10 +84,10 @@ func TestShutdownWaitsForRunningPollBeforeClosingDatabase(t *testing.T) {
 
 	answered := make(chan struct{})
 	release := make(chan struct{})
-	makeKitsuResponse = func(context.Context, config.Config) ([]kitsu.MessagePayload, error) {
+	makeKitsuResponse = func(context.Context, config.Config) ([]kitsu.MessagePayload, []kitsu.MessagePayload, error) {
 		close(answered)
 		<-release
-		return []kitsu.MessagePayload{}, nil
+		return []kitsu.MessagePayload{}, nil, nil
 	}
 
 	var pollDone atomic.Bool
@@ -136,9 +136,9 @@ func TestRunOnePollContextAbortsWhenShutdownCancelsTheRoot(t *testing.T) {
 	setup.Stats = &setup.RuntimeStats{}
 
 	seen := make(chan error, 1)
-	makeKitsuResponse = func(ctx context.Context, _ config.Config) ([]kitsu.MessagePayload, error) {
+	makeKitsuResponse = func(ctx context.Context, _ config.Config) ([]kitsu.MessagePayload, []kitsu.MessagePayload, error) {
 		seen <- ctx.Err()
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
