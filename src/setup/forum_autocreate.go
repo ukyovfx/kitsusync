@@ -247,6 +247,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 					created, _ := keepCreated()
 					return created, fmt.Errorf("%w: フォーラム「%s」を作成できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
 				}
+				guildChannelListCache.invalidate(guildID)
 			} else {
 				delete(existingForums, nameKey)
 				// A reused forum may be missing the role tags a save requires;
@@ -263,6 +264,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 						created, _ := keepCreated()
 						return created, fmt.Errorf("%w: フォーラム「%s」に足りないタグを追加できませんでした: %w", errForumCreateAction, route.TaskTypeName, err)
 					}
+					guildChannelListCache.invalidate(guildID)
 					forum.Tags = updated
 				}
 			}

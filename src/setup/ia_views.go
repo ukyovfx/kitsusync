@@ -3451,9 +3451,17 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 	if project.ID == "" || guildID == "" {
 		return `<section class="section-card glass" role="alert">` + esc(tr(lang, "wizard.plan_blocked")) + `</section>`
 	}
-	channels, err := ListGuildChannels(guildID, botToken)
-	if err != nil {
-		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p>` + esc(tr(lang, "wizard.plan_unavailable")) + `</p></section>`
+	refetchURL := withLang("/bot/admin/refresh-discord-channels?guild="+url.QueryEscape(guildID)+"&back="+url.QueryEscape(r.URL.RequestURI()), r)
+	refetchButton := `<div class="button-row"><a class="btn-ghost" href="` + esc(refetchURL) + `">` + esc(t(lang, "チャンネル情報を再取得", "Refresh channel info")) + `</a></div>`
+	view := guildChannelListCache.view(guildID, botToken)
+	var channels []DiscordGuildChannel
+	if view.hasData() {
+		if decoded, decodeErr := decodeGuildChannelsBody(view.body); decodeErr == nil {
+			channels = decoded
+		}
+	}
+	if len(channels) == 0 {
+		return `<section class="section-card glass" role="alert"><h2>` + esc(tr(lang, "wizard.plan_title")) + `</h2><p>` + esc(tr(lang, "wizard.plan_unavailable")) + `</p>` + refetchButton + `</section>`
 	}
 	categoryID := strings.TrimSpace(r.URL.Query().Get("plan_category"))
 	if categoryID == "" {
@@ -3486,8 +3494,12 @@ func renderWizardPlan(lang string, r *http.Request, db *gorm.DB, botToken string
 	}
 	categoryOptions += `<option value="__create__"` + map[bool]string{true: " selected", false: ""}[categoryID == "__create__"] + `>` + esc(t(lang, "新しいカテゴリを作成", "Create a new category")) + `</option>`
 	notificationLanguage := normalizedProductionNotificationLanguage(r.FormValue("notification_language"))
+	staleNotice := ""
+	if !view.fresh && view.fetchFailed {
+		staleNotice = `<p class="field-help" role="status">` + esc(guildChannelStaleNoticeText(lang, view.rateLimited)) + `</p>` + refetchButton
+	}
 	languageControl := `<div class="wizard-notification-language"><label for="wizard-notification-language">` + esc(t(lang, "Discord通知の言語", "Discord notification language")) + `</label><select id="wizard-notification-language" name="notification_language"><option value="ja"` + selectedAttr(notificationLanguage == "ja") + `>` + esc(t(lang, "日本語", "Japanese")) + `</option><option value="en"` + selectedAttr(notificationLanguage == "en") + `>English</option></select><p class="field-help">` + esc(t(lang, "このProductionの今後のDiscord通知に使う言語です。管理画面の言語とは別に設定できます。", "Used for future Discord notifications for this Production. It is independent of the admin UI language.")) + `</p></div>`
-	return `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div></div><form method="GET" class="wizard-plan-form" action="/bot/setup"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><input type="hidden" name="lang" value="` + esc(lang) + `">` + repairInput(r) + `<label for="wizard-plan-category">` + esc(t(lang, "Discordカテゴリ", "Discord category")) + `</label><select id="wizard-plan-category" name="plan_category">` + categoryOptions + `</select><p class="field-help">` + esc(t(lang, "既存カテゴリを確認するか、新しい管理対象カテゴリを作成します。", "Choose an existing category or explicitly create a new managed category.")) + `</p>` + languageControl + `<div class="button-row wizard-plan-actions"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, project.ID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit" name="wizard_step" value="5">` + esc(tr(lang, "wizard.review")) + `</button></div></form></section>`
+	return `<section class="section-card glass wizard-plan-card" aria-labelledby="wizard-plan-title"><div class="page-heading"><div><h2 id="wizard-plan-title">` + esc(tr(lang, "wizard.plan_title")) + `</h2><p class="hint">` + esc(tr(lang, "wizard.plan_hint")) + `</p></div></div><form method="GET" class="wizard-plan-form" action="/bot/setup"><input type="hidden" name="project" value="` + esc(project.ID) + `"><input type="hidden" name="plan_guild" value="` + esc(guildID) + `"><input type="hidden" name="lang" value="` + esc(lang) + `">` + repairInput(r) + staleNotice + `<label for="wizard-plan-category">` + esc(t(lang, "Discordカテゴリ", "Discord category")) + `</label><select id="wizard-plan-category" name="plan_category">` + categoryOptions + `</select><p class="field-help">` + esc(t(lang, "既存カテゴリを確認するか、新しい管理対象カテゴリを作成します。", "Choose an existing category or explicitly create a new managed category.")) + `</p>` + languageControl + `<div class="button-row wizard-plan-actions"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 3, project.ID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit" name="wizard_step" value="5">` + esc(tr(lang, "wizard.review")) + `</button></div></form></section>`
 }
 
 func renderWizardPlanReview(lang string, r *http.Request, project KitsuProject, guildID, botToken, categoryID, notificationLanguage string) string {

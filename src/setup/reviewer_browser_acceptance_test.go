@@ -123,7 +123,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 			if scenario.Load().(string) == "japanese-wfa-add" {
 				projects[0].Name = "aa"
 			}
-			if scenario.Load().(string) == "unconnected-production" {
+			if mode := scenario.Load().(string); mode == "unconnected-production" || mode == "channels-unconnected" {
 				projects = append(projects, kitsu.Project{ID: "reviewer-unconnected", Name: "Synthetic Unconnected Production"})
 			}
 			_ = json.NewEncoder(w).Encode(projects)
@@ -291,6 +291,9 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/bot/admin/forum", RequireSession(ForumSettingsHandler(db, func() (string, string) {
 		return reviewerBrowserBot, reviewerBrowserGuild
 	})))
+	mux.HandleFunc("GET /bot/admin/refresh-discord-channels", RequireSession(RefreshDiscordChannelsHandler(func() string {
+		return reviewerBrowserBot
+	})))
 	health := HealthHandler(db)
 	mux.HandleFunc("/bot/admin/health", RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The browser suite visits several pages before System Status; reseed
@@ -303,8 +306,17 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production", "user-linking-long-label":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "user-linking-long-label":
 			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "unconnected-production":
+			// The wizard plan step renders only the cached guild channel list,
+			// so warm the cache before the click-through reaches step 4.
+			scenario.Store(mode)
+			if _, _, err := guildChannelListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not prefetch the synthetic guild channel list", http.StatusInternalServerError)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case "no-connected-production":
 			// Readiness derives ProductionRequired from the absence of connected
@@ -393,6 +405,13 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				return
 			}
 			scenario.Store("ready")
+			// The forum settings page renders only the cached guild channel
+			// list, so warm the cache before the page asserts its live forum
+			// options.
+			if _, _, err := guildChannelListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not prefetch the synthetic guild channel list", http.StatusInternalServerError)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case "forum-zero-touch":
 			// A Production whose forum setup was never finished: no saved forum
@@ -442,6 +461,37 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 				return
 			}
 			scenario.Store("ready")
+			w.WriteHeader(http.StatusNoContent)
+		case "channels-warm":
+			// Hand the following flows a fresh cache and the healthy scenario.
+			scenario.Store("ready")
+			if _, _, err := guildChannelListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not refresh the synthetic guild channel list", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "channels-rate-limited", "channels-unconnected":
+			// Drop the cached list so the next render meets a cold cache while
+			// Discord answers 429 for the channel list.
+			guildChannelListCache.invalidate(reviewerBrowserGuild)
+			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "channels-stale-rate-limited":
+			// Warm the cache, record a rate-limited refresh failure against the
+			// kept body, then expire the entry: the next render must show the
+			// cached channels with the rate-limit stale notice.
+			scenario.Store("ready")
+			if _, _, err := guildChannelListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot); err != nil {
+				http.Error(w, "could not prefetch the synthetic guild channel list", http.StatusInternalServerError)
+				return
+			}
+			scenario.Store("channels-rate-limited")
+			guildChannelListCache.refresh(reviewerBrowserGuild, reviewerBrowserBot)
+			guildChannelListCache.mu.Lock()
+			if entry := guildChannelListCache.entries[reviewerBrowserGuild]; entry != nil {
+				entry.fetchedAt = time.Now().Add(-guildChannelCacheTTL - time.Minute)
+			}
+			guildChannelListCache.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.Error(w, "unknown isolated fixture state", http.StatusBadRequest)
@@ -673,9 +723,12 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 		body = `{"id":"` + id + `","name":"` + payload.Name + `","guild_id":"` + d.expectedGuild + `","type":15,"parent_id":"` + reviewerBrowserCategory + `","available_tags":[{"id":"` + id + `-wfa","name":"WFA"},{"id":"` + id + `-retake","name":"RETAKE"},{"id":"` + id + `-done","name":"DONE"},{"id":"` + id + `-wip","name":"WIP"}]}`
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
 		// Compositing and animation carry the four standard tags (the names the
-	// save derives the role mapping from); storyboard keeps human-readable tag
-	// names, so a save routed to it is refused for its missing standard tags.
-	body = `[{"id":"66666666666666661","name":"compositing","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666661-wfa","name":"WFA"},{"id":"66666666666666661-retake","name":"RETAKE"},{"id":"66666666666666661-done","name":"DONE"},{"id":"66666666666666661-wip","name":"WIP"}]},{"id":"66666666666666662","name":"animation","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666662-wfa","name":"WFA"},{"id":"66666666666666662-retake","name":"RETAKE"},{"id":"66666666666666662-done","name":"DONE"},{"id":"66666666666666662-wip","name":"WIP"}]},{"id":"66666666666666663","name":"review","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666664","name":"storyboard","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666664-wfa","name":"Waiting for approval"},{"id":"66666666666666664-retake","name":"Retake"},{"id":"66666666666666664-done","name":"Done"},{"id":"66666666666666664-wip","name":"In progress"}]}]`
+		// save derives the role mapping from); storyboard keeps human-readable tag
+		// names, so a save routed to it is refused for its missing standard tags.
+		body = `[{"id":"66666666666666661","name":"compositing","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666661-wfa","name":"WFA"},{"id":"66666666666666661-retake","name":"RETAKE"},{"id":"66666666666666661-done","name":"DONE"},{"id":"66666666666666661-wip","name":"WIP"}]},{"id":"66666666666666662","name":"animation","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666662-wfa","name":"WFA"},{"id":"66666666666666662-retake","name":"RETAKE"},{"id":"66666666666666662-done","name":"DONE"},{"id":"66666666666666662-wip","name":"WIP"}]},{"id":"66666666666666663","name":"review","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666664","name":"storyboard","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666664-wfa","name":"Waiting for approval"},{"id":"66666666666666664-retake","name":"Retake"},{"id":"66666666666666664-done","name":"Done"},{"id":"66666666666666664-wip","name":"In progress"}]}]`
+		if mode := d.scenario.Load().(string); mode == "channels-rate-limited" || mode == "channels-unconnected" {
+			status, body = http.StatusTooManyRequests, `{"message":"synthetic rate limit"}`
+		}
 	default:
 		select {
 		case d.unexpected <- r.Method + " " + r.URL.Host + r.URL.Path:

@@ -1,15 +1,17 @@
 package setup
 
 import (
-	"app/src/api/kitsu"
-	"app/src/model"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
+
+	"app/src/api/kitsu"
+	"app/src/model"
 )
 
 func newForumPageDB(t *testing.T) *gorm.DB {
@@ -30,11 +32,13 @@ func newForumPageDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// stubForumLookups replaces the Kitsu and Discord lookups for one test.
+// stubForumLookups replaces the Kitsu and Discord lookups for one test. Saves
+// read the forum list through forumChannelLister; page rendering reads the
+// guild channel cache, so both seams are replaced together.
 func stubForumLookups(t *testing.T, discordErr error) {
 	t.Helper()
-	oldTypes, oldStatuses, oldForums := forumTaskTypeLister, forumStatusLister, forumChannelLister
-	t.Cleanup(func() { forumTaskTypeLister, forumStatusLister, forumChannelLister = oldTypes, oldStatuses, oldForums })
+	oldTypes, oldStatuses, oldForums, oldCache := forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache
+	t.Cleanup(func() { forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache = oldTypes, oldStatuses, oldForums, oldCache })
 	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "tt-anim", Name: "Animation"}, {ID: "tt-comp", Name: "Compositing"}}
 	}
@@ -48,6 +52,25 @@ func stubForumLookups(t *testing.T, discordErr error) {
 		tags := []forumTagInfo{{ID: "t1", Name: "WFA"}, {ID: "t2", Name: "Retake"}, {ID: "t3", Name: "Done"}, {ID: "t4", Name: "WIP"}}
 		return []forumChannelInfo{{ID: "f-anim", Name: "animation", Tags: tags}, {ID: "f-comp", Name: "compositing", Tags: tags}}, nil
 	}
+	body := []byte(`[{"id":"f-anim","name":"animation","type":15,"available_tags":[{"id":"t1","name":"WFA"},{"id":"t2","name":"Retake"},{"id":"t3","name":"Done"},{"id":"t4","name":"WIP"}]},{"id":"f-comp","name":"compositing","type":15,"available_tags":[{"id":"t1","name":"WFA"},{"id":"t2","name":"Retake"},{"id":"t3","name":"Done"},{"id":"t4","name":"WIP"}]}]`)
+	cache := &guildChannelsCache{
+		ttl:     guildChannelCacheTTL,
+		entries: map[string]*guildChannelCacheEntry{},
+		loads:   map[string]*guildChannelLoad{},
+		fetch: func(guildID, botToken string) ([]byte, int, error) {
+			if discordErr != nil {
+				return nil, http.StatusServiceUnavailable, discordErr
+			}
+			return body, http.StatusOK, nil
+		},
+		now: time.Now,
+	}
+	if discordErr == nil {
+		// The page fixture project points at guild "g1"; serve the same list
+		// the old forumChannelLister stub returned, already cached.
+		cache.entries["g1"] = &guildChannelCacheEntry{body: body, fetchedAt: time.Now()}
+	}
+	guildChannelListCache = cache
 }
 
 func forumHandler(db *gorm.DB) http.HandlerFunc {

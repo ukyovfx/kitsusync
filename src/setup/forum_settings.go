@@ -43,14 +43,22 @@ var (
 )
 
 // listGuildForumChannels returns the guild's forum channels with their tags.
+// It goes through the shared cache refresh, so saves get fresh data while
+// page rendering stays non-blocking.
 func listGuildForumChannels(guildID, botToken string) ([]forumChannelInfo, error) {
-	body, status, err := botDo(http.MethodGet, fmt.Sprintf("%s/guilds/%s/channels", discordAPI, url.PathEscape(strings.TrimSpace(guildID))), nil, botToken)
+	body, status, err := guildChannelListCache.refresh(guildID, botToken)
 	if err != nil {
 		return nil, err
 	}
 	if status >= 400 {
 		return nil, discordBotAPIError("discord guild channel list failed", status, body)
 	}
+	return decodeGuildForumChannels(body)
+}
+
+// decodeGuildForumChannels reads the forum channels (with their tags) from a
+// raw guild channel list body, which may come from the cache.
+func decodeGuildForumChannels(body []byte) ([]forumChannelInfo, error) {
 	var raw []struct {
 		ID            string `json:"id"`
 		Name          string `json:"name"`
@@ -350,8 +358,26 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	statuses, statusErr := forumStatusLister(db)
 	var forums []forumChannelInfo
 	var forumErr error
+	var staleNotice string
+	refetchNeeded := false
 	if strings.TrimSpace(botToken) != "" && guildID != "" {
-		forums, forumErr = forumChannelLister(guildID, botToken)
+		view := guildChannelListCache.view(guildID, botToken)
+		if view.hasData() {
+			if decoded, decodeErr := decodeGuildForumChannels(view.body); decodeErr == nil {
+				forums = decoded
+				if !view.fresh && view.fetchFailed {
+					refetchNeeded = true
+					staleNotice = guildChannelStaleNoticeText(lang, view.rateLimited)
+				}
+			} else {
+				forumErr = decodeErr
+			}
+		} else {
+			// No cached list yet (first view or every fetch has failed): the
+			// background refresh may still land, so offer the manual refetch.
+			refetchNeeded = true
+			forumErr = fmt.Errorf("discord forum list unavailable")
+		}
 	} else {
 		forumErr = fmt.Errorf("no Discord bot token or server ID")
 	}
@@ -360,6 +386,14 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	}
 	if forumErr != nil {
 		notices.WriteString(`<p class="field-help" role="status">` + esc(t(lang, "Discordのフォーラム一覧を取得できませんでした。Bot設定とサーバーIDを確認してください。保存済みの値はそのまま残ります。", "Could not read the Discord forum list. Check Bot settings and the server ID. Saved values are kept.")) + `</p>`)
+	}
+	if staleNotice != "" {
+		notices.WriteString(`<p class="field-help" role="status">` + esc(staleNotice) + `</p>`)
+	}
+	refetchButton := ""
+	if refetchNeeded {
+		refetchURL := withLang("/bot/admin/refresh-discord-channels?guild="+url.QueryEscape(guildID)+"&back="+url.QueryEscape(r.URL.RequestURI()), r)
+		refetchButton = ` <a class="btn-ghost" href="` + esc(refetchURL) + `">` + esc(t(lang, "チャンネル情報を再取得", "Refresh channel info")) + `</a>`
 	}
 
 	forumOptions := make([][2]string, 0, len(forums))
@@ -454,7 +488,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<table class="data-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p><table class="data-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
-		`<div class="button-row"><button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button> <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
+		`<div class="button-row"><button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button> <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button>` + refetchButton + ` <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
 
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`
 	return adminPage(lang, t(lang, "フォーラム通知の設定", "Forum notification settings"), r, body)

@@ -1472,6 +1472,47 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     }
     await fixture(page, 'ready');
 
+    // Guild channel list cache acceptance: cold and stale caches under a
+    // rate-limited Discord channel list must keep the pages open, with
+    // cached-only rendering and the manual refetch action visible.
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await fixture(page, 'channels-rate-limited');
+    await page.goto(`${base}/bot/admin/forum?project=reviewer-production&lang=en`, { waitUntil: 'networkidle' });
+    const coldForumBody = await page.locator('main').innerText();
+    if (!coldForumBody.includes('Could not read the Discord forum list')) throw new Error('forum settings with a cold cache under a channel rate limit must open with the read-failure note');
+    const coldRefetchLink = page.locator('a[href*="/bot/admin/refresh-discord-channels"]');
+    if (!(await coldRefetchLink.count()) || !(await coldRefetchLink.first().isVisible())) throw new Error('forum settings under a channel rate limit must offer the manual refetch action');
+    await coldRefetchLink.first().click();
+    await page.waitForURL(url => url.pathname === '/bot/admin/forum', { timeout: 10000 });
+    await page.waitForLoadState('networkidle');
+    if (!(await page.locator('main').innerText()).includes('Could not read the Discord forum list')) throw new Error('post-refetch forum render lost the read-failure note');
+    await page.screenshot({ path: path.join(output, 'forum-channels-rate-limited-cold-en-desktop.png'), fullPage: true });
+    await record(page, '/bot/admin/forum?project=reviewer-production', 'en', 'desktop', 'forum settings cold under channel rate limit', 'the page opened without blocking, the channel read failure stayed confined to its note, and the manual refetch action returned safely to the page');
+
+    await fixture(page, 'channels-stale-rate-limited');
+    await page.goto(`${base}/bot/admin/forum?project=reviewer-production&lang=en`, { waitUntil: 'networkidle' });
+    const staleForumSelect = page.locator('form.section-stack select[name="tt_forum"]');
+    if (!(await staleForumSelect.locator('option[value="66666666666666661"]').count())) throw new Error('forum settings with a stale cache must keep rendering the cached forum options');
+    const staleForumBody = await page.locator('main').innerText();
+    if (!staleForumBody.includes('Discord is rate limiting the requests, so the channel information shown is slightly old.')) throw new Error('forum settings stale render must explain the rate-limited fallback');
+    if (!(await page.locator('a[href*="/bot/admin/refresh-discord-channels"]').count())) throw new Error('forum settings stale render must offer the manual refetch action');
+    await page.screenshot({ path: path.join(output, 'forum-channels-rate-limited-stale-en-desktop.png'), fullPage: true });
+    await record(page, '/bot/admin/forum?project=reviewer-production', 'en', 'desktop', 'forum settings stale under channel rate limit', 'cached forum options stayed visible with the rate-limit notice and the refetch action');
+
+    await page.goto(`${base}/bot/admin/forum?project=reviewer-production&lang=ja`, { waitUntil: 'networkidle' });
+    const staleForumBodyJa = await page.locator('main').innerText();
+    if (!staleForumBodyJa.includes('Discordの制限中のため、少し古いチャンネル情報を表示しています。') || !staleForumBodyJa.includes('チャンネル情報を再取得')) throw new Error(`ja stale notice missing from forum settings: ${JSON.stringify(staleForumBodyJa.slice(0, 300))}`);
+    await record(page, '/bot/admin/forum?project=reviewer-production', 'ja', 'desktop', 'forum settings stale ja notice', 'ja render kept the cached options and the チャンネル情報を再取得 action');
+
+    await fixture(page, 'channels-unconnected');
+    await page.goto(`${base}/bot/setup?wizard_step=4&project=reviewer-unconnected&plan_guild=${guildID}&lang=en`, { waitUntil: 'networkidle' });
+    const wizardPlanBody = await page.locator('body').innerText();
+    if (!wizardPlanBody.includes('The server channels could not be read. No changes were made.')) throw new Error('wizard plan with a cold cache under a channel rate limit must open with the unavailable note');
+    if (!(await page.locator('a[href*="/bot/admin/refresh-discord-channels"]').count())) throw new Error('wizard plan under a channel rate limit must offer the manual refetch action');
+    await page.screenshot({ path: path.join(output, 'wizard-channels-rate-limited-en-desktop.png'), fullPage: true });
+    await record(page, '/bot/setup?wizard_step=4', 'en', 'desktop', 'wizard plan cold under channel rate limit', 'the plan step opened with the unavailable note and the refetch action');
+    await fixture(page, 'channels-warm');
+
     // JP/EN and desktop/mobile acceptance for Production Users, User Linking, and System Status.
     for (const locale of locales) {
       for (const viewport of viewports) {
