@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -539,10 +540,14 @@ func (p Planner) updateTaskRowIn(db *gorm.DB, input TaskInput, fromStatusID stri
 	updates := map[string]interface{}{
 		"status_id":        input.StatusID,
 		"assignee_ids":     encodeIDs(assignees),
-		"last_comment_at":  input.CommentDate,
 		"kitsu_updated_at": input.KitsuUpdated,
 		"last_seen_at":     p.Now,
 		"title":            model.TruncateForumTitle(input.Title),
+	}
+	if !input.Comment.Unavailable {
+		updates["last_comment_at"] = input.CommentDate
+	} else {
+		slog.Warn("forum: comments unavailable; keeping comment checkpoint", "error_class", "forum_comments_unavailable", "task_id", input.TaskID)
 	}
 	if fromStatusID != input.StatusID {
 		updates["status_since"] = p.Now
