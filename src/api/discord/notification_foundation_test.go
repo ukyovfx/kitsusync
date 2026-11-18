@@ -98,7 +98,7 @@ func TestCurrentStatusCardsDoNotUseLegacyTemplateFiles(t *testing.T) {
 				StatusUpper: status, StatusEmoji: "•", StatusMessage: "Please review", NotificationLanguage: "en",
 			}, preset)
 			want := "## Shot / sc001 - sh001\n\n### • " + status + "\nPlease review"
-			if len(payload.Embeds) != 1 || payload.Embeds[0].Author.Name != "Compositing" || payload.Embeds[0].Title != "" || !strings.HasPrefix(payload.Embeds[0].Description, want) || !strings.Contains(payload.Embeds[0].Description, "**📊 Status**　　　**👤 Assignee**\n"+strings.ToLower(status)) {
+			if len(payload.Embeds) != 1 || payload.Embeds[0].Author.Name != "Compositing" || payload.Embeds[0].Title != "" || !strings.HasPrefix(payload.Embeds[0].Description, want) || !strings.Contains(payload.Embeds[0].Description, "**📊 Status**\n"+strings.ToLower(status)) {
 				t.Fatalf("current status card used legacy preset %q for %s: %+v", preset, status, payload)
 			}
 		}
