@@ -108,6 +108,150 @@ func TestPlannerSkipsCommentSignalWhenCommentsUnavailable(t *testing.T) {
 	}
 }
 
+func TestPlannerRetriesCommentSignalOnNextPollAfterUnavailable(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	// Poll 1: Kitsu has a new comment date, but comments fetch fails (Unavailable = true).
+	planner.Now = now.Add(5 * time.Minute)
+	poll1 := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
+	poll1.CommentDate = "2026-11-15T09:04:00.000Z"
+	poll1.Comment = CommentInput{ID: "comment-1", Text: "直してください", Unavailable: true}
+	if _, err := planner.PlanTask(poll1, stubCard()); err != nil {
+		t.Fatalf("PlanTask poll 1: %v", err)
+	}
+
+	var poll1Count int64
+	if err := db.Model(&model.ForumOutbox{}).Where("dedupe_key LIKE ?", "msg:comment:%").Count(&poll1Count).Error; err != nil {
+		t.Fatalf("count poll 1: %v", err)
+	}
+	if poll1Count != 0 {
+		t.Fatalf("poll 1 comment signals = %d, want 0 when comments are unavailable", poll1Count)
+	}
+	task1, err := model.FindForumTaskWithError(db, "task-1")
+	if err != nil {
+		t.Fatalf("find task poll 1: %v", err)
+	}
+	if task1.LastCommentAt != "" {
+		t.Fatalf("poll 1 last_comment_at = %q, want empty (checkpoint preserved)", task1.LastCommentAt)
+	}
+
+	// Poll 2: The comment fetch succeeds on the next poll with the same CommentDate.
+	planner.Now = now.Add(10 * time.Minute)
+	poll2 := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
+	poll2.CommentDate = "2026-11-15T09:04:00.000Z"
+	poll2.Comment = commentInput("comment-1", "直してください", "person-2")
+	if _, err := planner.PlanTask(poll2, stubCard()); err != nil {
+		t.Fatalf("PlanTask poll 2: %v", err)
+	}
+
+	var poll2Count int64
+	if err := db.Model(&model.ForumOutbox{}).Where("dedupe_key LIKE ?", "msg:comment:%").Count(&poll2Count).Error; err != nil {
+		t.Fatalf("count poll 2: %v", err)
+	}
+	if poll2Count != 1 {
+		t.Fatalf("poll 2 comment signals = %d, want 1 when retry succeeds", poll2Count)
+	}
+	task2, err := model.FindForumTaskWithError(db, "task-1")
+	if err != nil {
+		t.Fatalf("find task poll 2: %v", err)
+	}
+	if task2.LastCommentAt != "2026-11-15T09:04:00.000Z" {
+		t.Fatalf("poll 2 last_comment_at = %q, want updated", task2.LastCommentAt)
+	}
+
+	// Poll 3: Subsequent poll with no new comment keeps signal count at 1.
+	planner.Now = now.Add(15 * time.Minute)
+	if _, err := planner.PlanTask(poll2, stubCard()); err != nil {
+		t.Fatalf("PlanTask poll 3: %v", err)
+	}
+	var poll3Count int64
+	if err := db.Model(&model.ForumOutbox{}).Where("dedupe_key LIKE ?", "msg:comment:%").Count(&poll3Count).Error; err != nil {
+		t.Fatalf("count poll 3: %v", err)
+	}
+	if poll3Count != 1 {
+		t.Fatalf("poll 3 comment signals = %d, want 1 (no duplicate)", poll3Count)
+	}
+}
+
+func TestPlannerPreservesCheckpointOnlyForFailingTask(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+
+	// Seed task-1
+	seedPostedTask(t, db, &planner)
+
+	// Seed task-2
+	task2Input := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
+	task2Input.TaskID = "task-2"
+	if _, err := planner.PlanTask(task2Input, stubCard()); err != nil {
+		t.Fatalf("create task-2: %v", err)
+	}
+	if err := db.Model(&model.ForumTask{}).Where("task_id = ?", "task-2").Updates(map[string]interface{}{
+		"thread_id": "thread-2",
+		"forum_id":  "forum-1",
+	}).Error; err != nil {
+		t.Fatalf("store thread task-2: %v", err)
+	}
+	if err := db.Model(&model.ForumOutbox{}).Where("task_id = ?", "task-2").Update("state", model.ForumOutboxDone).Error; err != nil {
+		t.Fatalf("finish rows task-2: %v", err)
+	}
+
+	planner.Now = now.Add(5 * time.Minute)
+
+	// task-1 fails comments
+	t1 := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
+	t1.TaskID = "task-1"
+	t1.CommentDate = "2026-11-15T09:05:00.000Z"
+	t1.Comment = CommentInput{ID: "c1", Unavailable: true}
+	if _, err := planner.PlanTask(t1, stubCard()); err != nil {
+		t.Fatalf("plan t1: %v", err)
+	}
+
+	// task-2 succeeds comments
+	t2 := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
+	t2.TaskID = "task-2"
+	t2.CommentDate = "2026-11-15T09:05:00.000Z"
+	t2.Comment = commentInput("c2", "task2 comment", "person-2")
+	if _, err := planner.PlanTask(t2, stubCard()); err != nil {
+		t.Fatalf("plan t2: %v", err)
+	}
+
+	row1, err := model.FindForumTaskWithError(db, "task-1")
+	if err != nil {
+		t.Fatalf("find task-1: %v", err)
+	}
+	if row1.LastCommentAt != "" {
+		t.Fatalf("task-1 last_comment_at = %q, want empty (preserved)", row1.LastCommentAt)
+	}
+
+	row2, err := model.FindForumTaskWithError(db, "task-2")
+	if err != nil {
+		t.Fatalf("find task-2: %v", err)
+	}
+	if row2.LastCommentAt != "2026-11-15T09:05:00.000Z" {
+		t.Fatalf("task-2 last_comment_at = %q, want updated", row2.LastCommentAt)
+	}
+
+	// Only task-2 comment signal should exist in pending/queued
+	var c1Count, c2Count int64
+	if err := db.Model(&model.ForumOutbox{}).Where("task_id = ? AND dedupe_key LIKE ?", "task-1", "msg:comment:%").Count(&c1Count).Error; err != nil {
+		t.Fatalf("count c1: %v", err)
+	}
+	if err := db.Model(&model.ForumOutbox{}).Where("task_id = ? AND dedupe_key LIKE ?", "task-2", "msg:comment:%").Count(&c2Count).Error; err != nil {
+		t.Fatalf("count c2: %v", err)
+	}
+	if c1Count != 0 {
+		t.Fatalf("task-1 comment signals = %d, want 0", c1Count)
+	}
+	if c2Count != 1 {
+		t.Fatalf("task-2 comment signals = %d, want 1", c2Count)
+	}
+}
+
 func TestPlannerQuotesLatestCommentOnRetake(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
