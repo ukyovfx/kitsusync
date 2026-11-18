@@ -1,9 +1,11 @@
 package forum
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1250,3 +1252,176 @@ func TestExecutorCancelsSignalForNonTriggerFinalStatus(t *testing.T) {
 		t.Errorf("requests = %d, want no Discord call for a cancelled signal", len(requests))
 	}
 }
+
+func TestExecutor_SyncThreadMissingPermissionDoesNotBlockMention(t *testing.T) {
+	db := newForumDB(t)
+	if err := db.AutoMigrate(&model.AuditLog{}); err != nil {
+		t.Fatalf("migrate audit: %v", err)
+	}
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-retake")
+	executor, fake := newExecutor(t, db)
+
+	// slog の出力をキャプチャする
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(prevLogger)
+	})
+
+	fake.respond = func(r *http.Request) (int, string) {
+		switch {
+		case r.Method == http.MethodGet:
+			return http.StatusOK, `{"id":"thread-1","applied_tags":["tag-wfa"],"thread_metadata":{"archived":false,"auto_archive_duration":10080}}`
+		case r.Method == http.MethodPatch:
+			// 403 Forbidden (Missing Permissions)
+			return http.StatusForbidden, `{"code":50013,"message":"Missing Permissions"}`
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages"):
+			return http.StatusOK, `{"id":"msg-1","channel_id":"thread-1"}`
+		}
+		return http.StatusNotFound, `{}`
+	}
+
+	syncRow := enqueue(t, db, model.ForumOutbox{
+		TaskID:      "task-1",
+		Kind:        model.ForumOutboxSyncThread,
+		DedupeKey:   model.ForumSyncThreadCoalesceKey("task-1") + ":1",
+		CoalesceKey: model.ForumSyncThreadCoalesceKey("task-1"),
+		Payload:     "{}",
+		State:       model.ForumOutboxPending,
+		NotBefore:   executor.Now(),
+		CreatedAt:   executor.Now(),
+	})
+	signalRow := enqueue(t, db, model.ForumOutbox{
+		TaskID:      "task-1",
+		Kind:        model.ForumOutboxPostMessage,
+		DedupeKey:   model.ForumPostMessageCoalesceKey(model.ForumIntentStatusRetake, "task-1") + ":1",
+		CoalesceKey: model.ForumPostMessageCoalesceKey(model.ForumIntentStatusRetake, "task-1"),
+		Payload:     `{"intent":"retake"}`,
+		State:       model.ForumOutboxPending,
+		NotBefore:   executor.Now(),
+		CreatedAt:   executor.Now(),
+	})
+
+	// Drain: syncRow が 403 で即座に failed になり、同じタスクの後続の signalRow が直ちに送信される
+	processed, err := executor.Drain(10)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("processed = %d, want 2 (sync_thread failed + post_message done)", processed)
+	}
+
+	syncGot, err := loadOutbox(db, syncRow.ID)
+	if err != nil {
+		t.Fatalf("load sync: %v", err)
+	}
+	if syncGot.State != model.ForumOutboxFailed {
+		t.Errorf("syncRow state = %q, want failed", syncGot.State)
+	}
+	if syncGot.LastErrorClass != "missing_permission" {
+		t.Errorf("syncRow last_error_class = %q, want missing_permission", syncGot.LastErrorClass)
+	}
+	if syncGot.Note != "Manage Threads required" {
+		t.Errorf("syncRow note = %q, want 'Manage Threads required'", syncGot.Note)
+	}
+
+	signalGot, err := loadOutbox(db, signalRow.ID)
+	if err != nil {
+		t.Fatalf("load signal: %v", err)
+	}
+	if signalGot.State != model.ForumOutboxDone {
+		t.Errorf("signalRow state = %q, want done", signalGot.State)
+	}
+
+	// Discord へのメッセージ送信リクエストが 1 回送信されたこと
+	var messageCalls int
+	for _, req := range fake.snapshot() {
+		if req.Method == http.MethodPost && strings.HasSuffix(req.Path, "/messages") {
+			messageCalls++
+		}
+	}
+	if messageCalls != 1 {
+		t.Errorf("messageCalls = %d, want 1", messageCalls)
+	}
+
+	// エラーログが記録されたこと
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "Forum thread sync lacks Discord permission") {
+		t.Errorf("expected log message 'Forum thread sync lacks Discord permission', got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "forum_missing_permission") {
+		t.Errorf("expected log to contain error_class 'forum_missing_permission', got: %s", logOutput)
+	}
+
+	// 監査ログに失敗として記録されたこと
+	var audit model.AuditLog
+	if err := db.Where("task_id = ? AND success = ?", "task-1", false).First(&audit).Error; err != nil {
+		t.Fatalf("failed to find audit log for failed sync: %v", err)
+	}
+	if !strings.Contains(audit.ErrorMessage, "missing_permission") {
+		t.Errorf("audit error message = %q, want missing_permission", audit.ErrorMessage)
+	}
+}
+
+func TestExecutor_RetryLaterLogsError(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-retake")
+	executor, fake := newExecutor(t, db)
+
+	var logBuf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(prevLogger)
+	})
+
+	// 500 Discord Server Error を返す
+	fake.respond = func(r *http.Request) (int, string) {
+		switch {
+		case r.Method == http.MethodGet:
+			return http.StatusInternalServerError, `{"message":"Internal Server Error"}`
+		}
+		return http.StatusNotFound, `{}`
+	}
+
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:      "task-1",
+		Kind:        model.ForumOutboxSyncThread,
+		DedupeKey:   model.ForumSyncThreadCoalesceKey("task-1") + ":1",
+		CoalesceKey: model.ForumSyncThreadCoalesceKey("task-1"),
+		Payload:     "{}",
+		State:       model.ForumOutboxPending,
+		NotBefore:   executor.Now(),
+		CreatedAt:   executor.Now(),
+	})
+
+	processed, err := executor.Drain(10)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed = %d, want 1", processed)
+	}
+
+	got, err := loadOutbox(db, row.ID)
+	if err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if got.State != model.ForumOutboxPending {
+		t.Errorf("state = %q, want pending", got.State)
+	}
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "Forum outbox delivery retrying later") {
+		t.Errorf("expected log 'Forum outbox delivery retrying later', got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "discord_server_error") {
+		t.Errorf("expected log to contain error_class 'discord_server_error', got: %s", logOutput)
+	}
+}
+
+
+
