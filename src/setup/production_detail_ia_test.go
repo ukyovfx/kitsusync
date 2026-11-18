@@ -83,7 +83,7 @@ func TestProductionTeamCompactRows(t *testing.T) {
 	if strings.Count(body, `class="production-team-row"`) != 2 || !strings.Contains(body, longDepartment) || !strings.Contains(body, longScope) {
 		t.Fatalf("Team did not render comparative member rows with Department and derived Supervisor scope: %s", body)
 	}
-	for _, marker := range []string{`class="production-team-table"`, `<th scope="col">Member</th>`, `<th scope="col">Kitsu role</th>`, `<th scope="col">Department</th>`, `<th scope="col">Discord</th>`, `<th scope="col">Status / action</th>`, `href="/bot/admin/users?lang=en"`} {
+	for _, marker := range []string{`class="production-team-table"`, `<th scope="col">Member</th>`, `<th scope="col">Kitsu role</th>`, `<th scope="col">Department</th>`, `<th scope="col">Discord</th>`, `<th scope="col">Status</th>`, `<th scope="col">Action</th>`, `href="/bot/admin/users?lang=en"`} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("Team is missing the Gemini-derived table/navigation structure %q: %s", marker, body)
 		}
@@ -343,8 +343,11 @@ func TestProductionTeamStatusActionsStayAlignedAndDangerDisclosureUsesSemanticRe
 }
 
 func TestProductionNotificationHeaderActionsShareDenseControlHeight(t *testing.T) {
-	if !strings.Contains(adminThemeCSS, `.production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:32px;min-height:32px;padding-block:0}`) {
-		t.Fatal("Notifications status and Edit controls must share the same visible height rhythm")
+	// Design system: Edit is a regular 40px button and the status pill is 24px (docs/agent/plans/active/admin-ui-design-system.md).
+	for _, want := range []string{`--ds-btn-h:40px`, `--ds-pill-h:24px`, `.editorial-workbench .status-pill,.editorial-workbench .status-badge,.editorial-workbench .dashboard-status-chip{`} {
+		if !strings.Contains(adminThemeCSS, want) {
+			t.Fatalf("Notifications status and Edit controls must follow the shared design system sizes: missing %q", want)
+		}
 	}
 	if !strings.Contains(adminThemeCSS, `.editorial-workbench .production-context .production-settings-disclosure-row>summary{min-height:var(--control-height-dense,38px);`) {
 		t.Fatal("Settings disclosures must use the compact shared control height")

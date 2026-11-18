@@ -367,10 +367,8 @@ button,input,select{font:inherit}
  .connections-edit-grid .field-help{font-size:11px;line-height:1.45;}
  .connections-edit-grid .connection-state-row{margin:0 0 8px;padding:2px 0 8px;}
  .connections-edit-grid .connections-actions{margin-top:auto;padding-top:12px;}
-  .connections-edit-grid .connections-actions .btn,.connections-edit-grid .connections-actions .btn-ghost{min-height:var(--control-height-standard);padding:8px 12px;}
  .page-card:has(.connections-summary-grid) .connections-card-header{margin-bottom:8px;}
  .page-card:has(.connections-summary-grid) .connection-state-value{font-size:12px;}
- .page-card:has(.connections-summary-grid) .connections-actions .btn,.page-card:has(.connections-summary-grid) .connections-actions .btn-ghost{min-height:38px;padding:7px 12px;}
  .page-card:has(.connections-summary-grid) .connections-card .connection-field-row{min-height:28px;}
 .connections-actions{margin-top:0;padding-top:0;padding-bottom:0;}
 .hint,.muted{color:var(--muted);line-height:1.7}
@@ -585,7 +583,6 @@ code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#
   .production-list-item h2{margin:0;overflow-wrap:anywhere}.production-list-item .field-help{margin:3px 0 0}.production-list-state{display:grid;gap:3px;justify-items:start;min-width:0}.production-list-state .field-help{font-size:11px;overflow-wrap:anywhere}
   .connections-summary-grid,.connections-edit-grid{gap:20px}.connections-summary-grid>.connections-card,.connections-edit-grid>.connections-card{border:0;border-top:2px solid var(--line);border-radius:0;padding:14px 0;background:transparent;box-shadow:none}
   .connections-edit-grid>.connections-card{border-top-color:rgba(109,195,255,.35)}.connections-summary-grid .connections-card-header,.connections-edit-grid .connections-card-header{margin-bottom:8px}
-  .connections-summary-grid .connections-actions .btn,.connections-summary-grid .connections-actions .btn-ghost{min-height:var(--control-height-standard)}
   .user-linking-page>.section-card:first-of-type{border-left:3px solid rgba(109,195,255,.45);border-radius:0;background:transparent;box-shadow:none;padding:12px 16px}
   .user-linking-table{box-shadow:none;background:transparent;border-radius:0;border-left:0;border-right:0}.user-linking-table tr{background:transparent}
   .audit-log-table{box-shadow:none;background:transparent;border-radius:0;border-left:0;border-right:0}.audit-log-table th{font-size:11px}.audit-log-table td{padding:8px 10px}.audit-log-table tbody tr:hover{background:rgba(255,255,255,.025)}
@@ -763,7 +760,6 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .connection-expert-network[hidden]{display:none}
   .editorial-workbench .connection-external-url-controls{display:flex;align-items:center;gap:12px;width:100%}
   .editorial-workbench .connection-external-url-controls input{flex:1 1 auto;min-width:0}
-  .editorial-workbench .connection-external-url-controls .btn-ghost,.editorial-workbench .connection-external-url-controls .btn{flex:0 0 auto;min-height:var(--control-height-standard);padding:7px 12px;font-size:13px;white-space:nowrap}
   .system-status-sections .api-observation-latency{display:flex;align-items:baseline;justify-content:space-between;gap:16px;min-width:0}
   .system-status-sections .api-observation-primary{display:flex;align-items:baseline;gap:10px;min-width:0}
   .system-status-sections .api-observation-primary .api-observation-label{white-space:nowrap}
@@ -832,7 +828,6 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .production-wfa-edit-groups{gap:16px}
   .production-wfa-edit-panel [data-wfa-automatic],.production-wfa-edit-panel [data-wfa-additional]{padding:10px 0 0;border-top:1px solid rgba(255,255,255,.07);gap:8px}
   .production-wfa-edit-panel [data-wfa-target-list] li{min-height:38px;padding:6px 0}
-  .production-wfa-edit-panel .production-wfa-add-target{min-height:32px;padding:4px 9px;font-size:.82rem}
   .production-routing-editor-footer{margin-top:2px;padding-top:12px}
   .production-routing-editor .routing-select-task{display:inline-flex;align-items:center;max-width:100%;min-height:34px;padding:5px 8px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text);font:inherit;text-align:start;cursor:pointer;appearance:none}
   .production-routing-editor .routing-select-task:hover{background:var(--interaction-hover)}
@@ -915,15 +910,12 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .production-context dialog select,.editorial-workbench .production-team-page dialog select{color-scheme:dark;background:var(--surface-control);color:var(--text);border-color:var(--border-default)}
   .production-context .production-notification-heading{display:flex;justify-content:flex-end;margin:0 0 var(--space-3,12px)}
   .production-context .production-notification-actions{display:flex;align-items:center;gap:var(--space-2,8px);min-height:32px}
-  .production-context .production-notification-actions .status-pill,.production-context .production-notification-actions .btn-ghost{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:32px;min-height:32px;padding-block:0}
-  .production-context .production-notification-actions .status-pill{align-self:center;min-width:0;min-height:32px;height:32px;padding:0 8px;border-radius:var(--status-radius);font-size:11px;line-height:1.1}
   .production-context .production-routing-editor .routing-select-task{display:inline-flex;align-items:center;gap:var(--space-2,8px);width:100%;min-width:0;padding:6px 8px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--color-content);text-align:left;cursor:pointer}
   .production-context .production-routing-editor .routing-task-type-name{min-width:0;overflow-wrap:anywhere}
   .production-context .production-routing-editor .routing-select-task:hover{background:var(--surface-subtle)}
   .production-context .production-routing-editor .routing-select-task[aria-pressed=true]{color:var(--text);font-weight:650;background:transparent}
   .production-context .production-routing-editor .routing-expand-indicator{width:7px;height:7px;flex:0 0 7px;margin-inline-start:auto;border-right:1px solid var(--color-content-subtle);border-bottom:1px solid var(--color-content-subtle);transform:rotate(45deg);transition:transform .14s ease}
   .production-context .production-routing-editor .routing-select-task[aria-expanded=true] .routing-expand-indicator{transform:rotate(225deg)}
-  .production-context .production-notification-actions .btn-ghost{min-width:0;padding-inline:10px;font-size:12px}
   .production-context .production-routing-editor{gap:var(--space-4,16px)}
   .production-context .production-routing-editor [data-current-routing-form]{display:grid;row-gap:var(--space-4,16px);min-width:0}
   .production-context .production-routing-editor .production-routing-editor-actions{margin:0}
@@ -1056,6 +1048,84 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
     .mobile-card-table tr>.mobile-card-lead:has(.status-pill){grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px}
     .mobile-card-table tr>[data-label]::before,.mobile-card-table tr>.mobile-card-lead-label::before{content:attr(data-label);color:var(--muted-2);font-size:.74rem;letter-spacing:.02em}
   }
+  /* ===== Admin UI design system v1: docs/agent/plans/active/admin-ui-design-system.md ===== */
+  :root{--ds-btn-h:40px;--ds-btn-h-compact:32px;--ds-pill-h:24px;--ds-disabled-fg:#9a958d}
+  /* 1. Buttons: one regular size (40px) and one compact size (32px, rows only). */
+  .editorial-workbench .btn,.editorial-workbench .btn-sm,.editorial-workbench .btn-ghost,.editorial-workbench .btn-danger,.editorial-workbench .btn-quiet{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);min-height:var(--ds-btn-h);min-width:80px;padding:0 var(--space-4);border-radius:8px;font-size:14px;font-weight:600;letter-spacing:.02em;line-height:1.2;white-space:nowrap;text-decoration:none}
+  .editorial-workbench .btn-quiet{border:1px solid transparent;background:transparent;color:var(--accent-2);box-shadow:none;cursor:pointer}
+  .editorial-workbench .btn-quiet:hover{background:var(--interaction-hover);color:var(--text)}
+  .editorial-workbench td .btn,.editorial-workbench td .btn-ghost,.editorial-workbench td .btn-danger,.editorial-workbench td .btn-quiet,.editorial-workbench li .btn-ghost,.editorial-workbench li .btn-danger,.editorial-workbench .production-wfa-recipient-row .btn-ghost{min-height:var(--ds-btn-h-compact);min-width:64px;padding:0 var(--space-3);font-size:13px}
+  .editorial-workbench .btn:disabled,.editorial-workbench .btn-ghost:disabled,.editorial-workbench .btn-danger:disabled,.editorial-workbench .btn-quiet:disabled{opacity:1;color:var(--ds-disabled-fg);background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);box-shadow:none;cursor:not-allowed}
+  .editorial-workbench .button-row,.editorial-workbench .inline-actions{gap:var(--space-2)}
+  /* 2. Pills: one size for every status marker. */
+  .editorial-workbench .status-pill,.editorial-workbench .status-badge,.editorial-workbench .dashboard-status-chip{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:var(--space-1);width:auto;min-width:0;height:auto;min-height:var(--ds-pill-h);padding:0 10px;border-radius:999px;font-size:12px;font-weight:600;line-height:1.2;white-space:nowrap}
+  /* 3. Tables: identity column keeps its width, action column is content-sized, rows never grow from wrapping names. */
+  .editorial-workbench table th,.editorial-workbench table td{padding:12px}
+  .editorial-workbench .production-notification-row>th,.editorial-workbench .production-team-member strong,.editorial-workbench .user-link-grid-row>td:first-child{overflow-wrap:normal;word-break:normal}
+  .table-wrap:has(.user-link-grid-row) table{grid-template-columns:minmax(14rem,1.4fr) minmax(10rem,1fr) 8.5rem minmax(0,1.7fr)}
+  .editorial-workbench .production-team-table{table-layout:fixed}
+  .production-team-col-member{width:20%}.production-team-col-role{width:11%}.production-team-col-department{width:17%}.production-team-col-discord{width:22%}.production-team-col-status{width:10rem}.production-team-col-actions{width:14rem}
+  .editorial-workbench .production-team-discord,.editorial-workbench .production-team-member strong,.editorial-workbench .production-team-discord-name,.editorial-workbench .user-link-discord-identity{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .editorial-workbench .production-team-actions .production-team-status-actions{flex-wrap:wrap;justify-content:flex-start;gap:var(--space-1) var(--space-2)}
+  .editorial-workbench .production-team-status{vertical-align:middle}
+  /* 4. Section header: title left, status + action right, one row. */
+  .production-context .production-notification-heading{justify-content:space-between;align-items:center;gap:var(--space-3);margin:0 0 var(--space-4)}
+  .production-context .production-notification-heading h3,.production-context .production-routing-editor>.page-heading h3{margin:0;font-size:1rem}
+  .production-context .production-notification-actions{min-height:0;gap:var(--space-2)}
+  .production-context .production-routing-editor>.page-heading{align-items:center;margin:0}
+  /* 5. Edit pattern: disclosure marker leads the task name; label column is fixed next to the value. */
+  .production-context .production-routing-editor .routing-select-task{justify-content:flex-start}
+  .production-context .production-routing-editor .routing-expand-indicator{margin-inline-start:0;margin-inline-end:var(--space-2)}
+  .production-context .production-routing-editor .production-wfa-recipient-row{grid-template-columns:9rem minmax(0,1fr) auto;align-items:center;gap:var(--space-3)}
+  .production-context .production-routing-editor .production-wfa-recipient-row .production-wfa-recipient-kind{color:var(--muted-2)}
+  .production-context .production-routing-editor-actions{display:flex;align-items:center;justify-content:flex-end;gap:var(--space-2);margin:0;padding-top:var(--space-4);border-top:1px solid var(--divider-color)}
+  .production-context .production-routing-editor-actions [data-pending-status]{margin-inline-end:auto;color:var(--muted);font-size:13px}
+  .production-context .production-routing-editor-actions .btn-ghost{order:1}.production-context .production-routing-editor-actions .btn{order:2}
+  /* 6. Production list row: name, fixed state column, action button. */
+  .production-list-item{align-items:center;gap:var(--space-4)}
+  @media(min-width:761px){.production-list-item{grid-template-columns:minmax(0,1fr) 8rem auto}.production-list-item>*{grid-row:1}.production-list-item>:nth-child(1){grid-column:1}.production-list-item>:nth-child(2){grid-column:2}.production-list-item>:nth-child(3){grid-column:3}}
+  @media(max-width:760px){.production-list-item{grid-template-columns:minmax(0,1fr) auto;gap:var(--space-3)}.production-list-item>:nth-child(1){grid-column:1/-1;grid-row:1}.production-list-item>:nth-child(2){grid-column:1;grid-row:2}.production-list-item>:nth-child(3){grid-column:2;grid-row:2}}
+  .production-list-item .production-list-link{text-decoration:none}
+  .production-list-item .production-list-open{color:inherit}
+  /* 7. Dialogs: fixed width, 16px rhythm, right-aligned action bar. */
+  .editorial-workbench dialog{box-sizing:border-box;width:min(560px,calc(100vw - 32px));max-width:none;padding:var(--space-5)}
+  .editorial-workbench dialog h3,.editorial-workbench dialog h4{margin:0 0 var(--space-4);font-size:18px;font-weight:600}
+  .editorial-workbench dialog .button-row{margin-top:var(--space-5);justify-content:flex-end;gap:var(--space-2)}
+  .editorial-workbench dialog [data-wfa-add-confirm]{margin-inline-start:0}
+  .editorial-workbench dialog .recipient-picker-label{margin:var(--space-4) 0 0}
+  .editorial-workbench dialog .recipient-mode-tabs{margin-bottom:var(--space-4)}
+  .recipient-listbox{width:min(100%,520px);max-height:min(280px,40vh)}
+  .recipient-listbox>[role="option"]{min-height:40px;display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .recipient-listbox>[role="option"][aria-disabled="true"]{color:var(--muted-2)}
+  /* 8. Forum settings and other form rows: consistent field rhythm. */
+  .editorial-workbench .forum-map-table td,.editorial-workbench .forum-map-table th{padding:var(--space-3)}
+  .editorial-workbench .forum-map-table select{width:100%}
+  .editorial-workbench .section-card form .button-row{margin-top:var(--space-4)}
+  /* ---- round 1 fixes ---- */
+  .editorial-workbench dialog{background:var(--bg2)}
+  .editorial-workbench .production-context #panel-notifications>.production-notifications>.production-settings-section{padding:var(--space-5) 0}
+  .production-context .production-notification-heading,.production-context .production-routing-editor>.page-heading{min-height:var(--ds-btn-h)}
+  .production-context .production-routing-editor{gap:var(--space-4)}
+  .production-context .production-routing-editor table thead th:nth-child(2),.production-context .production-routing-editor tbody>[data-routing-row]>td:nth-child(2){width:40%;text-align:left}
+  .production-context .production-routing-editor .production-wfa-recipient-row[data-wfa-additional]{grid-template-columns:9rem minmax(0,1fr)}
+  .production-context .production-routing-editor .production-wfa-recipient-row[data-wfa-additional] [data-wfa-add-target]{grid-column:2;justify-self:start}
+  /* ---- round 2 fixes: horizontal rhythm (label column next to its value, no far-right drift) ---- */
+  .production-context .production-routing-editor table thead th:nth-child(1),.production-context .production-routing-editor tbody>[data-routing-row]>th{width:18rem}
+  .production-context .production-routing-editor table thead th:nth-child(2),.production-context .production-routing-editor tbody>[data-routing-row]>td:nth-child(2){width:auto}
+  .editorial-workbench .forum-map-table{table-layout:fixed;width:100%}
+  .editorial-workbench .forum-map-table tr>*:first-child{width:16rem}
+  .editorial-workbench .forum-map-table select{width:100%;max-width:32rem}
+  .production-team-col-member{width:13rem}.production-team-col-role{width:6.5rem}.production-team-col-department{width:9rem}.production-team-col-discord{width:auto}.production-team-col-status{width:8.5rem}.production-team-col-actions{width:15rem}
+  .production-context .production-routing-editor .wizard-plan-table th:first-child,.production-context .production-routing-editor .wizard-plan-table td:first-child{width:18rem}
+  .production-context .production-routing-editor .wizard-plan-table th:last-child,.production-context .production-routing-editor .wizard-plan-table td:last-child{width:auto;text-align:left}
+  .production-context .production-notification-heading,.production-context .production-routing-editor>.page-heading{flex-direction:row;flex-wrap:wrap;text-align:left}
+  .editorial-workbench .production-storage-actions .btn,.editorial-workbench .production-storage-control-row .btn{height:auto;min-height:var(--control-height-standard,44px)}
+  .editorial-workbench .connection-endpoint-reset{min-height:var(--ds-btn-h-compact);min-width:64px}
+  /* A button beside an input takes the input's height (44px) so the row reads as one control. */
+  .editorial-workbench .connection-external-url-controls .btn,.editorial-workbench .connection-external-url-controls .btn-ghost{min-height:var(--control-height-standard,44px)}
+  .editorial-workbench .connection-endpoint-reset,.editorial-workbench .connection-host-manual .connection-endpoint-reset{height:var(--ds-btn-h-compact);min-height:var(--ds-btn-h-compact);padding-block:0}
+  @media(max-width:760px){.production-context .production-routing-editor .wizard-plan-table th:first-child,.production-context .production-routing-editor .wizard-plan-table td:first-child,.production-context .production-routing-editor .wizard-plan-table th:last-child,.production-context .production-routing-editor .wizard-plan-table td:last-child{width:auto!important}.production-context .production-routing-editor .wizard-plan-table [data-routing-row]>th{display:block;padding:0}.production-context .production-routing-editor .wizard-plan-table [data-routing-row]>td{padding:0 0 0 var(--space-5)!important}}
+  @media(min-width:761px){.editorial-workbench .production-team-supervisor-scope{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}}
 `
 
 func shellHeadExtras() string {

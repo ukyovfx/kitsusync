@@ -507,7 +507,7 @@ func renderIAProductionList(w http.ResponseWriter, r *http.Request, db *gorm.DB,
 	for _, p := range projects {
 		class, label := productionConnectionStatus(p, lang)
 		_, _, hint := iaStatus(db, p, lang)
-		rows.WriteString(fmt.Sprintf(`<article class="section-card glass production-list-item"><div><h2>%s</h2><p class="field-help">%s</p></div><div class="production-list-state"><span class="status-pill %s">%s</span><span class="field-help">%s</span></div><a class="production-list-link" href="%s"><span class="production-list-open">%s</span></a></article>`, esc(p.Name), esc(t(lang, "現在の状態", "Current state")), class, esc(label), esc(hint), esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(t(lang, "プロダクションを開く", "Open Production"))))
+		rows.WriteString(fmt.Sprintf(`<article class="section-card glass production-list-item"><div><h2>%s</h2><p class="field-help">%s</p></div><div class="production-list-state"><span class="status-pill %s">%s</span><span class="field-help">%s</span></div><a class="btn-ghost production-list-link" href="%s"><span class="production-list-open">%s</span></a></article>`, esc(p.Name), esc(t(lang, "現在の状態", "Current state")), class, esc(label), esc(hint), esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID), r)), esc(t(lang, "プロダクションを開く", "Open Production"))))
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(emptyState("-", t(lang, "プロダクションがありません", "No Productions"), t(lang, "新しいプロダクションを接続してください。", "Connect a new Production.")))
@@ -927,7 +927,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 		linkOptions.WriteString(`<option value="` + esc(id) + `">` + esc(name) + `</option>`)
 	}
 	if teamErr != nil {
-		members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></div></td></tr>`)
+		members.WriteString(`<tr><td colspan="6"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></div></td></tr>`)
 	} else {
 		botEmail := botAccountEmail(db)
 		for _, person := range team {
@@ -954,27 +954,29 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			userLinkingAction := ""
 			if person.Active && !person.Archived {
 				linkButton = `<button type="button" class="btn-ghost" data-open-team-link data-person-id="` + esc(person.ID) + `" data-person-name="` + esc(kitsuPersonDisplayName(person)) + `" data-person-email="` + esc(person.Email) + `">` + esc(userText("Discordをリンク", "Link Discord")) + `</button>`
-				userLinkingAction = `<a class="production-team-user-link" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(userText("ユーザー紐づけ", "User Linking")) + `</a>`
+				userLinkingAction = `<a class="btn-quiet production-team-user-link" href="` + esc(withLang("/bot/admin/users", r)) + `">` + esc(userText("ユーザー紐づけ", "User Linking")) + `</a>`
 			}
 			discordCell := `<span class="field-help">—</span>`
+			actionCell := ""
 			statusCell := `<span class="status-pill warning" role="status">` + esc(userText("要確認", "Needs review")) + `</span>`
 			if guildReadOK {
-				statusCell += userLinkingAction + linkButton
+				actionCell += userLinkingAction + linkButton
 			} else if guildMembersPending {
 				discordCell += `<span class="field-help">` + esc(userText("Discord所属を取得中", "Guild membership is loading")) + `</span>`
-				statusCell += userLinkingAction
+				actionCell += userLinkingAction
 			} else {
 				discordCell += `<span class="field-help">` + esc(userText("Discord所属を確認できません", "Guild membership could not be verified")) + `</span>`
-				statusCell += userLinkingAction
+				actionCell += userLinkingAction
 			}
 			if user := globalUserForKitsuPerson(globalUsers, person); user != nil && isDiscordSnowflake(user.DiscordID) {
 				if !guildReadOK || !guildMemberIDs[strings.TrimSpace(user.DiscordID)] {
 					discordCell = `<span class="field-help">` + esc(userText("Discord所属を再確認", "Discord membership needs review")) + `</span>`
 					statusCell = `<span class="status-pill warning" role="status">` + esc(userText("要確認", "Needs review")) + `</span>`
+					actionCell = ""
 					if guildReadOK {
-						statusCell += userLinkingAction + linkButton
+						actionCell += userLinkingAction + linkButton
 					} else {
-						statusCell += userLinkingAction
+						actionCell += userLinkingAction
 					}
 				} else {
 					discordName := guildMemberNames[strings.TrimSpace(user.DiscordID)]
@@ -984,25 +986,26 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 					if discordName == "" {
 						discordName = userText("リンク済み", "Linked")
 					}
-					discordCell = `<span class="production-team-discord-name">` + esc(discordName) + `</span>`
+					discordCell = `<span class="production-team-discord-name" title="` + esc(discordName) + `">` + esc(discordName) + `</span>`
 					statusCell = `<span class="status-pill success" role="status">` + esc(userText("リンク済み", "Linked")) + `</span>`
+					actionCell = ""
 				}
 			}
 			scopeMarkup := ""
 			if strings.EqualFold(role, "Supervisor") && scope != userText("—", "—") {
-				scopeMarkup = `<small class="production-team-supervisor-scope"><span class="production-team-label">` + esc(userText("Supervisor範囲", "Supervision scope")) + `</span> ` + esc(scope) + `</small>`
+				scopeMarkup = `<small class="production-team-supervisor-scope" title="` + esc(scope) + `"><span class="production-team-label">` + esc(userText("Supervisor範囲", "Supervision scope")) + `</span> ` + esc(scope) + `</small>`
 			}
-			members.WriteString(`<tr class="production-team-row"><th scope="row" class="production-team-cell production-team-member"><strong>` + esc(kitsuPersonDisplayName(person)) + `</strong></th><td class="production-team-cell" data-label="` + esc(userText("Kitsuロール", "Kitsu role")) + `">` + esc(role) + `</td><td class="production-team-cell" data-label="Department"><span>` + esc(departments) + `</span>` + scopeMarkup + `</td><td class="production-team-cell production-team-discord" data-label="Discord">` + discordCell + `</td><td class="production-team-cell production-team-status" data-label="` + esc(userText("状態 / 操作", "Status / action")) + `"><div class="production-team-status-actions">` + statusCell + `</div></td></tr>`)
+			members.WriteString(`<tr class="production-team-row"><th scope="row" class="production-team-cell production-team-member"><strong title="` + esc(kitsuPersonDisplayName(person)) + `">` + esc(kitsuPersonDisplayName(person)) + `</strong></th><td class="production-team-cell" data-label="` + esc(userText("Kitsuロール", "Kitsu role")) + `">` + esc(role) + `</td><td class="production-team-cell" data-label="Department"><span>` + esc(departments) + `</span>` + scopeMarkup + `</td><td class="production-team-cell production-team-discord" data-label="Discord">` + discordCell + `</td><td class="production-team-cell production-team-status" data-label="` + esc(userText("状態", "Status")) + `">` + statusCell + `</td><td class="production-team-cell production-team-actions" data-label="` + esc(userText("操作", "Action")) + `"><div class="production-team-status-actions">` + actionCell + `</div></td></tr>`)
 		}
 		if members.Len() == 0 {
-			members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームは空です", "The Kitsu Production Team is empty")) + `</strong></div></td></tr>`)
+			members.WriteString(`<tr><td colspan="6"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームは空です", "The Kitsu Production Team is empty")) + `</strong></div></td></tr>`)
 		}
 	}
 	modal := ""
 	if guildReadOK && linkOptions.Len() > 0 {
 		modal = `<dialog data-team-link-modal><form method="post" action="` + esc(withLang("/bot/admin/users", r)) + `"><h3>` + esc(userText("Discordユーザーをリンク", "Link Discord user")) + `</h3><p data-team-link-person-label></p><input type="hidden" name="action" value="save_global_link"><input type="hidden" name="team_link_project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="kitsu_id" data-team-link-person-id><input type="hidden" name="kitsu_name" data-team-link-person-name><input type="hidden" name="kitsu_email" data-team-link-person-email><input type="hidden" name="discord_guild_id" value="` + esc(p.DiscordGuildID) + `"><label>` + esc(userText("Discordユーザー", "Discord user")) + `<select name="discord_user_id" required><option value="">` + esc(userText("選択", "Select")) + `</option>` + linkOptions.String() + `</select></label><div class="button-row"><button type="button" class="btn-ghost" data-team-link-cancel>` + esc(userText("キャンセル", "Cancel")) + `</button><button type="submit" class="btn">` + esc(userText("保存", "Save")) + `</button></div></form></dialog><script>(function(){var dialog=document.querySelector('[data-team-link-modal]');if(!dialog)return;document.querySelectorAll('[data-open-team-link]').forEach(function(button){button.addEventListener('click',function(){dialog.querySelector('[data-team-link-person-id]').value=button.dataset.personId||'';dialog.querySelector('[data-team-link-person-name]').value=button.dataset.personName||'';dialog.querySelector('[data-team-link-person-email]').value=button.dataset.personEmail||'';dialog.querySelector('[data-team-link-person-label]').textContent=button.dataset.personName||'';dialog.showModal()})});dialog.querySelector('[data-team-link-cancel]')?.addEventListener('click',function(){dialog.close()})})();</script>`
 	}
-	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p>` + guildNoticeMarkup(guildNotice) + `<div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態 / 操作", "Status / action")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>` + modal + `</section>`
+	return `<section id="production-team" class="production-team-page"><h2>` + esc(userText("チーム", "Team")) + `</h2><p class="field-help">` + esc(userText("メンバーとロールはKitsuから読み取り専用で表示します。Supervisor範囲はDepartmentとProductionのTask Typeから導出され、実際のタスク割り当てを示すものではありません。", "Members and roles are read-only from Kitsu. Supervisor scope is derived from Departments and this Production's Task Types; it does not indicate actual task assignments.")) + `</p>` + guildNoticeMarkup(guildNotice) + `<div class="table-wrap production-team-table-wrap"><table class="production-team-table"><colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status"><col class="production-team-col-actions"></colgroup><thead><tr><th scope="col">` + esc(userText("メンバー", "Member")) + `</th><th scope="col">` + esc(userText("Kitsuロール", "Kitsu role")) + `</th><th scope="col">Department</th><th scope="col">Discord</th><th scope="col">` + esc(userText("状態", "Status")) + `</th><th scope="col">` + esc(userText("操作", "Action")) + `</th></tr></thead><tbody>` + members.String() + `</tbody></table></div>` + modal + `</section>`
 }
 
 func productionDepartmentNames(taskTypes []kitsu.TaskType) map[string]string {
@@ -1567,12 +1570,11 @@ func renderSelectedProductionNotifications(db *gorm.DB, r *http.Request, p model
 			class, statusLabel = "warning", t(lang, "要確認", "Needs review")
 		}
 	}
-	readTable := renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 	var routing string
 	if editing {
-		routing = renderCurrentIARoutingEditorSetupStyleWithData(db, r, p, lang, readTable, data)
+		routing = renderCurrentIARoutingEditorWithStatus(db, r, p, lang, productionDirectoryNoticeMarkup(lang, p, data), data, class, statusLabel)
 	} else {
-		routing = readTable
+		routing = renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 	}
 	return `<div class="production-notifications">` + routing + `</div>`
 }
@@ -1719,13 +1721,9 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="3"><div class="production-detail-state-row">` + esc(label("通知ルーティングはまだ設定されていません。", "No notification routing is configured.")) + `</div></td></tr>`)
 	}
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, data, lang)
-	var directoryNotice strings.Builder
-	if data.GuildPending || data.RolesPending {
-		directoryNotice.WriteString(`<p class="field-help guild-directory-notice" role="status">` + esc(label("Discordのメンバー・ロールは未取得（背景で取得中）です。取得が終わるまで一部の通知先は確認できません。", "Discord members and roles are not loaded yet (fetching in the background). Some recipients stay unverified until it finishes.")) + `</p>`)
-	}
-	directoryNotice.WriteString(guildNoticeMarkup(guildDirectoryNotice(lang, guildMemberListCache.view(p.DiscordGuildID, data.BotToken))))
+	directoryNotice := productionDirectoryNoticeMarkup(lang, p, data)
 	roleApplyNotice := `<p class="field-help guild-directory-notice">` + esc(label("ロールの送信可否は表示時に確認しません。適用時に確認します。", "Role send access is not verified for display; it is verified when applied.")) + `</p>`
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div>` + directoryNotice.String() + roleApplyNotice + `<div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><h3 id="production-notifications-title">` + esc(label("WFA通知先", "WFA recipients")) + `</h3><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div>` + directoryNotice + roleApplyNotice + `<div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
 }
 
 func renderProductionWFATargetChips(values []string, emptyLabel, unavailableLabel string, automatic bool) string {
@@ -3737,4 +3735,15 @@ func renderIAConnectedProductionDeleteResultRefined(lang string, r *http.Request
 	}
 	body.WriteString(`<div class="button-row"><a class="btn" href="` + esc(withLang("/bot/admin/projects", r)) + `">` + esc(t(lang, "プロダクション一覧へ戻る", "Back to Productions")) + `</a></div></section>`)
 	return adminPage(lang, "", r, body.String())
+}
+
+// productionDirectoryNoticeMarkup explains an unloaded or unverified Discord
+// member/role directory; both the view and the edit mode of Notifications show it.
+func productionDirectoryNoticeMarkup(lang string, p model.Project, data productionNotificationReviewerView) string {
+	var notice strings.Builder
+	if data.GuildPending || data.RolesPending {
+		notice.WriteString(`<p class="field-help guild-directory-notice" role="status">` + esc(t(lang, "Discordのメンバー・ロールは未取得（背景で取得中）です。取得が終わるまで一部の通知先は確認できません。", "Discord members and roles are not loaded yet (fetching in the background). Some recipients stay unverified until it finishes.")) + `</p>`)
+	}
+	notice.WriteString(guildNoticeMarkup(guildDirectoryNotice(lang, guildMemberListCache.view(p.DiscordGuildID, data.BotToken))))
+	return notice.String()
 }
