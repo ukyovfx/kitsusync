@@ -186,16 +186,27 @@ func TestAssigneeDisplayNeverRendersOrAllowsAssigneeMentions(t *testing.T) {
 	}
 }
 
-func TestKitsuPersonDisplayNameUsesStructuredJapaneseOrderSafely(t *testing.T) {
-	person := kitsu.Person{FirstName: "太郎", LastName: "山田", FullName: "太郎 山田"}
-	if got := kitsuPersonDisplayName(person, "ja"); got != "山田 太郎" {
-		t.Fatalf("Japanese structured name = %q", got)
+func TestKitsuPersonDisplayNameReturnsRegisteredName(t *testing.T) {
+	if got := kitsuPersonDisplayName(kitsu.Person{FirstName: "太郎", LastName: "山田", FullName: "太郎 山田"}, "ja"); got != "太郎 山田" {
+		t.Fatalf("Japanese display name not in registered Kitsu order = %q", got)
 	}
-	if got := kitsuPersonDisplayName(person, "en"); got != "太郎 山田" {
-		t.Fatalf("English display-name convention changed = %q", got)
+	if got := kitsuPersonDisplayName(kitsu.Person{FirstName: "太郎", LastName: "山田", FullName: "太郎 山田"}, "en"); got != "太郎 山田" {
+		t.Fatalf("English display name not in registered Kitsu order = %q", got)
+	}
+	if got := kitsuPersonDisplayName(kitsu.Person{FirstName: "太郎", LastName: "山田"}, "ja"); got != "太郎 山田" {
+		t.Fatalf("name without FullName should fall back to FirstName + LastName = %q", got)
 	}
 	if got := kitsuPersonDisplayName(kitsu.Person{FullName: "Unknown order"}, "ja"); got != "Unknown order" {
-		t.Fatalf("unstructured name was guessed = %q", got)
+		t.Fatalf("FullName was not used as-is = %q", got)
+	}
+}
+
+func TestAssigneeResolveMatchesUserMapRegisteredFullName(t *testing.T) {
+	conf := config.Config{Mention: config.MentionConfig{UserMap: []config.UserMapEntry{{KitsuName: "太郎 山田", DiscordID: "123456789012345678"}}}}
+	person := kitsu.Person{ID: "p1", FirstName: "太郎", LastName: "山田", FullName: "太郎 山田"}
+	displayName := kitsuPersonDisplayName(person, "ja")
+	if id := resolveAssigneeDiscordID("proj", person, displayName, conf); id != "123456789012345678" {
+		t.Fatalf("user map registered as FullName no longer matches display name %q: got %q", displayName, id)
 	}
 }
 
