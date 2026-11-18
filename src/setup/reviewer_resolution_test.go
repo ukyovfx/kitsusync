@@ -17,7 +17,7 @@ func reviewerResolutionTestDB(t *testing.T) (*gorm.DB, model.Project) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Project{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectReviewerTarget{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}); err != nil {
+	if err := db.AutoMigrate(&model.Project{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectReviewerTarget{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ForumBaseline{}, &model.ForumTask{}); err != nil {
 		t.Fatal(err)
 	}
 	project := model.Project{KitsuProjectID: "production-1", DiscordGuildID: "123456789012345600"}
