@@ -665,7 +665,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           };
         });
         const centered = Math.abs((readActions.badgeTop + readActions.badgeBottom) / 2 - (readActions.editTop + readActions.editBottom) / 2) <= 1;
-        const sameHeightRhythm = Math.abs(readActions.badgeHeight - readActions.editHeight) <= 1;
+        // Design system: the status pill is 24px and the Edit action is a regular 40px button, centered on one line.
+        const sameHeightRhythm = Math.round(readActions.badgeHeight) === 24 && Math.round(readActions.editHeight) === 40;
         const distinctTreatments = readActions.badgeClass.includes('status-pill') && readActions.editClass.includes('btn-ghost') && readActions.badgeBackground !== readActions.editBackground;
         if (!centered || !sameHeightRhythm || !distinctTreatments) {
           throw new Error(`Notifications Healthy status pill and Edit action must share alignment/height while retaining distinct semantic treatments in ${locale.lang}: ${JSON.stringify(readActions)}`);
@@ -710,7 +711,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           const edit = node.querySelector('.btn-ghost').getBoundingClientRect().height;
           return { status, edit, statusLabel: node.querySelector('.status-pill').innerText, editLabel: node.querySelector('.btn-ghost').innerText };
         });
-        if (Math.max(headerControlHeights.status, headerControlHeights.edit) > 33 || Math.abs(headerControlHeights.status - headerControlHeights.edit) > 1) throw new Error(`Notifications status/Edit controls are not compact and aligned in ${locale.lang}/${viewport.name}: ${JSON.stringify(headerControlHeights)}`);
+        if (Math.round(headerControlHeights.status) !== 24 || Math.round(headerControlHeights.edit) !== 40) throw new Error(`Notifications status/Edit controls do not follow the design system sizes (pill 24px, Edit 40px) in ${locale.lang}/${viewport.name}: ${JSON.stringify(headerControlHeights)}`);
         await page.screenshot({ path: path.join(output, `production-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-notifications-${locale.lang}-${viewport.name}.png`), fullPage: true });
         if ((await compReadRow.innerText()).includes(locale.lang === 'ja' ? '自動' : 'Automatic') || (await compReadRow.innerText()).includes(locale.lang === 'ja' ? '追加' : 'Additional')) throw new Error(`read mode exposes internal WFA provenance labels in ${locale.lang}`);
@@ -1151,10 +1152,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const teamHeaders = (await page.locator('.production-team-table thead th').allTextContents()).map(text => text.trim());
         const expectedTeamHeaders = locale.lang === 'ja'
-          ? ['メンバー', 'Kitsuロール', 'Department', 'Discord', '状態 / 操作']
-          : ['Member', 'Kitsu role', 'Department', 'Discord', 'Status / action'];
+          ? ['メンバー', 'Kitsuロール', 'Department', 'Discord', '状態', '操作']
+          : ['Member', 'Kitsu role', 'Department', 'Discord', 'Status', 'Action'];
         if (JSON.stringify(teamHeaders) !== JSON.stringify(expectedTeamHeaders)) {
-          throw new Error(`Team table does not match the five-column structure in ${locale.lang}: ${JSON.stringify(teamHeaders)}`);
+          throw new Error(`Team table does not match the six-column structure (status and action are separate columns) in ${locale.lang}: ${JSON.stringify(teamHeaders)}`);
         }
         const userLinkingHref = await page.locator('.production-team-user-link').first().getAttribute('href');
         if (!userLinkingHref || !userLinkingHref.startsWith(`/bot/admin/users?lang=${locale.lang}`)) {
@@ -1164,11 +1165,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (userLinkingLabel !== (locale.lang === 'ja' ? 'ユーザー紐づけ' : 'User Linking')) throw new Error(`Team User Linking action is not localized in ${locale.lang}: ${userLinkingLabel}`);
         if (viewport.name === 'desktop') {
           const statusAction = await page.locator('.production-team-status-actions:has(.production-team-user-link)').first().evaluate(node => {
-            const status = node.querySelector('.status-pill');
+            // Status and Action are separate columns of the same row; the action rail stays on one row.
+            const row = node.closest('tr');
+            const status = row.querySelector('.production-team-status .status-pill');
             const action = node.querySelector('.production-team-user-link');
-            return { display: getComputedStyle(node).display, statusY: status?.getBoundingClientRect().y, actionY: action?.getBoundingClientRect().y };
+            const statusBox = status?.getBoundingClientRect(), actionBox = action?.getBoundingClientRect();
+            return { display: getComputedStyle(node).display, wrap: getComputedStyle(node).flexWrap, statusMid: statusBox && statusBox.y + statusBox.height / 2, actionMid: actionBox && actionBox.y + actionBox.height / 2 };
           });
-          if (statusAction.display !== 'flex' || !Number.isFinite(statusAction.statusY) || Math.abs(statusAction.statusY - statusAction.actionY) > 8) throw new Error(`Team status and User Linking action are not inline in ${locale.lang}: ${JSON.stringify(statusAction)}`);
+          if (statusAction.display !== 'flex' || !Number.isFinite(statusAction.statusMid) || Math.abs(statusAction.statusMid - statusAction.actionMid) > 8) throw new Error(`Team status and User Linking action are not on one line at 1440px in ${locale.lang}: ${JSON.stringify(statusAction)}`);
         }
         if (viewport.name === 'mobile') {
           const teamControls = await page.locator('.production-team-discord,.production-team-status').evaluateAll(cells => cells.flatMap(cell => {
@@ -1192,7 +1196,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Production Team is not a compact responsive table in ${locale.lang}: ${JSON.stringify(teamRows)}`);
         }
         const teamColumnWidths = await page.locator('.production-team-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
-        if (teamColumnWidths.length !== 5 || (viewport.name === 'desktop' && teamColumnWidths.some(width => parseFloat(width) <= 0)) || (viewport.name === 'mobile' && teamRows.some(row => row.cells !== 5))) throw new Error(`Team lost stable five-column structure in ${locale.lang}/${viewport.name}: ${JSON.stringify({ teamColumnWidths, teamRows })}`);
+        if (teamColumnWidths.length !== 6 || (viewport.name === 'desktop' && teamColumnWidths.some(width => parseFloat(width) <= 0)) || (viewport.name === 'mobile' && teamRows.some(row => row.cells !== 6))) throw new Error(`Team lost stable six-column structure in ${locale.lang}/${viewport.name}: ${JSON.stringify({ teamColumnWidths, teamRows })}`);
         const teamLinkButton = page.locator('[data-open-team-link]').first();
         if (!(await teamLinkButton.count())) throw new Error(`Team has no verified in-place global User Linking action in ${locale.lang}`);
         const teamLinkModal = page.locator('[data-team-link-modal]');
@@ -1497,13 +1501,13 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       if (screen.tab === 'notifications') {
         // The page-level badge must never claim a healthy directory while the
         // member or role snapshot is stale or unrefreshable.
-        const badge = (await page.locator('.production-notification-actions .status-pill').first().innerText()).trim();
+        const badge = (await page.locator('.production-notification-actions .status-pill, .production-routing-editor > .page-heading .status-pill').first().innerText()).trim();
         if (badge !== 'Needs review') throw new Error(`the notification badge claims "${badge}" from an unrefreshable Discord directory (${screen.extra}); expected Needs review`);
       }
     }
     await fixture(page, 'directory-warm');
     await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=notifications&lang=en`, { waitUntil: 'networkidle' });
-    const warmBadge = (await page.locator('.production-notification-actions .status-pill').first().innerText()).trim();
+    const warmBadge = (await page.locator('.production-notification-actions .status-pill, .production-routing-editor > .page-heading .status-pill').first().innerText()).trim();
     if (warmBadge !== 'Healthy') throw new Error(`the notification badge reads "${warmBadge}" after the Discord directory refreshed successfully`);
 
     // rate-limited Discord channel list must keep the pages open, with
@@ -1832,7 +1836,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact effective-recipient summary');
 
         await gotoProduction(page, locale, 'team');
-        if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 5 || await page.locator('.production-team-table col').count() !== 5) throw new Error(`Sparse Team lost its single row/five-column table structure in ${locale.lang}`);
+        if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 6 || await page.locator('.production-team-table col').count() !== 6) throw new Error(`Sparse Team lost its single row/six-column table structure in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-sparse-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'sparse Production', 'one member retains a stable five-column Team table');
 
@@ -2220,7 +2224,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           };
         });
         if (!failure) throw new Error(`team failure notice missing at ${width}px (${locale.lang})`);
-        if (failure.tag !== 'DIV' || failure.display === 'table-cell' || failure.colspan !== '5') throw new Error(`team failure notice is still a bare table cell at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
+        if (failure.tag !== 'DIV' || failure.display === 'table-cell' || failure.colspan !== '6') throw new Error(`team failure notice is still a bare table cell at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
         if (failure.width < Math.min(failure.tableWidth, 320) - 40 || failure.right > failure.tableRight + 1) throw new Error(`team failure notice is squeezed at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
         await page.screenshot({ path: path.join(output, `batch3-team-failure-${locale.lang}-${width}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?project=reviewer-production&tab=team', locale.lang, 'band-' + width, 'team load failure', 'block notice spans the full ' + failure.colspan + '-column row at ' + failure.width + 'px');
@@ -2308,7 +2312,8 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           if (width === 1440) {
             if (table.layout !== 'fixed') throw new Error(`forum mapping table is not fixed layout at ${width}px (${locale.lang})`);
             if (table.firstVerticalAlign !== 'middle') throw new Error(`forum mapping name column is not vertically centered at ${width}px (${locale.lang}): ${table.firstVerticalAlign}`);
-            if (Math.abs(table.firstRatio - 0.4) > 0.04) throw new Error(`forum mapping name column is not 40% wide at ${width}px (${locale.lang}): ${table.firstRatio.toFixed(3)}`);
+            // Design system: the name column is a fixed 16rem so the select sits next to its label instead of drifting right.
+            if (table.firstRatio < 0.18 || table.firstRatio > 0.32) throw new Error(`forum mapping name column is not the fixed 16rem label column at ${width}px (${locale.lang}): ${table.firstRatio.toFixed(3)}`);
           } else if (!table.rowDisplays.includes('grid') || !table.stacked) {
             throw new Error(`forum mapping rows do not stack into one column at ${width}px (${locale.lang}): ${JSON.stringify(table)}`);
           }
