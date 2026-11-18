@@ -86,8 +86,8 @@ func newExecutor(t *testing.T, db *gorm.DB) (Executor, *fakeDiscord) {
 		BotToken: func() string { return "token-1" },
 		GuildID:  func() string { return "guild-1" },
 		TaskURL:  func(taskID string) string { return "https://kitsu.example/tasks/" + taskID },
-		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string) {
-			return []string{"111111111111111111"}, nil
+		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
+			return []string{"111111111111111111"}, nil, nil
 		},
 		Now:   func() time.Time { return now },
 		Sleep: func(time.Duration) {},
@@ -538,6 +538,202 @@ func TestExecutorPostsSignalWithNonce(t *testing.T) {
 	}
 	if done.State != model.ForumOutboxDone {
 		t.Errorf("state = %q", done.State)
+	}
+}
+
+// TestExecutorRetriesSignalWhenRecipientResolutionFails reproduces the audit
+// finding H3/F10: a failing reviewer resolution must not post the signal
+// unmentioned and mark the row done. It must retry instead.
+func TestExecutorRetriesSignalWhenRecipientResolutionFails(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	executor.Recipients = func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
+		return nil, nil, errors.New("kitsu unavailable")
+	}
+
+	payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA})
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: "post:retry-resolution",
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if requests := fake.snapshot(); len(requests) != 0 {
+		t.Fatalf("requests = %d, want no message while recipients are unresolved", len(requests))
+	}
+	got, err := loadOutbox(db, row.ID)
+	if err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if got.State != model.ForumOutboxPending {
+		t.Fatalf("state = %q, want pending for a later retry", got.State)
+	}
+	if got.LastErrorClass != "forum_recipient_resolution_failed" {
+		t.Errorf("error class = %q", got.LastErrorClass)
+	}
+}
+
+// TestExecutorSendsWithoutMentionsAfterRepeatedResolutionFailures checks the
+// approved fallback: once the retries are spent the signal is posted without
+// mentions, so the thread still records the state change.
+func TestExecutorSendsWithoutMentionsAfterRepeatedResolutionFailures(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	calls := 0
+	executor.Recipients = func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
+		calls++
+		return nil, nil, errors.New("kitsu unavailable")
+	}
+
+	payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA})
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: "post:resolution-giveup",
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+	if err := db.Model(&model.ForumOutbox{}).Where("id = ?", row.ID).Update("attempts", forumRecipientResolutionMaxAttempts-1).Error; err != nil {
+		t.Fatalf("mark attempted: %v", err)
+	}
+
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("resolver calls = %d, want 1", calls)
+	}
+	requests := fake.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %d, want the unmentioned signal", len(requests))
+	}
+	content, _ := requests[0].Body["content"].(string)
+	if !strings.Contains(content, "チェックをお願いします。") {
+		t.Errorf("content = %q, want the WFA signal", content)
+	}
+	if strings.Contains(content, "<@111111111111111111>") {
+		t.Errorf("content = %q, want no mention after failed resolutions", content)
+	}
+	got, err := loadOutbox(db, row.ID)
+	if err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if got.State != model.ForumOutboxDone {
+		t.Errorf("state = %q, want done", got.State)
+	}
+}
+
+// TestExecutorCancelsSignalWithoutRecipients: resolved but empty targets must
+// not post a bare message (D-06); the row is cancelled as no_recipient.
+func TestExecutorCancelsSignalWithoutRecipients(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	executor.Recipients = func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
+		return nil, nil, nil
+	}
+
+	payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA})
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: "post:no-recipient",
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if requests := fake.snapshot(); len(requests) != 0 {
+		t.Fatalf("requests = %d, want none without recipients", len(requests))
+	}
+	got, err := loadOutbox(db, row.ID)
+	if err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if got.State != model.ForumOutboxCancelled {
+		t.Errorf("state = %q, want cancelled", got.State)
+	}
+	if got.Note != "no_recipient" {
+		t.Errorf("note = %q, want no_recipient", got.Note)
+	}
+}
+
+// TestExecutorResolvesReviewersOncePerProductionAndTaskType: signals of the
+// same production and task type within one drain share one reviewer lookup.
+func TestExecutorResolvesReviewersOncePerProductionAndTaskType(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wfa")
+	secondThread := "thread-2"
+	second := model.ForumTask{
+		TaskID:      "task-2",
+		ProjectID:   "prod-1",
+		TaskTypeID:  "tt-comp",
+		EntityID:    "entity-2",
+		EntityKind:  model.ForumEntityKindShot,
+		Title:       "Compositing sq010 sh003",
+		StatusID:    "s-wfa",
+		StatusSince: time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC),
+		ForumID:     "forum-1",
+		ThreadID:    &secondThread,
+		FirstSeenAt: time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC),
+		LastSeenAt:  time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC),
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatalf("create second task: %v", err)
+	}
+	executor, fake := newExecutor(t, db)
+	calls := 0
+	executor.Recipients = func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
+		calls++
+		return []string{"111111111111111111"}, nil, nil
+	}
+
+	for _, taskID := range []string{"task-1", "task-2"} {
+		payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA})
+		enqueue(t, db, model.ForumOutbox{
+			TaskID:    taskID,
+			Kind:      model.ForumOutboxPostMessage,
+			DedupeKey: "post:" + taskID,
+			Payload:   string(payload),
+			State:     model.ForumOutboxPending,
+			NotBefore: executor.Now(),
+			CreatedAt: executor.Now(),
+		})
+	}
+
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("resolver calls = %d, want 1 for the shared production and task type", calls)
+	}
+	var messages []recordedRequest
+	for _, request := range fake.snapshot() {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.Path, "/messages") {
+			messages = append(messages, request)
+		}
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %d, want one signal per task", len(messages))
 	}
 }
 

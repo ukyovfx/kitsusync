@@ -29,23 +29,25 @@ type Recipients struct {
 	NotifyAssigneesOnComment bool
 }
 
-// ForTask returns the user and role IDs to mention.
-func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload) ([]string, []string) {
+// ForTask returns the user and role IDs to mention. A resolution error is
+// returned so the executor can retry instead of posting without mentions.
+func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
 	task, err := model.FindForumTaskWithError(r.DB, taskID)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	switch payload.Intent {
 	case model.ForumIntentStatusWFA:
 		return r.reviewers(task.ProjectID, task.TaskTypeID)
 	case model.ForumIntentStatusRetake, model.ForumIntentStatusDone:
-		return r.assignees(task)
+		users, roles := r.assignees(task)
+		return users, roles, nil
 	case model.ForumIntentAssign:
 		added := addedIDs(payload.BaseAssignees, model.ForumAssigneeIDs(task))
 		if len(added) == 0 {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return r.mapAssignees(task.ProjectID, added), nil
+		return r.mapAssignees(task.ProjectID, added), nil, nil
 	case model.ForumIntentComment:
 		// Q-01: the comment's mentions plus the current assignees.
 		users := r.mapAssignees(task.ProjectID, payload.Mentions)
@@ -53,9 +55,9 @@ func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload
 			assigneeUsers, _ := r.assignees(task)
 			users = append(users, assigneeUsers...)
 		}
-		return uniqueIDs(users), nil
+		return uniqueIDs(users), nil, nil
 	default:
-		return nil, nil
+		return nil, nil, nil
 	}
 }
 
@@ -75,9 +77,9 @@ func uniqueIDs(ids []string) []string {
 	return out
 }
 
-func (r Recipients) reviewers(projectID, taskTypeID string) ([]string, []string) {
+func (r Recipients) reviewers(projectID, taskTypeID string) ([]string, []string, error) {
 	if r.ResolveReviewers == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	name := ""
 	if r.TaskTypeName != nil {
@@ -85,7 +87,7 @@ func (r Recipients) reviewers(projectID, taskTypeID string) ([]string, []string)
 	}
 	targets, err := r.ResolveReviewers(projectID, taskTypeID, name)
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	var users, roles []string
 	for _, target := range targets {
@@ -96,7 +98,7 @@ func (r Recipients) reviewers(projectID, taskTypeID string) ([]string, []string)
 			roles = append(roles, target.ID)
 		}
 	}
-	return users, roles
+	return users, roles, nil
 }
 
 func (r Recipients) assignees(task model.ForumTask) ([]string, []string) {
