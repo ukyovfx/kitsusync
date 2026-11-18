@@ -2,6 +2,8 @@ package forum
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -382,8 +384,8 @@ func TestExecutorRetriesRateLimitWithoutConsumingAttempts(t *testing.T) {
 		CreatedAt: executor.Now(),
 	})
 
-	if _, err := executor.Drain(10); err != nil {
-		t.Fatalf("Drain: %v", err)
+	if _, err := executor.Drain(10); !errors.Is(err, ErrForumRateLimited) {
+		t.Fatalf("Drain err = %v, want ErrForumRateLimited", err)
 	}
 	got, err := loadOutbox(db, row.ID)
 	if err != nil {
@@ -397,6 +399,42 @@ func TestExecutorRetriesRateLimitWithoutConsumingAttempts(t *testing.T) {
 	}
 	if !got.NextAttemptAt.Equal(executor.Now().Add(12 * time.Second)) {
 		t.Errorf("next attempt = %v", got.NextAttemptAt)
+	}
+}
+
+// TestDrainStopsWhileDiscordIsRateLimited reproduces the audit finding: a 429
+// with no retry_after for a global limit must end the drain pass instead of
+// letting it claim the next 49 rows and hammer Discord.
+func TestDrainStopsWhileDiscordIsRateLimited(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	fake.respond = func(r *http.Request) (int, string) {
+		if r.URL.Path == "/channels/thread-1/messages" {
+			return http.StatusTooManyRequests, `{"message":"You are being rate limited.","global":true,"retry_after":0}`
+		}
+		return http.StatusOK, `{"id":"thread-1"}`
+	}
+	for i := 0; i < 5; i++ {
+		payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA})
+		enqueue(t, db, model.ForumOutbox{
+			TaskID:    "task-1",
+			Kind:      model.ForumOutboxPostMessage,
+			DedupeKey: fmt.Sprintf("post:%d", i),
+			Payload:   string(payload),
+			State:     model.ForumOutboxPending,
+			NotBefore: executor.Now(),
+			CreatedAt: executor.Now(),
+		})
+	}
+
+	_, err := executor.Drain(50)
+	if !errors.Is(err, ErrForumRateLimited) {
+		t.Fatalf("Drain error = %v, want ErrForumRateLimited", err)
+	}
+	if got := len(fake.snapshot()); got != 1 {
+		t.Errorf("discord requests = %d, want the drain to stop after the first 429", got)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	stdslog "log/slog"
 	"net/http"
@@ -408,6 +409,12 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		},
 	}
 	if _, err := executor.Drain(forumOutboxDrainLimit); err != nil {
+		// A rate-limited drain is a pause, not a failure: the rows stay due and
+		// the next poll resumes them.
+		if errors.Is(err, forum.ErrForumRateLimited) {
+			slog.Warn("Forum outbox drain paused by a discord rate limit", "error_class", "forum_outbox_rate_limited")
+			return
+		}
 		slog.Error("Forum outbox drain failed", "error_class", "forum_outbox_drain_failed", "err", err)
 	}
 }
