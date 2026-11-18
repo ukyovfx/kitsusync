@@ -30,6 +30,10 @@ func newIAViewDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&model.Project{}, &model.ProjectWebhook{}, &model.ProjectSetting{}, &model.ProductionChannelMapping{}, &model.ProductionNotificationConfig{}, &model.ProductionNotificationRoute{}, &model.NotificationRoutingDiagnosis{}, &model.AuditLog{}, &model.UserMap{}, &model.ProjectUserMap{}, &model.ProjectCheckerMap{}, &model.ProjectReviewerTarget{}, &model.ProductionNotificationWriteLock{}, &model.NotificationDeliveryEvent{}, &model.ManagedChannelDeletion{}, &model.CheckerMap{}, &model.Setting{}, &model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}); err != nil {
 		t.Fatal(err)
 	}
+	if sqlDB, err := db.DB(); err == nil {
+		// Windows cannot remove the temp SQLite file while its handle is open.
+		t.Cleanup(func() { sqlDB.Close() })
+	}
 	return db
 }
 
@@ -1302,6 +1306,44 @@ func TestProductionNotificationLanguageSaveIsProductionScoped(t *testing.T) {
 	updated := model.FindProjectByKitsuID(db, project.KitsuProjectID)
 	if updated == nil || updated.Language != "en" {
 		t.Fatalf("language save did not persist on the selected Production: %#v", updated)
+	}
+}
+
+func TestVisibilityAndAuditTablesCollapseToLabeledCardsOnMobile(t *testing.T) {
+	db := newIAViewDB(t)
+	db.Create(&model.Project{KitsuProjectID: "visibility-p", Name: "VeryLongProductionNameForMobile"})
+	model.WriteAuditLog(db, model.AuditLog{ProjectName: "VeryLongProductionNameForMobile", EntityName: "Storyboard", Success: true})
+	visibility := renderProductionVisibilitySection("en", httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
+	auditPage := httptest.NewRecorder()
+	renderIAAudit(auditPage, httptest.NewRequest("GET", "/bot/admin/audit?lang=en", nil), db)
+	for name, body := range map[string]string{
+		"visibility": visibility,
+		"audit":      auditPage.Body.String(),
+	} {
+		if !strings.Contains(body, `<table class="mobile-card-table">`) && !strings.Contains(body, `class="data-table mobile-card-table"`) {
+			t.Fatalf("%s table is missing the mobile card class", name)
+		}
+		var cells []string
+		if name == "visibility" {
+			cells = []string{`class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="Production">`, `data-label="Visible to bot"`, `data-label="Task count"`, `data-label="Last polling success"`}
+		} else {
+			cells = []string{`data-label="Date and time"`, `data-label="Production"`, `data-label="Action"`, `data-label="Acting user"`, `data-label="Result"`}
+		}
+		for _, cell := range cells {
+			if !strings.Contains(body, cell) {
+				t.Fatalf("%s table cell lost its mobile label %s", name, cell)
+			}
+		}
+	}
+	for _, rule := range []string{
+		`th[scope=row]{color:var(--text);text-transform:none;letter-spacing:normal;font-family:inherit;font-size:inherit;}`,
+		`.mobile-card-table thead{position:absolute;width:1px;height:1px;`,
+		`.mobile-card-table tr>[data-label]::before,.mobile-card-table tr>.mobile-card-lead-label::before{content:attr(data-label);`,
+		`.mobile-card-table tr>.mobile-card-lead:has(.status-pill){`,
+	} {
+		if !strings.Contains(adminThemeCSS, rule) {
+			t.Errorf("mobile card table is missing style %q", rule)
+		}
 	}
 }
 

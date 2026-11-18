@@ -1872,6 +1872,57 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     records.push({ route: '/bot/admin/projects?project=reviewer-production&tab=notifications', locale: 'ja', viewport: 'desktop', state: 'Production aa / Storyboard WFA recipient add', detail: 'empty Add feedback, Japanese User mouse selection, Role tab change, keyboard reopen, duplicate suppression, one exact-ID Apply, and refreshed persisted summary' });
 
     if (errors.length) throw new Error(`browser console/runtime or external-origin errors (${errors.length}): ${errors.slice(0, 12).join(' | ')}`);
+
+        // Wide admin tables must collapse into labeled cards on phone widths instead of
+    // breaking one character per line.
+    await fixture(page, 'ready');
+    for (const locale of locales) {
+      const prompts = [
+        { route: '/bot/admin/health', table: '.production-visibility table', labels: locale.lang === 'ja' ? ['bot から見えているか', 'タスク件数', '最終ポーリング成功'] : ['Visible to bot', 'Task count', 'Last polling success'] },
+        { route: '/bot/admin/audit', table: '.audit-log-table table', labels: locale.lang === 'ja' ? ['日時', 'Production', '操作内容', '操作ユーザー', '結果'] : ['Date and time', 'Production', 'Action', 'Acting user', 'Result'] },
+      ];
+      for (const prompt of prompts) {
+        await page.goto(base + prompt.route + '?lang=' + locale.lang, { waitUntil: 'networkidle' });
+        for (const width of [390, 320]) {
+          await page.setViewportSize({ width, height: 844 });
+          const cards = await page.evaluate(({ selector, labels }) => {
+            const table = document.querySelector(selector);
+            if (!table) return null;
+            const thead = table.querySelector('thead');
+            const rows = [...table.querySelectorAll('tbody tr')];
+            const cells = rows.flatMap(row => [...row.querySelectorAll('th,td')]);
+            // ::before content comes back quoted (and escaped inside attr()), so strip quotes before matching.
+            const shown = cell => (getComputedStyle(cell, '::before').content || '').replace(/^"|"$/g, '').replace(/\\(["'])/g, '$1');
+            return {
+              tableDisplay: getComputedStyle(table).display,
+              theadWidth: thead ? Math.round(thead.getBoundingClientRect().width) : 0,
+              theadHeight: thead ? Math.round(thead.getBoundingClientRect().height) : 0,
+              rows: rows.length,
+              rowsAreGrid: rows.every(row => getComputedStyle(row).display === 'grid'),
+              leads: rows.filter(row => row.firstElementChild && row.firstElementChild.classList.contains('mobile-card-lead')).length,
+              labelsShown: labels.filter(label => cells.some(cell => shown(cell).includes(label))),
+              narrowest: cells.length ? Math.min(...cells.map(cell => Math.round(cell.getBoundingClientRect().width))) : 0,
+              overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            };
+          }, { selector: prompt.table, labels: prompt.labels });
+          if (!cards || cards.tableDisplay !== 'block' || cards.theadWidth > 1 || cards.theadHeight > 1 || !cards.rowsAreGrid || cards.rows === 0 || cards.leads !== cards.rows || cards.labelsShown.length !== prompt.labels.length || cards.narrowest < 100 || cards.overflow > 1) {
+            throw new Error(prompt.route + ' is not a labeled card layout at ' + width + 'px (' + locale.lang + '): ' + JSON.stringify(cards));
+          }
+          const broken = await page.evaluate(selector => [...document.querySelectorAll(selector + ' tbody th,' + selector + ' tbody td')].filter(cell => {
+            const probe = document.createRange();
+            probe.selectNodeContents(cell);
+            const lines = [...probe.getClientRects()].filter(rect => rect.height > 1 && rect.width > 1).length;
+            return lines > 2;
+          }).length, prompt.table);
+          if (broken > 0) throw new Error(prompt.route + ' still breaks text into three or more lines at ' + width + 'px (' + locale.lang + '): ' + broken + ' cells');
+          if (width === 320 || locale.lang === 'en') {
+            await page.screenshot({ path: path.join(output, 'mobile-card-table-' + prompt.route.split('/').pop() + '-' + locale.lang + '-' + width + '.png'), fullPage: true });
+          }
+          await record(page, prompt.route, locale.lang, 'mobile-' + width, 'labeled card table', cards.rows + ' rows render as labeled cards with ' + prompt.labels.length + ' readable labels and no one-character wrapping');
+        }
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };
     fs.writeFileSync(path.join(output, 'browser-results.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
     await context.close();

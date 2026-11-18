@@ -208,6 +208,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatal("seed disposable Production")
 	}
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: "TVアニメ『佐々木さんとピーちゃんSeason2』第1話 制作進行記録", EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now()})
 	settings := reviewerBrowserForumSettings(project.KitsuProjectID, project.DiscordGuildID, []model.ProductionForumRoute{
 		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-comp", TaskTypeName: "Compositing", ForumChannelID: "66666666666666661", ForumChannelName: "compositing"},
 		{ProductionID: project.KitsuProjectID, TaskTypeID: "task-animation", TaskTypeName: "Animation", ForumChannelID: "66666666666666662", ForumChannelName: "animation"},

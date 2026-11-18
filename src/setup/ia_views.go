@@ -2062,13 +2062,13 @@ func renderProductionVisibilitySection(lang string, r *http.Request, db *gorm.DB
 		if polled {
 			taskCount = strconv.Itoa(stat.TaskCount)
 		}
-		rows = append(rows, fmt.Sprintf(`<tr><th scope="row">%s</th><td><span class="status-pill %s" role="status">%s</span></td><td>%s</td><td>%s</td></tr>`,
-			esc(name), esc(pillClass), esc(pillLabel), esc(taskCount), esc(lastPoll)))
+		rows = append(rows, fmt.Sprintf(`<tr><th scope="row" class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="%s">%s</span></th><td data-label="%s"><span class="status-pill %s" role="status">%s</span></td><td data-label="%s">%s</td><td data-label="%s">%s</td></tr>`,
+			esc(t(lang, "作品", "Production")), esc(name), esc(t(lang, "bot から見えているか", "Visible to bot")), esc(pillClass), esc(pillLabel), esc(t(lang, "タスク件数", "Task count")), esc(taskCount), esc(t(lang, "最終ポーリング成功", "Last polling success")), esc(lastPoll)))
 	}
 	if len(rows) == 0 {
 		return ""
 	}
-	table := `<table class="data-table" aria-label="` + esc(t(lang, "作品ごとのポーリング可視性", "Per-production polling visibility")) + `"><thead><tr><th scope="col">` + esc(t(lang, "作品", "Production")) + `</th><th scope="col">` + esc(t(lang, "bot から見えているか", "Visible to bot")) + `</th><th scope="col">` + esc(t(lang, "タスク件数", "Task count")) + `</th><th scope="col">` + esc(t(lang, "最終ポーリング成功", "Last polling success")) + `</th></tr></thead><tbody>` + strings.Join(rows, "") + `</tbody></table>`
+	table := `<table class="data-table mobile-card-table" aria-label="` + esc(t(lang, "作品ごとのポーリング可視性", "Per-production polling visibility")) + `"><thead><tr><th scope="col">` + esc(t(lang, "作品", "Production")) + `</th><th scope="col">` + esc(t(lang, "bot から見えているか", "Visible to bot")) + `</th><th scope="col">` + esc(t(lang, "タスク件数", "Task count")) + `</th><th scope="col">` + esc(t(lang, "最終ポーリング成功", "Last polling success")) + `</th></tr></thead><tbody>` + strings.Join(rows, "") + `</tbody></table>`
 	return `<section class="section-card glass production-visibility" aria-labelledby="production-visibility-title"><div class="page-heading"><div><h2 id="production-visibility-title">` + esc(t(lang, "作品ごとの可視性", "Per-production visibility")) + `</h2><p class="hint">` + esc(t(lang, "bot が各作品のタスクを取得できているかを表示します。0 件が続く作品は警告になります。", "Shows whether the bot still observes tasks for each production. Productions with zero tasks are marked as warnings.")) + `</p></div>` + map[bool]string{true: `<span class="status-pill bad">` + esc(fmt.Sprint(warnCount)) + `</span>`, false: ""}[warnCount > 0] + `</div>` + table + `</section>`
 }
 
@@ -2831,15 +2831,15 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		if !log.Success {
 			result = t(lang, "失敗", "Failed")
 		}
-		rows.WriteString(`<tr><td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td>` + esc(log.ProjectName) + `</td><td>` + esc(iaActivityAction(lang, log)) + `</td><td>` + esc(auditActorLabel(lang, log)) + `</td><td><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[log.Success] + `">` + esc(result) + `</span></td></tr>`)
+		rows.WriteString(`<tr><td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td data-label="Production">` + esc(log.ProjectName) + `</td><td data-label="` + esc(t(lang, "操作内容", "Action")) + `">` + esc(iaActivityAction(lang, log)) + `</td><td data-label="` + esc(t(lang, "操作ユーザー", "Acting user")) + `">` + esc(auditActorLabel(lang, log)) + `</td><td data-label="` + esc(t(lang, "結果", "Result")) + `"><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[log.Success] + `">` + esc(result) + `</span></td></tr>`)
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません", "No audit log entries")) + `</td></tr>`)
 	}
-	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
+	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table class="mobile-card-table"><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
 	for _, log := range logs {
-		oldTime := `<td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td>`
-		newTime := `<td><time class="audit-time" datetime="` + esc(log.CreatedAt.UTC().Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time></td>`
+		oldTime := `<td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td>`
+		newTime := `<td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `"><time class="audit-time" datetime="` + esc(log.CreatedAt.UTC().Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time></td>`
 		body = strings.Replace(body, oldTime, newTime, 1)
 	}
 	body += `<script data-audit-local-time>(function(){var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll(".audit-time").forEach(function(node){var date=new Date(node.getAttribute("datetime"));if(Number.isNaN(date.getTime())){return}node.textContent=new Intl.DateTimeFormat(undefined,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"}).format(date)+" "+zone;node.title="UTC "+node.getAttribute("datetime")})})();</script>`
