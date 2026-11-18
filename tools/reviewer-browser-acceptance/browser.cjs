@@ -1448,10 +1448,11 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await permittedRoleModal.locator('#wfa-role-tab').click();
     await permittedRoleModal.locator('[data-wfa-role-combobox]').click();
     const permittedRoleOption = permittedRoleModal.locator('[data-wfa-role-listbox] [role="option"][data-wfa-option-value="33333333333333332"]');
-    if (await permittedRoleOption.getAttribute('aria-disabled') !== 'false') throw new Error('verified destination Bot permission should enable the non-mentionable Role');
-    await permittedRoleOption.click();
-    if (await permittedRoleModal.locator('[data-wfa-role-id]').inputValue() !== '33333333333333332') throw new Error('verified Bot-permission Role could not be selected');
-    await permittedRoleModal.locator('[data-wfa-add-cancel]').click();
+    if (await permittedRoleOption.getAttribute('aria-disabled') !== 'true' || !(await permittedRoleOption.innerText()).includes('Not mentionable')) throw new Error('Role send access is verified on apply only, so a non-mentionable Role must stay disabled even when the Bot could mention roles');
+    await permittedRoleOption.click({ force: true });
+    if (await permittedRoleModal.locator('[data-wfa-role-id]').inputValue() !== '') throw new Error('the non-mentionable Role must stay unselectable until it is applied');
+    await page.screenshot({ path: path.join(output, 'production-notifications-add-recipient-roles-bot-can-mention-en-desktop.png'), fullPage: true });
+    await gotoWFARecipients(page, locales[0], '&edit_routing=1');
 
     for (const failure of [
       { scenario: 'roles-forbidden', status: 'HTTP 403', file: 'production-notifications-add-recipient-roles-forbidden-en-desktop.png' },
@@ -1464,15 +1465,38 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       await failureForm.locator('[data-wfa-add-target]').click();
       const failureModal = page.locator('[data-wfa-add-modal]');
       await failureModal.locator('#wfa-role-tab').click();
-      if (!(await failureModal.innerText()).includes(failure.status)) throw new Error(`${failure.scenario} role lookup must show its distinct safe status`);
-      if (await failureModal.locator('[data-wfa-role-combobox]:visible').count()) throw new Error(`${failure.scenario} must not present lookup failure as an empty selectable role list`);
+      // Display no longer calls Discord per render, so a failing role lookup
+      // shows as not-yet-available instead of a per-request HTTP status.
+      if (await failureModal.locator('[data-wfa-role-combobox]:visible').count()) throw new Error(`${failure.scenario} must not present an unavailable role list as selectable`);
       if (!(await failureModal.locator('[data-wfa-add-confirm]').isDisabled())) throw new Error(`${failure.scenario} must fail closed with Add disabled`);
       await page.screenshot({ path: path.join(output, failure.file), fullPage: true });
-      await failureModal.locator('[data-wfa-add-cancel]').click();
+      await gotoWFARecipients(page, locales[0], '&edit_routing=1');
     }
     await fixture(page, 'ready');
 
     // Guild channel list cache acceptance: cold and stale caches under a
+    // A long Retry-After on the member and role reads must never reach the
+    // display paths: each screen has to paint from the cached directory (or
+    // the not-yet-loaded note) well inside the retry window.
+    await fixture(page, 'directory-stale-rate-limited');
+    for (const screen of [
+      { tab: 'team', extra: '', file: 'production-team-directory-rate-limited-en-desktop.png' },
+      { tab: 'notifications', extra: '', file: 'production-notifications-directory-rate-limited-en-desktop.png' },
+      { tab: 'notifications', extra: '&edit_routing=1', file: 'production-routing-directory-rate-limited-en-desktop.png' },
+    ]) {
+      const startedAt = Date.now();
+      await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${screen.tab}&lang=en${screen.extra}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      const screenBody = await page.locator('main').innerText();
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= 2000) throw new Error(`the ${screen.tab}${screen.extra} screen blocked on a rate-limited Discord directory read: ${elapsed}ms`);
+      if (!screenBody.includes('Discord server membership is loading in the background') && !screenBody.includes('Discord is rate limiting the requests, so the member and role information shown is slightly old.')) {
+        throw new Error(`the ${screen.tab}${screen.extra} screen under a rate-limited directory read did not explain the unverified directory: ${JSON.stringify(screenBody.slice(0, 400))}`);
+      }
+      await page.screenshot({ path: path.join(output, screen.file), fullPage: true });
+      await record(page, `/bot/admin/projects?tab=${screen.tab}${screen.extra}`, 'en', 'desktop', 'rate-limited Discord directory', `rendered in ${elapsed}ms from the cached or not-yet-loaded directory without waiting on the rate limit`);
+    }
+    await fixture(page, 'directory-warm');
+
     // rate-limited Discord channel list must keep the pages open, with
     // cached-only rendering and the manual refetch action visible.
     await page.setViewportSize({ width: 1440, height: 1000 });

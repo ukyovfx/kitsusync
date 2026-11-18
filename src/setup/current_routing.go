@@ -120,18 +120,21 @@ func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request
 	for _, role := range roleCatalog {
 		roleMentionable[role.ID] = role.Mentionable
 		label := "@" + role.Name
-		disabledLabel := t(lang, "送信先を確認できません", "Destination could not be verified")
+		disabledLabel := ""
 		if !role.Mentionable {
 			disabledLabel = t(lang, "メンション不可（適用時に確認）", "Not mentionable (verified on apply)")
 		}
 		disabledAttr := ""
-		if role.Mentionable {
-			disabledLabel = ""
-		} else {
+		if !role.Mentionable {
 			disabledAttr = ` disabled`
 		}
+		roleOptionDisabled := strconv.FormatBool(!role.Mentionable)
+		roleOptionClass := "recipient-option"
+		if !role.Mentionable {
+			roleOptionClass = "recipient-option-disabled"
+		}
 		roleOptions.WriteString(`<option value="` + esc(role.ID) + `"` + disabledAttr + `>@` + esc(role.Name) + `</option>`)
-		roleListboxOptions.WriteString(`<button type="button" role="option" tabindex="-1" aria-selected="false" aria-disabled="` + strconv.FormatBool(!role.Mentionable) + `" class="recipient-option` + map[bool]string{true: "-disabled"}[!role.Mentionable] + `" data-role-mentionable="` + strconv.FormatBool(role.Mentionable) + `" data-role-name="` + esc(label) + `" data-role-disabled-label="` + esc(disabledLabel) + `" data-wfa-option-value="` + esc(role.ID) + `">` + esc(label+map[bool]string{true: " — " + disabledLabel}[disabledLabel != ""]) + `</button>`)
+		roleListboxOptions.WriteString(`<button type="button" role="option" tabindex="-1" aria-selected="false" aria-disabled="` + roleOptionDisabled + `" class="` + roleOptionClass + `" data-role-mentionable="` + strconv.FormatBool(role.Mentionable) + `" data-role-name="` + esc(label) + `" data-role-disabled-label="` + esc(disabledLabel) + `" data-wfa-option-value="` + esc(role.ID) + `">` + esc(label+map[bool]string{true: " — " + disabledLabel}[disabledLabel != ""]) + `</button>`)
 	}
 	userAvailability, roleAvailability := "", ""
 	if view.TeamErr != nil {
@@ -177,7 +180,7 @@ func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request
 				eligibleRoleIDs = append(eligibleRoleIDs, role.ID)
 			}
 		}
-		rows.WriteString(`<tr data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-existing-targets="` + targetsAttribute + `" data-role-sender-verified="false" data-bot-can-mention-roles="false" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `" tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"><th scope="row"><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></th><td>#` + esc(strings.TrimPrefix(route.ForumChannelName, "#")) + `</td></tr>`)
+		rows.WriteString(`<tr data-routing-row data-task-type="` + esc(route.TaskTypeID) + `" data-task-type-name="` + esc(route.TaskTypeName) + `" data-existing-targets="` + targetsAttribute + `" data-role-sender-verified="true" data-bot-can-mention-roles="false" data-role-eligible-ids="` + esc(strings.Join(eligibleRoleIDs, ",")) + `" tabindex="0" aria-controls="production-wfa-detail-panel" aria-selected="false" aria-expanded="false"><th scope="row"><button type="button" class="routing-select-task" data-select-task aria-pressed="false" aria-expanded="false"><span class="routing-task-type-name">` + esc(route.TaskTypeName) + `</span><span class="routing-expand-indicator" aria-hidden="true"></span></button></th><td>#` + esc(strings.TrimPrefix(route.ForumChannelName, "#")) + `</td></tr>`)
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr class="production-notification-empty"><td colspan="2">` + esc(t(lang, "フォーラムがまだ設定されていません。先にフォーラム設定を完了してください。", "No forums are configured yet. Finish the forum settings first.")) + `</td></tr>`)
