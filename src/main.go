@@ -889,6 +889,9 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ProductionForumRoute{},
 		&model.ProductionForumStatusRole{},
 		&model.ProductionForumTag{},
+		&model.ProductionHandoffConfig{},
+		&model.ProductionHandoffProductType{},
+		&model.ProductionHandoffRoute{},
 		&model.ForumBaseline{},
 		&model.ForumTask{},
 		&model.ForumTransition{},
@@ -1280,6 +1283,10 @@ func main() {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
 			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))
+		// The handoff mapping is local per-Production configuration as well: it is
+		// stored by KitsuSync and needs neither Kitsu nor Discord to save. An
+		// unconfigured Production has no rows, so the handoff path stays inactive.
+		mux.HandleFunc(prefix+"/admin/handoff", setup.RequireSession(setup.RejectValidationMutation(setup.HandoffSettingsHandler(db))))
 		// Manual refetch of a guild's channel list, bypassing the admin pages'
 		// cache. A plain GET link (PRG): the operator explicitly asked to wait
 		// for Discord's answer, so botDo's retries run synchronously here.
