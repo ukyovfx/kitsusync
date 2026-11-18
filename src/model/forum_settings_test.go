@@ -16,7 +16,7 @@ func newForumSettingsTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite db: %v", err)
 	}
-	if err := db.AutoMigrate(&ProductionForumConfig{}, &ProductionForumRoute{}, &ProductionForumStatusRole{}, &ProductionForumTag{}); err != nil {
+	if err := db.AutoMigrate(&ProductionForumConfig{}, &ProductionForumRoute{}, &ProductionForumStatusRole{}, &ProductionForumTag{}, &ForumBaseline{}, &ForumTask{}); err != nil {
 		t.Fatalf("failed to migrate schema: %v", err)
 	}
 	return db
@@ -135,9 +135,69 @@ func TestValidateForumSettingsProblems(t *testing.T) {
 	}
 }
 
+// Saving a configuration that drops a Task Type must also drop its baseline:
+// otherwise re-routing it later keeps the stale baseline and never posts.
+func TestSaveForumSettingsDropsBaselinesOfRemovedRoutes(t *testing.T) {
+	db := newForumSettingsTestDB(t)
+	if err := SaveProductionForumSettings(db, completeForumSettings()); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []ForumBaseline{
+		{ProjectID: "p1", TaskTypeID: "tt-anim"},
+		{ProjectID: "p1", TaskTypeID: "tt-comp"},
+		{ProjectID: "p2", TaskTypeID: "tt-anim"},
+	} {
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatalf("seed baseline: %v", err)
+		}
+	}
+	for _, row := range []ForumTask{
+		{TaskID: "task-anim", ProjectID: "p1", TaskTypeID: "tt-anim"},
+		{TaskID: "task-comp", ProjectID: "p1", TaskTypeID: "tt-comp"},
+		{TaskID: "task-other", ProjectID: "p2", TaskTypeID: "tt-anim"},
+	} {
+		if err := db.Create(&row).Error; err != nil {
+			t.Fatalf("seed task: %v", err)
+		}
+	}
+
+	smaller := completeForumSettings()
+	smaller.Routes = smaller.Routes[1:] // tt-comp only
+	smaller.Tags = smaller.Tags[4:]
+	if err := SaveProductionForumSettings(db, smaller); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+
+	seeded, err := ForumBaselineExists(db, "p1", "tt-anim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seeded {
+		t.Fatal("the removed route kept its baseline")
+	}
+	seeded, err = ForumBaselineExists(db, "p1", "tt-comp")
+	if err != nil || !seeded {
+		t.Fatalf("the still-routed baseline must be kept: seeded=%v err=%v", seeded, err)
+	}
+	if seeded, _ := ForumBaselineExists(db, "p2", "tt-anim"); !seeded {
+		t.Fatal("another Production's baseline must be untouched")
+	}
+	var tasks []ForumTask
+	db.Order("task_id asc").Find(&tasks)
+	if len(tasks) != 2 || tasks[0].TaskID != "task-comp" || tasks[1].TaskID != "task-other" {
+		t.Fatalf("only the removed route's ledger rows may go, got %+v", tasks)
+	}
+}
+
 func TestDeleteProductionForumSettingsRemovesRows(t *testing.T) {
 	db := newForumSettingsTestDB(t)
 	if err := SaveProductionForumSettings(db, completeForumSettings()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ForumBaseline{ProjectID: "p1", TaskTypeID: "tt-anim"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&ForumTask{TaskID: "task-anim", ProjectID: "p1", TaskTypeID: "tt-anim"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := DeleteProductionForumSettings(db, "p1"); err != nil {
@@ -145,6 +205,14 @@ func TestDeleteProductionForumSettingsRemovesRows(t *testing.T) {
 	}
 	if _, ok, _ := LoadProductionForumSettings(db, "p1"); ok {
 		t.Fatal("settings must be gone")
+	}
+	if seeded, _ := ForumBaselineExists(db, "p1", "tt-anim"); seeded {
+		t.Fatal("a deleted configuration must not keep baselines")
+	}
+	var tasks int64
+	db.Model(&ForumTask{}).Where("project_id = ?", "p1").Count(&tasks)
+	if tasks != 0 {
+		t.Fatalf("a deleted configuration must not keep ledger rows, %d left", tasks)
 	}
 }
 
