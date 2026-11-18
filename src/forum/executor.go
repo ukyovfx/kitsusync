@@ -32,6 +32,10 @@ type Executor struct {
 	Sleep func(time.Duration)
 }
 
+// ErrForumRateLimited ends a drain pass: Discord reported a rate limit, so the
+// rest of the outbox must wait instead of being claimed and retried now.
+var ErrForumRateLimited = errors.New("forum outbox drain paused by a discord rate limit")
+
 // Drain processes due rows until none remain runnable or the budget is spent.
 func (e Executor) Drain(maxRows int) (int, error) {
 	if e.DB == nil {
@@ -266,7 +270,10 @@ func (e Executor) handleFailure(row model.ForumOutbox, err error) error {
 			if wait > 10*time.Minute {
 				wait = 10 * time.Minute
 			}
-			return model.ReleaseForumOutboxRow(e.DB, row.ID, e.Now().Add(wait))
+			if err := model.ReleaseForumOutboxRow(e.DB, row.ID, e.Now().Add(wait)); err != nil {
+				return err
+			}
+			return ErrForumRateLimited
 		case "missing_destination":
 			if row.Kind == model.ForumOutboxCreateThread {
 				return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", apiErr.Error())
