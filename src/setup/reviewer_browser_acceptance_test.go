@@ -306,8 +306,16 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "user-linking-long-label":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "user-linking-long-label", "overflow-clip-audit":
 			scenario.Store(mode)
+			w.WriteHeader(http.StatusNoContent)
+		case "overflow-clip-audit":
+			// The overflow/clip sweep reseeds the long-URL failure and badges of
+			// differing widths so its containment reads the fix, not seed age.
+			model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Compositing", TaskType: "Compositing", Success: false, ErrorMessage: "https://kitsu.synthetic.invalid/api/data/projects/50844686-9d53-4e1c-9f47-0f4f3a1b2c3d/task-types/?include=task_status&fields[task-type]=name,for_artist&page[size]=200&page[number]=1&department=Compositing&deadline=2026-11-18", CreatedAt: time.Now()})
+			model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Storyboard", TaskType: "Storyboard", Success: true, CreatedAt: time.Now().Add(-time.Minute)})
+			model.WriteAuditLog(db, model.AuditLog{ProjectID: project.KitsuProjectID, ProjectName: project.Name, EntityName: "Layout", TaskType: "Layout", Success: true, CreatedAt: time.Now().Add(-2 * time.Minute)})
+			scenario.Store("ready")
 			w.WriteHeader(http.StatusNoContent)
 		case "unconnected-production":
 			// The wizard plan step renders only the cached guild channel list,
@@ -677,7 +685,7 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			if d.scenario.Load().(string) == "japanese-wfa-add" {
 				body = strings.TrimSuffix(body, "]") + `,{"user":{"id":"22222222222222238","username":"nihongo-user","global_name":"日本語表示名"},"nick":"日本語ユーザー"}]`
 			}
-			if d.scenario.Load().(string) == "user-linking-long-label" {
+			if scenario := d.scenario.Load().(string); scenario == "user-linking-long-label" || scenario == "overflow-clip-audit" {
 				body = strings.Replace(body, `"nick":"Guild Nick Supervisor"`, `"nick":"`+userLinkingLongNickname+`"`, 1)
 			}
 		}
