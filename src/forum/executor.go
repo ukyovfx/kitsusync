@@ -386,6 +386,14 @@ func (e Executor) handleFailure(row model.ForumOutbox, err error) error {
 			}
 			return e.recreateThread(row, apiErr)
 		case "missing_permission":
+			if row.Kind == model.ForumOutboxSyncThread {
+				slog.Error("Forum thread sync lacks Discord permission",
+					"error_class", "forum_missing_permission",
+					"task_id", row.TaskID,
+					"err", apiErr,
+				)
+				return model.FailForumOutboxRow(e.DB, row.ID, "missing_permission", "Manage Threads required")
+			}
 			return e.retryLater(row, "missing_permission", 10*time.Minute)
 		case "invalid_request":
 			return model.FailForumOutboxRow(e.DB, row.ID, "invalid_request", apiErr.Error())
@@ -473,10 +481,24 @@ func (e Executor) pendingCreatePayload(taskID string) (model.ForumCreateThreadPa
 	}
 	return payload, true
 }
+
 func (e Executor) retryLater(row model.ForumOutbox, class string, wait time.Duration) error {
 	if row.Attempts >= model.ForumMaxAttempts {
+		slog.Error("Forum outbox delivery failed: retry budget exhausted",
+			"error_class", class,
+			"task_id", row.TaskID,
+			"kind", row.Kind,
+			"attempts", row.Attempts,
+		)
 		return model.FailForumOutboxRow(e.DB, row.ID, class, "retry budget exhausted")
 	}
+	slog.Error("Forum outbox delivery retrying later",
+		"error_class", class,
+		"task_id", row.TaskID,
+		"kind", row.Kind,
+		"attempts", row.Attempts,
+		"wait", wait,
+	)
 	return model.RetryForumOutboxRow(e.DB, row.ID, class, e.Now().Add(wait))
 }
 
