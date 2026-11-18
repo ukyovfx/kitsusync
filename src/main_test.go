@@ -32,12 +32,12 @@ func TestRunOnePollRecordsFailureAndRecoversOnSuccessfulEmptyPoll(t *testing.T) 
 
 	setup.Stats = &setup.RuntimeStats{}
 	call := 0
-	makeKitsuResponse = func(config.Config) ([]kitsu.MessagePayload, error) {
+	makeKitsuResponse = func(config.Config) ([]kitsu.MessagePayload, []kitsu.MessagePayload, error) {
 		call++
 		if call == 1 {
-			return nil, errors.New("Kitsu unavailable")
+			return nil, nil, errors.New("Kitsu unavailable")
 		}
-		return []kitsu.MessagePayload{}, nil
+		return []kitsu.MessagePayload{}, nil, nil
 	}
 
 	runOnePoll(config.Config{}, nil)
@@ -60,8 +60,8 @@ func TestRunOnePollCountsLegitimateEmptyPollAsSuccess(t *testing.T) {
 	}()
 
 	setup.Stats = &setup.RuntimeStats{}
-	makeKitsuResponse = func(config.Config) ([]kitsu.MessagePayload, error) {
-		return []kitsu.MessagePayload{}, nil
+	makeKitsuResponse = func(config.Config) ([]kitsu.MessagePayload, []kitsu.MessagePayload, error) {
+		return []kitsu.MessagePayload{}, nil, nil
 	}
 
 	runOnePoll(config.Config{}, nil)

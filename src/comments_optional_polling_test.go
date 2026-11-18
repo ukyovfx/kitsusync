@@ -88,7 +88,7 @@ func TestMakeKitsuResponseContinuesWhenTaskCommentsFail(t *testing.T) {
 		return http.StatusForbidden, `{"message":"Forbidden"}`
 	}, &reads)
 
-	payloads, err := MakeKitsuResponse(forumBConfig())
+	payloads, _, err := MakeKitsuResponse(forumBConfig())
 	if err != nil {
 		t.Fatalf("a task comments 403 must not fail the whole poll, got error: %v", err)
 	}
@@ -103,13 +103,36 @@ func TestMakeKitsuResponseContinuesWhenTaskCommentsFail(t *testing.T) {
 	}
 }
 
+// A task older than ignoreMessagesDaysOld is not notified on, but it must still
+// be baselined: otherwise forum mode later treats it as new and posts it.
+func TestMakeKitsuResponseBaselinesTasksOlderThanTheAgeFilter(t *testing.T) {
+	reads := 0
+	oldTask := `[{"id":"task-old","updated_at":"2020-01-01T00:00:00","entity_id":"entity-1","task_type_id":"tt1","task_status_id":"ts1","project_id":"p1","assignees":["person-1"],"last_comment_date":"2020-01-01T00:00:00"}]`
+	forumBKitsuMock(t, map[string]string{"p1": oldTask}, func(string) (int, string) {
+		return http.StatusOK, `[]`
+	}, &reads)
+	conf := forumBConfig()
+	conf.IgnoreMessagesDaysOld = 5
+
+	notifiable, baseline, err := MakeKitsuResponse(conf)
+	if err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	if len(notifiable) != 0 {
+		t.Fatalf("an old task must not be notified on, got %d payloads", len(notifiable))
+	}
+	if len(baseline) != 1 || baseline[0].Task.ID != "task-old" || baseline[0].Task.TaskTypeID != "tt1" {
+		t.Fatalf("an old task must still reach the baseline, got %+v", baseline)
+	}
+}
+
 func TestMakeKitsuResponseReadsCommentsOnlyWhenLastCommentDateMoves(t *testing.T) {
 	reads := 0
 	forumBKitsuMock(t, map[string]string{"p1": forumBTaskWithComment}, func(string) (int, string) {
 		return http.StatusOK, `[{"id":"c1","object_id":"task-1","person_id":"person-1","text":"hello @Artist A","created_at":"2026-08-07T00:00:00","updated_at":"2026-08-07T00:00:00","mentions":["person-1"]}]`
 	}, &reads)
 
-	first, err := MakeKitsuResponse(forumBConfig())
+	first, _, err := MakeKitsuResponse(forumBConfig())
 	if err != nil || len(first) != 1 {
 		t.Fatalf("first poll: %v, %d payloads", err, len(first))
 	}
@@ -119,7 +142,7 @@ func TestMakeKitsuResponseReadsCommentsOnlyWhenLastCommentDateMoves(t *testing.T
 	if got := first[0].LatestComment.Comment.Mentions; len(got) != 1 || got[0] != "person-1" {
 		t.Fatalf("comment mentions must be decoded, got %v", got)
 	}
-	second, err := MakeKitsuResponse(forumBConfig())
+	second, _, err := MakeKitsuResponse(forumBConfig())
 	if err != nil || len(second) != 1 {
 		t.Fatalf("second poll: %v, %d payloads", err, len(second))
 	}
@@ -137,7 +160,7 @@ func TestMakeKitsuResponseSkipsOnlyTheFailedProject(t *testing.T) {
 		return http.StatusOK, `[]`
 	}, &reads)
 
-	payloads, err := MakeKitsuResponse(forumBConfig())
+	payloads, _, err := MakeKitsuResponse(forumBConfig())
 	if err != nil {
 		t.Fatalf("one failed project must not fail the poll: %v", err)
 	}
@@ -152,7 +175,7 @@ func TestMakeKitsuResponseSkipsOnlyTheFailedProject(t *testing.T) {
 func TestMakeKitsuResponseFailsWhenEveryProjectFails(t *testing.T) {
 	reads := 0
 	forumBKitsuMock(t, map[string]string{"p1": ""}, func(string) (int, string) { return http.StatusOK, `[]` }, &reads)
-	if _, err := MakeKitsuResponse(forumBConfig()); err == nil {
+	if _, _, err := MakeKitsuResponse(forumBConfig()); err == nil {
 		t.Fatal("poll must fail when every project read fails")
 	}
 }
@@ -164,10 +187,10 @@ func TestTaskCommentCacheDoesNotCrossConnections(t *testing.T) {
 		return http.StatusOK, `[{"id":"c1","object_id":"task-1","person_id":"person-1","text":"hi","created_at":"2026-08-07T00:00:00","updated_at":"2026-08-07T00:00:00"}]`
 	}, &reads)
 
-	if _, err := MakeKitsuResponse(forumBConfig()); err != nil {
+	if _, _, err := MakeKitsuResponse(forumBConfig()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := MakeKitsuResponse(forumBConfig()); err != nil {
+	if _, _, err := MakeKitsuResponse(forumBConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if reads != 1 {
@@ -176,7 +199,7 @@ func TestTaskCommentCacheDoesNotCrossConnections(t *testing.T) {
 	// A different token is a different connection: the task has the same ID and
 	// last_comment_date there, yet its comments must be read again.
 	t.Setenv("KitsuJWTToken", "another-token")
-	if _, err := MakeKitsuResponse(forumBConfig()); err != nil {
+	if _, _, err := MakeKitsuResponse(forumBConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if reads != 2 {
