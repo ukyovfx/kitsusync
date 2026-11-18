@@ -143,6 +143,14 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) (notifiab
 		slog.Info("Got persons: " + strconv.Itoa(len(persons.Each)))
 	}
 
+	identities := make(map[string]kitsuPersonIdentity, len(persons.Each))
+	for _, person := range persons.Each {
+		if id := strings.TrimSpace(person.ID); id != "" {
+			identities[id] = kitsuPersonIdentity{name: person.FullName, email: person.Email}
+		}
+	}
+	lastPollPersonIdentities = identities
+
 	// Comments are read per task, and only for tasks whose last_comment_date
 	// moved since the previous poll (the comments LIST endpoint is admin only on
 	// Zou 1.1x). The cache is rebuilt each poll so it only holds tasks still seen.
@@ -416,7 +424,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 	recipients := forum.Recipients{
 		DB: db,
 		ResolveAssignees: func(projectID string, kitsuPersonIDs []string) []string {
-			return discord.ResolveAssigneeDiscordIDs(projectID, kitsuPersonIDs)
+			return discord.ResolveAssigneeDiscordIDsWithIdentity(projectID, kitsuPersonIDs, forumAssigneeIdentity)
 		},
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
@@ -558,6 +566,28 @@ var lastPollProductionTaskCounts map[string]int
 // poll. Their zero count is a fetch failure, not a stall, so the liveness
 // monitor skips them.
 var lastPollFailedProjects map[string]struct{}
+
+// kitsuPersonIdentity is the name/email fallback identity of one Kitsu person.
+type kitsuPersonIdentity struct {
+	name  string
+	email string
+}
+
+// lastPollPersonIdentities holds the identity of every person seen in the last
+// successful Kitsu read, so forum assignee resolution can retry the user map
+// with a name/email instead of only the Person ID. Written by
+// MakeKitsuResponseContext, read by runForumPoll in the same poll cycle.
+var lastPollPersonIdentities map[string]kitsuPersonIdentity
+
+// forumAssigneeIdentity returns the name/email of an assignee, if the person
+// was fetched in this poll.
+func forumAssigneeIdentity(kitsuPersonID string) (string, string) {
+	identity, ok := lastPollPersonIdentities[kitsuPersonID]
+	if !ok {
+		return "", ""
+	}
+	return identity.name, identity.email
+}
 
 // projectTasksResult is one project's task read.
 type projectTasksResult struct {

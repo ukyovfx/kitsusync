@@ -196,7 +196,7 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 			}
 			continue
 		}
-		for _, id := range discord.ResolveAssigneeDiscordIDs(project.KitsuProjectID, model.ForumAssigneeIDs(task)) {
+		for _, id := range discord.ResolveAssigneeDiscordIDsWithIdentity(project.KitsuProjectID, model.ForumAssigneeIDs(task), forumAssigneeIdentity) {
 			ensure(id).Retakes = append(ensure(id).Retakes, item)
 		}
 	}

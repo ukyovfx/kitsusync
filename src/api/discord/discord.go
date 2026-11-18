@@ -544,16 +544,26 @@ func resolveAssigneeDiscordID(projectID string, person kitsu.Person, displayName
 }
 
 // ResolveAssigneeDiscordIDs maps Kitsu person IDs to Discord user IDs through
-// the project user map. A person the project map cannot resolve is left out
-// rather than guessed from the global name map: forum assignee signals must not
-// mention whoever happens to share a display name.
+// the project user map.
 func ResolveAssigneeDiscordIDs(projectID string, kitsuPersonIDs []string) []string {
+	return ResolveAssigneeDiscordIDsWithIdentity(projectID, kitsuPersonIDs, nil)
+}
+
+// ResolveAssigneeDiscordIDsWithIdentity is ResolveAssigneeDiscordIDs with the
+// identity used for the fallback match. A person the project map cannot resolve
+// is left out rather than guessed from the global name map: forum assignee
+// signals must not mention whoever happens to share a display name.
+func ResolveAssigneeDiscordIDsWithIdentity(projectID string, kitsuPersonIDs []string, identity func(kitsuPersonID string) (name, email string)) []string {
 	ids := make([]string, 0, len(kitsuPersonIDs))
 	for _, personID := range kitsuPersonIDs {
 		if UserMapResolver == nil {
 			return nil
 		}
-		if id := UserMapResolver(projectID, personID, "", ""); id != "" {
+		var name, email string
+		if identity != nil {
+			name, email = identity(personID)
+		}
+		if id := UserMapResolver(projectID, personID, name, email); id != "" {
 			ids = append(ids, id)
 		}
 	}
