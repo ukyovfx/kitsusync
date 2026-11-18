@@ -1590,9 +1590,13 @@ type productionNotificationReviewerView struct {
 	RoleSendErrorsByTaskType   map[string]error
 	RoleSendersByTaskType      map[string]reviewerRoleSender
 	RoleSendEvidenceRequested  bool
-	KitsuBase                  string
-	KitsuToken                 string
-	KitsuReady                 bool
+	// AutomaticReviewersByTaskType is filled by the loader so rendering never
+	// re-queries Kitsu per row.
+	AutomaticReviewersByTaskType map[string][]string
+	AutomaticStatesByTaskType    map[string]string
+	KitsuBase                    string
+	KitsuToken                   string
+	KitsuReady                   bool
 }
 
 func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includeAutomatic, includeRoleSendEvidence bool, botTokens ...string) productionNotificationReviewerView {
@@ -1628,6 +1632,16 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 			view.RoleSendersByTaskType = make(map[string]reviewerRoleSender, len(forumSettings.Routes))
 			for _, route := range forumSettings.Routes {
 				view.RoleSendersByTaskType[route.TaskTypeID] = reviewerRoleSender{ChannelID: route.ForumChannelID}
+			}
+			// Resolve department supervisors from the cached snapshot so the
+			// read table is complete on the first render, while the directory
+			// is still being fetched in the background.
+			if !view.GuildPending && view.TeamErr == nil && view.KitsuReady {
+				view.AutomaticReviewersByTaskType = make(map[string][]string, len(view.TaskTypes))
+				view.AutomaticStatesByTaskType = make(map[string]string, len(view.TaskTypes))
+				for _, taskType := range view.TaskTypes {
+					view.AutomaticReviewersByTaskType[taskType.ID], view.AutomaticStatesByTaskType[taskType.ID] = productionAutomaticReviewerRecipients(taskType, view)
+				}
 			}
 		}
 		view.KitsuBase, view.KitsuToken, view.KitsuReady = runtimeKitsuDataSource(db)
@@ -1777,6 +1791,9 @@ func productionAutomaticReviewerLabel(taskType kitsu.TaskType, data productionNo
 }
 
 func productionAutomaticReviewerRecipients(taskType kitsu.TaskType, data productionNotificationReviewerView) ([]string, string) {
+	if names, ok := data.AutomaticReviewersByTaskType[taskType.ID]; ok {
+		return names, data.AutomaticStatesByTaskType[taskType.ID]
+	}
 	switch {
 	case data.GuildPending:
 		return nil, "discord-pending"
