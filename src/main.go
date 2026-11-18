@@ -429,7 +429,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		TaskURL: func(taskID string) string {
 			return forum.TaskURLFor(db, func() string { return setup.PublicKitsuURL(db) }, taskID)
 		},
-		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string) {
+		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
 			return recipients.ForTask(taskID, payload)
 		},
 	}

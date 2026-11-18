@@ -49,10 +49,13 @@ func TestRecipientsCommentIntentMentionsAndAssignees(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-1", "person-2")
 
-	users, roles := commentRecipients(db, true).ForTask("task-1", model.ForumPostMessagePayload{
+	users, roles, err := commentRecipients(db, true).ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentComment,
 		Mentions: []string{"person-9"},
 	})
+	if err != nil {
+		t.Fatalf("ForTask: %v", err)
+	}
 	if len(roles) != 0 {
 		t.Errorf("comment intent must not mention roles: %v", roles)
 	}
@@ -71,10 +74,13 @@ func TestRecipientsCommentIntentSkipsAssigneesWhenDisabled(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-1")
 
-	users, _ := commentRecipients(db, false).ForTask("task-1", model.ForumPostMessagePayload{
+	users, _, err := commentRecipients(db, false).ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentComment,
 		Mentions: []string{"person-9"},
 	})
+	if err != nil {
+		t.Fatalf("ForTask: %v", err)
+	}
 	if len(users) != 1 || users[0] != "d-person-9" {
 		t.Fatalf("users = %v, want only the mentioned person", users)
 	}
@@ -84,10 +90,13 @@ func TestRecipientsCommentIntentDeduplicatesOverlap(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-9")
 
-	users, _ := commentRecipients(db, true).ForTask("task-1", model.ForumPostMessagePayload{
+	users, _, err := commentRecipients(db, true).ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentComment,
 		Mentions: []string{"person-9"},
 	})
+	if err != nil {
+		t.Fatalf("ForTask: %v", err)
+	}
 	if len(users) != 1 {
 		t.Fatalf("users = %v, want one entry for the overlapping person", users)
 	}

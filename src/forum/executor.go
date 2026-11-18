@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -26,10 +27,26 @@ type Executor struct {
 	// TaskURL resolves the Kitsu link for a task.
 	TaskURL func(taskID string) string
 	// Recipients resolves the mention targets for a signal.
-	Recipients func(taskID string, payload model.ForumPostMessagePayload) (userIDs, roleIDs []string)
+	Recipients func(taskID string, payload model.ForumPostMessagePayload) (userIDs, roleIDs []string, err error)
 	Now        func() time.Time
 	// Sleep is injectable so tests do not wait for real backoff.
 	Sleep func(time.Duration)
+	// recipientCache reuses reviewer resolution within one drain pass, keyed
+	// by production and task type, so several signals do not re-resolve.
+	recipientCache map[string]resolvedRecipients
+}
+
+// forumRecipientResolutionMaxAttempts bounds the recipient-resolution retries:
+// after this many claims a signal is posted without mentions so the thread at
+// least documents the state change. 4 retries spend about 3.5 minutes of
+// backoff before the unmentioned send.
+const forumRecipientResolutionMaxAttempts = 5
+
+// resolvedRecipients is one cached recipient resolution.
+type resolvedRecipients struct {
+	users []string
+	roles []string
+	err   error
 }
 
 // ErrForumRateLimited ends a drain pass: Discord reported a rate limit, so the
@@ -48,6 +65,7 @@ func (e Executor) Drain(maxRows int) (int, error) {
 		e.Sleep = time.Sleep
 	}
 	processed := 0
+	e.recipientCache = map[string]resolvedRecipients{}
 	for processed < maxRows {
 		row, err := model.ClaimNextForumOutboxRow(e.DB, e.Now())
 		if err != nil {
@@ -203,7 +221,33 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	}
 	var userIDs, roleIDs []string
 	if e.Recipients != nil {
-		userIDs, roleIDs = e.Recipients(row.TaskID, payload)
+		users, roles, err := e.resolveRecipients(row, task, payload)
+		switch {
+		case err != nil:
+			if row.Attempts >= forumRecipientResolutionMaxAttempts {
+				slog.Warn("Forum recipients still unresolved; sending the signal without mentions",
+					"error_class", "forum_recipient_resolution_failed",
+					"task_id", row.TaskID,
+					"attempts", row.Attempts,
+					"err", err)
+			} else {
+				slog.Warn("Forum recipients unresolved; retrying later",
+					"error_class", "forum_recipient_resolution_failed",
+					"task_id", row.TaskID,
+					"attempts", row.Attempts,
+					"err", err)
+				return e.retryLater(row, "forum_recipient_resolution_failed", backoffFor(row.Attempts))
+			}
+		case len(users)+len(roles) == 0:
+			// D-06: with nobody to mention the message would only add noise.
+			slog.Info("Forum signal dropped: no recipients",
+				"error_class", "forum_no_recipient",
+				"task_id", row.TaskID,
+				"intent", payload.Intent)
+			return model.CancelForumOutboxRow(e.DB, row.ID, "no_recipient")
+		default:
+			userIDs, roleIDs = users, roles
+		}
 	}
 	url := ""
 	if e.TaskURL != nil {
@@ -219,6 +263,22 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 		return e.handleFailure(row, err)
 	}
 	return model.FinishForumOutboxRow(e.DB, row.ID, "message="+msg.ID)
+}
+
+// resolveRecipients calls the configured resolver, reusing the result within
+// the same drain pass for WFA signals of one (production, task type): the
+// reviewer lookup is external, so several signals must not re-resolve it.
+func (e Executor) resolveRecipients(row model.ForumOutbox, task model.ForumTask, payload model.ForumPostMessagePayload) ([]string, []string, error) {
+	if payload.Intent != model.ForumIntentStatusWFA {
+		return e.Recipients(row.TaskID, payload)
+	}
+	key := task.ProjectID + "\x00" + task.TaskTypeID
+	if cached, ok := e.recipientCache[key]; ok {
+		return cached.users, cached.roles, cached.err
+	}
+	users, roles, err := e.Recipients(row.TaskID, payload)
+	e.recipientCache[key] = resolvedRecipients{users: users, roles: roles, err: err}
+	return users, roles, err
 }
 
 // executeWarnMessage posts the flap warning. It never mentions anyone.
