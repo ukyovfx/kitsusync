@@ -126,7 +126,14 @@ func (e Executor) executeCreateThread(row model.ForumOutbox, token string) error
 // findExistingThread looks for a thread this Bot already opened with the same
 // name, so a create retried after a crash does not post the card twice.
 func (e Executor) findExistingThread(token, forumID, name string) (string, bool) {
-	threads, err := discord.ListActiveGuildThreads(token, e.GuildID())
+	guildID := e.guildForForum(forumID)
+	if guildID == "" {
+		// Without a resolvable guild the duplicate search cannot run: skip it
+		// so the retry falls through to a normal create attempt instead of
+		// panicking on a missing lookup.
+		return "", false
+	}
+	threads, err := discord.ListActiveGuildThreads(token, guildID)
 	if err == nil {
 		for _, thread := range threads {
 			if thread.ParentID == forumID && thread.Name == name {
@@ -144,6 +151,25 @@ func (e Executor) findExistingThread(token, forumID, name string) (string, bool)
 		}
 	}
 	return "", false
+}
+
+// guildForForum resolves the guild a forum channel belongs to: the
+// production's forum settings first, then the project's guild, then the
+// Executor-wide GuildID. Empty means the search above is skipped safely.
+func (e Executor) guildForForum(forumID string) string {
+	settings, ok, err := model.LoadProductionForumSettings(e.DB, e.productionForForum(forumID))
+	if err == nil && ok {
+		if guild := strings.TrimSpace(settings.Config.GuildID); guild != "" {
+			return guild
+		}
+		if p := model.FindProjectByKitsuID(e.DB, settings.Config.ProductionID); p != nil && strings.TrimSpace(p.DiscordGuildID) != "" {
+			return strings.TrimSpace(p.DiscordGuildID)
+		}
+	}
+	if e.GuildID != nil {
+		return strings.TrimSpace(e.GuildID())
+	}
+	return ""
 }
 
 func (e Executor) executeSyncThread(row model.ForumOutbox, token string) error {
