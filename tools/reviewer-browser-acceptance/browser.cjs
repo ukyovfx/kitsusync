@@ -1146,7 +1146,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await page.locator('form input[name="action"][value*="production_member"],form input[name="action"][value*="production_role"]').count()) throw new Error('Team exposed membership or role mutation');
         if ((await teamTab.innerText()).includes('Example task') || (await teamTab.innerText()).includes('Assigned')) throw new Error('Team inferred task assignments from Department membership');
         const teamText = await teamTab.innerText();
-        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '未リンク'] : ['Team', 'Supervision scope', 'Not linked']) {
+        for (const expected of locale.lang === 'ja' ? ['チーム', 'Supervisor範囲', '要確認'] : ['Team', 'Supervision scope', 'Needs review']) {
           if (!teamText.includes(expected)) throw new Error(`Team view is missing ${expected} in ${locale.lang}`);
         }
         const teamHeaders = (await page.locator('.production-team-table thead th').allTextContents()).map(text => text.trim());
@@ -1212,7 +1212,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await gotoProduction(page, locale, 'settings');
         const configuredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
         const settings = await page.locator('#panel-settings').innerText();
-        const settingsPositions = ['Storage', locale.lang === 'ja' ? '技術情報' : 'Technical details', locale.lang === 'ja' ? '診断' : 'Diagnostics', 'Danger Zone'].map(label => settings.indexOf(label));
+        const settingsPositions = [locale.lang === 'ja' ? 'ストレージ' : 'Storage', locale.lang === 'ja' ? '技術情報' : 'Technical details', locale.lang === 'ja' ? '診断' : 'Diagnostics', locale.lang === 'ja' ? '危険な操作' : 'Danger Zone'].map(label => settings.indexOf(label));
         if (settingsPositions.some(position => position < 0) || settingsPositions.some((position, index) => index > 0 && position <= settingsPositions[index - 1])) {
           throw new Error(`Settings sections are missing or out of order in ${locale.lang}: ${JSON.stringify(settingsPositions)}`);
         }
@@ -1494,8 +1494,17 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       }
       await page.screenshot({ path: path.join(output, screen.file), fullPage: true });
       await record(page, `/bot/admin/projects?tab=${screen.tab}${screen.extra}`, 'en', 'desktop', 'rate-limited Discord directory', `rendered in ${elapsed}ms from the cached or not-yet-loaded directory without waiting on the rate limit`);
+      if (screen.tab === 'notifications') {
+        // The page-level badge must never claim a healthy directory while the
+        // member or role snapshot is stale or unrefreshable.
+        const badge = (await page.locator('.production-notification-actions .status-pill').first().innerText()).trim();
+        if (badge !== 'Needs review') throw new Error(`the notification badge claims "${badge}" from an unrefreshable Discord directory (${screen.extra}); expected Needs review`);
+      }
     }
     await fixture(page, 'directory-warm');
+    await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=notifications&lang=en`, { waitUntil: 'networkidle' });
+    const warmBadge = (await page.locator('.production-notification-actions .status-pill').first().innerText()).trim();
+    if (warmBadge !== 'Healthy') throw new Error(`the notification badge reads "${warmBadge}" after the Discord directory refreshed successfully`);
 
     // rate-limited Discord channel list must keep the pages open, with
     // cached-only rendering and the manual refetch action visible.
@@ -1943,7 +1952,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     await fixture(page, 'ready');
     for (const locale of locales) {
       const prompts = [
-        { route: '/bot/admin/health', table: '.production-visibility table', labels: locale.lang === 'ja' ? ['bot から見えているか', 'タスク件数', '最終ポーリング成功'] : ['Visible to bot', 'Task count', 'Last polling success'] },
+        { route: '/bot/admin/health', table: '.production-visibility table', labels: locale.lang === 'ja' ? ['Bot から見えているか', 'タスク件数', '最終ポーリング成功'] : ['Visible to bot', 'Task count', 'Last polling success'] },
         { route: '/bot/admin/audit', table: '.audit-log-table table', labels: locale.lang === 'ja' ? ['日時', 'Production', '操作内容', '操作ユーザー', '結果'] : ['Date and time', 'Production', 'Action', 'Acting user', 'Result'] },
       ];
       for (const prompt of prompts) {
@@ -2229,30 +2238,37 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
       if (fields.count < 1 || fields.alignments.length !== 1 || fields.alignments[0] !== 'start') throw new Error(`connection form fields do not align to start (${locale.lang}): ${JSON.stringify(fields)}`);
       await record(page, '/bot/admin/bot?edit=1', locale.lang, 'desktop', 'connection form alignment', fields.count + ' fields report align-content: start');
 
-      // A12: focused inputs and selects keep a visible outline.
-      // A12: keyboard focus must leave a visible outline on inputs and selects.
-      // Tab from the document start so :focus-visible actually matches.
-      await page.evaluate(() => window.scrollTo(0, 0));
-      const seen = new Set();
-      let focusResults = [];
-      for (let step = 0; step < 60 && focusResults.length < 2; step++) {
-        await page.keyboard.press('Tab');
-        const state = await page.evaluate(() => {
-          const node = document.activeElement;
-          if (!node || !/^(INPUT|SELECT|TEXTAREA)$/.test(node.tagName)) return null;
-          if (node.type === 'hidden' || node.type === 'checkbox' || node.type === 'radio') return null;
-          const style = getComputedStyle(node);
-          return { name: node.name || node.id || node.tagName, tag: node.tagName, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
-        });
-        if (!state || seen.has(state.tag)) continue;
-        seen.add(state.tag);
-        focusResults.push(state);
+      // A12: keyboard focus must leave a visible outline on each focusable
+      // field kind the page offers. Tab from the document start so
+      // :focus-visible actually matches.
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`${base}/bot/admin/users?lang=${locale.lang}&discord_guild_id=${guildID}`, { waitUntil: 'networkidle' });
+        const seen = new Set();
+        const focusResults = [];
+        for (let step = 0; step < 80 && focusResults.length < 3; step++) {
+          await page.keyboard.press('Tab');
+          const state = await page.evaluate(() => {
+            const node = document.activeElement;
+            if (!node || !/^(INPUT|SELECT|TEXTAREA)$/.test(node.tagName)) return null;
+            if (node.type === 'hidden' || node.type === 'checkbox' || node.type === 'radio') return null;
+            const rect = node.getBoundingClientRect();
+            if (!rect.width || !rect.height) return null;
+            const stateStyle = getComputedStyle(node);
+            if (stateStyle.visibility === 'hidden' || stateStyle.display === 'none') return null;
+            return { name: node.name || node.id || node.tagName, tag: node.tagName, outlineStyle: stateStyle.outlineStyle, outlineWidth: stateStyle.outlineWidth };
+          });
+          if (!state || seen.has(state.tag)) continue;
+          seen.add(state.tag);
+          focusResults.push(state);
+        }
+        if (!focusResults.length) throw new Error(`never reached a keyboard-focused field at ${width}px (${locale.lang})`);
+        for (const item of focusResults) {
+          if (item.outlineStyle !== 'solid' || parseFloat(item.outlineWidth) < 1) throw new Error(`keyboard-focused field has no visible outline at ${width}px (${locale.lang}): ${JSON.stringify(focusResults)}`);
+        }
+        await page.screenshot({ path: path.join(output, `batch3-focus-ring-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin/users', locale.lang, 'band-' + width, 'focus ring', focusResults.map(item => item.tag).join(' + ') + ' keep a visible solid outline under keyboard focus');
       }
-      if (!focusResults.length) throw new Error(`never reached a keyboard-focused input or select on Connections (${locale.lang})`);
-      for (const item of focusResults) {
-        if (item.outlineStyle !== 'solid' || parseFloat(item.outlineWidth) < 1) throw new Error(`keyboard-focused field has no visible outline (${locale.lang}): ${JSON.stringify(focusResults)}`);
-      }
-      await record(page, '/bot/admin/bot?edit=1', locale.lang, 'desktop', 'focus ring', focusResults.map(item => item.tag).join(' + ') + ' keep a visible solid outline under keyboard focus');
 
       // A10: forum mapping tables use a fixed layout with a 40% name column on
       // desktop and stack into one column per row on phones.

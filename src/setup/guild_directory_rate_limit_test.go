@@ -171,3 +171,49 @@ func seedGuildDirectory(t *testing.T, cache *guildDirectoryCache, guildID, body 
 	defer cache.mu.Unlock()
 	cache.entries[guildID] = &guildDirectoryCacheEntry{body: []byte(body), fetchedAt: cache.now()}
 }
+
+// failGuildDirectory records a failed refresh that kept the cached snapshot, so
+// the next reader sees data that could not be refreshed.
+func failGuildDirectory(t *testing.T, cache *guildDirectoryCache, guildID string) {
+	t.Helper()
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if entry := cache.entries[guildID]; entry != nil {
+		entry.lastErr = discordBotAPIError("synthetic rate limit", http.StatusTooManyRequests, nil)
+		entry.rateLimited = true
+	}
+}
+
+// TestNotificationBadgeReflectsUnrefreshableDirectory covers the badge rule: a
+// healthy routing status must not report Healthy while the member or role
+// snapshot is stale after a failed fetch.
+func TestNotificationBadgeReflectsUnrefreshableDirectory(t *testing.T) {
+	db := newIAViewDB(t)
+	project := model.Project{
+		KitsuProjectID:    "badge-degraded",
+		Name:              "Badge Degraded",
+		DiscordGuildID:    "123456789012345678",
+		DiscordCategoryID: "123456789012345679",
+	}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatal(err)
+	}
+	renderBody := func() string {
+		return renderSelectedProductionNotifications(db, httptest.NewRequest("GET", "/bot/admin/projects?project="+project.KitsuProjectID+"&tab=notifications&lang=en", nil), project, "en", "ok", "Healthy", "", "synthetic-discord-token")
+	}
+
+	t.Cleanup(func() { invalidateGuildDirectory(project.DiscordGuildID) })
+	seedGuildDirectory(t, guildMemberListCache, project.DiscordGuildID, `[{"user":{"id":"123456789012345680","username":"linked-artist"},"nick":""}]`)
+	seedGuildDirectory(t, guildRoleListCache, project.DiscordGuildID, `[{"id":"123456789012345681","name":"Leads","mentionable":true}]`)
+	if rendered := renderBody(); !strings.Contains(rendered, `role="status">Healthy</span>`) {
+		t.Fatalf("fresh directory should keep the healthy badge: %s", rendered)
+	}
+
+	expireGuildDirectory(t, guildMemberListCache, project.DiscordGuildID)
+	expireGuildDirectory(t, guildRoleListCache, project.DiscordGuildID)
+	failGuildDirectory(t, guildMemberListCache, project.DiscordGuildID)
+	failGuildDirectory(t, guildRoleListCache, project.DiscordGuildID)
+	if rendered := renderBody(); strings.Contains(rendered, ">Healthy<") || !strings.Contains(rendered, "Needs review") {
+		t.Fatalf("badge must not report Healthy while the directory could not be refreshed: %s", rendered)
+	}
+}

@@ -217,6 +217,25 @@ func cachedGuildRoles(guildID, botToken string) ([]DiscordGuildRole, guildDirect
 	return roles, guildDirectoryReady, nil
 }
 
+// guildDirectoryDegraded reports whether the Discord member or role snapshot is
+// missing or could not be refreshed, so a page never shows a healthy state
+// while the data behind it is unavailable.
+func guildDirectoryDegraded(guildID, botToken string) bool {
+	if botToken == "" || !isDiscordSnowflake(guildID) {
+		return false
+	}
+	views := []guildDirectoryView{
+		guildMemberListCache.view(guildID, botToken),
+		guildRoleListCache.view(guildID, botToken),
+	}
+	for _, view := range views {
+		if !view.hasData() || view.fetchFailed {
+			return true
+		}
+	}
+	return false
+}
+
 // guildDirectoryNotice returns the stale/pending notice for a cached read, or
 // "" when the snapshot is fresh enough that nothing needs saying.
 func guildDirectoryNotice(lang string, view guildDirectoryView) string {

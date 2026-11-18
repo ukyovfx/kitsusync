@@ -226,7 +226,7 @@ func AdminIndexWithRuntime(db *gorm.DB, runtimeHealthy func() bool) http.Handler
 				esc(t(lang, "\u30a2\u30af\u30c6\u30a3\u30d6\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3", "Active Productions")),
 				withLang("/bot/admin/projects", r),
 				esc(t(lang, "\u9023\u643a\u6e08\u307f\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u3092\u958b\u304f \u2192", "Open Connected Productions \u2192")),
-				esc(t(lang, "\u30d7\u30ed\u30c0\u30af\u30b7\u30e7\u30f3\u540d", "Production")),
+				esc(t(lang, "プロダクション名", "プロダクション")),
 				esc(t(lang, "\u30c6\u30f3\u30d7\u30ec\u30fc\u30c8", "Template")),
 				esc(t(lang, "\u30c1\u30e3\u30f3\u30cd\u30eb\u6570", "Channels")),
 				esc(t(lang, "Webhook \u6570", "Webhooks")),
@@ -861,7 +861,7 @@ func renderConnectedProductionChannelValidationCard(lang string, r *http.Request
 		esc(t(lang, "\u9023\u643a\u3068 Discord \u30c1\u30e3\u30f3\u30cd\u30eb\u3092\u524a\u9664", "Remove connection and Discord channels")),
 		esc(t(lang, "\u524a\u9664\u524d\u306e\u6700\u7d42\u78ba\u8a8d\u3067\u3059\u3002\u5185\u90e8\u78ba\u8a8d\u306e\u7d50\u679c\u3092\u3075\u307e\u3048\u3066\u3001\u524a\u9664\u5185\u5bb9\u3068\u6ce8\u610f\u70b9\u3092\u78ba\u8a8d\u3057\u3066\u304f\u3060\u3055\u3044\u3002", "Final confirmation before stronger delete.")),
 		esc(t(lang, "\u78ba\u8a8d\u304c\u5fc5\u8981", "Review required")),
-		esc(t(lang, "Production", "Production")),
+		esc(t(lang, "プロダクション", "Production")),
 		esc(project.Name),
 		esc(t(lang, "Project ID", "Project ID")),
 		esc(project.KitsuProjectID),
@@ -926,7 +926,7 @@ func renderConnectedProductionChannelValidationCard(lang string, r *http.Request
 				esc(t(lang, "validated channel-only 削除候補の検証", "Validation-only review for validated channel delete candidates")),
 				esc(t(lang, "Discord 上の current state と保存済み参照を照合した確認結果です。まだ削除は実行されません。この flow は validated channel-only deletion だけを扱い、KitsuSync の連携解除、project row 削除、category 削除は行いません。", "This is a validation-only review card. It compares saved references with the current Discord state and does not execute deletion. This flow only covers validated channel-only deletion and does not remove the KitsuSync connection, project row, or category.")),
 				esc(t(lang, "VALIDATION ONLY", "VALIDATION ONLY")),
-				esc(t(lang, "Production", "Production")),
+				esc(t(lang, "プロダクション", "Production")),
 				esc(project.Name),
 				esc(t(lang, "Project ID", "Project ID")),
 				esc(project.KitsuProjectID),
@@ -1044,7 +1044,7 @@ func renderUnifiedConnectedProductionChannelValidationCard(lang string, r *http.
 		esc(t(lang, "Discord チャンネル削除の確認", "Review Discord channel deletion")),
 		esc(t(lang, "ここでは削除可能と確認できた Discord チャンネルだけを確認します。まだ削除は実行されません。", "This step reviews only the Discord channels that look safe to delete. No deletion runs yet.")),
 		esc(t(lang, "REVIEW REQUIRED", "REVIEW REQUIRED")),
-		esc(t(lang, "Production", "Production")),
+		esc(t(lang, "プロダクション", "Production")),
 		esc(project.Name),
 		esc(t(lang, "Project ID", "Project ID")),
 		esc(project.KitsuProjectID),
@@ -1525,7 +1525,7 @@ func renderConnectedProductionStrongDeleteResultPage(lang string, r *http.Reques
 		esc(summary),
 		statusClass,
 		esc(statusLabel),
-		esc(t(lang, "Production", "Production")),
+		esc(t(lang, "プロダクション", "Production")),
 		esc(project.Name),
 		esc(t(lang, "Project ID", "Project ID")),
 		esc(project.KitsuProjectID),
@@ -1656,7 +1656,7 @@ func renderConnectedProductionChannelDeleteResultPage(lang string, r *http.Reque
 		esc(t(lang, "validated candidate だけを対象に Discord channel deletion を実行した結果です。KitsuSync の連携解除、project row 削除、category 削除は自動では行っていません。", "This result covers actual Discord channel deletion only for validated candidates. KitsuSync connection removal, project-row deletion, and category deletion were not performed automatically.")),
 		statusClass,
 		esc(statusLabel),
-		esc(t(lang, "Production", "Production")),
+		esc(t(lang, "プロダクション", "Production")),
 		esc(project.Name),
 		esc(t(lang, "Project ID", "Project ID")),
 		esc(project.KitsuProjectID),
@@ -2262,7 +2262,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 				}
 				projectOptions.WriteString(fmt.Sprintf(`<option value="%s"%s>%s</option>`, esc(candidate.KitsuProjectID), selected, esc(candidate.Name)))
 			}
-			selectorCard = `<div class="section-card glass"><h3>` + t(lang, "編集対象の production", "Editing production") + `</h3><p class="hint">` + t(lang, "ユーザー割り当てと reviewer / checker 設定は production ごとに切り替えて編集します。", "Switch the production here to edit user assignments and reviewer/checker settings per production.") + `</p><form method="GET" action="/bot/admin/users"><input type="hidden" name="lang" value="` + esc(lang) + `"><div class="form-grid"><div><label>` + t(lang, "Production", "Production") + `</label><select name="project">` + projectOptions.String() + `</select></div></div><div class="button-row"><button type="submit" class="btn">` + t(lang, "表示を切り替え", "Switch production") + `</button></div></form></div>`
+			selectorCard = `<div class="section-card glass"><h3>` + t(lang, "編集対象のプロダクション", "Editing production") + `</h3><p class="hint">` + t(lang, "ユーザー割り当てと reviewer / checker 設定はプロダクションごとに切り替えて編集します。", "Switch the production here to edit user assignments and reviewer/checker settings per production.") + `</p><form method="GET" action="/bot/admin/users"><input type="hidden" name="lang" value="` + esc(lang) + `"><div class="form-grid"><div><label>` + t(lang, "プロダクション", "Production") + `</label><select name="project">` + projectOptions.String() + `</select></div></div><div class="button-row"><button type="submit" class="btn">` + t(lang, "表示を切り替え", "Switch production") + `</button></div></form></div>`
 		}
 		assignmentActionRow := `<div class="button-row"><button type="submit" class="btn">` + t(lang, "保存", "Save") + `</button><a class="btn-ghost" href="` + esc(usersPageURL) + `">` + t(lang, "キャンセル", "Cancel") + `</a></div>`
 		body := fmt.Sprintf(`
@@ -2570,7 +2570,7 @@ func renderConnectionsPageSafeWithRuntime(w http.ResponseWriter, r *http.Request
 		fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, body))
 		return
 	}
-	body := `<div class="section-card glass connections-card"><div class="page-heading connections-card-header"><div><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div><div class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><dl class="status-list"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd><dt>` + esc(tr(lang, "connections.account")) + `</dt><dd>` + connectionStatusPill(connectionSecretStatus(storedRuntimeKitsuEmail(db), lang)) + `</dd></dl></div><div class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><dl class="status-list"><dt>Discord Bot Token</dt><dd>` + connectionStatusPill(connectionSecretStatus(botToken, lang)) + `</dd></dl></div><div class="button-row connections-actions"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></div>`
+	body := `<div class="section-card glass connections-card"><div class="page-heading connections-card-header"><div><p class="hint">` + esc(statusHint) + `</p></div><span class="status-pill ` + esc(statusClass) + `" role="status">` + esc(statusLabel) + `</span></div><div class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><dl class="status-list"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd><dt>` + esc(tr(lang, "connections.account")) + `</dt><dd>` + connectionStatusPill(connectionSecretStatus(storedRuntimeKitsuEmail(db), lang)) + `</dd></dl></div><div class="settings-block connections-section"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><dl class="status-list"><dt>Discord Bot Token</dt><dd>` + connectionStatusPill(connectionSecretStatus(botToken, lang)) + `</dd></dl></div><div class="button-row connections-actions"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div></div>`
 	fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, body))
 }
 
@@ -2581,7 +2581,7 @@ func renderConnectionsDisplayBodyWithHealthRaw(lang string, r *http.Request, db 
 	return `<div class="connections-summary-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(tr(lang, "connections.host")) + `</dt><dd><code>` + esc(host) + `</code></dd></div><div class="connection-field-row"><dt>` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</dt><dd>` + connectionSecretDisplay(StoredRuntimeKitsuToken(db), lang) + `</dd></div></dl></section>` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.discord")) + `</h2><span class="status-pill ` + esc(discordStatus.Class) + `" role="status">` + esc(discordStatus.Label) + `</span></div><dl class="connection-field-list"><div class="connection-field-row"><dt>` + esc(t(lang, "Discord Botトークン", "Discord Bot Token")) + `</dt><dd>` + connectionSecretDisplay(botToken, lang) + `</dd></div></dl></section>` +
-		`</div><div class="button-row connections-actions"><a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn-ghost" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div>`
+		`</div><div class="button-row connections-actions"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(tr(lang, "connections.edit")) + `</a><a class="btn" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(tr(lang, "ia.new_connection")) + `</a></div>`
 }
 
 func renderConnectionsDisplayBodyWithHealth(lang string, r *http.Request, db *gorm.DB, statusHint, statusClass, statusLabel, host, botToken string, kitsuHealthy, discordHealthy bool) string {

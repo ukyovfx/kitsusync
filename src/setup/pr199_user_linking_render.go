@@ -160,9 +160,9 @@ func renderGlobalUserLinkingTable(db *gorm.DB, lang string, directory globalDisc
 				live, found := liveDiscordUsers[currentDiscordID]
 				switch {
 				case !found:
-					identity, state, class = t(lang, "選択中のDiscordサーバーで利用できません", "Unavailable in selected Discord server"), t(lang, "要確認", "Needs verification"), "warning"
+					identity, state, class = t(lang, "選択中のDiscordサーバーで利用できません", "Unavailable in selected Discord server"), t(lang, "要確認", "Needs review"), "warning"
 				case strings.TrimSpace(live.Username) == "":
-					identity, state, class = t(lang, "Discordユーザー名を確認できません", "Discord username unavailable"), t(lang, "要確認", "Needs verification"), "warning"
+					identity, state, class = t(lang, "Discordユーザー名を確認できません", "Discord username unavailable"), t(lang, "要確認", "Needs review"), "warning"
 				default:
 					identity, state, class = "@"+strings.TrimSpace(live.Username), t(lang, "紐づけ済み", "Linked"), "success"
 				}
