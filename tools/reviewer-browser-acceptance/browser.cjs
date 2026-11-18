@@ -2130,6 +2130,206 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (issues.spans.some(span => span.right > span.cardRight + 1)) throw new Error(`recent system issue URL clips its card at ${width}px (${locale.lang}): ${JSON.stringify(issues.spans)}`);
       }
     }
+    // Batch 3 acceptance: A6-A12, the label/value alignment, chip, table and
+    // dialog defects found in the 2026-11-18 audit.
+    // Note: chips live in a flex row, so the browser blockifies their
+    // display:inline-block to block. "Inline-block" is therefore asserted as
+    // "laid out on one line by a flex parent" rather than by computed display.
+    await fixture(page, 'ready');
+    for (const locale of locales) {
+      // A6: WFA recipient chips carry a title and never stack or clip.
+      for (const width of [1440, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        await gotoWFARecipients(page, locale);
+        const chips = await page.evaluate(() => {
+          const row = document.querySelector('.production-wfa-chip-row');
+          const found = [...document.querySelectorAll('.production-wfa-target-chip')];
+          if (!row) return null;
+          const rowRect = row.getBoundingClientRect();
+          const rects = found.map(chip => chip.getBoundingClientRect());
+          return {
+            count: found.length,
+            rowDisplay: getComputedStyle(row).display,
+            titlesMatch: found.every(chip => (chip.getAttribute('title') || '') === chip.textContent.trim()),
+            singleLine: found.every(chip => Math.round(chip.getBoundingClientRect().height) < 40),
+            flexWrap: getComputedStyle(row).flexWrap,
+            rowRight: Math.round(rowRect.right),
+            chipRight: rects.length ? Math.round(Math.max(...rects.map(rect => rect.right))) : 0,
+            rowTop: Math.round(rowRect.top),
+            chipTops: [...new Set(rects.map(rect => Math.round(rect.top)))].length,
+          };
+        });
+        if (!chips || chips.count < 1) throw new Error(`WFA recipient chips missing at ${width}px (${locale.lang})`);
+        if (chips.rowDisplay !== 'flex') throw new Error(`WFA chip row is not a flex line at ${width}px (${locale.lang}): ${JSON.stringify(chips)}`);
+        if (!chips.singleLine) throw new Error(`WFA recipient chips wrap their own text at ${width}px (${locale.lang}): ${JSON.stringify(chips)}`);
+        if (!chips.titlesMatch) throw new Error(`WFA recipient chips are missing their full-name title at ${width}px (${locale.lang})`);
+        if (width <= 390) {
+          if (chips.flexWrap !== 'wrap') throw new Error(`WFA chip row does not wrap at ${width}px (${locale.lang}): ${chips.flexWrap}`);
+        } else if (chips.chipTops !== 1) throw new Error(`WFA chips break onto several lines at ${width}px (${locale.lang}): ${JSON.stringify(chips)}`);
+        if (chips.chipRight > chips.rowRight + 1) throw new Error(`WFA recipient chips clip their row at ${width}px (${locale.lang}): ${JSON.stringify(chips)}`);
+        await page.screenshot({ path: path.join(output, `batch3-wfa-chips-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-production&tab=notifications', locale.lang, 'band-' + width, 'WFA recipient chips', chips.count + ' single-line flex chips with full-name titles, wrap ' + chips.flexWrap + ', no clipping');
+      }
+
+      // A7: Team table cells align their content to the start of the cell so
+      // the label and value no longer split the cell height.
+      for (const width of [1440, 760, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await gotoProduction(page, locale, 'team');
+        const cells = await page.evaluate(() => {
+          const found = [...document.querySelectorAll('.production-team-row>th,.production-team-row>td')];
+          return {
+            count: found.length,
+            alignments: [...new Set(found.map(cell => getComputedStyle(cell).alignContent))],
+          };
+        });
+        if (!cells || cells.count < 1) throw new Error(`production team rows missing at ${width}px (${locale.lang})`);
+        if (cells.alignments.length !== 1 || cells.alignments[0] !== 'start') throw new Error(`production team cells do not align to start at ${width}px (${locale.lang}): ${JSON.stringify(cells.alignments)}`);
+        await page.screenshot({ path: path.join(output, `batch3-team-row-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-production&tab=team', locale.lang, 'band-' + width, 'team row alignment', cells.count + ' cells report align-content: start');
+      }
+
+      // A8: the Team load-failure notice is a real block inside its colspan
+      // cell, not a table-cell squeezed into the row grid.
+      await fixture(page, 'team-failure');
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await gotoProduction(page, locale, 'team');
+        const failure = await page.evaluate(() => {
+          const card = document.querySelector('.production-team-table .empty-state');
+          if (!card) return null;
+          const cell = card.closest('td');
+          const table = card.closest('table');
+          return {
+            tag: card.tagName,
+            display: getComputedStyle(card).display,
+            colspan: cell ? cell.getAttribute('colspan') : '',
+            width: Math.round(card.getBoundingClientRect().width),
+            tableWidth: table ? Math.round(table.getBoundingClientRect().width) : 0,
+            right: Math.round(card.getBoundingClientRect().right),
+            tableRight: table ? Math.round(table.getBoundingClientRect().right) : 0,
+          };
+        });
+        if (!failure) throw new Error(`team failure notice missing at ${width}px (${locale.lang})`);
+        if (failure.tag !== 'DIV' || failure.display === 'table-cell' || failure.colspan !== '5') throw new Error(`team failure notice is still a bare table cell at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
+        if (failure.width < Math.min(failure.tableWidth, 320) - 40 || failure.right > failure.tableRight + 1) throw new Error(`team failure notice is squeezed at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
+        await page.screenshot({ path: path.join(output, `batch3-team-failure-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-production&tab=team', locale.lang, 'band-' + width, 'team load failure', 'block notice spans the full ' + failure.colspan + '-column row at ' + failure.width + 'px');
+      }
+      await fixture(page, 'ready');
+
+      // A9: connection form fields keep their label and control at the top of
+      // the grid cell.
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+      const fields = await page.evaluate(() => {
+        const found = [...document.querySelectorAll('.connection-form-field')];
+        return { count: found.length, alignments: [...new Set(found.map(field => getComputedStyle(field).alignContent))] };
+      });
+      if (fields.count < 1 || fields.alignments.length !== 1 || fields.alignments[0] !== 'start') throw new Error(`connection form fields do not align to start (${locale.lang}): ${JSON.stringify(fields)}`);
+      await record(page, '/bot/admin/bot?edit=1', locale.lang, 'desktop', 'connection form alignment', fields.count + ' fields report align-content: start');
+
+      // A12: focused inputs and selects keep a visible outline.
+      // A12: keyboard focus must leave a visible outline on inputs and selects.
+      // Tab from the document start so :focus-visible actually matches.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      const seen = new Set();
+      let focusResults = [];
+      for (let step = 0; step < 60 && focusResults.length < 2; step++) {
+        await page.keyboard.press('Tab');
+        const state = await page.evaluate(() => {
+          const node = document.activeElement;
+          if (!node || !/^(INPUT|SELECT|TEXTAREA)$/.test(node.tagName)) return null;
+          if (node.type === 'hidden' || node.type === 'checkbox' || node.type === 'radio') return null;
+          const style = getComputedStyle(node);
+          return { name: node.name || node.id || node.tagName, tag: node.tagName, outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+        });
+        if (!state || seen.has(state.tag)) continue;
+        seen.add(state.tag);
+        focusResults.push(state);
+      }
+      if (!focusResults.length) throw new Error(`never reached a keyboard-focused input or select on Connections (${locale.lang})`);
+      for (const item of focusResults) {
+        if (item.outlineStyle !== 'solid' || parseFloat(item.outlineWidth) < 1) throw new Error(`keyboard-focused field has no visible outline (${locale.lang}): ${JSON.stringify(focusResults)}`);
+      }
+      await record(page, '/bot/admin/bot?edit=1', locale.lang, 'desktop', 'focus ring', focusResults.map(item => item.tag).join(' + ') + ' keep a visible solid outline under keyboard focus');
+
+      // A10: forum mapping tables use a fixed layout with a 40% name column on
+      // desktop and stack into one column per row on phones.
+      for (const width of [1440, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        await fixture(page, 'forum-settings');
+        await gotoProduction(page, locale, 'notifications');
+        const forumEntry = page.getByRole('link', { name: locale.lang === 'ja' ? 'フォーラム設定を開く' : 'Open forum settings', exact: true });
+        if (await forumEntry.count() !== 1) throw new Error(`forum settings entry missing on the notifications tab (${locale.lang})`);
+        await forumEntry.click();
+        await page.waitForLoadState('networkidle');
+        await page.waitForSelector('.forum-map-table', { timeout: 10000 });
+        const tables = await page.evaluate(() => [...document.querySelectorAll('.forum-map-table')].map(table => {
+          const rows = [...table.querySelectorAll('tbody tr')];
+          const tableWidth = table.getBoundingClientRect().width;
+          const first = table.querySelector('tbody tr>td, tbody tr>th');
+          const firstWidth = first ? first.getBoundingClientRect().width : 0;
+          return {
+            layout: getComputedStyle(table).tableLayout,
+            rows: rows.length,
+            firstVerticalAlign: first ? getComputedStyle(first).verticalAlign : '',
+            firstRatio: tableWidth ? firstWidth / tableWidth : 0,
+            rowDisplays: [...new Set(rows.map(row => getComputedStyle(row).display))],
+            stacked: rows.every(row => {
+              const children = [...row.children];
+              if (children.length < 2) return true;
+              const left = row.getBoundingClientRect().left;
+              return children.every(child => Math.abs(child.getBoundingClientRect().left - left) <= 2);
+            }),
+            overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          };
+        }));
+        if (tables.length !== 2) throw new Error(`forum mapping tables missing at ${width}px (${locale.lang}): ${tables.length}`);
+        for (const table of tables) {
+          if (table.rows < 1) throw new Error(`forum mapping table is empty at ${width}px (${locale.lang})`);
+          if (table.overflow > 1) throw new Error(`forum mapping table overflows at ${width}px (${locale.lang}): ${table.overflow}px`);
+          if (width === 1440) {
+            if (table.layout !== 'fixed') throw new Error(`forum mapping table is not fixed layout at ${width}px (${locale.lang})`);
+            if (table.firstVerticalAlign !== 'middle') throw new Error(`forum mapping name column is not vertically centered at ${width}px (${locale.lang}): ${table.firstVerticalAlign}`);
+            if (Math.abs(table.firstRatio - 0.4) > 0.04) throw new Error(`forum mapping name column is not 40% wide at ${width}px (${locale.lang}): ${table.firstRatio.toFixed(3)}`);
+          } else if (!table.rowDisplays.includes('grid') || !table.stacked) {
+            throw new Error(`forum mapping rows do not stack into one column at ${width}px (${locale.lang}): ${JSON.stringify(table)}`);
+          }
+        }
+        await fixture(page, 'ready');
+        await page.screenshot({ path: path.join(output, `batch3-forum-map-${locale.lang}-${width}.png`), fullPage: true });
+        await record(page, '/bot/admin/projects?project=reviewer-production&tab=settings', locale.lang, 'band-' + width, 'forum mapping tables', tables.length + ' tables hold their layout without overflow: ' + JSON.stringify(tables.map(table => ({ layout: table.layout, ratio: table.firstRatio.toFixed(2), rows: table.rows }))));
+      }
+
+      // A11: the confirmation dialog paints an opaque surface instead of
+      // letting the page show through its translucent glass panel.
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        // Stay on a production surface: /bot/admin/users starts a background
+        // guild-directory fetch that races with the test transport stubs.
+        await gotoProduction(page, locale, 'notifications');
+        const box = await page.evaluate(() => {
+          const modal = document.getElementById('deleteModal');
+          if (!modal) return null;
+          modal.classList.add('open');
+          modal.removeAttribute('aria-hidden');
+          const panel = modal.querySelector('.delete-box');
+          const style = getComputedStyle(panel);
+          const alpha = /rgba?\(([^)]+)\)/.exec(style.backgroundColor);
+          const parts = alpha ? alpha[1].split(',').map(part => part.trim()) : [];
+          return {
+            background: style.backgroundColor,
+            alpha: parts.length === 4 ? Number(parts[3]) : (parts.length === 3 ? 1 : 0),
+            width: Math.round(panel.getBoundingClientRect().width),
+          };
+        });
+        if (!box) throw new Error(`confirmation dialog missing at ${width}px (${locale.lang})`);
+        if (box.alpha < 1) throw new Error(`confirmation dialog surface is translucent at ${width}px (${locale.lang}): ${box.background}`);
+        await page.screenshot({ path: path.join(output, `batch3-delete-dialog-${locale.lang}-${width}.png`), fullPage: false });
+        await record(page, '/bot/admin/projects?project=reviewer-production', locale.lang, 'band-' + width, 'confirmation dialog', 'opaque ' + box.background + ' surface at ' + box.width + 'px wide');
+      }
+    }
     await page.setViewportSize({ width: 1440, height: 900 });
     const report = { candidate_sha: head, result: 'PASS', authentication: 'normal /bot/login synthetic manager flow', browser: 'Playwright Chromium', external_network: 'blocked; remote fonts fulfilled locally', intercepted_font_hosts: [...new Set(interceptedExternal)], states_checked: records };
     fs.writeFileSync(path.join(output, 'browser-results.json'), JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
