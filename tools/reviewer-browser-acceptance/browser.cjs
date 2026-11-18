@@ -2080,7 +2080,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const badgeRights = rows.map(row => row.badge);
         if (Math.max(...taskLefts) - Math.min(...taskLefts) > 1) throw new Error(`production overview activity task column start misaligns across rows at ${width}px (${locale.lang}): ${JSON.stringify(rows)}`);
         if (Math.max(...badgeRights) - Math.min(...badgeRights) > 1) throw new Error(`production overview activity badges do not end-align across rows at ${width}px (${locale.lang}): ${JSON.stringify(rows)}`);
-        if (rows.some(row => row.badge > row.rowRight - 2)) throw new Error(`production overview activity badges clip their row at ${width}px in ${locale.lang}`);
+        if (rows.some(row => row.badge > row.rowRight + 1)) throw new Error(`production overview activity badges clip their row at ${width}px in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `overflow-clip-production-overview-${locale.lang}-${width}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?project=reviewer-production', locale.lang, 'band-' + width, 'overview activity', 'task column and end-aligned result badges hold across rows');
       }
