@@ -220,7 +220,10 @@ func (p Planner) createTask(input TaskInput, route model.ProductionForumRoute, c
 		if err := p.queueCreateThreadIn(tx, input, route, input.StatusRole, 0, rendered, &result); err != nil {
 			return fmt.Errorf("queue thread create: %w", err)
 		}
-		if err := p.queueStatusSignalIn(tx, input, model.ForumTask{StatusID: input.StatusID}, &result); err != nil {
+		// A creation has no previous status, so the signal carries no base:
+		// the round-trip cancel at send time must never eat the opening
+		// announcement of a fresh thread.
+		if err := p.queueStatusSignalIn(tx, input, model.ForumTask{}, &result); err != nil {
 			return fmt.Errorf("queue status signal: %w", err)
 		}
 		return nil
@@ -492,11 +495,12 @@ func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing mode
 		return err
 	}
 	now := p.Now
+	key := model.ForumStatusCoalesceKey(input.TaskID)
 	_, err = model.CoalesceForumPostMessage(db, model.ForumOutbox{
 		TaskID:      input.TaskID,
 		Kind:        model.ForumOutboxPostMessage,
-		DedupeKey:   model.ForumPostMessageCoalesceKey(intent, input.TaskID) + ":" + now.UTC().Format(time.RFC3339Nano),
-		CoalesceKey: model.ForumPostMessageCoalesceKey(intent, input.TaskID),
+		DedupeKey:   key + ":" + now.UTC().Format(time.RFC3339Nano),
+		CoalesceKey: key,
 		Payload:     string(payload),
 		State:       model.ForumOutboxPending,
 		NotBefore:   now.Add(model.ForumMentionWindow),

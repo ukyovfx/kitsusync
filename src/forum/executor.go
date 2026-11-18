@@ -245,6 +245,25 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if task.ThreadID == nil || *task.ThreadID == "" {
 		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
 	}
+	// The mention window coalesces every status change of a task into one
+	// row, so the payload's intent is stale by the time the row runs. The
+	// ledger's current status decides what is said: a status that is no
+	// longer a trigger, or a return to the status the window opened from,
+	// cancels the mention instead of repeating it.
+	switch payload.Intent {
+	case model.ForumIntentStatusWFA, model.ForumIntentStatusRetake, model.ForumIntentStatusDone:
+		role, _, err := e.currentRoleAndForum(task)
+		if err != nil {
+			return model.FailForumOutboxRow(e.DB, row.ID, "missing_settings", err.Error())
+		}
+		if !IsTriggerRole(role) {
+			return model.CancelForumOutboxRow(e.DB, row.ID, "not_trigger")
+		}
+		if payload.BaseStatusID != "" && task.StatusID == payload.BaseStatusID {
+			return model.CancelForumOutboxRow(e.DB, row.ID, "round_trip")
+		}
+		payload.Intent = intentForRole(role)
+	}
 	var userIDs, roleIDs []string
 	if e.Recipients != nil {
 		users, roles, err := e.resolveRecipients(row, task, payload)

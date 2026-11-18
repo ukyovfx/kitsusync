@@ -133,8 +133,8 @@ func TestPlannerDropsStaleRetakeQuote(t *testing.T) {
 	}
 
 	var row model.ForumOutbox
-	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:retake:%").
-		First(&row).Error; err != nil {
+	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:status:%").
+		Order("id desc").First(&row).Error; err != nil {
 		t.Fatalf("no retake signal: %v", err)
 	}
 	var payload model.ForumPostMessagePayload

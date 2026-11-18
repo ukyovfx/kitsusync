@@ -363,15 +363,43 @@ func coalesceForumPostMessage(tx *gorm.DB, row ForumOutbox) error {
 	var existing ForumOutbox
 	err := tx.Where("coalesce_key = ? AND state = ?", row.CoalesceKey, ForumOutboxPending).First(&existing).Error
 	if err == nil {
+		merged, mergeErr := mergeForumWindowPayload(existing.Payload, row.Payload)
+		if mergeErr != nil {
+			return mergeErr
+		}
 		// Update the payload only; not_before stays at the window start.
 		return tx.Model(&ForumOutbox{}).Where("id = ?", existing.ID).
-			Update("payload", row.Payload).Error
+			Update("payload", merged).Error
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	_, err = EnqueueForumOutbox(tx, row)
 	return err
+}
+
+// mergeForumWindowPayload keeps a coalesced row's window identity: the base
+// status and window start recorded when the window opened stay in the payload
+// even when later signals of the same window rewrite the intent.
+func mergeForumWindowPayload(existingJSON, nextJSON string) (string, error) {
+	var existing, next ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(existingJSON), &existing); err != nil {
+		return nextJSON, nil
+	}
+	if err := json.Unmarshal([]byte(nextJSON), &next); err != nil {
+		return nextJSON, err
+	}
+	if existing.BaseStatusID != "" {
+		next.BaseStatusID = existing.BaseStatusID
+	}
+	if !existing.WindowOpenedAt.IsZero() {
+		next.WindowOpenedAt = existing.WindowOpenedAt
+	}
+	merged, err := json.Marshal(next)
+	if err != nil {
+		return nextJSON, err
+	}
+	return string(merged), nil
 }
 
 // ClaimNextForumOutboxRow selects the oldest due row whose task has no earlier
@@ -574,6 +602,13 @@ func ForumSyncThreadCoalesceKey(taskID string) string {
 // ForumPostMessageCoalesceKey builds the coalesce key for a signal message.
 func ForumPostMessageCoalesceKey(intent, taskID string) string {
 	return fmt.Sprintf("msg:%s:%s", intent, taskID)
+}
+
+// ForumStatusCoalesceKey is the coalesce key shared by every status signal of
+// a task: the 3-minute mention window merges WFA, RETAKE and DONE legs into a
+// single final-state message instead of one row per transition.
+func ForumStatusCoalesceKey(taskID string) string {
+	return "msg:status:" + taskID
 }
 
 // ForumCommentCoalesceKey builds the coalesce key for a comment signal. A

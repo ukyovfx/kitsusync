@@ -266,8 +266,8 @@ func TestPlannerQuotesLatestCommentOnRetake(t *testing.T) {
 	}
 
 	var row model.ForumOutbox
-	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:retake:%").
-		First(&row).Error; err != nil {
+	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:status:%").
+		Order("id desc").First(&row).Error; err != nil {
 		t.Fatalf("no retake signal: %v", err)
 	}
 	var payload model.ForumPostMessagePayload
@@ -296,8 +296,8 @@ func TestPlannerQuotesRetakeCommentWithoutTimezone(t *testing.T) {
 	}
 
 	var row model.ForumOutbox
-	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:retake:%").
-		First(&row).Error; err != nil {
+	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:status:%").
+		Order("id desc").First(&row).Error; err != nil {
 		t.Fatalf("no retake signal: %v", err)
 	}
 	var payload model.ForumPostMessagePayload
@@ -314,7 +314,7 @@ func wfaSignalPayload(t *testing.T, db *gorm.DB) model.ForumPostMessagePayload {
 	var row model.ForumOutbox
 	// The newest row: a task whose opening transition was a WFA also queues a
 	// creation-time wfa signal, so an older row can match the same filter.
-	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:wfa:%").
+	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:status:%").
 		Order("id desc").First(&row).Error; err != nil {
 		t.Fatalf("no wfa signal: %v", err)
 	}

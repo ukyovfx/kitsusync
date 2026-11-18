@@ -1117,3 +1117,136 @@ func TestReconcileSendingRowsRequeuesClaimedRows(t *testing.T) {
 		t.Errorf("note = %q", got.Note)
 	}
 }
+
+// The audit's P1: WFA → RETAKE → DONE inside the 3-minute mention window.
+// Every leg coalesces into the row the window opened with, and the drain
+// speaks the window's final state once: one message, DONE.
+func TestExecutorSendsOnlyFinalSignalAfterConsecutiveTransitions(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	planner.Now = now.Add(time.Minute)
+	if _, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake), stubCard()); err != nil {
+		t.Fatalf("retake: %v", err)
+	}
+	planner.Now = now.Add(100 * time.Second)
+	if _, err := planner.PlanTask(taskInput("s-done", model.ForumRoleDone), stubCard()); err != nil {
+		t.Fatalf("done: %v", err)
+	}
+
+	executor, fake := newExecutor(t, db)
+	executor.Now = func() time.Time { return now.Add(6 * time.Minute) }
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	var posts []recordedRequest
+	for _, request := range fake.snapshot() {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.Path, "/messages") {
+			posts = append(posts, request)
+		}
+	}
+	if len(posts) != 1 {
+		t.Fatalf("messages posted = %d, want the window's final state only", len(posts))
+	}
+	content, _ := posts[0].Body["content"].(string)
+	if !strings.Contains(content, "完了しました。") {
+		t.Errorf("content = %q, want the DONE signal of the window's last state", content)
+	}
+	for _, stale := range []string{"チェックをお願いします。", "リテイクです。"} {
+		if strings.Contains(content, stale) {
+			t.Errorf("content = %q, want no %q from an intermediate state", content, stale)
+		}
+	}
+}
+
+// The audit's P2: a round trip inside the window returns the task to the
+// status it already had, so the mention is cancelled and only the flap
+// warning goes out.
+func TestExecutorRoundTripSendsWarningWithoutMention(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	planner.Now = now.Add(time.Minute)
+	if _, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake), stubCard()); err != nil {
+		t.Fatalf("retake: %v", err)
+	}
+	planner.Now = now.Add(2 * time.Minute)
+	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA), stubCard()); err != nil {
+		t.Fatalf("wfa back: %v", err)
+	}
+
+	executor, fake := newExecutor(t, db)
+	executor.Now = func() time.Time { return now.Add(6 * time.Minute) }
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	var posts []recordedRequest
+	for _, request := range fake.snapshot() {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.Path, "/messages") {
+			posts = append(posts, request)
+		}
+	}
+	if len(posts) != 1 {
+		t.Fatalf("messages posted = %d, want the warning only", len(posts))
+	}
+	content, _ := posts[0].Body["content"].(string)
+	if !strings.Contains(content, "⚠️") {
+		t.Errorf("content = %q, want the flap warning", content)
+	}
+	if strings.Contains(content, "<@") {
+		t.Errorf("content = %q, want no mention on a round trip", content)
+	}
+	var signal model.ForumOutbox
+	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:status:%").
+		Order("id desc").First(&signal).Error; err != nil {
+		t.Fatalf("load signal row: %v", err)
+	}
+	if signal.State != model.ForumOutboxCancelled || signal.Note != "round_trip" {
+		t.Errorf("signal row = %q/%q, want cancelled/round_trip", signal.State, signal.Note)
+	}
+}
+
+// A window whose task ends on a non-trigger status (WIP) has nothing left to
+// announce: the coalesced signal is cancelled, not sent.
+func TestExecutorCancelsSignalForNonTriggerFinalStatus(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wip")
+	executor, fake := newExecutor(t, db)
+	encoded, err := json.Marshal(model.ForumPostMessagePayload{
+		Intent:       model.ForumIntentStatusRetake,
+		BaseStatusID: "s-wfa",
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:      "task-1",
+		Kind:        model.ForumOutboxPostMessage,
+		DedupeKey:   model.ForumStatusCoalesceKey("task-1") + ":1",
+		CoalesceKey: model.ForumStatusCoalesceKey("task-1"),
+		Payload:     string(encoded),
+		State:       model.ForumOutboxPending,
+		NotBefore:   executor.Now(),
+		CreatedAt:   executor.Now(),
+	})
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	got, err := loadOutbox(db, row.ID)
+	if err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if got.State != model.ForumOutboxCancelled || got.Note != "not_trigger" {
+		t.Errorf("state/note = %q/%q, want cancelled/not_trigger", got.State, got.Note)
+	}
+	if requests := fake.snapshot(); len(requests) != 0 {
+		t.Errorf("requests = %d, want no Discord call for a cancelled signal", len(requests))
+	}
+}
