@@ -232,7 +232,7 @@ func TestPlannerSignalsWFAWhenStatusChangeCreatesThread(t *testing.T) {
 	if !rows[1].NotBefore.Equal(planner.Now.Add(model.ForumMentionWindow)) {
 		t.Errorf("signal not_before = %v, want the mention window", rows[1].NotBefore)
 	}
-	if rows[1].CoalesceKey != model.ForumPostMessageCoalesceKey(model.ForumIntentStatusWFA, "task-1") {
+	if rows[1].CoalesceKey != model.ForumStatusCoalesceKey("task-1") {
 		t.Errorf("signal coalesce key = %q", rows[1].CoalesceKey)
 	}
 	var payload model.ForumPostMessagePayload
@@ -452,7 +452,7 @@ func TestPlannerSyncsBeforeSignallingExistingPost(t *testing.T) {
 	}
 }
 
-func TestPlannerCoalescesRepeatedSignalsWithoutExtendingWindow(t *testing.T) {
+func TestPlannerMergesWindowSignalsIntoOneFinalStateMessage(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -467,6 +467,9 @@ func TestPlannerCoalescesRepeatedSignalsWithoutExtendingWindow(t *testing.T) {
 		t.Fatalf("store thread: %v", err)
 	}
 
+	// A retake and a return to WFA inside the same mention window must land
+	// in the one pending signal the window opened with: no second row, and
+	// the window start stays at the creation time.
 	planner.Now = now.Add(time.Minute)
 	if _, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake), stubCard()); err != nil {
 		t.Fatalf("retake: %v", err)
@@ -480,13 +483,24 @@ func TestPlannerCoalescesRepeatedSignalsWithoutExtendingWindow(t *testing.T) {
 	if err := db.Where("kind = ?", model.ForumOutboxPostMessage).Order("id asc").Find(&signals).Error; err != nil {
 		t.Fatalf("load signals: %v", err)
 	}
-	if len(signals) != 2 {
-		t.Fatalf("signals = %d, want the original wfa plus one coalesced retake", len(signals))
+	if len(signals) != 1 {
+		t.Fatalf("signals = %d, want one final-state row per window", len(signals))
 	}
-	// The first signal is the creation-time WFA; the second must still be the
-	// retake window opened at +1m, not extended to +2m.
-	if !signals[1].NotBefore.Equal(now.Add(time.Minute).Add(model.ForumMentionWindow)) {
-		t.Errorf("coalesced not_before = %v, want the original window", signals[1].NotBefore)
+	if !signals[0].NotBefore.Equal(now.Add(model.ForumMentionWindow)) {
+		t.Errorf("coalesced not_before = %v, want the window the task opened with", signals[0].NotBefore)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(signals[0].Payload), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Intent != model.ForumIntentStatusWFA {
+		t.Errorf("final intent = %q, want the window's last state", payload.Intent)
+	}
+	if payload.BaseStatusID != "s-wfa" {
+		t.Errorf("base status = %q, want the status the window opened from", payload.BaseStatusID)
+	}
+	if !payload.WindowOpenedAt.Equal(now) {
+		t.Errorf("window opened at = %v, want the creation time (never extended)", payload.WindowOpenedAt)
 	}
 }
 
