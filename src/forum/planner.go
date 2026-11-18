@@ -242,7 +242,15 @@ func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, ro
 			if failed {
 				return nil
 			}
-			return p.queueCreateThread(input, route, input.StatusRole, existing.ThreadGeneration, card, result)
+			if err := p.queueCreateThread(input, route, input.StatusRole, existing.ThreadGeneration, card, result); err != nil {
+				return err
+			}
+			// The thread that just opened must also announce the transition
+			// that opened it, exactly like createTask does (create, then
+			// signal). The signal row gets a later id, so the outbox ordering
+			// rules keep it behind the thread creation; window, recipients and
+			// coalescing stay identical to any other status signal.
+			return p.queueStatusSignal(input, existing, result)
 		}
 		return nil
 	}
