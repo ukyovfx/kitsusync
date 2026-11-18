@@ -73,6 +73,8 @@ func handoffTimingLabel(lang, timing string) string {
 		return t(lang, "即時", "Immediately")
 	case model.HandoffTimingDigest:
 		return t(lang, "朝のダイジェスト", "Morning digest")
+	case model.HandoffTimingMixed:
+		return t(lang, "指名は即時・それ以外は朝のダイジェスト", "Immediately when assigned, morning digest otherwise")
 	}
 	return timing
 }
@@ -242,10 +244,10 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 	} else {
 		current.Config = model.ProductionHandoffConfig{ProductionID: productionID}
 	}
-	// An untouched Production starts from the digest timing; a chosen fallback
-	// only appears once the operator picks it.
+	// An untouched Production starts from the mixed rule the owner chose: a
+	// chosen fallback only appears once the operator picks it.
 	if strings.TrimSpace(current.Config.NotifyTiming) == "" && submitted == nil {
-		current.Config.NotifyTiming = model.HandoffTimingDigest
+		current.Config.NotifyTiming = model.HandoffTimingMixed
 	}
 
 	var notices strings.Builder
@@ -327,8 +329,8 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 	}
 	productInputs.WriteString(`<li class="field-row"><input name="product_name" value="" placeholder="` + esc(t(lang, "製品タイプ名を追加", "Add a product type")) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `"></li>`)
 
-	timingOptions := make([][2]string, 0, 2)
-	for _, timing := range []string{model.HandoffTimingImmediate, model.HandoffTimingDigest} {
+	timingOptions := make([][2]string, 0, 3)
+	for _, timing := range []string{model.HandoffTimingImmediate, model.HandoffTimingDigest, model.HandoffTimingMixed} {
 		timingOptions = append(timingOptions, [2]string{timing, handoffTimingLabel(lang, timing)})
 	}
 	fallbackOptionsList := make([][2]string, 0, len(handoffFallbackOptions))

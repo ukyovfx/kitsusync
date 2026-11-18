@@ -62,8 +62,8 @@ func TestHandoffPageArrangesRowsWithoutProductTypes(t *testing.T) {
 	if strings.Contains(body, `name="row_task"`) {
 		t.Fatal("no mapping rows may be generated without a product type")
 	}
-	if !strings.Contains(body, `<option value="digest" selected>`) {
-		t.Fatal("an untouched Production must start on the digest timing")
+	if !strings.Contains(body, `<option value="mixed" selected>`) {
+		t.Fatal("an untouched Production must start on the mixed timing")
 	}
 	// Nothing stored: the handoff path stays inactive.
 	if _, ok, err := model.LoadProductionHandoffSettings(db, "p1"); err != nil || ok {

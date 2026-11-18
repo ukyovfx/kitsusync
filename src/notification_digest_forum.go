@@ -43,6 +43,9 @@ type forumDigestRecipient struct {
 	DiscordID string
 	Waiting   []forumDigestItem
 	Retakes   []forumDigestItem
+	// Handoffs are rendered lines, not forum items: a handoff carries the
+	// product and its version, which no forum thread title holds.
+	Handoffs []string
 }
 
 // sendForumMorningDigests sends the per-person forum digest for forum-mode
@@ -79,6 +82,9 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 			digestErrs = append(digestErrs, fmt.Sprintf("%s: %v", project.KitsuProjectID, err))
 			continue
 		}
+		// Unanswered handoffs are listed every morning until they are
+		// answered, so they are merged into the per-person queue.
+		recipients = mergeHandoffDigestItems(db, project, recipients)
 		projectErrs := 0
 		projectSent := 0
 		for _, recipient := range recipients {
@@ -200,12 +206,73 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 			ensure(id).Retakes = append(ensure(id).Retakes, item)
 		}
 	}
-	ordered := make([]forumDigestRecipient, 0, len(byPerson))
-	for _, recipient := range byPerson {
-		ordered = append(ordered, *recipient)
+		// Notification-only recipients (a handoff fallback, say) have no forum
+		// queue of their own; they are appended after the sorted ones.
+		ordered := make([]forumDigestRecipient, 0, len(byPerson))
+		for _, recipient := range byPerson {
+			ordered = append(ordered, *recipient)
+		}
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i].DiscordID < ordered[j].DiscordID })
+		return ordered, nil
+}
+
+// mergeHandoffDigestItems adds each person's unanswered handoffs to their digest
+// and creates the recipient when only a handoff concerns them.
+func mergeHandoffDigestItems(db *gorm.DB, project model.Project, recipients []forumDigestRecipient) []forumDigestRecipient {
+	items := handoffDigestItems(db, project)
+	if recipients == nil {
+		recipients = []forumDigestRecipient{}
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].DiscordID < ordered[j].DiscordID })
-	return ordered, nil
+	index := make(map[string]int, len(recipients))
+	for i, recipient := range recipients {
+		index[recipient.DiscordID] = i
+	}
+	for recipient, lines := range items {
+		position, known := index[recipient]
+		if !known {
+			recipients = append(recipients, forumDigestRecipient{DiscordID: recipient})
+			position = len(recipients) - 1
+			index[recipient] = position
+		}
+		recipients[position].Handoffs = lines
+	}
+	return recipients
+}
+
+// handoffDigestItems returns each person's pending handoffs per Production.
+func handoffDigestItems(db *gorm.DB, project model.Project) map[string][]string {
+	pending, err := model.PendingHandoffEvents(db)
+	if err != nil {
+		return nil
+	}
+	publicURL := setup.PublicKitsuURL(db)
+	timings := map[string]string{}
+	byPerson := map[string][]string{}
+	for _, event := range pending {
+		if event.ProductionID != project.KitsuProjectID {
+			continue
+		}
+		timing, known := timings[event.ProductionID]
+		if !known {
+			timing = handoffTiming(db, event.ProductionID)
+			timings[event.ProductionID] = timing
+		}
+		recipients := handoffRecipients(db, event)
+		// A handoff that would be sent immediately is not a reminder.
+		if handoffImmediate(timing, event.FallbackUsed, recipients) {
+			continue
+		}
+		line := handoffCardLine(event, handoffTaskURL(publicURL, event))
+		for _, recipient := range recipients {
+			byPerson[recipient] = append(byPerson[recipient], line)
+		}
+	}
+	for recipient, lines := range byPerson {
+		if len(lines) > handoffDigestMaxItems {
+			byPerson[recipient] = lines[:handoffDigestMaxItems]
+		}
+	}
+	return byPerson
 }
 
 // forumDigestReviewerIDs returns the Production's user-kind reviewer targets.
@@ -242,6 +309,14 @@ func renderForumDigestCard(productionName string, recipient forumDigestRecipient
 		b.WriteString("  " + strings.Join(items, ", "))
 	}
 	b.WriteString("\n")
+	// Both lists are always rendered, so the person sees a real 0件 rather
+	// than a missing section.
+	fmt.Fprintf(&b, "・素材の受け渡し: %d件", len(recipient.Handoffs))
+	if len(recipient.Handoffs) > 0 {
+		b.WriteString("\n  " + strings.Join(recipient.Handoffs, "\n  "))
+	} else {
+		b.WriteString("\n")
+	}
 	return b.String()
 }
 

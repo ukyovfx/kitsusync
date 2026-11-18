@@ -28,14 +28,27 @@ func validHandoffFlow(flow string) bool {
 const (
 	HandoffTimingImmediate = "immediate"
 	HandoffTimingDigest    = "digest"
+	// HandoffTimingMixed is the owner's rule: a handoff whose receiving task
+	// has an assignee is sent immediately, one that fell back is told in the
+	// morning digest. It is also what an unconfigured Production gets.
+	HandoffTimingMixed = "mixed"
 
 	HandoffFallbackAdmin    = "admin"
 	HandoffFallbackUsers    = "users"
 	HandoffFallbackDisabled = "none"
+	// HandoffFallbackNone marks a handoff whose receiving task had an
+	// assignee, so no fallback was used.
+	HandoffFallbackNone = "none"
 )
 
+// ValidHandoffTiming reports whether a notification timing is one of the three
+// the settings page offers.
+func ValidHandoffTiming(timing string) bool {
+	return timing == HandoffTimingImmediate || timing == HandoffTimingDigest || timing == HandoffTimingMixed
+}
+
 func validHandoffTiming(timing string) bool {
-	return timing == HandoffTimingImmediate || timing == HandoffTimingDigest
+	return ValidHandoffTiming(timing)
 }
 
 func validHandoffFallback(fallback string) bool {
