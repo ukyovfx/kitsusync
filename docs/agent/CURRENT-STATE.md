@@ -2,19 +2,19 @@
 
 ## Verification basis
 
-Verified against GitHub accepted `master` at `27dc0ac3bcde93db7e31e3198d81fb34b355caf2` on 2026-11-18. The forum-notification renovation and its follow-up fix batches are merged (see below); each PR head passed the full CI and Security Audit check suites before merge. Those are PR-head checks, not a claim that a live deployment of this code exists.
+Verified against GitHub accepted `master` at `fc1dfa8d276e46254b1d0727b060c3f16bb36791` on 2026-11-19. The forum-notification renovation and its follow-up fix batches are merged (see below); each PR head passed the full CI and Security Audit check suites before merge. Those are PR-head checks, not a claim that a live deployment of this code exists.
 
 Repository, Git, CI, tests, configuration, and verified live runtime evidence override this summary when they disagree. An open PR or release candidate is not accepted implementation.
 
 ## Accepted repository and release state
 
-- `master` at `27dc0ac3bcde93db7e31e3198d81fb34b355caf2` is the accepted code state. `VERSION` is `0.7.1`.
+- `master` at `fc1dfa8d276e46254b1d0727b060c3f16bb36791` is the accepted code state. `VERSION` is `0.7.1`.
 - The latest published GitHub release is `v0.7.1`. Production runs v0.7.1 (read-only inspect on 2026-11-17: OCI version `0.7.1`, image revision `7b6e7679`). No later code is deployed to Production.
 - The forum-notification renovation (the current system kept as the base; notifications moved from text-channel lanes to per-task-type forum channels, one post per task, status as forum tags, signals as mention messages inside the post, DM reduced to a morning digest) is fully merged:
   - Stage B (Kitsu fetch swap) #279, Stage C (forum settings + admin UI) #280, Stage D (forum sending + ledger + forum/tag auto-create) #282, Stage E (aggregation, flap warnings, comments, digest) #283, Stage F (lane removal) #284.
   - Acceptance coverage #285; submitter-marker reading side #286 (the Web Publisher writer side shipped separately in that product's 5.31).
   - Forum zero-touch auto-setup #292; per-forum tag-assignment settings abolished #295 (tags stay fixed/common, bound to roles by name).
-- Follow-up fixes merged on top: staging deploy script file list #287, browser-acceptance stabilization #288, staging script UTF-8 pinning #289, System Status button wrap #290, connection-wizard step-4 button #291, wizard/URL fixes #293/#298/#299, scale-audit pre-release fixes #294/#296/#297/#300/#301/#303, log rotation and configured log level #302, user-linking action-cell layout #305, guild channel-list cache #306, mobile card tables for the visibility and audit tables #307, overflow and clip fixes across the wizard, dashboard, activity list, system issues and production tabs #308.
+- Follow-up fixes merged on top: staging deploy script file list #287, browser-acceptance stabilization #288, staging script UTF-8 pinning #289, System Status button wrap #290, connection-wizard step-4 button #291, wizard/URL fixes #293/#298/#299, scale-audit pre-release fixes #294/#296/#297/#300/#301/#303, log rotation and configured log level #302, user-linking action-cell layout #305, guild channel-list cache #306, mobile card tables for the visibility and audit tables #307, overflow and clip fixes across the wizard, dashboard, activity list, system issues and production tabs #308; scale-audit baseline and shutdown fixes #310/#311/#313; guild member/role directory cache (admin renders no longer block on Discord rate limits) #314; fine layout fixes (WFA chips, team rows, forum tables, dialog background, focus visibility) #315; wording and terminology unification with a degraded-directory status badge #316.
 - Current IA UI decisions remain in `docs/CURRENT-IA-UI-SPEC.md`; browser-rendered output is the final source of truth for visual acceptance.
 
 ## Staging boundary
@@ -35,7 +35,7 @@ Repository, Git, CI, tests, configuration, and verified live runtime evidence ov
 
 ## Current / Next / Pending
 
-- Current: staging smoke on the latest master candidate; small pre-release fix batches (scale-audit remainder, admin-UI findings from the smoke) land as separate PRs.
+- Current: staging smoke on the latest master candidate; the remaining pre-release items are the scale-audit F7 reproduction verdict and the F10 recipients fix, which land as separate PRs when ready.
 - Next: finish the smoke and the poll-interval measurement, then cut the forum-model release (working version number 0.8.0) and deploy to Production under the contract, including the Kitsu preview-thumbnail proxy for Discord cards.
 - Pending: security-disposition implementation from the 2026-11-10 penetration-test rounds (Medium 8 / Low 10) is a separate track, not on the release critical path.
 
