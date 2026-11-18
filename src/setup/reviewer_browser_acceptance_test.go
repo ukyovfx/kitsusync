@@ -33,6 +33,9 @@ const (
 	reviewerBrowserPass     = "synthetic-browser-password"
 	reviewerBrowserGuild    = "11111111111111111"
 	reviewerBrowserCategory = "55555555555555550"
+	// userLinkingLongNickname reproduces the staging report where a very long
+	// Discord nickname in a linked row's select pushed the 解除 button off the line.
+	userLinkingLongNickname = "TVアニメ『佐々木さんとピーちゃんSeason2』第1話は1時間"
 )
 
 // TestReviewerBrowserAcceptance uses normal KitsuSync login/session routes,
@@ -299,7 +302,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "unconnected-production", "user-linking-long-label":
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "no-connected-production":
@@ -622,6 +625,9 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			body = `[{"user":{"id":"22222222222222222","username":"project-supervisor","global_name":"Global Supervisor Name"},"nick":"Guild Nick Supervisor"},{"user":{"id":"22222222222222223","username":"departmentless","global_name":"Departmentless Global"}},{"user":{"id":"22222222222222224","username":"wrong-department","global_name":"Wrong Department Global"}},{"user":{"id":"22222222222222225","username":"artist","global_name":"Artist Global"}},{"user":{"id":"22222222222222226","username":"manager","global_name":"Manager Global"}},{"user":{"id":"22222222222222227","username":"admin","global_name":"Admin Global"}},{"user":{"id":"22222222222222228","username":"demoted","global_name":"Demoted Global"}},{"user":{"id":"22222222222222229","username":"project-manager","global_name":"Project Manager Global"}},{"user":{"id":"22222222222222230","username":"position-only"}},{"user":{"id":"22222222222222231","username":"inactive"}},{"user":{"id":"22222222222222232","username":"kitsu-bot","bot":true}},{"user":{"id":"22222222222222234","username":"override-candidate","global_name":"Override Global"},"nick":"Guild Nick Override"},{"user":{"id":"22222222222222236","username":"global-name-fallback","global_name":"Global Name Fallback"}},{"user":{"id":"22222222222222237","username":"username-fallback"}}]`
 			if d.scenario.Load().(string) == "japanese-wfa-add" {
 				body = strings.TrimSuffix(body, "]") + `,{"user":{"id":"22222222222222238","username":"nihongo-user","global_name":"日本語表示名"},"nick":"日本語ユーザー"}]`
+			}
+			if d.scenario.Load().(string) == "user-linking-long-label" {
+				body = strings.Replace(body, `"nick":"Guild Nick Supervisor"`, `"nick":"`+userLinkingLongNickname+`"`, 1)
 			}
 		}
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/roles"):
