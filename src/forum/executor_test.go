@@ -215,6 +215,51 @@ func TestExecutorCreatesThreadAndStoresThreadID(t *testing.T) {
 	}
 }
 
+// A status change that opens a thread must also deliver its mention: the
+// planner queues create + signal, and the drain posts the signal into the
+// thread it just created, after the recipient resolution.
+func TestExecutorDeliversMentionForSignalFromStatusChangeCreate(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+
+	// A baselined task without a post; the next poll moves it to WFA.
+	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP), stubCard()); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	planner.Now = now.Add(time.Minute)
+	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA, "person-1"), stubCard()); err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+
+	executor, fake := newExecutor(t, db)
+	executor.Now = func() time.Time { return planner.Now.Add(model.ForumMentionWindow) }
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	requests := fake.snapshot()
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want the thread create then the signal message", len(requests))
+	}
+	if requests[0].Path != "/channels/forum-1/threads" {
+		t.Errorf("thread create path = %q", requests[0].Path)
+	}
+	if requests[1].Path != "/channels/thread-1/messages" {
+		t.Errorf("signal path = %q, want it posted into the created thread", requests[1].Path)
+	}
+	if content, _ := requests[1].Body["content"].(string); !strings.HasPrefix(content, "<@111111111111111111>") {
+		t.Errorf("signal content = %q, want the resolved mention first", content)
+	}
+	var done int64
+	if err := db.Model(&model.ForumOutbox{}).Where("state = ?", model.ForumOutboxDone).Count(&done).Error; err != nil {
+		t.Fatalf("count done rows: %v", err)
+	}
+	if done != 2 {
+		t.Errorf("done rows = %d, want the create and the signal both done", done)
+	}
+}
+
 func TestExecutorSyncsUnarchiveThenRetag(t *testing.T) {
 	db := newForumDB(t)
 	seedForumSettings(t, db)

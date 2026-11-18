@@ -204,6 +204,86 @@ func TestPlannerCreatesThreadOnFirstTriggerAfterBaseline(t *testing.T) {
 	}
 }
 
+// A baselined task whose status change opens the thread must signal that
+// change too: without the signal the new post exists but nobody mentioned.
+func TestPlannerSignalsWFAWhenStatusChangeCreatesThread(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+
+	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP), stubCard()); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	planner.Now = now.Add(time.Minute)
+	result, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA, "person-1"), stubCard())
+	if err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if !result.Created || result.Signalled != model.ForumIntentStatusWFA {
+		t.Fatalf("result = %+v, want a created thread plus a wfa signal", result)
+	}
+	rows := outboxRows(t, db)
+	if len(rows) != 2 {
+		t.Fatalf("outbox rows = %d, want create_thread + post_message", len(rows))
+	}
+	if rows[0].Kind != model.ForumOutboxCreateThread || rows[1].Kind != model.ForumOutboxPostMessage {
+		t.Fatalf("row kinds = %q, %q, want create then signal", rows[0].Kind, rows[1].Kind)
+	}
+	if !rows[1].NotBefore.Equal(planner.Now.Add(model.ForumMentionWindow)) {
+		t.Errorf("signal not_before = %v, want the mention window", rows[1].NotBefore)
+	}
+	if rows[1].CoalesceKey != model.ForumPostMessageCoalesceKey(model.ForumIntentStatusWFA, "task-1") {
+		t.Errorf("signal coalesce key = %q", rows[1].CoalesceKey)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(rows[1].Payload), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Intent != model.ForumIntentStatusWFA {
+		t.Errorf("intent = %q", payload.Intent)
+	}
+	if payload.BaseStatusID != "s-wip" {
+		t.Errorf("base status = %q, want the stored status before the change", payload.BaseStatusID)
+	}
+}
+
+// RETAKE opens a thread the same way when the task had no post; the signal
+// must be queued there too, with the same shape as the WFA case.
+func TestPlannerSignalsRetakeWhenStatusChangeCreatesThread(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+
+	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP), stubCard()); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	planner.Now = now.Add(time.Minute)
+	result, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake, "person-1"), stubCard())
+	if err != nil {
+		t.Fatalf("transition: %v", err)
+	}
+	if !result.Created || result.Signalled != model.ForumIntentStatusRetake {
+		t.Fatalf("result = %+v, want a created thread plus a retake signal", result)
+	}
+	rows := outboxRows(t, db)
+	if len(rows) != 2 {
+		t.Fatalf("outbox rows = %d, want create_thread + post_message", len(rows))
+	}
+	if rows[0].Kind != model.ForumOutboxCreateThread || rows[1].Kind != model.ForumOutboxPostMessage {
+		t.Fatalf("row kinds = %q, %q, want create then signal", rows[0].Kind, rows[1].Kind)
+	}
+	if !rows[1].NotBefore.Equal(planner.Now.Add(model.ForumMentionWindow)) {
+		t.Errorf("signal not_before = %v, want the mention window", rows[1].NotBefore)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(rows[1].Payload), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload.Intent != model.ForumIntentStatusRetake {
+		t.Errorf("intent = %q", payload.Intent)
+	}
+}
+
 // After a thread is lost and cleared, the next status change must queue a
 // fresh create for the new generation instead of being swallowed as a
 // duplicate of the spent generation-0 key.
