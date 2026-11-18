@@ -408,6 +408,7 @@ input[readonly],input[disabled],select[disabled]{opacity:.72;cursor:not-allowed;
 table{width:100%;border-collapse:collapse}
 th,td{padding:9px 10px;border-bottom:1px solid rgba(255,255,255,.07);text-align:left;vertical-align:top;overflow-wrap:anywhere;word-break:break-word}
 th{color:var(--muted-2);font-size:12px;text-transform:uppercase;letter-spacing:.16em;font-family:"Space Grotesk","Outfit",sans-serif;font-weight:500;}
+th[scope=row]{color:var(--text);text-transform:none;letter-spacing:normal;font-family:inherit;font-size:inherit;}
 code{background:rgba(255,255,255,.06);padding:4px 8px;border-radius:10px;color:#fff7f0;}
 .empty{text-align:center;padding:18px 12px;border-radius:16px;border:1px dashed rgba(255,255,255,.16);background:rgba(255,255,255,.03);}
 .metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:9px;}
@@ -1036,6 +1037,17 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   @media(max-width:520px){.user-linking-lookup-error{grid-template-columns:minmax(0,1fr)}.user-linking-lookup-error>.btn-ghost{grid-column:1;grid-row:auto;justify-self:start}.user-linking-lookup-error>.advanced-details{grid-column:1}}
   .editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-automatic]{border:0;padding:var(--space-2,8px) 0}
   .editorial-workbench .production-context .production-wfa-edit-panel [data-wfa-additional]{border:0;border-top:1px solid var(--divider-color);margin-top:var(--space-1,4px);padding:var(--space-3,12px) 0 var(--space-1,4px)}
+  /* Narrow widths: tables that cannot shrink turn each row into a labeled card. */
+  @media(max-width:760px){
+    .mobile-card-table,.mobile-card-table tbody{display:block;width:100%;min-width:0}
+    .mobile-card-table thead{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .mobile-card-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 14px;padding:14px 0;border-top:1px solid var(--divider-color)}
+    .mobile-card-table tr:first-child{border-top:0;padding-top:0}
+    .mobile-card-table tr>th,.mobile-card-table tr>td{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;min-width:0;padding:0;border:0;overflow-wrap:anywhere}
+    .mobile-card-table tr>.mobile-card-lead{grid-column:1/-1}
+    .mobile-card-table tr>.mobile-card-lead:has(.status-pill){grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px}
+    .mobile-card-table tr>[data-label]::before,.mobile-card-table tr>.mobile-card-lead-label::before{content:attr(data-label);color:var(--muted-2);font-size:.74rem;letter-spacing:.02em}
+  }
 `
 
 func shellHeadExtras() string {
