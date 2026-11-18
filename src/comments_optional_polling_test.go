@@ -3,6 +3,7 @@ package main
 import (
 	"app/src/api/kitsu"
 	"app/src/utils/config"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -219,7 +220,7 @@ func TestFetchProjectTasksIsBoundedAndKeepsOrder(t *testing.T) {
 	configureMainTestOrigin(t, server.URL)
 
 	projects := []kitsu.Project{{ID: "a"}, {ID: "b"}, {ID: "c"}, {ID: "d"}, {ID: "e"}, {ID: "f"}}
-	results := fetchProjectTasks(projects, 2)
+	results := fetchProjectTasks(context.Background(), projects, 2)
 	mu.Lock()
 	gotPeak := peak
 	mu.Unlock()
@@ -234,7 +235,7 @@ func TestFetchProjectTasksIsBoundedAndKeepsOrder(t *testing.T) {
 			t.Fatalf("result %d out of order or failed: %+v", i, results[i])
 		}
 	}
-	if got := fetchProjectTasks(projects[:1], 0); len(got) != 1 || got[0].err != nil {
+	if got := fetchProjectTasks(context.Background(), projects[:1], 0); len(got) != 1 || got[0].err != nil {
 		t.Fatalf("a limit below 1 must still read, got %+v", got)
 	}
 }

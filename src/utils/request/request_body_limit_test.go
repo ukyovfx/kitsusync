@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -40,7 +41,7 @@ func TestResponseBodyWithinLimitSucceeds(t *testing.T) {
 	var out struct {
 		Each []string `json:"each"`
 	}
-	got, err := DoWithError("", http.MethodGet, server.URL+"/x", nil, &out)
+	got, err := DoWithError(context.Background(), "", http.MethodGet, server.URL+"/x", nil, &out)
 	if err != nil {
 		t.Fatalf("under-limit response should succeed, got %v", err)
 	}
@@ -60,7 +61,7 @@ func TestResponseBodyOverLimitIsExplicitPermanentError(t *testing.T) {
 	body := `["` + strings.Repeat("a", 2048) + `"]`
 	server := newBodyLimitFixture(t, body)
 
-	_, err := DoWithError("", http.MethodGet, server.URL+"/x", nil, nil)
+	_, err := DoWithError(context.Background(), "", http.MethodGet, server.URL+"/x", nil, nil)
 	if err == nil {
 		t.Fatal("over-limit response should fail")
 	}

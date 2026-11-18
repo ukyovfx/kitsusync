@@ -58,14 +58,17 @@ func configuredVerifiedOrigin() VerifiedOrigin {
 // リトライするのは冪等なメソッド（GET/HEAD）だけで、POST/PUT/PATCH/DELETE は
 // 書き込みの重複を避けるため 1 回だけ送信する。
 func Do(token, method, url string, payload, unmarshal interface{}) string {
-	body, _ := DoWithError(token, method, url, payload, unmarshal)
+	body, _ := DoWithError(context.Background(), token, method, url, payload, unmarshal)
 	return body
 }
 
 // DoWithError executes the same bounded-retry request as Do, while preserving
 // the failure outcome for callers that must distinguish an empty response from
 // an unsuccessful request.
-func DoWithError(token, method, url string, payload, unmarshal interface{}) (string, error) {
+func DoWithError(ctx context.Context, token, method, url string, payload, unmarshal interface{}) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	maxAttempts := 3
 	if !isIdempotentMethod(method) {
 		maxAttempts = 1
@@ -84,6 +87,9 @@ func DoWithError(token, method, url string, payload, unmarshal interface{}) (str
 
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if attempt > 0 {
 			delay := retryDelays[attempt-1]
 			slog.Warn("request.Do: transient failure — retrying",
@@ -91,7 +97,12 @@ func DoWithError(token, method, url string, payload, unmarshal interface{}) (str
 				"maxAttempts", maxAttempts,
 				"delay", delay,
 				"url", redactURL(url))
-			time.Sleep(delay)
+			// A shutdown must not wait out the backoff.
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(delay):
+			}
 		}
 
 		// body は試行ごとに新しい Reader を作成する（io.Reader は一度読むと使い切り）
@@ -100,7 +111,7 @@ func DoWithError(token, method, url string, payload, unmarshal interface{}) (str
 			body = bytes.NewBuffer(payloadBytes)
 		}
 
-		result := attemptOnce(token, method, url, body, unmarshal)
+		result := attemptOnce(ctx, token, method, url, body, unmarshal)
 		switch result.status {
 		case statusSuccess:
 			return result.body, nil
@@ -222,7 +233,7 @@ type attemptResult struct {
 	err    error
 }
 
-func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interface{}) attemptResult {
+func attemptOnce(ctx context.Context, token, method, url string, body *bytes.Buffer, unmarshal interface{}) attemptResult {
 	origin := configuredVerifiedOrigin()
 	target, err := urlpkgParse(url)
 	if err != nil {
@@ -241,9 +252,9 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 
 	var req *http.Request
 	if body != nil {
-		req, err = http.NewRequest(method, url, body)
+		req, err = http.NewRequestWithContext(ctx, method, url, body)
 	} else {
-		req, err = http.NewRequest(method, url, nil)
+		req, err = http.NewRequestWithContext(ctx, method, url, nil)
 	}
 	if err != nil {
 		err = redactErr(err)
@@ -259,6 +270,10 @@ func attemptOnce(token, method, url string, body *bytes.Buffer, unmarshal interf
 	resp, err := client.Do(req)
 	if err != nil {
 		err = redactErr(err)
+		// A cancelled shutdown is not a transient network failure.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return attemptResult{status: statusPermanent, err: ctxErr}
+		}
 		slog.Error("request.Do: client.Do failed", "err", err, "method", method, "url", redactURL(url))
 		return attemptResult{status: statusTransient, err: fmt.Errorf("send request: %w", err)}
 	}

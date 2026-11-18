@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -53,7 +54,7 @@ func TestDoWithErrorDoesNotFollowRedirectsOrReplayBearerToken(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if _, err := DoWithError("synthetic-secret", http.MethodGet, source.URL, nil, nil); err == nil {
+			if _, err := DoWithError(context.Background(), "synthetic-secret", http.MethodGet, source.URL, nil, nil); err == nil {
 				t.Fatal("redirect was accepted")
 			}
 			if redirectTargetHit {
@@ -82,7 +83,7 @@ func TestDoWithErrorUsesPinnedIPWithoutChangingHost(t *testing.T) {
 	if err := ConfigureVerifiedOrigin(VerifiedOrigin{BaseURL: verified, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DoWithError("synthetic-token", http.MethodGet, verified+"/api/data/tasks", nil, nil); err != nil {
+	if _, err := DoWithError(context.Background(), "synthetic-token", http.MethodGet, verified+"/api/data/tasks", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -105,7 +106,7 @@ func TestDoWithErrorDoesNotFollowDNSReplacementOrSendBearerToReplacementIP(t *te
 	if err := ConfigureVerifiedOrigin(VerifiedOrigin{BaseURL: origin, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DoWithError("replacement-canary-token", http.MethodGet, origin+"/api/data/tasks", nil, nil); err != nil {
+	if _, err := DoWithError(context.Background(), "replacement-canary-token", http.MethodGet, origin+"/api/data/tasks", nil, nil); err != nil {
 		t.Fatalf("pinned request failed: %v", err)
 	}
 	if pinnedHits.Load() != 1 || replacementHits.Load() != 0 {
@@ -129,7 +130,7 @@ func TestDoWithErrorAcceptsPinnedPrivateAddress(t *testing.T) {
 	if err := ConfigureVerifiedOrigin(VerifiedOrigin{BaseURL: origin, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DoWithError("private-canary-token", http.MethodGet, origin+"/api/data/tasks", nil, nil); err != nil {
+	if _, err := DoWithError(context.Background(), "private-canary-token", http.MethodGet, origin+"/api/data/tasks", nil, nil); err != nil {
 		t.Fatalf("pinned private authority failed: %v", err)
 	}
 	if hits.Load() != 1 {
@@ -184,7 +185,7 @@ func TestDoWithErrorUsesVerifiedHostnameForTLSServerNameWhenDialingPinnedIP(t *t
 	if err := ConfigureVerifiedOrigin(VerifiedOrigin{BaseURL: origin, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
-	result := attemptOnce("tls-sni-canary-token", http.MethodGet, origin+"/api/data/tasks", nil, nil)
+	result := attemptOnce(context.Background(), "tls-sni-canary-token", http.MethodGet, origin+"/api/data/tasks", nil, nil)
 	if result.err == nil {
 		t.Fatal("expected local self-signed certificate verification failure")
 	}
@@ -202,7 +203,7 @@ func TestDoWithErrorRejectsConfiguredOriginMismatchBeforeDial(t *testing.T) {
 	if err := ConfigureVerifiedOrigin(VerifiedOrigin{BaseURL: origin, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DoWithError("override-canary-token", http.MethodGet, "http://attacker.kitsu.test:"+strconv.Itoa(port)+"/api/data/tasks", nil, nil); err == nil {
+	if _, err := DoWithError(context.Background(), "override-canary-token", http.MethodGet, "http://attacker.kitsu.test:"+strconv.Itoa(port)+"/api/data/tasks", nil, nil); err == nil {
 		t.Fatal("untrusted configured target was accepted")
 	}
 	if hits.Load() != 0 {
