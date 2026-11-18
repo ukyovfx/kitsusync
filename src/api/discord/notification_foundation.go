@@ -178,11 +178,15 @@ func notificationCardDescription(data Template) string {
 	if normalizeNotificationLang(data.NotificationLanguage) == "ja" {
 		statusLabel = "ステータス"
 	}
-	assigneeLabel := strings.TrimSpace(data.AssigneeLabel)
-	if assigneeLabel == "" {
-		assigneeLabel = "Assignee"
+	statusPart := "**📊 " + statusLabel + "**\n" + notificationCardStatusValue(data)
+	if assignees := strings.TrimSpace(data.AssigneesStr); assignees != "" {
+		assigneeLabel := strings.TrimSpace(data.AssigneeLabel)
+		if assigneeLabel == "" {
+			assigneeLabel = "Assignee"
+		}
+		statusPart += "\n**👤 " + assigneeLabel + "**\n" + assignees
 	}
-	parts = append(parts, "**📊 "+statusLabel+"**　　　**👤 "+assigneeLabel+"**\n"+notificationCardStatusValue(data)+"　　　　"+strings.TrimSpace(data.AssigneesStr))
+	parts = append(parts, statusPart)
 	return strings.Join(parts, "\n\n")
 }
 
