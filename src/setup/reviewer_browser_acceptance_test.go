@@ -306,7 +306,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "user-linking-long-label", "overflow-clip-audit":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "user-linking-long-label":
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "overflow-clip-audit":
@@ -685,7 +685,7 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			if d.scenario.Load().(string) == "japanese-wfa-add" {
 				body = strings.TrimSuffix(body, "]") + `,{"user":{"id":"22222222222222238","username":"nihongo-user","global_name":"日本語表示名"},"nick":"日本語ユーザー"}]`
 			}
-			if scenario := d.scenario.Load().(string); scenario == "user-linking-long-label" || scenario == "overflow-clip-audit" {
+			if d.scenario.Load().(string) == "user-linking-long-label" {
 				body = strings.Replace(body, `"nick":"Guild Nick Supervisor"`, `"nick":"`+userLinkingLongNickname+`"`, 1)
 			}
 		}
