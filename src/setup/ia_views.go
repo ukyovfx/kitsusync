@@ -927,7 +927,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 		linkOptions.WriteString(`<option value="` + esc(id) + `">` + esc(name) + `</option>`)
 	}
 	if teamErr != nil {
-		members.WriteString(`<tr><td class="empty-state" colspan="5" role="status"><strong>` + esc(userText("KitsuのProduction Teamを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></td></tr>`)
+		members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("KitsuのProduction Teamを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></div></td></tr>`)
 	} else {
 		botEmail := botAccountEmail(db)
 		for _, person := range team {
@@ -995,7 +995,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			members.WriteString(`<tr class="production-team-row"><th scope="row" class="production-team-cell production-team-member"><strong>` + esc(kitsuPersonDisplayName(person)) + `</strong></th><td class="production-team-cell" data-label="` + esc(userText("Kitsuロール", "Kitsu role")) + `">` + esc(role) + `</td><td class="production-team-cell" data-label="Department"><span>` + esc(departments) + `</span>` + scopeMarkup + `</td><td class="production-team-cell production-team-discord" data-label="Discord">` + discordCell + `</td><td class="production-team-cell production-team-status" data-label="` + esc(userText("状態 / 操作", "Status / action")) + `"><div class="production-team-status-actions">` + statusCell + `</div></td></tr>`)
 		}
 		if members.Len() == 0 {
-			members.WriteString(`<tr><td class="empty-state" colspan="5" role="status"><strong>` + esc(userText("KitsuのProduction Teamは空です", "The Kitsu Production Team is empty")) + `</strong></td></tr>`)
+			members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("KitsuのProduction Teamは空です", "The Kitsu Production Team is empty")) + `</strong></div></td></tr>`)
 		}
 	}
 	modal := ""
@@ -1746,7 +1746,7 @@ func renderProductionWFATargetChips(values []string, emptyLabel, unavailableLabe
 			chips.WriteString(`<span class="production-wfa-more-chip">+` + strconv.Itoa(len(unique)-visibleLimit) + `</span>`)
 			break
 		}
-		chips.WriteString(`<span class="production-wfa-target-chip">` + esc(value) + `</span>`)
+		chips.WriteString(`<span class="production-wfa-target-chip" title="` + esc(value) + `">` + esc(value) + `</span>`)
 	}
 	return `<span class="production-wfa-chip-row" aria-label="` + esc(strings.Join(unique, ", ")) + `">` + chips.String() + `</span>`
 }
@@ -3154,7 +3154,7 @@ func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB
 		}
 	}
 	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="4" class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません", "No user links yet")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></td></tr>`)
+		rows.WriteString(`<tr><td colspan="4"><div class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません", "No user links yet")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></div></td></tr>`)
 	}
 	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。", "Link Kitsu users to Discord users.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
 	fmt.Fprint(w, adminPage(lang, "", r, body))

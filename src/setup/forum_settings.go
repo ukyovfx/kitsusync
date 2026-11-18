@@ -485,9 +485,9 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2>` +
 		`<label class="field-label" for="forum-guild">` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</label><input id="forum-guild" name="guild_id" value="` + esc(guildID) + `" autocomplete="off">` +
 		`<p class="field-help">` + esc(t(lang, "保存時に、フォーラムが持つ標準名のタグ（WFA / RETAKE / DONE / WIP）から役割の紐づけを自動で作ります。", "On save, the role mapping is derived automatically from each forum's standard tags (WFA / RETAKE / DONE / WIP).")) + `</p>` +
-		`<table class="data-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
+		`<table class="data-table forum-map-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p><table class="data-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
+		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p><table class="data-table forum-map-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
 		`<div class="button-row"><button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button> <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button>` + refetchButton + ` <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
 
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`

@@ -155,7 +155,7 @@ func TestProductionSettingsVerticalSections(t *testing.T) {
 
 func TestProductionWFATargetChipsStayCompactAndSummarizeOverflow(t *testing.T) {
 	chips := renderProductionWFATargetChips([]string{"Supervisor A", "Supervisor B", "Supervisor C"}, "No Supervisor", "Unavailable", true)
-	if !strings.Contains(chips, `class="production-wfa-target-chip">Supervisor A</span>`) || !strings.Contains(chips, `class="production-wfa-more-chip">+1</span>`) || !strings.Contains(chips, `aria-label="Supervisor A, Supervisor B, Supervisor C"`) {
+	if !strings.Contains(chips, `class="production-wfa-target-chip" title="Supervisor A">Supervisor A</span>`) || !strings.Contains(chips, `class="production-wfa-more-chip">+1</span>`) || !strings.Contains(chips, `aria-label="Supervisor A, Supervisor B, Supervisor C"`) {
 		t.Fatalf("automatic recipients should use compact chips with accessible full summary: %s", chips)
 	}
 	if got := renderProductionWFATargetChips(nil, "Supervisorなし", "確認不可", true); got != `<span class="production-wfa-state-chip">Supervisorなし</span>` {
