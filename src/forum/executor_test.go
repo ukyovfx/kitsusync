@@ -215,6 +215,181 @@ func TestExecutorCreatesThreadAndStoresThreadID(t *testing.T) {
 	}
 }
 
+// P7 regression: main.go builds the Executor without a GuildID, so a create
+// retried after a transient server error used to panic when it looked for the
+// thread it may already have opened. The retry must resolve the guild from the
+// production's forum settings, finish the create, and let the queued signal
+// (the mention) proceed.
+func TestExecutorRetriedCreateResolvesGuildFromProductionSettings(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	executor.GuildID = nil
+
+	creates := 0
+	fake.respond = func(r *http.Request) (int, string) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/threads"):
+			creates++
+			if creates == 1 {
+				return http.StatusBadGateway, `{}`
+			}
+			return http.StatusOK, `{"id":"thread-1","parent_id":"forum-1"}`
+		case r.URL.Path == "/guilds/guild-1/threads/active":
+			return http.StatusOK, `{"threads":[]}`
+		case strings.HasSuffix(r.URL.Path, "/messages"):
+			return http.StatusOK, `{"id":"msg-1","channel_id":"thread-1"}`
+		}
+		return http.StatusOK, `{"threads":[]}`
+	}
+
+	createPayload, _ := json.Marshal(model.ForumCreateThreadPayload{
+		ForumID:        "forum-1",
+		Name:           "Compositing sq010 sh002",
+		Role:           model.ForumRoleWFA,
+		ArchiveMinutes: model.ForumArchiveOtherMinutes,
+		Card:           json.RawMessage(`{"embeds":[{"description":"card"}]}`),
+	})
+	createRow := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxCreateThread,
+		DedupeKey: model.ForumCreateThreadDedupeKey("task-1", 0),
+		Payload:   string(createPayload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+	signalPayload, _ := json.Marshal(model.ForumPostMessagePayload{
+		Intent:         model.ForumIntentStatusWFA,
+		WindowOpenedAt: executor.Now(),
+	})
+	signalRow := enqueue(t, db, model.ForumOutbox{
+		TaskID:      "task-1",
+		Kind:        model.ForumOutboxPostMessage,
+		DedupeKey:   model.ForumPostMessageCoalesceKey(model.ForumIntentStatusWFA, "task-1") + ":1",
+		CoalesceKey: model.ForumPostMessageCoalesceKey(model.ForumIntentStatusWFA, "task-1"),
+		Payload:     string(signalPayload),
+		State:       model.ForumOutboxPending,
+		NotBefore:   executor.Now(),
+		CreatedAt:   executor.Now(),
+	})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("retried create panicked: %v", r)
+		}
+	}()
+	// First pass: the thread create fails with a 502 and goes back to pending.
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain 1: %v", err)
+	}
+	if failed, err := loadOutbox(db, createRow.ID); err != nil || failed.State != model.ForumOutboxPending {
+		t.Fatalf("create row after first drain = %v, %v; want pending", failed.State, err)
+	}
+	// Second pass: the retry must not panic.
+	base := executor.Now()
+	executor.Now = func() time.Time { return base.Add(2 * time.Minute) }
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain 2: %v", err)
+	}
+	task, err := model.FindForumTaskWithError(db, "task-1")
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if task.ThreadID == nil || *task.ThreadID != "thread-1" {
+		t.Errorf("task thread id = %v, want the retried create to store it", task.ThreadID)
+	}
+	for _, row := range []model.ForumOutbox{createRow, signalRow} {
+		done, err := loadOutbox(db, row.ID)
+		if err != nil {
+			t.Fatalf("load row %d: %v", row.ID, err)
+		}
+		if done.State != model.ForumOutboxDone {
+			t.Errorf("row %d state = %q, want done", row.ID, done.State)
+		}
+	}
+	mentioned := false
+	for _, request := range fake.snapshot() {
+		if request.Method == http.MethodPost && request.Path == "/channels/thread-1/messages" {
+			mentioned = true
+		}
+	}
+	if !mentioned {
+		t.Errorf("the signal following the retried create was not posted")
+	}
+}
+
+// Without any resolvable guild (no forum settings stored), the retried create
+// must skip the duplicate search safely and retry the create normally instead
+// of panicking.
+func TestExecutorRetriedCreateWithoutGuildSkipsThreadSearch(t *testing.T) {
+	db := newForumDB(t)
+	seedForumTask(t, db, "", "s-wfa")
+	executor, fake := newExecutor(t, db)
+	executor.GuildID = nil
+
+	creates := 0
+	fake.respond = func(r *http.Request) (int, string) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/threads") {
+			creates++
+			if creates == 1 {
+				return http.StatusBadGateway, `{}`
+			}
+			return http.StatusOK, `{"id":"thread-1","parent_id":"forum-1"}`
+		}
+		return http.StatusOK, `{"threads":[]}`
+	}
+
+	createPayload, _ := json.Marshal(model.ForumCreateThreadPayload{
+		ForumID:        "forum-1",
+		Name:           "Compositing sq010 sh002",
+		Role:           model.ForumRoleWFA,
+		ArchiveMinutes: model.ForumArchiveOtherMinutes,
+	})
+	createRow := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxCreateThread,
+		DedupeKey: model.ForumCreateThreadDedupeKey("task-1", 0),
+		Payload:   string(createPayload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("retried create panicked without a guild: %v", r)
+		}
+	}()
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain 1: %v", err)
+	}
+	base := executor.Now()
+	executor.Now = func() time.Time { return base.Add(2 * time.Minute) }
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain 2: %v", err)
+	}
+	if creates != 2 {
+		t.Errorf("thread create calls = %d, want the retry to attempt the create again", creates)
+	}
+	for _, request := range fake.snapshot() {
+		if strings.Contains(request.Path, "/threads/active") {
+			t.Errorf("unexpected guild thread search for %q", request.Path)
+		}
+	}
+	task, err := model.FindForumTaskWithError(db, "task-1")
+	if err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if task.ThreadID == nil || *task.ThreadID != "thread-1" {
+		t.Errorf("task thread id = %v, want the retried create to store it", task.ThreadID)
+	}
+	if done, err := loadOutbox(db, createRow.ID); err != nil || done.State != model.ForumOutboxDone {
+		t.Fatalf("create row after retry = %v, %v; want done", done.State, err)
+	}
+}
+
 // A status change that opens a thread must also deliver its mention: the
 // planner queues create + signal, and the drain posts the signal into the
 // thread it just created, after the recipient resolution.
