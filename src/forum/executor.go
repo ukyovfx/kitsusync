@@ -59,6 +59,7 @@ func (e Executor) Drain(maxRows int) (int, error) {
 		if err := e.execute(*row); err != nil {
 			return processed, err
 		}
+		e.recordAudit(*row)
 		processed++
 	}
 	return processed, nil
