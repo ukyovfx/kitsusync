@@ -33,6 +33,9 @@ const (
 	reviewerBrowserPass     = "synthetic-browser-password"
 	reviewerBrowserGuild    = "11111111111111111"
 	reviewerBrowserCategory = "55555555555555550"
+	// userLinkingLongNickname reproduces the staging report where a very long
+	// Discord nickname in a linked row's select pushed the 解除 button off the line.
+	userLinkingLongNickname = "TVアニメ『佐々木さんとピーちゃんSeason2』第1話は1時間"
 )
 
 // TestReviewerBrowserAcceptance uses normal KitsuSync login/session routes,
@@ -302,7 +305,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("/__fixture", func(w http.ResponseWriter, r *http.Request) {
 		mode := strings.TrimSpace(r.URL.Query().Get("scenario"))
 		switch mode {
-		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership":
+		case "ready", "empty-team", "team-failure", "no-matching", "no-linked", "no-roles", "non-mentionable-roles", "bot-can-mention-roles", "roles-forbidden", "roles-rate-limited", "discord-failure", "stale-membership", "user-linking-long-label":
 			scenario.Store(mode)
 			w.WriteHeader(http.StatusNoContent)
 		case "unconnected-production":
@@ -673,6 +676,9 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 			if d.scenario.Load().(string) == "japanese-wfa-add" {
 				body = strings.TrimSuffix(body, "]") + `,{"user":{"id":"22222222222222238","username":"nihongo-user","global_name":"日本語表示名"},"nick":"日本語ユーザー"}]`
 			}
+			if d.scenario.Load().(string) == "user-linking-long-label" {
+				body = strings.Replace(body, `"nick":"Guild Nick Supervisor"`, `"nick":"`+userLinkingLongNickname+`"`, 1)
+			}
 		}
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/roles"):
 		if r.URL.Path != "/api/v10/guilds/"+d.expectedGuild+"/roles" {
@@ -716,9 +722,9 @@ func (d reviewerBrowserDiscordTransport) RoundTrip(r *http.Request) (*http.Respo
 		body = `{"id":"` + id + `","name":"` + payload.Name + `","guild_id":"` + d.expectedGuild + `","type":15,"parent_id":"` + reviewerBrowserCategory + `","available_tags":[{"id":"` + id + `-wfa","name":"WFA"},{"id":"` + id + `-retake","name":"RETAKE"},{"id":"` + id + `-done","name":"DONE"},{"id":"` + id + `-wip","name":"WIP"}]}`
 	case strings.HasPrefix(r.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(r.URL.Path, "/channels"):
 		// Compositing and animation carry the four standard tags (the names the
-	// save derives the role mapping from); storyboard keeps human-readable tag
-	// names, so a save routed to it is refused for its missing standard tags.
-	body = `[{"id":"66666666666666661","name":"compositing","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666661-wfa","name":"WFA"},{"id":"66666666666666661-retake","name":"RETAKE"},{"id":"66666666666666661-done","name":"DONE"},{"id":"66666666666666661-wip","name":"WIP"}]},{"id":"66666666666666662","name":"animation","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666662-wfa","name":"WFA"},{"id":"66666666666666662-retake","name":"RETAKE"},{"id":"66666666666666662-done","name":"DONE"},{"id":"66666666666666662-wip","name":"WIP"}]},{"id":"66666666666666663","name":"review","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666664","name":"storyboard","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666664-wfa","name":"Waiting for approval"},{"id":"66666666666666664-retake","name":"Retake"},{"id":"66666666666666664-done","name":"Done"},{"id":"66666666666666664-wip","name":"In progress"}]}]`
+		// save derives the role mapping from); storyboard keeps human-readable tag
+		// names, so a save routed to it is refused for its missing standard tags.
+		body = `[{"id":"66666666666666661","name":"compositing","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666661-wfa","name":"WFA"},{"id":"66666666666666661-retake","name":"RETAKE"},{"id":"66666666666666661-done","name":"DONE"},{"id":"66666666666666661-wip","name":"WIP"}]},{"id":"66666666666666662","name":"animation","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666662-wfa","name":"WFA"},{"id":"66666666666666662-retake","name":"RETAKE"},{"id":"66666666666666662-done","name":"DONE"},{"id":"66666666666666662-wip","name":"WIP"}]},{"id":"66666666666666663","name":"review","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[]},{"id":"66666666666666664","name":"storyboard","guild_id":"` + d.expectedGuild + `","type":15,"permission_overwrites":[],"available_tags":[{"id":"66666666666666664-wfa","name":"Waiting for approval"},{"id":"66666666666666664-retake","name":"Retake"},{"id":"66666666666666664-done","name":"Done"},{"id":"66666666666666664-wip","name":"In progress"}]}]`
 		if mode := d.scenario.Load().(string); mode == "channels-rate-limited" || mode == "channels-unconnected" {
 			status, body = http.StatusTooManyRequests, `{"message":"synthetic rate limit"}`
 		}
