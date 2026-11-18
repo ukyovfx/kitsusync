@@ -21,8 +21,9 @@ import (
 const discordChannelTypeForum = 15
 
 type forumTagInfo struct {
-	ID   string
-	Name string
+	ID    string
+	Name  string
+	Emoji string
 }
 
 type forumChannelInfo struct {
@@ -65,8 +66,9 @@ func decodeGuildForumChannels(body []byte) ([]forumChannelInfo, error) {
 		Type          int    `json:"type"`
 		ParentID      string `json:"parent_id"`
 		AvailableTags []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID    string `json:"id"`
+			Name  string `json:"name"`
+			Emoji string `json:"emoji_name"`
 		} `json:"available_tags"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -79,7 +81,7 @@ func decodeGuildForumChannels(body []byte) ([]forumChannelInfo, error) {
 		}
 		forum := forumChannelInfo{ID: channel.ID, Name: channel.Name, ParentID: strings.TrimSpace(channel.ParentID)}
 		for _, tag := range channel.AvailableTags {
-			forum.Tags = append(forum.Tags, forumTagInfo{ID: tag.ID, Name: tag.Name})
+			forum.Tags = append(forum.Tags, forumTagInfo{ID: tag.ID, Name: tag.Name, Emoji: tag.Emoji})
 		}
 		forums = append(forums, forum)
 	}
@@ -167,16 +169,6 @@ func forumTemplateRoleForStatus(name string) string {
 		return model.ForumRoleWIP
 	}
 	return ""
-}
-
-// forumTemplateStatusRoles builds the default status → role rows from the live
-// Kitsu status list. Statuses the template does not name stay unmapped.
-func forumTemplateStatusRoles(db *gorm.DB) []model.ProductionForumStatusRole {
-	statuses, err := forumStatusLister(db)
-	if err != nil {
-		return nil
-	}
-	return forumTemplateStatusRolesFrom(statuses)
 }
 
 // forumTemplateStatusRolesFrom derives the same template from a status list
