@@ -322,7 +322,7 @@ func MakeKitsuResponseContext(ctx context.Context, conf config.Config) (notifiab
 		log.Printf("Done secondary loop in %s", time.Since(start))
 	}
 
-return out, baselineOut, nil
+	return out, baselineOut, nil
 }
 
 // statusChangeComment returns only a comment that Zou deterministically ties
@@ -405,6 +405,14 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		return
 	}
 	poller := forum.Poller{DB: db, RenderCard: forumCardRenderer(conf, db)}
+	// Handoff detection reads the same payloads: a publish comment with no
+	// status change on a 受け渡し row becomes a handoff event for K3.
+	detector := forum.HandoffDetector{DB: db, Comments: kitsu.GetTaskCommentsWithError}
+	if hr, err := detector.Detect(data); err != nil {
+		slog.Error("Handoff detection failed", "error_class", "handoff_detect_failed", "err", err)
+	} else if hr.Events > 0 || hr.Known > 0 {
+		slog.Info("Handoff detection summary", "event", "handoff_detect_summary", "events", hr.Events, "known", hr.Known)
+	}
 	result, err := poller.PollProjects(data)
 	if err != nil {
 		slog.Error("Forum poll failed", "error_class", "forum_poll_failed", "err", err)
@@ -892,6 +900,7 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ProductionHandoffConfig{},
 		&model.ProductionHandoffProductType{},
 		&model.ProductionHandoffRoute{},
+		&model.HandoffEvent{},
 		&model.ForumBaseline{},
 		&model.ForumTask{},
 		&model.ForumTransition{},
