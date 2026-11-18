@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -32,12 +33,12 @@ func TestRepeatedRequestsDoNotCreateTransports(t *testing.T) {
 	retryDelays = []time.Duration{time.Millisecond, time.Millisecond}
 	t.Cleanup(func() { retryDelays = prev })
 
-	attemptOnce("tok", http.MethodGet, server.URL+"/x", nil, nil)
+	attemptOnce(context.Background(), "tok", http.MethodGet, server.URL+"/x", nil, nil)
 	pinnedTransportCache.Lock()
 	before := pinnedTransportCache.transport
 	pinnedTransportCache.Unlock()
 	for i := 0; i < 5; i++ {
-		attemptOnce("tok", http.MethodGet, server.URL+"/x", nil, nil)
+		attemptOnce(context.Background(), "tok", http.MethodGet, server.URL+"/x", nil, nil)
 	}
 	pinnedTransportCache.Lock()
 	after := pinnedTransportCache.transport

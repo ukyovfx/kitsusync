@@ -1,6 +1,7 @@
 package request
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -48,7 +49,7 @@ func TestDoWithErrorRetriesOnly5xxForIdempotentMethods(t *testing.T) {
 			if tc.method != http.MethodGet && tc.method != http.MethodHead {
 				payload = map[string]string{"k": "v"}
 			}
-			if _, err := DoWithError("", tc.method, server.URL+"/x", payload, nil); err == nil {
+			if _, err := DoWithError(context.Background(), "", tc.method, server.URL+"/x", payload, nil); err == nil {
 				t.Fatal("expected error for 5xx")
 			}
 			if got := hits.Load(); got != tc.want {
@@ -67,7 +68,7 @@ func TestDoWithErrorDoesNotRetryPostOnNetworkError(t *testing.T) {
 		conn, _, _ := hj.Hijack()
 		_ = conn.Close()
 	})
-	if _, err := DoWithError("", http.MethodPost, server.URL+"/x", map[string]string{"k": "v"}, nil); err == nil {
+	if _, err := DoWithError(context.Background(), "", http.MethodPost, server.URL+"/x", map[string]string{"k": "v"}, nil); err == nil {
 		t.Fatal("expected network error")
 	}
 	if got := hits.Load(); got != 1 {
@@ -82,7 +83,7 @@ func TestDoWithErrorErrorsDoNotLeakQueryString(t *testing.T) {
 		conn, _, _ := hj.Hijack()
 		_ = conn.Close()
 	})
-	_, err := DoWithError("", http.MethodPost, server.URL+"/x?secret=abc123", nil, nil)
+	_, err := DoWithError(context.Background(), "", http.MethodPost, server.URL+"/x?secret=abc123", nil, nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
