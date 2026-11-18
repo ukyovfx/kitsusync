@@ -37,7 +37,7 @@ func TestValidationOnlyProjectRendersReadOnlyRealData(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=real-production-id&tab=team&lang=en", nil)
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, r, db, "")
-	if body := w.Body.String(); !strings.Contains(body, "Real Person") || !strings.Contains(body, "Not linked") {
+	if body := w.Body.String(); !strings.Contains(body, "Real Person") || !strings.Contains(body, "Needs review") {
 		t.Fatal("validation-only participants were not rendered")
 	}
 }

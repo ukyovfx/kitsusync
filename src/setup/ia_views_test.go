@@ -848,12 +848,12 @@ func TestSelectedProductionOverviewUsesCanonicalConnectionStatuses(t *testing.T)
 	w := httptest.NewRecorder()
 	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?project=canonical-status-p&lang=ja", nil), db, "")
 	body := w.Body.String()
-	for _, want := range []string{"接続済", "未設定", "プロダクション接続", "Discordリソース", "通知ルーティング"} {
+	for _, want := range []string{"接続済み", "未設定", "プロダクション接続", "Discordリソース", "通知ルーティング"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("overview missing canonical status content %q", want)
 		}
 	}
-	for _, forbidden := range []string{"接続済み", "次の操作", "通常どおり利用できます", "wizard_step=3"} {
+	for _, forbidden := range []string{"次の操作", "通常どおり利用できます", "wizard_step=3"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("overview retained obsolete content %q", forbidden)
 		}
@@ -1194,7 +1194,7 @@ func TestConnectionsSummaryUsesTwoExplicitPeerCards(t *testing.T) {
 	if strings.Contains(body, `connections-card-header"><div>`) || strings.Contains(body, `role="status">Connected</span></div><section`) {
 		t.Fatal("summary retained the redundant combined status header")
 	}
-	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済", "https://kitsu.example.test", "configured-token", true, true)
+	body = renderConnectionsDisplayBodyWithHealth("ja", httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db, "", "ok", "接続済み", "https://kitsu.example.test", "configured-token", true, true)
 	if !strings.Contains(body, "Kitsu接続") || !strings.Contains(body, "Discord Bot接続") || strings.Contains(body, "configured-token") || !strings.Contains(body, connectionSecretMask) {
 		t.Fatal("Japanese summary did not preserve explicit service labels or secret safety")
 	}
@@ -2275,7 +2275,7 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldReader, oldMembers })
 
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en", "synthetic-token")
-	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Not linked", "/bot/admin/users", "Kitsu role"} {
+	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Needs review", "/bot/admin/users", "Kitsu role"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
 		}

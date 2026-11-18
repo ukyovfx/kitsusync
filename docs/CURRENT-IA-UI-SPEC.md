@@ -43,7 +43,7 @@ The two statuses are independent and vertically stacked as equal label/badge row
 
 ## Production list and detail
 
-Each Production row presents the human-readable Production name, a compact content-sized status badge, and its action. `Connected` / `接続済` is positive green. `Disconnected` / `未接続` is warning yellow, not neutral gray. A visible Kitsu Production without a KitsuSync connection is included in the total and disconnected count, but not in the connected count or Needs attention count. Dashboard and Production list derive these counts from the same live-plus-local Production set and connection-state definition; ValidationOnly records are excluded from normal summary counts.
+Each Production row presents the human-readable Production name, a compact content-sized status badge, and its action. `Connected` / `接続済み` is positive green. `Disconnected` / `未接続` is warning yellow, not neutral gray. A visible Kitsu Production without a KitsuSync connection is included in the total and disconnected count, but not in the connected count or Needs attention count. Dashboard and Production list derive these counts from the same live-plus-local Production set and connection-state definition; ValidationOnly records are excluded from normal summary counts.
 
 The detail view uses the same connection-state definition as the list and Dashboard count. It may show routing/resource information only when that state exists; it must not invent or duplicate stale resources.
 
@@ -56,7 +56,7 @@ Normal view:
 - masked Kitsu Bot API Token
 - `Discord Bot connection [Connected / Disconnected / Not configured / Needs review / Error]`
 - masked Discord Bot Token
-- edit and New Production Connection actions
+- edit and New Production Connection actions, secondary action first and the primary action last
 
 Kitsu and Discord cards are equal-height, stretch-aligned desktop peers without fake filler content. The cards stack naturally at narrow widths.
 
@@ -80,7 +80,7 @@ Badges are short semantic states; explanatory sentences remain supporting text.
 
 | Meaning | Japanese | English | Color |
 | --- | --- | --- | --- |
-| healthy connection | 接続済 | Connected | green |
+| healthy connection | 接続済み | Connected | green |
 | disconnected | 未接続 | Disconnected | yellow/warning |
 | missing configuration | 未設定 | Not configured | yellow/warning |
 | configured but failing validation | 要確認 | Needs review | yellow/warning |
@@ -172,7 +172,7 @@ The forum settings page is separate from the lane routing editor in Notification
 
 The page has four sections in this order: Discord server (ID), Task Type → forum, Kitsu status → role, and Role → forum tag (one group per routed forum). Forum and tag choices are selects fed by the live Discord forum list; when that list cannot be read the page says so in one line, keeps every saved value selectable, and still saves. Status roles are Waiting (WFA), Retake, Done, and In progress (tag only). Default roles are pre-assigned from the Kitsu status names as a template (Waiting For Approval → WFA, Retake → Retake, Done or Approved → Done, Work In Progress → tag only, everything else unmapped) whenever the Production has no saved status roles yet; saved operator values always win once they exist.
 
-`Botでフォーラムとタグを作成` / `Create forums and tags with the Bot` is the primary action. From an untouched Production one press seeds one route per live Kitsu Task Type, creates a forum with the four role tags under the Production's Discord category (reusing an existing forum of the same name in that category instead of duplicating it), applies the template status roles, and saves, returning to the page with a success notice (`フォーラムとタグを作成し、設定を保存しました。`). A retry from a half-created state never duplicates forums.
+`Botでフォーラムとタグを作成` / `Create forums and tags with the Bot` is the primary action and sits last in the button row, after Save, Refresh channel info, and Back to notifications. From an untouched Production one press seeds one route per live Kitsu Task Type, creates a forum with the four role tags under the Production's Discord category (reusing an existing forum of the same name in that category instead of duplicating it), applies the template status roles, and saves, returning to the page with a success notice (`フォーラムとタグを作成し、設定を保存しました。`). A retry from a half-created state never duplicates forums.
 
 Forum mode is accepted only when the Discord server ID is set, at least one Task Type has a forum, Waiting, Retake and Done each have a status, and every routed forum has a tag for those three roles with no tag reused. Lane mode may hold a half-finished draft. A rejected save or create returns HTTP 400, keeps the submitted values on the page, and shows a bordered error notice (`notice notice-error`) listing every remaining problem at once in the page language, with forum names rather than channel IDs when known, in a stable order. Internal errors are never shown verbatim. Saving stores settings only; sending to forums is not part of this page and the mode does not change delivery until the forum sender exists.
 
@@ -188,7 +188,7 @@ The normal Kitsu API and Discord API cards show the current response value or fa
 
 Every successful line point is a timestamped observation. It has a native SVG tooltip and a keyboard-reachable accessible name. Successful observations expose the viewer-local time, measured milliseconds, and `Healthy` / the Japanese equivalent. Failed observations break the line without a graph mark or fabricated latency; the latest failure remains explicit in the response state. Tooltips never contain tokens, headers, URLs, bodies, or internal identifiers.
 
-Telemetry timestamps and generated snapshot timestamps are UTC RFC3339 values. The browser converts them with its local `Intl`/IANA timezone rules; language selection never changes timezone conversion, and daylight-saving transitions follow the browser. Audit Log timestamps use the same viewer-local conversion and include the active IANA timezone context.
+Telemetry timestamps and generated snapshot timestamps are UTC RFC3339 values. The browser converts them with its local `Intl`/IANA timezone rules; language selection never changes timezone conversion, and daylight-saving transitions follow the browser. Audit Log timestamps use the same viewer-local conversion, include the active IANA timezone context, and format their date and time in the page language (`ja-JP` / `en-US`) rather than the browser locale.
 
 The chart time labels are `60s`, `30s`, `Now` / `60秒`, `30秒`, `今`. Charts retain independent zero-based scales, a shared timestamp-based 60-second X domain, full-width plot geometry, orthogonal axes, and green successful line segments. Failed observations and gaps longer than 30 seconds break the line without a bottom-row marker or plotted latency. The adjacent pre-window sample may interpolate an entering segment at the left boundary when its gap is within 30 seconds. A latest observation older than 45 seconds is identified as stale. No fixed latency threshold, adaptive yellow health line, or fabricated observation is displayed. Auto-refresh remains in-memory and does not persist telemetry to SQLite.
 
