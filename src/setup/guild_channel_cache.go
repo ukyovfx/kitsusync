@@ -155,7 +155,7 @@ func RefreshDiscordChannelsHandler(discordSettings func() (botToken string)) htt
 	return func(w http.ResponseWriter, r *http.Request) {
 		back := r.FormValue("back")
 		// Only same-app paths, so the redirect cannot leave this app.
-		if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") {
+		if !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") || strings.HasPrefix(back, "/\") {
 			back = "/bot/admin"
 		}
 		if guildID := strings.TrimSpace(r.FormValue("guild")); guildID != "" {
