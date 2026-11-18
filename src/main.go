@@ -45,10 +45,17 @@ import (
 // filter: a task older than the notification window still has to be recorded
 // as existing, or forum mode would later treat it as new and post it.
 func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, baseline []kitsu.MessagePayload, err error) {
+	return MakeKitsuResponseContext(context.Background(), conf)
+}
+
+// MakeKitsuResponseContext is MakeKitsuResponse with a cancellation root: when
+// ctx is cancelled every Kitsu read in flight is aborted so a shutdown does not
+// wait on the request timeouts.
+func MakeKitsuResponseContext(ctx context.Context, conf config.Config) (notifiable []kitsu.MessagePayload, baseline []kitsu.MessagePayload, err error) {
 	pollFetchStart := time.Now()
 	taskCommentReads.Store(0)
 
-	projects, err := kitsu.GetProjectsWithError()
+	projects, err := kitsu.GetProjectsWithContext(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch projects: %w", err)
 	}
@@ -63,7 +70,7 @@ func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, b
 	var tasks kitsu.Tasks
 	failedProjects := make(map[string]struct{})
 	tasksFetchStart := time.Now()
-	fetched := fetchProjectTasks(projects.Each, conf.Threads)
+	fetched := fetchProjectTasks(ctx, projects.Each, conf.Threads)
 	var slowestProject time.Duration
 	for i, result := range fetched {
 		if result.elapsed > slowestProject {
@@ -85,7 +92,7 @@ func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, b
 		slog.Info("Got tasks: " + strconv.Itoa(len(tasks.Each)))
 	}
 
-	taskStatuses, err := kitsu.GetTaskStatusesWithError()
+	taskStatuses, err := kitsu.GetTaskStatusesWithContext(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch task statuses: %w", err)
 	}
@@ -93,7 +100,7 @@ func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, b
 		slog.Info("Got taskStatuses: " + strconv.Itoa(len(taskStatuses.Each)))
 	}
 
-	entities, err := kitsu.GetEntitiesWithError()
+	entities, err := kitsu.GetEntitiesWithContext(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch entities: %w", err)
 	}
@@ -101,7 +108,7 @@ func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, b
 		slog.Info("Got entities: " + strconv.Itoa(len(entities.Each)))
 	}
 
-	enitityTypes, err := kitsu.GetEntityTypesWithError()
+	enitityTypes, err := kitsu.GetEntityTypesWithContext(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch entity types: %w", err)
 	}
@@ -109,7 +116,7 @@ func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, b
 		slog.Info("Got enitityTypes: " + strconv.Itoa(len(enitityTypes.Each)))
 	}
 
-	taskTypes, err := kitsu.GetTaskTypesWithError()
+	taskTypes, err := kitsu.GetTaskTypesWithContext(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch task types: %w", err)
 	}
@@ -127,7 +134,7 @@ func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, b
 		}
 	}
 
-	persons, err := kitsu.GetPersonsWithError()
+	persons, err := kitsu.GetPersonsWithContext(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch persons: %w", err)
 	}
@@ -216,7 +223,7 @@ func MakeKitsuResponse(conf config.Config) (notifiable []kitsu.MessagePayload, b
 			}
 
 			if conf.Kitsu.SkipComments == false {
-				taskComments, commentsOK := loadTaskComments(tasks.Each[i], previousComments, nextComments, &nextCommentsMu)
+				taskComments, commentsOK := loadTaskComments(ctx, tasks.Each[i], previousComments, nextComments, &nextCommentsMu)
 				if !commentsOK {
 					// Keep the stored comment checkpoint; the next poll retries.
 					response[i].CommentsUnavailable = true
@@ -501,7 +508,24 @@ func getDiscordSettings(db *gorm.DB, conf config.Config) (botToken, guildID, web
 // pollMu prevents overlapping polling cycles in the same process.
 var pollMu sync.Mutex
 
-var makeKitsuResponse = MakeKitsuResponse
+// pollWork tracks the poll goroutines that may still touch the database, so
+// shutdown waits for them before closing SQLite.
+var pollWork sync.WaitGroup
+
+// pollCtx is the cancellation root for polling. Shutdown cancels it first so
+// in-flight Kitsu reads return instead of outliving SQLite.
+var pollCtx, stopPolling = context.WithCancel(context.Background())
+
+// trackPoll runs fn as poll work that shutdown waits for.
+func trackPoll(fn func()) {
+	pollWork.Add(1)
+	go func() {
+		defer pollWork.Done()
+		fn()
+	}()
+}
+
+var makeKitsuResponse = MakeKitsuResponseContext
 
 func redactExpiredNotificationPayloads(conf config.Config, db *gorm.DB, now time.Time) {
 	days := conf.Notification.DeliveryPayloadRetentionDays
@@ -538,7 +562,7 @@ type projectTasksResult struct {
 // fetchProjectTasks reads every project's tasks with at most `limit` reads in
 // flight (conf.Threads, minimum 1). Results keep the projects' order so the
 // poll stays deterministic.
-func fetchProjectTasks(projects []kitsu.Project, limit int) []projectTasksResult {
+func fetchProjectTasks(ctx context.Context, projects []kitsu.Project, limit int) []projectTasksResult {
 	if limit < 1 {
 		limit = 1
 	}
@@ -552,7 +576,7 @@ func fetchProjectTasks(projects []kitsu.Project, limit int) []projectTasksResult
 			defer wg.Done()
 			defer func() { <-slots }()
 			started := time.Now()
-			read, err := kitsu.GetProjectTasksWithError(projects[i].ID)
+			read, err := kitsu.GetProjectTasksWithContext(ctx, projects[i].ID)
 			results[i] = projectTasksResult{tasks: read.Each, err: err, elapsed: time.Since(started)}
 		}(i)
 	}
@@ -605,7 +629,7 @@ func replaceTaskCommentCache(connectionKey string, next map[string]cachedTaskCom
 // last_comment_date differs from the cached read. A task without a
 // last_comment_date has no comments. On a failed read the previous cache entry
 // is kept (so the next poll retries) and ok is false.
-func loadTaskComments(task kitsu.Task, previous, next map[string]cachedTaskComments, nextMu *sync.Mutex) (comments kitsu.Comments, ok bool) {
+func loadTaskComments(ctx context.Context, task kitsu.Task, previous, next map[string]cachedTaskComments, nextMu *sync.Mutex) (comments kitsu.Comments, ok bool) {
 	date := strings.TrimSpace(task.LastCommentDate)
 	if date == "" {
 		return kitsu.Comments{}, true
@@ -618,7 +642,7 @@ func loadTaskComments(task kitsu.Task, previous, next map[string]cachedTaskComme
 		return kitsu.Comments{Each: append([]kitsu.Comment(nil), cached.comments...)}, true
 	}
 	taskCommentReads.Add(1)
-	fetched, err := kitsu.GetTaskCommentsWithError(task.ID)
+	fetched, err := kitsu.GetTaskCommentsWithContext(ctx, task.ID)
 	if err != nil {
 		slog.Warn("Task comments fetch failed; comment diff skipped for this task", "error_class", "kitsu_comments_fetch_failed", "taskID", task.ID, "error", err)
 		if hit {
@@ -677,6 +701,12 @@ func notifyProductionStall(conf config.Config, db *gorm.DB, project model.Projec
 }
 
 func runOnePoll(conf config.Config, db *gorm.DB) {
+	runOnePollContext(context.Background(), conf, db)
+}
+
+// runOnePollContext runs one poll with a cancellation root. Cancelling ctx
+// aborts the Kitsu reads in flight and leaves the remaining work undone.
+func runOnePollContext(ctx context.Context, conf config.Config, db *gorm.DB) {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("KITSUSYNC_DISABLE_POLL")), "1") {
 		slog.Info("Poll skipped by local audit guard")
 		return
@@ -689,7 +719,7 @@ func runOnePoll(conf config.Config, db *gorm.DB) {
 	started := time.Now()
 
 	// Poll Kitsu with runtime credentials from DB/env/conf priority.
-	kitsuResponse, baselineResponse, err := makeKitsuResponse(conf)
+	kitsuResponse, baselineResponse, err := makeKitsuResponse(ctx, conf)
 	if err != nil {
 		setup.Stats.RecordPollError(err.Error())
 		slog.Error("Kitsu poll failed", "error_class", "kitsu_fetch_failed", "err", err)
@@ -1112,7 +1142,7 @@ func main() {
 			return
 		}
 		slog.Debug("Kitsu reconnect result", "success", true)
-		safego.Go("kitsu reconnect poll", func() { runtime.runWhenReady(func() { runOnePoll(conf, db) }) })
+		safego.Go("kitsu reconnect poll", func() { runtime.runWhenReady(func() { runOnePollContext(pollCtx, conf, db) }) })
 	}
 
 	setupHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -1243,9 +1273,9 @@ func main() {
 				slog.Info("validation-only profile imported", "productions", count)
 			}
 		}
-		safego.Go("initial poll", func() {
+		trackPoll(func() {
 			runtime.runWhenReady(func() {
-				runOnePoll(conf, db)
+				runOnePollContext(pollCtx, conf, db)
 				if conf.Log {
 					slog.Info("Done initial poll", "duration", time.Since(start).String())
 				}
@@ -1271,7 +1301,7 @@ func main() {
 		if !runtime.ready() && !refreshRuntime() {
 			return
 		}
-		runtime.runWhenReady(func() { runOnePoll(conf, db) })
+		runOnePollContext(pollCtx, conf, db)
 	})
 	c.AddFunc("@every 1h", func() { redactExpiredNotificationPayloads(conf, db, time.Now()) })
 	c.AddFunc("0 3 * * *", func() {
@@ -1289,6 +1319,10 @@ func main() {
 	<-sigCtx.Done()
 	slog.Info("Shutdown signal received; stopping HTTP server, cron, and SQLite")
 
+	// Abort in-flight Kitsu reads first: an un-cancelled request can otherwise
+	// outlive the 10s grace periods and touch SQLite after it is closed.
+	stopPolling()
+
 	stopCtx := c.Stop()
 	select {
 	case <-stopCtx.Done():
@@ -1304,6 +1338,8 @@ func main() {
 	} else {
 		slog.Info("HTTP server shutdown complete")
 	}
+
+	pollWork.Wait()
 
 	if err := sqlDB.Close(); err != nil {
 		slog.Warn("SQLite close failed", "err", err)
