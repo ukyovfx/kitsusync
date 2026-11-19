@@ -174,19 +174,13 @@ func notificationCardDescription(data Template) string {
 		parts = append(parts, strings.Join(links, "　　"))
 	}
 
-	statusLabel := "Status"
-	if normalizeNotificationLang(data.NotificationLanguage) == "ja" {
-		statusLabel = "ステータス"
-	}
-	statusPart := "**📊 " + statusLabel + "**\n" + notificationCardStatusValue(data)
+	// The footer block is two plain lines with a full-width colon, shared
+	// with the forum signal cards (tuning: footer unification).
+	bodyBlock := "ステータス：" + notificationCardStatusValue(data)
 	if assignees := strings.TrimSpace(data.AssigneesStr); assignees != "" {
-		assigneeLabel := strings.TrimSpace(data.AssigneeLabel)
-		if assigneeLabel == "" {
-			assigneeLabel = "Assignee"
-		}
-		statusPart += "\n**👤 " + assigneeLabel + "**\n" + assignees
+		bodyBlock += "\n担当：" + assignees
 	}
-	parts = append(parts, statusPart)
+	parts = append(parts, bodyBlock)
 	return strings.Join(parts, "\n\n")
 }
 

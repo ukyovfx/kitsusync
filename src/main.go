@@ -442,7 +442,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
 		},
-		NotifyAssigneesOnComment: conf.Notification.CommentNotifyAssignee,
+		NotifyAssigneesOnComment: commentNotifyAssignee(db, conf),
 	}
 	executor := forum.Executor{
 		DB:       db,
@@ -453,6 +453,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
 			return recipients.ForTask(taskID, payload)
 		},
+		AssigneeNames: forumAssigneeNames,
 	}
 	if _, err := executor.Drain(forumOutboxDrainLimit); err != nil {
 		// A rate-limited drain is a pause, not a failure: the rows stay due and
@@ -479,6 +480,18 @@ func forumReviewerTargets(db *gorm.DB, conf config.Config, botToken, projectID, 
 		resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
 	}
 	return resolved, err
+}
+
+// commentNotifyAssignee prefers the admin-UI setting: a stored true/false wins,
+// and conf.toml only supplies the initial value while nothing is stored.
+func commentNotifyAssignee(db *gorm.DB, conf config.Config) bool {
+	switch model.GetSetting(db, setup.CommentNotifyAssigneeSettingKey) {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	return conf.Notification.CommentNotifyAssignee
 }
 
 // forumOutboxDrainLimit bounds one poll's Discord calls.
@@ -600,6 +613,21 @@ func forumAssigneeIdentity(kitsuPersonID string) (string, string) {
 		return "", ""
 	}
 	return identity.name, identity.email
+}
+
+// forumAssigneeNames resolves the footer 担当 names of a task's assignees from
+// the last poll's Kitsu identities. Unresolved IDs are skipped: an ID appearing
+// in the footer as raw text helps nobody.
+func forumAssigneeNames(projectID string, personIDs []string) []string {
+	names := make([]string, 0, len(personIDs))
+	for _, id := range personIDs {
+		name, _ := forumAssigneeIdentity(id)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // projectTasksResult is one project's task read.
@@ -1276,7 +1304,7 @@ func main() {
 		// A global validation-only profile still refuses writes.
 		mux.HandleFunc(prefix+"/admin/forum", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
-			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
+			setup.ForumSettingsHandler(db, conf.Notification.CommentNotifyAssignee, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))
 		// The handoff mapping is local per-Production configuration as well: it is
 		// stored by KitsuSync and needs neither Kitsu nor Discord to save. An

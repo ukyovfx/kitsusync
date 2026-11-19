@@ -70,7 +70,7 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 	if strings.Contains(embed.Description, "<@") {
 		t.Fatalf("mention leaked into embed: %q", embed.Description)
 	}
-	if !strings.Contains(embed.Description, "**📊 Status**\nwfa → retake\n**👤 Assignee**\nJane Doe") {
+	if !strings.Contains(embed.Description, "ステータス：wfa → retake\n担当：Jane Doe") {
 		t.Fatalf("metadata is missing from the description: %q", embed.Description)
 	}
 	if len(embed.Fields) != 0 || !strings.Contains(embed.Description, "[🦊 Kitsu](https://kitsu.example/tasks/cut009)　　[📁 Drive](https://drive.example/cut009)") {
@@ -124,7 +124,7 @@ func TestAssigneeDisplayNeverRendersOrAllowsAssigneeMentions(t *testing.T) {
 		NotificationLanguage: "en",
 	}
 	payload := RenderNotificationPayload(data, "rich")
-	if strings.Contains(payload.Embeds[0].Description, "<@123456789012345678>") || !strings.Contains(payload.Embeds[0].Description, "**👤 Assignee**\n") || !strings.Contains(payload.Embeds[0].Description, "Artist A") {
+	if strings.Contains(payload.Embeds[0].Description, "<@123456789012345678>") || !strings.Contains(payload.Embeds[0].Description, "担当：Artist A") {
 		t.Fatalf("assignee metadata should contain only the plain Kitsu name: %+v", payload.Embeds)
 	}
 	if len(payload.AllowedMentions.Users) != 0 {
@@ -186,7 +186,7 @@ func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 	if embed.Url != "" {
 		t.Fatalf("task title must not be a hyperlink: %q", embed.Url)
 	}
-	if len(embed.Fields) != 0 || !strings.Contains(embed.Description, "[🦊 Kitsu](https://kitsu.example/tasks/cut012)　　[📁 Drive](https://drive.example/cut012)") || !strings.Contains(embed.Description, "**📊 ステータス**\ndone\n**👤 担当**\nKOTARO MITA") {
+	if len(embed.Fields) != 0 || !strings.Contains(embed.Description, "[🦊 Kitsu](https://kitsu.example/tasks/cut012)　　[📁 Drive](https://drive.example/cut012)") || !strings.Contains(embed.Description, "ステータス：done\n担当：KOTARO MITA") {
 		t.Fatalf("links or metadata are not grouped in description: fields=%+v description=%q", embed.Fields, embed.Description)
 	}
 }
@@ -209,13 +209,13 @@ func TestNotificationCardNativeHierarchyIsExplicit(t *testing.T) {
 	if embed.Title != "" {
 		t.Fatalf("title must be empty; shot context belongs in description, got %q", embed.Title)
 	}
-	if embed.Description != "## Shot / SC02 - cut012\n\n### 👀 WFA\nチェックをお願いします\n\n**📊 ステータス**\ntodo → wfa\n**👤 担当**\n未割り当て" {
+	if embed.Description != "## Shot / SC02 - cut012\n\n### 👀 WFA\nチェックをお願いします\n\nステータス：todo → wfa\n担当：未割り当て" {
 		t.Fatalf("description must contain the shot/status/body hierarchy, got %q", embed.Description)
 	}
 	if embed.Footer.Text != "テスト通知" {
 		t.Fatalf("test marker must be footer-only, got %q", embed.Footer.Text)
 	}
-	if len(embed.Fields) != 0 || !strings.Contains(embed.Description, "**📊 ステータス**\ntodo → wfa\n**👤 担当**\n未割り当て") {
+	if len(embed.Fields) != 0 || !strings.Contains(embed.Description, "ステータス：todo → wfa\n担当：未割り当て") {
 		t.Fatalf("metadata row must be in the description: %+v", embed)
 	}
 }
@@ -263,7 +263,7 @@ func TestNotificationCardSerializedPayloadMatchesFinalDiscordContract(t *testing
 	if embed.Author.Name != "Compositing" || embed.Title != "" || embed.URL != "" {
 		t.Fatalf("serialized author/title contract mismatch: %+v", embed)
 	}
-	if embed.Description != "## Shot / sc001 - sh001\n\n### 🔄 RETAKE\n修正をお願いします\n\n[🦊 Kitsu](https://kitsu.example.com/productions/p/shots/s/tasks/t)　　[📁 Drive](https://drive.example.com/folder)\n\n**📊 ステータス**\nwfa → retake\n**👤 担当**\n山田 太郎" {
+	if embed.Description != "## Shot / sc001 - sh001\n\n### 🔄 RETAKE\n修正をお願いします\n\n[🦊 Kitsu](https://kitsu.example.com/productions/p/shots/s/tasks/t)　　[📁 Drive](https://drive.example.com/folder)\n\nステータス：wfa → retake\n担当：山田 太郎" {
 		t.Fatalf("serialized status/body contract mismatch: %q", embed.Description)
 	}
 	if embed.Footer.Text != "" {

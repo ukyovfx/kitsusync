@@ -1507,7 +1507,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			esc(t(lang, "通知確認と runtime / configuration checks をまとめて確認できます。", "Review delivery verification with the current runtime / configuration checks.")) +
 			`</p></div></div>` +
 			renderDiagnosticsPanel(lang, r, db, func() (string, string, string, string) {
-				return model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db), model.GetSetting(db, "discord.guild_id"), model.GetSetting(db, "discord.webhook_url")
+				return model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db), model.GetSetting(db, "discord.guildID"), model.GetSetting(db, "discord.webhook_url")
 			}, withLang("/bot/admin/health", r), false) +
 			`</div>`
 
@@ -1907,7 +1907,7 @@ func canonicalConnectionStatuses(lang string, db *gorm.DB, readiness SharedBotRu
 	} else {
 		kitsuHealthy = checkKitsuStatus(normalizeKitsuHostname(KitsuHostForUI(db))).Authenticated
 	}
-	guildID := strings.TrimSpace(model.GetSetting(db, "discord.guild_id"))
+	guildID := strings.TrimSpace(model.GetSetting(db, "discord.guildID"))
 	botToken := storedRuntimeDiscordBotToken(db)
 	discord := checkDiscordStatus(botToken, guildID)
 	discordHealthy := discord.BotValid && (guildID == "" || discord.GuildValid)
@@ -2415,7 +2415,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		} else {
 			kitsuHealthy = checkKitsuStatus(normalizeKitsuHostname(effectiveHost)).Authenticated
 		}
-		guildID := strings.TrimSpace(model.GetSetting(db, "discord.guild_id"))
+		guildID := strings.TrimSpace(model.GetSetting(db, "discord.guildID"))
 		discordStatus := checkDiscordStatus(storedRuntimeDiscordBotToken(db), guildID)
 		discordHealthy := discordStatus.BotValid && (guildID == "" || discordStatus.GuildValid)
 		kitsuConfigured := strings.TrimSpace(StoredRuntimeKitsuToken(db)) != ""

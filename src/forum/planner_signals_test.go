@@ -532,3 +532,17 @@ func TestCommentQuoteKeepsOneLineAndTruncates(t *testing.T) {
 		t.Errorf("truncated quote length = %d", len(got))
 	}
 }
+
+func TestCommentQuoteSkipsTableRows(t *testing.T) {
+	// AYON publish comments mix free text and tables; an empty "| | |" row
+	// must never become the quote.
+	if got := commentQuote("| | |\n| version | 3 |\n本文"); got != "本文" {
+		t.Errorf("quote = %q, want the first non-table line", got)
+	}
+}
+
+func TestCommentQuoteReturnsEmptyForTableOnlyComment(t *testing.T) {
+	if got := commentQuote("| version | 3 |\n| family | matchmove |\n|---|---|"); got != "" {
+		t.Errorf("quote = %q, want empty for a table-only comment", got)
+	}
+}
