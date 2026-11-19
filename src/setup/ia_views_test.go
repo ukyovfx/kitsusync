@@ -1398,7 +1398,7 @@ func TestReadModelProvenanceUsesProductionAndUserLinkingSources(t *testing.T) {
 func TestReadOnlyPreviewStatusDoesNotRenderInternalKey(t *testing.T) {
 	db := newIAViewDB(t)
 	class, label, hint := iaStatus(db, model.Project{ReadOnlyPreview: true}, "en")
-	if class != "warning" || label != "Disconnected" || strings.Contains(label, "preview_not_connected") || !strings.Contains(hint, "Notifications are unavailable") {
+	if class != "neutral" || label != "Disconnected" || strings.Contains(label, "preview_not_connected") || !strings.Contains(hint, "Notifications are unavailable") {
 		t.Fatalf("unexpected preview status: %q %q %q", class, label, hint)
 	}
 }
@@ -2009,7 +2009,7 @@ func TestSystemStatusUsesContextualDiagnosticsLabels(t *testing.T) {
 }
 
 func TestProductionListRowsRemoveRedundantStatusCopy(t *testing.T) {
-	rows := `<article class="section-card glass production-list-item"><div><h2>Test</h2><p class="field-help">Current state</p></div><div class="production-list-state"><span class="status-pill warning">Disconnected</span><span class="field-help">No route</span></div><a class="btn" href="#">Open Production</a></article>`
+	rows := `<article class="section-card glass production-list-item"><div><h2>Test</h2><p class="field-help">Current state</p></div><div class="production-list-state"><span class="status-pill neutral">Disconnected</span><span class="field-help">No route</span></div><a class="btn" href="#">Open Production</a></article>`
 	clean := simplifyProductionListRows(rows)
 	if strings.Contains(clean, "Current state") || strings.Contains(clean, "No route") {
 		t.Fatal("redundant Production list copy remains")
@@ -2068,8 +2068,8 @@ func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
 	if counts != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
 		t.Fatalf("Production counts = %+v, want total=2 connected=1 disconnected=1", counts)
 	}
-	if class, label := productionConnectionStatus(preview, "en"); class != "warning" || label != "Disconnected" {
-		t.Fatalf("live-only Production status = %q/%q, want warning/Disconnected", class, label)
+	if class, label := productionConnectionStatus(preview, "en"); class != "neutral" || label != "Disconnected" {
+		t.Fatalf("live-only Production status = %q/%q, want neutral/Disconnected", class, label)
 	}
 	if class, label := productionConnectionStatus(connected, "en"); class != "ok" || label != "Connected" {
 		t.Fatalf("local Production status = %q/%q, want ok/Connected", class, label)

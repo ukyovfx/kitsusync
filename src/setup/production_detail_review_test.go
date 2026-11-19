@@ -19,7 +19,7 @@ func TestUnconfiguredProductionSharesConfiguredDetailShell(t *testing.T) {
 		`production-unconfigured-actions"`,
 		`class="eyebrow">Production</div>`,
 		`<h1>Live-only Production</h1>`,
-		`status-pill warning`,
+		`status-pill neutral`,
 		`class="production-settings-section production-unconfigured-state production-detail-surface"`,
 		`/bot/setup?lang=en&amp;project=live-only`,
 	} {
