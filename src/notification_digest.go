@@ -56,7 +56,7 @@ func prefixItems(items []string, max int) []string {
 // sendDigestDirectMessage delivers one digest card through the existing bot
 // DM transport. Failures surface to the caller; they never abort the digest
 // for other productions.
-func sendDigestDirectMessage(botToken, recipientID, content string) error {
+func sendDigestDirectMessage(botToken, recipientID, content string, rows []discord.ActionRow) error {
 	if strings.TrimSpace(botToken) == "" {
 		return fmt.Errorf("dm_bot_token_missing")
 	}
@@ -64,7 +64,7 @@ func sendDigestDirectMessage(botToken, recipientID, content string) error {
 	if err != nil {
 		return fmt.Errorf("dm_channel_unavailable: %w", err)
 	}
-	result := discord.SendDirectMessage(botToken, channelID, discord.Payload{Content: content})
+	result := discord.SendDirectMessage(botToken, channelID, discord.Payload{Content: content, Components: rows})
 	if result.MessageID == "" {
 		return fmt.Errorf("dm_send_failed: %s", result.FailureCategory)
 	}

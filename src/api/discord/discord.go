@@ -54,7 +54,34 @@ type Payload struct {
 	Content         string           `json:"content"`
 	Embeds          []Embed          `json:"embeds,omitempty"`
 	AllowedMentions *AllowedMentions `json:"allowed_mentions,omitempty"`
+	// Components holds the action rows of an interactive message. An empty
+	// list clears the rows on edit, so it is not omitempty.
+	Components []ActionRow `json:"components"`
 }
+
+// ActionRow is one row of message components; Discord allows five rows per
+// message and five buttons per row.
+type ActionRow struct {
+	Type       int        `json:"type"` // 1 = action row
+	Components []Button   `json:"components"`
+}
+
+// Button is an interaction button (type 2). A non-empty CustomID makes it
+// usable while nothing listens for button presses yet.
+type Button struct {
+	Type     int    `json:"type"` // 2 = button
+	Style    int    `json:"style"`
+	Label    string `json:"label"`
+	CustomID string `json:"custom_id,omitempty"`
+	Disabled bool   `json:"disabled,omitempty"`
+}
+
+const (
+	ButtonStylePrimary   = 1
+	ButtonStyleSecondary = 2
+	ButtonStyleSuccess   = 3
+	ButtonStyleDanger    = 4
+)
 
 // AllowedMentions keeps Kitsu-originated text from turning into an accidental
 // Discord-wide or role mention. User mentions are opt-in and listed explicitly.
@@ -1009,9 +1036,10 @@ func OpenDMChannel(botToken, recipientID string) (string, error) {
 	return strings.TrimSpace(opened.ID), nil
 }
 
-// SendDirectMessage posts one payload to an open DM channel via the bot API.
-// Webhook-only fields (username/avatar) are stripped because the bot message
-// endpoint rejects them. Retry and failure classification mirror SendMessage.
+// SendDirectMessage posts one payload to an open DM channel and returns the
+// message ID. Webhook-only fields (username/avatar) are stripped because the
+// bot message endpoint rejects them. Retry and failure classification mirror
+// SendMessage.
 func SendDirectMessage(botToken, dmChannelID string, payload Payload) SendResult {
 	if strings.TrimSpace(botToken) == "" {
 		return SendResult{FailureCategory: "dm_bot_token_missing"}
@@ -1091,6 +1119,41 @@ func SendDirectMessage(botToken, dmChannelID string, payload Payload) SendResult
 		return SendResult{FailureCategory: "unknown_response", Unknown: true}
 	}
 	return SendResult{MessageID: msg.ID}
+}
+
+// EditBotMessage replaces the content and components of a message through the
+// bot API. An edit always states embeds and components explicitly so the old
+// card cannot survive next to the new one.
+func EditBotMessage(botToken, channelID, messageID string, payload Payload) bool {
+	if strings.TrimSpace(botToken) == "" || strings.TrimSpace(channelID) == "" || strings.TrimSpace(messageID) == "" {
+		return false
+	}
+	payload.Username, payload.AvatarUrl = "", ""
+	if payload.Embeds == nil {
+		payload.Embeds = []Embed{}
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	endpoint := discordBotAPI + "/channels/" + url.PathEscape(strings.TrimSpace(channelID)) + "/messages/" + url.PathEscape(strings.TrimSpace(messageID))
+	req, err := http.NewRequest(http.MethodPatch, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bot "+botToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		slog.Warn("EditBotMessage: non-2xx response", "status", resp.StatusCode)
+		return false
+	}
+	return true
 }
 
 
