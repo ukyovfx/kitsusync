@@ -131,7 +131,7 @@ func handoffProduct(event model.HandoffEvent) string {
 // reply buttons under it.
 func renderHandoffCard(taskURL string, event model.HandoffEvent) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "🔁 素材の受け渡し — %s\n", event.ProductName)
+	fmt.Fprintf(&b, "🔁 素材の受け渡し — %s / %s\n", strings.TrimSpace(event.EntityName), event.ProductName)
 	if version := strings.TrimSpace(event.ProductVersion); version != "" {
 		fmt.Fprintf(&b, "版: %s\n", version)
 	}

@@ -46,6 +46,8 @@ type forumDigestRecipient struct {
 	// Handoffs carry the product and its version, which no forum thread
 	// title holds, and one reply row each.
 	Handoffs []model.HandoffEvent
+	// HandoffsMore is how many unanswered handoffs the card's cap left out.
+	HandoffsMore int
 }
 
 // sendForumMorningDigests sends the per-person forum digest for forum-mode
@@ -221,7 +223,7 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 // mergeHandoffDigestItems adds each person's unanswered handoffs to their digest
 // and creates the recipient when only a handoff concerns them.
 func mergeHandoffDigestItems(db *gorm.DB, project model.Project, recipients []forumDigestRecipient) []forumDigestRecipient {
-	items := handoffDigestItems(db, project)
+	items, moreHandoffs := handoffDigestItems(db, project)
 	if recipients == nil {
 		recipients = []forumDigestRecipient{}
 	}
@@ -237,6 +239,7 @@ func mergeHandoffDigestItems(db *gorm.DB, project model.Project, recipients []fo
 			index[recipient] = position
 		}
 		recipients[position].Handoffs = events
+		recipients[position].HandoffsMore = moreHandoffs[recipient]
 	}
 	return recipients
 }
@@ -245,13 +248,15 @@ func mergeHandoffDigestItems(db *gorm.DB, project model.Project, recipients []fo
 // A pending handoff that the poller will send right away is not a reminder;
 // notified handoffs, and pending ones the send failed on, stay listed until
 // they are answered. The cap is what keeps a digest card's reply rows inside
-// Discord's five-rows-per-message limit.
-func handoffDigestItems(db *gorm.DB, project model.Project) map[string][]model.HandoffEvent {
+// Discord's five-rows-per-message limit; it also returns, per person, how many
+// unanswered handoffs the cap left out.
+func handoffDigestItems(db *gorm.DB, project model.Project) (map[string][]model.HandoffEvent, map[string]int) {
 	unanswered, err := model.UnansweredHandoffEvents(db)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	byPerson := map[string][]model.HandoffEvent{}
+	moreHandoffs := map[string]int{}
 	for _, event := range unanswered {
 		if event.ProductionID != project.KitsuProjectID {
 			continue
@@ -266,10 +271,13 @@ func handoffDigestItems(db *gorm.DB, project model.Project) map[string][]model.H
 	}
 	for recipient, events := range byPerson {
 		if len(events) > handoffDigestMaxItems {
+			// A shortened card holds a forgotten row; the count keeps the
+			// person aware of it when no button can reach it.
+			moreHandoffs[recipient] = len(events) - handoffDigestMaxItems
 			byPerson[recipient] = events[:handoffDigestMaxItems]
 		}
 	}
-	return byPerson
+	return byPerson, moreHandoffs
 }
 
 // forumDigestReviewerIDs returns the Production's user-kind reviewer targets.
@@ -315,6 +323,9 @@ func renderForumDigestCard(productionName string, recipient forumDigestRecipient
 			lines = append(lines, handoffCardLine(event, publicURL))
 		}
 		b.WriteString("\n  " + strings.Join(lines, "\n  "))
+		if recipient.HandoffsMore > 0 {
+			fmt.Fprintf(&b, "\n  他に未返事が %d 件あります", recipient.HandoffsMore)
+		}
 	} else {
 		b.WriteString("\n")
 	}
