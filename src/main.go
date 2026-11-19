@@ -444,7 +444,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
 		},
-		NotifyAssigneesOnComment: conf.Notification.CommentNotifyAssignee,
+		NotifyAssigneesOnComment: commentNotifyAssignee(db, conf),
 	}
 	executor := forum.Executor{
 		DB:       db,
@@ -481,6 +481,18 @@ func forumReviewerTargets(db *gorm.DB, conf config.Config, botToken, projectID, 
 		resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
 	}
 	return resolved, err
+}
+
+// commentNotifyAssignee prefers the admin-UI setting: a stored true/false wins,
+// and conf.toml only supplies the initial value while nothing is stored.
+func commentNotifyAssignee(db *gorm.DB, conf config.Config) bool {
+	switch model.GetSetting(db, setup.CommentNotifyAssigneeSettingKey) {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	return conf.Notification.CommentNotifyAssignee
 }
 
 // forumOutboxDrainLimit bounds one poll's Discord calls.
@@ -1296,7 +1308,7 @@ func main() {
 		// A global validation-only profile still refuses writes.
 		mux.HandleFunc(prefix+"/admin/forum", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
-			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
+			setup.ForumSettingsHandler(db, conf.Notification.CommentNotifyAssignee, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))
 		// The handoff mapping is local per-Production configuration as well: it is
 		// stored by KitsuSync and needs neither Kitsu nor Discord to save. An

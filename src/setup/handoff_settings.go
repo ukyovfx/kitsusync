@@ -82,7 +82,7 @@ func handoffTimingLabel(lang, timing string) string {
 func handoffFallbackLabel(lang, fallback string) string {
 	switch fallback {
 	case model.HandoffFallbackAdmin:
-		return t(lang, "管理者ロールに通知", "Notify the admin role")
+		return t(lang, "サーバーの管理者権限を持つ人に通知", "Notify members with server administrator permissions")
 	case model.HandoffFallbackUsers:
 		return t(lang, "指定したユーザーに通知", "Notify a chosen user")
 	case model.HandoffFallbackDisabled:

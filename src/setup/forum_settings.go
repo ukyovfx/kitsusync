@@ -187,8 +187,10 @@ func forumTemplateStatusRolesFrom(statuses []kitsu.TaskStatus) []model.Productio
 	return rows
 }
 
-// ForumSettingsHandler serves /admin/forum?project=<Kitsu project ID>.
-func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbackGuildID string)) http.HandlerFunc {
+// ForumSettingsHandler serves /admin/forum?project=<Kitsu project ID>. The
+// commentNotifyAssignee default is the conf.toml seed the checkbox shows until
+// the operator saves a value of its own.
+func ForumSettingsHandler(db *gorm.DB, commentNotifyDefault bool, discordSettings func() (botToken, fallbackGuildID string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -199,25 +201,26 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 			return
 		}
 		botToken, fallbackGuildID := discordSettings()
-		if r.Method == http.MethodPost && strings.TrimSpace(r.FormValue("action")) == "create_forums" {
-			if project.ValidationOnly || ValidationOnlyModeEnabled() {
-				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
-				return
-			}
-			submitted := parseForumSettingsForm(r, projectID)
-			created, err := createForumsForTaskTypes(db, projectID, botToken, fallbackGuildID, submitted)
-			if err == nil {
-				http.Redirect(w, r, withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)+"&msg=forums_created", http.StatusSeeOther)
-				return
-			}
-			// The forums may already exist, so show what was made and what is left.
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &created, err))
-			return
-		}
 		if r.Method == http.MethodPost {
 			if project.ValidationOnly || ValidationOnlyModeEnabled() {
 				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
+				return
+			}
+			if err := saveCommentNotifyAssignee(db, r); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, nil, err))
+				return
+			}
+			if strings.TrimSpace(r.FormValue("action")) == "create_forums" {
+				submitted := parseForumSettingsForm(r, projectID)
+				created, err := createForumsForTaskTypes(db, projectID, botToken, fallbackGuildID, submitted)
+				if err == nil {
+					http.Redirect(w, r, withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)+"&msg=forums_created", http.StatusSeeOther)
+					return
+				}
+				// The forums may already exist, so show what was made and what is left.
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, &created, err))
 				return
 			}
 			settings := parseForumSettingsForm(r, projectID)
@@ -254,20 +257,31 @@ func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbac
 				if len(settings.Tags) == 0 {
 					err := &model.ForumSettingsError{Problems: []model.ForumSettingsProblem{{Code: model.ProblemForumListUnavailable}}}
 					w.WriteHeader(http.StatusBadRequest)
-					fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
+					fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, &settings, err))
 					return
 				}
 			}
 			if err := model.SaveProductionForumSettings(db, settings); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
+				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, &settings, err))
 				return
 			}
 			http.Redirect(w, r, withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)+"&msg=saved", http.StatusSeeOther)
 			return
 		}
-		fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, nil, nil))
+		fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, nil, nil))
 	}
+}
+
+// saveCommentNotifyAssignee stores the global comment-assignee toggle. An
+// explicit false is stored too, so a saved OFF stays OFF regardless of the
+// conf.toml seed.
+func saveCommentNotifyAssignee(db *gorm.DB, r *http.Request) error {
+	value := "false"
+	if r.FormValue("comment_notify_assignee") != "" {
+		value = "true"
+	}
+	return model.SetSettingWithError(db, CommentNotifyAssigneeSettingKey, value)
 }
 
 // parseForumSettingsForm reads the page's parallel-array fields. It needs no
@@ -321,7 +335,11 @@ func forumSelect(name, selected string, options [][2]string, emptyLabel string) 
 	return b.String()
 }
 
-func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project model.Project, botToken, fallbackGuildID string, submitted *model.ProductionForumSettings, saveErr error) string {
+// CommentNotifyAssigneeSettingKey stores the comment-assignee toggle in the
+// settings table; conf.toml only seeds it until the first admin save.
+const CommentNotifyAssigneeSettingKey = "notification.comment_notify_assignee"
+
+func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project model.Project, botToken, fallbackGuildID string, commentNotifyDefault bool, submitted *model.ProductionForumSettings, saveErr error) string {
 	productionID := project.KitsuProjectID
 	var current model.ProductionForumSettings
 	if submitted != nil {
@@ -472,6 +490,14 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 			forumSelect("st_role", roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</td></tr>`)
 	}
 
+	commentNotify := commentNotifyDefault
+	if v := model.GetSetting(db, CommentNotifyAssigneeSettingKey); v != "" {
+		commentNotify = v == "true"
+	}
+	if r.Method == http.MethodPost {
+		commentNotify = r.FormValue("comment_notify_assignee") != ""
+	}
+
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/forum", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2>` +
@@ -480,6 +506,9 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<table class="data-table forum-map-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p><table class="data-table forum-map-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
+		`<section class="section-card glass"><h2>` + esc(t(lang, "コメントの通知", "Comment notifications")) + `</h2>` +
+		`<p class="field-help">` + esc(t(lang, "コメントの通知で、現在の担当者にもメンションを送るかを選びます。オフのときは、コメントでメンションされた人だけに届きます。", "Choose whether a comment notification also mentions the current assignees. When off, only the people mentioned in the comment are notified.")) + `</p>` +
+		`<label class="checkbox-label"><input type="checkbox" name="comment_notify_assignee" value="on"` + handoffChecked(commentNotify) + `> ` + esc(t(lang, "担当者にも通知する", "Also notify the current assignees")) + `</label></section>` +
 		`<div class="button-row"><button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button>` + refetchButton + ` <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a> <button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button></div></form>`
 
 	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`

@@ -74,7 +74,7 @@ func stubForumLookups(t *testing.T, discordErr error) {
 }
 
 func forumHandler(db *gorm.DB) http.HandlerFunc {
-	return ForumSettingsHandler(db, func() (string, string) { return "bot-token", "g-fallback" })
+	return ForumSettingsHandler(db, false, func() (string, string) { return "bot-token", "g-fallback" })
 }
 
 func forumPost(t *testing.T, db *gorm.DB, form url.Values) *httptest.ResponseRecorder {
