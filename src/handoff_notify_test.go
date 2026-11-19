@@ -115,8 +115,8 @@ func handoffState(t *testing.T, db *gorm.DB, commentID string) string {
 	return event.State
 }
 
-// A handoff whose receiving task has an assignee is sent immediately and is not
-// repeated on the next poll.
+// A handoff whose receiving task has an assignee is sent immediately and is
+// listed again in the morning digest while nobody has answered it.
 func TestHandoffAssignedIsSentImmediatelyOnce(t *testing.T) {
 	db := handoffNotifyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
@@ -132,6 +132,13 @@ func TestHandoffAssignedIsSentImmediatelyOnce(t *testing.T) {
 	}
 	if state := handoffState(t, db, "comment-1"); state != model.HandoffEventNotified {
 		t.Fatalf("state = %q", state)
+	}
+	// The next morning the same unanswered handoff is listed again.
+	if _, err := sendForumMorningDigests(digestTestConfig(), db, time.Date(2026, 11, 17, 9, 0, 0, 0, jst), "2026-11-17"); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.sendsFor("222222222222222222") != 2 {
+		t.Fatalf("unanswered handoff not repeated: sends = %d", fixture.sendsFor("222222222222222222"))
 	}
 	if sent, err := sendImmediateHandoffs(digestTestConfig(), db); err != nil || sent != 0 {
 		t.Fatalf("resent: sent=%d err=%v", sent, err)

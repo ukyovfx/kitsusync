@@ -206,14 +206,14 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 			ensure(id).Retakes = append(ensure(id).Retakes, item)
 		}
 	}
-		// Notification-only recipients (a handoff fallback, say) have no forum
-		// queue of their own; they are appended after the sorted ones.
-		ordered := make([]forumDigestRecipient, 0, len(byPerson))
-		for _, recipient := range byPerson {
-			ordered = append(ordered, *recipient)
-		}
-		sort.Slice(ordered, func(i, j int) bool { return ordered[i].DiscordID < ordered[j].DiscordID })
-		return ordered, nil
+	// Notification-only recipients (a handoff fallback, say) have no forum
+	// queue of their own; they are appended after the sorted ones.
+	ordered := make([]forumDigestRecipient, 0, len(byPerson))
+	for _, recipient := range byPerson {
+		ordered = append(ordered, *recipient)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].DiscordID < ordered[j].DiscordID })
+	return ordered, nil
 }
 
 // mergeHandoffDigestItems adds each person's unanswered handoffs to their digest
@@ -239,27 +239,23 @@ func mergeHandoffDigestItems(db *gorm.DB, project model.Project, recipients []fo
 	return recipients
 }
 
-// handoffDigestItems returns each person's pending handoffs per Production.
+// handoffDigestItems returns each person's unanswered handoffs per Production.
+// A pending handoff that the poller will send right away is not a reminder;
+// notified handoffs, and pending ones the send failed on, stay listed until
+// they are answered.
 func handoffDigestItems(db *gorm.DB, project model.Project) map[string][]string {
-	pending, err := model.PendingHandoffEvents(db)
+	unanswered, err := model.UnansweredHandoffEvents(db)
 	if err != nil {
 		return nil
 	}
 	publicURL := setup.PublicKitsuURL(db)
-	timings := map[string]string{}
 	byPerson := map[string][]string{}
-	for _, event := range pending {
+	for _, event := range unanswered {
 		if event.ProductionID != project.KitsuProjectID {
 			continue
 		}
-		timing, known := timings[event.ProductionID]
-		if !known {
-			timing = handoffTiming(db, event.ProductionID)
-			timings[event.ProductionID] = timing
-		}
 		recipients := handoffRecipients(db, event)
-		// A handoff that would be sent immediately is not a reminder.
-		if handoffImmediate(timing, event.FallbackUsed, recipients) {
+		if event.State == model.HandoffEventPending && handoffImmediate(handoffTiming(db, event.ProductionID), event.FallbackUsed, recipients) {
 			continue
 		}
 		line := handoffCardLine(event, handoffTaskURL(publicURL, event))
