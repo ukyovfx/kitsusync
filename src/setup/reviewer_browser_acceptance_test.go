@@ -39,6 +39,32 @@ const (
 	userLinkingLongNickname = "TVアニメ『佐々木さんとピーちゃんSeason2』第1話は1時間"
 )
 
+// stubReviewerBrowserCaches replaces this suite's cached Discord snapshots with
+// empty ones it owns, so the suite only waits on (and can drop) caches no other
+// test saw. A rejected transport request only ends a goroutine that writes to
+// its own empty cache.
+func stubReviewerBrowserCaches(t *testing.T) {
+	t.Helper()
+	oldMembers := guildMemberListCache
+	oldRoles := guildRoleListCache
+	oldChannels := guildChannelListCache
+	guildMemberListCache = &guildDirectoryCache{ttl: guildDirectoryCacheTTL, entries: map[string]*guildDirectoryCacheEntry{}, loads: map[string]*guildDirectoryLoad{}, fetch: guildMemberListBody, now: time.Now}
+	guildRoleListCache = &guildDirectoryCache{ttl: guildDirectoryCacheTTL, entries: map[string]*guildDirectoryCacheEntry{}, loads: map[string]*guildDirectoryLoad{}, fetch: guildRoleListBody, now: time.Now}
+	guildChannelListCache = &guildChannelsCache{ttl: guildChannelCacheTTL, entries: map[string]*guildChannelCacheEntry{}, loads: map[string]*guildChannelLoad{}, fetch: guildChannelListBody, now: time.Now}
+	caches := []*guildDirectoryCache{guildMemberListCache, guildRoleListCache}
+	t.Cleanup(func() {
+		for _, cache := range caches {
+			// The transport the caller restores is only swapped out after every
+			// refresh that was reading fetch has finished.
+			cache.inflight.Wait()
+		}
+		guildChannelListCache.inflight.Wait()
+		guildChannelListCache = oldChannels
+		guildRoleListCache = oldRoles
+		guildMemberListCache = oldMembers
+	})
+}
+
 // expireReviewerBrowserDirectory ages both cached directory snapshots past
 // their TTL, so the next display render treats them as stale.
 func expireReviewerBrowserDirectory() {
@@ -288,6 +314,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 		baseTransport: oldTransport,
 	}
 	t.Cleanup(func() { http.DefaultTransport = oldTransport })
+	stubReviewerBrowserCaches(t)
 	scenario.Store("japanese-wfa-add")
 	preflight := checkDiscordStatus(reviewerBrowserBot, reviewerBrowserGuild)
 	if !preflight.BotValid || !preflight.GuildValid {
