@@ -11,7 +11,6 @@ func TestBaseAdminJSGuardsUserUnlinkActions(t *testing.T) {
 		for _, want := range []string{
 			"remove_global_link",
 			"remove_production_user",
-			"remove_production_checker",
 			"form.classList.add('delete-form')",
 			"modal.setAttribute('aria-describedby', 'deleteModalText')",
 			"modal.setAttribute('aria-hidden', 'false')",

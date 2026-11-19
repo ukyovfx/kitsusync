@@ -878,8 +878,7 @@ type MappingStateResponse struct {
 	ProjectName  string                `json:"project_name"`
 	Persons      []MappingPerson       `json:"persons"`
 	TaskTypes    []string              `json:"task_types"`
-	UserMaps     []MappingUserEntry    `json:"user_maps"`
-	CheckerMaps  []MappingCheckerEntry `json:"checker_maps"`
+	UserMaps     []MappingUserEntry `json:"user_maps"`
 }
 
 // MappingPerson is a Kitsu person with their current Discord mapping status.
@@ -896,23 +895,10 @@ type MappingUserEntry struct {
 	DiscordUserID string `json:"discord_user_id"`
 }
 
-// MappingCheckerEntry is one saved checker mapping entry.
-type MappingCheckerEntry struct {
-	TaskTypeID    string `json:"task_type_id,omitempty"`
-	TaskType      string `json:"task_type"`
-	DiscordUserID string `json:"discord_user_id"`
-}
-
 // SaveUserMappingRequest is the body for POST /api/setup/mapping/users.
 type SaveUserMappingRequest struct {
 	ProjectID string             `json:"project_id"`
 	Mappings  []MappingUserEntry `json:"mappings"`
-}
-
-// SaveCheckerMappingRequest is the body for POST /api/setup/mapping/checkers.
-type SaveCheckerMappingRequest struct {
-	ProjectID string                `json:"project_id"`
-	Mappings  []MappingCheckerEntry `json:"mappings"`
 }
 
 // MappingStateHandler handles GET /api/setup/mapping.
@@ -971,16 +957,6 @@ func MappingStateHandler(db *gorm.DB) http.HandlerFunc {
 			})
 		}
 
-		rawCheckers := model.ListProjectCheckerMaps(db, proj.ID)
-		checkerMaps := make([]MappingCheckerEntry, 0, len(rawCheckers))
-		for _, c := range rawCheckers {
-			checkerMaps = append(checkerMaps, MappingCheckerEntry{
-				TaskTypeID:    c.TaskTypeID,
-				TaskType:      c.TaskType,
-				DiscordUserID: c.DiscordUserID,
-			})
-		}
-
 		json.NewEncoder(w).Encode(MappingStateResponse{
 			ProjectRowID: proj.ID,
 			ProjectID:    proj.KitsuProjectID,
@@ -988,7 +964,6 @@ func MappingStateHandler(db *gorm.DB) http.HandlerFunc {
 			Persons:      persons,
 			TaskTypes:    taskTypes,
 			UserMaps:     userMaps,
-			CheckerMaps:  checkerMaps,
 		})
 	}
 }
@@ -1059,56 +1034,6 @@ func SaveUserMappingHandler(db *gorm.DB) http.HandlerFunc {
 				model.DeleteProjectUserMapByName(db, proj.ID, name)
 			} else {
 				model.UpsertProjectUserMap(db, proj.ID, name, strings.TrimSpace(m.KitsuEmail), discordID)
-			}
-		}
-
-		w.WriteHeader(http.StatusNoContent)
-	})
-}
-
-// SaveCheckerMappingHandler handles POST /api/setup/mapping/checkers.
-// Upserts project-scoped task type → checker Discord ID mappings; empty discord_user_id deletes the entry.
-func SaveCheckerMappingHandler(db *gorm.DB) http.HandlerFunc {
-	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		var req SaveCheckerMappingRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-			return
-		}
-
-		proj := model.FindProjectByKitsuID(db, strings.TrimSpace(req.ProjectID))
-		if proj == nil {
-			http.Error(w, `{"error":"project not found"}`, http.StatusNotFound)
-			return
-		}
-
-		taskTypes := setupKitsuTaskTypes(db, proj.KitsuProjectID)
-		for _, m := range req.Mappings {
-			taskType := strings.TrimSpace(m.TaskType)
-			taskTypeID := strings.TrimSpace(m.TaskTypeID)
-			if taskTypeID != "" {
-				if currentName := taskTypeName(taskTypeID, taskTypes); currentName != "" {
-					taskType = currentName
-				} else {
-					taskTypeID = ""
-				}
-			} else {
-				taskTypeID = taskTypeIDForName(taskType, taskTypes)
-			}
-			if taskType == "" {
-				continue
-			}
-			discordID := strings.TrimSpace(m.DiscordUserID)
-			if discordID == "" {
-				if taskTypeID != "" {
-					model.DeleteProjectCheckerMapByTaskTypeID(db, proj.ID, taskTypeID)
-				} else {
-					model.DeleteProjectCheckerMapByTaskType(db, proj.ID, taskType)
-				}
-			} else {
-				model.UpsertProjectCheckerMapWithTaskTypeID(db, proj.ID, taskTypeID, taskType, discordID)
 			}
 		}
 
