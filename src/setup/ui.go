@@ -1213,7 +1213,7 @@ func baseAdminJS(lang string) string {
 
 	document.querySelectorAll('form').forEach(function(form){
 		var action = form.querySelector('input[name="action"]');
-		if(action && ['remove_global_link','remove_production_user','remove_production_checker'].indexOf(action.value) !== -1){
+		if(action && ['remove_global_link','remove_production_user'].indexOf(action.value) !== -1){
 			form.classList.add('delete-form');
 			if(!form.getAttribute('data-confirm')){
 				var context = form.closest('tr, li');
