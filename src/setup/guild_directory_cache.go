@@ -40,6 +40,9 @@ type guildDirectoryCache struct {
 	loads   map[string]*guildDirectoryLoad
 	fetch   func(guildID, botToken string) ([]byte, int, error)
 	now     func() time.Time
+	// inflight counts the background refreshes that may call fetch, so a test
+	// can wait for them before it restores fetch or swaps a shared seam.
+	inflight sync.WaitGroup
 }
 
 var guildMemberListCache = &guildDirectoryCache{
@@ -132,7 +135,11 @@ func (c *guildDirectoryCache) view(guildID, botToken string) guildDirectoryView 
 	}
 	if entry == nil || !v.fresh {
 		if c.loads[guildID] == nil {
-			go c.refresh(guildID, botToken)
+			c.inflight.Add(1)
+			go func() {
+				defer c.inflight.Done()
+				_, _, _ = c.refresh(guildID, botToken)
+			}()
 		}
 	}
 	c.mu.Unlock()

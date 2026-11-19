@@ -39,6 +39,9 @@ type guildChannelsCache struct {
 	loads   map[string]*guildChannelLoad
 	fetch   func(guildID, botToken string) ([]byte, int, error)
 	now     func() time.Time
+	// inflight counts the background refreshes that may call fetch, so a test
+	// can wait for them before it restores fetch or swaps a shared seam.
+	inflight sync.WaitGroup
 }
 
 // guildChannelListBody performs the same GET the list readers used to do
@@ -120,7 +123,11 @@ func (c *guildChannelsCache) view(guildID, botToken string) guildChannelView {
 	}
 	if entry == nil || !v.fresh {
 		if c.loads[guildID] == nil {
-			go c.refresh(guildID, botToken)
+			c.inflight.Add(1)
+			go func() {
+				defer c.inflight.Done()
+				_, _, _ = c.refresh(guildID, botToken)
+			}()
 		}
 	}
 	c.mu.Unlock()
