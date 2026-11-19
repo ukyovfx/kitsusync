@@ -54,7 +54,6 @@ func TestSetupJSONWriteHandlersRejectGETWithBody(t *testing.T) {
 		"test-discord": TestDiscordHandler(db),
 		"notification": TestNotificationHandler(db, nil),
 		"users":        SaveUserMappingHandler(db),
-		"checkers":     SaveCheckerMappingHandler(db),
 	}
 	body := `{"hostname":"http://attacker.test","email":"a@b.test","password":"pw","project_id":"p1"}`
 	for name, h := range handlers {
@@ -77,7 +76,7 @@ func TestValidationOnlyRejectsSetupWritesIncludingTestKitsu(t *testing.T) {
 	called := false
 	next := func(http.ResponseWriter, *http.Request) { called = true }
 	h := RejectValidationMutation(requirePOST(next))
-	for _, target := range []string{"test-kitsu", "test-discord", "apply-project", "test-notification", "mapping/users", "mapping/checkers"} {
+	for _, target := range []string{"test-kitsu", "test-discord", "apply-project", "test-notification", "mapping/users"} {
 		called = false
 		req := httptest.NewRequest(http.MethodPost, "/api/setup/"+target, strings.NewReader(`{}`))
 		rr := httptest.NewRecorder()

@@ -1269,7 +1269,6 @@ func main() {
 		mux.HandleFunc(prefix+"/api/setup/test-notification", setup.RequireSession(setup.RejectValidationMutation(setup.TestNotificationHandler(db, setupCredsFunc))))
 		mux.HandleFunc(prefix+"/api/setup/mapping", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.MappingStateHandler(db))))
 		mux.HandleFunc(prefix+"/api/setup/mapping/users", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveUserMappingHandler(db)))))
-		mux.HandleFunc(prefix+"/api/setup/mapping/checkers", setup.RequireSession(setup.RuntimeReadyRequired(runtime.ready, setup.RejectValidationMutation(setup.SaveCheckerMappingHandler(db)))))
 	}
 	setupAPIRoutes("")
 	setupAPIRoutes("/bot")

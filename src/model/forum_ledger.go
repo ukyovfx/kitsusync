@@ -36,10 +36,10 @@ const (
 	ForumArchiveDoneMinutes  = 4320
 	ForumArchiveOtherMinutes = 10080
 
-	// ForumMentionWindow is the aggregation window reserved for stage E. Stage D
-	// queues post_message rows with not_before = window start + this value so
-	// aggregation can be inserted later without changing the ledger shape.
-	ForumMentionWindow = 3 * time.Minute
+	// ForumMentionWindow is the mention aggregation window. 30s keeps the
+	// aggregation behaviour but removes the 3-minute "no notification arrived"
+	// delay operators reported. Flap detection has its own window below.
+	ForumMentionWindow = 30 * time.Second
 
 	// ForumMaxAttempts bounds transient retries before a row is failed.
 	ForumMaxAttempts = 20
