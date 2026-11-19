@@ -97,9 +97,8 @@ migration, and the normal no-argument deployment command.
 
 - Polling behavior (`ignoreMessagesDaysOld`, `requestInterval`, `threads`)
 - Delivered notification payload retention (`notification.deliveryPayloadRetentionDays`; 30-day default, `0` disables payload redaction)
-- Discord message layout (`tplPreset`, `useThreads`, `embedsPerRequests`)
+- Discord message layout (`tplPreset`, `embedsPerRequests`)
 - Routing rules (`[[discord.productions]]`, `[[discord.taskTypeWebhooks]]`)
-- Mention configuration (`checkerStatuses`, `artistStatuses`, `hereStatuses`)
 - User and checker mappings
 
 **env file** holds secrets and per-environment values:

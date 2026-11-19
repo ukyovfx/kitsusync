@@ -26,7 +26,7 @@ The current polling implementation supports these normalized event kinds:
 | --- | --- | --- |
 | `status_change` | A task reaches `WFA`, `RETAKE`, or `DONE`, and its stored status differs | Delivered through the Production + Task Type route |
 | `comment_update` | A task's latest comment/timestamp changes while the task remains in a notifiable status | Delivered through the same route; the payload marks it as comment-only |
-| `assignment` | A task is observed with status `none` and `notification.notifyOnAssign=true` | Delivered through the same route; otherwise the observation is stored without delivery |
+| `assignment` | A task is observed with status `none` on a task type that produces an assign notification | Delivered through the same route; otherwise the observation is stored without delivery |
 
 Other Kitsu task statuses are observed but are not notification events in the current policy. Unknown event shapes are not rendered or sent.
 

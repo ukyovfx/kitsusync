@@ -199,7 +199,7 @@ type ProjectStatuses struct {
 type MessagePayload struct {
 	PreviousStatusName   string // we store task status from DB and consider it 'old/prevous'
 	IsCommentOnly        bool   // true when only the comment changed (no status/timestamp change)
-	IsAssignNotification bool   // true when task status is "none" (TODO) and notifyOnAssign is enabled
+	IsAssignNotification bool   // true when this is a fresh task-assign notification (status was none in the prior poll)
 	CommentsUnavailable  bool   // true when the comments LIST fetch failed this poll; comment diffing is skipped
 	Project              struct {
 		Project

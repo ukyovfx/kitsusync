@@ -363,8 +363,8 @@ func timestampsEqual(left, right string) bool {
 }
 
 // forumCardRenderer renders the first message of a forum post with the same
-// card the lane path posts. MentionContent and AllowedMentions are cleared
-// because the first message never mentions anyone (D-04).
+// card the lane path posts. The card never mentions anyone and carries no
+// parse targets because the first message must stay silently non-pinging (D-04).
 func forumCardRenderer(conf config.Config, db *gorm.DB) func(kitsu.MessagePayload) (json.RawMessage, error) {
 	return func(payload kitsu.MessagePayload) (json.RawMessage, error) {
 		return forum.RenderCard(payload, func(item kitsu.MessagePayload) (discord.Payload, error) {
@@ -387,12 +387,10 @@ func renderForumCard(payload kitsu.MessagePayload, conf config.Config, db *gorm.
 	if err != nil {
 		return discord.Payload{}, err
 	}
-	// The first message never mentions anyone (D-04).
-	template.MentionContent = ""
-	template.AllowedUserIDs = nil
-	template.AllowedRoleIDs = nil
+	// The first message never mentions anyone (D-04). The template carries no
+	// mention fields anymore for the forum card path, so nothing must be
+	// cleared here; the empty AllowedMentions parse still guarantees silence.
 	card := discord.RenderNotificationPayload(template, conf.TplPreset)
-	card.Content = ""
 	card.AllowedMentions = &discord.AllowedMentions{Parse: []string{}, Users: []string{}, Roles: []string{}}
 	return card, nil
 }
@@ -1056,7 +1054,6 @@ func main() {
 	}
 	model.PurgeLegacySensitiveData(db)
 
-	setup.SeedConfigIfFixture(db, conf)
 	if err := setup.MigrateRuntimeDiscordBotToken(db); err != nil {
 		slog.Warn("Discord runtime token migration deferred", "error_class", "credential_migration_failed")
 	}
@@ -1071,23 +1068,6 @@ func main() {
 
 	discord.UserMapResolver = func(projectID, kitsuPersonID, kitsuName, kitsuEmail string) string {
 		return model.GetUserMapForProjectWithIdentity(db, projectID, kitsuPersonID, kitsuName, kitsuEmail)
-	}
-	discord.CheckerResolver = func(projectID, taskTypeID, taskTypeName string) []string {
-		return model.GetCheckerForProjectByTaskTypeID(db, projectID, taskTypeID, taskTypeName)
-	}
-	discord.ReviewerResolver = func(projectID, taskTypeID, taskTypeName, senderWebhookURL string) ([]discord.ReviewerTarget, error) {
-		hostname, _, _ := getKitsuCreds(db, conf)
-		connection, connectionErr := setup.ResolveKitsuConnection(context.Background(), hostname, model.GetSetting(db, setup.KitsuAPIBaseURLSettingKey))
-		baseURL := ""
-		if connectionErr == nil {
-			baseURL = connection.ResolvedAPIBaseURL
-		}
-		targets, err := setup.ResolveForumWFAReviewerTargets(db, baseURL, setup.StoredRuntimeKitsuToken(db), setup.StoredRuntimeDiscordBotToken(db), projectID, taskTypeID)
-		resolved := make([]discord.ReviewerTarget, 0, len(targets))
-		for _, target := range targets {
-			resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
-		}
-		return resolved, err
 	}
 	discord.GoogleDriveURLResolver = func(projectID string) string {
 		return model.GetProjectStorageURL(db, projectID)

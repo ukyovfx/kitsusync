@@ -79,7 +79,6 @@ const forumBTaskWithComment = `[{"id":"task-1","updated_at":"2026-08-07T00:00:00
 func forumBConfig() config.Config {
 	var conf config.Config
 	conf.Threads = 1
-	conf.Notification.NotifyOnAssign = true
 	return conf
 }
 

@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/gookit/slog"
 	"github.com/naoina/toml"
@@ -25,30 +24,8 @@ type TaskTypeWebhook struct {
 	WebhookURL string `toml:"webhookURL"`
 }
 
-// UserMapEntry は Kitsu の名前と Discord ID の紐付け
-type UserMapEntry struct {
-	KitsuName string `toml:"kitsuName"` // Kitsu 上のフルネーム
-	DiscordID string `toml:"discordID"` // Discord ユーザー ID
-}
-
-// CheckerEntry はタスクタイプ（工程）ごとのチェッカー
-type CheckerEntry struct {
-	TaskType  string `toml:"taskType"`  // タスクタイプ名（例: "Animation", "FX"）
-	DiscordID string `toml:"discordID"` // チェッカーの Discord ID
-}
-
-// MentionConfig はメンション機能の全設定
-type MentionConfig struct {
-	ArtistStatuses  []string       `toml:"artistStatuses"`  // アーティストにメンションするステータス
-	CheckerStatuses []string       `toml:"checkerStatuses"` // チェッカーにメンションするステータス
-	HereStatuses    []string       `toml:"hereStatuses"`    // @here を飛ばす緊急ステータス
-	UserMap         []UserMapEntry `toml:"userMap"`         // Kitsu名 → Discord ID
-	Checkers        []CheckerEntry `toml:"checkers"`        // タスクタイプ → チェッカー Discord ID
-}
-
 // NotificationConfig は通知機能の設定
 type NotificationConfig struct {
-	NotifyOnAssign               bool `toml:"notifyOnAssign"` // true なら TODO（新規アサイン）ステータスの変化も通知する
 	DeliveryPayloadRetentionDays int  `toml:"deliveryPayloadRetentionDays"`
 	// CommentNotifyAssignee は true のとき、コメント通知の宛先に現在の担当者も加える（既定 false）。
 	CommentNotifyAssignee bool `toml:"commentNotifyAssignee"`
@@ -75,13 +52,11 @@ type Config struct {
 		EmbedsPerRequests int
 		RequestsPerMinute int
 		WebhookURL        string
-		UseThreads        bool              `toml:"useThreads"`
 		BotToken          string            `toml:"botToken"` // Discord Bot トークン（${DISCORD_BOT_TOKEN}）
 		GuildID           string            `toml:"guildID"`  // Discord サーバー ID
 		Productions       []Productions     `toml:"productions,omitempty"`
 		TaskTypeWebhooks  []TaskTypeWebhook `toml:"taskTypeWebhooks,omitempty"`
 	}
-	Mention      MentionConfig      `toml:"mention"`
 	Notification NotificationConfig `toml:"notification"`
 	GoogleDrive  struct {
 		URL string `toml:"url"`
@@ -202,55 +177,7 @@ func (c *Config) Validate() []string {
 		issues = append(issues, "[WARN] discord.webhookURL is empty — project routing can be configured in the Web UI")
 	}
 
-	// --- テンプレートプレースホルダ検出 ---
-	for _, u := range c.Mention.UserMap {
-		if looksLikePlaceholder(u.KitsuName) {
-			issues = append(issues, "[WARN] mention.userMap: kitsuName looks like a placeholder — update it: "+u.KitsuName)
-		}
-		if looksLikePlaceholder(u.DiscordID) {
-			issues = append(issues, "[WARN] mention.userMap: discordID looks like a placeholder for kitsuName="+u.KitsuName+" — update it: "+u.DiscordID)
-		}
-	}
-	for _, ch := range c.Mention.Checkers {
-		if looksLikePlaceholder(ch.DiscordID) {
-			issues = append(issues, "[WARN] mention.checkers: discordID looks like a placeholder for taskType="+ch.TaskType+" — update it: "+ch.DiscordID)
-		}
-	}
-
 	return issues
-}
-
-// looksLikePlaceholder は文字列がプレースホルダ（未設定値）らしいかどうかを返す。
-// 判定基準:
-//   - 日本語（CJK/ひらがな/カタカナ等）を含む → テンプレートの日本語説明文
-//   - "000000000000000000" や "222222222222222222" など明らかなダミー Discord ID
-func looksLikePlaceholder(s string) bool {
-	if s == "" {
-		return false // 空は別途必須チェックで拾う
-	}
-	for _, r := range s {
-		// ひらがな / カタカナ / CJK統合漢字 / CJK記号 など
-		if unicode.In(r,
-			unicode.Hiragana,
-			unicode.Katakana,
-			unicode.Han,
-		) {
-			return true
-		}
-	}
-	// よく使われるダミー Discord ID パターン
-	knownDummies := []string{
-		"222222222222222222",
-		"000000000000000000",
-		"111111111111111111",
-		"999999999999999999",
-	}
-	for _, d := range knownDummies {
-		if s == d {
-			return true
-		}
-	}
-	return false
 }
 
 // expandEnvBraces replaces ${VAR} occurrences with the value of the environment

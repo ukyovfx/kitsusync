@@ -155,10 +155,6 @@ If you want a default catch-all Discord route before project setup, also set:
 `conf.toml.example` already points secret values at environment variables. Common values to review:
 
 - `kitsu.hostname`
-- `discord.useThreads`
-- `mention.checkerStatuses`
-- `mention.artistStatuses`
-- `mention.hereStatuses`
 
 ### 4. Start the app locally (development only)
 

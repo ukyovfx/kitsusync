@@ -25,7 +25,6 @@ log = true
     embedsPerRequests = 10
     RequestsPerMinute = 50
     webhookURL = "${DISCORD_WEBHOOK_URL}"
-    useThreads = false
 
     # Required for /bot/setup and /bot/admin channel operations.
     botToken = "${DISCORD_BOT_TOKEN}"
@@ -45,21 +44,7 @@ log = true
 #    taskType = "Animation"
 #    webhookURL = "https://discord.com/api/webhooks/REPLACE_ME/REPLACE_ME"
 
-[mention]
-    checkerStatuses = ["WFA"]
-    artistStatuses = ["READY", "RETAKE", "DONE"]
-    hereStatuses = []
-
-[[mention.userMap]]
-    kitsuName = "Taro Yamada"
-    discordID = "123456789012345678"
-
-[[mention.checkers]]
-    taskType = "Animation"
-    discordID = "345678901234567890"
-
 [notification]
-    notifyOnAssign = false
     deliveryPayloadRetentionDays = 30 # Redact delivered outbox payload bodies after this many days; 0 disables redaction.
 
 [googleDrive]
