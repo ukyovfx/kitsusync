@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 	"unicode"
@@ -156,7 +157,10 @@ func ReadFromPath(path string) (Config, error) {
 		DeliveryPayloadRetentionDays: defaultDeliveryPayloadRetentionDays,
 		CommentNotifyAssignee:        false,
 	}}
-	if err := toml.NewDecoder(strings.NewReader(expanded)).Decode(&config); err != nil {
+	// 未知のキーは無視する。構造体から削除した設定項目が残る conf.toml でも起動できるようにするため。
+	tomlCfg := toml.DefaultConfig
+	tomlCfg.MissingField = func(reflect.Type, string) error { return nil }
+	if err := tomlCfg.NewDecoder(strings.NewReader(expanded)).Decode(&config); err != nil {
 		return Config{}, fmt.Errorf("parse conf.toml: %w", err)
 	}
 	return config, nil

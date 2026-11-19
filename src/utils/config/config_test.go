@@ -15,6 +15,32 @@ func TestReadFromPathRejectsDirectoryWithSafeDiagnostic(t *testing.T) {
 	}
 }
 
+func TestReadFromPathIgnoresUnknownKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.toml")
+	const content = "" +
+		"[kitsu]\n" +
+		"hostname = \"http://kitsu.invalid\"\n" +
+		"removedLegacyKey = \"gone-in-struct\"\n" +
+		"\n" +
+		"[discord]\n" +
+		"useThreads = true\n" +
+		"embedsPerRequests = 10\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadFromPath(path)
+	if err != nil {
+		t.Fatalf("conf.toml with unknown keys should load, got %v", err)
+	}
+	if loaded.Kitsu.Hostname != "http://kitsu.invalid" {
+		t.Fatalf("known keys should still decode, got hostname %q", loaded.Kitsu.Hostname)
+	}
+	if loaded.Discord.EmbedsPerRequests != 10 {
+		t.Fatalf("known keys should still decode, got embedsPerRequests %d", loaded.Discord.EmbedsPerRequests)
+	}
+}
+
 func TestReadFromPathExpandsEnvironmentWithoutPersistingValues(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "conf.toml")
