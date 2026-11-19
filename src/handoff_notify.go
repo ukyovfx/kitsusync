@@ -95,7 +95,8 @@ func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
 			continue
 		}
 		for _, recipient := range recipients {
-			if err := sendDigestDirectMessage(botToken, recipient, renderHandoffCard(handoffTaskURL(publicURL, event), event)); err != nil {
+			content := renderHandoffCard(publicURL, event)
+			if err := sendDigestDirectMessage(botToken, recipient, content, handoffReplyRows([]model.HandoffEvent{event})); err != nil {
 				errs = append(errs, fmt.Sprintf("%d/%s: %v", event.ID, recipient, err))
 			}
 		}
@@ -112,18 +113,22 @@ func handoffRecipients(db *gorm.DB, event model.HandoffEvent) []string {
 	return discord.ResolveAssigneeDiscordIDsWithIdentity(event.ProductionID, handoffAssignees(db, event), forumAssigneeIdentity)
 }
 
-// handoffCardLine reads as one row of the DM: which product of which shot came
-// from whose task, with the link to the receiving task.
+// handoffCardLine reads as one row of the DM and, with a task route, links the
+// receiving task in Kitsu.
 func handoffCardLine(event model.HandoffEvent, taskURL string) string {
-	product := strings.TrimSpace(event.ProductName + " " + event.ProductVersion)
-	line := fmt.Sprintf("%s: %s ← %s の %s", event.EntityName, product, event.SourceAuthorName, event.SourceTaskTypeName)
+	line := fmt.Sprintf("%s: %s ← %s の %s", event.EntityName, handoffProduct(event), event.SourceAuthorName, event.SourceTaskTypeName)
 	if taskURL != "" {
-		line += " " + taskURL
+		line += " " + handoffTaskURL(taskURL, event)
 	}
 	return line
 }
 
-// renderHandoffCard is the immediate DM for one handoff.
+func handoffProduct(event model.HandoffEvent) string {
+	return strings.TrimSpace(event.ProductName + " " + event.ProductVersion)
+}
+
+// renderHandoffCard is the immediate DM for one handoff, with the receiver's
+// reply buttons under it.
 func renderHandoffCard(taskURL string, event model.HandoffEvent) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🔁 素材の受け渡し — %s\n", event.ProductName)
@@ -132,10 +137,42 @@ func renderHandoffCard(taskURL string, event model.HandoffEvent) string {
 	}
 	fmt.Fprintf(&b, "%s の %s から届きました。\n", event.SourceAuthorName, event.SourceTaskTypeName)
 	if taskURL != "" {
-		fmt.Fprintf(&b, "Kitsu: %s\n", taskURL)
+		fmt.Fprintf(&b, "Kitsu: %s\n", handoffTaskURL(taskURL, event))
 	}
 	return b.String()
 }
+
+// handoffReplyRows is the receiver's reply for one handoff: one row with OK and
+// リテイク. Discords' five-rows-per-message limit therefore caps a digest card
+// at handoffDigestMaxItems handoffs. Without a CustomID the buttons are inert,
+// which is what the bot sends while nothing listens for button presses yet.
+func handoffReplyRows(events []model.HandoffEvent) []discord.ActionRow {
+	rows := make([]discord.ActionRow, 0, len(events))
+	for _, event := range events {
+		id := event.CommentID
+		rows = append(rows, discord.ActionRow{Type: 1, Components: []discord.Button{
+			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id)},
+			{Type: 2, Style: discord.ButtonStyleDanger, Label: "リテイク", CustomID: handoffReplyCustomID("retake", id)},
+		}})
+	}
+	return rows
+}
+
+// handoffReplyCustomID names the reply of one handoff. It is empty while the
+// runtime has no Discord interaction endpoint to receive the press, so the
+// button still tells the receiver what the options are without pretending the
+// press does something. Flip handoffRepliesWired when that endpoint exists.
+func handoffReplyCustomID(action, commentID string) string {
+	if !handoffRepliesWired() || strings.TrimSpace(commentID) == "" {
+		return ""
+	}
+	return "handoff:" + action + ":" + commentID
+}
+
+// handoffRepliesWired reports whether button presses are received. KitsuSync
+// has no Discord gateway and no public interaction endpoint, so today it is
+// always false: replies are written by hand in Kitsu.
+func handoffRepliesWired() bool { return false }
 
 // handoffTaskURL links the receiving task of a handoff in Kitsu.
 func handoffTaskURL(publicURL string, event model.HandoffEvent) string {

@@ -43,9 +43,9 @@ type forumDigestRecipient struct {
 	DiscordID string
 	Waiting   []forumDigestItem
 	Retakes   []forumDigestItem
-	// Handoffs are rendered lines, not forum items: a handoff carries the
-	// product and its version, which no forum thread title holds.
-	Handoffs []string
+	// Handoffs carry the product and its version, which no forum thread
+	// title holds, and one reply row each.
+	Handoffs []model.HandoffEvent
 }
 
 // sendForumMorningDigests sends the per-person forum digest for forum-mode
@@ -87,12 +87,14 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 		recipients = mergeHandoffDigestItems(db, project, recipients)
 		projectErrs := 0
 		projectSent := 0
+		publicURL := setup.PublicKitsuURL(db)
 		for _, recipient := range recipients {
 			marker := forumDigestLastSentDateSettingKey + project.KitsuProjectID + "." + recipient.DiscordID
 			if model.GetSetting(db, marker) == today {
 				continue
 			}
-			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, renderForumDigestCard(project.Name, recipient)); err != nil {
+			content := renderForumDigestCard(project.Name, recipient, publicURL)
+			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, content, handoffReplyRows(recipient.Handoffs)); err != nil {
 				projectErrs++
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient.DiscordID, err))
 				continue
@@ -227,14 +229,14 @@ func mergeHandoffDigestItems(db *gorm.DB, project model.Project, recipients []fo
 	for i, recipient := range recipients {
 		index[recipient.DiscordID] = i
 	}
-	for recipient, lines := range items {
+	for recipient, events := range items {
 		position, known := index[recipient]
 		if !known {
 			recipients = append(recipients, forumDigestRecipient{DiscordID: recipient})
 			position = len(recipients) - 1
 			index[recipient] = position
 		}
-		recipients[position].Handoffs = lines
+		recipients[position].Handoffs = events
 	}
 	return recipients
 }
@@ -242,14 +244,14 @@ func mergeHandoffDigestItems(db *gorm.DB, project model.Project, recipients []fo
 // handoffDigestItems returns each person's unanswered handoffs per Production.
 // A pending handoff that the poller will send right away is not a reminder;
 // notified handoffs, and pending ones the send failed on, stay listed until
-// they are answered.
-func handoffDigestItems(db *gorm.DB, project model.Project) map[string][]string {
+// they are answered. The cap is what keeps a digest card's reply rows inside
+// Discord's five-rows-per-message limit.
+func handoffDigestItems(db *gorm.DB, project model.Project) map[string][]model.HandoffEvent {
 	unanswered, err := model.UnansweredHandoffEvents(db)
 	if err != nil {
 		return nil
 	}
-	publicURL := setup.PublicKitsuURL(db)
-	byPerson := map[string][]string{}
+	byPerson := map[string][]model.HandoffEvent{}
 	for _, event := range unanswered {
 		if event.ProductionID != project.KitsuProjectID {
 			continue
@@ -258,14 +260,13 @@ func handoffDigestItems(db *gorm.DB, project model.Project) map[string][]string 
 		if event.State == model.HandoffEventPending && handoffImmediate(handoffTiming(db, event.ProductionID), event.FallbackUsed, recipients) {
 			continue
 		}
-		line := handoffCardLine(event, handoffTaskURL(publicURL, event))
 		for _, recipient := range recipients {
-			byPerson[recipient] = append(byPerson[recipient], line)
+			byPerson[recipient] = append(byPerson[recipient], event)
 		}
 	}
-	for recipient, lines := range byPerson {
-		if len(lines) > handoffDigestMaxItems {
-			byPerson[recipient] = lines[:handoffDigestMaxItems]
+	for recipient, events := range byPerson {
+		if len(events) > handoffDigestMaxItems {
+			byPerson[recipient] = events[:handoffDigestMaxItems]
 		}
 	}
 	return byPerson
@@ -292,7 +293,7 @@ func forumDigestReviewerIDs(db *gorm.DB, projectID uint) []string {
 
 // renderForumDigestCard lists the person's own queue. Titles are the forum
 // thread titles, so the DM reads the same as the post.
-func renderForumDigestCard(productionName string, recipient forumDigestRecipient) string {
+func renderForumDigestCard(productionName string, recipient forumDigestRecipient, publicURL string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "📋 朝のダイジェスト — %s\n", productionName)
 	fmt.Fprintf(&b, "・チェック待ち (WFA): %d件", len(recipient.Waiting))
@@ -309,7 +310,11 @@ func renderForumDigestCard(productionName string, recipient forumDigestRecipient
 	// than a missing section.
 	fmt.Fprintf(&b, "・素材の受け渡し: %d件", len(recipient.Handoffs))
 	if len(recipient.Handoffs) > 0 {
-		b.WriteString("\n  " + strings.Join(recipient.Handoffs, "\n  "))
+		lines := make([]string, 0, len(recipient.Handoffs))
+		for _, event := range recipient.Handoffs {
+			lines = append(lines, handoffCardLine(event, publicURL))
+		}
+		b.WriteString("\n  " + strings.Join(lines, "\n  "))
 	} else {
 		b.WriteString("\n")
 	}

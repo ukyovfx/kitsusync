@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -8,12 +9,15 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// Handoff event states. K2 only records events; the sending side reads them.
+// Handoff event states. K2 only records events; the sending side reads them,
+// and the receiver's reply moves a reported event to answered or retaken.
 const (
 	HandoffEventPending   = "pending"
 	HandoffEventNotified  = "notified"
 	HandoffEventNoTarget  = "no_target" // no receiving task, or nobody to notify
 	HandoffEventCancelled = "cancelled" // superseded before it was sent
+	HandoffEventAnswered  = "answered"  // the receiver accepted the delivery
+	HandoffEventRetaken   = "retaken"   // the receiver asked for a retake
 )
 
 // HandoffEvent is one detected material handoff: a source task delivered a
@@ -128,5 +132,21 @@ func MarkHandoffNotified(db *gorm.DB, id uint) (bool, error) {
 	claim := db.Model(&HandoffEvent{}).
 		Where("id = ? AND state = ?", id, HandoffEventPending).
 		Update("state", HandoffEventNotified)
+	return claim.RowsAffected > 0, claim.Error
+}
+
+// MarkHandoffReplied moves a reported event to the receiver's answer. It
+// reports false when the event was already answered or retaken, so a double
+// press never writes a second comment.
+func MarkHandoffReplied(db *gorm.DB, id uint, state string) (bool, error) {
+	if db == nil || id == 0 {
+		return false, nil
+	}
+	if state != HandoffEventAnswered && state != HandoffEventRetaken {
+		return false, errors.New("handoff reply state is invalid")
+	}
+	claim := db.Model(&HandoffEvent{}).
+		Where("id = ? AND state IN ?", id, []string{HandoffEventPending, HandoffEventNotified}).
+		Update("state", state)
 	return claim.RowsAffected > 0, claim.Error
 }

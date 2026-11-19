@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -80,6 +81,9 @@ type dmFixture struct {
 	sends      map[string]*atomic.Int64
 	failingIDs map[string]bool
 	mu         atomic.Int64
+	lastMu     sync.Mutex
+	last       discord.Payload
+	lastSeen   bool
 }
 
 func newDMFixture(t *testing.T, failingIDs ...string) *dmFixture {
@@ -105,6 +109,11 @@ func newDMFixture(t *testing.T, failingIDs ...string) *dmFixture {
 	})
 	mux.HandleFunc("POST /api/v10/channels/", func(w http.ResponseWriter, r *http.Request) {
 		fixture.mu.Add(1)
+		var sent discord.Payload
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		fixture.lastMu.Lock()
+		fixture.last, fixture.lastSeen = sent, true
+		fixture.lastMu.Unlock()
 		recipient := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v10/channels/dm-channel-"), "/messages")
 		if fixture.sends[recipient] == nil {
 			fixture.sends[recipient] = &atomic.Int64{}
@@ -127,6 +136,13 @@ func newDMFixture(t *testing.T, failingIDs ...string) *dmFixture {
 		discord.ResetDMChannelCache()
 	})
 	return fixture
+}
+
+// body holds the last payload the fixture received.
+func (f *dmFixture) body() (discord.Payload, bool) {
+	f.lastMu.Lock()
+	defer f.lastMu.Unlock()
+	return f.last, f.lastSeen
 }
 
 func (f *dmFixture) sendsFor(recipient string) int64 {
