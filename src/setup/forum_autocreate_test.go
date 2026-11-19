@@ -327,7 +327,7 @@ func TestForumAutoCreateNeedsBotToken(t *testing.T) {
 	var created []string
 	stubForumCreate(t, &created)
 	db := newForumPageDB(t)
-	handler := ForumSettingsHandler(db, func() (string, string) { return "", "g1" })
+	handler := ForumSettingsHandler(db, false, func() (string, string) { return "", "g1" })
 	form := url.Values{"project": {"p1"}, "action": {"create_forums"}}
 	r := httptest.NewRequest(http.MethodPost, "/bot/admin/forum?lang=ja", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")

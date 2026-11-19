@@ -25,7 +25,8 @@ type Recipients struct {
 	// TaskTypeName resolves a display name for the reviewer lookup.
 	TaskTypeName func(taskTypeID string) string
 	// NotifyAssigneesOnComment includes the current assignees in a comment
-	// signal (tuning.comment_notify_assignee, default true).
+	// signal (settings key notification.comment_notify_assignee, conf.toml
+	// fallback, default false).
 	NotifyAssigneesOnComment bool
 }
 

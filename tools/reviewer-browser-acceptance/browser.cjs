@@ -21,11 +21,11 @@ function isNotificationsApplyRequest(request) {
 const locales = [
   {
     lang: 'en', automatic: 'Automatic', overrides: 'Additional', tabs: ['Overview', 'Notifications', 'Team', 'Settings'],
-    forumHeadings: ['Task Type → forum', 'Kitsu status → role'],
+    forumHeadings: ['Task Type → forum', 'Kitsu status → role', 'Comment notifications'],
   },
   {
     lang: 'ja', automatic: '自動', overrides: '追加', tabs: ['概要', '通知', 'チーム', '設定'],
-    forumHeadings: ['タスクタイプ → フォーラム', 'Kitsuのステータス → 役割'],
+    forumHeadings: ['タスクタイプ → フォーラム', 'Kitsuのステータス → 役割', 'コメントの通知'],
   },
 ];
 const compositingAutomatic = ['@Guild Nick Supervisor', '@Global Name Fallback', '@username-fallback'];
@@ -732,7 +732,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await forumForm.count() !== 1) throw new Error(`Forum settings form missing in ${locale.lang}`);
         const forumHeadings = (await page.locator('form.section-stack > section.section-card > h2').allTextContents()).map(text => text.trim());
         if (JSON.stringify(forumHeadings) !== JSON.stringify(locale.forumHeadings)) {
-          throw new Error(`Forum settings sections are not the two ${locale.lang} headings: ${JSON.stringify(forumHeadings)}`);
+          throw new Error(`Forum settings sections are not the expected ${locale.lang} headings: ${JSON.stringify(forumHeadings)}`);
         }
         if (await page.locator('form.section-stack select[name="tag_id"]').count() || await page.locator('form.section-stack input[name="tag_forum"]').count()) {
           throw new Error(`Forum settings still renders tag assignment inputs in ${locale.lang}`);
@@ -760,7 +760,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const forumSaveButton = forumForm.locator('button[type="submit"]:not([name="action"])');
         if (await forumSaveButton.count() !== 1 || !(await forumSaveButton.isVisible())) throw new Error(`Forum settings Save action is missing in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `forum-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'Task Type → forum and Kitsu status → role sections with the server field, Save and Bot auto-create; the tag mapping is derived from the forum tag names on save');
+        await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'Task Type → forum and Kitsu status → role sections with the server field, the Comment notifications checkbox, Save and Bot auto-create; the tag mapping is derived from the forum tag names on save');
 
         // Assign the unrouted Animation row to the storyboard forum, whose
         // tags do not use the standard names. The save is refused, naming the
