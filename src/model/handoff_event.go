@@ -108,3 +108,25 @@ func PendingHandoffEvents(db *gorm.DB) ([]HandoffEvent, error) {
 	err := db.Where("state = ?", HandoffEventPending).Order("id asc").Find(&events).Error
 	return events, err
 }
+
+// UnansweredHandoffEvents lists the events a morning digest still has to
+// remind: a pending event waits for the poller to send it right away, a
+// notified one is already out and waits for a reply until it is answered, so
+// it stays listed. A cancelled event is answered by a newer delivery.
+func UnansweredHandoffEvents(db *gorm.DB) ([]HandoffEvent, error) {
+	var events []HandoffEvent
+	err := db.Where("state IN ?", []string{HandoffEventPending, HandoffEventNotified}).Order("id asc").Find(&events).Error
+	return events, err
+}
+
+// MarkHandoffNotified moves a pending event to sent. It reports false when the
+// event was already sent, so two pollers never report the same delivery twice.
+func MarkHandoffNotified(db *gorm.DB, id uint) (bool, error) {
+	if db == nil || id == 0 {
+		return false, nil
+	}
+	claim := db.Model(&HandoffEvent{}).
+		Where("id = ? AND state = ?", id, HandoffEventPending).
+		Update("state", HandoffEventNotified)
+	return claim.RowsAffected > 0, claim.Error
+}

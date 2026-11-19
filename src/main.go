@@ -413,6 +413,13 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 	} else if hr.Events > 0 || hr.Known > 0 {
 		slog.Info("Handoff detection summary", "event", "handoff_detect_summary", "events", hr.Events, "known", hr.Known)
 	}
+	// A handoff addressed to a concrete assignee is reported now; the rest
+	// wait for the morning digest, which lists them until they are answered.
+	if sent, err := sendImmediateHandoffs(conf, db); err != nil {
+		slog.Error("Handoff notification failed", "error_class", "handoff_notify_failed", "err", err)
+	} else if sent > 0 {
+		slog.Info("Handoff notification summary", "event", "handoff_notify_summary", "sent", sent)
+	}
 	result, err := poller.PollProjects(data)
 	if err != nil {
 		slog.Error("Forum poll failed", "error_class", "forum_poll_failed", "err", err)
