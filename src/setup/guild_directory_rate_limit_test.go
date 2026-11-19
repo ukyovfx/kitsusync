@@ -6,7 +6,6 @@ package setup
 // immediately. That is the whole point of the directory cache.
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,26 +19,52 @@ import (
 	"gorm.io/gorm"
 )
 
-// guildDirectoryRateLimitTransport answers every guild read with a 429 whose
-// Retry-After is far longer than any render budget.
-type guildDirectoryRateLimitTransport struct {
-	base http.RoundTripper
-	hits *atomic.Int32
+// guildDirectoryRateLimitedFetch stands in for the cache's Discord reader and
+// answers every fetch like a 429 whose Retry-After is far longer than any
+// render budget, so botDo keeps waiting for the whole test.
+func guildDirectoryRateLimitedFetch(hits *atomic.Int32) func(guildID, botToken string) ([]byte, int, error) {
+	return func(string, string) ([]byte, int, error) {
+		hits.Add(1)
+		body := []byte(`{"message":"You are being rate limited.","retry_after":900}`)
+		return body, http.StatusTooManyRequests, discordBotAPIError("discord guild directory refresh failed", http.StatusTooManyRequests, body)
+	}
 }
 
-func (d guildDirectoryRateLimitTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if !strings.Contains(r.URL.Path, "/guilds/") {
-		return d.base.RoundTrip(r)
-	}
-	d.hits.Add(1)
-	body := `{"message":"You are being rate limited.","retry_after":900}`
-	return &http.Response{
-		StatusCode: http.StatusTooManyRequests,
-		Status:     "429 Too Many Requests",
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Request:    r,
-	}, nil
+// stubGuildChannelFetch is stubGuildDirectoryFetch for the channel cache; the
+// fetch signature differs only in the decoder, which the caller owns.
+func stubGuildChannelFetch(t *testing.T, cache *guildChannelsCache, fetch func(guildID, botToken string) ([]byte, int, error)) {
+	t.Helper()
+	cache.mu.Lock()
+	oldFetch := cache.fetch
+	cache.mu.Unlock()
+	cache.fetch = fetch
+	t.Cleanup(func() {
+		cache.inflight.Wait()
+		cache.mu.Lock()
+		cache.fetch = oldFetch
+		clear(cache.entries)
+		cache.mu.Unlock()
+	})
+}
+
+// stubGuildDirectoryFetch replaces a directory cache's fetch for one test and
+// restores it afterwards. Unlike swapping http.DefaultTransport it cannot leak
+// into another test that a background refresh outlives.
+func stubGuildDirectoryFetch(t *testing.T, cache *guildDirectoryCache, fetch func(guildID, botToken string) ([]byte, int, error), now func() time.Time) {
+	t.Helper()
+	cache.mu.Lock()
+	oldFetch, oldNow := cache.fetch, cache.now
+	cache.mu.Unlock()
+	cache.fetch, cache.now = fetch, now
+	t.Cleanup(func() {
+		// Background refreshes started by this test must finish before the
+		// stub disappears or can read state the test has already dropped.
+		cache.inflight.Wait()
+		cache.mu.Lock()
+		cache.fetch, cache.now = oldFetch, oldNow
+		clear(cache.entries)
+		cache.mu.Unlock()
+	})
 }
 
 // expireGuildDirectory marks the cached snapshot for the guild as stale.
@@ -75,10 +100,9 @@ func TestProductionDisplayPathsDoNotBlockOnDiscordRateLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	oldTasks, oldTeam, oldTransport := reviewerTaskTypesForProduction, reviewerProductionTeamReader, http.DefaultTransport
+	oldTasks, oldTeam := reviewerTaskTypesForProduction, reviewerProductionTeamReader
 	t.Cleanup(func() {
 		reviewerTaskTypesForProduction, reviewerProductionTeamReader = oldTasks, oldTeam
-		http.DefaultTransport = oldTransport
 	})
 	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"}}
@@ -87,10 +111,12 @@ func TestProductionDisplayPathsDoNotBlockOnDiscordRateLimit(t *testing.T) {
 		return []kitsu.Person{{ID: "artist-person", FullName: "Linked Artist", Role: "artist", Active: true}}, nil
 	}
 
-	// Warm the directory from the rate-limited Discord: botDo gives up after
+	// Warm the directory from the rate-limited stub: botDo gives up after
 	// three Retry-After waits, so the warm-up is slow but the snapshots are real.
 	hits := new(atomic.Int32)
-	http.DefaultTransport = guildDirectoryRateLimitTransport{base: oldTransport, hits: hits}
+	rateLimited := guildDirectoryRateLimitedFetch(hits)
+	stubGuildDirectoryFetch(t, guildMemberListCache, rateLimited, time.Now)
+	stubGuildDirectoryFetch(t, guildRoleListCache, rateLimited, time.Now)
 	failed := make(chan error, 2)
 	go func() {
 		_, _, err := guildMemberListCache.refresh(project.DiscordGuildID, "synthetic-discord-token")

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -46,6 +47,19 @@ func pr199UserLinkingDB(t *testing.T, personsStatus int, personsBody string) *go
 
 func installPR199DiscordReplies(t *testing.T, replies map[string]pr199DiscordReply) {
 	t.Helper()
+	for _, source := range []*guildDirectoryCache{guildMemberListCache, guildRoleListCache} {
+		cache := source
+		stubGuildDirectoryFetch(t, cache, func(guildID, _ string) ([]byte, int, error) {
+			reply, ok := replies["/api/v10/guilds/"+guildID+"/members"]
+			if !ok {
+				reply = pr199DiscordReply{status: http.StatusNotFound, body: `{}`}
+			}
+			if reply.status == 0 {
+				reply.status = http.StatusOK
+			}
+			return []byte(reply.body), reply.status, nil
+		}, time.Now)
+	}
 	old := http.DefaultTransport
 	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.URL.Host != "discord.com" {
