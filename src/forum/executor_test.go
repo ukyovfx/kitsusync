@@ -411,7 +411,20 @@ func TestExecutorDeliversMentionForSignalFromStatusChangeCreate(t *testing.T) {
 	}
 
 	executor, fake := newExecutor(t, db)
-	executor.Now = func() time.Time { return planner.Now.Add(model.ForumMentionWindow) }
+	window := planner.Now.Add(model.ForumMentionWindow)
+	// The planner queues the signal at window start + mention window; a drain
+	// 5s earlier must post nothing. A create from an earlier poll may still be
+	// pending then, so assert on the signal row itself.
+	executor.Now = func() time.Time { return window.Add(-5 * time.Second) }
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain before window: %v", err)
+	}
+	for _, request := range fake.snapshot() {
+		if request.Path == "/channels/thread-1/messages" {
+			t.Fatalf("signal posted 5s before the mention window: %+v", request)
+		}
+	}
+	executor.Now = func() time.Time { return window }
 	if _, err := executor.Drain(10); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}

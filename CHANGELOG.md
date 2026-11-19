@@ -4,6 +4,12 @@ All notable changes to this project should be recorded here.
 
 ## Unreleased
 
+### Changed - forum mention aggregation window
+
+- The forum mention aggregation window is 30 seconds instead of 3 minutes, so
+  a status change pings about 30s after the window opens instead of 3 minutes.
+  Flap (round-trip) detection keeps its own 3-minute window.
+
 ### Fixed - notification routing editor
 
 - The routing editor's inline script failed to parse (unbalanced brace), so no
