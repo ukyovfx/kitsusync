@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"app/src/api/discord"
 	"app/src/model"
@@ -324,4 +326,68 @@ func TestForumDigestQuietPollWritesNoAuditRow(t *testing.T) {
 // sendForumDigestsForTest wraps sendForumMorningDigests with the test config.
 func sendForumDigestsForTest(db *gorm.DB, now time.Time, today string) (int, error) {
 	return sendForumMorningDigests(digestTestConfig(), db, now, today)
+}
+
+// Digest items must name the task (the forum thread's title) and link it in
+// Kitsu; titles cut by runes, never bytes, so Japanese keeps whole
+// characters; the 10-item section cap and link-less unknown entity kinds
+// behave as designed; the handoff section keeps its task link.
+func TestForumDigestItemsNameTheTaskAndLinkKitsu(t *testing.T) {
+	long := strings.Repeat("あ", digestTitleMaxRunes + 4) // rune cut, no byte cut
+	recipient := forumDigestRecipient{
+		Waiting: []forumDigestItem{
+			{TaskID: "task-wfa", EntityKind: model.ForumEntityKindShot, Title: "コンポジット sq010 ショット002"},
+			{TaskID: "task-long", EntityKind: model.ForumEntityKindShot, Title: long},
+		},
+		Retakes: []forumDigestItem{
+			{TaskID: "task-retake", EntityKind: model.ForumEntityKindAsset, Title: "Compositing sq010 sh002"},
+			{TaskID: "task-seq", EntityKind: "sequence", Title: "シークエンス工程"},
+		},
+		Handoffs: []model.HandoffEvent{{
+			EntityName: "sq010_sh001", ProductName: "camera", SourceAuthorName: "田中",
+			SourceTaskTypeName: "Animation", ProductionID: "p1",
+			EntityKind: model.ForumEntityKindShot, NotifyTaskID: "task-recv",
+		}},
+	}
+	card := renderForumDigestCard("Muse", "p1", recipient, "https://kitsu.example.org")
+	text := card.Description
+	if !utf8.ValidString(text) {
+		t.Fatal("description holds broken UTF-8")
+	}
+	for _, want := range []string{
+		"・チェック待ち (WFA): 2件", "・差し戻し (RETAKE): 2件", "・素材の受け渡し: 1件",
+		"[コンポジット sq010 ショット002](https://kitsu.example.org/productions/p1/shots/tasks/task-wfa)",
+		"[Compositing sq010 sh002](https://kitsu.example.org/productions/p1/assets/tasks/task-retake)",
+		"https://kitsu.example.org/productions/p1/shots/tasks/task-recv",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %q", want, text)
+		}
+	}
+	// Unknown entity kinds fail closed: the title stays readable, no link.
+	if !strings.Contains(text, "シークエンス工程") || strings.Contains(text, "tasks/task-seq") {
+		t.Fatalf("sequence item: %q", text)
+	}
+	// The long Japanese title was cut by runes, not bytes: the first runes
+	// plus the marker survive and nothing reads garbage.
+	if want := string([]rune(long)[:digestTitleMaxRunes-1]) + "…"; !strings.Contains(text, want) {
+		t.Fatalf("rune-truncated title missing: %q", text)
+	}
+	if strings.Contains(text, long) {
+		t.Fatal("long title was not truncated")
+	}
+
+	// The section cap holds: 12 waiting items render a 12件 count with
+	// exactly 10 links.
+	var many []forumDigestItem
+	for i := 0; i < 12; i++ {
+		many = append(many, forumDigestItem{TaskID: fmt.Sprintf("task-%02d", i), EntityKind: model.ForumEntityKindShot, Title: fmt.Sprintf("タスク%02d", i)})
+	}
+	capped := renderForumDigestCard("Muse", "p1", forumDigestRecipient{Waiting: many}, "https://kitsu.example.org")
+	if !strings.Contains(capped.Description, "・チェック待ち (WFA): 12件") {
+		t.Fatalf("count line: %q", capped.Description)
+	}
+	if links := strings.Count(capped.Description, "](https://kitsu.example.org/productions/"); links != 10 {
+		t.Fatalf("links = %d, want 10", links)
+	}
 }

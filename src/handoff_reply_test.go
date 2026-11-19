@@ -135,8 +135,8 @@ func TestHandoffDigestListsUntilRepliedAndDropsAfter(t *testing.T) {
 	if !seen {
 		t.Fatal("no digest payload")
 	}
-	if !strings.Contains(sent.Content, "素材の受け渡し: 1件") {
-		t.Fatalf("card = %q", sent.Content)
+	if len(sent.Embeds) != 1 || !strings.Contains(sent.Embeds[0].Description, "素材の受け渡し: 1件") {
+		t.Fatalf("card = %+v", sent)
 	}
 	if len(sent.Components) != 1 || sent.Components[0].Components[0].Label != "OK" {
 		t.Fatalf("components = %+v", sent.Components)
@@ -177,11 +177,14 @@ func TestHandoffDigestCountsTheHandoffsItLeftOut(t *testing.T) {
 	if !seen {
 		t.Fatal("no digest payload")
 	}
-	if !strings.Contains(card.Content, "素材の受け渡し: 5件") {
-		t.Fatalf("card = %q", card.Content)
+	if len(card.Embeds) != 1 {
+		t.Fatalf("embeds = %+v", card.Embeds)
 	}
-	if !strings.Contains(card.Content, "他に未返事が 2 件あります") {
-		t.Fatalf("missing leftover count in %q", card.Content)
+	if !strings.Contains(card.Embeds[0].Description, "素材の受け渡し: 5件") {
+		t.Fatalf("card = %q", card.Embeds[0].Description)
+	}
+	if !strings.Contains(card.Embeds[0].Description, "他に未返事が 2 件あります") {
+		t.Fatalf("missing leftover count in %q", card.Embeds[0].Description)
 	}
 	if len(card.Components) != 5 {
 		t.Fatalf("rows = %d, want 5", len(card.Components))
