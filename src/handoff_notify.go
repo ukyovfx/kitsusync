@@ -184,10 +184,21 @@ func handoffTaskURL(publicURL string, event model.HandoffEvent) string {
 var resolveHandoffAdminKitsuPersonIDs = resolveHandoffAdminIDs
 
 // resolveHandoffAdminIDs reads the Guild's admins as Kitsu person IDs, the
-// fallback K2 recorded for a receiving task without an assignee.
+// fallback K2 recorded for a receiving task without an assignee. Per the
+// owner's 2026-11-19 decision only members holding a role with the Discord
+// Administrator permission resolve through, and zero administrators resolves
+// to no destination instead of an error.
 func resolveHandoffAdminIDs(db *gorm.DB, guildID string) []string {
 	if db == nil || strings.TrimSpace(guildID) == "" {
 		return nil
+	}
+	admins := setup.GuildAdministratorDiscordIDs(guildID, setup.RuntimeDiscordBotToken(db))
+	if len(admins) == 0 {
+		return nil
+	}
+	resolved := make(map[string]struct{}, len(admins))
+	for _, id := range admins {
+		resolved[id] = struct{}{}
 	}
 	var users []model.UserMap
 	if err := db.Where("discord_guild_id = ?", guildID).Find(&users).Error; err != nil {
@@ -195,6 +206,9 @@ func resolveHandoffAdminIDs(db *gorm.DB, guildID string) []string {
 	}
 	ids := make([]string, 0, len(users))
 	for _, user := range users {
+		if _, ok := resolved[strings.TrimSpace(user.DiscordID)]; !ok {
+			continue
+		}
 		if id := strings.TrimSpace(user.KitsuID); id != "" {
 			ids = append(ids, id)
 		}
