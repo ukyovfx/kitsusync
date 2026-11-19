@@ -101,6 +101,48 @@ func TestHandoffPageAppliesPresetsToMatchingRowsOnly(t *testing.T) {
 	}
 }
 
+// Rendering hands off renderPass to Compositing; Compositing's own render
+// submission stays the only "render" preset row (owner decision 2026-11-19).
+func TestHandoffPresetRenderingUsesRenderPass(t *testing.T) {
+	stubHandoffTaskTypes(t, []kitsu.TaskType{
+		{ID: "tt-comp", Name: "Compositing"},
+		{ID: "tt-render", Name: "Rendering"},
+	})
+	db := newForumPageDB(t)
+	w := handoffPost(t, db, url.Values{
+		"project":       {"p1"},
+		"product_name":  {"renderPass", "render"},
+		"notify_timing": {"digest"},
+		"no_assignee":   {"admin"},
+	})
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	body := handoffGet(t, db).Body.String()
+	for label, wants := range map[string][]string{
+		`Rendering × renderPass<input type="hidden"`: {
+			`<option value="hand" selected>`,
+			`name="row_notify_tt-render|renderPass" value="tt-comp" checked`,
+		},
+		`Compositing × render<input type="hidden"`: {`<option value="submit" selected>`},
+		`Rendering × render<input type="hidden"`:   {`<option value="shelve" selected>`},
+	} {
+		start := strings.Index(body, label)
+		if start < 0 {
+			t.Fatalf("row %q is missing from the table: %s", label, body)
+		}
+		row := body[start:]
+		if end := strings.Index(row, "<tr><td>"); end > 0 {
+			row = row[:end]
+		}
+		for _, want := range wants {
+			if !strings.Contains(row, want) {
+				t.Fatalf("row %q is missing %q, got: %s", label, want, row)
+			}
+		}
+	}
+}
+
 func TestHandoffSaveStoresSelectionAndReloadsIt(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
