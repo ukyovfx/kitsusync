@@ -104,7 +104,8 @@ func TestPlannerRetakeQuotesAnnouncedCommentOnlyOutsideWindow(t *testing.T) {
 	seedPostedTask(t, db, &planner)
 
 	// 09:05: the comment announces itself.
-	planner.Now = now.Add(5 * time.Minute)
+	announceAt := now.Add(5 * time.Minute)
+	planner.Now = announceAt
 	commentPoll := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
 	commentPoll.CommentDate = "2026-11-15T09:04:00.000Z"
 	commentPoll.Comment = commentInput("comment-1", "直してください", "person-2")
@@ -113,8 +114,9 @@ func TestPlannerRetakeQuotesAnnouncedCommentOnlyOutsideWindow(t *testing.T) {
 		t.Fatalf("PlanTask comment: %v", err)
 	}
 
-	// 09:07: the retake is in the same window and must quote nothing.
-	planner.Now = now.Add(7 * time.Minute)
+	// Half a window after the announce, the retake is inside the same
+	// aggregation window and must quote nothing.
+	planner.Now = announceAt.Add(model.ForumMentionWindow / 2)
 	retakePoll := taskInput("s-retake", model.ForumRoleRetake, "person-1")
 	retakePoll.CommentDate = "2026-11-15T09:04:00.000Z"
 	retakePoll.Comment = commentInput("comment-1", "直してください")
@@ -126,13 +128,14 @@ func TestPlannerRetakeQuotesAnnouncedCommentOnlyOutsideWindow(t *testing.T) {
 		t.Fatalf("retake quote = %q, want empty inside the aggregation window", got)
 	}
 
-	// 09:09→09:10: step away and retake again; the window from 09:05 has
-	// closed, so the quote is allowed again.
-	planner.Now = now.Add(9 * time.Minute)
+	// One window after the announce, step away and retake again; the window
+	// has closed but the comment is still in the quote lookback, so the quote
+	// is allowed again.
+	planner.Now = announceAt.Add(model.ForumMentionWindow + 10*time.Second)
 	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP, "person-1"), stubCard()); err != nil {
 		t.Fatalf("PlanTask wip: %v", err)
 	}
-	planner.Now = now.Add(10 * time.Minute)
+	planner.Now = announceAt.Add(model.ForumMentionWindow + 20*time.Second)
 	if _, err := planner.PlanTask(retakePoll, stubCard()); err != nil {
 		t.Fatalf("PlanTask retake again: %v", err)
 	}
@@ -178,8 +181,9 @@ func TestOutboxClaimKeepsStatusBeforeLaterComment(t *testing.T) {
 	planner := testPlanner(db, now)
 	seedPostedTask(t, db, &planner)
 
-	// 09:05: a retake opens a status signal, due at 09:08.
-	planner.Now = now.Add(5 * time.Minute)
+	// 09:05: a retake opens a status signal, due one window later.
+	retakeAt := now.Add(5 * time.Minute)
+	planner.Now = retakeAt
 	if _, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake), stubCard()); err != nil {
 		t.Fatalf("PlanTask retake: %v", err)
 	}
@@ -190,28 +194,28 @@ func TestOutboxClaimKeepsStatusBeforeLaterComment(t *testing.T) {
 		t.Fatalf("finish sync rows: %v", err)
 	}
 
-	// 09:06: a fresh comment signal, due at once.
-	planner.Now = now.Add(6 * time.Minute)
+	// 10s later: a fresh comment signal, due at once.
+	planner.Now = retakeAt.Add(10 * time.Second)
 	commentPoll := taskInput("s-retake", model.ForumRoleRetake)
-	commentPoll.CommentDate = "2026-11-15T09:05:30.000Z"
+	commentPoll.CommentDate = "2026-11-15T09:05:00.000Z"
 	commentPoll.Comment = commentInput("comment-2", "追加の指摘", "person-2")
 	if _, err := planner.PlanTask(commentPoll, stubCard()); err != nil {
 		t.Fatalf("PlanTask comment: %v", err)
 	}
 
-	// 09:06: the due comment row is blocked by the pending status row.
-	claimed, err := model.ClaimNextForumOutboxRow(db, now.Add(6*time.Minute))
+	// The due comment row is blocked by the still-pending status row.
+	claimed, err := model.ClaimNextForumOutboxRow(db, retakeAt.Add(10*time.Second))
 	if err != nil {
-		t.Fatalf("claim at 09:06: %v", err)
+		t.Fatalf("claim before the status row: %v", err)
 	}
 	if claimed != nil {
-		t.Fatalf("claimed %q at 09:06, want nothing before the status signal", claimed.DedupeKey)
+		t.Fatalf("claimed %q before the status signal, want nothing", claimed.DedupeKey)
 	}
 
-	// 09:08: the status row comes first.
-	claimed, err = model.ClaimNextForumOutboxRow(db, now.Add(8*time.Minute))
+	// One window after the retake: the status row comes first.
+	claimed, err = model.ClaimNextForumOutboxRow(db, retakeAt.Add(model.ForumMentionWindow))
 	if err != nil {
-		t.Fatalf("claim at 09:08: %v", err)
+		t.Fatalf("claim the status row: %v", err)
 	}
 	if claimed == nil || !strings.HasPrefix(claimed.DedupeKey, "msg:status:") {
 		t.Fatalf("claimed = %v, want the status signal first", claimed)
@@ -221,7 +225,7 @@ func TestOutboxClaimKeepsStatusBeforeLaterComment(t *testing.T) {
 	}
 
 	// Only then the comment row follows.
-	claimed, err = model.ClaimNextForumOutboxRow(db, now.Add(8*time.Minute))
+	claimed, err = model.ClaimNextForumOutboxRow(db, retakeAt.Add(model.ForumMentionWindow))
 	if err != nil {
 		t.Fatalf("claim comment row: %v", err)
 	}
