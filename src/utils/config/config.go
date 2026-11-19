@@ -49,7 +49,7 @@ type MentionConfig struct {
 type NotificationConfig struct {
 	NotifyOnAssign               bool `toml:"notifyOnAssign"` // true なら TODO（新規アサイン）ステータスの変化も通知する
 	DeliveryPayloadRetentionDays int  `toml:"deliveryPayloadRetentionDays"`
-	// CommentNotifyAssignee は false のとき、コメント通知の宛先から担当者を外す（既定 true）。
+	// CommentNotifyAssignee は true のとき、コメント通知の宛先に現在の担当者も加える（既定 false）。
 	CommentNotifyAssignee bool `toml:"commentNotifyAssignee"`
 }
 
@@ -154,7 +154,7 @@ func ReadFromPath(path string) (Config, error) {
 
 	config := Config{Notification: NotificationConfig{
 		DeliveryPayloadRetentionDays: defaultDeliveryPayloadRetentionDays,
-		CommentNotifyAssignee:        true,
+		CommentNotifyAssignee:        false,
 	}}
 	if err := toml.NewDecoder(strings.NewReader(expanded)).Decode(&config); err != nil {
 		return Config{}, fmt.Errorf("parse conf.toml: %w", err)

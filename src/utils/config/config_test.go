@@ -135,3 +135,32 @@ func TestPollIntervalDefaultsToTenSecondsWhenUnset(t *testing.T) {
 		t.Fatalf("unset poll interval = %d, want 10 seconds", got)
 	}
 }
+
+// CommentNotifyAssignee は既定で無効: 現在の担当者はコメント通知の宛先に
+// 加わらず、コメント内でメンションされた人だけに届く。設定で true にした
+// 場合のみ担当者も宛先に加わる。
+func TestCommentNotifyAssigneeDefaultsToOff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.toml")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := ReadFromPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Notification.CommentNotifyAssignee {
+		t.Fatal("CommentNotifyAssignee = true, want the default false")
+	}
+
+	if err := os.WriteFile(path, []byte("[notification]\ncommentNotifyAssignee = true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = ReadFromPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Notification.CommentNotifyAssignee {
+		t.Fatal("CommentNotifyAssignee = false, want true when configured explicitly")
+	}
+}
