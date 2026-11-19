@@ -184,9 +184,13 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 			return result, err
 		}
 	}
+	// A comment attached to a trigger transition (WFA/retake/done) belongs to
+	// the status signal — the retake quote carries the text — so its own
+	// comment notification would only repeat it, empty text included.
+	commentWithTriggerChange := statusChanged && IsTriggerRole(input.StatusRole)
 	// The stored marker is the Kitsu last_comment_date, so a first poll after
 	// the baseline does not announce a comment the row already recorded.
-	if hasPost && !input.Comment.Unavailable && input.Comment.ID != "" && input.CommentDate != existing.LastCommentAt {
+	if hasPost && !commentWithTriggerChange && !input.Comment.Unavailable && input.Comment.ID != "" && input.CommentDate != existing.LastCommentAt {
 		if err := p.queueCommentSignal(input, existing); err != nil {
 			return result, err
 		}
@@ -488,7 +492,7 @@ func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing mode
 		Intent:         intent,
 		WindowOpenedAt: p.Now,
 		BaseStatusID:   existing.StatusID,
-		Quote:          retakeQuote(intent, input.Comment, p.Now),
+		Quote:          p.signalQuote(input.TaskID, intent, input.Comment),
 		Submitter:      submitterMarker(intent, input.Comment, p.Now),
 	})
 	if err != nil {
@@ -600,6 +604,40 @@ func retakeQuote(intent string, comment CommentInput, now time.Time) string {
 		return ""
 	}
 	return commentQuote(comment.Text)
+}
+
+// signalQuote decides the quote of a status signal. A RETAKE quotes the newest
+// comment, but a comment that already went out as a comment notification in
+// the same aggregation window must not be quoted a second time.
+func (p Planner) signalQuote(taskID, intent string, comment CommentInput) string {
+	quote := retakeQuote(intent, comment, p.Now)
+	if quote == "" {
+		return ""
+	}
+	announced, err := p.commentAnnouncedInWindow(taskID, comment.ID)
+	if err != nil {
+		slog.Warn("forum: could not check announced comments; quoting anyway", "error_class", "forum_quote_lookup_failed", "task_id", taskID, "err", err)
+		return quote
+	}
+	if announced {
+		return ""
+	}
+	return quote
+}
+
+// commentAnnouncedInWindow reports whether this comment's own notification was
+// enqueued or shown within the coalescing window. A failed or cancelled row
+// never showed the text and does not suppress the quote.
+func (p Planner) commentAnnouncedInWindow(taskID, commentID string) (bool, error) {
+	var count int64
+	err := p.DB.Model(&model.ForumOutbox{}).
+		Where("task_id = ? AND dedupe_key = ? AND state IN ? AND created_at >= ?",
+			taskID,
+			model.ForumCommentCoalesceKey(commentID, taskID),
+			[]string{model.ForumOutboxPending, model.ForumOutboxSending, model.ForumOutboxDone},
+			p.Now.Add(-model.ForumMentionWindow),
+		).Count(&count).Error
+	return count > 0, err
 }
 
 // commentCreatedAt parses a Kitsu comment timestamp. Kitsu sometimes omits the
