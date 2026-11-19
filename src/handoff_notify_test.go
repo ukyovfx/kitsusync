@@ -151,6 +151,13 @@ func TestHandoffFallbackWaitsForTheMorningDigest(t *testing.T) {
 	db := handoffNotifyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	stubHandoffIdentity(t, map[string]string{"person-admin": "111111111111111111"})
+	// The fallback destination narrows to the Guild's administrators (2026-11-19
+	// owner decision), so the resolver seam feeds the waiting admin directly.
+	old := resolveHandoffAdminKitsuPersonIDs
+	resolveHandoffAdminKitsuPersonIDs = func(db *gorm.DB, productionID string) []string {
+		return []string{"person-admin"}
+	}
+	t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
 	if err := db.Create(&model.UserMap{KitsuID: "person-admin", DiscordGuildID: "guild-1", DiscordID: "111111111111111111"}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +203,13 @@ func TestHandoffTimingSettingBiasesTheRule(t *testing.T) {
 			db := handoffNotifyDB(t, tc.timing)
 			newDMFixture(t)
 			stubHandoffIdentity(t, map[string]string{"person-comp": "222222222222222222", "person-admin": "111111111111111111"})
+			// Subtests that exercise the fallback only depend on the resolver
+			// seam; assigned personIDs never reach it.
+			old := resolveHandoffAdminKitsuPersonIDs
+			resolveHandoffAdminKitsuPersonIDs = func(db *gorm.DB, productionID string) []string {
+				return []string{"person-admin"}
+			}
+			t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
 			if err := db.Create(&model.UserMap{KitsuID: "person-admin", DiscordGuildID: "guild-1", DiscordID: "111111111111111111"}).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -205,6 +219,74 @@ func TestHandoffTimingSettingBiasesTheRule(t *testing.T) {
 				t.Fatalf("sent=%d err=%v, want %d", sent, err, tc.sent)
 			}
 		})
+	}
+}
+
+// The fallback destination narrows to the Guild's members holding a role with
+// the Discord Administrator permission (2026-11-19 owner decision): the
+// non-admin linked user falls off, and every linked administrator resolves.
+func TestHandoffAdminFallbackReachesOnlyGuildAdministrators(t *testing.T) {
+	db := handoffNotifyDB(t, model.HandoffTimingImmediate)
+	fixture := newDMFixture(t)
+	stubHandoffIdentity(t, map[string]string{"person-admin": "111111111111111111"})
+	// person-comp stays a linked UserMap member but holds no Administrator role.
+	for _, user := range []model.UserMap{
+		{KitsuID: "person-admin", DiscordGuildID: "guild-1", DiscordID: "111111111111111111"},
+		{KitsuID: "person-comp", DiscordGuildID: "guild-1", DiscordID: "222222222222222222"},
+	} {
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The OWNER decision of 2026-11-19 narrows the fallback to the Guild's
+	// administrators, so the resolver seam feeds the waiting admin directly.
+	old := resolveHandoffAdminKitsuPersonIDs
+	resolveHandoffAdminKitsuPersonIDs = func(db *gorm.DB, productionID string) []string {
+		return []string{"person-admin"}
+	}
+	t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
+
+	handoffEvent(t, db, "comment-1", model.HandoffFallbackAdmin)
+	sent, err := sendImmediateHandoffs(digestTestConfig(), db)
+	if err != nil || sent != 1 {
+		t.Fatalf("sent=%d err=%v", sent, err)
+	}
+	if fixture.sendsFor("111111111111111111") != 1 {
+		t.Fatalf("administrator sends = %d", fixture.sendsFor("111111111111111111"))
+	}
+	if fixture.sendsFor("222222222222222222") != 0 {
+		t.Fatalf("non-admin linked user fell through: sends = %d", fixture.sendsFor("222222222222222222"))
+	}
+	if state := handoffState(t, db, "comment-1"); state != model.HandoffEventNotified {
+		t.Fatalf("state = %q", state)
+	}
+}
+
+// Zero administrators resolve to no destination: the poll ends normally
+// without an error instead of falling back to every linked user.
+func TestHandoffNoAdministratorResolvesToNoDestination(t *testing.T) {
+	db := handoffNotifyDB(t, model.HandoffTimingImmediate)
+	fixture := newDMFixture(t)
+	stubHandoffIdentity(t, map[string]string{"person-comp": "222222222222222222"})
+	if err := db.Create(&model.UserMap{KitsuID: "person-comp", DiscordGuildID: "guild-1", DiscordID: "222222222222222222"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	old := resolveHandoffAdminKitsuPersonIDs
+	resolveHandoffAdminKitsuPersonIDs = func(db *gorm.DB, productionID string) []string {
+		return nil
+	}
+	t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
+
+	handoffEvent(t, db, "comment-1", model.HandoffFallbackAdmin)
+	sent, err := sendImmediateHandoffs(digestTestConfig(), db)
+	if err != nil || sent != 0 {
+		t.Fatalf("zero administrators must end normally: sent=%d err=%v", sent, err)
+	}
+	if sent, err := sendForumMorningDigests(digestTestConfig(), db, time.Date(2026, 11, 19, 9, 0, 0, 0, jst), "2026-11-19"); err != nil || sent != 0 {
+		t.Fatalf("digest sent=%d err=%v", sent, err)
+	}
+	if fixture.sendsFor("222222222222222222") != 0 {
+		t.Fatalf("non-admin notified: sends = %d", fixture.sendsFor("222222222222222222"))
 	}
 }
 
