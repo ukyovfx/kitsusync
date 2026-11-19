@@ -34,6 +34,12 @@ func newSetupStateTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&model.Setting{}); err != nil {
 		t.Fatalf("failed to migrate settings schema: %v", err)
 	}
+	// Close before t.TempDir cleanup; an open sqlite handle makes RemoveAll fail on Windows and would fail the test.
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	return db
 }
 
@@ -161,6 +167,16 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	}
 	if got := strings.TrimSpace(model.GetSetting(db, "discord.guildID")); got != "999999999999999999" {
 		t.Fatalf("expected persisted guild ID, got %q", got)
+	}
+	// Reader side: connection/diagnostics must read the same guild ID saved under discord.guildID.
+	installDiscordAPIStub(t, "999999999999999999")
+	diag := httptest.NewRecorder()
+	HealthHandler(db)(diag, httptest.NewRequest(http.MethodGet, "/bot/admin/health?legacy=1&lang=en", nil))
+	if !strings.Contains(diag.Body.String(), "Discord guild accessible") {
+		t.Fatal("diagnostics did not read the saved guild ID; guild check missing from the diagnostics panel")
+	}
+	if !strings.Contains(diag.Body.String(), "Bot is a member of the guild.") {
+		t.Fatal("diagnostics guild check did not pass with the saved guild ID")
 	}
 }
 
