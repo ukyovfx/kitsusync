@@ -120,6 +120,24 @@ type ForumOutbox struct {
 
 func (ForumOutbox) TableName() string { return "forum_outbox" }
 
+// ForumOutboxRetentionDays keeps finished outbox ledger rows for this long
+// before the hourly purge removes them (mirrors DeliveryPayloadRetentionDays).
+const ForumOutboxRetentionDays = 30
+
+// PurgeOldForumOutbox deletes terminal-state outbox rows whose finished_at is
+// older than the retention window. Pending/sending rows are never touched.
+func PurgeOldForumOutbox(db *gorm.DB, retentionDays int) int {
+	if db == nil || retentionDays <= 0 {
+		return 0
+	}
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+	result := db.Where("state IN ? AND finished_at < ?", []string{ForumOutboxDone, ForumOutboxFailed, ForumOutboxCancelled}, cutoff).Delete(&ForumOutbox{})
+	if result.Error != nil {
+		return 0
+	}
+	return int(result.RowsAffected)
+}
+
 // ForumCreateThreadPayload is the payload of a create_thread row.
 type ForumCreateThreadPayload struct {
 	ForumID        string `json:"forum_id"`
