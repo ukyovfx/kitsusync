@@ -454,6 +454,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 			return recipients.ForTask(taskID, payload)
 		},
 		AssigneeNames: forumAssigneeNames,
+		RecordSend:    setup.Stats.RecordSend,
 	}
 	if _, err := executor.Drain(forumOutboxDrainLimit); err != nil {
 		// A rate-limited drain is a pause, not a failure: the rows stay due and
