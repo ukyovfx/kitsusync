@@ -455,6 +455,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		Recipients: func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
 			return recipients.ForTask(taskID, payload)
 		},
+		AssigneeNames: forumAssigneeNames,
 	}
 	if _, err := executor.Drain(forumOutboxDrainLimit); err != nil {
 		// A rate-limited drain is a pause, not a failure: the rows stay due and
@@ -614,6 +615,21 @@ func forumAssigneeIdentity(kitsuPersonID string) (string, string) {
 		return "", ""
 	}
 	return identity.name, identity.email
+}
+
+// forumAssigneeNames resolves the footer 担当 names of a task's assignees from
+// the last poll's Kitsu identities. Unresolved IDs are skipped: an ID appearing
+// in the footer as raw text helps nobody.
+func forumAssigneeNames(projectID string, personIDs []string) []string {
+	names := make([]string, 0, len(personIDs))
+	for _, id := range personIDs {
+		name, _ := forumAssigneeIdentity(id)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // projectTasksResult is one project's task read.

@@ -20,15 +20,21 @@ import (
 
 // TaskInput is one task as observed by the poller.
 type TaskInput struct {
-	TaskID       string
-	ProjectID    string
-	TaskTypeID   string
-	EntityID     string
-	EntityKind   string
-	EntityName   string
-	ParentName   string
-	EntityType   string
-	Title        string
+	TaskID     string
+	ProjectID  string
+	TaskTypeID string
+	EntityID   string
+	EntityKind string
+	EntityName string
+	ParentName string
+	EntityType string
+	Title      string
+	// TaskTypeName is the display name of the task type ("Layout"…), the
+	// embed author line.
+	TaskTypeName string
+	// StatusName is the display name of the task's current Kitsu status
+	// (lower-cased by the planner for the embed footer).
+	StatusName   string
 	StatusID     string
 	StatusRole   string
 	Assignees    []string
@@ -282,14 +288,32 @@ func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, ro
 
 // queueCommentSignal announces a new comment on a task that already has a post.
 // A task without a post is ignored, which keeps WIP chatter out of the forum.
+// An AYON publish comment becomes a publish trace: it shows the 📦 line and
+// mentions nobody.
 func (p Planner) queueCommentSignal(input TaskInput, existing model.ForumTask) error {
-	quote := commentQuote(input.Comment.Text)
-	payload, err := json.Marshal(model.ForumPostMessagePayload{
+	payload := model.ForumPostMessagePayload{
 		Intent:         model.ForumIntentComment,
 		WindowOpenedAt: p.Now,
-		Quote:          quote,
+		Quote:          commentQuote(input.Comment.Text),
 		Mentions:       model.NormalizeForumAssigneeIDs(input.Comment.Mentions),
-	})
+	}
+	if table, ok := ParseDeliverTable(input.Comment.Text); ok {
+		payload.Intent = model.ForumIntentPublish
+		payload.PublishLine = forumPublishLine(table)
+		payload.Quote = ""
+		payload.Mentions = nil
+	}
+	payload.StatusName = strings.ToLower(strings.TrimSpace(input.StatusName))
+	return p.enqueueCommentPayload(input, payload)
+}
+
+// forumPublishLine renders the publish trace line of a delivery comment.
+func forumPublishLine(table DeliverTable) string {
+	return "📦 " + table.Name + "（" + table.Family + "）" + table.Version + " が publish されました"
+}
+
+func (p Planner) enqueueCommentPayload(input TaskInput, payload model.ForumPostMessagePayload) error {
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -298,7 +322,7 @@ func (p Planner) queueCommentSignal(input TaskInput, existing model.ForumTask) e
 		TaskID:    input.TaskID,
 		Kind:      model.ForumOutboxPostMessage,
 		DedupeKey: model.ForumCommentCoalesceKey(input.Comment.ID, input.TaskID),
-		Payload:   string(payload),
+		Payload:   string(encoded),
 		State:     model.ForumOutboxPending,
 		NotBefore: now,
 		CreatedAt: now,
@@ -406,11 +430,13 @@ func (p Planner) flapEpisode(taskID, fromStatusID, toStatusID string) (time.Time
 }
 
 // commentQuote takes the first line of a comment, stripped of quoting markers
-// and truncated for a one-line quote.
+// and truncated for a one-line quote. Markdown table rows are skipped: AYON
+// publish comments open with an empty "| | |" row, which must not become the
+// quote. A table-only comment quotes nothing.
 func commentQuote(text string) string {
 	for _, line := range strings.Split(strings.ReplaceAll(text, "\r", ""), "\n") {
 		trimmed := strings.TrimLeft(strings.TrimSpace(line), "># ")
-		if trimmed == "" {
+		if trimmed == "" || strings.HasPrefix(trimmed, "|") {
 			continue
 		}
 		runes := []rune(trimmed)
@@ -483,17 +509,39 @@ func (p Planner) queueStatusSignal(input TaskInput, existing model.ForumTask, re
 	return p.queueStatusSignalIn(p.DB, input, existing, result)
 }
 
+// forumCardFields carries the plan-time heading inputs of a signal embed.
+type forumCardFields struct {
+	EntityType string
+	ParentName string
+	EntityName string
+	TaskType   string
+}
+
+func forumTaskCardFields(input TaskInput) forumCardFields {
+	return forumCardFields{
+		EntityType: input.EntityType,
+		ParentName: input.ParentName,
+		EntityName: input.EntityName,
+		TaskType:   input.TaskTypeName,
+	}
+}
+
 func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing model.ForumTask, result *PlanResult) error {
 	intent := intentForRole(input.StatusRole)
 	if intent == "" {
 		return nil
 	}
+	fields := forumTaskCardFields(input)
 	payload, err := json.Marshal(model.ForumPostMessagePayload{
 		Intent:         intent,
 		WindowOpenedAt: p.Now,
 		BaseStatusID:   existing.StatusID,
 		Quote:          p.signalQuote(input.TaskID, intent, input.Comment),
 		Submitter:      submitterMarker(intent, input.Comment, p.Now),
+		EntityType:     fields.EntityType,
+		ParentName:     fields.ParentName,
+		EntityName:     fields.EntityName,
+		TaskType:       fields.TaskType,
 	})
 	if err != nil {
 		return err
@@ -518,10 +566,16 @@ func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing mode
 }
 
 func (p Planner) queueAssigneeSignal(input TaskInput, existing model.ForumTask, assignees []string) error {
+	fields := forumTaskCardFields(input)
 	payload, err := json.Marshal(model.ForumPostMessagePayload{
 		Intent:         model.ForumIntentAssign,
 		WindowOpenedAt: p.Now,
 		BaseAssignees:  model.ForumAssigneeIDs(existing),
+		StatusName:     strings.ToLower(strings.TrimSpace(input.StatusName)),
+		EntityType:     fields.EntityType,
+		ParentName:     fields.ParentName,
+		EntityName:     fields.EntityName,
+		TaskType:       fields.TaskType,
 	})
 	if err != nil {
 		return err

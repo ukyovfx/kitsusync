@@ -27,8 +27,8 @@ type PollResult struct {
 
 // Poller holds the poll dependencies.
 type Poller struct {
-	DB   *gorm.DB
-	Now  func() time.Time
+	DB  *gorm.DB
+	Now func() time.Time
 	// RenderCard renders the first message for a task.
 	RenderCard func(kitsu.MessagePayload) (json.RawMessage, error)
 }
@@ -158,6 +158,8 @@ func taskInputFromPayload(payload kitsu.MessagePayload) TaskInput {
 		ParentName:   payload.Parent.Entity.Name,
 		EntityType:   payload.EntityType.EntityType.Name,
 		Title:        title,
+		TaskTypeName: payload.TaskType.TaskType.Name,
+		StatusName:   payload.TaskStatus.TaskStatus.Name,
 		StatusID:     payload.TaskStatus.TaskStatus.ID,
 		Assignees:    assignees,
 		CommentDate:  payload.Task.Task.LastCommentDate,

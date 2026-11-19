@@ -62,22 +62,22 @@ func (ForumBaseline) TableName() string { return "forum_baselines" }
 
 // ForumTask is the per-task ledger row.
 type ForumTask struct {
-	TaskID           string `gorm:"primaryKey;size:64"`
-	ProjectID        string `gorm:"index:idx_forum_task_project_type,priority:1;size:64;not null"`
-	TaskTypeID       string `gorm:"index:idx_forum_task_project_type,priority:2;size:64;not null"`
-	EntityID         string `gorm:"size:64"`
-	EntityKind       string `gorm:"size:16"`
-	Title            string `gorm:"size:255"`
-	StatusID         string `gorm:"size:64"`
-	StatusSince      time.Time
-	AssigneeIDs      string `gorm:"type:text"`
-	LastCommentAt    string `gorm:"size:64"`
-	KitsuUpdatedAt   string `gorm:"size:64"`
-	ForumID          string `gorm:"size:64"`
+	TaskID         string `gorm:"primaryKey;size:64"`
+	ProjectID      string `gorm:"index:idx_forum_task_project_type,priority:1;size:64;not null"`
+	TaskTypeID     string `gorm:"index:idx_forum_task_project_type,priority:2;size:64;not null"`
+	EntityID       string `gorm:"size:64"`
+	EntityKind     string `gorm:"size:16"`
+	Title          string `gorm:"size:255"`
+	StatusID       string `gorm:"size:64"`
+	StatusSince    time.Time
+	AssigneeIDs    string `gorm:"type:text"`
+	LastCommentAt  string `gorm:"size:64"`
+	KitsuUpdatedAt string `gorm:"size:64"`
+	ForumID        string `gorm:"size:64"`
 	// NULL (not "") while no thread exists: the unique index must ignore
 	// every not-yet-posted task.
 	ThreadID         *string `gorm:"size:64;uniqueIndex:idx_forum_task_thread"`
-	ThreadGeneration int    `gorm:"not null;default:0"`
+	ThreadGeneration int     `gorm:"not null;default:0"`
 	FirstSeenAt      time.Time
 	LastSeenAt       time.Time
 }
@@ -97,10 +97,10 @@ func (ForumTransition) TableName() string { return "forum_task_transitions" }
 
 // ForumOutbox is the durable send queue.
 type ForumOutbox struct {
-	ID        uint   `gorm:"primaryKey;autoIncrement;index:idx_forum_outbox_claim,priority:3;index:idx_forum_outbox_task_claim,priority:3"`
-	TaskID    string `gorm:"index:idx_forum_outbox_task_claim,priority:1;size:64"`
-	Kind      string `gorm:"size:32;not null"`
-	DedupeKey string `gorm:"size:191;uniqueIndex;not null"`
+	ID          uint   `gorm:"primaryKey;autoIncrement;index:idx_forum_outbox_claim,priority:3;index:idx_forum_outbox_task_claim,priority:3"`
+	TaskID      string `gorm:"index:idx_forum_outbox_task_claim,priority:1;size:64"`
+	Kind        string `gorm:"size:32;not null"`
+	DedupeKey   string `gorm:"size:191;uniqueIndex;not null"`
 	CoalesceKey string `gorm:"size:191"`
 	Payload     string `gorm:"type:text"`
 	State       string `gorm:"size:16;not null;index:idx_forum_outbox_claim,priority:1"`
@@ -145,6 +145,19 @@ type ForumPostMessagePayload struct {
 	// Submitter is the display name read from the submitter marker in the
 	// task's newest comment. Display only: it is never used as a mention.
 	Submitter string `json:"submitter,omitempty"`
+	// EntityType, ParentName, EntityName and TaskType are plan-time display
+	// fields for the card-shaped signal embed. Rows queued before this change
+	// leave them empty and the executor falls back to the task's Title.
+	EntityType string `json:"entity_type,omitempty"`
+	ParentName string `json:"parent_name,omitempty"`
+	EntityName string `json:"entity_name,omitempty"`
+	TaskType   string `json:"task_type,omitempty"`
+	// PublishLine is the pre-rendered 📦 trace line of an AYON publish comment.
+	PublishLine string `json:"publish_line,omitempty"`
+	// StatusName is the plan-time display name of the Kitsu status, lower-case,
+	// for the footer ステータス line. Status signals re-derive it at send time
+	// from the ledger; comment and publish rows keep the plan-time value.
+	StatusName string `json:"status_name,omitempty"`
 }
 
 // ForumPostIntent values.
@@ -154,6 +167,7 @@ const (
 	ForumIntentStatusDone   = "done"
 	ForumIntentAssign       = "assign"
 	ForumIntentComment      = "comment"
+	ForumIntentPublish      = "publish"
 )
 
 // Stage E tuning values, fixed by the design.
@@ -170,9 +184,9 @@ const (
 
 // ForumFlapState remembers the last flap episode that was warned about.
 type ForumFlapState struct {
-	TaskID     string `gorm:"primaryKey;size:64"`
-	EpisodeAt  time.Time
-	WarnedAt   time.Time
+	TaskID    string `gorm:"primaryKey;size:64"`
+	EpisodeAt time.Time
+	WarnedAt  time.Time
 }
 
 func (ForumFlapState) TableName() string { return "forum_flap_states" }

@@ -57,6 +57,9 @@ func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload
 			users = append(users, assigneeUsers...)
 		}
 		return uniqueIDs(users), nil, nil
+	case model.ForumIntentPublish:
+		// The publish trace informs the thread; it pings nobody (spec).
+		return nil, nil, nil
 	default:
 		return nil, nil, nil
 	}

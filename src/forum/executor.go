@@ -28,7 +28,10 @@ type Executor struct {
 	TaskURL func(taskID string) string
 	// Recipients resolves the mention targets for a signal.
 	Recipients func(taskID string, payload model.ForumPostMessagePayload) (userIDs, roleIDs []string, err error)
-	Now        func() time.Time
+	// AssigneeNames maps the task's Kitsu assignee IDs to display names for
+	// the embed footer.
+	AssigneeNames func(projectID string, personIDs []string) []string
+	Now           func() time.Time
 	// Sleep is injectable so tests do not wait for real backoff.
 	Sleep func(time.Duration)
 	// recipientCache reuses reviewer resolution within one drain pass, keyed
@@ -265,7 +268,9 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 		payload.Intent = intentForRole(role)
 	}
 	var userIDs, roleIDs []string
-	if e.Recipients != nil {
+	// The publish trace pings nobody by design: it posts even though the
+	// recipient set is empty, unlike the other intents (D-06).
+	if payload.Intent != model.ForumIntentPublish && e.Recipients != nil {
 		users, roles, err := e.resolveRecipients(row, task, payload)
 		switch {
 		case err != nil:
@@ -298,7 +303,34 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if e.TaskURL != nil {
 		url = e.TaskURL(row.TaskID)
 	}
-	signal := discord.RenderForumSignal(payload.Intent, url, payload.Quote, payload.Submitter, userIDs, roleIDs)
+	// The footer's ステータス value is the send-time status for status
+	// signals (the intent was re-derived above); comment and publish rows
+	// keep the plan-time name.
+	statusValue := payload.StatusName
+	switch payload.Intent {
+	case model.ForumIntentStatusWFA, model.ForumIntentStatusRetake, model.ForumIntentStatusDone:
+		statusValue = payload.Intent
+	}
+	var assignees []string
+	if e.AssigneeNames != nil {
+		assignees = e.AssigneeNames(task.ProjectID, model.ForumAssigneeIDs(task))
+	}
+	signal := discord.RenderForumSignalCard(discord.ForumCardInput{
+		Intent:      payload.Intent,
+		TaskType:    payload.TaskType,
+		EntityType:  payload.EntityType,
+		ParentName:  payload.ParentName,
+		EntityName:  payload.EntityName,
+		LegacyTitle: task.Title,
+		Quote:       payload.Quote,
+		Submitter:   payload.Submitter,
+		PublishLine: payload.PublishLine,
+		TaskURL:     url,
+		StatusName:  statusValue,
+		Assignees:   assignees,
+		UserIDs:     userIDs,
+		RoleIDs:     roleIDs,
+	})
 	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
 		return err
@@ -341,8 +373,8 @@ func (e Executor) executeWarnMessage(row model.ForumOutbox, token string) error 
 		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
 	}
 	var payload struct {
-		Transitions  int `json:"transitions"`
-		SpanSeconds  int `json:"span_seconds"`
+		Transitions int `json:"transitions"`
+		SpanSeconds int `json:"span_seconds"`
 	}
 	if err := json.Unmarshal([]byte(row.Payload), &payload); err != nil {
 		return model.FailForumOutboxRow(e.DB, row.ID, "invalid_payload", err.Error())

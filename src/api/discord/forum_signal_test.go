@@ -6,53 +6,116 @@ import (
 	"time"
 )
 
-func TestRenderForumSignalCommentCarriesQuote(t *testing.T) {
-	const url = "https://kitsu.example/productions/1/shots/tasks/2"
-	signal := RenderForumSignal("comment", url, "ここを直してください", "", []string{"111111111111111111"}, nil)
-	for _, want := range []string{"<@111111111111111111>", "コメントがあります。", "> ここを直してください", url} {
-		if !strings.Contains(signal.Content, want) {
-			t.Errorf("content %q missing %q", signal.Content, want)
+func TestRenderForumSignalCommentCard(t *testing.T) {
+	signal := RenderForumSignalCard(ForumCardInput{
+		Intent:     "comment",
+		TaskType:   "Layout",
+		EntityType: "Shot",
+		ParentName: "sq01",
+		EntityName: "sh002",
+		Quote:      "ここを直してください",
+		TaskURL:    "https://kitsu.example/productions/1/shots/tasks/2",
+		StatusName: "wip",
+		Assignees:  []string{"山田 太郎"},
+		UserIDs:    []string{"111111111111111111"},
+	})
+	if signal.Content != "<@111111111111111111>" {
+		t.Errorf("content must be the mention line only: %q", signal.Content)
+	}
+	if len(signal.Embeds) != 1 {
+		t.Fatalf("embeds = %d, want 1", len(signal.Embeds))
+	}
+	embed := signal.Embeds[0]
+	if embed.Title != "Shot / sq01 - sh002" {
+		t.Errorf("title = %q", embed.Title)
+	}
+	if embed.Author.Name != "Layout" {
+		t.Errorf("author = %q", embed.Author.Name)
+	}
+	for _, want := range []string{"💬 ここを直してください", "[🦊 Kitsu](https://kitsu.example/productions/1/shots/tasks/2)", "ステータス：wip", "担当：山田 太郎"} {
+		if !strings.Contains(embed.Description, want) {
+			t.Errorf("description %q missing %q", embed.Description, want)
 		}
 	}
-	if strings.Contains(signal.Content, "@everyone") || strings.Contains(signal.Content, "@here") {
-		t.Errorf("content must never mention everyone or here: %q", signal.Content)
+	if embed.Color != neutralEmbedColor {
+		t.Errorf("comment card must be neutral, got %#x", embed.Color)
+	}
+	if len(signal.AllowedUserIDs) != 1 || signal.AllowedUserIDs[0] != "111111111111111111" {
+		t.Errorf("allowed users = %v", signal.AllowedUserIDs)
 	}
 }
 
-func TestRenderForumSignalCommentWithoutQuote(t *testing.T) {
-	signal := RenderForumSignal("comment", "https://kitsu.example/t/1", "", "", nil, nil)
-	if strings.Contains(signal.Content, ">") {
-		t.Errorf("content must not quote an empty comment: %q", signal.Content)
+func TestRenderForumSignalRetakeCard(t *testing.T) {
+	signal := RenderForumSignalCard(ForumCardInput{
+		Intent:     "retake",
+		TaskType:   "Animation",
+		EntityType: "Shot",
+		EntityName: "sh010",
+		Quote:      ".Environment_Hall_Door",
+		TaskURL:    "https://kitsu.example/t/1",
+		StatusName: "retake",
+		Assignees:  []string{"山田", "松尾"},
+		UserIDs:    []string{"222222222222222222"},
+	})
+	embed := signal.Embeds[0]
+	if !strings.Contains(embed.Description, "🔄 RETAKE 修正をお願いします") {
+		t.Errorf("description %q missing the retake status line", embed.Description)
 	}
-	if !strings.HasPrefix(signal.Content, "コメントがあります。") {
-		t.Errorf("content = %q", signal.Content)
+	if !strings.Contains(embed.Description, "> .Environment_Hall_Door") {
+		t.Errorf("description %q missing the retake quote", embed.Description)
+	}
+	if embed.Color != 0xC45656 {
+		t.Errorf("retake color = %#x", embed.Color)
 	}
 }
 
-func TestRenderForumSignalIgnoresQuoteForOtherIntents(t *testing.T) {
-	signal := RenderForumSignal("done", "https://kitsu.example/t/1", "余計な引用", "", nil, nil)
-	if strings.Contains(signal.Content, "余計な引用") {
-		t.Errorf("only retake and comment quote: %q", signal.Content)
+func TestRenderForumSignalWFACardKeepsSubmitter(t *testing.T) {
+	signal := RenderForumSignalCard(ForumCardInput{
+		Intent:    "wfa",
+		TaskType:  "Modeling",
+		Submitter: "山田 太郎",
+		TaskURL:   "https://kitsu.example/t/1",
+		UserIDs:   []string{"222222222222222222"},
+	})
+	embed := signal.Embeds[0]
+	if !strings.Contains(embed.Description, "提出：山田 太郎") {
+		t.Errorf("description %q missing the submitter line", embed.Description)
 	}
-}
-
-func TestRenderForumSignalShowsSubmitterWithoutMentioning(t *testing.T) {
-	signal := RenderForumSignal("wfa", "https://kitsu.example/t/1", "", "山田 太郎", []string{"222222222222222222"}, nil)
-	if !strings.Contains(signal.Content, "提出：山田 太郎") {
-		t.Errorf("content %q missing the submitter line", signal.Content)
-	}
-	if strings.Count(signal.Content, "<@") != 1 {
+	if strings.Contains(signal.Content, "山田") {
 		t.Errorf("submitter must not become a mention: %q", signal.Content)
 	}
-	if len(signal.AllowedUserIDs) != 1 || signal.AllowedUserIDs[0] != "222222222222222222" {
-		t.Errorf("allowed users = %v, want the reviewer only", signal.AllowedUserIDs)
+	if embed.Color != 0xD4A72C {
+		t.Errorf("wfa color = %#x", embed.Color)
 	}
 }
 
-func TestRenderForumSignalWithoutSubmitterKeepsShape(t *testing.T) {
-	signal := RenderForumSignal("wfa", "https://kitsu.example/t/1", "", "", []string{"222222222222222222"}, nil)
-	if strings.Contains(signal.Content, "提出：") {
-		t.Errorf("content must not carry an empty submitter line: %q", signal.Content)
+func TestRenderForumSignalPublishCardHasNoMention(t *testing.T) {
+	signal := RenderForumSignalCard(ForumCardInput{
+		Intent:      "publish",
+		TaskType:    "Lighting",
+		PublishLine: "📦 Env_A（mayaScene）v012 が publish されました",
+		TaskURL:     "https://kitsu.example/t/1",
+		StatusName:  "wip",
+	})
+	if strings.Contains(signal.Content, "<@") {
+		t.Errorf("publish signals must not mention: %q", signal.Content)
+	}
+	embed := signal.Embeds[0]
+	if !strings.Contains(embed.Description, "📦 Env_A（mayaScene）v012 が publish されました") {
+		t.Errorf("description %q missing the publish line", embed.Description)
+	}
+	if embed.Color != neutralEmbedColor {
+		t.Errorf("publish card must be neutral, got %#x", embed.Color)
+	}
+}
+
+func TestRenderForumSignalCardFallsBackToLegacyTitle(t *testing.T) {
+	signal := RenderForumSignalCard(ForumCardInput{
+		Intent:      "comment",
+		LegacyTitle: "Layout Shot / sq01 - sh002",
+	})
+	if signal.Embeds[0].Title != "Layout Shot / sq01 - sh002" {
+		t.Errorf("title = %q, want the legacy title", signal.Embeds[0].Title)
 	}
 }
 
@@ -68,21 +131,5 @@ func TestForumFlapWarningHasNoMentions(t *testing.T) {
 	}
 	if strings.Contains(signal.Content, "<@") {
 		t.Errorf("warning content must not contain mentions: %q", signal.Content)
-	}
-}
-
-func TestForumSpanText(t *testing.T) {
-	cases := []struct {
-		span time.Duration
-		want string
-	}{
-		{30 * time.Second, "1分以内"},
-		{12 * time.Minute, "12分"},
-		{2 * time.Hour, "2時間"},
-	}
-	for _, tc := range cases {
-		if got := forumSpanText(tc.span); got != tc.want {
-			t.Errorf("forumSpanText(%v) = %q, want %q", tc.span, got, tc.want)
-		}
 	}
 }
