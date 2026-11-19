@@ -38,14 +38,20 @@ func newHandoffDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// seedHandoffRoutes saves prod-1 settings: Matchmove delivers "matchmove" and
-// the Compositing task on the same shot is told.
+// seedHandoffRoutes saves prod-1 settings with the immediate timing.
 func seedHandoffRoutes(t *testing.T, db *gorm.DB, flow, noAssignee string) {
+	t.Helper()
+	seedHandoffTiming(t, db, flow, noAssignee, model.HandoffTimingImmediate)
+}
+
+// seedHandoffTiming saves prod-1 settings: Matchmove delivers "matchmove" and
+// the Compositing task on the same shot is told.
+func seedHandoffTiming(t *testing.T, db *gorm.DB, flow, noAssignee, timing string) {
 	t.Helper()
 	err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
 		Config: model.ProductionHandoffConfig{
 			ProductionID:   "prod-1",
-			NotifyTiming:   model.HandoffTimingImmediate,
+			NotifyTiming:   timing,
 			NoAssignee:     noAssignee,
 			FallbackUserID: "person-lead",
 		},
@@ -113,7 +119,7 @@ func TestHandoffDetectRecordsDelivery(t *testing.T) {
 	if got := model.SplitHandoffPersonIDs(event.NotifyPersonIDs); len(got) != 1 || got[0] != "person-comp" {
 		t.Fatalf("recipients = %v", got)
 	}
-	if event.State != model.HandoffEventPending || event.FallbackUsed != "" {
+	if event.State != model.HandoffEventPending || event.FallbackUsed != model.HandoffFallbackNone {
 		t.Fatalf("state = %q fallback = %q", event.State, event.FallbackUsed)
 	}
 }
@@ -213,6 +219,107 @@ func TestHandoffDetectNoAssigneeFallback(t *testing.T) {
 	}
 	if got := model.SplitHandoffPersonIDs(event.NotifyPersonIDs); len(got) != 1 || got[0] != "person-lead" {
 		t.Fatalf("chosen-user fallback = %v", got)
+	}
+}
+
+// The event Detect records for a named assignee is one the mixed rule sends
+// immediately. The sending side's own test builds the event by hand, which is
+// exactly how the empty FallbackUsed slipped past it.
+func TestHandoffDetectAssignedEventIsImmediateUnderMixed(t *testing.T) {
+	db := newHandoffDB(t)
+	seedHandoffTiming(t, db, model.HandoffFlowHand, model.HandoffFallbackAdmin, model.HandoffTimingMixed)
+	payloads := []kitsu.MessagePayload{
+		deliveryPayload("task-src", "tt-mm", "comment-1", deliverTable),
+		receiverPayload("tt-comp", "person-comp"),
+	}
+	if _, err := (HandoffDetector{DB: db}).Detect(payloads); err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	event, err := model.FindHandoffEvent(db, "comment-1")
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	// handoffImmediate is the sender's rule; this test only pins the values it
+	// reads (state, fallback flag, recipient list) as K2 wrote them.
+	ids := model.SplitHandoffPersonIDs(event.NotifyPersonIDs)
+	if len(ids) != 1 || event.State != model.HandoffEventPending || event.FallbackUsed != model.HandoffFallbackNone {
+		t.Fatalf("detected event = state %q fallback %q recipients %v, want a pending non-fallback handoff", event.State, event.FallbackUsed, ids)
+	}
+}
+
+// Nothing is told when a receiver has no assignee and the Production chose the
+// disabled handling, so no pending event waits for a reply that cannot come.
+func TestHandoffDetectNoAssigneeDisabledRecordsNoTarget(t *testing.T) {
+	db := newHandoffDB(t)
+	seedHandoffTiming(t, db, model.HandoffFlowHand, model.HandoffFallbackDisabled, model.HandoffTimingMixed)
+	payloads := []kitsu.MessagePayload{
+		deliveryPayload("task-src", "tt-mm", "comment-1", deliverTable),
+		receiverPayload("tt-comp"),
+	}
+	if _, err := (HandoffDetector{DB: db}).Detect(payloads); err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	event, err := model.FindHandoffEvent(db, "comment-1")
+	if err != nil {
+		t.Fatalf("event: %v", err)
+	}
+	if event.State != model.HandoffEventNoTarget {
+		t.Fatalf("state = %q, want no_target", event.State)
+	}
+	pending, err := model.PendingHandoffEvents(db)
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending = %d err = %v, want none", len(pending), err)
+	}
+}
+
+// Only a newer delivery of the same product replaces a pending event: another
+// product on the same receiving task still waits for its own reply.
+func TestHandoffDetectSupersedesOnlyTheSameProduct(t *testing.T) {
+	db := newHandoffDB(t)
+	seedHandoffTiming(t, db, model.HandoffFlowHand, model.HandoffFallbackAdmin, model.HandoffTimingMixed)
+	err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
+		Config: model.ProductionHandoffConfig{
+			ProductionID: "prod-1", NotifyTiming: model.HandoffTimingMixed, NoAssignee: model.HandoffFallbackAdmin,
+		},
+		ProductTypes: []model.ProductionHandoffProductType{{Name: "matchmove"}, {Name: "layout"}},
+		Routes: []model.ProductionHandoffRoute{
+			{TaskTypeID: "tt-mm", TaskTypeName: "Matchmove", ProductType: "matchmove", Flow: model.HandoffFlowHand, NotifyTaskTypeIDs: "tt-comp"},
+			{TaskTypeID: "tt-layout", TaskTypeName: "Layout", ProductType: "layout", Flow: model.HandoffFlowHand, NotifyTaskTypeIDs: "tt-comp"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	detector := HandoffDetector{DB: db}
+	layoutTable := "| version | 2 |\n| family | layout |\n| name | sq010_sh002_layout |\n"
+	if _, err := detector.Detect([]kitsu.MessagePayload{
+		deliveryPayload("task-src", "tt-layout", "comment-layout", layoutTable),
+		receiverPayload("tt-comp", "person-comp"),
+	}); err != nil {
+		t.Fatalf("detect layout: %v", err)
+	}
+	if _, err := detector.Detect([]kitsu.MessagePayload{
+		deliveryPayload("task-src", "tt-mm", "comment-mm1", deliverTable),
+		receiverPayload("tt-comp", "person-comp"),
+	}); err != nil {
+		t.Fatalf("detect matchmove 1: %v", err)
+	}
+	if _, err := detector.Detect([]kitsu.MessagePayload{
+		deliveryPayload("task-src", "tt-mm", "comment-mm2", "v4\n\n"+deliverTable),
+		receiverPayload("tt-comp", "person-comp"),
+	}); err != nil {
+		t.Fatalf("detect matchmove 2: %v", err)
+	}
+	pending, err := model.PendingHandoffEvents(db)
+	if err != nil {
+		t.Fatalf("pending: %v", err)
+	}
+	got := make([]string, 0, len(pending))
+	for _, event := range pending {
+		got = append(got, event.CommentID)
+	}
+	if len(got) != 2 || got[0] != "comment-layout" || got[1] != "comment-mm2" {
+		t.Fatalf("pending = %v, want the layout row and the newer matchmove", got)
 	}
 }
 

@@ -52,6 +52,23 @@ func TestHandoffButtonsAreInertUntilTheInteractionEndpointExists(t *testing.T) {
 	}
 }
 
+// handoffEventNamed records one pending event of its own product.
+func handoffEventNamed(t *testing.T, db *gorm.DB, commentID, productName string) {
+	t.Helper()
+	event := model.HandoffEvent{
+		CommentID: commentID, ProductionID: "p1", SourceTaskID: "task-lay-1", SourceTaskTypeID: "tt-lay",
+		SourceTaskTypeName: "Layout", SourceAuthorName: "Layout Artist", EntityID: "shot-1",
+		EntityKind: model.ForumEntityKindShot, EntityName: "sq010", ProductType: "matchmove",
+		ProductVersion: "v003", ProductName: productName, NotifyTaskID: "task-comp-1",
+		NotifyTaskTypeID: "tt-comp", NotifyTaskTypeName: "Compositing",
+		NotifyPersonIDs: model.JoinHandoffNotifyIDs([]string{"person-comp"}),
+		FallbackUsed:    model.HandoffFallbackNone,
+	}
+	if _, err := model.RecordHandoffEvent(db, event); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // handoffReplyDB seeds one Production whose receiving person maps to a Discord
 // user, with the forum settings the digest needs.
 func handoffReplyDB(t *testing.T, timing string) *gorm.DB {
@@ -138,6 +155,45 @@ func TestHandoffDigestListsUntilRepliedAndDropsAfter(t *testing.T) {
 	}
 	if fixture.sendsFor("222222222222222222") != 1 {
 		t.Fatalf("sends = %d", fixture.sendsFor("222222222222222222"))
+	}
+}
+
+// A capped card counts what it left out, and keeps one reply row per listed
+// handoff only.
+func TestHandoffDigestCountsTheHandoffsItLeftOut(t *testing.T) {
+	db := handoffReplyDB(t, model.HandoffTimingDigest)
+	fixture := newDMFixture(t)
+	// Different products: the same product on the same receiving task would
+	// supersede the older one instead of queueing.
+	for _, product := range []string{"camera", "model", "rig", "clone", "anim", "fx", "light"} {
+		handoffEventNamed(t, db, "comment-"+product, product)
+	}
+
+	morning := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)
+	if sent, err := sendForumMorningDigests(digestTestConfig(), db, morning, "2026-11-16"); err != nil || sent != 1 {
+		t.Fatalf("sent=%d err=%v", sent, err)
+	}
+	card, seen := fixture.body()
+	if !seen {
+		t.Fatal("no digest payload")
+	}
+	if !strings.Contains(card.Content, "素材の受け渡し: 5件") {
+		t.Fatalf("card = %q", card.Content)
+	}
+	if !strings.Contains(card.Content, "他に未返事が 2 件あります") {
+		t.Fatalf("missing leftover count in %q", card.Content)
+	}
+	if len(card.Components) != 5 {
+		t.Fatalf("rows = %d, want 5", len(card.Components))
+	}
+}
+
+// The immediate DM's first line names the shot or asset as well as the
+// product, so the receiver knows what arrived.
+func TestHandoffImmediateDMCardNamesTheEntity(t *testing.T) {
+	card := renderHandoffCard("", model.HandoffEvent{EntityName: "sq010_sh001", ProductName: "camera", ProductVersion: "v003"})
+	if !strings.Contains(card, "🔁 素材の受け渡し — sq010_sh001 / camera") {
+		t.Fatalf("card = %q", card)
 	}
 }
 

@@ -233,6 +233,14 @@ func handoffEventFor(source kitsu.MessagePayload, comment kitsu.Comment, table D
 		if conf.NoAssignee == model.HandoffFallbackUsers {
 			ids = model.SplitHandoffPersonIDs(conf.FallbackUserID)
 		}
+		if conf.NoAssignee == model.HandoffFallbackDisabled {
+			// Nobody is told, so nothing waits for a reply.
+			event.State = model.HandoffEventNoTarget
+		}
+	} else {
+		// The receiving task has an assignee, so no fallback was used and the
+		// mixed timing sends this handoff immediately.
+		event.FallbackUsed = model.HandoffFallbackNone
 	}
 	event.NotifyPersonIDs = model.JoinHandoffNotifyIDs(ids)
 	return event

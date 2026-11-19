@@ -84,10 +84,12 @@ func RecordHandoffEvent(db *gorm.DB, event HandoffEvent) (existing bool, err err
 	if strings.TrimSpace(event.NotifyTaskID) == "" {
 		return false, nil
 	}
-	// A newer delivery to the same receiving task replaces the older pending
-	// report, which stays in the table as history.
+	// A newer delivery of the same product to the same receiving task replaces
+	// the older pending report, which stays in the table as history. Another
+	// product still waits for its own reply.
 	var stale []HandoffEvent
-	err = db.Where("notify_task_id = ? AND state = ? AND id <> ?", event.NotifyTaskID, HandoffEventPending, event.ID).
+	err = db.Where("notify_task_id = ? AND product_type = ? AND product_name = ? AND state = ? AND id <> ?",
+		event.NotifyTaskID, event.ProductType, event.ProductName, HandoffEventPending, event.ID).
 		Find(&stale).Error
 	if err != nil || len(stale) == 0 {
 		return false, err
