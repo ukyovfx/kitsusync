@@ -43,7 +43,7 @@ The two statuses are independent and vertically stacked as equal label/badge row
 
 ## Production list and detail
 
-Each Production row presents the human-readable Production name, a compact content-sized status badge, and its action. `Connected` / `接続済み` is positive green. `Disconnected` / `未接続` is warning yellow, not neutral gray. A visible Kitsu Production without a KitsuSync connection is included in the total and disconnected count, but not in the connected count or Needs attention count. Dashboard and Production list derive these counts from the same live-plus-local Production set and connection-state definition; ValidationOnly records are excluded from normal summary counts.
+Each Production row presents the human-readable Production name, a compact content-sized status badge, and its action. `Connected` / `接続済み` is positive green. `Disconnected` / `未接続` is neutral gray, not warning yellow. A visible Kitsu Production without a KitsuSync connection is included in the total and disconnected count, but not in the connected count or Needs attention count. Dashboard and Production list derive these counts from the same live-plus-local Production set and connection-state definition; ValidationOnly records are excluded from normal summary counts.
 
 The detail view uses the same connection-state definition as the list and Dashboard count. It may show routing/resource information only when that state exists; it must not invent or duplicate stale resources.
 
@@ -81,7 +81,7 @@ Badges are short semantic states; explanatory sentences remain supporting text.
 | Meaning | Japanese | English | Color |
 | --- | --- | --- | --- |
 | healthy connection | 接続済み | Connected | green |
-| disconnected | 未接続 | Disconnected | yellow/warning |
+| disconnected | 未接続 | Disconnected | neutral/gray |
 | missing configuration | 未設定 | Not configured | yellow/warning |
 | configured but failing validation | 要確認 | Needs review | yellow/warning |
 | hard failure | エラー | Error | red/error |

@@ -79,10 +79,10 @@ func ifNonEmpty(value, wrapped string) string {
 
 func iaStatus(db *gorm.DB, project model.Project, lang string) (string, string, string) {
 	if project.ReadOnlyPreview && lang == "en" {
-		return "warning", "Disconnected", "This Production is not connected to KitsuSync yet. Notifications are unavailable."
+		return "neutral", "Disconnected", "This Production is not connected to KitsuSync yet. Notifications are unavailable."
 	}
 	if project.ReadOnlyPreview {
-		return "warning", t(lang, "未接続", "Not connected"), t(lang, "このプロダクションはまだKitsuSyncに接続されていません。通知は利用できません。", "This Production is not connected to KitsuSync yet. Notifications are unavailable.")
+		return "neutral", t(lang, "未接続", "Not connected"), t(lang, "このプロダクションはまだKitsuSyncに接続されていません。通知は利用できません。", "This Production is not connected to KitsuSync yet. Notifications are unavailable.")
 	}
 	if project.ValidationOnly {
 		return "warning", t(lang, "検証専用", "Validation only"), t(lang, "実データの表示確認用です。Discordサーバーは未接続で、通知は利用できません。", "Read-only Kitsu data for validation. No Discord server is connected and notifications are unavailable.")
@@ -658,7 +658,7 @@ func renderStorageSettingsFeedback(r *http.Request, lang string) string {
 func renderIAUnconnectedProduction(r *http.Request, p model.Project, lang string) string {
 	configureURL := withLang("/bot/setup?project="+url.QueryEscape(p.KitsuProjectID), r)
 	productionListURL := withLang("/bot/admin/projects", r)
-	return `<div class="production-context production-unconfigured">` + renderProductionIdentity(p, lang, "warning", tr(lang, "production.unconnected.status")) + `<section class="production-settings-section production-unconfigured-state production-detail-surface" aria-labelledby="unconnected-production-title"><div class="production-unconfigured-content"><h2 id="unconnected-production-title">` + esc(tr(lang, "production.unconnected.source")) + `</h2><p class="production-detail-state-row" role="status">` + esc(tr(lang, "production.unconnected.explanation")) + `</p></div><div class="button-row production-unconfigured-actions"><a class="btn" href="` + esc(configureURL) + `">` + esc(tr(lang, "production.unconnected.configure")) + `</a><a class="btn-ghost" href="` + esc(productionListURL) + `">` + esc(tr(lang, "production.unconnected.back")) + `</a></div></section></div>`
+	return `<div class="production-context production-unconfigured">` + renderProductionIdentity(p, lang, "neutral", tr(lang, "production.unconnected.status")) + `<section class="production-settings-section production-unconfigured-state production-detail-surface" aria-labelledby="unconnected-production-title"><div class="production-unconfigured-content"><h2 id="unconnected-production-title">` + esc(tr(lang, "production.unconnected.source")) + `</h2><p class="production-detail-state-row" role="status">` + esc(tr(lang, "production.unconnected.explanation")) + `</p></div><div class="button-row production-unconfigured-actions"><a class="btn" href="` + esc(configureURL) + `">` + esc(tr(lang, "production.unconnected.configure")) + `</a><a class="btn-ghost" href="` + esc(productionListURL) + `">` + esc(tr(lang, "production.unconnected.back")) + `</a></div></section></div>`
 }
 
 func selectedProductionTab(raw string) string {
@@ -724,9 +724,9 @@ func renderCurrentProductionOverview(db *gorm.DB, r *http.Request, p model.Proje
 		productionStateClass, productionState = "warning", t(lang, "検証専用", "Validation only")
 	}
 	if p.ReadOnlyPreview {
-		productionStateClass, productionState = "warning", t(lang, "未接続", "Disconnected")
+		productionStateClass, productionState = "neutral", t(lang, "未接続", "Disconnected")
 	}
-	discordClass, discordState := "warning", t(lang, "未接続", "Not connected")
+	discordClass, discordState := "neutral", t(lang, "未接続", "Not connected")
 	if strings.TrimSpace(p.DiscordGuildID) != "" {
 		discordClass, discordState = "success", t(lang, "接続済み", "Connected")
 	}
@@ -3699,13 +3699,13 @@ func connectedProductionCount(projects []model.Project) int {
 
 func productionConnectionStatus(project model.Project, lang string) (string, string) {
 	if project.ReadOnlyPreview || project.ValidationOnly {
-		return "warning", t(lang, "未接続", "Disconnected")
+		return "neutral", t(lang, "未接続", "Disconnected")
 	}
 	return "ok", t(lang, "接続済み", "Connected")
 }
 
 func renderDisconnectedProductionCard(lang string, r *http.Request, project model.Project) string {
-	return `<article class="section-card glass production-list-item"><div><h2>` + esc(project.Name) + `</h2></div><span class="status-pill warning">` + esc(t(lang, "未接続", "Disconnected")) + `</span><a class="btn-ghost" href="` + esc(withLang("/bot/setup?project="+url.QueryEscape(project.KitsuProjectID), r)) + `">` + esc(t(lang, "接続設定", "Configure connection")) + `</a></article>`
+	return `<article class="section-card glass production-list-item"><div><h2>` + esc(project.Name) + `</h2></div><span class="status-pill neutral">` + esc(t(lang, "未接続", "Disconnected")) + `</span><a class="btn-ghost" href="` + esc(withLang("/bot/setup?project="+url.QueryEscape(project.KitsuProjectID), r)) + `">` + esc(t(lang, "接続設定", "Configure connection")) + `</a></article>`
 }
 
 func renderIAConnectedProductionDeleteResultRefined(lang string, r *http.Request, project model.Project, result connectedProductionChannelDeleteExecution) string {
