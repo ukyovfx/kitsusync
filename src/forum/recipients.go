@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"gorm.io/gorm"
 
@@ -194,17 +193,4 @@ type ForumChannel struct {
 type ForumTag struct {
 	ID   string
 	Name string
-}
-
-// Summary formats a poll result for logs.
-func (r PollResult) Summary() string {
-	parts := []string{
-		fmt.Sprintf("productions=%d", r.Productions),
-		fmt.Sprintf("baselined=%d", r.Baselined),
-		fmt.Sprintf("created=%d", r.Created),
-		fmt.Sprintf("synced=%d", r.Synced),
-		fmt.Sprintf("signalled=%d", r.Signalled),
-		fmt.Sprintf("skipped=%d", r.Skipped),
-	}
-	return strings.Join(parts, " ")
 }

@@ -654,39 +654,6 @@ func KitsuTaskURL(host, productionID, entityType, taskID string) string {
 	return joined
 }
 
-func statusTransitionMessage(prev, current string) string {
-	if prev == "" || strings.EqualFold(prev, current) {
-		return ""
-	}
-	key := strings.ToUpper(prev) + "→" + strings.ToUpper(current)
-	switch key {
-	case "RETAKE→WFA":
-		return "📤 修正版がアップされました"
-	case "RETAKE→DONE":
-		return "✅ 承認されました"
-	case "WFA→RETAKE":
-		return "🔃 リテイクお願いします。"
-	case "WFA→READY":
-		return "🟢 承認完了。次工程の作業待ちです"
-	case "READY→WIP":
-		return "🚀 作業を開始しました"
-	case "READY→DONE":
-		return "🎉 作業完了・承認されました"
-	case "WIP→WFA":
-		return "📤 チェック依頼が送られました"
-	case "WFA→DONE":
-		return "🎉 最終承認されました！お疲れ様でした"
-	case "RETAKE→WIP":
-		return "🔧 修正作業を開始しました"
-	case "WIP→RETAKE":
-		return "🔄 リテイクお願いします。"
-	case "TODO→WIP":
-		return "🚀 作業を開始しました"
-	default:
-		return ""
-	}
-}
-
 // 工程ごとのアイコン
 func getProcessEmoji(taskType string) string {
 	switch strings.ToLower(strings.TrimSpace(taskType)) {

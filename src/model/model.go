@@ -140,211 +140,6 @@ type Task struct {
 	StatusChangedAt time.Time
 }
 
-func CreateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
-	db.Create(&Task{
-		TaskID:           taskID,
-		TaskUpdatedAt:    taskUpdatedAt,
-		TaskStatus:       taskStatus,
-		CommentID:        commentID,
-		CommentUpdatedAt: commentUpdatedAt,
-	})
-}
-
-func UpdateTask(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt string) {
-	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
-		"task_updated_at":    taskUpdatedAt,
-		"task_status":        taskStatus,
-		"comment_id":         commentID,
-		"comment_updated_at": commentUpdatedAt,
-	})
-}
-
-// taskTransitionTime parses the Kitsu updated_at of a transition; the wall
-// clock is the fallback for malformed timestamps.
-func taskTransitionTime(taskUpdatedAt string) time.Time {
-	if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(taskUpdatedAt)); err == nil {
-		return parsed.UTC()
-	}
-	return time.Now().UTC()
-}
-
-// MarkTaskObserved records a non-deliverable or permanently failed event
-// without clearing a previously delivered Discord message.
-func MarkTaskObserved(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName string) error {
-	if db == nil || strings.TrimSpace(taskID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var existing Task
-		err := tx.Where("task_id = ?", taskID).First(&existing).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return tx.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, TaskStatus: taskStatus, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt,
-				ProductionID: strings.TrimSpace(productionID), EntityName: strings.TrimSpace(entityName), StatusChangedAt: taskTransitionTime(taskUpdatedAt),
-				DeliveredTaskUpdatedAt: taskUpdatedAt, DeliveredTaskStatus: taskStatus, DeliveredCommentID: commentID, DeliveredCommentUpdatedAt: commentUpdatedAt}).Error
-		}
-		if err != nil {
-			return err
-		}
-		updates := map[string]interface{}{
-			"task_updated_at": taskUpdatedAt, "last_observed_status": taskStatus, "comment_id": commentID, "comment_updated_at": commentUpdatedAt,
-			"task_status": taskStatus, "delivered_task_updated_at": taskUpdatedAt, "delivered_task_status": taskStatus,
-			"delivered_comment_id": commentID, "delivered_comment_updated_at": commentUpdatedAt,
-		}
-		if strings.TrimSpace(productionID) != "" {
-			updates["production_id"] = strings.TrimSpace(productionID)
-		}
-		if strings.TrimSpace(entityName) != "" {
-			updates["entity_name"] = strings.TrimSpace(entityName)
-		}
-		if last := strings.TrimSpace(existing.LastObservedStatus); last != "" && !strings.EqualFold(last, taskStatus) {
-			updates["status_changed_at"] = taskTransitionTime(taskUpdatedAt)
-		}
-		return tx.Model(&Task{}).Where("id = ?", existing.ID).Updates(updates).Error
-	})
-}
-
-// PreviousTaskStatus returns the deterministic status immediately before the
-// supplied observation. It uses durable observation state first so a retry or
-// process restart cannot turn a known transition into an invented one.
-func PreviousTaskStatus(task Task, currentStatus string) string {
-	currentStatus = strings.TrimSpace(currentStatus)
-	previous := strings.TrimSpace(task.LastObservedStatus)
-	if previous == "" {
-		previous = strings.TrimSpace(task.TaskStatus)
-	}
-	if previous == currentStatus {
-		return strings.TrimSpace(task.PreviousObservedStatus)
-	}
-	return previous
-}
-
-// ObserveTaskStatus durably records Kitsu status order without marking the
-// notification delivered. This preserves retry behavior while retaining a
-// real previous status across poll cycles and process recreation. The
-// production ID and entity name keep the observation table self-sufficient
-// for digest membership; status_changed_at records the transition time.
-func ObserveTaskStatus(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName string) error {
-	if db == nil || strings.TrimSpace(taskID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var existing Task
-		result := tx.Where("task_id = ?", taskID).First(&existing)
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return tx.Create(&Task{TaskID: taskID, TaskUpdatedAt: taskUpdatedAt, LastObservedStatus: taskStatus, CommentID: commentID, CommentUpdatedAt: commentUpdatedAt,
-				ProductionID: strings.TrimSpace(productionID), EntityName: strings.TrimSpace(entityName), StatusChangedAt: taskTransitionTime(taskUpdatedAt)}).Error
-		}
-		if result.Error != nil {
-			return result.Error
-		}
-		last := strings.TrimSpace(existing.LastObservedStatus)
-		if last == "" {
-			last = strings.TrimSpace(existing.TaskStatus)
-		}
-		updates := map[string]interface{}{
-			"task_updated_at": taskUpdatedAt, "last_observed_status": taskStatus,
-			"comment_id": commentID, "comment_updated_at": commentUpdatedAt,
-		}
-		if strings.TrimSpace(productionID) != "" {
-			updates["production_id"] = strings.TrimSpace(productionID)
-		}
-		if strings.TrimSpace(entityName) != "" {
-			updates["entity_name"] = strings.TrimSpace(entityName)
-		}
-		// Legacy rows have no separate successful checkpoint. Seed it once from
-		// the old snapshot before replacing the observed values; never reinterpret
-		// the new observation as a successful delivery checkpoint.
-		if existing.DeliveredTaskStatus == "" && (existing.TaskStatus != "" || existing.TaskUpdatedAt != "" || existing.CommentUpdatedAt != "") {
-			updates["delivered_task_status"] = existing.TaskStatus
-			updates["delivered_task_updated_at"] = existing.TaskUpdatedAt
-			updates["delivered_comment_id"] = existing.CommentID
-			updates["delivered_comment_updated_at"] = existing.CommentUpdatedAt
-		}
-		if last != "" && !strings.EqualFold(last, taskStatus) {
-			updates["previous_observed_status"] = last
-			updates["status_changed_at"] = taskTransitionTime(taskUpdatedAt)
-		}
-		return tx.Model(&Task{}).Where("id = ?", existing.ID).Updates(updates).Error
-	})
-}
-
-func UpdateTaskWithDiscord(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, discordMessageID, webhookURL, threadID, productionID, entityName string) error {
-	if db == nil || strings.TrimSpace(taskID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName); err != nil {
-			return err
-		}
-		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
-			"task_updated_at": taskUpdatedAt, "task_status": taskStatus, "comment_id": commentID, "comment_updated_at": commentUpdatedAt,
-			"discord_message_id": discordMessageID, "webhook_url": "", "discord_thread_id": threadID,
-			"delivered_task_updated_at": taskUpdatedAt, "delivered_task_status": taskStatus,
-			"delivered_comment_id": commentID, "delivered_comment_updated_at": commentUpdatedAt,
-		}).Error
-	})
-}
-
-// MarkNotificationDeliveredCheckpoint advances the delivered checkpoint without
-// a Discord send. Aggregated consumptions (bulk summaries, flap downgrades) use
-// it so a recorded transition is never re-offered by later polls.
-func MarkNotificationDeliveredCheckpoint(db *gorm.DB, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName string) error {
-	if db == nil || strings.TrimSpace(taskID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		if err := ObserveTaskStatus(tx, taskID, taskUpdatedAt, taskStatus, commentID, commentUpdatedAt, productionID, entityName); err != nil {
-			return err
-		}
-		return tx.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
-			"task_updated_at": taskUpdatedAt, "task_status": taskStatus, "comment_id": commentID, "comment_updated_at": commentUpdatedAt,
-			"delivered_task_updated_at": taskUpdatedAt, "delivered_task_status": taskStatus,
-			"delivered_comment_id": commentID, "delivered_comment_updated_at": commentUpdatedAt,
-		}).Error
-	})
-}
-
-func ClearMessageID(db *gorm.DB, taskID string) {
-	db.Model(&Task{}).Where("task_id = ?", taskID).Updates(map[string]interface{}{
-		"discord_message_id": "",
-		"discord_thread_id":  "",
-	})
-}
-
-type StatusCount struct {
-	TaskStatus string
-	Count      int
-}
-
-func GetStatusCounts(db *gorm.DB) []StatusCount {
-	var results []StatusCount
-	db.Model(&Task{}).
-		Select("task_status, count(*) as count").
-		Where("deleted_at IS NULL").
-		Group("task_status").
-		Order("count desc").
-		Scan(&results)
-	return results
-}
-
-func FindTask(db *gorm.DB, taskID string) Task {
-	var task Task
-	db.First(&task, "task_id = ?", taskID)
-	return task
-}
-
-func FindTaskWithError(db *gorm.DB, taskID string) (Task, error) {
-	var task Task
-	if db == nil || strings.TrimSpace(taskID) == "" {
-		return task, gorm.ErrInvalidData
-	}
-	err := db.First(&task, "task_id = ?", taskID).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return Task{}, nil
-	}
-	return task, err
-}
-
 type Project struct {
 	ID                 uint   `gorm:"primaryKey"`
 	KitsuProjectID     string `gorm:"uniqueIndex"`
@@ -469,33 +264,6 @@ func ListProductionChannelMappings(db *gorm.DB, productionID string) []Productio
 	return rows
 }
 
-func SaveProductionChannelMappings(db *gorm.DB, productionID, guildID string, mappings []ProductionChannelMapping) error {
-	if db == nil || strings.TrimSpace(productionID) == "" || strings.TrimSpace(guildID) == "" {
-		return gorm.ErrInvalidData
-	}
-	if issues := ValidateProductionChannelMappings(productionID, guildID, mappings); len(issues) > 0 {
-		return fmt.Errorf("invalid production channel mappings: %s", strings.Join(issues, "; "))
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		for _, mapping := range mappings {
-			var existing ProductionChannelMapping
-			err := tx.Where("production_id = ? AND task_type_id = ?", productionID, mapping.TaskTypeID).First(&existing).Error
-			if err == nil {
-				mapping.ID = existing.ID
-				mapping.CreatedAt = existing.CreatedAt
-			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			mapping.ProductionID = strings.TrimSpace(productionID)
-			mapping.GuildID = strings.TrimSpace(guildID)
-			if err := tx.Save(&mapping).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 // SavePendingProductionChannelMapping records a verified Discord result before
 // the complete channel plan is ready. Pending rows are deliberately inactive;
 // they make retries and manual recovery possible without enabling partial
@@ -515,30 +283,6 @@ func SavePendingProductionChannelMapping(db *gorm.DB, mapping ProductionChannelM
 		return err
 	}
 	return db.Save(&mapping).Error
-}
-
-func MarkProductionChannelMappingsReviewRequired(db *gorm.DB, productionID, operationID string, keep map[string]bool, reason string) error {
-	if db == nil {
-		return gorm.ErrInvalidData
-	}
-	var rows []ProductionChannelMapping
-	if err := db.Where("production_id = ?", strings.TrimSpace(productionID)).Find(&rows).Error; err != nil {
-		return err
-	}
-	for _, row := range rows {
-		if keep[row.TaskTypeID] {
-			continue
-		}
-		row.Active = false
-		row.State = ChannelMappingStateReviewRequired
-		row.MigrationState = ChannelMappingStateReviewRequired
-		row.OperationID = operationID
-		row.LastError = reason
-		if err := db.Save(&row).Error; err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // ActivateProductionRoutingFromMappings makes the new routing model the
@@ -956,10 +700,6 @@ func FindProjectWebhookByID(db *gorm.DB, id uint) *ProjectWebhook {
 	return &wh
 }
 
-func DeleteProjectWebhookByID(db *gorm.DB, id uint) {
-	db.Delete(&ProjectWebhook{}, id)
-}
-
 // DeleteProjectWebhooksByChannelName deletes all webhook records that share the same
 // channel name within a project (used when deleting a hierarchical channel group).
 func DeleteProjectWebhooksByChannelName(db *gorm.DB, kitsuProjectID, channelName string) error {
@@ -989,16 +729,6 @@ func ListProjects(db *gorm.DB) []Project {
 	return rows
 }
 
-func ListProjectChannelNames(db *gorm.DB, kitsuProjectID string) []string {
-	var webhooks []ProjectWebhook
-	db.Where("kitsu_project_id = ?", kitsuProjectID).Find(&webhooks)
-	names := make([]string, 0, len(webhooks))
-	for _, wh := range webhooks {
-		names = append(names, wh.ChannelName)
-	}
-	return names
-}
-
 // ListAllProjectWebhooks returns every webhook row across all projects.
 func ListAllProjectWebhooks(db *gorm.DB) []ProjectWebhook {
 	var rows []ProjectWebhook
@@ -1006,30 +736,11 @@ func ListAllProjectWebhooks(db *gorm.DB) []ProjectWebhook {
 	return rows
 }
 
-func FindWebhookForTask(db *gorm.DB, kitsuProjectID, taskType string) string {
-	var wh ProjectWebhook
-	if err := db.Where("kitsu_project_id = ? AND task_type = ?", kitsuProjectID, taskType).First(&wh).Error; err == nil {
-		return wh.WebhookURL
-	}
-	if err := db.Where("kitsu_project_id = ? AND task_type = ?", kitsuProjectID, "*").First(&wh).Error; err == nil {
-		return wh.WebhookURL
-	}
-	return ""
-}
-
 // FindChannelNameByWebhookURL returns the channel name associated with the given webhook URL.
 func FindChannelNameByWebhookURL(db *gorm.DB, webhookURL string) string {
 	var wh ProjectWebhook
 	if err := db.Where("webhook_url = ?", webhookURL).First(&wh).Error; err == nil {
 		return wh.ChannelName
-	}
-	return ""
-}
-
-func FindWebhookURLForChannel(db *gorm.DB, kitsuProjectID, channelName string) string {
-	var wh ProjectWebhook
-	if err := db.Where("kitsu_project_id = ? AND channel_name = ?", kitsuProjectID, channelName).First(&wh).Error; err == nil {
-		return wh.WebhookURL
 	}
 	return ""
 }
@@ -1042,36 +753,6 @@ func FindChannelRecord(db *gorm.DB, kitsuProjectID, channelName string) *Project
 		return nil
 	}
 	return &wh
-}
-
-func GetProjectWebhook(db *gorm.DB, kitsuProjectID string) string {
-	var wh ProjectWebhook
-	if err := db.Where("kitsu_project_id = ? AND task_type = ?", kitsuProjectID, "*").First(&wh).Error; err == nil {
-		return wh.WebhookURL
-	}
-	if err := db.Where("kitsu_project_id = ?", kitsuProjectID).First(&wh).Error; err == nil {
-		return wh.WebhookURL
-	}
-	return ""
-}
-
-func SetProjectWebhook(db *gorm.DB, kitsuProjectID, webhookURL, channelID string) {
-	var wh ProjectWebhook
-	if err := db.Where("kitsu_project_id = ? AND task_type = ?", kitsuProjectID, "*").First(&wh).Error; err == nil {
-		wh.WebhookURL = webhookURL
-		if channelID != "" {
-			wh.DiscordChannelID = channelID
-		}
-		db.Save(&wh)
-		return
-	}
-	db.Create(&ProjectWebhook{
-		KitsuProjectID:   kitsuProjectID,
-		ChannelName:      "general",
-		TaskType:         "*",
-		WebhookURL:       webhookURL,
-		DiscordChannelID: channelID,
-	})
 }
 
 type UserMap struct {
@@ -1117,14 +798,6 @@ func ListUserMap(db *gorm.DB) []UserMap {
 	var rows []UserMap
 	db.Order("kitsu_name asc").Find(&rows)
 	return rows
-}
-
-func FindDiscordIDByKitsuName(db *gorm.DB, kitsuName string) string {
-	var u UserMap
-	if err := db.Where("kitsu_name = ?", kitsuName).First(&u).Error; err == nil {
-		return u.DiscordID
-	}
-	return ""
 }
 
 func FindUserMapByID(db *gorm.DB, id uint) *UserMap {
@@ -1243,10 +916,6 @@ func UpsertUserMapWithEmail(db *gorm.DB, kitsuName, kitsuEmail, discordID string
 	db.Create(&UserMap{KitsuName: kitsuName, KitsuEmail: kitsuEmail, DiscordID: discordID})
 }
 
-func DeleteUserMap(db *gorm.DB, kitsuName string) {
-	db.Where("kitsu_name = ?", kitsuName).Delete(&UserMap{})
-}
-
 func ListCheckerMap(db *gorm.DB) []CheckerMap {
 	var rows []CheckerMap
 	db.Order("task_type asc").Find(&rows)
@@ -1314,56 +983,6 @@ func AddCheckerMapWithTaskTypeID(db *gorm.DB, taskTypeID, taskType, discordID st
 	}
 }
 
-func AddCheckerMapByKitsuName(db *gorm.DB, taskType, kitsuName string) {
-	AddCheckerMapByUser(db, taskType, kitsuName, "")
-}
-
-func AddCheckerMapByUser(db *gorm.DB, taskType, kitsuName, kitsuEmail string) {
-	AddCheckerMapByUserWithOverride(db, taskType, kitsuName, kitsuEmail, "")
-}
-
-func AddCheckerMapByUserWithOverride(db *gorm.DB, taskType, kitsuName, kitsuEmail, overrideDiscordID string) {
-	AddCheckerMapByUserWithOverrideAndTaskTypeID(db, "", taskType, kitsuName, kitsuEmail, overrideDiscordID)
-}
-
-func AddCheckerMapByUserWithOverrideAndTaskTypeID(db *gorm.DB, taskTypeID, taskType, kitsuName, kitsuEmail, overrideDiscordID string) {
-	if strings.TrimSpace(taskType) == "" || strings.TrimSpace(kitsuName) == "" {
-		return
-	}
-	discordID := FindDiscordIDByKitsuNameOrEmail(db, kitsuName, kitsuEmail)
-	overrideDiscordID = strings.TrimSpace(overrideDiscordID)
-	var c CheckerMap
-	query := db.Where("task_type = ?", taskType)
-	if kitsuEmail != "" {
-		query = query.Where("kitsu_email = ?", kitsuEmail)
-	} else {
-		query = query.Where("kitsu_name = ?", kitsuName)
-	}
-	if err := query.First(&c).Error; err == nil {
-		c.KitsuName = kitsuName
-		c.KitsuEmail = kitsuEmail
-		c.DiscordID = discordID
-		c.OverrideDiscordID = overrideDiscordID
-		if strings.TrimSpace(taskTypeID) != "" {
-			c.TaskTypeID = strings.TrimSpace(taskTypeID)
-		}
-		db.Save(&c)
-		return
-	}
-	db.Create(&CheckerMap{
-		TaskTypeID:        strings.TrimSpace(taskTypeID),
-		TaskType:          taskType,
-		KitsuName:         kitsuName,
-		KitsuEmail:        kitsuEmail,
-		DiscordID:         discordID,
-		OverrideDiscordID: overrideDiscordID,
-	})
-}
-
-func UpdateCheckerMap(db *gorm.DB, id uint, taskType, kitsuName, kitsuEmail string) {
-	UpdateCheckerMapWithOverride(db, id, taskType, kitsuName, kitsuEmail, "")
-}
-
 func UpdateCheckerMapWithOverride(db *gorm.DB, id uint, taskType, kitsuName, kitsuEmail, overrideDiscordID string) {
 	UpdateCheckerMapWithOverrideAndTaskTypeID(db, id, "", taskType, kitsuName, kitsuEmail, overrideDiscordID)
 }
@@ -1387,20 +1006,8 @@ func UpdateCheckerMapWithOverrideAndTaskTypeID(db *gorm.DB, id uint, taskTypeID,
 	db.Model(&CheckerMap{}).Where("id = ?", id).Updates(updates)
 }
 
-func DeleteCheckerEntry(db *gorm.DB, taskType, discordID string) {
-	db.Where("task_type = ? AND discord_id = ?", taskType, discordID).Delete(&CheckerMap{})
-}
-
-func DeleteCheckerEntryByKitsuName(db *gorm.DB, taskType, kitsuName string) {
-	db.Where("task_type = ? AND kitsu_name = ?", taskType, kitsuName).Delete(&CheckerMap{})
-}
-
 func DeleteCheckerEntryByID(db *gorm.DB, id uint) {
 	db.Delete(&CheckerMap{}, id)
-}
-
-func DeleteCheckerMap(db *gorm.DB, taskType string) {
-	db.Where("task_type = ?", taskType).Delete(&CheckerMap{})
 }
 
 // ProjectUserMap stores project-scoped Kitsu → Discord user mappings.

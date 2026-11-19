@@ -555,9 +555,6 @@ func RecordManagedChannelDeletionFailure(db *gorm.DB, webhookRowID uint, class s
 // RecordNotificationOnlyDelivery writes a record-only lane entry to the
 // delivery journal. Nothing is sent; the row documents that the notification
 // was intentionally recorded without delivery.
-func FinalizeManagedChannelDeletion(db *gorm.DB, webhookRowID uint, now time.Time) error {
-	return finalizeManagedChannelDeletion(db, webhookRowID, now, "")
-}
 func FinalizeManagedChannelDeletionForProductionTeardown(db *gorm.DB, webhookRowID uint, now time.Time, token string) error {
 	if strings.TrimSpace(token) == "" {
 		return gorm.ErrInvalidData

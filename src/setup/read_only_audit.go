@@ -44,20 +44,6 @@ func ReadOnlyAuditRoute(ready func() bool, next http.HandlerFunc) http.HandlerFu
 	}
 }
 
-func ReadOnlyAuditPreviewRoute(ready func() bool, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if ready == nil || ready() {
-			next(w, r)
-			return
-		}
-		if !ReadOnlyAuditModeEnabled() || !readOnlyAuditSessionHasRole(r) || r.Method != http.MethodPost {
-			RuntimeReadyRequired(ready, next)(w, r)
-			return
-		}
-		withReadOnlyAuditToken(r, next, w)
-	}
-}
-
 func withReadOnlyAuditToken(r *http.Request, next http.HandlerFunc, w http.ResponseWriter) {
 	_, token, _, _ := CurrentSessionKitsuAuth(r)
 	readOnlyAuditEnvMu.Lock()

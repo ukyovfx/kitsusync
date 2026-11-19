@@ -205,17 +205,6 @@ func ForumAssigneeIDs(row ForumTask) []string {
 	return ids
 }
 
-func encodeForumAssigneeIDs(ids []string) string {
-	if len(ids) == 0 {
-		return ""
-	}
-	encoded, err := json.Marshal(ids)
-	if err != nil {
-		return ""
-	}
-	return string(encoded)
-}
-
 // NormalizeForumAssigneeIDs drops empty entries and sorts for stable diffing.
 func NormalizeForumAssigneeIDs(ids []string) []string {
 	seen := map[string]struct{}{}

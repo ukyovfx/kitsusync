@@ -129,7 +129,7 @@ func TestCheckDiscordStatusValidatesBotWithoutGuild(t *testing.T) {
 	}
 }
 
-func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
+func TestBotHandler_PostPersistsRuntimeToken(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
 	t.Setenv("DISCORD_BOT_TOKEN", "before-token")
@@ -137,7 +137,6 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	h := BotHandler(db, nil)
 	form := url.Values{}
 	form.Set("bot_token", "rotated-token")
-	form.Set("guild_id", "999999999999999999")
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?legacy=1", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	addRecentBotEditSession(t, req)
@@ -158,9 +157,6 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	}
 	if got := StoredRuntimeDiscordBotToken(db); got != "rotated-token" {
 		t.Fatalf("expected encrypted runtime token, got %q", got)
-	}
-	if got := strings.TrimSpace(model.GetSetting(db, "discord.guildID")); got != "999999999999999999" {
-		t.Fatalf("expected persisted guild ID, got %q", got)
 	}
 }
 

@@ -185,10 +185,6 @@ func statusSummaryRow(label, class, value, explanation, actionHTML string) strin
 	return `<div class="status-row"><dt class="status-row-label">` + esc(label) + `</dt><dd class="status-row-value"><span class="status-badge status-badge-` + esc(class) + `" role="status">` + esc(value) + `</span></dd>` + explanationCell + action + `</div>`
 }
 
-func productionSummaryCard(label, value, class string) string {
-	return `<div class="production-summary-card"><span class="production-summary-label">` + esc(label) + `</span><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(value) + `</span></div>`
-}
-
 func dashboardStatusRow(label, class, value string) string {
 	return `<div class="dashboard-status-row"><span class="dashboard-status-label">` + esc(label) + `</span><span class="status-badge status-badge-` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(value) + `</span></div>`
 }
@@ -202,10 +198,6 @@ func dashboardProblemAction(r *http.Request, p model.Project, lang, hint string)
 		label = t(lang, "WFA通知先を確認", "Review WFA recipients")
 	}
 	return withLang(path, r), label
-}
-
-func renderIADashboard(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
-	renderIADashboardWithRuntime(w, r, db, nil)
 }
 
 func renderIADashboardWithRuntime(w http.ResponseWriter, r *http.Request, db *gorm.DB, runtimeHealthy func() bool) {
@@ -425,28 +417,6 @@ func removeDashboardSubtitle(body string) string {
 	pEnd := pStart + pRelEnd + len(`</p>`)
 	section = section[:pStart] + section[pEnd:]
 	return body[:start] + section + body[end:]
-}
-
-func renderDashboardMenu(lang string, r *http.Request, db *gorm.DB, productionCount, attentionCount int, readiness SharedBotRuntimeReadiness) string {
-	auditFirst, auditSecond, auditClass, auditSecondClass := dashboardAuditSummaryCanonical(lang, db)
-	items := []struct {
-		key, path, ja, en, statusA, statusB, statusAClass, statusBClass string
-	}{
-		{"ia.production_list", "/bot/admin/projects", "接続済みプロダクションの状態と設定を確認します。", "Review connected Productions and settings.", fmt.Sprintf("%d件", productionCount), fmt.Sprintf("要対応 %d件", attentionCount), map[bool]string{true: "ok", false: "muted"}[productionCount > 0], map[bool]string{true: "warning", false: "ok"}[attentionCount > 0]},
-		{"ia.user_mapping", "/bot/admin/users", "KitsuユーザーとDiscordユーザーの紐づけを管理します。", "Manage Kitsu-to-Discord user links.", fmt.Sprintf("%d件", len(model.ListUserMap(db))), "ローカル設定", map[bool]string{true: "ok", false: "muted"}[len(model.ListUserMap(db)) > 0], "muted"},
-		{"connections.title", "/bot/admin/bot", "Kitsu接続とDiscord Bot接続を設定します。", "Configure the Kitsu and Discord Bot connections.", statusText(lang, readiness.KitsuConfigured), statusText(lang, readiness.DiscordConfigured), map[bool]string{true: "ok", false: "warning"}[readiness.KitsuConfigured], map[bool]string{true: "ok", false: "warning"}[readiness.DiscordConfigured]},
-		{"ia.system_status", "/bot/admin/health", "接続状態と通知の利用可否を確認します。", "Review connection state and notification availability.", readinessViewFor(lang, r, readiness).Label, statusTextOverall(lang, readiness.OverallReady), map[bool]string{true: "ok", false: "warning"}[readiness.OverallReady], map[bool]string{true: "ok", false: "warning"}[readiness.OverallReady]},
-		{"ia.audit_log", "/bot/admin/audit", "操作履歴と通知イベントを確認します。", "Review action history and notification events.", auditFirst, auditSecond, auditClass, auditSecondClass},
-	}
-	var cards strings.Builder
-	for i, item := range items {
-		description := item.ja
-		if lang == "en" {
-			description = item.en
-		}
-		cards.WriteString(`<a class="dashboard-menu-card" href="` + esc(withLang(item.path, r)) + `"><span class="dashboard-menu-icon" aria-hidden="true">` + strconv.Itoa(i+1) + `</span><span class="dashboard-menu-copy"><strong>` + esc(tr(lang, item.key)) + `</strong><span class="field-help">` + esc(description) + `</span></span><span class="dashboard-menu-status"><span class="dashboard-status-chip ` + esc(item.statusAClass) + `">` + esc(item.statusA) + `</span><span class="dashboard-status-chip ` + esc(item.statusBClass) + `">` + esc(item.statusB) + `</span></span></a>`)
-	}
-	return `<div class="dashboard-menu-wrap"><section class="dashboard-cta" aria-labelledby="dashboard-new-connection"><div><span class="dashboard-cta-kicker">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</span><h2 id="dashboard-new-connection">` + esc(t(lang, "ia.new_connection", "New Production Connection")) + `</h2></div><a class="btn dashboard-cta-action" href="` + esc(withLang("/bot/setup", r)) + `">` + esc(t(lang, "新しいプロダクションを接続", "Open setup")) + `</a></section><section class="dashboard-menu" aria-labelledby="dashboard-menu-title"><div class="page-heading"><div><h2 id="dashboard-menu-title">` + esc(t(lang, "管理メニュー", "Management")) + `</h2></div></div><div class="dashboard-menu-grid">` + cards.String() + `</div></section></div>`
 }
 
 func dashboardAuditSummaryCanonical(lang string, db *gorm.DB) (string, string, string, string) {
@@ -1043,35 +1013,6 @@ func productionPersonDepartmentSummary(person kitsu.Person, departmentNames map[
 // the cache and the readers do not form an initialization cycle.
 var reviewerGuildMembersForGuild func(string, string) ([]DiscordGuildMember, error)
 
-func renderCurrentProductionWFARecipients(db *gorm.DB, r *http.Request, p model.Project, lang string, botTokens ...string) string {
-	var team []kitsu.Person
-	var teamErr error
-	if p.ValidationOnly || p.ReadOnlyPreview {
-		for _, person := range p.ValidationData().Participants {
-			team = append(team, kitsu.Person{ID: person.ID, FullName: person.FullName, Email: person.Email})
-		}
-	} else {
-		team, teamErr = reviewerProductionTeamReader(db, p.KitsuProjectID)
-	}
-	taskTypes := reviewerTaskTypesForProduction(db, p.KitsuProjectID)
-	globalUsers := filterAssignableUsers(model.ListUserMap(db), botAccountEmail(db))
-	botToken := ""
-	if len(botTokens) > 0 {
-		botToken = botTokens[0]
-	}
-	var guildMembers []DiscordGuildMember
-	var guildMembersErr error
-	guildMembersPending := false
-	guildNotice := ""
-	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		var status guildDirectoryStatus
-		guildMembers, status, guildMembersErr = cachedGuildMembers(p.DiscordGuildID, botToken)
-		guildMembersPending = status == guildDirectoryPending
-		guildNotice = guildDirectoryNotice(lang, guildMemberListCache.view(p.DiscordGuildID, botToken))
-	}
-	return renderProductionReviewerManager(db, r, p, lang, botToken, team, teamErr, globalUsers, taskTypes, guildMembers, guildMembersErr, guildMembersPending, guildNotice)
-}
-
 func productionSupervisorTaskTypeSummaries(team []kitsu.Person, taskTypes []kitsu.TaskType) map[string]string {
 	type summary struct {
 		department string
@@ -1230,200 +1171,6 @@ func currentProductionLinkedHumanDiscordIDs(team []kitsu.Person, globalUsers []m
 		}
 	}
 	return linked
-}
-
-func renderProductionReviewerManager(db *gorm.DB, r *http.Request, p model.Project, lang, botToken string, team []kitsu.Person, teamErr error, globalUsers []model.UserMap, taskTypes []kitsu.TaskType, guildMembers []DiscordGuildMember, guildMembersErr error, guildMembersPending bool, guildNotice string) string {
-	label := func(ja, en string) string { return t(lang, ja, en) }
-	selectedID := strings.TrimSpace(r.URL.Query().Get("reviewer_task_type"))
-	selectedTaskType := kitsu.TaskType{}
-	var taskOptions strings.Builder
-	for _, taskType := range taskTypes {
-		if selectedID == "" {
-			selectedID = strings.TrimSpace(taskType.ID)
-		}
-		selected := strings.TrimSpace(taskType.ID) == selectedID
-		if selected {
-			selectedTaskType = taskType
-		}
-		taskOptions.WriteString(`<option value="` + esc(taskType.ID) + `"` + map[bool]string{true: ` selected`}[selected] + `>` + esc(taskType.Name) + `</option>`)
-	}
-	if selectedTaskType.ID == "" && len(taskTypes) > 0 {
-		selectedTaskType = taskTypes[0]
-		selectedID = selectedTaskType.ID
-	}
-	postURL := withLang("/bot/admin/projects", r)
-	roles, rolesReady := []DiscordGuildRole{}, false
-	rolesPending := false
-	if botToken != "" && isDiscordSnowflake(p.DiscordGuildID) {
-		var status guildDirectoryStatus
-		var err error
-		var listed []DiscordGuildRole
-		listed, status, err = cachedGuildRoles(p.DiscordGuildID, botToken)
-		rolesPending = status == guildDirectoryPending
-		if err == nil && !rolesPending {
-			roles = reviewerRoleCatalog(p.DiscordGuildID, listed)
-			rolesReady = true
-		}
-	}
-	// Role send access is verified when the target is applied, not here, so the
-	// display only relies on what the role list already says (mentionable).
-	eligibleRoleIDs := map[string]struct{}{}
-	for _, role := range roles {
-		if role.Mentionable {
-			eligibleRoleIDs[role.ID] = struct{}{}
-		}
-	}
-	var explicitRows []model.ProjectReviewerTarget
-	for _, target := range model.ListProjectReviewerTargets(db, p.ID) {
-		if target.TaskTypeID == selectedID {
-			explicitRows = append(explicitRows, target)
-		}
-	}
-	var overrides, automatic strings.Builder
-	membershipWarning := guildNoticeMarkup(guildNotice)
-	if guildMembersPending {
-		membershipWarning += `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを背景で取得中です。取得が終わるまで自動ReviewerとUser Overrideの対象者は表示されません。", "Discord server membership is loading in the background. Automatic eligibility and User Override candidates stay hidden until it finishes.")) + `</p>`
-	} else if guildMembersErr != nil {
-		membershipWarning += `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを確認できません。自動ReviewerとUser Overrideの対象者は確認できません。Bot接続とメンバー閲覧権限を確認してください。", "Discord server membership could not be verified. Automatic eligibility and User Override candidates are unavailable. Check the Bot connection and member access.")) + `</p>`
-	}
-	if len(explicitRows) > 0 {
-		for _, target := range explicitRows {
-			name := label("Discordロール", "Discord Role")
-			if target.TargetKind == model.ReviewerTargetUser {
-				name = label("Discordユーザー", "Discord User")
-				for _, user := range globalUsers {
-					if strings.TrimSpace(user.DiscordID) == target.DiscordID {
-						name = ""
-						for _, member := range guildMembers {
-							if strings.TrimSpace(member.User.ID) == target.DiscordID && !member.User.Bot {
-								name = discordGuildMemberDisplayName(member)
-								break
-							}
-						}
-						if name == "" {
-							name = discordReviewerDisplayName(user.DiscordDisplayName)
-						}
-						if name == "" {
-							name = strings.TrimSpace(user.KitsuName)
-						}
-						break
-					}
-				}
-			} else {
-				for _, role := range roles {
-					if role.ID == target.DiscordID {
-						name = "@" + role.Name
-						break
-					}
-				}
-			}
-			overrides.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(name) + `</strong></span><form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="remove_production_reviewer_target"><input type="hidden" name="target_id" value="` + strconv.FormatUint(uint64(target.ID), 10) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><button class="btn-ghost" type="submit">` + esc(label("解除", "Remove")) + `</button></form></li>`)
-		}
-	}
-	if selectedTaskType.ID != "" {
-		if guildMembersPending {
-			automatic.WriteString(`<li class="field-help">` + esc(label("Discordメンバーを背景で取得中です。", "Discord membership is loading in the background.")) + `</li>`)
-		} else if guildMembersErr != nil {
-			automatic.WriteString(`<li class="field-help">` + esc(label("Discordメンバーの確認が必要です。", "Discord membership verification required.")) + `</li>`)
-		} else if teamErr != nil {
-			automatic.WriteString(`<li class="field-help">` + esc(label("プロダクションのチームを読み込めません。", "Production Team unavailable.")) + `</li>`)
-		} else if strings.TrimSpace(selectedTaskType.DepartmentID) == "" {
-			automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
-		} else if baseURL, token, ok := runtimeKitsuDataSource(db); ok {
-			supervisors, err := reviewerDepartmentSupervisorsForTeam(baseURL, token, selectedTaskType.DepartmentID, team)
-			if err != nil {
-				automatic.WriteString(`<li class="field-help">` + esc(label("Supervisor情報を読み込めません。", "Supervisor data unavailable.")) + `</li>`)
-			} else {
-				linkedIDs := currentProductionLinkedHumanDiscordIDs(team, globalUsers, guildMembers)
-				for _, person := range supervisors {
-					user := globalUserForKitsuPerson(globalUsers, person)
-					if user == nil || linkedIDs[strings.TrimSpace(user.DiscordID)] == "" {
-						continue
-					}
-					reason := label("Supervisor", "Supervisor")
-					if department := strings.TrimSpace(selectedTaskType.DepartmentName); department != "" {
-						reason = label(department+"担当", department+" Supervisor")
-					}
-					automatic.WriteString(`<li class="reviewer-target-row"><span><strong>` + esc(kitsuPersonDisplayName(person)) + `</strong><small>` + esc(reason) + `</small></span><span class="status-pill success">` + esc(label("リンク済み", "Linked")) + `</span></li>`)
-				}
-				if automatic.Len() == 0 {
-					automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
-				}
-			}
-		} else {
-			automatic.WriteString(`<li class="field-help">` + esc(label("Kitsu接続が必要です。", "Kitsu connection required.")) + `</li>`)
-		}
-	}
-	if automatic.Len() == 0 {
-		automatic.WriteString(`<li class="field-help">` + esc(label("該当するSupervisorはいません。", "No matching Supervisor.")) + `</li>`)
-	}
-	if overrides.Len() == 0 {
-		overrides.WriteString(`<li class="field-help">` + esc(label("なし", "None")) + `</li>`)
-	}
-	var userOptions strings.Builder
-	linkedUsers := currentProductionLinkedHumanDiscordIDs(team, globalUsers, guildMembers)
-	userIDs := make([]string, 0, len(linkedUsers))
-	for id := range linkedUsers {
-		userIDs = append(userIDs, id)
-	}
-	sort.Strings(userIDs)
-	for _, id := range userIDs {
-		userOptions.WriteString(`<option value="` + esc(id) + `">` + esc(linkedUsers[id]) + `</option>`)
-	}
-	addForm := `<p class="field-help">` + esc(label("Kitsu接続からTask Typeを選択してください。", "Load available Task Types from Kitsu.")) + `</p>`
-	if selectedTaskType.ID != "" {
-		addForm = ""
-		if guildMembersPending {
-			addForm = `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを背景で取得中です。取得が終わるまでUser Overrideを追加できません。", "Discord server membership is loading in the background. User Overrides cannot be added until it finishes.")) + `</p>`
-		} else if guildMembersErr != nil {
-			addForm = `<p class="field-help reviewer-guild-members-warning" role="status">` + esc(label("Discordサーバーのメンバーを確認できないため、User Overrideを追加できません。", "User Overrides cannot be added until Discord server membership can be verified.")) + `</p>`
-		} else if teamErr != nil {
-			addForm = `<p class="field-help" role="status">` + esc(label("Kitsuのプロダクションチームを取得できないため、Discordユーザーを選択できません。", "Discord users cannot be selected because the Kitsu Production Team could not be loaded.")) + `</p>`
-		} else {
-			disabled := ""
-			if userOptions.Len() == 0 {
-				disabled = ` disabled`
-			}
-			addForm = `<form method="post" class="reviewer-target-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="action" value="add_production_reviewer_target"><input type="hidden" name="target_kind" value="user"><label>` + esc(label("Discordユーザー", "Discord user")) + `<select name="target_id" required>` + userOptions.String() + `</select></label><button class="btn" type="submit"` + disabled + `>` + esc(label("ユーザーを追加", "Add user")) + `</button></form>`
-		}
-		if rolesReady && len(roles) > 0 {
-			var roleOptions strings.Builder
-			eligibleCount := 0
-			for _, role := range roles {
-				_, eligible := eligibleRoleIDs[role.ID]
-				disabled, reason := "", ""
-				if !eligible {
-					disabled = ` disabled`
-					reason = label("メンション不可（適用時に確認）", "Not mentionable (verified on apply)")
-				} else {
-					eligibleCount++
-				}
-				optionText := "@" + role.Name
-				if reason != "" {
-					optionText += " — " + reason
-				}
-				roleOptions.WriteString(`<option value="` + esc(role.ID) + `"` + disabled + `>` + esc(optionText) + `</option>`)
-			}
-			disabled := ""
-			if eligibleCount == 0 {
-				disabled = ` disabled`
-			}
-			addForm += `<form method="post" class="reviewer-target-form" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="action" value="add_production_reviewer_target"><input type="hidden" name="target_kind" value="role"><label>` + esc(label("Discordロール", "Discord role")) + `<select name="target_id" required>` + roleOptions.String() + `</select></label><button class="btn" type="submit"` + disabled + `>` + esc(label("ロールを追加", "Add role")) + `</button></form>`
-		} else if rolesPending {
-			addForm += `<p class="field-help" role="status">` + esc(label("Discordロールを背景で取得中です。", "Discord roles are loading in the background.")) + `</p>`
-		} else {
-			addForm += `<p class="field-help">` + esc(label("メンション可能なDiscordロールはありません。", "No mentionable Discord roles are available.")) + `</p>`
-		}
-	}
-	reset := ""
-	if len(explicitRows) > 0 {
-		resetLabel := label("自動設定に戻す", "Reset to Automatic")
-		reset = `<form method="post" action="` + esc(postURL) + `"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="action" value="reset_production_reviewers"><input type="hidden" name="task_type_id" value="` + esc(selectedID) + `"><input type="hidden" name="task_type_name" value="` + esc(selectedTaskType.Name) + `"><button class="btn-ghost" type="submit">` + esc(resetLabel) + `</button></form>`
-	}
-	if len(taskTypes) == 0 {
-		taskOptions.WriteString(`<option value="">` + esc(label("Task Typeを利用できません", "Task Types unavailable")) + `</option>`)
-	}
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-wfa-recipients"><h3>` + esc(label("WFA通知先", "WFA recipients")) + `</h3><form method="get" class="reviewer-task-type-select" action="/bot/admin/projects"><input type="hidden" name="project" value="` + esc(p.KitsuProjectID) + `"><input type="hidden" name="tab" value="notifications"><input type="hidden" name="lang" value="` + esc(lang) + `"><label>` + esc(label("Task Type", "Task Type")) + `<select name="reviewer_task_type">` + taskOptions.String() + `</select></label><button class="btn-ghost" type="submit">` + esc(label("表示", "View")) + `</button></form>` + membershipWarning + `<div class="reviewer-group"><h4>` + esc(label("自動通知先", "Automatic recipients")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + automatic.String() + `</ul></div><div class="reviewer-group"><h4>` + esc(label("追加通知先", "Additional recipients")) + `</h4><ul class="production-users-simple-list reviewer-target-list">` + overrides.String() + `</ul></div><div class="reviewer-target-add">` + addForm + `</div><div class="reviewer-target-reset">` + reset + `</div></section>`
 }
 
 func handleCurrentProductionUserMutation(w http.ResponseWriter, r *http.Request, db *gorm.DB, botTokens ...string) bool {
@@ -1654,12 +1401,6 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 		view.KitsuBase, view.KitsuToken, view.KitsuReady = runtimeKitsuDataSource(db)
 	}
 	return view
-}
-
-func renderProductionNotificationsReadTable(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, botTokens ...string) string {
-	forumSettings, _, _ := model.LoadProductionForumSettings(db, p.KitsuProjectID)
-	data := loadProductionNotificationReviewerView(db, p, len(forumSettings.Routes) > 0, len(forumSettings.Routes) > 0, botTokens...)
-	return renderProductionNotificationsReadTableWithData(db, r, p, lang, class, statusLabel, data)
 }
 
 func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, data productionNotificationReviewerView) string {
@@ -1994,45 +1735,8 @@ func renderSelectedProductionDanger(r *http.Request, p model.Project, lang strin
 	return `<details id="danger-zone" class="production-settings-section production-settings-disclosure advanced-details danger-zone"` + open + `><summary>` + esc(t(lang, "危険な操作", "Danger Zone")) + `</summary><p class="danger-zone-intro">` + esc(t(lang, "危険操作は確認後にのみ実行されます。", "Destructive actions require explicit confirmation.")) + `</p><div class="danger-actions"><div class="danger-action-block"><h3>` + esc(tr(lang, "ia.disconnect_production")) + `</h3><p class="hint">` + esc(t(lang, "KitsuSyncの連携だけを解除します。Discord側のリソースは残ります。", "This removes only the KitsuSync connection. Discord resources remain.")) + `</p><form method="POST" class="delete-form" data-confirm="` + esc(t(lang, "Productionの連携を解除します。Discord側のリソースは残ります。", "This removes the Production connection. Discord resources remain.")) + `" data-require-text="` + esc(disconnectPhrase) + `"><input type="hidden" name="action" value="remove_connection"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-ghost" type="submit">` + esc(tr(lang, "ia.disconnect_production")) + `</button></form></div><div class="danger-action-block"><h3>` + esc(tr(lang, "ia.delete_discord_resources")) + `</h3><p class="hint">` + esc(t(lang, "Discord側のチャンネルとカテゴリを削除します。連携解除とは別の操作です。", "This may delete Discord channels and the category. It is separate from disconnecting the Production.")) + `</p><form method="POST" class="delete-form" data-confirm="` + esc(t(lang, "Discord側のリソースを削除します。", "This may delete Discord-side resources.")) + `" data-require-text="` + esc(deletePhrase) + `"><input type="hidden" name="action" value="preview_remove_connection_with_discord"><input type="hidden" name="project_id" value="` + esc(p.KitsuProjectID) + `"><button class="btn-danger" type="submit">` + esc(tr(lang, "ia.delete_discord_resources")) + `</button></form></div></div></details>`
 }
 
-func renderIABot(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
-	lang := currentLang(r)
-	class, _, hint := iaReadiness(db, lang)
-	permissionAction := `<a class="btn" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(t(lang, "Bot接続を設定", "Connect or reconnect")) + `</a>`
-	body := `<div class="section-stack"><section class="section-card glass"><div class="page-heading"><div><h2>` + esc(tr(lang, "connections.title")) + `</h2><p class="hint">` + esc(hint) + `</p></div></div><dl class="status-list">` +
-		statusSummaryRow(t(lang, "Bot状態", "Bot state"), normalizeStatusClass(class), cleanStatusLabel(lang, class), hint, permissionAction) +
-		statusSummaryRow(t(lang, "必要な権限", "Required permissions"), "neutral", t(lang, "接続設定時に必要", "Required during connection setup"), t(lang, "チャンネル表示、メッセージ送信、接続設定時のチャンネル管理", "View channels, send messages, and manage channels during setup"), "") +
-		statusSummaryRow(t(lang, "接続済みサーバー", "Joined servers"), "neutral", t(lang, "Bot接続後に確認できます", "Available after Bot Connection"), "", "") + `</dl></section></div>`
-	fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, body))
-}
-
 type pipelineHealthItem struct {
-	label, value, class, explanation, details, detailsLabel, action, actionLabel, detailsID string
-}
-
-func pipelineReadinessNextAction(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) string {
-	if readiness.State == ReadinessReady {
-		return ""
-	}
-	view := readinessViewFor(lang, r, readiness)
-	copyText, actionLabel := view.Hint, view.ActionLabel
-	switch readiness.State {
-	case ReadinessSetupRequired:
-		copyText = t(lang, "Kitsu接続が未設定のため、イベント監視と通知を開始できません。", "Kitsu setup is required before event monitoring and notifications can run.")
-		actionLabel = t(lang, "Kitsu接続を設定", "Configure Kitsu connection")
-	case ReadinessBotSetupRequired:
-		copyText = t(lang, "Discord Bot設定が未完了のため、通知を開始できません。", "Discord Bot setup is incomplete, so notifications cannot run.")
-		actionLabel = t(lang, "Discord Botを設定", "Configure Discord Bot")
-	case ReadinessProductionRequired:
-		copyText = t(lang, "接続済みで通知可能なプロダクションがありません。", "No connected and notifiable Production is available.")
-		actionLabel = t(lang, "新しいプロダクション接続", "New Production Connection")
-	case ReadinessRoutingRequired:
-		copyText = t(lang, "通知ルーティング設定が未完了です。", "Notification routing needs attention.")
-		actionLabel = t(lang, "通知設定を確認", "Review notification settings")
-	}
-	if strings.TrimSpace(view.ActionURL) == "" || strings.TrimSpace(actionLabel) == "" {
-		return `<p class="field-help pipeline-health-next-action" role="status">` + esc(copyText) + `</p>`
-	}
-	return `<div class="pipeline-health-next-action" role="status"><p class="field-help">` + esc(copyText) + `</p><a class="btn-ghost pipeline-health-next-action-link" href="` + esc(view.ActionURL) + `">` + esc(actionLabel) + `</a></div>`
+	label, value, class, explanation, details, detailsLabel, action, actionLabel string
 }
 
 func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -2187,10 +1891,6 @@ func replaceElementTextByID(body, id, text string) string {
 	return body[:start] + esc(text) + body[end:]
 }
 
-func addTelemetryViewerLocalTimes(body string, stats RuntimeSnapshot, windowName string) (result string) {
-	return addTelemetryViewerLocalTimesAt(body, stats, windowName, time.Now())
-}
-
 func addTelemetryViewerLocalTimesAt(body string, stats RuntimeSnapshot, windowName string, asOf time.Time) (result string) {
 	for _, service := range []string{"kitsu", "discord"} {
 		items := filterAPIObservations(stats.APIObservations[service], asOf, time.Minute)
@@ -2202,10 +1902,6 @@ func addTelemetryViewerLocalTimesAt(body string, stats RuntimeSnapshot, windowNa
 		body = strings.Replace(body, marker, replacement, 1)
 	}
 	return body + `<script data-telemetry-local-time>(function(){window.kitsuSyncSystemStatusTime=function(value){var date=new Date(value);if(Number.isNaN(date.getTime())){return ""}return [date.getHours(),date.getMinutes(),date.getSeconds()].map(function(part){return String(part).padStart(2,"0")}).join(":")};var zone=Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";document.querySelectorAll("[data-telemetry-meta][data-telemetry-at]").forEach(function(node){node.textContent=(document.documentElement.lang==="ja"?"最終更新":"Last updated")+" "+window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"));node.title="UTC "+node.getAttribute("data-telemetry-at")+" · "+zone});document.querySelectorAll(".telemetry-point[data-telemetry-at]").forEach(function(node){var duration=Number(node.getAttribute("data-telemetry-duration"))||0,label=(window.kitsuSyncSystemStatusTime(node.getAttribute("data-telemetry-at"))+" "+duration+" ms "+(document.documentElement.lang==="ja"?"正常":"Healthy")).trim();node.setAttribute("aria-label",label);var title=node.querySelector("title");if(title){title.textContent=label}})})();</script>`
-}
-
-func renderRuntimeObservabilitySummaryRaw(lang string, stats RuntimeSnapshot, windowName, body string) string {
-	return renderRuntimeObservabilitySummaryRawAt(lang, stats, windowName, body, time.Now())
 }
 
 func renderRuntimeObservabilitySummaryRawAt(lang string, stats RuntimeSnapshot, windowName, body string, asOf time.Time) string {
@@ -2228,10 +1924,6 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 		details = `<details class="pipeline-health-diagnostic"><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-diagnostic-content">` + item.details + `</div></details>`
 	}
 	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + details + `</div><div class="pipeline-health-rail"><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + action + `</div></article>`
-}
-
-func apiObservationDetails(lang string, stats RuntimeSnapshot, service, windowName string) string {
-	return apiObservationDetailsAt(lang, stats, service, windowName, time.Now())
 }
 
 func apiObservationDetailsAt(lang string, stats RuntimeSnapshot, service, windowName string, asOf time.Time) string {
@@ -2257,22 +1949,6 @@ func systemStatusProjectAction(lang string, r *http.Request, db *gorm.DB) string
 		}
 	}
 	return withLang("/bot/admin/projects", r)
-}
-
-func apiObservationGraph(items []APIObservation) string {
-	return apiObservationLineGraph(items, "en", telemetryWindow60Seconds)
-}
-
-func apiObservationLineGraph(items []APIObservation, lang, windowName string) string {
-	return apiObservationLineGraphWithScale(items, lang, windowName, observationScaleForItems(items))
-}
-
-func apiObservationLineGraphWithScale(items []APIObservation, lang, windowName string, maxValue float64) string {
-	return apiObservationLineGraphWithDomain(items, lang, windowName, observationYDomain{Lower: 0, Upper: maxValue})
-}
-
-func apiObservationLineGraphWithDomain(items []APIObservation, lang, windowName string, domain observationYDomain) string {
-	return apiObservationLineGraphAt(items, lang, time.Now(), domain)
 }
 
 func apiObservationLineGraphAt(items []APIObservation, lang string, asOf time.Time, domain observationYDomain) string {
@@ -2372,79 +2048,6 @@ func telemetryObservationLabel(lang string, item APIObservation) string {
 	return when + " " + strconv.FormatInt(item.Duration.Milliseconds(), 10) + " ms " + t(lang, "正常", "Healthy")
 }
 
-func rewriteLatencyGraph(graph string) string {
-	if graph == "" {
-		return graph
-	}
-	graph = strings.ReplaceAll(graph, `x="3" y="12"`, `x="0" y="12"`)
-	graph = strings.ReplaceAll(graph, `x="3" y="48"`, `x="0" y="48"`)
-	graph = strings.ReplaceAll(graph, `x="3" y="84"`, `x="0" y="84"`)
-	return alignLatencyTickLabels(addLatencyTickUnits(removeChartAxisTitle(graph)))
-}
-
-func alignLatencyTickLabels(graph string) string {
-	graph = strings.ReplaceAll(graph, `<text class="chart-tick" x="0"`, `<text class="chart-tick" text-anchor="end" x="66"`)
-	graph = strings.ReplaceAll(graph, `<text class='chart-tick' x='0'`, `<text class='chart-tick' text-anchor='end' x='66'`)
-	return graph
-}
-
-func removeChartAxisTitle(graph string) string {
-	for {
-		start := strings.Index(graph, `<text class="chart-axis-label"`)
-		quote := `"`
-		if start < 0 {
-			start = strings.Index(graph, `<text class='chart-axis-label'`)
-			quote = `'`
-		}
-		_ = quote
-		if start < 0 {
-			return graph
-		}
-		relEnd := strings.Index(graph[start:], `</text>`)
-		if relEnd < 0 {
-			return graph
-		}
-		end := start + relEnd + len(`</text>`)
-		graph = graph[:start] + graph[end:]
-	}
-}
-
-func addLatencyTickUnits(graph string) string {
-	var result strings.Builder
-	for len(graph) > 0 {
-		start := strings.Index(graph, `<text class="chart-tick"`)
-		if start < 0 {
-			start = strings.Index(graph, `<text class='chart-tick'`)
-		}
-		if start < 0 {
-			result.WriteString(graph)
-			break
-		}
-		result.WriteString(graph[:start])
-		openEnd := strings.Index(graph[start:], ">")
-		if openEnd < 0 {
-			result.WriteString(graph[start:])
-			break
-		}
-		contentStart := start + openEnd + 1
-		relEnd := strings.Index(graph[contentStart:], `</text>`)
-		if relEnd < 0 {
-			result.WriteString(graph[start:])
-			break
-		}
-		contentEnd := contentStart + relEnd
-		result.WriteString(graph[start:contentStart])
-		content := graph[contentStart:contentEnd]
-		result.WriteString(content)
-		if !strings.HasSuffix(content, "ms") {
-			result.WriteString("ms")
-		}
-		result.WriteString(`</text>`)
-		graph = graph[contentEnd+len(`</text>`):]
-	}
-	return result.String()
-}
-
 type telemetryChartLayout struct {
 	Width, Height, PlotLeft, PlotRight, DataLeft, DataRight, PlotTop, PlotMiddle, PlotBottom, PlotCenterX float64
 }
@@ -2456,58 +2059,6 @@ type observationYDomain struct {
 
 func formatLatencyTick(value float64) string {
 	return strconv.FormatInt(int64(math.Round(math.Max(0, value))), 10) + "ms"
-}
-
-func observationYDomainForItems(items []APIObservation) observationYDomain {
-	if len(items) == 0 {
-		return observationYDomain{Lower: 0, Upper: 10}
-	}
-	minValue, maxValue := math.Inf(1), 0.0
-	for _, item := range items {
-		if !item.Success {
-			continue
-		}
-		value := float64(item.Duration.Milliseconds())
-		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-			continue
-		}
-		minValue = math.Min(minValue, value)
-		maxValue = math.Max(maxValue, value)
-	}
-	if math.IsInf(minValue, 1) {
-		return observationYDomain{Lower: 0, Upper: 10}
-	}
-	rangeValue := maxValue - minValue
-	minimumSpan := math.Max(10, maxValue*0.25)
-	if rangeValue < minimumSpan {
-		rangeValue = minimumSpan
-	}
-	lower := math.Max(0, minValue-math.Max(rangeValue*0.15, minimumSpan*0.4))
-	upper := maxValue + math.Max(rangeValue*0.15, minimumSpan*0.6)
-	step := niceObservationStep((upper - lower) / 4)
-	lower = math.Max(0, math.Floor(lower/step)*step)
-	upper = math.Ceil(upper/step) * step
-	if upper-lower < minimumSpan {
-		upper = lower + math.Ceil(minimumSpan/step)*step
-	}
-	return observationYDomain{Lower: lower, Upper: upper}
-}
-
-func niceObservationStep(value float64) float64 {
-	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-		return 1
-	}
-	magnitude := math.Pow(10, math.Floor(math.Log10(value)))
-	normalized := value / magnitude
-	step := 1.0
-	if normalized > 5 {
-		step = 10
-	} else if normalized > 2 {
-		step = 5
-	} else if normalized > 1 {
-		step = 2
-	}
-	return step * magnitude
 }
 
 func telemetryChartGeometry() telemetryChartLayout {
@@ -2541,50 +2092,10 @@ type observationScaleState struct {
 	downSince time.Time
 }
 
-type observationDomainState struct {
-	domain    observationYDomain
-	downSince time.Time
-}
-
 var observationScaleStates = struct {
 	sync.Mutex
 	values map[string]observationScaleState
 }{values: make(map[string]observationScaleState)}
-
-var observationDomainStates = struct {
-	sync.Mutex
-	values map[string]observationDomainState
-}{values: make(map[string]observationDomainState)}
-
-func stableObservationYDomain(service, windowName string, items []APIObservation) observationYDomain {
-	required := observationYDomainForItems(items)
-	now := time.Now()
-	key := service + ":" + windowName
-	observationDomainStates.Lock()
-	defer observationDomainStates.Unlock()
-	state := observationDomainStates.values[key]
-	if state.domain.Upper <= state.domain.Lower {
-		state.domain = required
-		state.downSince = time.Time{}
-	} else {
-		expand := required.Upper > state.domain.Upper
-		if expand {
-			state.domain.Lower = math.Min(state.domain.Lower, required.Lower)
-			state.domain.Upper = math.Max(state.domain.Upper, required.Upper)
-			state.downSince = time.Time{}
-		} else if required.Lower > state.domain.Lower || required.Upper < state.domain.Upper {
-			if state.downSince.IsZero() {
-				state.downSince = now
-			} else if now.Sub(state.downSince) >= 15*time.Second {
-				state.domain = required
-				state.downSince = time.Time{}
-			}
-		}
-	}
-	observationDomainStates.values[key] = state
-	return state.domain
-}
-
 func stableObservationScale(service, windowName string, items []APIObservation) float64 {
 	key := service + ":" + windowName
 	required := observationScaleForItems(items)
@@ -2607,10 +2118,6 @@ func stableObservationScale(service, windowName string, items []APIObservation) 
 	return state.ceiling
 }
 
-func apiObservationStatusClass(stats RuntimeSnapshot, service string) string {
-	return apiObservationStatusClassAt(stats, service, time.Now())
-}
-
 func apiObservationStatusClassAt(stats RuntimeSnapshot, service string, asOf time.Time) string {
 	items := stats.APIObservations[service]
 	if len(items) == 0 {
@@ -2623,10 +2130,6 @@ func apiObservationStatusClassAt(stats RuntimeSnapshot, service string, asOf tim
 		return "ok"
 	}
 	return "bad"
-}
-
-func apiObservationStatus(lang string, stats RuntimeSnapshot, service string) string {
-	return apiObservationStatusAt(lang, stats, service, time.Now())
 }
 
 func apiObservationStatusAt(lang string, stats RuntimeSnapshot, service string, asOf time.Time) string {
@@ -2720,20 +2223,6 @@ func pipelineRoutingHint(lang string, readiness SharedBotRuntimeReadiness) strin
 		return t(lang, "通知可能なプロダクションがありません。", "No Production is currently available for notifications.")
 	}
 	return t(lang, "Productionはありますが、有効な通知先設定がありません。", "A Production exists, but its notification routing is missing or invalid.")
-}
-
-func pipelineDiscordValue(lang string, configured bool) string {
-	if configured {
-		return t(lang, "未検証", "Unverified")
-	}
-	return t(lang, "未設定", "Not configured")
-}
-
-func pipelineDiscordHint(lang string, configured bool) string {
-	if configured {
-		return t(lang, "Discord APIの検証結果はまだ記録されていません。", "Discord API validation has not been recorded.")
-	}
-	return t(lang, "Discord Botを設定してください。", "Configure the Discord Bot.")
 }
 
 func pipelineNotificationValue(lang string, readiness SharedBotRuntimeReadiness) string {
@@ -2847,28 +2336,6 @@ func cleanStatusLabel(lang, class string) string {
 	default:
 		return tr(lang, "status.action_required")
 	}
-}
-
-func statusText(lang string, ok bool) string {
-	if ok {
-		return t(lang, "接続済み", "Connected")
-	}
-	return tr(lang, "wizard.not_configured")
-}
-func statusTextOverall(lang string, ok bool) string {
-	if ok {
-		return tr(lang, "wizard.available")
-	}
-	return tr(lang, "wizard.unavailable")
-}
-func notificationClass(state string, ready bool, lang string) string {
-	if strings.Contains(strings.ToLower(state), "pause") || state == t(lang, "一時停止中", "Paused") {
-		return "warning"
-	}
-	if ready {
-		return "success"
-	}
-	return "blocked"
 }
 
 func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
@@ -3096,73 +2563,6 @@ func renderGlobalUserLinkForm(w http.ResponseWriter, r *http.Request, db *gorm.D
 	fmt.Fprint(w, adminPage(lang, "", r, body))
 }
 
-func renderGlobalUserMapping(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
-	lang := currentLang(r)
-	var rows strings.Builder
-	if len(model.ListUserMap(db)) == 0 && strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
-		for _, person := range filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db)) {
-			if strings.TrimSpace(person.FullName) == "" {
-				continue
-			}
-			rows.WriteString(`<tr><td>` + esc(person.FullName) + `</td><td>` + esc(t(lang, "未設定", "Not set")) + `</td><td><span class="status-badge status-badge-blocked" role="status">` + esc(t(lang, "未設定", "Not set")) + `</span></td><td><span class="field-help">` + esc(t(lang, "Kitsuの読み取り専用データです。ローカルの紐づけはありません。", "Read-only live Kitsu data; no local link is configured.")) + `</span></td></tr>`)
-		}
-	}
-	for _, u := range model.ListUserMap(db) {
-		state := tr(lang, "status.incomplete")
-		class := "blocked"
-		identity := t(lang, "未設定", "Not set")
-		if strings.TrimSpace(u.DiscordID) != "" {
-			state = tr(lang, "wizard.connected")
-			class = "success"
-			identity = strings.TrimSpace(u.DiscordDisplayName)
-			if identity == "" {
-				identity = t(lang, "Discordユーザー紐づけ済み", "Discord user linked")
-			}
-		}
-		if isSyntheticDiscordID(u.DiscordID) {
-			state = t(lang, "検証用データ", "Fixture data")
-			class = "neutral"
-			identity = t(lang, "—", "—")
-		} else if strings.TrimSpace(u.DiscordID) != "" && strings.TrimSpace(u.DiscordDisplayName) == "" {
-			state = t(lang, "表示名未確認", "Display name not verified")
-			class = "warning"
-			identity = t(lang, "表示名未確認", "Display name not verified")
-		}
-		if strings.TrimSpace(u.DiscordID) == "" {
-			state = t(lang, "未設定", "Not set")
-			class = "blocked"
-			identity = t(lang, "未設定", "Not set")
-		} else if isSyntheticDiscordID(u.DiscordID) {
-			state = t(lang, "検証用データ", "Fixture data")
-			class = "neutral"
-			identity = t(lang, "検証用データ", "Fixture data")
-		} else if strings.TrimSpace(u.DiscordDisplayName) == "" {
-			state = t(lang, "要確認", "Needs review")
-			class = "warning"
-			identity = t(lang, "表示名未確認", "Display name not verified")
-		} else {
-			state = t(lang, "紐づけ済み", "Linked")
-			class = "success"
-			identity = strings.TrimSpace(u.DiscordDisplayName)
-		}
-		if isSyntheticDiscordID(u.DiscordID) {
-			identity = t(lang, "—", "—")
-		}
-		if hasValidationOnlyProject(db) {
-			rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><span class="field-help">` + esc(t(lang, "検証専用・変更不可", "Validation only; changes disabled")) + `</span></td></tr>`)
-		} else {
-			change := withLang("/bot/admin/users?edit="+fmt.Sprint(u.ID), r)
-			remove := `<form method="POST" class="inline-form delete-form" data-confirm="` + esc(t(lang, "この紐づけだけを解除します。Discord側のユーザーは変更しません。", "Remove only this identity link. The Discord user will not be changed.")) + `" data-require-text="` + esc(t(lang, "解除", "REMOVE")) + `"><input type="hidden" name="action" value="remove_global_link"><input type="hidden" name="user_id" value="` + fmt.Sprint(u.ID) + `"><button class="btn-danger" type="submit">` + esc(t(lang, "解除", "Remove")) + `</button></form>`
-			rows.WriteString(`<tr><td>` + esc(u.KitsuName) + `</td><td>` + esc(identity) + `</td><td><span class="status-badge status-badge-` + class + `" role="status">` + esc(state) + `</span></td><td><div class="inline-actions"><a class="btn-ghost" href="` + esc(change) + `">` + esc(t(lang, "変更", "Change")) + `</a>` + remove + `</div></td></tr>`)
-		}
-	}
-	if rows.Len() == 0 {
-		rows.WriteString(`<tr><td colspan="4"><div class="empty-state"><strong>` + esc(t(lang, "ユーザー紐づけはありません", "No user links yet")) + `</strong><span class="field-help">` + esc(t(lang, "Kitsuユーザーが利用可能になると、ここからDiscordユーザーを選択できます。", "When Kitsu users are available, choose their Discord identity here.")) + `</span></div></td></tr>`)
-	}
-	body := `<section class="section-card glass"><h1>` + esc(tr(lang, "ia.user_mapping")) + `</h1><p class="hint">` + esc(t(lang, "KitsuユーザーとDiscordユーザーを紐づけます。", "Link Kitsu users to Discord users.")) + `</p><div class="table-wrap"><table><thead><tr><th>` + esc(t(lang, "Kitsuユーザー", "Kitsu user")) + `</th><th>` + esc(t(lang, "Discordユーザー", "Discord user")) + `</th><th>` + esc(t(lang, "状態", "Status")) + `</th><th>` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></section>`
-	fmt.Fprint(w, adminPage(lang, "", r, body))
-}
-
 func globalUserLinkingPeople(db *gorm.DB) ([]KitsuPerson, string) {
 	if strings.TrimSpace(os.Getenv("KitsuJWTToken")) != "" {
 		return filterAssignablePersons(ListKitsuPersons(""), botAccountEmail(db)), "live_kitsu_api"
@@ -3362,35 +2762,6 @@ func renderWizardPrerequisitesShared(lang string, r *http.Request, readiness Sha
 	return body + `</section>`
 }
 
-func renderWizardPrerequisites(lang string, r *http.Request, readiness SharedBotRuntimeReadiness) string {
-	status := func(ok bool) string {
-		if ok {
-			return tr(lang, "wizard.connected")
-		}
-		return tr(lang, "wizard.not_configured")
-	}
-	botExplanation := ""
-	if !readiness.DiscordConfigured {
-		botExplanation = tr(lang, "wizard.bot_required_explanation")
-	}
-	notificationValue := tr(lang, "wizard.unavailable")
-	notificationExplanation := tr(lang, "wizard.unavailable_explanation")
-	if readiness.OverallReady {
-		notificationValue = tr(lang, "wizard.available")
-		notificationExplanation = ""
-	}
-	body := `<section class="section-card glass" aria-labelledby="wizard-prerequisites-title"><h2 id="wizard-prerequisites-title">` + esc(tr(lang, "wizard.prerequisites_title")) + `</h2><dl class="status-list">` +
-		statusSummaryRow("Kitsu"+t(lang, "接続", " connection"), map[bool]string{true: "success", false: "blocked"}[readiness.KitsuConfigured], status(readiness.KitsuConfigured), "", "") +
-		statusSummaryRow("Discord Bot", map[bool]string{true: "success", false: "blocked"}[readiness.DiscordConfigured], status(readiness.DiscordConfigured), botExplanation, "") +
-		statusSummaryRow(tr(lang, "wizard.notification_state"), map[bool]string{true: "success", false: "blocked"}[readiness.OverallReady], notificationValue, notificationExplanation, "") + `</dl>`
-	if !readiness.OverallReady {
-		body += `<p class="state-explanation" role="status" aria-live="polite">` + esc(tr(lang, "wizard.blocked_bot")) + `</p><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "wizard.open_bot")) + `</a>`
-	} else {
-		body += `<p class="state-explanation" role="status" aria-live="polite">` + esc(tr(lang, "wizard.prerequisites_ready")) + `</p><a class="btn" href="` + esc(setupWizardURL(r, 2, "", "", false)) + `">` + esc(tr(lang, "wizard.next")) + `</a>`
-	}
-	return body + `</section>`
-}
-
 func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject, projectsErr error) string {
 	var options strings.Builder
 	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_production")) + `</option>`)
@@ -3428,32 +2799,6 @@ func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, 
 			if !found {
 				errorMessage = `<p class="state-explanation" role="alert">` + esc(tr(lang, "wizard.error.invalid_production")) + `</p>`
 			}
-		}
-	}
-	return `<section class="section-card glass" aria-labelledby="wizard-production-title"><h2 id="wizard-production-title">` + esc(tr(lang, "wizard.production_title")) + `</h2>` + errorMessage + `<form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="3"><input type="hidden" name="lang" value="` + esc(lang) + `">` + repairInput(r) + `<label for="wizard-production">` + esc(tr(lang, "wizard.production_label")) + `</label><select id="wizard-production" name="project" required aria-describedby="wizard-production-help">` + options.String() + `</select><p id="wizard-production-help" class="field-help">` + esc(tr(lang, "wizard.production_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 1, "", "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
-}
-
-func renderWizardProduction(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject) string {
-	var options strings.Builder
-	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_production")) + `</option>`)
-	for _, p := range projects {
-		connected := model.FindProjectByKitsuID(db, p.ID) != nil
-		disabled := ""
-		label := p.Name
-		if connected {
-			disabled = " disabled"
-			label += " (" + tr(lang, "wizard.already_connected") + ")"
-		}
-		options.WriteString(`<option value="` + esc(p.ID) + `"` + disabled + `>` + esc(label) + `</option>`)
-	}
-	errorMessage := ""
-	if r.URL.Query().Get("wizard_step") == "3" {
-		if strings.TrimSpace(r.URL.Query().Get("project")) == "" {
-			errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "プロダクションを選択してください", "Select a Production")) + `</p>`
-		} else if selected := wizardProject(projects, strings.TrimSpace(r.URL.Query().Get("project"))); selected.ID != "" && model.FindProjectByKitsuID(db, selected.ID) != nil {
-			errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "このプロダクションはすでに連携されています", "This Production is already connected")) + `</p>`
-		} else {
-			errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "選択したプロダクションを確認できませんでした", "The selected Production could not be verified")) + `</p>`
 		}
 	}
 	return `<section class="section-card glass" aria-labelledby="wizard-production-title"><h2 id="wizard-production-title">` + esc(tr(lang, "wizard.production_title")) + `</h2>` + errorMessage + `<form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="3"><input type="hidden" name="lang" value="` + esc(lang) + `">` + repairInput(r) + `<label for="wizard-production">` + esc(tr(lang, "wizard.production_label")) + `</label><select id="wizard-production" name="project" required aria-describedby="wizard-production-help">` + options.String() + `</select><p id="wizard-production-help" class="field-help">` + esc(tr(lang, "wizard.production_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 1, "", "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
@@ -3702,10 +3047,6 @@ func productionConnectionStatus(project model.Project, lang string) (string, str
 		return "neutral", t(lang, "未接続", "Disconnected")
 	}
 	return "ok", t(lang, "接続済み", "Connected")
-}
-
-func renderDisconnectedProductionCard(lang string, r *http.Request, project model.Project) string {
-	return `<article class="section-card glass production-list-item"><div><h2>` + esc(project.Name) + `</h2></div><span class="status-pill neutral">` + esc(t(lang, "未接続", "Disconnected")) + `</span><a class="btn-ghost" href="` + esc(withLang("/bot/setup?project="+url.QueryEscape(project.KitsuProjectID), r)) + `">` + esc(t(lang, "接続設定", "Configure connection")) + `</a></article>`
 }
 
 func renderIAConnectedProductionDeleteResultRefined(lang string, r *http.Request, project model.Project, result connectedProductionChannelDeleteExecution) string {

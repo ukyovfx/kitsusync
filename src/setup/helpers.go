@@ -507,14 +507,6 @@ func selectedAttr(selected bool) string {
 	return ""
 }
 
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-// botDo executes a Discord Bot API request and retries once on HTTP 429 (rate limit).
 func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, error) {
 	trimmedToken := strings.TrimSpace(botToken)
 	if trimmedToken == "" {

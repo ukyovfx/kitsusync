@@ -263,13 +263,6 @@ func authenticateDeleteAdmin(ctx context.Context, db *gorm.DB, kitsuHost, email,
 	return nil
 }
 
-func adminProjectsPathFor(r *http.Request) string {
-	if strings.HasPrefix(r.URL.Path, "/bot/") {
-		return "/bot/admin/projects"
-	}
-	return "/admin/projects"
-}
-
 // renderDeleteReauthPage renders the re-authentication page shown as step 2 of project deletion.
 func renderDeleteReauthPage(lang, pid, projectName string, r *http.Request) string {
 	backURL := withLang("/bot/setup", r)
@@ -315,18 +308,6 @@ func page(lang, title, color, sub, listItems, footer string) string {
 	body := fmt.Sprintf(`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0"><div class="page-heading"><div><div class="eyebrow">Project Setup</div><h1 style="color:%s">%s</h1><p>%s</p></div></div><div class="section-card glass"><div class="table-wrap"><table><tbody>%s</tbody></table></div></div><div class="button-row">%s</div></div>`,
 		color, esc(title), esc(sub), listItems, footer)
 	return appShell("KitsuSync", "", lang, nil, "", body)
-}
-
-func renderBotSetupSuccess(lang string) string {
-	return page(lang, t(lang, "Bot設定完了", "Bot Setup Complete"), "#8ecf8b", t(lang, "Botアカウントを作成し、実行環境へ適用しました。", "The bot account was created and applied to the running environment."), `<li>`+esc(t(lang, "次は新規連携セットアップで project routing を設定してください。", "Continue in New Connection Setup to configure project routing."))+`</li>`, `<a href="`+appendLang("/bot/setup", lang)+`">`+t(lang, "新規連携セットアップへ戻る", "Back to New Connection Setup")+`</a>`)
-}
-
-func renderBotSetupError(lang, errMsg string) string {
-	return page(lang, t(lang, "Bot設定失敗", "Bot Setup Failed"), "#ff6a50", t(lang, "Botアカウントを作成できませんでした。", "The bot account could not be created."), `<li>`+html.EscapeString(errMsg)+`</li>`, `<a href="`+appendLang("/bot/setup", lang)+`">`+t(lang, "戻る", "Back")+`</a>`)
-}
-
-func renderKitsuConnectionSuccess(lang string) string {
-	return page(lang, t(lang, "Kitsu接続を保存しました", "Kitsu connection saved"), "#8ecf8b", t(lang, "Kitsu Bot tokenを検証して安全に保存しました。", "The Kitsu Bot token was validated and stored safely."), `<li>`+html.EscapeString(t(lang, "接続設定で状態を確認できます。", "Review the connection state in Connections."))+`</li>`, `<a href="`+appendLang("/bot/admin/bot?edit=1", lang)+`">`+t(lang, "接続設定へ戻る", "Back to Connections")+`</a>`)
 }
 
 func renderKitsuConnectionError(lang string, args ...interface{}) string {

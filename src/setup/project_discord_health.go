@@ -1,14 +1,10 @@
 package setup
 
 import (
-	"fmt"
-	"html"
-	"net/url"
 	"strings"
 
 	"app/src/model"
 	"gorm.io/gorm"
-	"net/http"
 )
 
 // ProjectDiscordResourceHealth is a read-only ownership report for one
@@ -125,25 +121,4 @@ func inspectProjectDiscordResources(project model.Project, db *gorm.DB) ProjectD
 		report.ChannelsRateLimited = view.rateLimited
 	}
 	return report
-}
-
-func renderProjectDiscordResourceNotice(db *gorm.DB, r *http.Request, project model.Project, lang string) string {
-	report := inspectProjectDiscordResources(project, db)
-	if report.Error == "" && !report.HasStaleResources() {
-		return ""
-	}
-	detail := report.Error
-	if detail == "" {
-		detail = fmt.Sprintf(t(lang, "保存channel %d件のうち %d件を確認できません。category=%t、重複=%d件です。", "%d saved channel(s) have not been verified; category=%t, duplicates=%d."), report.SavedChannelCount, report.LiveSavedChannelCount, report.CategoryPresent, report.DuplicateSavedChannelCount)
-	}
-	fix := t(lang, "既存のDiscord Guildを再検証し、不足channelだけを確認して修復してください。", "Revalidate the linked Discord Guild and explicitly repair only missing channels.")
-	repairURL := ""
-	if strings.TrimSpace(project.DiscordGuildID) != "" {
-		repairURL = withLang("/bot/setup?wizard_step=4&repair=1&project="+url.QueryEscape(project.KitsuProjectID)+"&plan_guild="+url.QueryEscape(project.DiscordGuildID), r)
-	}
-	action := ""
-	if repairURL != "" {
-		action = `<a class="btn-ghost" href="` + html.EscapeString(repairURL) + `">` + html.EscapeString(t(lang, "修復計画を確認", "Review repair plan")) + `</a>`
-	}
-	return `<div class="routing-resource-warning" role="alert" style="padding:12px 14px;border:1px solid rgba(255,200,80,.38);border-radius:14px;background:rgba(255,200,80,.08);margin-bottom:14px"><strong>` + html.EscapeString(t(lang, "Discordリソースを確認できません", "Discord resources need review")) + `</strong><p style="margin:6px 0">` + html.EscapeString(detail) + `</p><small>` + html.EscapeString(fix) + `</small><div style="margin-top:10px">` + action + `</div></div>`
 }

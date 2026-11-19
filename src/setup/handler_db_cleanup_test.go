@@ -1,12 +1,8 @@
 package setup
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,16 +10,6 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
-
-type setupDiscordProvisioningStub struct {
-	t                *testing.T
-	categoryID       string
-	categoryStarted  chan struct{}
-	channelStarted   chan struct{}
-	createdChannelID []string
-	deletedIDs       []string
-	nextChannelNum   int
-}
 
 func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -56,77 +42,6 @@ func newSetupHandlerTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
 	return db
-}
-
-func installSetupDiscordProvisioningStub(t *testing.T) *setupDiscordProvisioningStub {
-	t.Helper()
-	stub := &setupDiscordProvisioningStub{
-		t:          t,
-		categoryID: "cat-setup-test",
-	}
-
-	oldTransport := http.DefaultTransport
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "discord.com" {
-			return nil, fmt.Errorf("unexpected host: %s", req.URL.Host)
-		}
-		if !strings.HasPrefix(req.URL.Path, "/api/v10/") {
-			return nil, fmt.Errorf("unexpected path: %s", req.URL.Path)
-		}
-
-		switch {
-		case req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/api/v10/guilds/") && strings.HasSuffix(req.URL.Path, "/channels"):
-			var payload struct {
-				Type int `json:"type"`
-			}
-			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
-				return nil, err
-			}
-			if payload.Type == 4 {
-				if stub.categoryStarted != nil {
-					select {
-					case stub.categoryStarted <- struct{}{}:
-					default:
-					}
-				}
-				return jsonResp(http.StatusOK, `{"id":"`+stub.categoryID+`"}`), nil
-			}
-			if payload.Type == 0 {
-				if stub.channelStarted != nil {
-					select {
-					case stub.channelStarted <- struct{}{}:
-					default:
-					}
-				}
-				stub.nextChannelNum++
-				channelID := fmt.Sprintf("ch-%d", stub.nextChannelNum)
-				stub.createdChannelID = append(stub.createdChannelID, channelID)
-				return jsonResp(http.StatusOK, `{"id":"`+channelID+`"}`), nil
-			}
-			return jsonResp(http.StatusBadRequest, `{"message":"unexpected channel type"}`), nil
-
-		case req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/api/v10/channels/") && strings.HasSuffix(req.URL.Path, "/webhooks"):
-			parts := strings.Split(req.URL.Path, "/")
-			channelID := parts[len(parts)-2]
-			return jsonResp(http.StatusOK, `{"id":"wh-`+channelID+`","token":"tok-`+channelID+`"}`), nil
-
-		case req.Method == http.MethodDelete && strings.HasPrefix(req.URL.Path, "/api/v10/channels/"):
-			parts := strings.Split(req.URL.Path, "/")
-			channelID := parts[len(parts)-1]
-			stub.deletedIDs = append(stub.deletedIDs, channelID)
-			return jsonResp(http.StatusOK, `{"id":"`+channelID+`"}`), nil
-		}
-
-		return jsonResp(http.StatusNotFound, `{"message":"not found"}`), nil
-	})
-	t.Cleanup(func() {
-		http.DefaultTransport = oldTransport
-	})
-	return stub
-}
-
-func jsonResp(status int, body string) *http.Response {
-	return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: http.Header{"Content-Type": []string{"application/json"}}}
 }
 
 func TestDeleteProjectConnectionOnlyRejectsUnresolvedDeletionTombstone(t *testing.T) {
@@ -313,16 +228,6 @@ func TestCreateProjectDoesNotInheritOrphanRoutingState(t *testing.T) {
 		t.Fatal("stale notification config was inherited")
 	}
 }
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func TestSetupSQLiteFixtureEnablesForeignKeysAndHasNoViolations(t *testing.T) {
 	db := newSetupHandlerTestDB(t)
 	var enabled int

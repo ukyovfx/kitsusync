@@ -885,58 +885,6 @@ func isStudioManagerOrHigher(role string) bool {
 	}
 }
 
-func legacyLoginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
-	errHTML := ""
-	if errMsg != "" {
-		errHTML = `<div class="toast glass" role="alert" aria-live="assertive" style="background:rgba(255,106,80,.12);border-color:rgba(255,106,80,.24);color:#ffd7cf">` + html.EscapeString(errMsg) + `</div>`
-	}
-	nextInput := ""
-	if next != "" {
-		nextInput = `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">`
-	}
-	hostnameInput := ""
-	if showHostname {
-		hostnameInput = `<label for="login-hostname">` + t(lang, "Kitsu URL", "Kitsu URL") + `</label><input id="login-hostname" type="url" name="hostname" placeholder="http://127.0.0.1:8080" required>`
-	}
-
-	body := fmt.Sprintf(`
-<div class="login-page"><div class="page-card glass login-card" style="width:100%%;max-width:520px">
-  <div class="page-heading">
-    <div>
-      <div class="eyebrow">%s</div>
-      <h1>%s</h1>
-      <p>%s</p>
-    </div>
-  </div>
-  %s
-  <form method="POST" class="section-stack">
-    %s
-    <div class="section-card glass">
-      %s
-      <label for="login-email">%s</label>
-      <input id="login-email" type="email" name="email" autocomplete="email" required autofocus>
-      <label for="login-password">%s</label>
-      <input id="login-password" type="password" name="password" autocomplete="current-password" required>
-      <div class="button-row">
-        <button type="submit" class="btn">%s</button>
-      </div>
-    </div>
-  </form>
-</div></div>`,
-		t(lang, "管理画面ログイン", "Admin Access"),
-		"KitsuSync",
-		t(lang, "Kitsu の manager / admin アカウントでログインしてください。", "Sign in with a Kitsu manager or admin account."),
-		errHTML,
-		nextInput,
-		hostnameInput,
-		t(lang, "メール", "Email"),
-		t(lang, "パスワード", "Password"),
-		t(lang, "ログイン", "Login"),
-	)
-
-	return appShellWithSurface("KitsuSync", "", lang, r, "", "login-surface", body)
-}
-
 func loginPageHTML(lang, errMsg, next string, showHostname bool, r *http.Request) string {
 	errHTML := ""
 	if errMsg != "" {
