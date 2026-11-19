@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"app/src/model"
+	"app/src/utils/truncate"
 )
 
 // Forum signal messages. The first message of a thread is the card; every later
@@ -13,58 +16,147 @@ import (
 // ForumSignal is one rendered signal message.
 type ForumSignal struct {
 	Content        string
+	Embeds         []Embed
 	AllowedUserIDs []string
 	AllowedRoleIDs []string
 }
 
-// RenderForumSignal renders the signal for a forum intent.
-//   - wfa:     reviewer mention + チェックをお願いします。 (+ optional 提出 line)
-//   - retake:  assignee mention + リテイクです。 (+ optional quote)
-//   - done:    assignee mention + 完了しました。
-//   - assign:  new assignee mention + このタスクの担当になりました。
-//   - comment: mention + コメントがあります。 (+ optional quote)
-//
-// submitter is the display name from the submitter marker. It is shown as text
-// only: the mention list stays exactly what the caller computed.
-func RenderForumSignal(intent, taskURL, quote, submitter string, userIDs, roleIDs []string) ForumSignal {
-	mentions := forumMentionText(userIDs, roleIDs)
-	var line string
-	switch intent {
-	case "wfa":
-		line = "チェックをお願いします。"
-	case "retake":
-		line = "リテイクです。"
-	case "done":
-		line = "完了しました。"
-	case "assign":
-		line = "このタスクの担当になりました。"
-	case "comment":
-		line = "コメントがあります。"
+// ForumCardInput carries everything the card-shaped signal renderer needs.
+// EntityType / ParentName / EntityName / TaskType come from the planned
+// payload; LegacyTitle is the task row's space-joined title, the fallback for
+// rows queued before the payload carried display fields.
+type ForumCardInput struct {
+	Intent      string
+	TaskType    string
+	EntityType  string
+	ParentName  string
+	EntityName  string
+	LegacyTitle string
+	Quote       string
+	Submitter   string
+	PublishLine string
+	TaskURL     string
+	StatusName  string
+	Assignees   []string
+	UserIDs     []string
+	RoleIDs     []string
+}
+
+// forumCardHeading builds the embed title in the card shape
+// ("Shot / sq01 - sh002"), falling back to the legacy thread title.
+func forumCardHeading(entityType, parent, task, legacyTitle string) string {
+	switch {
+	case entityType != "" && parent != "" && task != "":
+		return entityType + " / " + parent + " - " + task
+	case entityType != "" && task != "":
+		return entityType + " / " + task
+	case parent != "" && task != "":
+		return parent + " / " + task
+	case entityType != "":
+		return entityType
+	case parent != "":
+		return parent
+	case task != "":
+		return task
 	default:
-		line = "更新されました。"
+		return legacyTitle
 	}
-	parts := []string{}
-	if mentions != "" {
-		parts = append(parts, mentions)
+}
+
+// forumStatusLine renders the 状態行: emoji + STATUS + action.
+func forumStatusLine(intent string) string {
+	switch intent {
+	case model.ForumIntentStatusWFA, model.ForumIntentStatusRetake, model.ForumIntentStatusDone:
+		message, emoji := localizedStatusMessageInfo(strings.ToUpper(intent), "ja")
+		return emoji + " " + strings.ToUpper(intent) + " " + message
+	case model.ForumIntentAssign:
+		_, emoji := localizedStatusMessageInfo("TODO", "ja")
+		return emoji + " このタスクの担当になりました。"
+	default:
+		return ""
 	}
-	parts = append(parts, line)
-	if intent == "wfa" {
-		if trimmed := strings.TrimSpace(submitter); trimmed != "" {
+}
+
+// forumCardDescription assembles the embed description lines.
+func forumCardDescription(in ForumCardInput) string {
+	var parts []string
+	switch in.Intent {
+	case model.ForumIntentComment:
+		if in.Quote != "" {
+			parts = append(parts, "💬 "+in.Quote)
+		}
+	case model.ForumIntentPublish:
+		if in.PublishLine != "" {
+			parts = append(parts, sanitizeDiscordText(in.PublishLine))
+		}
+	default:
+		if line := forumStatusLine(in.Intent); line != "" {
+			parts = append(parts, line)
+		}
+	}
+	if in.Intent == model.ForumIntentStatusWFA {
+		if trimmed := strings.TrimSpace(in.Submitter); trimmed != "" {
 			parts = append(parts, "提出："+sanitizeDiscordText(trimmed))
 		}
 	}
-	if intent == "retake" || intent == "comment" {
-		if trimmed := strings.TrimSpace(quote); trimmed != "" {
+	if in.Intent == model.ForumIntentStatusRetake {
+		if trimmed := strings.TrimSpace(in.Quote); trimmed != "" {
 			parts = append(parts, "> "+sanitizeDiscordText(trimmed))
 		}
 	}
-	if taskURL != "" {
-		parts = append(parts, taskURL)
+	if in.TaskURL != "" {
+		parts = append(parts, "[🦊 Kitsu]("+in.TaskURL+")")
+	}
+	footer := forumCardFooter(in.StatusName, in.Assignees)
+	if footer != "" {
+		parts = append(parts, footer)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// forumCardFooter renders the footer block: ステータス / 担当, full-width colon.
+func forumCardFooter(statusName string, assignees []string) string {
+	var lines []string
+	if status := strings.ToLower(strings.TrimSpace(statusName)); status != "" {
+		lines = append(lines, "ステータス："+status)
+	}
+	if names := sanitizeAssigneeNames(assignees); len(names) > 0 {
+		lines = append(lines, "担当："+strings.Join(names, " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func sanitizeAssigneeNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if trimmed := sanitizeDiscordText(strings.TrimSpace(name)); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// RenderForumSignalCard renders a signal as a card-shaped embed. Content
+// carries the mention line only; description, links and the status/assignee
+// footer live in the embed. Comment and publish signals are neutral: only
+// WFA / RETAKE / DONE use the status colors.
+func RenderForumSignalCard(in ForumCardInput) ForumSignal {
+	title := truncate.TruncateString(forumCardHeading(in.EntityType, in.ParentName, in.EntityName, in.LegacyTitle), 256)
+	color := neutralEmbedColor
+	if in.Intent == model.ForumIntentStatusWFA || in.Intent == model.ForumIntentStatusRetake || in.Intent == model.ForumIntentStatusDone {
+		color = notificationStatusColor(in.Intent)
+	}
+	embed := Embed{
+		Description: truncate.TruncateString(forumCardDescription(in), 4096),
+		Title:       title,
+		Color:       color,
+		Author:      EmbedAuthor{Name: truncate.TruncateString(strings.TrimSpace(in.TaskType), 256)},
 	}
 	return ForumSignal{
-		Content:        strings.Join(parts, "\n"),
-		AllowedUserIDs: uniqueDiscordIDs(userIDs),
-		AllowedRoleIDs: uniqueDiscordRoleIDs(roleIDs),
+		Content:        forumMentionText(in.UserIDs, in.RoleIDs),
+		Embeds:         []Embed{embed},
+		AllowedUserIDs: uniqueDiscordIDs(in.UserIDs),
+		AllowedRoleIDs: uniqueDiscordRoleIDs(in.RoleIDs),
 	}
 }
 
@@ -118,6 +210,7 @@ func ForumFirstMessage(card Payload) ForumThreadMessage {
 func ForumSignalMessage(signal ForumSignal, nonce string) ForumMessageCreate {
 	return ForumMessageCreate{
 		Content: signal.Content,
+		Embeds:  signal.Embeds,
 		AllowedMentions: &AllowedMentions{
 			Parse: []string{},
 			Users: signal.AllowedUserIDs,

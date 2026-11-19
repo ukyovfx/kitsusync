@@ -139,7 +139,8 @@ func TestForumSyncPatchClearsTagsWithEmptyArray(t *testing.T) {
 	}
 }
 
-func TestForumRequestClassifiesRateLimit(t *testing.T) {	withForumAPI(t, func(w http.ResponseWriter, r *http.Request) {
+func TestForumRequestClassifiesRateLimit(t *testing.T) {
+	withForumAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "2.5")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"code":0,"message":"You are being rate limited.","retry_after":2.5}`))
@@ -206,7 +207,7 @@ func TestPostForumMessageCarriesNonceAndSuppressedMentions(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"msg-1","channel_id":"thread-1"}`))
 	})
 
-	signal := RenderForumSignal("wfa", "https://kitsu/productions/1/shots/tasks/2", "", "", []string{"111111111111111111"}, nil)
+	signal := RenderForumSignalCard(ForumCardInput{Intent: "wfa", TaskURL: "https://kitsu/productions/1/shots/tasks/2", UserIDs: []string{"111111111111111111"}})
 	msg, err := PostForumMessage("token-1", "thread-1", ForumSignalMessage(signal, ForumNonce("task-1", 7)))
 	if err != nil {
 		t.Fatalf("PostForumMessage: %v", err)
@@ -235,7 +236,10 @@ func TestPostForumMessageCarriesNonceAndSuppressedMentions(t *testing.T) {
 }
 
 func TestForumNonceFitsDiscordLimit(t *testing.T) {
-	cases := []struct{ taskID string; outboxID uint }{
+	cases := []struct {
+		taskID   string
+		outboxID uint
+	}{
 		{"", 1},
 		{"task-1", 7},
 		{"9b2f1c4e-8a3d-4f6b-9c1e-2d5a7b8c9d0e", 12345},
@@ -261,17 +265,20 @@ func TestRenderForumSignalTemplates(t *testing.T) {
 		quote  string
 		want   []string
 	}{
-		{"wfa", "", []string{"<@111111111111111111>", "チェックをお願いします。", url}},
-		{"retake", "直してください", []string{"リテイクです。", "> 直してください", url}},
-		{"done", "", []string{"完了しました。", url}},
-		{"assign", "", []string{"このタスクの担当になりました。", url}},
+		{"wfa", "", []string{"👀 WFA チェックをお願いします", url}},
+		{"retake", "直してください", []string{"🔄 RETAKE 修正をお願いします", "> 直してください", url}},
+		{"done", "", []string{"✅ DONE 完了しました。必要に応じてご確認ください。", url}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.intent, func(t *testing.T) {
-			signal := RenderForumSignal(tc.intent, url, tc.quote, "", []string{"111111111111111111"}, nil)
+			signal := RenderForumSignalCard(ForumCardInput{Intent: tc.intent, Quote: tc.quote, TaskURL: url, UserIDs: []string{"111111111111111111"}})
+			if len(signal.Embeds) != 1 {
+				t.Fatalf("embeds = %d, want 1", len(signal.Embeds))
+			}
+			description := signal.Embeds[0].Description
 			for _, want := range tc.want {
-				if !strings.Contains(signal.Content, want) {
-					t.Errorf("content %q missing %q", signal.Content, want)
+				if !strings.Contains(description, want) {
+					t.Errorf("description %q missing %q", description, want)
 				}
 			}
 			if strings.Contains(signal.Content, "@everyone") {
@@ -281,10 +288,13 @@ func TestRenderForumSignalTemplates(t *testing.T) {
 	}
 }
 
-func TestRenderForumSignalWithoutRecipientsKeepsURL(t *testing.T) {
-	signal := RenderForumSignal("done", "https://kitsu.example/t/1", "", "", nil, nil)
-	if signal.Content != "完了しました。\nhttps://kitsu.example/t/1" {
-		t.Errorf("content = %q", signal.Content)
+func TestRenderForumSignalCardKeepsURLWithoutRecipients(t *testing.T) {
+	signal := RenderForumSignalCard(ForumCardInput{Intent: "done", TaskURL: "https://kitsu.example/t/1"})
+	if signal.Content != "" {
+		t.Errorf("content = %q, want the mention line only", signal.Content)
+	}
+	if !strings.Contains(signal.Embeds[0].Description, "[🦊 Kitsu](https://kitsu.example/t/1)") {
+		t.Errorf("description %q missing the Kitsu link", signal.Embeds[0].Description)
 	}
 	if len(signal.AllowedUserIDs) != 0 || len(signal.AllowedRoleIDs) != 0 {
 		t.Errorf("mentions must be empty: %v %v", signal.AllowedUserIDs, signal.AllowedRoleIDs)

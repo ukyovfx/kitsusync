@@ -541,11 +541,19 @@ func TestExecutorPostsSignalWithNonce(t *testing.T) {
 		t.Errorf("enforce_nonce = %v", requests[0].Body["enforce_nonce"])
 	}
 	content, _ := requests[0].Body["content"].(string)
-	if !strings.Contains(content, "チェックをお願いします。") {
-		t.Errorf("content = %q", content)
+	if content != "<@111111111111111111>" {
+		t.Errorf("content = %q, want the mention-only contract", content)
 	}
-	if !strings.Contains(content, "https://kitsu.example/tasks/task-1") {
-		t.Errorf("content missing the Kitsu link: %q", content)
+	bodyEmbeds, _ := requests[0].Body["embeds"].([]any)
+	if len(bodyEmbeds) != 1 {
+		t.Fatalf("embeds = %v, want 1", requests[0].Body["embeds"])
+	}
+	bodyEmbed, _ := bodyEmbeds[0].(map[string]any)
+	description, _ := bodyEmbed["description"].(string)
+	for _, want := range []string{"👀 WFA チェックをお願いします", "https://kitsu.example/tasks/task-1", "ステータス：wfa"} {
+		if !strings.Contains(description, want) {
+			t.Errorf("description %q missing %q", description, want)
+		}
 	}
 	done, err := loadOutbox(db, row.ID)
 	if err != nil {
@@ -636,11 +644,18 @@ func TestExecutorSendsWithoutMentionsAfterRepeatedResolutionFailures(t *testing.
 		t.Fatalf("requests = %d, want the unmentioned signal", len(requests))
 	}
 	content, _ := requests[0].Body["content"].(string)
-	if !strings.Contains(content, "チェックをお願いします。") {
-		t.Errorf("content = %q, want the WFA signal", content)
-	}
 	if strings.Contains(content, "<@111111111111111111>") {
 		t.Errorf("content = %q, want no mention after failed resolutions", content)
+	}
+	bodyEmbeds, _ := requests[0].Body["embeds"].([]any)
+	var description string
+	if len(bodyEmbeds) == 1 {
+		if bodyEmbed, ok := bodyEmbeds[0].(map[string]any); ok {
+			description, _ = bodyEmbed["description"].(string)
+		}
+	}
+	if !strings.Contains(description, "👀 WFA チェックをお願いします") {
+		t.Errorf("description %q, want the WFA signal", description)
 	}
 	got, err := loadOutbox(db, row.ID)
 	if err != nil {
@@ -1166,13 +1181,18 @@ func TestExecutorSendsOnlyFinalSignalAfterConsecutiveTransitions(t *testing.T) {
 	if len(posts) != 1 {
 		t.Fatalf("messages posted = %d, want the window's final state only", len(posts))
 	}
-	content, _ := posts[0].Body["content"].(string)
-	if !strings.Contains(content, "完了しました。") {
-		t.Errorf("content = %q, want the DONE signal of the window's last state", content)
+	description := ""
+	if bodyEmbeds, ok := posts[0].Body["embeds"].([]any); ok && len(bodyEmbeds) == 1 {
+		if bodyEmbed, ok := bodyEmbeds[0].(map[string]any); ok {
+			description, _ = bodyEmbed["description"].(string)
+		}
 	}
-	for _, stale := range []string{"チェックをお願いします。", "リテイクです。"} {
-		if strings.Contains(content, stale) {
-			t.Errorf("content = %q, want no %q from an intermediate state", content, stale)
+	if !strings.Contains(description, "✅ DONE 完了しました。") {
+		t.Errorf("description = %q, want the DONE signal of the window's last state", description)
+	}
+	for _, stale := range []string{"WFA", "RETAKE"} {
+		if strings.Contains(description, stale) {
+			t.Errorf("description = %q, want no %q from an intermediate state", description, stale)
 		}
 	}
 }
@@ -1436,5 +1456,87 @@ func TestExecutor_RetryLaterLogsError(t *testing.T) {
 	}
 }
 
+// TestExecutorPostsPublishRowWithoutRecipients: the AYON publish trace pings
+// nobody by design, so an empty recipient set must not cancel the row (spec:
+// メンションなしで投稿する).
+func TestExecutorPostsPublishRowWithoutRecipients(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wip")
+	executor, fake := newExecutor(t, db)
+	executor.Recipients = func(taskID string, payload model.ForumPostMessagePayload) ([]string, []string, error) {
+		return nil, nil, nil
+	}
 
+	payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentPublish})
+	row := enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: "post:publish",
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
 
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	posts := 0
+	for _, request := range fake.snapshot() {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.Path, "/messages") {
+			posts++
+			if content, _ := request.Body["content"].(string); content != "" {
+				t.Errorf("publish content = %q, want no mention line", content)
+			}
+		}
+	}
+	if posts != 1 {
+		t.Fatalf("messages posted = %d, want the publish trace", posts)
+	}
+	got, err := loadOutbox(db, row.ID)
+	if err != nil {
+		t.Fatalf("load row: %v", err)
+	}
+	if got.State != model.ForumOutboxDone {
+		t.Errorf("state = %q, want done", got.State)
+	}
+}
+
+// TestExecutorOldPayloadFallsBackToLegacyTitle: rows queued before the payload
+// carried display fields must still render the card with the legacy
+// space-joined thread title.
+func TestExecutorOldPayloadFallsBackToLegacyTitle(t *testing.T) {
+	db := newForumDB(t)
+	seedForumSettings(t, db)
+	seedForumTask(t, db, "thread-1", "s-wfa")
+	executor, fake := newExecutor(t, db)
+
+	payload, _ := json.Marshal(model.ForumPostMessagePayload{Intent: model.ForumIntentStatusWFA})
+	enqueue(t, db, model.ForumOutbox{
+		TaskID:    "task-1",
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: "post:legacy",
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: executor.Now(),
+		CreatedAt: executor.Now(),
+	})
+
+	if _, err := executor.Drain(10); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	var title string
+	for _, request := range fake.snapshot() {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.Path, "/messages") {
+			if embeds, ok := request.Body["embeds"].([]any); ok && len(embeds) == 1 {
+				if bodyEmbed, ok := embeds[0].(map[string]any); ok {
+					title, _ = bodyEmbed["title"].(string)
+				}
+			}
+		}
+	}
+	if title != "Compositing sq010 sh002" {
+		t.Errorf("embed title = %q, want the legacy task title", title)
+	}
+}
