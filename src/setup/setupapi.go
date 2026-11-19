@@ -197,10 +197,10 @@ type ProjectGuildHealth struct {
 	GuildID         string `json:"guild_id,omitempty"`
 	GuildValid      bool   `json:"guild_valid"`
 	PermissionValid bool   `json:"permission_valid"`
-	WebhookHealth   string `json:"webhook_health"`
-	CategoryValid   bool   `json:"category_valid"`
+	ForumHealth     string `json:"forum_health"`
 	ResourceHealth  string `json:"resource_health"`
-	StaleChannels   int    `json:"stale_channel_count"`
+	MissingForums   int    `json:"missing_forum_count"`
+	MissingTags     int    `json:"missing_tag_count"`
 }
 
 // SetupProjectItem is one entry in the GET /api/setup/projects response.
@@ -322,9 +322,9 @@ type TestDiscordResponse struct {
 }
 
 type TestNotificationRequest struct {
-	ProjectID            string `json:"project_id"`
-	DestinationWebhookID uint   `json:"destination_webhook_id"`
-	Message              string `json:"message"`
+	ProjectID        string `json:"project_id"`
+	DestinationForum string `json:"destination_forum"`
+	Message          string `json:"message"`
 }
 
 type TestNotificationResponse struct {
@@ -414,7 +414,8 @@ func ProjectsHandler(db *gorm.DB) http.HandlerFunc {
 	}
 }
 
-// TestNotificationHandler sends a small message to one project webhook and marks the setup as verified.
+// TestNotificationHandler posts one test card into a Production's configured
+// forum and marks the setup as verified.
 func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botToken, guildID, webhookURL string)) http.HandlerFunc {
 	return requirePOST(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -444,30 +445,28 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
-		if strings.TrimSpace(project.DiscordGuildID) == "" {
-			errStr := "this project has no Discord Guild configured"
-			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
-			return
-		}
 
-		_, botToken, _, _ := refreshCreds()
-		projectChannels, err := ListGuildChannels(strings.TrimSpace(project.DiscordGuildID), botToken)
-		if err != nil {
-			errStr := "could not verify Discord destinations for this project"
+		settings, ok, err := model.LoadProductionForumSettings(db, projectID)
+		if err != nil || !ok {
+			errStr := "this project has no forum settings saved"
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
-		destination, err := validateTestNotificationDestination(db, projectID, req.DestinationWebhookID, projectChannels)
+		forum, err := testNotificationForum(settings, req.DestinationForum)
 		if err != nil {
 			errStr := err.Error()
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
 
+		_, botToken, _, _ := refreshCreds()
 		payload := testNotificationPayload(*project, req.Message)
-		res := discord.SendMessage(payload, destination.WebhookURL, "", "")
-		if strings.TrimSpace(res.MessageID) == "" {
-			errStr := "test notification failed to send"
+		thread, err := discord.CreateForumThread(botToken, forum.ForumChannelID, discord.ForumThreadCreate{
+			Name:    testNotificationThreadName(*project),
+			Message: discord.ForumFirstMessage(payload),
+		})
+		if err != nil {
+			errStr := "test notification failed to send: " + err.Error()
 			json.NewEncoder(w).Encode(TestNotificationResponse{ProjectID: projectID, Error: &errStr})
 			return
 		}
@@ -480,10 +479,50 @@ func TestNotificationHandler(db *gorm.DB, refreshCreds func() (kitsuHost, botTok
 			OK:                   true,
 			ProjectID:            projectID,
 			ProjectName:          project.Name,
-			MessageID:            res.MessageID,
+			MessageID:            thread.ID,
 			NotificationVerified: true,
 		})
 	})
+}
+
+// testNotificationForum picks the forum a test post goes into: the explicitly
+// selected routed forum, or the Production's single routed forum. A Production
+// with several routed forums must name one, so a test never lands in an
+// unintended forum.
+func testNotificationForum(settings model.ProductionForumSettings, requested string) (model.ProductionForumRoute, error) {
+	requested = strings.TrimSpace(requested)
+	var routes []model.ProductionForumRoute
+	seen := map[string]bool{}
+	for _, route := range settings.Routes {
+		forumID := strings.TrimSpace(route.ForumChannelID)
+		if forumID == "" || seen[forumID] {
+			continue
+		}
+		if requested != "" && forumID != requested {
+			continue
+		}
+		seen[forumID] = true
+		routes = append(routes, route)
+	}
+	switch {
+	case len(routes) == 0 && requested != "":
+		return model.ProductionForumRoute{}, fmt.Errorf("the selected forum is not routed for this project")
+	case len(routes) == 0:
+		return model.ProductionForumRoute{}, fmt.Errorf("this project has no forum routed for notifications")
+	case len(routes) > 1:
+		return model.ProductionForumRoute{}, fmt.Errorf("select which forum the test notification goes to")
+	}
+	return routes[0], nil
+}
+
+// testNotificationThreadName is the visible title of the test post, so the
+// operator can find and delete it in Discord.
+func testNotificationThreadName(project model.Project) string {
+	name := "KitsuSync test notification"
+	if discord.NotificationLanguage(project.Language) != "en" {
+		name = "KitsuSync テスト通知"
+	}
+	return "[KitsuSync] " + name
 }
 
 func testNotificationPayload(project model.Project, message string) discord.Payload {
@@ -512,33 +551,6 @@ func testNotificationPayload(project model.Project, message string) discord.Payl
 		CommentContent: comment, CommentLabel: "コメント", AssigneesStr: "未割り当て", AssigneeLabel: "担当",
 		NotificationLanguage: notificationLanguage, AllowedUserIDs: []string{}, Color: 0xD4A72C,
 	}, "rich")
-}
-
-func validateTestNotificationDestination(db *gorm.DB, projectID string, destinationWebhookID uint, channels []DiscordGuildChannel) (*model.ProjectWebhook, error) {
-	if destinationWebhookID == 0 {
-		return nil, fmt.Errorf("select a test notification destination")
-	}
-	project := model.FindProjectByKitsuID(db, projectID)
-	if project == nil {
-		return nil, fmt.Errorf("project not found")
-	}
-	destination := model.FindProjectWebhookByID(db, destinationWebhookID)
-	if destination == nil || destination.KitsuProjectID != projectID || strings.TrimSpace(destination.WebhookURL) == "" || strings.TrimSpace(destination.DiscordChannelID) == "" {
-		return nil, fmt.Errorf("selected test destination is not configured for this project")
-	}
-	if strings.TrimSpace(project.DiscordGuildID) == "" {
-		return nil, fmt.Errorf("this project has no Discord Guild configured")
-	}
-	for _, channel := range channels {
-		if channel.ID != destination.DiscordChannelID {
-			continue
-		}
-		if strings.TrimSpace(project.DiscordCategoryID) != "" && channel.ParentID != project.DiscordCategoryID {
-			return nil, fmt.Errorf("selected test destination is outside this project's Discord category")
-		}
-		return destination, nil
-	}
-	return nil, fmt.Errorf("selected test destination is stale or not in this project's Discord Guild")
 }
 
 // TestKitsuHandler handles POST /api/setup/test-kitsu.
@@ -815,12 +827,14 @@ func buildProjectGuildHealth(db *gorm.DB, botToken, fallbackGuildID string) []Pr
 		// A Production's saved Guild is authoritative. The compatibility
 		// fallback must never make a different Guild look healthy.
 		discordInfo := checkDiscordStatus(botToken, guildID)
-		wh := model.ListProjectWebhooks(db, p.KitsuProjectID)
-		webhookHealth := "missing"
-		if len(wh) > 0 {
-			webhookHealth = "ok"
-		}
 		report := inspectProjectDiscordResources(p, db)
+		forumHealth := "missing"
+		if report.ForumConfigured {
+			forumHealth = "ok"
+			if len(report.ForumProblems) > 0 {
+				forumHealth = "incomplete"
+			}
+		}
 		resourceHealth := "stale"
 		if report.Healthy() {
 			resourceHealth = "ok"
@@ -830,11 +844,11 @@ func buildProjectGuildHealth(db *gorm.DB, botToken, fallbackGuildID string) []Pr
 			ProjectName:     p.Name,
 			GuildID:         guildID,
 			GuildValid:      discordInfo.GuildValid,
-			PermissionValid: discordInfo.Permissions.ManageChannels && discordInfo.Permissions.ManageWebhooks,
-			WebhookHealth:   webhookHealth,
-			CategoryValid:   report.CategoryPresent,
+			PermissionValid: discordInfo.Permissions.ManageChannels,
+			ForumHealth:     forumHealth,
 			ResourceHealth:  resourceHealth,
-			StaleChannels:   report.StaleChannelCount,
+			MissingForums:   report.MissingForumCount,
+			MissingTags:     report.MissingTags,
 		})
 	}
 	return out

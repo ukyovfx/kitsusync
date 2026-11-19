@@ -42,7 +42,6 @@ type projectDeliveryItem struct {
 }
 
 type projectDeliveryDestination struct {
-	WebhookID   uint   `json:"webhook_id"`
 	ChannelID   string `json:"channel_id"`
 	ChannelName string `json:"channel_name"`
 }
@@ -373,7 +372,7 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 		configureBotSettingsFix,
 		botSettingsFix,
 	))
-	checks = append(checks, buildProjectDiscordResourceCheck(lang, db, botToken))
+	checks = append(checks, buildProjectDiscordResourceCheck(lang, db))
 
 	var count int64
 	if err := db.Raw("SELECT COUNT(*) FROM sqlite_master").Scan(&count).Error; err != nil {
@@ -410,9 +409,9 @@ func runDiagnostics(lang, kitsuHost, botToken, guildID, webhookURL string, db *g
 	return checks
 }
 
-func buildProjectDiscordResourceCheck(lang string, db *gorm.DB, botToken string) diagCheck {
+func buildProjectDiscordResourceCheck(lang string, db *gorm.DB) diagCheck {
 	projects := model.ListProjects(db)
-	label := t(lang, "Production Discord リソース", "Production Discord resources")
+	label := t(lang, "Production フォーラムリソース", "Production forum resources")
 	if len(projects) == 0 {
 		return diagCheck{Label: label, Status: "warn", Detail: t(lang, "接続済みProductionがないため確認できません。", "No connected Production is available to inspect."), Fix: t(lang, "Productionを接続してから再確認してください。", "Connect a Production, then rerun Diagnostics.")}
 	}
@@ -421,15 +420,18 @@ func buildProjectDiscordResourceCheck(lang string, db *gorm.DB, botToken string)
 		if report.Error != "" {
 			return diagCheck{Label: label, Status: "fail", Detail: fmt.Sprintf(t(lang, "%s: %s", "%s: %s"), project.Name, report.Error), Fix: t(lang, "このProductionのDiscord GuildとBot権限を確認してください。", "Review this Production's Discord Guild and bot permissions.")}
 		}
+		if !report.ForumConfigured {
+			return diagCheck{Label: label, Status: "fail", Detail: fmt.Sprintf(t(lang, "%s: フォーラム設定が未保存です。", "%s: no forum settings are saved."), project.Name), Fix: t(lang, "このProductionのフォーラム設定を開いて保存してください。", "Open this Production's forum settings and save them.")}
+		}
 		if report.ChannelsStale {
 			return diagCheck{Label: label, Status: "warn", Detail: fmt.Sprintf(t(lang, "%s: Discordの制限中(または再取得失敗)のため、少し古いチャンネル情報を確認しています。", "%s: Discord rate limiting (or a failed refetch) means the channel information checked is slightly old."), project.Name), Fix: t(lang, "フォーラム設定ページの「チャンネル情報を再取得」から取り直してください。", "Use \"Refresh channel info\" on the forum settings page to refetch.")}
 		}
 		if report.HasStaleResources() {
-			detail := fmt.Sprintf(t(lang, "%s: 保存channel %d件、Discord上で確認できるchannel %d件、stale %d件、重複 %d件です。", "%s: %d saved channel(s), %d live channel(s), %d stale, %d duplicate."), project.Name, report.SavedChannelCount, report.LiveSavedChannelCount, report.StaleChannelCount, report.DuplicateSavedChannelCount)
-			return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: t(lang, "Production詳細の通知ルーティングから、既存Guildを再検証し、不足channelだけを明示確認して修復してください。", "Open this Production's notification routing, revalidate the linked Guild, and explicitly repair only missing channels.")}
+			detail := fmt.Sprintf(t(lang, "%s: 通知先フォーラム%d件中%d件をDiscord側で確認できず、タグ不一致%d件です。", "%s: %d of %d routed forum(s) were not found in Discord; %d tag mismatch(es)."), project.Name, report.MissingForumCount, report.RoutedForumCount, report.MissingTags)
+			return diagCheck{Label: label, Status: "fail", Detail: detail, Fix: t(lang, "フォーラム設定を開き、対象Guildのフォーラムとタグを確認して保存し直してください。", "Open the forum settings, confirm the routed forums and tags in that guild, and save again.")}
 		}
 	}
-	return diagCheck{Label: label, Status: "ok", Detail: t(lang, "各ProductionのGuild、category、保存済みchannel ownershipを確認しました。", "Each Production Guild, category, and saved channel ownership was verified.")}
+	return diagCheck{Label: label, Status: "ok", Detail: t(lang, "各ProductionのGuild、通知先フォーラム、ロールタグを確認しました。", "Each Production guild, routed forum, and role tag was verified.")}
 }
 
 func buildForumSettingsCheck(
@@ -618,7 +620,7 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 
 	projects := model.ListProjects(db)
 	if len(projects) == 0 {
-		state.Fix = t(lang, "まず Project Management で project routing と webhook を作成してください。", "Create the project routing and webhook in Project Management first.")
+		state.Fix = t(lang, "まず Production のフォーラム設定を開き、通知先フォーラムを保存してください。", "Open the Production's forum settings and save the forums notifications go to first.")
 		return state
 	}
 
@@ -642,19 +644,28 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 			CanSend:     true,
 		}
 
-		for _, webhook := range model.ListProjectWebhooks(db, project.KitsuProjectID) {
-			if strings.TrimSpace(webhook.WebhookURL) != "" && strings.TrimSpace(webhook.DiscordChannelID) != "" {
+		if settings, ok, err := model.LoadProductionForumSettings(db, project.KitsuProjectID); err == nil && ok {
+			seen := map[string]bool{}
+			for _, route := range settings.Routes {
+				forumID := strings.TrimSpace(route.ForumChannelID)
+				if forumID == "" || seen[forumID] {
+					continue
+				}
+				seen[forumID] = true
 				item.Destinations = append(item.Destinations, projectDeliveryDestination{
-					WebhookID: webhook.ID, ChannelID: webhook.DiscordChannelID, ChannelName: strings.TrimPrefix(strings.TrimSpace(webhook.ChannelName), "#"),
+					ChannelID:   forumID,
+					ChannelName: strings.TrimPrefix(strings.TrimSpace(route.ForumChannelName), "#"),
 				})
-				item.Detail = t(lang, "Project webhook は作成済みです。通知配信は project-level webhook を使用します。", "Project webhooks are configured. Delivery uses project-level webhooks.")
+			}
+			if len(item.Destinations) > 0 {
+				item.Detail = t(lang, "フォーラム設定の通知先フォーラムを使用します。", "Delivery uses the Production's forum settings.")
 			}
 		}
 
-		if item.Detail == t(lang, "まだこの project のテスト通知確認は記録されていません。", "No successful test notification has been recorded for this project yet.") {
+		if len(item.Destinations) == 0 {
 			item.Status = "fail"
-			item.Summary = t(lang, "Webhook未設定", "Webhook missing")
-			item.Detail = t(lang, "この project は webhook URL または Discord channel ID が不足しています。", "This project is missing a webhook URL or Discord channel ID.")
+			item.Summary = t(lang, "フォーラム未設定", "Forum missing")
+			item.Detail = t(lang, "この project は通知先フォーラムが設定されていません。", "This project has no forum routed for notifications.")
 			allReady = false
 		}
 
@@ -673,8 +684,8 @@ func buildProjectDeliveryState(lang string, db *gorm.DB, apiPath string) project
 	case !allReady:
 		state.SummaryStatus = "fail"
 		state.Summary = t(lang, "要修正", "Needs setup")
-		state.Detail = t(lang, "project-level webhook が未完了の project があります。", "Some projects still need complete project-level webhooks.")
-		state.Fix = t(lang, "Project Management で不足している project webhook を確認してください。", "Review the incomplete project webhook setup in Project Management.")
+		state.Detail = t(lang, "通知先フォーラムが未設定の project があります。", "Some projects still have no forum routed for notifications.")
+		state.Fix = t(lang, "各 project のフォーラム設定を開き、通知先フォーラムを保存してください。", "Open each project's forum settings and save the forums notifications go to.")
 	case anyVerified:
 		state.SummaryStatus = "ok"
 		state.Summary = t(lang, "確認済み", "Verified")
@@ -719,7 +730,7 @@ func renderDiagGroups(lang string, checks []diagCheck) string {
 		case "Database (SQLite)", "data/ directory available":
 			storageChecks = append(storageChecks, c)
 		default:
-			if strings.Contains(c.Label, "Discord") || strings.Contains(c.Label, "Production Discord") {
+			if strings.Contains(c.Label, "Discord") || strings.Contains(c.Label, "Production ") {
 				discordChecks = append(discordChecks, c)
 			} else {
 				storageChecks = append(storageChecks, c)
@@ -807,7 +818,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 			selectedCanSend = item.CanSend
 		}
 
-		options = append(options, fmt.Sprintf(
+			options = append(options, fmt.Sprintf(
 			`<option value="%s" data-project-name="%s" data-summary="%s" data-detail="%s" data-last-verified="%s" data-pill-class="%s" data-can-send="%t">%s</option>`,
 			esc(item.ProjectID),
 			esc(item.ProjectName),
@@ -882,7 +893,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
     destination.innerHTML = '<option value="">%s</option>';
     (destinationData[option.value] || []).forEach(function(item){
       var destinationOption = document.createElement('option');
-      destinationOption.value = String(item.webhook_id);
+      destinationOption.value = String(item.channel_id);
       destinationOption.textContent = '#' + item.channel_name;
       destination.appendChild(destinationOption);
     });
@@ -909,7 +920,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: button.getAttribute('data-project-id'), destination_webhook_id: Number(destination.value) })
+        body: JSON.stringify({ project_id: button.getAttribute('data-project-id'), destination_forum: destination.value })
       });
       var data = await resp.json();
       if (!resp.ok || data.error) {
@@ -949,7 +960,7 @@ func renderProjectDeliverySelectorCard(lang string, state projectDeliveryState) 
 		strings.Join(options, ""),
 		esc(t(lang, "テスト送信先", "Test destination")),
 		t(lang, "送信先を選択", "Select a destination"),
-		esc(t(lang, "テスト通知だけを選択したDiscordチャンネルへ送信します。通常の通知ルーティングは変更しません。", "Sends one test notification only to the selected Discord channel. Normal notification routing is not changed.")),
+		esc(t(lang, "テスト通知だけを選択したフォーラムへ送信します。通常の通知ルーティングは変更しません。", "Sends one test notification only to the selected forum. Normal notification routing is not changed.")),
 		esc(t(lang, "最終確認: ", "Last verified: ")),
 		esc(selectedLastVerified),
 		selectedPillClass,

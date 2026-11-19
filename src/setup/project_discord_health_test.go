@@ -1,47 +1,69 @@
 package setup
 
 import (
-	"app/src/model"
 	"testing"
+
+	"app/src/model"
 )
 
-func TestSummarizeProjectDiscordResourcesDetectsStaleAndDuplicateChannels(t *testing.T) {
-	project := model.Project{KitsuProjectID: "p1", DiscordGuildID: "g1", DiscordCategoryID: "cat1"}
-	webhooks := []model.ProjectWebhook{
-		{DiscordChannelID: "live1"},
-		{DiscordChannelID: "stale1"},
-		{DiscordChannelID: "live1"},
+func TestSummarizeForumResourcesCountsMissingForumsAndTags(t *testing.T) {
+	report := ProjectDiscordResourceHealth{ForumConfigured: true}
+	settings := model.ProductionForumSettings{
+		Routes: []model.ProductionForumRoute{
+			{TaskTypeID: "tt1", ForumChannelID: "forum-1"},
+			{TaskTypeID: "tt2", ForumChannelID: "forum-1"},
+			{TaskTypeID: "tt3", ForumChannelID: "forum-gone"},
+		},
+		Tags: []model.ProductionForumTag{
+			{ForumChannelID: "forum-1", Role: model.ForumRoleWFA, TagID: "tag-wfa"},
+			{ForumChannelID: "forum-1", Role: model.ForumRoleDone, TagID: "tag-removed"},
+			{ForumChannelID: "forum-gone", Role: model.ForumRoleWFA, TagID: "tag-gone"},
+		},
 	}
-	channels := []DiscordGuildChannel{
-		{ID: "cat1", Type: 4},
-		{ID: "live1", Type: 0, ParentID: "cat1"},
+	forums := []forumChannelInfo{
+		{ID: "forum-1", Tags: []forumTagInfo{{ID: "tag-wfa", Name: "WFA"}}},
 	}
-	report := summarizeProjectDiscordResources(project, webhooks, channels)
-	if !report.CategoryPresent || report.SavedChannelCount != 3 || report.LiveSavedChannelCount != 2 || report.StaleChannelCount != 1 || report.DuplicateSavedChannelCount != 1 {
-		t.Fatalf("unexpected resource report: %#v", report)
+
+	summarizeForumResources(&report, settings, forums)
+
+	if report.RoutedForumCount != 2 || report.MissingForumCount != 1 {
+		t.Fatalf("routed forums miscounted: %#v", report)
 	}
+	// The deleted forum's tag is not counted again; the removed tag on the live
+	// forum is.
+	if report.MissingTags != 1 {
+		t.Fatalf("expected one missing tag, got %d", report.MissingTags)
+	}
+
+	report.GuildValid, report.ManageChannels = true, true
 	if report.Healthy() || !report.HasStaleResources() {
-		t.Fatalf("stale resources must block health: %#v", report)
+		t.Fatalf("a missing forum must block health: %#v", report)
 	}
 }
 
-func TestSummarizeProjectDiscordResourcesRequiresManagedCategoryParent(t *testing.T) {
-	project := model.Project{KitsuProjectID: "p1", DiscordCategoryID: "cat1"}
-	webhooks := []model.ProjectWebhook{{DiscordChannelID: "channel1"}}
-	channels := []DiscordGuildChannel{
-		{ID: "cat1", Type: 4},
-		{ID: "channel1", Type: 0, ParentID: "other-category"},
+func TestSummarizeForumResourcesHealthyWhenEverythingExists(t *testing.T) {
+	report := ProjectDiscordResourceHealth{GuildValid: true, ManageChannels: true, ForumConfigured: true}
+	settings := model.ProductionForumSettings{
+		Routes: []model.ProductionForumRoute{{TaskTypeID: "tt1", ForumChannelID: "forum-1"}},
+		Tags:   []model.ProductionForumTag{{ForumChannelID: "forum-1", Role: model.ForumRoleWFA, TagID: "tag-wfa"}},
 	}
-	report := summarizeProjectDiscordResources(project, webhooks, channels)
-	if report.LiveSavedChannelCount != 0 || report.StaleChannelCount != 1 {
-		t.Fatalf("channel outside managed category was not stale: %#v", report)
+	forums := []forumChannelInfo{
+		{ID: "forum-1", Tags: []forumTagInfo{{ID: "tag-wfa", Name: "WFA"}}},
+	}
+
+	summarizeForumResources(&report, settings, forums)
+
+	if !report.Healthy() || report.HasStaleResources() {
+		t.Fatalf("complete forum setup should be healthy: %#v", report)
 	}
 }
 
-func TestMergeDiscordStatusPreservesResourceHealth(t *testing.T) {
-	report := ProjectDiscordResourceHealth{CategoryPresent: true, SavedChannelCount: 1, LiveSavedChannelCount: 1}
-	merged := mergeDiscordStatus(report, DiscordStatusInfo{GuildValid: true, Permissions: DiscordPermissionInfo{ManageChannels: true, ManageWebhooks: true}})
-	if !merged.Healthy() {
-		t.Fatalf("complete Discord status and live resources should be healthy: %#v", merged)
+func TestHasStaleResourcesWithoutForumConfiguration(t *testing.T) {
+	report := ProjectDiscordResourceHealth{GuildValid: true, ManageChannels: true}
+	if report.Healthy() {
+		t.Fatal("a Production without saved forum settings must not be healthy")
+	}
+	if !report.HasStaleResources() {
+		t.Fatal("a Production without saved forum settings must be reported")
 	}
 }
