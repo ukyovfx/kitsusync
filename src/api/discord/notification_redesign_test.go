@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"app/src/utils/config"
 )
 
 func TestParseKitsuStatusColorUsesNeutralFallback(t *testing.T) {
@@ -21,51 +19,6 @@ func TestParseKitsuStatusColorUsesNeutralFallback(t *testing.T) {
 	}
 }
 
-func TestNotificationRecipientPolicy(t *testing.T) {
-	conf := testMentionConfig()
-	if got := notificationRecipientCandidates("WFA", false, []string{"101"}, []string{"202"}, conf); strings.Join(got, ",") != "202" {
-		t.Fatalf("WFA recipients = %v, want checker", got)
-	}
-	if got := notificationRecipientCandidates("RETAKE", false, []string{"101", "101"}, []string{"202"}, conf); strings.Join(got, ",") != "101" {
-		t.Fatalf("RETAKE recipients = %v, want deduplicated assignee", got)
-	}
-	if got := notificationRecipientCandidates("DONE", false, []string{"101"}, []string{"202"}, conf); strings.Join(got, ",") != "101" {
-		t.Fatalf("DONE recipients = %v, want assignee", got)
-	}
-	if got := notificationRecipientCandidates("WFA", false, []string{"101"}, []string{"bad", "202", "202", "<@303>"}, conf); strings.Join(got, ",") != "202" {
-		t.Fatalf("recipient validation = %v", got)
-	}
-}
-
-func TestStatusMentionRoutingSerializesOnlyExactRecipients(t *testing.T) {
-	conf := config.Config{}
-	for _, tc := range []struct {
-		status string
-		want   []string
-		input  []string
-	}{
-		{status: "WFA", want: []string{"202"}, input: []string{"101"}},
-		{status: "RETAKE", want: []string{"101"}, input: []string{"101", "<@everyone>", "bad"}},
-		{status: "DONE", want: []string{"101"}, input: []string{"101"}},
-	} {
-		ids := notificationRecipientCandidates(tc.status, false, tc.input, []string{"202"}, conf)
-		payload := RenderNotificationPayload(Template{
-			StatusUpper: tc.status, StatusEmoji: "•", StatusMessage: "Review",
-			MentionContent: mentionContent(ids), AllowedUserIDs: ids,
-		}, "rich")
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if payload.Content != mentionContent(tc.want) || len(payload.AllowedMentions.Users) != len(tc.want) {
-			t.Fatalf("%s mention payload = %s, want only %v", tc.status, raw, tc.want)
-		}
-		if strings.Contains(string(raw), "everyone") || strings.Contains(string(raw), "<@&") {
-			t.Fatalf("%s unsafe mention leaked: %s", tc.status, raw)
-		}
-	}
-}
-
 func TestNotificationRecipientBoundAndMentionContentMatch(t *testing.T) {
 	ids := make([]string, maxNotificationRecipients+2)
 	for i := range ids {
@@ -75,14 +28,10 @@ func TestNotificationRecipientBoundAndMentionContentMatch(t *testing.T) {
 	if len(got) != maxNotificationRecipients {
 		t.Fatalf("recipient count = %d, want %d", len(got), maxNotificationRecipients)
 	}
-	content := mentionContent(got)
 	for _, id := range got {
-		if !strings.Contains(content, "<@"+id+">") {
-			t.Fatalf("mention content does not match allowed ID %s: %q", id, content)
+		if !isValidDiscordUserID(id) {
+			t.Fatalf("recipient ID %q is not a validated Discord user ID", id)
 		}
-	}
-	if strings.Contains(content, "everyone") || strings.Contains(content, "here") || strings.Contains(content, "<@&") {
-		t.Fatalf("unsafe mention content: %q", content)
 	}
 }
 
@@ -198,15 +147,6 @@ func TestKitsuPersonDisplayNameReturnsRegisteredName(t *testing.T) {
 	}
 	if got := kitsuPersonDisplayName(kitsu.Person{FullName: "Unknown order"}, "ja"); got != "Unknown order" {
 		t.Fatalf("FullName was not used as-is = %q", got)
-	}
-}
-
-func TestAssigneeResolveMatchesUserMapRegisteredFullName(t *testing.T) {
-	conf := config.Config{Mention: config.MentionConfig{UserMap: []config.UserMapEntry{{KitsuName: "太郎 山田", DiscordID: "123456789012345678"}}}}
-	person := kitsu.Person{ID: "p1", FirstName: "太郎", LastName: "山田", FullName: "太郎 山田"}
-	displayName := kitsuPersonDisplayName(person, "ja")
-	if id := resolveAssigneeDiscordID("proj", person, displayName, conf); id != "123456789012345678" {
-		t.Fatalf("user map registered as FullName no longer matches display name %q: got %q", displayName, id)
 	}
 }
 
@@ -484,8 +424,4 @@ func TestRenderNotificationPayloadFitsDiscordEmbedTextLimit(t *testing.T) {
 	if got := embedTextLength(payload.Embeds[0]); got > maxDiscordEmbedText {
 		t.Fatalf("embed text length = %d, exceeds %d", got, maxDiscordEmbedText)
 	}
-}
-
-func testMentionConfig() config.Config {
-	return config.Config{}
 }

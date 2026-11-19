@@ -631,7 +631,7 @@ func TestProductionNotificationRolePickerShowsDisabledRolesWithoutMakingThemSele
 		},
 		Roles: []DiscordGuildRole{{ID: "123456789012345680", Name: "Reviewers", Mentionable: true}},
 	}
-	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=role-picker-states&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", data)
+	body := renderCurrentIARoutingEditorWithStatus(db, httptest.NewRequest(http.MethodGet, "/bot/admin/projects?project=role-picker-states&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", data, "", "")
 	for _, want := range []string{`data-wfa-option-value="123456789012345680"`, `data-wfa-option-value="123456789012345681"`, `aria-disabled="true"`, "Not mentionable", "@Reviewers"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("role picker missing safe role state %q: %s", want, body)
@@ -687,7 +687,7 @@ func TestProductionRoutingEditStagesWFAInOneAsyncApply(t *testing.T) {
 	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345680"); err != nil {
 		t.Fatal(err)
 	}
-	body := renderCurrentIARoutingEditorSetupStyleWithData(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{BotToken: "configured", RolesReady: true})
+	body := renderCurrentIARoutingEditorWithStatus(db, httptest.NewRequest("GET", "/bot/admin/projects?project=pending-apply-production&tab=notifications&edit_routing=1&lang=en", nil), project, "en", "", productionNotificationReviewerView{BotToken: "configured", RolesReady: true}, "", "")
 	for _, required := range []string{`role="tablist"`, `data-recipient-mode="user"`, `data-recipient-mode="role"`, `data-recipient-panel="user"`, `data-recipient-panel="role"`, `No custom Discord roles are configured.`, `data-recipient-select="user"`, `data-recipient-select="role"`} {
 		if !strings.Contains(body, required) {
 			t.Errorf("explicit User/Role chooser or empty state is missing %q", required)
@@ -755,7 +755,7 @@ func TestProductionRoutingEditorProvidesAutomaticSummaryForAllTaskTypes(t *testi
 	}
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=pending-new-task-type&tab=notifications&edit_routing=1&lang=en", nil)
 	readTable := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", view)
-	body := renderCurrentIARoutingEditorSetupStyleWithData(db, request, project, "en", readTable, view)
+	body := renderCurrentIARoutingEditorWithStatus(db, request, project, "en", readTable, view, "", "")
 	source := strings.Index(body, `data-wfa-pending-source`)
 	if source < 0 {
 		t.Fatal("pending Task Type must have a WFA summary source before Apply")

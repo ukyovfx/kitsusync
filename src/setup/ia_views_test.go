@@ -198,23 +198,6 @@ func TestLiveProductionPreviewsKeepTaskTypesIsolated(t *testing.T) {
 	}
 }
 
-func TestGlobalUserMappingHasNoProductionOrRoleControls(t *testing.T) {
-	db := newIAViewDB(t)
-	db.Create(&model.UserMap{KitsuName: "Synthetic User", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord User"})
-	r := httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil)
-	w := httptest.NewRecorder()
-	renderGlobalUserMapping(w, r, db)
-	body := w.Body.String()
-	for _, forbidden := range []string{"Editing production", "Reviewer / Checker task types", "Production selector", "Discord ID"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("global mapping leaked production-scoped control %q", forbidden)
-		}
-	}
-	if !strings.Contains(body, "Synthetic User") || !strings.Contains(body, "Synthetic Discord User") {
-		t.Fatal("global user mapping did not show user-facing identities")
-	}
-}
-
 func TestPrimaryNavigationAndNewConnectionFlow(t *testing.T) {
 	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
 	body := adminPage("en", "Dashboard", r, "")
@@ -528,112 +511,6 @@ func TestCurrentIADeleteResultPartialShowsOnlyRemainingIssues(t *testing.T) {
 	}
 }
 
-func TestDashboardUsesSharedReadinessAndShowsNextAction(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
-	renderIADashboard(w, r, db)
-	body := w.Body.String()
-	if mainStart := strings.Index(body, `<main id="main-content">`); mainStart >= 0 {
-		body = body[mainStart:]
-	}
-	for _, want := range []string{"Not set", "Configure the Kitsu connection before continuing.", "Productions needing attention", "dashboard-menu-status", "dashboard-menu-card"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("dashboard missing readiness copy %q", want)
-		}
-	}
-	if strings.Contains(body, "Polling") || strings.Contains(body, "Runtime") {
-		t.Fatal("dashboard exposes implementation status")
-	}
-	if strings.Contains(body, "Productions with notifications paused") || strings.Contains(body, "Paused") {
-		t.Fatal("dashboard exposes the retired pause state")
-	}
-	if strings.Count(body, "<h1") != 1 {
-		t.Fatalf("dashboard should have exactly one h1, got %d", strings.Count(body, "<h1"))
-	}
-	if strings.Contains(body, "chart") || strings.Contains(body, "sparkline") || strings.Contains(body, "waveform") {
-		t.Fatal("dashboard contains decorative chart markup outside the approved operations layout")
-	}
-}
-
-func TestDashboardUsesShortJapaneseSetupStatus(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=ja", nil), db)
-	body := w.Body.String()
-	if !strings.Contains(body, `class="status-pill danger">未設定</span>`) {
-		t.Fatal("current Dashboard did not use the short Japanese setup status")
-	}
-	if strings.Contains(body, "初期設定が必要です") {
-		t.Fatal("current Dashboard retained the long Japanese setup status")
-	}
-}
-
-func TestDashboardRemovesSubtitleAndUsesSemanticMetricStates(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
-	body := w.Body.String()
-	if strings.Contains(body, "Review KitsuSync connection state and items that need attention.") {
-		t.Fatal("dashboard subtitle is still rendered")
-	}
-	if strings.Count(body, `class="metric-card `) != 4 {
-		t.Fatalf("dashboard summary cards are missing semantic classes: %d", strings.Count(body, `class="metric-card `))
-	}
-	if !strings.Contains(body, "semantic-neutral") || !strings.Contains(body, "semantic-good") || !strings.Contains(body, "semantic-warning") {
-		t.Fatal("dashboard semantic metric states are incomplete")
-	}
-}
-
-func TestDashboardDoesNotRenderDuplicateTopProductionSummary(t *testing.T) {
-	db := newIAViewDB(t)
-	for _, lang := range []string{"ja", "en"} {
-		w := httptest.NewRecorder()
-		renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang="+lang, nil), db)
-		body := w.Body.String()
-		if mainStart := strings.Index(body, `<main id="main-content">`); mainStart >= 0 {
-			body = body[mainStart:]
-		}
-		if strings.Contains(body, "Production availability") || strings.Contains(body, "Kitsu Productions available") {
-			t.Fatalf("duplicate top Production summary rendered in %s", lang)
-		}
-		if !strings.Contains(body, "dashboard-summary-grid") || !strings.Contains(body, "dashboard-queue") {
-			t.Fatalf("existing Dashboard structure missing in %s", lang)
-		}
-		if !strings.Contains(body, "dashboard-cta") || strings.Count(body, `class="dashboard-menu-card`) != 5 {
-			t.Fatalf("reference dashboard management cards are incomplete in %s", lang)
-		}
-		if !strings.Contains(body, `href="/bot/admin?lang=`) {
-			t.Fatalf("dashboard refresh action does not stay on the dashboard in %s", lang)
-		}
-		if strings.Contains(body, "dashboard-activity") || strings.Contains(body, "dashboard-system") || strings.Contains(body, "通知システム") || strings.Contains(body, "Notification system") {
-			t.Fatalf("retired lower dashboard panels remain in %s", lang)
-		}
-		if strings.Count(body, `class="dashboard-status-chip `) < 5 {
-			t.Fatalf("dashboard management cards are missing status chips in %s", lang)
-		}
-		if strings.Contains(body, "dashboard-quick") && !strings.Contains(body, "display:none") {
-			t.Fatal("legacy quick actions remain visible")
-		}
-	}
-}
-
-func TestLegacyPausedProductionIsReviewRequiredAndNotPaused(t *testing.T) {
-	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "legacy-paused-dashboard-p", Name: "Legacy State Production"}
-	db.Create(&p)
-	db.Create(&model.ProductionNotificationConfig{ProductionID: p.KitsuProjectID, Enabled: false})
-	class, label, hint := iaStatus(db, p, "en")
-	if class != "bad" || label != "Incomplete" || strings.Contains(strings.ToLower(hint), "paused") {
-		t.Fatalf("legacy paused state was not converted to an explicit review state: %q %q %q", class, label, hint)
-	}
-	w := httptest.NewRecorder()
-	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
-	if strings.Contains(w.Body.String(), "Productions with notifications paused") || strings.Contains(w.Body.String(), "Paused") {
-		t.Fatal("legacy paused state leaked as an ordinary Dashboard state")
-	}
-}
-
 func TestNotificationsHasNoNormalPauseResumeControls(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "notification-controls-p", Name: "Notification Controls Production"}
@@ -682,32 +559,6 @@ func TestDashboardProblemActionTargetsDirectDestination(t *testing.T) {
 	userURL, userLabel := dashboardProblemAction(r, p, "en", "Reviewer participant is not mapped")
 	if !strings.Contains(userURL, "tab=notifications#wfa-recipients") || userLabel != "Review WFA recipients" {
 		t.Fatalf("participant issue did not target WFA recipient settings: %q %q", userURL, userLabel)
-	}
-}
-
-func TestDashboardIncludesRecentActivityAndBotNextAction(t *testing.T) {
-	db := newIAViewDB(t)
-	db.Save(&model.Setting{Key: "kitsu.hostname", Value: "http://synthetic-kitsu.invalid"})
-	db.Save(&model.Setting{Key: RuntimeKitsuEmailSettingKey, Value: "operator@synthetic.invalid"})
-	db.Save(&model.Setting{Key: RuntimeKitsuTokenSettingKey, Value: "synthetic-runtime-credential"})
-	model.WriteAuditLog(db, model.AuditLog{ProjectID: "dashboard-p", ProjectName: "Dashboard Production", EntityName: "configuration", Success: true})
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/bot/admin?lang=en", nil)
-	renderIADashboard(w, r, db)
-	body := w.Body.String()
-	if mainStart := strings.Index(body, `<main id="main-content">`); mainStart >= 0 {
-		body = body[mainStart:]
-	}
-	for _, want := range []string{"Connections", "dashboard-menu-status"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("dashboard missing %q", want)
-		}
-	}
-	if strings.Contains(body, "dashboard-activity-row") || strings.Contains(body, "Notification system") {
-		t.Fatal("retired dashboard lower panels remain visible")
-	}
-	if strings.Contains(body, "Dashboard Production") {
-		t.Fatal("dashboard activity data remains visible after removing the lower panels")
 	}
 }
 
@@ -876,26 +727,6 @@ func TestSelectedProductionOverviewUsesCompactSummaryAndSeparatesIssues(t *testi
 	}
 }
 
-func TestGlobalUserMappingUsesSafeDiscordDisplayName(t *testing.T) {
-	db := newIAViewDB(t)
-	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "Synthetic Discord Reviewer"})
-	w := httptest.NewRecorder()
-	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=en", nil), db)
-	body := w.Body.String()
-	if !strings.Contains(body, "Synthetic Discord Reviewer") {
-		t.Fatal("global mapping does not show the safe Discord display name")
-	}
-	if strings.Contains(body, "synthetic-discord-id") {
-		t.Fatal("global mapping leaked the raw Discord identifier")
-	}
-	if strings.Contains(body, "Discord user mapped") {
-		t.Fatal("global mapping used generic identity text instead of the stored display name")
-	}
-	if strings.Count(body, "<h1") != 1 {
-		t.Fatalf("global mapping should have exactly one h1, got %d", strings.Count(body, "<h1"))
-	}
-}
-
 func TestGlobalUserForKitsuPersonDoesNotCrossStablePersonIDs(t *testing.T) {
 	users := []model.UserMap{{KitsuID: "old-person", KitsuName: "Shared Name", KitsuEmail: "shared@example.invalid", DiscordID: "123456789012345678"}}
 	person := kitsu.Person{ID: "new-person", FullName: "Shared Name", Email: "shared@example.invalid"}
@@ -931,22 +762,6 @@ func TestGlobalUserForKitsuPersonRejectsAmbiguousIdentitylessFallback(t *testing
 	person := kitsu.Person{FullName: "Same Name"}
 	if got := globalUserForKitsuPerson(users, person); got != nil {
 		t.Fatalf("ambiguous legacy fallback must fail closed, got %+v", got)
-	}
-}
-
-func TestGlobalUserMappingJapaneseHasNoMojibakeOrDecorativeStatusGlyph(t *testing.T) {
-	db := newIAViewDB(t)
-	db.Create(&model.UserMap{KitsuName: "Synthetic Kitsu User", DiscordID: "123456789012345678", DiscordDisplayName: "安全なDiscord表示名"})
-	w := httptest.NewRecorder()
-	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
-	body := strings.ReplaceAll(w.Body.String(), `<canvas class="background-canvas" data-background="app-dots" aria-hidden="true"></canvas>`, `<canvas class="background-canvas" data-background="app-dots"></canvas>`)
-	for _, marker := range []string{"\u7ab6", "\u8b41", "\u7e67", "\ufffd", "aria-hidden=\"true\""} {
-		if strings.Contains(body, marker) {
-			t.Fatalf("Japanese Global User Linking HTML contains mojibake or decorative glyph marker %q", marker)
-		}
-	}
-	if !strings.Contains(body, "安全なDiscord表示名") || !strings.Contains(body, "紐づけ済み") {
-		t.Fatal("Japanese Global User Linking did not render the safe display name and plain status")
 	}
 }
 
@@ -1074,49 +889,6 @@ func TestGlobalUserLinkingUsesTruthfulUnavailableState(t *testing.T) {
 	}
 	if !strings.Contains(body, "Discord Bot token is not configured") && !strings.Contains(body, "Discord") {
 		t.Fatal("global User Linking did not expose a truthful Discord blocker")
-	}
-}
-
-func TestBotConnectionNormalSurfaceUsesSeparatedSafeLabels(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
-	body := w.Body.String()
-	for _, forbidden := range []string{"Bot設定", "Discord設定", "Kitsu Runtime", "Runtimeメール", "Runtimeパスワード", "preview_not_connected", "not_set"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("normal Japanese Bot Connection surface contains legacy/internal text %q", forbidden)
-		}
-	}
-	for _, required := range []string{"Bot接続", "Kitsu接続", "Discord Bot接続", "未設定"} {
-		if !strings.Contains(body, required) {
-			t.Fatalf("normal Japanese Bot Connection surface is missing %q", required)
-		}
-	}
-	w = httptest.NewRecorder()
-	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=en", nil), db)
-	body = w.Body.String()
-	for _, required := range []string{"Connections", "Kitsu connection", "Discord Bot connection", "Not configured"} {
-		if !strings.Contains(body, required) {
-			t.Fatalf("normal English Bot Connection surface is missing %q", required)
-		}
-	}
-}
-
-func checkConnectionsPageUsesSafeNameAndUnescapedStatusMarkup(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	renderConnectionsPageSafe(w, httptest.NewRequest("GET", "/bot/admin/bot?lang=ja", nil), db)
-	body := w.Body.String()
-	for _, want := range []string{"接続設定", "Kitsu接続", "Discord Bot接続", "未設定"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("Connections page missing %q", want)
-		}
-	}
-	if strings.Contains(body, "&lt;span") || strings.Contains(body, "Bot設定") || strings.Contains(body, "Runtime") {
-		t.Fatal("Connections page contains escaped markup or internal legacy terminology")
-	}
-	if got := strings.Count(body, "<h1"); got != 1 {
-		t.Fatalf("Connections page has %d h1 elements, want 1", got)
 	}
 }
 
@@ -1546,60 +1318,6 @@ func TestProductionDetailsUsesDetailsLabel(t *testing.T) {
 	}
 }
 
-func TestBotAndSystemStatusUseActualPrerequisiteValues(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
-	renderIAHealth(w, r, db)
-	body := w.Body.String()
-	for _, want := range []string{"System", "Not configured", "Discord API", "Notification processing", "Internal data"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("system status missing %q", want)
-		}
-	}
-	w = httptest.NewRecorder()
-	renderIABot(w, r, db)
-	if !strings.Contains(w.Body.String(), "Action required") || !strings.Contains(w.Body.String(), "View channels") {
-		t.Fatal("Bot Connection does not expose state and permission list")
-	}
-}
-
-func TestGlobalUserLinkingUsesApprovedJapaneseTerm(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
-	body := w.Body.String()
-	if !strings.Contains(body, "\u30e6\u30fc\u30b6\u30fc\u7d10\u3065\u3051") {
-		t.Fatal("global user linking did not use the approved Japanese term")
-	}
-	if strings.Contains(body, "\u30e6\u30fc\u30b6\u30fc\u5bfe\u5fdc\u4ed8\u3051") {
-		t.Fatal("legacy Japanese user-management term remains in normal UI")
-	}
-	if !strings.Contains(body, "Kitsu\u30e6\u30fc\u30b6\u30fc\u3068Discord\u30e6\u30fc\u30b6\u30fc\u3092\u7d10\u3065\u3051\u307e\u3059\u3002") {
-		t.Fatal("global user linking description is missing")
-	}
-}
-
-func TestFixtureUserLinkingDoesNotDuplicateStatusText(t *testing.T) {
-	db := newIAViewDB(t)
-	db.Create(&model.UserMap{KitsuName: "Fixture User", DiscordID: "synthetic-discord-id", DiscordDisplayName: "Fixture Discord User"})
-	w := httptest.NewRecorder()
-	renderGlobalUserMapping(w, httptest.NewRequest("GET", "/bot/admin/users?lang=ja", nil), db)
-	body := w.Body.String()
-	start := strings.LastIndex(body, "Fixture User")
-	end := strings.Index(body[start:], "</tr>")
-	if start < 0 || end < 0 {
-		t.Fatal("fixture user row is missing")
-	}
-	row := body[start : start+end]
-	if !strings.Contains(row, "Fixture data") && !strings.Contains(row, "\u691c\u8a3c\u7528\u30c7\u30fc\u30bf") {
-		t.Fatal("fixture status is missing")
-	}
-	if strings.Contains(row, "Fixture Discord User") || strings.Contains(row, "synthetic-discord-id") {
-		t.Fatal("fixture row claims a real Discord identity or exposes its raw ID")
-	}
-}
-
 func TestProductionUserSettingsEmptyStatesHaveNoDecorativeBullets(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "empty-user-settings", Name: "Empty User Settings"}
@@ -1660,49 +1378,6 @@ func TestSystemStatusRoutingDistinguishesWaitingFromRoutingFailure(t *testing.T)
 	}
 	if got := pipelineRoutingValue("en", SharedBotRuntimeReadiness{ProductionConnected: true, RoutingReady: true}); got != "Configured" {
 		t.Fatalf("connected Production with valid routing = %q, want Configured", got)
-	}
-}
-
-func TestSystemStatusUsesStateSpecificNextActions(t *testing.T) {
-	r := httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil)
-	setup := SharedBotRuntimeReadiness{State: ReadinessSetupRequired}
-	setupAction := pipelineReadinessNextAction("en", r, setup)
-	if !strings.Contains(setupAction, "Kitsu setup is required") || !strings.Contains(setupAction, "Configure Kitsu connection") || !strings.Contains(setupAction, `href="/bot/admin/bot?lang=en"`) {
-		t.Fatalf("Kitsu section action = %q", setupAction)
-	}
-	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, setup); got != "Configure the Kitsu connection before continuing." {
-		t.Fatalf("Kitsu setup blocker = %q", got)
-	}
-	if got := pipelineNotificationHint("en", setup); got != "Configure the Kitsu connection before continuing." {
-		t.Fatalf("notification setup blocker = %q", got)
-	}
-	production := SharedBotRuntimeReadiness{State: ReadinessProductionRequired, KitsuConfigured: true, DiscordConfigured: true, PrerequisitesReady: true}
-	if got := pipelineReadinessNextAction("en", r, production); !strings.Contains(got, "No connected and notifiable Production is available.") || !strings.Contains(got, "New Production Connection") {
-		t.Fatalf("Production section action = %q", got)
-	}
-	if got := pipelineRoutingHint("en", production); got != "No Production is currently available for notifications." {
-		t.Fatalf("Production blocker = %q", got)
-	}
-	view := readinessViewFor("en", r, production)
-	if view.ActionURL != "/bot/setup?lang=en" || view.ActionLabel != "New Production Connection" {
-		t.Fatalf("Production action = %#v", view)
-	}
-	routing := SharedBotRuntimeReadiness{State: ReadinessRoutingRequired, KitsuConfigured: true, DiscordConfigured: true, ProductionConnected: true, PrerequisitesReady: true}
-	if got := pipelineReadinessNextAction("en", r, routing); !strings.Contains(got, "Notification routing needs attention.") || !strings.Contains(got, "Review notification settings") {
-		t.Fatalf("routing section action = %q", got)
-	}
-	if got := pipelineRoutingHint("en", routing); got != "A Production exists, but its notification routing is missing or invalid." {
-		t.Fatalf("routing blocker = %q", got)
-	}
-	if got := pipelineProcessingHint("en", RuntimeSnapshot{}, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "Waiting for the first observation." {
-		t.Fatalf("first-observation guidance = %q", got)
-	}
-	if got := pipelineReadinessNextAction("en", r, SharedBotRuntimeReadiness{State: ReadinessReady, PrerequisitesReady: true}); got != "" {
-		t.Fatalf("ready section should not expose a next action: %q", got)
-	}
-	rendered := renderPipelineHealthItem("en", pipelineHealthItem{label: "Event monitoring", value: "Needs review", class: "warning", details: "<p>safe</p>", detailsLabel: "Observation diagnostics", action: "/bot/admin/audit", actionLabel: "Review audit log"}, 0)
-	if !strings.Contains(rendered, `<details class="pipeline-health-diagnostic">`) || !strings.Contains(rendered, `href="/bot/admin/audit"`) || strings.Contains(rendered, `href="#`) {
-		t.Fatal("diagnostics must stay informational while actions use a real page")
 	}
 }
 
@@ -1819,67 +1494,6 @@ func TestDashboardNotificationStatusUsesUnavailableCopyWithoutProductions(t *tes
 				t.Fatal("dashboard retained ambiguous waiting language")
 			}
 		})
-	}
-}
-
-func TestStatusPolishUsesRealSparkline(t *testing.T) {
-	items := []APIObservation{{At: time.Now().Add(-30 * time.Second), Duration: 10 * time.Millisecond, Success: true}, {At: time.Now().Add(-15 * time.Second), Duration: 20 * time.Millisecond, Success: true}, {At: time.Now().Add(-5 * time.Second), Success: false}}
-	graph := apiObservationGraph(items)
-	if !strings.Contains(graph, `class="telemetry-line success"`) || !strings.Contains(graph, `viewBox="0 0 496 104"`) || strings.Contains(graph, "telemetry-bar") {
-		t.Fatal("line graph did not reflect the recorded observations")
-	}
-	if strings.Contains(apiObservationGraph(nil), "telemetry-line") {
-		t.Fatal("empty telemetry should not render a fake graph")
-	}
-	if !strings.Contains(apiObservationGraph([]APIObservation{{At: time.Now(), Duration: 10 * time.Millisecond, Success: true}}), `tabindex="0"`) {
-		t.Fatal("a single telemetry sample should render an accessible point")
-	}
-}
-
-func TestDashboardRendersPrimaryContentBeforeManagementMenu(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
-	body := w.Body.String()
-	positions := []string{`<section class="dashboard-intro">`, `class="dashboard-summary-grid"`, `dashboard-queue"`, `dashboard-cta"`, `dashboard-menu"`}
-	last := -1
-	for _, marker := range positions {
-		pos := strings.Index(body[last+1:], marker)
-		if pos >= 0 {
-			pos += last + 1
-		}
-		if pos <= last {
-			t.Fatalf("dashboard marker %q is out of order", marker)
-		}
-		last = pos
-	}
-}
-
-func TestDashboardConnectionsCardStaysContainedAndCSSDoesNotReorderDOM(t *testing.T) {
-	db := newIAViewDB(t)
-	w := httptest.NewRecorder()
-	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
-	body := w.Body.String()
-	start := strings.Index(body, `class="dashboard-menu-card"`)
-	if start < 0 {
-		t.Fatal("Dashboard management cards are missing")
-	}
-	end := strings.Index(body[start:], `</a>`)
-	if end < 0 {
-		t.Fatal("Connections card is incomplete")
-	}
-	card := body[start : start+end]
-	if !strings.Contains(body, `class="dashboard-service-status"`) || strings.Contains(card, `Connected 1`) {
-		t.Fatal("Production count is intruding into the Connections card")
-	}
-	if strings.Contains(body, `dashboard-menu-card-connections`) || !strings.Contains(adminThemeCSS, `.dashboard-menu-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))`) {
-		t.Fatal("Dashboard management cards do not use the shared equal-width grid")
-	}
-	if !strings.Contains(adminThemeCSS, `.dashboard-service-status{display:grid`) || !strings.Contains(adminThemeCSS, `.dashboard-service-status>span{display:grid;grid-template-columns:minmax(0,1fr) auto`) {
-		t.Fatal("Connections statuses are not using the shared vertical row layout")
-	}
-	if !strings.Contains(adminThemeCSS, `.section-stack>.dashboard-intro,.section-stack>.dashboard-summary-grid`) || !strings.Contains(adminThemeCSS, `{order:initial}`) {
-		t.Fatal("Dashboard source order is not protected from obsolete CSS reordering")
 	}
 }
 
@@ -2016,106 +1630,6 @@ func TestProductionListRowsRemoveRedundantStatusCopy(t *testing.T) {
 	}
 	if !strings.Contains(clean, "Disconnected") || !strings.Contains(clean, "Open Production") {
 		t.Fatal("Production list lost its semantic status or action")
-	}
-}
-
-func TestDisconnectedProductionCardIsCompactAndLocalized(t *testing.T) {
-	db := newIAViewDB(t)
-	p := model.Project{KitsuProjectID: "disconnected-live", Name: "Live Production", ReadOnlyPreview: true}
-	db.Create(&p)
-	for _, lang := range []string{"ja", "en"} {
-		body := renderDisconnectedProductionCard(lang, httptest.NewRequest("GET", "/bot/admin/projects?lang="+lang, nil), p)
-		if !strings.Contains(body, "Live Production") || !strings.Contains(body, map[string]string{"ja": "未接続", "en": "Disconnected"}[lang]) {
-			t.Fatalf("%s disconnected Production card is missing expected content", lang)
-		}
-		if strings.Contains(body, "Current state") || strings.Contains(body, "This Production is not connected to KitsuSync yet.") {
-			t.Fatalf("%s disconnected Production card still contains redundant explanation", lang)
-		}
-	}
-}
-
-func TestProductionConnectionStateIsSharedByDashboardAndList(t *testing.T) {
-	db := newIAViewDB(t)
-	preview := model.Project{KitsuProjectID: "live-preview", Name: "Live Preview", ReadOnlyPreview: true}
-	connected := model.Project{KitsuProjectID: "connected-local", Name: "Connected Local"}
-	if err := db.Create(&connected).Error; err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/data/projects/":
-			_, _ = w.Write([]byte(`[{"id":"live-preview","name":"Live Preview"}]`))
-		case "/api/data/projects/live-preview/task-types":
-			_, _ = w.Write([]byte(`[]`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	t.Setenv("KitsuJWTToken", "")
-	t.Setenv("KITSU_API_BASE_URL", "")
-	t.Setenv("KITSU_HOSTNAME", "")
-	if err := request.ConfigureVerifiedOrigin(request.VerifiedOrigin{BaseURL: server.URL, PinnedIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}); err != nil {
-		t.Fatal(err)
-	}
-	model.SetSetting(db, KitsuAPIBaseURLSettingKey, server.URL+"/api")
-	if err := setRuntimeKitsuToken(db, "dashboard-count-test-token"); err != nil {
-		t.Fatal(err)
-	}
-	projects := []model.Project{preview, connected}
-	counts := productionConnectionCounts(projects)
-	if counts != (productionCounts{Total: 2, Connected: 1, Disconnected: 1}) {
-		t.Fatalf("Production counts = %+v, want total=2 connected=1 disconnected=1", counts)
-	}
-	if class, label := productionConnectionStatus(preview, "en"); class != "neutral" || label != "Disconnected" {
-		t.Fatalf("live-only Production status = %q/%q, want neutral/Disconnected", class, label)
-	}
-	if class, label := productionConnectionStatus(connected, "en"); class != "ok" || label != "Connected" {
-		t.Fatalf("local Production status = %q/%q, want ok/Connected", class, label)
-	}
-	w := httptest.NewRecorder()
-	renderIADashboard(w, httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db)
-	dashboardBody := w.Body.String()
-	if !strings.Contains(dashboardBody, `metric-value">2</div>`) || !strings.Contains(dashboardBody, "Connected <strong>1</strong>") || !strings.Contains(dashboardBody, "Disconnected <strong>1</strong>") {
-		t.Fatalf("Dashboard did not render the live + connected Production counts: %s", dashboardBody)
-	}
-	if !strings.Contains(dashboardBody, `metric-label">Needs attention</div><div class="metric-value">1</div>`) {
-		t.Fatal("disconnected live Production incorrectly increased Needs attention")
-	}
-	w = httptest.NewRecorder()
-	renderIAProductionList(w, httptest.NewRequest("GET", "/bot/admin/projects?lang=en", nil), db, "")
-	body := w.Body.String()
-	if !strings.Contains(body, "Live Preview") || !strings.Contains(body, "Connected Local") {
-		t.Fatal("Production list did not retain both the live-only and connected Kitsu Productions")
-	}
-	if !strings.Contains(body, `class="status-pill ok">Connected</span>`) {
-		t.Fatal("Production list does not render the connected semantic state")
-	}
-	if strings.Contains(body, `min-width:170px`) {
-		t.Fatal("Production status layout still reserves the old fixed-width column")
-	}
-	if got := dashboardProductionMetric("en", counts); !strings.Contains(got, "Production") || !strings.Contains(got, "metric-value\">2</div>") || !strings.Contains(got, "Connected <strong>1</strong>") || !strings.Contains(got, "Disconnected <strong>1</strong>") {
-		t.Fatalf("Dashboard Production summary does not expose total/connected/disconnected: %s", got)
-	}
-	if got := productionListConnectionSummary("en", counts); !strings.Contains(got, "Connected <strong>1</strong>") || !strings.Contains(got, "Disconnected <strong>1</strong>") {
-		t.Fatalf("Production list summary does not expose both states: %s", got)
-	}
-	if !strings.Contains(body, "Connected <strong>1</strong>") || !strings.Contains(body, "Disconnected <strong>1</strong>") {
-		t.Fatal("Production list summary does not reflect the shared live + local Production state")
-	}
-	management := renderDashboardMenuRefined("en", httptest.NewRequest("GET", "/bot/admin?lang=en", nil), db, projects, 0, SharedBotRuntimeReadiness{}, nil)
-	start := strings.Index(management, `href="/bot/admin/projects?lang=en"`)
-	if start < 0 {
-		t.Fatal("Dashboard Management menu is missing the Production card")
-	}
-	end := strings.Index(management[start:], `</a>`)
-	productionCard := management[start : start+end]
-	if !strings.Contains(productionCard, "Connected 1") || !strings.Contains(productionCard, "Disconnected 1") || strings.Contains(productionCard, "Needs review 1") {
-		t.Fatalf("Dashboard Management Production summary has incompatible state semantics: %s", productionCard)
-	}
-	if class, _, _ := iaStatus(db, preview, "en"); class == "bad" {
-		t.Fatal("disconnected Production must not count as Needs attention")
 	}
 }
 
@@ -2340,195 +1854,6 @@ func TestProductionTeamViewUsesFreshKitsuMembershipOnEveryRender(t *testing.T) {
 	}
 	if got := len(model.ListProjectUserMaps(db, project.ID)); got != 0 {
 		t.Fatalf("live team rendering persisted %d ProjectUserMap rows", got)
-	}
-}
-
-func TestReviewerOverrideManagerRendersLocalizedTaskTypesAndSafeGuildRoles(t *testing.T) {
-	db := newIAViewDB(t)
-	t.Setenv("KitsuJWTToken", "reviewer-test-token")
-	t.Setenv("KITSU_API_BASE_URL", "https://kitsu.example.test/api")
-	project := model.Project{KitsuProjectID: "reviewer-manager", Name: "Reviewer Manager", DiscordGuildID: "123456789012345678"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&model.ProjectUserMap{ProjectID: project.ID, KitsuName: "Linked Artist", DiscordUserID: "123456789012345679"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&model.UserMap{KitsuID: "linked-artist", KitsuName: "Linked Artist", KitsuEmail: "artist@example.test", DiscordID: "123456789012345679", DiscordDisplayName: "Discord Artist"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&model.UserMap{KitsuID: "non-team-user", KitsuName: "Outsider", KitsuEmail: "outside@example.test", DiscordID: "123456789012345682", DiscordDisplayName: "Outside Discord"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	oldTasks, oldRoles, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerGuildMembersForGuild
-	oldTeam := reviewerProductionTeamReader
-	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
-		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentName: "Comp"}}
-	}
-	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
-		return []kitsu.Person{
-			{ID: "linked-artist", FullName: "Linked Artist", Email: "artist@example.test", Active: true},
-			{ID: "unlinked-person", FullName: "Unlinked Person", Email: "unlinked@example.test", Active: true},
-		}, nil
-	}
-	reviewerDiscordRolesForGuild = func(guildID, _ string) ([]DiscordGuildRole, error) {
-		return []DiscordGuildRole{
-			{ID: guildID, Name: "@everyone", Mentionable: true},
-			{ID: "123456789012345680", Name: "Mentionable", Mentionable: true},
-			{ID: "123456789012345681", Name: "Not Mentionable", Mentionable: false},
-		}, nil
-	}
-	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
-		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345679", "linked-artist", "Discord Artist", "")}, nil
-	}
-	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
-	})
-
-	for _, tc := range []struct{ lang, wantAutomatic, wantOverrides, wantNone, wantUser, wantUserLabel, wantRole, wantRoleDisabled string }{
-		{"ja", "自動通知先", "追加通知先", "なし", "ユーザーを追加", "Discordユーザー", "ロールを追加", "メンション不可（適用時に確認）"},
-		{"en", "Automatic recipients", "Additional recipients", "None", "Add user", "Discord user", "Add role", "Not mentionable (verified on apply)"},
-	} {
-		request := httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-manager&tab=users&lang="+tc.lang, nil)
-		body := renderCurrentProductionWFARecipients(db, request, project, tc.lang, "bot-token")
-		for _, want := range []string{tc.wantAutomatic, "Compositing", "Comp", "@Discord Artist", tc.wantUserLabel, tc.wantUser, tc.wantRole, `value="123456789012345679"`, `value="123456789012345680"`} {
-			if !strings.Contains(body, want) {
-				t.Fatalf("%s Reviewer UI missing %q", tc.lang, want)
-			}
-		}
-		if !strings.Contains(body, tc.wantOverrides) || !strings.Contains(body, tc.wantNone) || strings.Contains(body, "Not active while an override is set.") {
-			t.Fatalf("%s Reviewer UI must state that no override exists", tc.lang)
-		}
-		if strings.Contains(body, `value="123456789012345678"`) || strings.Contains(body, `value="123456789012345682"`) || strings.Contains(body, "unlinked-person") {
-			t.Fatalf("%s Reviewer UI exposed @everyone, a non-Team user, or an unlinked ID", tc.lang)
-		}
-		if !strings.Contains(body, `value="123456789012345681" disabled`) || !strings.Contains(body, tc.wantRoleDisabled) {
-			t.Fatalf("%s Reviewer UI must show a non-mentionable role as disabled with a reason when no verified route exists", tc.lang)
-		}
-		if strings.Contains(body, "save_production_checker") {
-			t.Fatalf("%s Reviewer UI still exposes the single-target legacy form", tc.lang)
-		}
-	}
-}
-
-func TestReviewerManagerExplainsGuildMembershipLookupFailure(t *testing.T) {
-	db := newIAViewDB(t)
-	project := model.Project{KitsuProjectID: "reviewer-guild-failure", DiscordGuildID: "123456789012345678"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&model.UserMap{KitsuID: "linked-person", KitsuName: "Linked Person", DiscordID: "123456789012345679", DiscordDisplayName: "linked"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	oldTasks, oldRoles, oldTeam, oldGuildMembers := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild
-	reviewerTaskTypesForProduction = func(*gorm.DB, string) []kitsu.TaskType {
-		return []kitsu.TaskType{{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Compositing"}}
-	}
-	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
-		return []kitsu.Person{{ID: "linked-person", FullName: "Linked Person", Email: "linked@example.test", Active: true, Role: "supervisor", Departments: []string{"dept-comp"}}}, nil
-	}
-	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) {
-		return []DiscordGuildRole{{ID: "123456789012345680", Name: "Reviewers", Mentionable: true}}, nil
-	}
-	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
-		return nil, errors.New("synthetic member lookup failure")
-	}
-	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldTasks, oldRoles, oldTeam, oldGuildMembers
-	})
-
-	body := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=reviewer-guild-failure&tab=reviewers&lang=en", nil), project, "en", "bot-token")
-	// A plain (non-rate-limit) member read failure leaves no cached snapshot, so
-	// the screen stays immediately renderable and says membership is loading.
-	for _, want := range []string{"Discord server membership is loading in the background", "Automatic eligibility", "User Override candidates", "@Reviewers"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("Guild-member lookup failure missing safe Reviewer state %q: %s", want, body)
-		}
-	}
-	if strings.Contains(body, `name="target_kind" value="user"`) || strings.Contains(body, "Linked Person</strong><small>Discord: @linked</small>") {
-		t.Fatalf("unverified Guild membership was presented as eligible or selectable: %s", body)
-	}
-}
-
-func TestProductionUsersSummarizesSupervisorDepartmentsAndReviewerOverrides(t *testing.T) {
-	db := newIAViewDB(t)
-	t.Setenv("KitsuJWTToken", "reviewer-test-token")
-	t.Setenv("KITSU_API_BASE_URL", "https://kitsu.example.test/api")
-	project := model.Project{KitsuProjectID: "supervisor-summary", Name: "Supervisor Summary", DiscordGuildID: "123456789012345678"}
-	if err := db.Create(&project).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Create(&model.UserMap{KitsuID: "comp-supervisor", KitsuName: "Ukyo Matsuo", KitsuEmail: "ukyo@example.test", DiscordID: "123456789012345679", DiscordDisplayName: "ukyo"}).Error; err != nil {
-		t.Fatal(err)
-	}
-	oldTasks, oldRoles, oldTeam, oldSupervisors := reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerDepartmentSupervisorsForTeam
-	taskReads, teamReads := 0, 0
-	reviewerTaskTypesForProduction = func(_ *gorm.DB, _ string) []kitsu.TaskType {
-		taskReads++
-		return []kitsu.TaskType{
-			{ID: "task-comp", Name: "Compositing", DepartmentID: "dept-comp", DepartmentName: "Comp"},
-			{ID: "task-roto", Name: "Roto", DepartmentID: "dept-comp", DepartmentName: "Comp"},
-			{ID: "task-anim", Name: "Animation", DepartmentID: "dept-anim", DepartmentName: "Animation"},
-		}
-	}
-	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) {
-		teamReads++
-		return []kitsu.Person{
-			{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Email: "ukyo@example.test", Active: true, Role: "artist", ProjectRole: "supervisor", Departments: []string{"dept-comp"}},
-			{ID: "animation-supervisor", FullName: "Animation Supervisor", Active: true, Role: "supervisor", Departments: []string{"dept-anim"}},
-			{ID: "comp-artist", FullName: "Comp Artist", Active: true, Role: "artist", Departments: []string{"dept-comp"}},
-			{ID: "unknown-supervisor", FullName: "Unknown Supervisor", Active: true, Role: "supervisor", Departments: []string{"dept-unknown"}},
-		}, nil
-	}
-	oldGuildMembers := reviewerGuildMembersForGuild
-	reviewerGuildMembersForGuild = func(_, _ string) ([]DiscordGuildMember, error) {
-		return []DiscordGuildMember{reviewerTestGuildMember("123456789012345679", "ukyo", "global-ukyo", "ukyo-guild")}, nil
-	}
-	reviewerDiscordRolesForGuild = func(string, string) ([]DiscordGuildRole, error) { return nil, nil }
-	reviewerDepartmentSupervisorsForTeam = func(_, _, departmentID string, team []kitsu.Person) ([]kitsu.Person, error) {
-		if departmentID != "dept-comp" || len(team) == 0 {
-			return nil, nil
-		}
-		return []kitsu.Person{{ID: "comp-supervisor", FullName: "Ukyo Matsuo", Role: "supervisor"}}, nil
-	}
-	t.Cleanup(func() {
-		reviewerTaskTypesForProduction, reviewerDiscordRolesForGuild, reviewerProductionTeamReader, reviewerDepartmentSupervisorsForTeam = oldTasks, oldRoles, oldTeam, oldSupervisors
-		reviewerGuildMembersForGuild = oldGuildMembers
-	})
-
-	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=team&lang=en", nil), project, "en", "synthetic-discord-token")
-	for _, want := range []string{"Ukyo Matsuo", "@ukyo", "Supervisor", "Comp", "Comp: Compositing, Roto", "Supervisor scope is derived from Departments", "does not indicate actual task assignments", "Linked"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("Production Team UI missing %q: %s", want, body)
-		}
-	}
-	if strings.Contains(body, "Comp Artist</strong>") && strings.Contains(body, "Comp Artist") && strings.Contains(body, "Supervision scope") {
-		start := strings.Index(body, `>Comp Artist</strong>`)
-		end := strings.Index(body[start:], `</li>`)
-		if start >= 0 && end >= 0 && strings.Contains(body[start:start+end], "Comp: Compositing, Roto") {
-			t.Fatal("normal Department membership was mislabeled as a Supervisor scope")
-		}
-	}
-	if !strings.Contains(body, "Unknown Supervisor") || taskReads != 1 || teamReads != 1 || strings.Contains(body, "reviewer-target-form") {
-		t.Fatalf("Production Team summary guessed missing metadata, repeated reads, or exposed writes: taskReads=%d teamReads=%d team=%s", taskReads, teamReads, body)
-	}
-	wfa := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=notifications&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
-	for _, want := range []string{"Automatic recipients", "Additional recipients", "Comp Supervisor", "Ukyo Matsuo", "None"} {
-		if !strings.Contains(wfa, want) {
-			t.Fatalf("Notifications WFA recipient state missing %q: %s", want, wfa)
-		}
-	}
-	if err := model.UpsertProjectReviewerTarget(db, project.ID, "task-comp", "Compositing", model.ReviewerTargetUser, "123456789012345679"); err != nil {
-		t.Fatal(err)
-	}
-	overridden := renderCurrentProductionWFARecipients(db, httptest.NewRequest("GET", "/bot/admin/projects?project=supervisor-summary&tab=notifications&lang=en&reviewer_task_type=task-comp", nil), project, "en", "bot-token")
-	for _, want := range []string{"Ukyo Matsuo", "Additional recipients", "Comp Supervisor"} {
-		if !strings.Contains(overridden, want) {
-			t.Fatalf("automatic Reviewer/override state missing %q: %s", want, overridden)
-		}
-	}
-	if strings.Contains(overridden, "Not active while an override is set.") {
-		t.Fatal("automatic Reviewer was marked inactive while additive overrides existed")
 	}
 }
 

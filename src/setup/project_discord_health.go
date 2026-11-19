@@ -1,13 +1,10 @@
 package setup
 
 import (
-	"fmt"
-	"net/url"
 	"strings"
 
 	"app/src/model"
 	"gorm.io/gorm"
-	"net/http"
 )
 
 // ProjectDiscordResourceHealth is a read-only report on one connected
@@ -155,32 +152,4 @@ func forumHasTagID(tags []forumTagInfo, tagID string) bool {
 		}
 	}
 	return false
-}
-
-func renderProjectDiscordResourceNotice(db *gorm.DB, r *http.Request, project model.Project, lang string) string {
-	report := inspectProjectDiscordResources(project, db)
-	if report.Error == "" && !report.HasStaleResources() {
-		return ""
-	}
-	detail := report.Error
-	if detail == "" {
-		switch {
-		case !report.ForumConfigured:
-			detail = t(lang, "このProductionのフォーラム設定が未保存です。", "This Production has no saved forum settings.")
-		case len(report.ForumProblems) > 0:
-			detail = fmt.Sprintf(t(lang, "フォーラム設定に%d件の問題があります。", "The forum settings have %d problem(s)."), len(report.ForumProblems))
-		default:
-			detail = fmt.Sprintf(t(lang, "フォーラム%d件中%d件をDiscord側で確認できません。タグ不一致%d件です。", "%d of %d routed forum(s) were not found in Discord; %d tag mismatch(es)."), report.MissingForumCount, report.RoutedForumCount, report.MissingTags)
-		}
-	}
-	fix := t(lang, "フォーラム設定を開き、対象Guildのフォーラムとタグを確認して保存し直してください。", "Open the forum settings, confirm the routed forums and tags in that guild, and save again.")
-	settingsURL := ""
-	if strings.TrimSpace(project.KitsuProjectID) != "" {
-		settingsURL = withLang("/bot/admin/forum?project="+url.QueryEscape(project.KitsuProjectID), r)
-	}
-	action := ""
-	if settingsURL != "" {
-		action = `<a class="btn-ghost" href="` + esc(settingsURL) + `">` + esc(t(lang, "フォーラム設定を開く", "Open forum settings")) + `</a>`
-	}
-	return `<div class="routing-resource-warning" role="alert" style="padding:12px 14px;border:1px solid rgba(255,200,80,.38);border-radius:14px;background:rgba(255,200,80,.08);margin-bottom:14px"><strong>` + esc(t(lang, "Discordリソースを確認できません", "Discord resources need review")) + `</strong><p style="margin:6px 0">` + esc(detail) + `</p><small>` + esc(fix) + `</small><div style="margin-top:10px">` + action + `</div></div>`
 }

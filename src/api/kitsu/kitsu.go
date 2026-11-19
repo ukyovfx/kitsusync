@@ -199,7 +199,7 @@ type ProjectStatuses struct {
 type MessagePayload struct {
 	PreviousStatusName   string // we store task status from DB and consider it 'old/prevous'
 	IsCommentOnly        bool   // true when only the comment changed (no status/timestamp change)
-	IsAssignNotification bool   // true when task status is "none" (TODO) and notifyOnAssign is enabled
+	IsAssignNotification bool   // true when this is a fresh task-assign notification (status was none in the prior poll)
 	CommentsUnavailable  bool   // true when the comments LIST fetch failed this poll; comment diffing is skipped
 	Project              struct {
 		Project
@@ -236,11 +236,6 @@ type MessagePayload struct {
 	Assignees []Person
 }
 
-func GetComments() Comments {
-	response, _ := GetCommentsWithError()
-	return response
-}
-
 func GetCommentsWithError() (Comments, error) {
 	return GetCommentsWithContext(context.Background())
 }
@@ -251,14 +246,6 @@ func GetCommentsWithContext(ctx context.Context) (Comments, error) {
 	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
-}
-
-func GetComment(objectID string) Comments {
-	path := kitsuBase() + "api/data/comments?object_id=" + objectID
-	response := Comments{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
-
-	return response
 }
 
 // ConnectionKey identifies the current Kitsu connection (API base and token) for
@@ -297,11 +284,6 @@ func GetProjectTasksWithContext(ctx context.Context, projectID string) (Tasks, e
 	return response, err
 }
 
-func GetTasks() Tasks {
-	response, _ := GetTasksWithError()
-	return response
-}
-
 func GetTasksWithError() (Tasks, error) {
 	return GetTasksWithContext(context.Background())
 }
@@ -312,22 +294,6 @@ func GetTasksWithContext(ctx context.Context) (Tasks, error) {
 	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
-}
-
-func GetTask(taskID string) Task {
-	path := kitsuBase() + "api/data/tasks/" + taskID
-	response := Task{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
-	return response
-}
-
-func GetPerson(personID string) Person {
-	path := kitsuBase() + "api/data/persons/" + personID
-	response := Person{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
-	return response
 }
 
 func GetPersons() Persons {
@@ -359,11 +325,6 @@ func getPersonsWithContext(ctx context.Context, baseURL, token string) (Persons,
 	return response, err
 }
 
-func GetEntities() Entities {
-	response, _ := GetEntitiesWithError()
-	return response
-}
-
 func GetEntitiesWithError() (Entities, error) {
 	return GetEntitiesWithContext(context.Background())
 }
@@ -374,19 +335,6 @@ func GetEntitiesWithContext(ctx context.Context) (Entities, error) {
 	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
-}
-
-func GetEntity(EntityID string) Entity {
-	path := kitsuBase() + "api/data/entities/" + EntityID
-	response := Entity{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
-	return response
-}
-
-func GetEntityTypes() EntityTypes {
-	response, _ := GetEntityTypesWithError()
-	return response
 }
 
 func GetEntityTypesWithError() (EntityTypes, error) {
@@ -401,19 +349,6 @@ func GetEntityTypesWithContext(ctx context.Context) (EntityTypes, error) {
 	return response, err
 }
 
-func GetEntityType(entityTypeID string) EntityType {
-	path := kitsuBase() + "api/data/entity-types/" + entityTypeID
-	response := EntityType{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
-	return response
-}
-
-func GetTaskStatuses() TaskStatuses {
-	response, _ := GetTaskStatusesWithError()
-	return response
-}
-
 func GetTaskStatusesWithError() (TaskStatuses, error) {
 	return GetTaskStatusesWithContext(context.Background())
 }
@@ -424,22 +359,6 @@ func GetTaskStatusesWithContext(ctx context.Context) (TaskStatuses, error) {
 	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response.Each)
 
 	return response, err
-}
-
-func GetTaskStatus(taskStatusID string) TaskStatus {
-	path := kitsuBase() + "api/data/task-status/" + taskStatusID
-	response := TaskStatus{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
-	return response
-}
-
-func GetTaskType(taskID string) TaskType {
-	path := kitsuBase() + "api/data/task-types/" + taskID
-	response := TaskType{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
-	return response
 }
 
 func GetTaskTypes() TaskTypes {
@@ -480,14 +399,6 @@ func getProjectTaskTypesWithCredentials(baseURL, token, projectID string) TaskTy
 	}
 	path := kitsuBaseFor(baseURL) + "api/data/projects/" + url.PathEscape(projectID) + "/task-types"
 	request.Do(token, http.MethodGet, path, nil, &response.Each)
-	return response
-}
-
-func GetProject(projectID string) Project {
-	path := kitsuBase() + "api/data/projects/" + projectID
-	response := Project{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
 	return response
 }
 
@@ -552,14 +463,6 @@ func kitsuBaseFor(raw string) string {
 	h := strings.TrimRight(strings.TrimSpace(raw), "/")
 	h = strings.TrimSuffix(h, "/api")
 	return h + "/"
-}
-
-func GetProjectStatus(projectStatusID string) ProjectStatus {
-	path := kitsuBase() + "api/data/project-status/" + projectStatusID
-	response := ProjectStatus{}
-	request.Do(os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
-
-	return response
 }
 
 // GetProjectTaskTypesWithCredentialsAndError reads Task Types for one Production

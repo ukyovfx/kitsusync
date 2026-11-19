@@ -325,13 +325,7 @@ The Bot may have channel create permission but not webhook create permission. In
 
 ### `@here` or user mentions not working
 
-Mentions require mapping configuration in `conf.toml` or `/bot/admin`:
-
-- **User mentions:** Add entries under `[[mention.userMap]]` or set them via `/bot/admin` → User Mappings
-- **Checker mentions:** Add entries under `[[mention.checkers]]` or `/bot/admin` → Checker Mappings
-- **`@here`:** Add the status to `mention.hereStatuses` in `conf.toml` (use cautiously — this pings all members)
-
-Unregistered Kitsu users generate a `WARN Kitsu user not registered` log line — not an error.
+Mentions are configured in `/bot/admin` (User Mappings and Checker Mappings). Unregistered Kitsu users generate a `WARN Kitsu user not registered` log line — not an error.
 
 ### Preview images not showing in Discord embeds
 

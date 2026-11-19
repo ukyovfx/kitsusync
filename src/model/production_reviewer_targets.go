@@ -151,27 +151,3 @@ func DeleteProjectReviewerTargetsForTaskType(db *gorm.DB, projectID uint, taskTy
 	})
 }
 
-func DeleteProjectReviewerTargetsForDiscordUser(db *gorm.DB, projectID uint, discordID string) error {
-	if db == nil || projectID == 0 || strings.TrimSpace(discordID) == "" {
-		return gorm.ErrInvalidData
-	}
-	return db.Transaction(func(tx *gorm.DB) error {
-		var project Project
-		if err := tx.Select("kitsu_project_id").First(&project, projectID).Error; err != nil {
-			return err
-		}
-		if err := AcquireProductionNotificationWriteLock(tx, project.KitsuProjectID); err != nil {
-			return err
-		}
-		if err := EnsureProductionNotificationMutationIdle(tx, project.KitsuProjectID, ""); err != nil {
-			return err
-		}
-		if err := EnsureNoUnresolvedManagedChannelDeletions(tx, project.KitsuProjectID); err != nil {
-			return err
-		}
-		if err := EnsureNoUnresolvedNotificationDeliveries(tx, project.KitsuProjectID); err != nil {
-			return err
-		}
-		return tx.Where("project_id = ? AND target_kind = ? AND discord_id = ?", projectID, ReviewerTargetUser, strings.TrimSpace(discordID)).Delete(&ProjectReviewerTarget{}).Error
-	})
-}

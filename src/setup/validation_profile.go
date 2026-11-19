@@ -10,7 +10,6 @@ import (
 
 	"app/src/api/kitsu"
 	"app/src/model"
-	"app/src/utils/config"
 	"gorm.io/gorm"
 )
 
@@ -36,11 +35,6 @@ func ValidationOnlyModeEnabled() bool {
 	return value == "1" || value == "true" || value == "yes"
 }
 
-func FixtureModeEnabled() bool {
-	value := strings.TrimSpace(strings.ToLower(os.Getenv("KITSUSYNC_FIXTURE_MODE")))
-	return value == "1" || value == "true" || value == "yes"
-}
-
 func RejectValidationMutation(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if ValidationOnlyModeEnabled() && r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -48,12 +42,6 @@ func RejectValidationMutation(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
-	}
-}
-
-func SeedConfigIfFixture(db *gorm.DB, conf config.Config) {
-	if FixtureModeEnabled() {
-		SeedFromConfig(db, conf)
 	}
 }
 

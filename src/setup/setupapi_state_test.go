@@ -135,7 +135,7 @@ func TestCheckDiscordStatusValidatesBotWithoutGuild(t *testing.T) {
 	}
 }
 
-func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
+func TestBotHandler_PostPersistsRuntimeToken(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://kitsu.local/")
 	t.Setenv("DISCORD_BOT_TOKEN", "before-token")
@@ -143,7 +143,6 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	h := BotHandler(db, nil)
 	form := url.Values{}
 	form.Set("bot_token", "rotated-token")
-	form.Set("guild_id", "999999999999999999")
 	req := httptest.NewRequest(http.MethodPost, "/bot/admin/bot?legacy=1", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	addRecentBotEditSession(t, req)
@@ -164,19 +163,6 @@ func TestBotHandler_PostPersistsRuntimeTokenAndGuildID(t *testing.T) {
 	}
 	if got := StoredRuntimeDiscordBotToken(db); got != "rotated-token" {
 		t.Fatalf("expected encrypted runtime token, got %q", got)
-	}
-	if got := strings.TrimSpace(model.GetSetting(db, "discord.guildID")); got != "999999999999999999" {
-		t.Fatalf("expected persisted guild ID, got %q", got)
-	}
-	// Reader side: connection/diagnostics must read the same guild ID saved under discord.guildID.
-	installDiscordAPIStub(t, "999999999999999999")
-	diag := httptest.NewRecorder()
-	HealthHandler(db)(diag, httptest.NewRequest(http.MethodGet, "/bot/admin/health?legacy=1&lang=en", nil))
-	if !strings.Contains(diag.Body.String(), "Discord guild accessible") {
-		t.Fatal("diagnostics did not read the saved guild ID; guild check missing from the diagnostics panel")
-	}
-	if !strings.Contains(diag.Body.String(), "Bot is a member of the guild.") {
-		t.Fatal("diagnostics guild check did not pass with the saved guild ID")
 	}
 }
 

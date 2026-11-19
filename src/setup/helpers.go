@@ -3,7 +3,6 @@ package setup
 import (
 	"app/src/api/kitsu"
 	"app/src/model"
-	"app/src/utils/config"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -482,24 +481,6 @@ func setRuntimeDiscordBotToken(db *gorm.DB, token string) error {
 	return SetRuntimeDiscordBotToken(db, token)
 }
 
-func SeedFromConfig(db *gorm.DB, conf config.Config) {
-	if db == nil {
-		return
-	}
-	for _, user := range conf.Mention.UserMap {
-		if strings.TrimSpace(user.KitsuName) == "" || strings.TrimSpace(user.DiscordID) == "" {
-			continue
-		}
-		model.UpsertUserMap(db, strings.TrimSpace(user.KitsuName), strings.TrimSpace(user.DiscordID))
-	}
-	for _, checker := range conf.Mention.Checkers {
-		if strings.TrimSpace(checker.TaskType) == "" || strings.TrimSpace(checker.DiscordID) == "" {
-			continue
-		}
-		model.AddCheckerMap(db, strings.TrimSpace(checker.TaskType), strings.TrimSpace(checker.DiscordID))
-	}
-}
-
 func selectedAttr(selected bool) string {
 	if selected {
 		return "selected"
@@ -507,14 +488,6 @@ func selectedAttr(selected bool) string {
 	return ""
 }
 
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-// botDo executes a Discord Bot API request and retries once on HTTP 429 (rate limit).
 func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, error) {
 	trimmedToken := strings.TrimSpace(botToken)
 	if trimmedToken == "" {

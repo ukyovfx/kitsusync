@@ -81,7 +81,7 @@ tplPreset = "rich"            # "rich" (Japanese), "eng" (English), or "rus" (Ru
 ignoreMessagesDaysOld = 5     # How many days back to pick up missed changes on first boot
 
 [discord]
-  useThreads = false          # Set true to post updates as thread replies instead of new messages
+  botToken = "${DISCORD_BOT_TOKEN}"
 ```
 
 Leave other settings at their defaults for now.

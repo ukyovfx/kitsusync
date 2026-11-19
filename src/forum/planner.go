@@ -96,27 +96,6 @@ func (p Planner) ForumForTaskType(taskTypeID string) (model.ProductionForumRoute
 	return model.ProductionForumRoute{}, false
 }
 
-// TagFor returns the configured tag for a role in a forum.
-func (p Planner) TagFor(forumID, role string) string {
-	for _, tag := range p.Settings.Tags {
-		if tag.ForumChannelID == forumID && tag.Role == role {
-			return tag.TagID
-		}
-	}
-	return ""
-}
-
-// ManagedTags lists every tag the bot owns in a forum.
-func (p Planner) ManagedTags(forumID string) []string {
-	var tags []string
-	for _, tag := range p.Settings.Tags {
-		if tag.ForumChannelID == forumID && tag.TagID != "" {
-			tags = append(tags, tag.TagID)
-		}
-	}
-	return tags
-}
-
 // IsTriggerRole reports whether a role opens a post or signals a change.
 func IsTriggerRole(role string) bool {
 	return role == model.ForumRoleWFA || role == model.ForumRoleRetake || role == model.ForumRoleDone

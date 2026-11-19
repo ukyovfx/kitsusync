@@ -79,19 +79,10 @@ func reviewerRoleAvailabilityMessage(lang string, project model.Project, view pr
 	return `<p class="field-help recipient-empty-state" role="status">` + esc(message) + `</p>`
 }
 
-func renderCurrentIARoutingEditorSetupStyle(db *gorm.DB, r *http.Request, p model.Project, lang, readTable string, botTokens ...string) string {
-	view := loadProductionNotificationReviewerView(db, p, true, true, botTokens...)
-	return renderCurrentIARoutingEditorSetupStyleWithData(db, r, p, lang, readTable, view)
-}
-
 type reviewerTargetView struct {
 	Kind  string `json:"kind"`
 	ID    string `json:"id"`
 	Label string `json:"label"`
-}
-
-func renderCurrentIARoutingEditorSetupStyleWithData(db *gorm.DB, r *http.Request, p model.Project, lang, readTable string, view productionNotificationReviewerView) string {
-	return renderCurrentIARoutingEditorWithStatus(db, r, p, lang, readTable, view, iaStatusClass(db, p), iaStatusLabel(db, p, lang))
 }
 
 // renderCurrentIARoutingEditorWithStatus renders the edit UI under the same
@@ -212,33 +203,6 @@ func renderCurrentIARoutingEditorWithStatus(db *gorm.DB, r *http.Request, p mode
 	}
 	html := `<section class="production-routing-editor" aria-labelledby="production-routing-editor-title"><div class="page-heading"><div><h3 id="production-routing-editor-title">` + esc(t(lang, "WFA通知先", "WFA recipients")) + `</h3></div><span class="status-pill ` + esc(normalizeStatusClass(statusClass)) + `" role="status">` + esc(statusLabel) + `</span></div>` + readTable + pendingSource + `<form method="post" action="` + esc(formAction) + `" data-current-routing-form lang="` + esc(lang) + `" data-async-notification-apply data-apply-endpoint="/bot/admin/projects?apply_notifications=1" data-project-id="` + esc(p.KitsuProjectID) + `" data-success-url="` + esc(successURL) + `" data-no-pending="` + esc(t(lang, "変更はありません", "No pending changes")) + `" data-pending-one="` + esc(t(lang, "件の未適用の変更", "pending change")) + `" data-pending-many="` + esc(t(lang, "件の未適用の変更", "pending changes")) + `" data-pending-instruction="` + esc(t(lang, "変更はまだ保存されていません。下の「適用」を押してください。", "Changes are pending; click Apply below to save.")) + `" data-stale-message="` + esc(t(lang, "別の編集が保存されました。入力内容は保持されています。内容を確認してから、もう一度変更を適用してください。", "Another edit was saved. Your pending changes are preserved. Review them, then Apply again.")) + `" data-error-message="` + esc(t(lang, "変更を適用できませんでした。入力内容は保持されています。", "Changes could not be applied. Your pending edits are preserved.")) + `" data-error-production-not-writable="` + esc(t(lang, "このProductionは読み取り専用のため保存できません。書き込み可能なProductionを選択してください。", "This Production is read-only, so changes were not saved. Select a writable Production.")) + `" data-error-reviewer-target="` + esc(t(lang, "選択したユーザーまたはロールを現在の送信先で確認できません。利用可能な対象を選び直してください。", "The selected User or Role could not be verified for the current destination. Choose an eligible target and try again.")) + `" data-error-reviewer-unavailable="` + esc(t(lang, "チーム所属またはDiscord権限を確認できませんでした。接続状態を確認してから再試行してください。", "Team membership or Discord permissions could not be verified. Check the connections and try again.")) + `" data-error-route-removed="` + esc(t(lang, "対象のTask Typeのフォーラムが削除されています。画面を再読み込みしてください。", "The forum for that Task Type no longer exists. Reload the page.")) + `" data-remove-label="` + esc(t(lang, "削除", "Remove")) + `" data-empty-wfa="` + esc(t(lang, "該当するSupervisorはいません。", "No matching Supervisor.")) + `"><input type="hidden" name="expected_revision" value="` + esc(revision) + `"><div class="table-wrap wizard-plan-table"><table><thead><tr><th>` + esc(t(lang, "Kitsu Task Type", "Kitsu Task Type")) + `</th><th>` + esc(t(lang, "フォーラム", "Forum")) + `</th></tr></thead><tbody data-current-routing-sort>` + rows.String() + `</tbody></table></div>` + panel + `<div class="button-row production-routing-editor-actions"><span data-pending-status aria-live="polite"></span><button type="submit" class="btn" data-apply-submit disabled>` + esc(t(lang, "適用", "Apply")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div><p data-apply-message role="alert"></p></form>` + addModal + `</section>`
 	return html + currentRoutingEditorScript() + currentRecipientComboboxScript()
-}
-
-func renderCurrentIARoutingSummaryWithStatus(db *gorm.DB, r *http.Request, p model.Project, lang, class, label string) string {
-	channelLabel := t(lang, "フォーラム", "Forum")
-	var rows strings.Builder
-	settings, _, _ := model.LoadProductionForumSettings(db, p.KitsuProjectID)
-	for _, route := range settings.Routes {
-		channel := t(lang, "未設定", "Not configured")
-		if name := strings.TrimSpace(route.ForumChannelName); name != "" {
-			channel = "#" + strings.TrimPrefix(name, "#")
-		}
-		rows.WriteString(`<div class="production-routing-summary-row"><strong>` + esc(route.TaskTypeName) + `</strong><span aria-hidden="true">&#8594;</span><span>` + esc(channel) + `</span></div>`)
-	}
-	if rows.Len() == 0 {
-		rows.WriteString(`<p class="field-help">` + esc(t(lang, "フォーラムはまだ設定されていません。", "No forums are configured yet.")) + `</p>`)
-	}
-	editURL := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
-	return `<section class="production-settings-section production-routing-summary"><div class="page-heading"><div><h3>` + esc(t(lang, "WFA通知先", "WFA recipients")) + `</h3><p class="field-help">` + esc(t(lang, "タスクタイプごとのフォーラムと通知先の設定です。", "Per-Task-Type forums and their recipients.")) + `</p></div><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(label) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(t(lang, "編集", "Edit")) + `</a></div><div class="production-routing-summary-head"><strong>Kitsu Task Type</strong><strong>` + esc(channelLabel) + `</strong></div><div class="production-routing-summary-list">` + rows.String() + `</div></section>`
-}
-
-func iaStatusClass(db *gorm.DB, p model.Project) string {
-	class, _, _ := iaStatus(db, p, "en")
-	return class
-}
-func iaStatusLabel(db *gorm.DB, p model.Project, lang string) string {
-	_, label, _ := iaStatus(db, p, lang)
-	return label
 }
 
 func currentRecipientComboboxScript() string {

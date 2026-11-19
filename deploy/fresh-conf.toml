@@ -19,17 +19,8 @@ log = true
     embedsPerRequests = 10
     RequestsPerMinute = 50
     webhookURL = ""
-    useThreads = false
     botToken = ""
     guildID = ""
-
-[mention]
-    checkerStatuses = ["WFA"]
-    artistStatuses = ["READY", "RETAKE", "DONE"]
-    hereStatuses = []
-
-[notification]
-    notifyOnAssign = false
 
 [googleDrive]
     url = ""

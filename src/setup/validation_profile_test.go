@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"app/src/model"
-	"app/src/utils/config"
 )
 
 func TestValidationOnlyProjectRendersReadOnlyRealData(t *testing.T) {
@@ -79,17 +78,6 @@ func TestLiveProductionPreviewIsReadOnlyAndDoesNotPersist(t *testing.T) {
 	}
 }
 
-func TestFixtureConfigRequiresExplicitMode(t *testing.T) {
-	t.Setenv("KITSUSYNC_FIXTURE_MODE", "")
-	if FixtureModeEnabled() {
-		t.Fatal("fixture mode enabled without explicit flag")
-	}
-	t.Setenv("KITSUSYNC_FIXTURE_MODE", "1")
-	if !FixtureModeEnabled() {
-		t.Fatal("fixture mode did not enable with explicit flag")
-	}
-}
-
 func TestLocalDevelopmentKitsuHostnameRequiresExplicitProfile(t *testing.T) {
 	t.Setenv(localProfileEnv, "")
 	t.Setenv("KITSUSYNC_LOCAL_KITSU_HOST", "")
@@ -107,13 +95,11 @@ func TestLocalDevelopmentKitsuHostnameRequiresExplicitProfile(t *testing.T) {
 }
 
 func TestNormalStartupDoesNotSeedFixtureOrValidationData(t *testing.T) {
-	t.Setenv("KITSUSYNC_FIXTURE_MODE", "")
 	t.Setenv(validationOnlyEnv, "")
-	if FixtureModeEnabled() || ValidationOnlyModeEnabled() {
+	if ValidationOnlyModeEnabled() {
 		t.Fatal("normal startup unexpectedly enabled an isolated data mode")
 	}
 	db := newIAViewDB(t)
-	SeedConfigIfFixture(db, config.Config{Mention: config.MentionConfig{UserMap: []config.UserMapEntry{{KitsuName: "Sample User", DiscordID: "synthetic"}}}})
 	for _, table := range []string{"projects", "user_maps", "production_notification_routes", "production_channel_mappings", "audit_logs"} {
 		var before, after int64
 		if err := db.Table(table).Count(&before).Error; err != nil {
@@ -125,10 +111,6 @@ func TestNormalStartupDoesNotSeedFixtureOrValidationData(t *testing.T) {
 		if after != before {
 			t.Fatalf("normal startup changed %s rows from %d to %d", table, before, after)
 		}
-	}
-	var sample model.UserMap
-	if db.Where("kitsu_name = ?", "Sample User").First(&sample).Error == nil {
-		t.Fatal("normal startup imported a sample user")
 	}
 }
 
@@ -147,24 +129,6 @@ func TestLiveKitsuPersonsMatchActiveUserSourceRule(t *testing.T) {
 		if person.FullName == "KitsuSync Bot" || person.FullName == "Archived User" {
 			t.Fatalf("stale or inactive Kitsu person remained visible: %q", person.FullName)
 		}
-	}
-}
-
-func TestSampleConfigIsIgnoredUnlessFixtureModeIsExplicit(t *testing.T) {
-	db := newIAViewDB(t)
-	conf := config.Config{}
-	conf.Mention.UserMap = []config.UserMapEntry{{KitsuName: "Sample User", DiscordID: "123456789012345678"}}
-	conf.Mention.Checkers = []config.CheckerEntry{{TaskType: "Animation", DiscordID: "123456789012345679"}}
-	t.Setenv("KITSUSYNC_FIXTURE_MODE", "")
-	SeedConfigIfFixture(db, conf)
-	var sample model.UserMap
-	if db.Where("kitsu_name = ?", "Sample User").First(&sample).Error == nil {
-		t.Fatal("sample user mapping populated without fixture mode")
-	}
-	t.Setenv("KITSUSYNC_FIXTURE_MODE", "1")
-	SeedConfigIfFixture(db, conf)
-	if db.Where("kitsu_name = ?", "Sample User").First(&sample).Error != nil {
-		t.Fatal("fixture mode did not populate sample mapping")
 	}
 }
 

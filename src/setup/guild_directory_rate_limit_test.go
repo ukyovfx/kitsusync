@@ -156,13 +156,6 @@ func TestProductionDisplayPathsDoNotBlockOnDiscordRateLimit(t *testing.T) {
 			want: []string{"Linked Artist", "Artist Nick"},
 		},
 		{
-			name: "reviewer manager",
-			render: func() string {
-				return renderCurrentProductionWFARecipients(db, request("&tab=team&lang=en"), project, "en", "synthetic-discord-token")
-			},
-			want: []string{"Compositing", "@Leads"},
-		},
-		{
 			name: "notification tab",
 			render: func() string {
 				return renderSelectedProductionNotifications(db, request("&tab=notifications&lang=en"), project, "en", "ok", "Healthy", "", "synthetic-discord-token")
