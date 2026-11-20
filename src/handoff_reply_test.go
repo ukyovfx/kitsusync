@@ -13,7 +13,7 @@ import (
 
 // handoffReplyRowsFor is what the digest or the DM sends for these events.
 func handoffReplyRowsFor(events []model.HandoffEvent) []discord.ActionRow {
-	return handoffReplyRows(events)
+	return handoffReplyRows(events, "ja")
 }
 
 // A digest keeps one reply row per handoff, so the configured cap is what
@@ -194,7 +194,7 @@ func TestHandoffDigestCountsTheHandoffsItLeftOut(t *testing.T) {
 // The immediate DM's first line names the shot or asset as well as the
 // product, so the receiver knows what arrived.
 func TestHandoffImmediateDMCardNamesTheEntity(t *testing.T) {
-	card := renderHandoffCard("", model.HandoffEvent{EntityName: "sq010_sh001", ProductName: "camera", ProductVersion: "v003"})
+	card := renderHandoffCard("", model.HandoffEvent{EntityName: "sq010_sh001", ProductName: "camera", ProductVersion: "v003"}, "ja")
 	if !strings.Contains(card, "🔁 素材の受け渡し — sq010_sh001 / camera") {
 		t.Fatalf("card = %q", card)
 	}

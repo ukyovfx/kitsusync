@@ -318,6 +318,9 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if e.TaskURL != nil {
 		url = e.TaskURL(row.TaskID)
 	}
+	// The card's language is the Production's notification language; tasks
+	// of unknown Productions fall back to Japanese.
+	language := productionLanguage(e.DB, task.ProjectID)
 	// The footer's ステータス value is the send-time status for status
 	// signals (the intent was re-derived above); comment and publish rows
 	// keep the plan-time name.
@@ -345,6 +348,7 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 		Assignees:   assignees,
 		UserIDs:     userIDs,
 		RoleIDs:     roleIDs,
+		Language:    language,
 	})
 	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
@@ -399,7 +403,7 @@ func (e Executor) executeWarnMessage(row model.ForumOutbox, token string) error 
 	if e.TaskURL != nil {
 		url = e.TaskURL(row.TaskID)
 	}
-	signal := discord.ForumFlapWarning(url, payload.Transitions, time.Duration(payload.SpanSeconds)*time.Second)
+	signal := discord.ForumFlapWarning(url, payload.Transitions, time.Duration(payload.SpanSeconds)*time.Second, productionLanguage(e.DB, task.ProjectID))
 	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
 		return err

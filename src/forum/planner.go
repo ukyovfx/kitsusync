@@ -10,6 +10,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"app/src/api/discord"
 	"app/src/api/kitsu"
 	"app/src/model"
 )
@@ -278,7 +279,7 @@ func (p Planner) queueCommentSignal(input TaskInput, existing model.ForumTask) e
 	}
 	if table, ok := ParseDeliverTable(input.Comment.Text); ok {
 		payload.Intent = model.ForumIntentPublish
-		payload.PublishLine = forumPublishLine(table)
+		payload.PublishLine = forumPublishLine(table, productionLanguage(p.DB, input.ProjectID))
 		payload.Quote = ""
 		payload.Mentions = nil
 	}
@@ -286,9 +287,22 @@ func (p Planner) queueCommentSignal(input TaskInput, existing model.ForumTask) e
 	return p.enqueueCommentPayload(input, payload)
 }
 
-// forumPublishLine renders the publish trace line of a delivery comment.
-func forumPublishLine(table DeliverTable) string {
+// forumPublishLine renders the publish trace line of a delivery comment. The
+// language is the Production's; unknown projects fall back to Japanese.
+func forumPublishLine(table DeliverTable, lang string) string {
+	if lang == "en" {
+		return "📦 " + table.Name + " (" + table.Family + ") " + table.Version + " was published"
+	}
 	return "📦 " + table.Name + "（" + table.Family + "）" + table.Version + " が publish されました"
+}
+
+// productionLanguage resolves the Production's normalized notification
+// language ("ja"/"en") from its Kitsu project ID; unknown projects are "ja".
+func productionLanguage(db *gorm.DB, kitsuProjectID string) string {
+	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
+		return discord.NotificationLanguage(project.Language)
+	}
+	return "ja"
 }
 
 func (p Planner) enqueueCommentPayload(input TaskInput, payload model.ForumPostMessagePayload) error {

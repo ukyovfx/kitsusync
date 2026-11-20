@@ -70,7 +70,7 @@ func TestFinalNotificationCardHasNoDuplicateStatusOrTaskTypeEmoji(t *testing.T) 
 	if strings.Contains(embed.Description, "<@") {
 		t.Fatalf("mention leaked into embed: %q", embed.Description)
 	}
-	if !strings.Contains(embed.Description, "ステータス：wfa → retake\n担当：Jane Doe") {
+	if !strings.Contains(embed.Description, "Status: wfa → retake\nAssignees: Jane Doe") {
 		t.Fatalf("metadata is missing from the description: %q", embed.Description)
 	}
 	if len(embed.Fields) != 0 || !strings.Contains(embed.Description, "[🦊 Kitsu](https://kitsu.example/tasks/cut009)　　[📁 Drive](https://drive.example/cut009)") {
@@ -124,7 +124,7 @@ func TestAssigneeDisplayNeverRendersOrAllowsAssigneeMentions(t *testing.T) {
 		NotificationLanguage: "en",
 	}
 	payload := RenderNotificationPayload(data, "rich")
-	if strings.Contains(payload.Embeds[0].Description, "<@123456789012345678>") || !strings.Contains(payload.Embeds[0].Description, "担当：Artist A") {
+	if strings.Contains(payload.Embeds[0].Description, "<@123456789012345678>") || !strings.Contains(payload.Embeds[0].Description, "Assignees: Artist A") {
 		t.Fatalf("assignee metadata should contain only the plain Kitsu name: %+v", payload.Embeds)
 	}
 	if len(payload.AllowedMentions.Users) != 0 {

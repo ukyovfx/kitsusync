@@ -174,11 +174,12 @@ func notificationCardDescription(data Template) string {
 		parts = append(parts, strings.Join(links, "　　"))
 	}
 
-	// The footer block is two plain lines with a full-width colon, shared
-	// with the forum signal cards (tuning: footer unification).
-	bodyBlock := "ステータス：" + notificationCardStatusValue(data)
+	// The footer block is two plain lines, shared with the forum signal
+	// cards (tuning: footer unification); language comes from the Production.
+	statusLabel, assigneeLabel := footerLabels(data.NotificationLanguage)
+	bodyBlock := statusLabel + notificationCardStatusValue(data)
 	if assignees := strings.TrimSpace(data.AssigneesStr); assignees != "" {
-		bodyBlock += "\n担当：" + assignees
+		bodyBlock += "\n" + assigneeLabel + assignees
 	}
 	parts = append(parts, bodyBlock)
 	return strings.Join(parts, "\n\n")

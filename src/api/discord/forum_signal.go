@@ -24,7 +24,8 @@ type ForumSignal struct {
 // ForumCardInput carries everything the card-shaped signal renderer needs.
 // EntityType / ParentName / EntityName / TaskType come from the planned
 // payload; LegacyTitle is the task row's space-joined title, the fallback for
-// rows queued before the payload carried display fields.
+// rows queued before the payload carried display fields. Language is the
+// Production's notification language ("ja"/"en"); empty falls back to "ja".
 type ForumCardInput struct {
 	Intent      string
 	TaskType    string
@@ -40,6 +41,24 @@ type ForumCardInput struct {
 	Assignees   []string
 	UserIDs     []string
 	RoleIDs     []string
+	Language    string
+}
+
+// footerLabels returns the localized footer prefixes so the forum signal
+// cards and the notification card footer never drift apart.
+func footerLabels(lang string) (status, assignees string) {
+	if normalizeNotificationLang(lang) == "en" {
+		return "Status: ", "Assignees: "
+	}
+	return "ステータス：", "担当："
+}
+
+// submitLabel is the WFA submitter line's localized prefix.
+func submitLabel(lang string) string {
+	if normalizeNotificationLang(lang) == "en" {
+		return "Submitted by: "
+	}
+	return "提出："
 }
 
 // forumCardHeading builds the embed title in the card shape
@@ -64,13 +83,16 @@ func forumCardHeading(entityType, parent, task, legacyTitle string) string {
 }
 
 // forumStatusLine renders the 状態行: emoji + STATUS + action.
-func forumStatusLine(intent string) string {
+func forumStatusLine(intent, lang string) string {
 	switch intent {
 	case model.ForumIntentStatusWFA, model.ForumIntentStatusRetake, model.ForumIntentStatusDone:
-		message, emoji := localizedStatusMessageInfo(strings.ToUpper(intent), "ja")
+		message, emoji := localizedStatusMessageInfo(strings.ToUpper(intent), lang)
 		return emoji + " " + strings.ToUpper(intent) + " " + message
 	case model.ForumIntentAssign:
-		_, emoji := localizedStatusMessageInfo("TODO", "ja")
+		_, emoji := localizedStatusMessageInfo("TODO", lang)
+		if normalizeNotificationLang(lang) == "en" {
+			return emoji + " You have been assigned to this task."
+		}
 		return emoji + " このタスクの担当になりました。"
 	default:
 		return ""
@@ -90,13 +112,13 @@ func forumCardDescription(in ForumCardInput) string {
 			parts = append(parts, sanitizeDiscordText(in.PublishLine))
 		}
 	default:
-		if line := forumStatusLine(in.Intent); line != "" {
+		if line := forumStatusLine(in.Intent, in.Language); line != "" {
 			parts = append(parts, line)
 		}
 	}
 	if in.Intent == model.ForumIntentStatusWFA {
 		if trimmed := strings.TrimSpace(in.Submitter); trimmed != "" {
-			parts = append(parts, "提出："+sanitizeDiscordText(trimmed))
+			parts = append(parts, submitLabel(in.Language)+sanitizeDiscordText(trimmed))
 		}
 	}
 	if in.Intent == model.ForumIntentStatusRetake {
@@ -107,21 +129,23 @@ func forumCardDescription(in ForumCardInput) string {
 	if in.TaskURL != "" {
 		parts = append(parts, "[🦊 Kitsu]("+in.TaskURL+")")
 	}
-	footer := forumCardFooter(in.StatusName, in.Assignees)
+	footer := forumCardFooter(in.StatusName, in.Assignees, in.Language)
 	if footer != "" {
 		parts = append(parts, footer)
 	}
 	return strings.Join(parts, "\n\n")
 }
 
-// forumCardFooter renders the footer block: ステータス / 担当, full-width colon.
-func forumCardFooter(statusName string, assignees []string) string {
+// forumCardFooter renders the footer block: status / assignees. Japanese keeps
+// the full-width colon; English uses the plain one.
+func forumCardFooter(statusName string, assignees []string, lang string) string {
+	statusLabel, assigneeLabel := footerLabels(lang)
 	var lines []string
 	if status := strings.ToLower(strings.TrimSpace(statusName)); status != "" {
-		lines = append(lines, "ステータス："+status)
+		lines = append(lines, statusLabel+status)
 	}
 	if names := sanitizeAssigneeNames(assignees); len(names) > 0 {
-		lines = append(lines, "担当："+strings.Join(names, " "))
+		lines = append(lines, assigneeLabel+strings.Join(names, " "))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -161,16 +185,33 @@ func RenderForumSignalCard(in ForumCardInput) ForumSignal {
 }
 
 // ForumFlapWarning renders the "state is flapping" warning. It carries no
-// mentions on purpose: the signal messages still ping, the warning only informs.
-func ForumFlapWarning(taskURL string, transitions int, span time.Duration) ForumSignal {
-	parts := []string{fmt.Sprintf("⚠️ 状態が短時間に何度も変わっています（%d 回 / %s）。タグは最新の状態を表しています。", transitions, forumSpanText(span))}
+// mentions on purpose: the signal messages still ping, the warning only
+// informs. lang is the Production's notification language; empty means "ja".
+func ForumFlapWarning(taskURL string, transitions int, span time.Duration, lang string) ForumSignal {
+	var line string
+	if normalizeNotificationLang(lang) == "en" {
+		line = fmt.Sprintf("⚠️ The status changed %d times in %s. The tag shows the latest status.", transitions, forumSpanText(span, lang))
+	} else {
+		line = fmt.Sprintf("⚠️ 状態が短時間に何度も変わっています（%d 回 / %s）。タグは最新の状態を表しています。", transitions, forumSpanText(span, lang))
+	}
+	parts := []string{line}
 	if taskURL != "" {
 		parts = append(parts, taskURL)
 	}
 	return ForumSignal{Content: strings.Join(parts, "\n")}
 }
 
-func forumSpanText(span time.Duration) string {
+func forumSpanText(span time.Duration, lang string) string {
+	if normalizeNotificationLang(lang) == "en" {
+		if span < time.Minute {
+			return "under a minute"
+		}
+		minutes := int(span.Round(time.Minute) / time.Minute)
+		if minutes >= 60 {
+			return fmt.Sprintf("%dh", minutes/60)
+		}
+		return fmt.Sprintf("%dm", minutes)
+	}
 	if span < time.Minute {
 		return "1分以内"
 	}

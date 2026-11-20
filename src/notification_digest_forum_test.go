@@ -349,7 +349,7 @@ func TestForumDigestItemsNameTheTaskAndLinkKitsu(t *testing.T) {
 			EntityKind: model.ForumEntityKindShot, NotifyTaskID: "task-recv",
 		}},
 	}
-	card := renderForumDigestCard("Muse", "p1", recipient, "https://kitsu.example.org")
+	card := renderForumDigestCard("Muse", "p1", recipient, "https://kitsu.example.org", "ja")
 	text := card.Description
 	if !utf8.ValidString(text) {
 		t.Fatal("description holds broken UTF-8")
@@ -383,7 +383,7 @@ func TestForumDigestItemsNameTheTaskAndLinkKitsu(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		many = append(many, forumDigestItem{TaskID: fmt.Sprintf("task-%02d", i), EntityKind: model.ForumEntityKindShot, Title: fmt.Sprintf("タスク%02d", i)})
 	}
-	capped := renderForumDigestCard("Muse", "p1", forumDigestRecipient{Waiting: many}, "https://kitsu.example.org")
+	capped := renderForumDigestCard("Muse", "p1", forumDigestRecipient{Waiting: many}, "https://kitsu.example.org", "ja")
 	if !strings.Contains(capped.Description, "・チェック待ち (WFA): 12件") {
 		t.Fatalf("count line: %q", capped.Description)
 	}
