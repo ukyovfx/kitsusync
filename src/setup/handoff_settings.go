@@ -44,6 +44,7 @@ var handoffPresets = []handoffPreset{
 	{"Animation", "pointcache", model.HandoffFlowHand, []string{"Lighting", "FX", "Rendering"}},
 	{"FX", "fxcache", model.HandoffFlowHand, []string{"Lighting", "Compositing"}},
 	{"Lighting", "lighting", model.HandoffFlowHand, []string{"Rendering"}},
+	{"Rendering", "render", model.HandoffFlowHand, []string{"Compositing"}},
 	{"Rendering", "renderPass", model.HandoffFlowHand, []string{"Compositing"}},
 	{"Compositing", "render", model.HandoffFlowSubmit, nil},
 	{"Storyboard", "storyboard", model.HandoffFlowShelve, nil},
@@ -184,6 +185,13 @@ func parseHandoffSettingsForm(r *http.Request, productionID string) model.Produc
 		seenProducts[key] = struct{}{}
 		settings.ProductTypes = append(settings.ProductTypes, model.ProductionHandoffProductType{Name: name})
 	}
+	// Product types still waiting to be classified stay marked until one of
+	// their rows leaves the shelved default, so a save of something else does
+	// not quietly clear the mark.
+	stillUnclassified := map[string]struct{}{}
+	for _, name := range r.Form["product_unclassified"] {
+		stillUnclassified[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
+	}
 	ids, names, products := r.Form["row_task"], r.Form["row_task_name"], r.Form["row_product"]
 	flows := r.Form["row_flow"]
 	// Notify boxes are per row, so each row reads its own checkbox group.
@@ -208,7 +216,13 @@ func parseHandoffSettingsForm(r *http.Request, productionID string) model.Produc
 		if i < len(flows) {
 			route.Flow = strings.TrimSpace(flows[i])
 		}
+		if route.Flow != model.HandoffFlowShelve || route.NotifyTaskTypeIDs != "" {
+			delete(stillUnclassified, strings.ToLower(route.ProductType))
+		}
 		settings.Routes = append(settings.Routes, route)
+	}
+	for i := range settings.ProductTypes {
+		_, settings.ProductTypes[i].Unclassified = stillUnclassified[strings.ToLower(settings.ProductTypes[i].Name)]
 	}
 	// Keep the display names of the notified Task Types for the reloaded page.
 	// The row only carries its own Task Type name, so the rest of the Production's
@@ -279,8 +293,12 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		seenProducts[key] = struct{}{}
 		products = append(products, productRow{name: name})
 	}
+	unclassified := map[string]bool{}
 	for _, product := range current.ProductTypes {
 		addProduct(product.Name)
+		if product.Unclassified {
+			unclassified[strings.ToLower(strings.TrimSpace(product.Name))] = true
+		}
 	}
 	for _, route := range current.Routes {
 		addProduct(route.ProductType)
@@ -312,7 +330,7 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 			if route.Flow == "" {
 				route.Flow = model.HandoffFlowShelve
 			}
-			rowTable.WriteString(handoffRouteRow(lang, taskType, product.name, route, notifyOptions))
+			rowTable.WriteString(handoffRouteRow(lang, taskType, product.name, route, notifyOptions, unclassified[strings.ToLower(product.name)]))
 		}
 	}
 	if len(products) == 0 || len(taskTypes) == 0 {
@@ -325,7 +343,11 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 
 	var productInputs strings.Builder
 	for _, product := range products {
-		productInputs.WriteString(`<li class="field-row"><input name="product_name" value="` + esc(product.name) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `"></li>`)
+		productInputs.WriteString(`<li class="field-row"><input name="product_name" value="` + esc(product.name) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `">`)
+		if unclassified[strings.ToLower(product.name)] {
+			productInputs.WriteString(` ` + handoffUnclassifiedBadge(lang) + `<input type="hidden" name="product_unclassified" value="` + esc(product.name) + `">`)
+		}
+		productInputs.WriteString(`</li>`)
 	}
 	productInputs.WriteString(`<li class="field-row"><input name="product_name" value="" placeholder="` + esc(t(lang, "製品タイプ名を追加", "Add a product type")) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `"></li>`)
 
@@ -369,7 +391,13 @@ func handoffRouteKey(taskTypeID, product string) string {
 	return strings.TrimSpace(taskTypeID) + "\x00" + strings.ToLower(strings.TrimSpace(product))
 }
 
-func handoffRouteRow(lang string, taskType kitsu.TaskType, product string, route model.ProductionHandoffRoute, notifyOptions [][2]string) string {
+// handoffUnclassifiedBadge marks a product type the detector registered by
+// itself and nobody has classified yet.
+func handoffUnclassifiedBadge(lang string) string {
+	return `<span class="status-pill warning">` + esc(t(lang, "未分類", "Unclassified")) + `</span>`
+}
+
+func handoffRouteRow(lang string, taskType kitsu.TaskType, product string, route model.ProductionHandoffRoute, notifyOptions [][2]string, unclassified bool) string {
 	flowOptions := make([][2]string, 0, len(handoffFlowOptions))
 	for _, flow := range handoffFlowOptions {
 		flowOptions = append(flowOptions, [2]string{flow, handoffFlowLabel(lang, flow)})
@@ -392,7 +420,11 @@ func handoffRouteRow(lang string, taskType kitsu.TaskType, product string, route
 		notify.WriteString(`<label class="checkbox-label"><input type="checkbox" checked name="row_notify_` + esc(taskType.ID+"|"+product) + `" value="` + esc(id) + `> ` + esc(id) + `</label>`)
 	}
 	notify.WriteString(`</div>`)
-	return `<tr><td>` + esc(taskType.Name) + ` × ` + esc(product) +
+	badge := ""
+	if unclassified {
+		badge = ` ` + handoffUnclassifiedBadge(lang)
+	}
+	return `<tr><td>` + esc(taskType.Name) + ` × ` + esc(product) + badge +
 		`<input type="hidden" name="row_task" value="` + esc(taskType.ID) + `">` +
 		`<input type="hidden" name="row_task_name" value="` + esc(taskType.Name) + `">` +
 		`<input type="hidden" name="row_product" value="` + esc(product) + `"></td><td>` +

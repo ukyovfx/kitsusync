@@ -78,6 +78,10 @@ type ProductionHandoffProductType struct {
 	ID           uint   `gorm:"primaryKey"`
 	ProductionID string `gorm:"not null;uniqueIndex:idx_handoff_product_type"`
 	Name         string `gorm:"not null;uniqueIndex:idx_handoff_product_type"`
+	// Unclassified marks a product type the detector registered on its own
+	// when a publish arrived with a name the mapping table did not know. It
+	// starts shelved (no notification) until the operator classifies it.
+	Unclassified bool `gorm:"not null;default:false"`
 	CreatedAt    time.Time
 }
 
@@ -322,6 +326,30 @@ func SaveProductionHandoffSettings(db *gorm.DB, settings ProductionHandoffSettin
 		}
 		return nil
 	})
+}
+
+// RegisterUnclassifiedHandoffProductType adds a product type the detector met
+// for the first time to the Production's list as unclassified, and reports
+// whether it was new. A name already registered (case-insensitively) is left
+// alone, so a repeated publish never registers it twice.
+func RegisterUnclassifiedHandoffProductType(db *gorm.DB, productionID, name string) (bool, error) {
+	productionID, name = strings.TrimSpace(productionID), strings.TrimSpace(name)
+	if db == nil || productionID == "" || name == "" {
+		return false, gorm.ErrInvalidData
+	}
+	created := false
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&ProductionHandoffProductType{}).Where("production_id = ? AND lower(name) = lower(?)", productionID, name).Count(&count).Error; err != nil || count > 0 {
+			return err
+		}
+		if err := tx.Create(&ProductionHandoffProductType{ProductionID: productionID, Name: name, Unclassified: true}).Error; err != nil {
+			return err
+		}
+		created = true
+		return nil
+	})
+	return created, err
 }
 
 // DeleteProductionHandoffSettings removes a Production's handoff configuration.
