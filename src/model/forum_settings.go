@@ -386,6 +386,38 @@ func deleteProductionForumBaselinesOutside(tx *gorm.DB, productionID string, kee
 	return tasks.Delete(&ForumTask{}).Error
 }
 
+// deleteProductionForumLedger removes a Production's forum ledger rows.
+// Outbox and transition rows key by task_id, so this production's task IDs
+// are collected while the task ledger still exists.
+func deleteProductionForumLedger(tx *gorm.DB, productionID string) error {
+	var taskIDs []string
+	if tx.Migrator().HasTable(&ForumTask{}) {
+		if err := tx.Model(&ForumTask{}).Where("project_id = ?", productionID).Pluck("task_id", &taskIDs).Error; err != nil {
+			return err
+		}
+	}
+	for _, taskKeyed := range []any{&ForumOutbox{}, &ForumTransition{}} {
+		if len(taskIDs) == 0 {
+			break
+		}
+		if !tx.Migrator().HasTable(taskKeyed) {
+			continue
+		}
+		if err := tx.Where("task_id IN ?", taskIDs).Delete(taskKeyed).Error; err != nil {
+			return err
+		}
+	}
+	for _, projectKeyed := range []any{&ForumTask{}, &ForumBaseline{}} {
+		if !tx.Migrator().HasTable(projectKeyed) {
+			continue
+		}
+		if err := tx.Where("project_id = ?", productionID).Delete(projectKeyed).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // DeleteProductionForumSettings removes a Production's forum configuration and
 // its baseline/ledger rows, so a re-added configuration starts from scratch.
 func DeleteProductionForumSettings(db *gorm.DB, productionID string) error {
