@@ -18,6 +18,9 @@ import (
 const (
 	digestHourJST            = 9
 	digestMaxTasksPerSection = 10
+	// digestTitleMaxRunes bounds one digest item's name. Titles are cut by
+	// runes — never bytes — so a Japanese name keeps whole characters.
+	digestTitleMaxRunes = 40
 )
 
 // jst is a fixed UTC+9 zone: Japan has no DST, so a FixedZone is exact.
@@ -39,24 +42,27 @@ func runMorningDigestIfDue(conf config.Config, db *gorm.DB) {
 	}
 }
 
+// prefixItems caps the list at max items and trims each item to
+// digestTitleMaxRunes. Cutting runes (not bytes) keeps Japanese intact; the
+// marker shows the name continues.
 func prefixItems(items []string, max int) []string {
 	if len(items) > max {
 		items = items[:max]
 	}
 	short := make([]string, 0, len(items))
 	for _, item := range items {
-		if len(item) > 12 {
-			item = item[:12]
+		if runes := []rune(item); len(runes) > digestTitleMaxRunes {
+			item = string(runes[:digestTitleMaxRunes-1]) + "…"
 		}
 		short = append(short, item)
 	}
 	return short
 }
 
-// sendDigestDirectMessage delivers one digest card through the existing bot
+// sendDigestDirectMessage delivers one digest payload through the existing bot
 // DM transport. Failures surface to the caller; they never abort the digest
 // for other productions.
-func sendDigestDirectMessage(botToken, recipientID, content string, rows []discord.ActionRow) error {
+func sendDigestDirectMessage(botToken, recipientID string, payload discord.Payload) error {
 	if strings.TrimSpace(botToken) == "" {
 		return fmt.Errorf("dm_bot_token_missing")
 	}
@@ -64,7 +70,7 @@ func sendDigestDirectMessage(botToken, recipientID, content string, rows []disco
 	if err != nil {
 		return fmt.Errorf("dm_channel_unavailable: %w", err)
 	}
-	result := discord.SendDirectMessage(botToken, channelID, discord.Payload{Content: content, Components: rows})
+	result := discord.SendDirectMessage(botToken, channelID, payload)
 	if result.MessageID == "" {
 		return fmt.Errorf("dm_send_failed: %s", result.FailureCategory)
 	}

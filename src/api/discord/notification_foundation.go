@@ -76,7 +76,7 @@ func renderCurrentNotificationCardPayload(data Template) Payload {
 	if data.PreviewImageURL != "" {
 		embed.Image = &EmbedImage{URL: data.PreviewImageURL}
 	}
-	fitEmbedTextLimits(&embed)
+	FitEmbedTextLimits(&embed)
 	return Payload{
 		Content: data.MentionContent,
 		Embeds:  []Embed{embed},
@@ -113,7 +113,7 @@ func renderTemplateNotificationPayload(data Template, preset string) Payload {
 			embed.Fields = fields
 		}
 	}
-	fitEmbedTextLimits(&embed)
+	FitEmbedTextLimits(&embed)
 
 	return Payload{
 		Content: data.MentionContent,
@@ -243,7 +243,10 @@ func embedTextLength(embed Embed) int {
 	return length
 }
 
-func fitEmbedTextLimits(embed *Embed) {
+// FitEmbedTextLimits trims an embed down to Discord's text budgets. The
+// morning digest builds its queues outside this package, so the trimmer is
+// shared instead of re-implemented there.
+func FitEmbedTextLimits(embed *Embed) {
 	if embed == nil {
 		return
 	}
