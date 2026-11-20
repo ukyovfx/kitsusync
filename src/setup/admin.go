@@ -1323,21 +1323,23 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			tags     int
 			missing  bool
 			problems []model.ForumSettingsProblem
+			check    string // automatic forum creation failure, if any
 		}
 		var forumRows []forumHealthRow
 		forumIssueCount := 0
 		for _, p := range model.ListProjects(db) {
+			check := model.GetSetting(db, forumAutoCreateCheckKey(p.KitsuProjectID))
 			settings, ok, err := model.LoadProductionForumSettings(db, p.KitsuProjectID)
 			if err != nil || !ok {
 				forumIssueCount++
-				forumRows = append(forumRows, forumHealthRow{name: p.Name, missing: true})
+				forumRows = append(forumRows, forumHealthRow{name: p.Name, missing: true, check: check})
 				continue
 			}
 			problems := model.ForumSettingsProblems(settings)
-			if len(problems) > 0 {
+			if len(problems) > 0 || check != "" {
 				forumIssueCount++
 			}
-			forumRows = append(forumRows, forumHealthRow{name: p.Name, routes: len(settings.Routes), roles: len(settings.StatusRoles), tags: len(settings.Tags), problems: problems})
+			forumRows = append(forumRows, forumHealthRow{name: p.Name, routes: len(settings.Routes), roles: len(settings.StatusRoles), tags: len(settings.Tags), problems: problems, check: check})
 		}
 		pollingActive := !snap.LastPollTime.IsZero()
 		isHealthy := pollingActive && forumIssueCount == 0
@@ -1413,10 +1415,13 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 			okForumCount := 0
 			for _, row := range forumRows {
 				var statusCell string
-				if row.missing || len(row.problems) > 0 {
+				if row.missing || len(row.problems) > 0 || row.check != "" {
 					statusCell = `<span class="status-pill bad">` + esc(t(lang, "要確認", "Attention")) + `</span>`
 					if row.missing {
 						statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + esc(t(lang, "フォーラム設定が未保存です。Productionのフォーラム設定を保存してください。", "Forum settings are not saved yet. Save the Production's forum settings.")) + `</div>`
+					}
+					if row.check != "" {
+						statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + esc(t(lang, "接続時のフォーラム自動作成に失敗しました。「Botでフォーラムとタグを作成」で再実行できます: ", "Automatic forum creation after connecting failed. Run \"Create forums and tags with the Bot\" to retry: ")+row.check) + `</div>`
 					}
 					for _, problem := range row.problems {
 						statusCell += `<div style="font-size:.78rem;color:var(--muted-2);margin-top:3px">` + esc(forumProblemText(lang, problem, nil)) + `</div>`

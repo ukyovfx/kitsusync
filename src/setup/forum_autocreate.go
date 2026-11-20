@@ -426,6 +426,7 @@ func createForumsForTaskTypes(db *gorm.DB, productionID, botToken, fallbackGuild
 	if err := model.SaveProductionForumSettings(db, settings); err != nil {
 		return settings, err
 	}
+	model.DeleteSetting(db, forumAutoCreateCheckKey(productionID))
 	return settings, nil
 }
 

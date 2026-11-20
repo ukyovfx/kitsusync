@@ -250,6 +250,13 @@ func executeFirstTimeConnectionLocked(plan firstTimeConnectionPlan, botToken, la
 		}
 	}
 	completed = true
+	if createdProject {
+		// The single point where a Production turns from not-connected to
+		// connected: repair mode (project already saved) never reaches this.
+		if saved := model.FindProjectByKitsuID(db, plan.Project.ID); saved != nil {
+			runNewProductionAutomation(db, *saved, botToken)
+		}
+	}
 	slog.Info("first-time production connection completed (forum mode)", "project_id", plan.Project.ID, "guild_id", safeLogField(plan.GuildID), "category_id", safeLogField(plan.CategoryID))
 	return adminPage(lang, tr(lang, "wizard.complete_title"), r, renderWizardFrame(lang, 7, renderWizardComplete(lang, r, db, plan.Project.ID)))
 }

@@ -13,6 +13,8 @@ import (
 type HandoffResult struct {
 	Events int // new events recorded
 	Known  int // deliveries whose comment was already eventized
+	// Unclassified counts product types registered for the first time.
+	Unclassified int
 }
 
 // HandoffDetector turns AYON publish comments into handoff events. It reads the
@@ -121,6 +123,17 @@ func (d HandoffDetector) Detect(payloads []kitsu.MessagePayload) (HandoffResult,
 		}
 		route, routed := handoffRoute(settings, payload.TaskType.TaskType.ID, table.Family)
 		if !routed {
+			// A product type the table has never heard of is shelved and
+			// listed as unclassified, so the operator sees it without anyone
+			// typing it in first. Nothing is notified for it.
+			if !hasProductType(settings, table.Family) {
+				if _, err := model.RegisterUnclassifiedHandoffProductType(d.DB, productionID, table.Family); err != nil {
+					return result, err
+				}
+				settings.ProductTypes = append(settings.ProductTypes, model.ProductionHandoffProductType{ProductionID: productionID, Name: strings.TrimSpace(table.Family), Unclassified: true})
+				settingsByProduction[productionID] = settings
+				result.Unclassified++
+			}
 			continue
 		}
 		receiving, found := receivingPayload(payloads, payload, model.SplitHandoffNotifyIDs(route.NotifyTaskTypeIDs))
@@ -181,6 +194,17 @@ func handoffRoute(settings model.ProductionHandoffSettings, taskTypeID, family s
 		}
 	}
 	return model.ProductionHandoffRoute{}, false
+}
+
+// hasProductType reports whether the family is already in the Production's
+// product type list.
+func hasProductType(settings model.ProductionHandoffSettings, family string) bool {
+	for _, product := range settings.ProductTypes {
+		if strings.EqualFold(strings.TrimSpace(product.Name), strings.TrimSpace(family)) {
+			return true
+		}
+	}
+	return false
 }
 
 // receivingPayload finds the task that receives the delivery: the same shot or
