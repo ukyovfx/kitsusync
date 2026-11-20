@@ -130,7 +130,9 @@ func TestGlobalUserLinkingPostRedirectPreservesOnlyValidatedGuild(t *testing.T) 
 	}
 }
 
-func TestProductionTeamRendersGlobalUserLinkingModalOnlyAfterGuildRead(t *testing.T) {
+// Discord linking lives in the top-right User Linking page only: the Team tab
+// shows the link state per member but offers no linking control of its own.
+func TestProductionTeamHasNoPerMemberLinkingControls(t *testing.T) {
 	db := newIAViewDB(t)
 	project := model.Project{KitsuProjectID: "team-modal-production", Name: "Team Modal", DiscordGuildID: "11111111111111111"}
 	if err := db.Create(&project).Error; err != nil {
@@ -151,18 +153,19 @@ func TestProductionTeamRendersGlobalUserLinkingModalOnlyAfterGuildRead(t *testin
 		return []DiscordGuildMember{member}, nil
 	}
 	request := httptest.NewRequest("GET", "/bot/admin/projects?project=team-modal-production&tab=team&lang=en", nil)
-	body := renderCurrentProductionTeam(db, request, project, "en", "test-token")
-	for _, want := range []string{`data-open-team-link`, `data-team-link-modal`, `name="team_link_project_id"`, `name="action" value="save_global_link"`, `Link Discord user`, `candidate`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("Team User Linking modal missing %q: %s", want, body)
+	for name, read := range map[string]func(string, string) ([]DiscordGuildMember, error){
+		"guild read ok": reviewerGuildMembersForGuild,
+		"guild failed":  func(string, string) ([]DiscordGuildMember, error) { return nil, errors.New("Guild unavailable") },
+	} {
+		reviewerGuildMembersForGuild = read
+		body := renderCurrentProductionTeam(db, request, project, "en", "test-token")
+		if !strings.Contains(body, "Team Person") {
+			t.Fatalf("%s: member row missing: %s", name, body)
 		}
-	}
-	if strings.Contains(body, "ProjectUserMap") || strings.Contains(body, "add_production_user") {
-		t.Fatal("Team modal exposes Production-local membership mutation")
-	}
-	reviewerGuildMembersForGuild = func(string, string) ([]DiscordGuildMember, error) { return nil, errors.New("Guild unavailable") }
-	body = renderCurrentProductionTeam(db, request, project, "en", "test-token")
-	if strings.Contains(body, `data-team-link-modal`) || strings.Contains(body, `data-open-team-link`) {
-		t.Fatal("Team modal remained available without a verified Guild read")
+		for _, forbidden := range []string{"data-open-team-link", "data-team-link-modal", "team_link_project_id", "save_global_link", "Link Discord", "production-team-user-link", "ProjectUserMap", "add_production_user", `<th scope="col">Action</th>`} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("%s: Team tab still has a per-member linking control %q: %s", name, forbidden, body)
+			}
+		}
 	}
 }

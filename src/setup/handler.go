@@ -283,8 +283,8 @@ func renderDeleteReauthPage(lang, pid, projectName string, r *http.Request) stri
 		`<input type="password" name="admin_password" placeholder="Password" required autocomplete="current-password"></div>` +
 		`</div>` +
 		`<div class="button-row">` +
+		`<a class="btn-ghost" href="` + backURL + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a>` +
 		`<button type="submit" class="btn-danger">` + esc(t(lang, "完全に削除する", "Delete permanently")) + `</button>` +
-		`<a href="` + backURL + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a>` +
 		`</div></form>`
 	body := fmt.Sprintf(
 		`<div class="page-card glass" style="width:100%%;max-width:760px;margin:6vh auto 0">`+

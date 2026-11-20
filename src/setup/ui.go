@@ -1126,6 +1126,26 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .editorial-workbench .connection-endpoint-reset,.editorial-workbench .connection-host-manual .connection-endpoint-reset{height:var(--ds-btn-h-compact);min-height:var(--ds-btn-h-compact);padding-block:0}
   @media(max-width:760px){.production-context .production-routing-editor .wizard-plan-table th:first-child,.production-context .production-routing-editor .wizard-plan-table td:first-child,.production-context .production-routing-editor .wizard-plan-table th:last-child,.production-context .production-routing-editor .wizard-plan-table td:last-child{width:auto!important}.production-context .production-routing-editor .wizard-plan-table [data-routing-row]>th{display:block;padding:0}.production-context .production-routing-editor .wizard-plan-table [data-routing-row]>td{padding:0 0 0 var(--space-5)!important}}
   @media(min-width:761px){.editorial-workbench .production-team-supervisor-scope{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}}
+  /* Handoff matrix: Task Types down the side, product types across the top. */
+  .handoff-matrix-wrap{overflow-x:auto;max-width:100%}
+  .handoff-matrix{width:max-content;min-width:100%;table-layout:auto}
+  .handoff-matrix th,.handoff-matrix td{vertical-align:top;text-align:left}
+  .handoff-matrix thead th{white-space:nowrap}
+  .handoff-matrix tbody th[scope="row"]{position:sticky;left:0;z-index:1;background:var(--surface-page,#111);white-space:nowrap}
+  .handoff-matrix-corner{font-weight:500}
+  .handoff-axis-task,.handoff-axis-product{display:inline-block;color:var(--muted-2)}
+  .handoff-cell{min-width:9.5rem;max-width:12rem}
+  .handoff-cell select{width:100%;max-width:none}
+  .handoff-cell[data-flow="hand"]{box-shadow:inset 3px 0 0 var(--accent,#e85a1a)}
+  .handoff-cell[data-flow="submit"]{box-shadow:inset 3px 0 0 #6dc3ff}
+  .handoff-notify{margin-top:6px;font-size:.85rem}
+  .handoff-notify summary{cursor:pointer;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .handoff-notify .checkbox-label{display:flex;gap:6px;align-items:center;margin:4px 0;text-transform:none;letter-spacing:normal;font-family:inherit;font-size:.85rem}
+  /* Keyboard focus is always visible on every input, select and textarea; local rules that flatten a control's border or shadow must not hide it. */
+  input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--border-focus)!important;outline-offset:2px!important}
+  input:not([type="checkbox"]):not([type="radio"]):focus-visible,select:focus-visible,textarea:focus-visible{box-shadow:0 0 0 3px rgba(109,195,255,.35)!important}
+  /* Team table between 761px and 1024px: the Discord column keeps room for the @name. */
+  @media(min-width:761px) and (max-width:1100px){.production-team-col-member{width:20%}.production-team-col-role{width:15%}.production-team-col-department{width:20%}.production-team-col-discord{width:28%}.production-team-col-status{width:17%}}
 `
 
 func shellHeadExtras() string {
@@ -1173,6 +1193,7 @@ func baseAdminJS(lang string) string {
   var confirmBtn = document.getElementById('deleteConfirmBtn');
   var cancelBtn = document.getElementById('deleteCancelBtn');
   var activeForm = null;
+	var activeCallback = null;
 	var activeTrigger = null;
 	var expectedValue = "";
 	var savingLabel = %q;
@@ -1183,6 +1204,7 @@ func baseAdminJS(lang string) string {
     if(!modal){ return; }
     modal.classList.remove('open');
     activeForm = null;
+    activeCallback = null;
     expectedValue = "";
     if(inputEl){ inputEl.value = ""; }
     if(inputWrap){ inputWrap.classList.add('hidden'); }
@@ -1226,24 +1248,24 @@ func baseAdminJS(lang string) string {
 		}
 	});
 
-	document.querySelectorAll('form.delete-form').forEach(function(form){
-    form.addEventListener('submit', function(event){
-      if(!modal){ return; }
-      event.preventDefault();
-      activeForm = form;
-      activeTrigger = event.submitter || form.querySelector('button[type="submit"]');
-      textEl.textContent = form.getAttribute('data-confirm') || '';
-      expectedValue = form.getAttribute('data-require-text') || '';
-      if(expectedValue){
-        inputWrap.classList.remove('hidden');
-        helperEl.classList.remove('hidden');
-        expectedEl.textContent = expectedValue;
-        helperEl.textContent = %q;
-      } else {
-        inputWrap.classList.add('hidden');
-        helperEl.classList.add('hidden');
-      }
-      inputEl.value = '';
+	// Every confirmation goes through this one dialog: delete forms open it on
+	// submit, and scripts call window.kitsusyncConfirm instead of the browser dialog.
+	function openConfirm(message, required, trigger, form, callback){
+		activeForm = form;
+		activeCallback = callback || null;
+		activeTrigger = trigger;
+		textEl.textContent = message || '';
+		expectedValue = required || '';
+		if(expectedValue){
+			inputWrap.classList.remove('hidden');
+			helperEl.classList.remove('hidden');
+			expectedEl.textContent = expectedValue;
+			helperEl.textContent = %q;
+		} else {
+			inputWrap.classList.add('hidden');
+			helperEl.classList.add('hidden');
+		}
+		inputEl.value = '';
 		syncConfirmState();
 		modal.classList.add('open');
 		modal.setAttribute('aria-hidden', 'false');
@@ -1251,6 +1273,17 @@ func baseAdminJS(lang string) string {
 			if(expectedValue && inputEl){ inputEl.focus(); }
 			else if(cancelBtn){ cancelBtn.focus(); }
 		}, 20);
+	}
+	window.kitsusyncConfirm = function(message, callback, trigger){
+		if(!modal){ callback(); return; }
+		openConfirm(message, '', trigger || null, null, callback);
+	};
+
+	document.querySelectorAll('form.delete-form').forEach(function(form){
+    form.addEventListener('submit', function(event){
+      if(!modal){ return; }
+      event.preventDefault();
+      openConfirm(form.getAttribute('data-confirm'), form.getAttribute('data-require-text'), event.submitter || form.querySelector('button[type="submit"]'), form, null);
     });
   });
 
@@ -1277,6 +1310,12 @@ func baseAdminJS(lang string) string {
   if(inputEl){ inputEl.addEventListener('input', syncConfirmState); }
   if(confirmBtn){
     confirmBtn.addEventListener('click', function(){
+      if(activeCallback && !confirmBtn.disabled){
+        var callback = activeCallback;
+        closeModal();
+        callback();
+        return;
+      }
       if(activeForm && !confirmBtn.disabled){
         if(expectedValue){
           var hidden = activeForm.querySelector('input[name="confirm_text"]');

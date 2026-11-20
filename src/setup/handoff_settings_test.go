@@ -91,9 +91,9 @@ func TestHandoffPageAppliesPresetsToMatchingRowsOnly(t *testing.T) {
 		t.Fatal("Layout × layout must default to the handoff flow from the preset")
 	}
 	// Animation × layout is not in the preset table and must stay shelved.
-	for _, row := range []string{"Animation × layout", "Animation × camera", "Lighting × layout"} {
-		if !strings.Contains(body, row) {
-			t.Fatalf("row %q is missing from the generated table", row)
+	for _, cell := range []string{"tt-anim|layout", "tt-anim|camera", "tt-light|layout"} {
+		if !strings.Contains(body, `data-handoff-cell="`+cell+`"`) {
+			t.Fatalf("cell %q is missing from the generated matrix", cell)
 		}
 	}
 	if strings.Count(body, `<option value="shelve" selected>`) < 6 {
@@ -119,25 +119,25 @@ func TestHandoffPresetRenderingUsesRenderPass(t *testing.T) {
 		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
 	}
 	body := handoffGet(t, db).Body.String()
-	for label, wants := range map[string][]string{
-		`Rendering × renderPass<input type="hidden"`: {
+	for cell, wants := range map[string][]string{
+		`data-handoff-cell="tt-render|renderPass"`: {
 			`<option value="hand" selected>`,
 			`name="row_notify_tt-render|renderPass" value="tt-comp" checked`,
 		},
-		`Compositing × render<input type="hidden"`: {`<option value="submit" selected>`},
-		`Rendering × render<input type="hidden"`:   {`<option value="shelve" selected>`},
+		`data-handoff-cell="tt-comp|render"`:   {`<option value="submit" selected>`},
+		`data-handoff-cell="tt-render|render"`: {`<option value="shelve" selected>`},
 	} {
-		start := strings.Index(body, label)
+		start := strings.Index(body, cell)
 		if start < 0 {
-			t.Fatalf("row %q is missing from the table: %s", label, body)
+			t.Fatalf("cell %q is missing from the matrix: %s", cell, body)
 		}
 		row := body[start:]
-		if end := strings.Index(row, "<tr><td>"); end > 0 {
+		if end := strings.Index(row, "</td>"); end > 0 {
 			row = row[:end]
 		}
 		for _, want := range wants {
 			if !strings.Contains(row, want) {
-				t.Fatalf("row %q is missing %q, got: %s", label, want, row)
+				t.Fatalf("cell %q is missing %q, got: %s", cell, want, row)
 			}
 		}
 	}

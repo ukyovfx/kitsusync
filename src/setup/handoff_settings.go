@@ -313,11 +313,22 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		notifyOptions = append(notifyOptions, [2]string{taskType.ID, taskType.Name})
 	}
 
-	// The table: the Production's Task Types in Kitsu order, then the registered
-	// product types. Every cell is a select; nothing is typed per row.
-	var rowTable strings.Builder
+	// The matrix: one row per Task Type (Kitsu order) and one column per
+	// registered product type. Every cell is a flow select plus the Task Types
+	// to notify; nothing is typed per cell.
+	var matrixHead, matrixBody strings.Builder
 	presetsApplied := 0
+	matrixHead.WriteString(`<tr><th scope="col" class="handoff-matrix-corner"><span class="handoff-axis-task">` + esc(t(lang, "タスクタイプ ↓", "Task Type ↓")) + `</span> <span class="handoff-axis-product">` + esc(t(lang, "製品タイプ →", "Product type →")) + `</span></th>`)
+	for _, product := range products {
+		badge := ""
+		if unclassified[strings.ToLower(product.name)] {
+			badge = ` ` + handoffUnclassifiedBadge(lang)
+		}
+		matrixHead.WriteString(`<th scope="col">` + esc(product.name) + badge + `</th>`)
+	}
+	matrixHead.WriteString(`</tr>`)
 	for _, taskType := range taskTypes {
+		matrixBody.WriteString(`<tr><th scope="row">` + esc(taskType.Name) + `</th>`)
 		for _, product := range products {
 			route, saved := savedByName[handoffRouteKey(taskType.ID, product.name)]
 			if !saved && submitted == nil {
@@ -329,15 +340,17 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 			if route.Flow == "" {
 				route.Flow = model.HandoffFlowShelve
 			}
-			rowTable.WriteString(handoffRouteRow(lang, taskType, product.name, route, notifyOptions, unclassified[strings.ToLower(product.name)]))
+			matrixBody.WriteString(handoffRouteCell(lang, taskType, product.name, route, notifyOptions))
 		}
+		matrixBody.WriteString(`</tr>`)
 	}
+	matrixHTML := `<div class="table-wrap handoff-matrix-wrap"><table class="data-table handoff-matrix"><thead>` + matrixHead.String() + `</thead><tbody>` + matrixBody.String() + `</tbody></table></div>`
 	if len(products) == 0 || len(taskTypes) == 0 {
 		hint := t(lang, "製品タイプを1つ以上登録すると、対応表の行が自動で並びます。", "Register at least one product type and the mapping rows appear automatically.")
 		if len(products) > 0 {
 			hint = t(lang, "Kitsuからタスクタイプを取得できませんでした。接続を確認してください。", "Could not read the Task Types from Kitsu. Check the connection.")
 		}
-		rowTable.WriteString(`<tr><td colspan="3"><p class="field-help">` + esc(hint) + `</p></td></tr>`)
+		matrixHTML = `<p class="field-help">` + esc(hint) + `</p>`
 	}
 
 	var productInputs strings.Builder
@@ -365,9 +378,8 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<p class="field-help">` + esc(t(lang, "この製作で使う製品タイプの名前を登録します。行は「タスクタイプ × 製品タイプ」で自動的に並びます。", "Register the product type names this Production uses. The rows are arranged automatically as Task Type × product type.")) + `</p>` +
 		`<ul class="field-list">` + productInputs.String() + `</ul></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "受け渡しの対応表", "Handoff mapping")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "出す側のタスクタイプと製品タイプごとに、流れと通知先のタスクタイプを選びます。プリセットは一致する行にだけ入り、それ以外は棚置きです。", "For each source Task Type and product type, choose the flow and the Task Types to notify. The preset fills only matching rows; the rest default to shelving.")) + `</p>` +
-		`<table class="data-table forum-map-table"><thead><tr><th scope="col">` + esc(t(lang, "タスクタイプ × 製品タイプ", "Task Type × product type")) + `</th><th scope="col">` + esc(t(lang, "流れ", "Flow")) + `</th><th scope="col">` + esc(t(lang, "通知先タスクタイプ", "Notify Task Types")) + `</th></tr></thead>` +
-		`<tbody>` + rowTable.String() + `</tbody></table></section>` +
+		`<p class="field-help">` + esc(t(lang, "行がタスクタイプ、列が製品タイプです。セルごとに、流れと通知先のタスクタイプを選びます。プリセットは一致する行にだけ入り、それ以外は棚置きです。", "Rows are Task Types and columns are product types. In each cell choose the flow and the Task Types to notify. The preset fills only matching rows; the rest default to shelving.")) + `</p>` +
+		matrixHTML + `</section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "通知の設定", "Notification settings")) + `</h2>` +
 		`<label class="field-label" for="handoff-timing">` + esc(t(lang, "通知タイミング", "Notification timing")) + `</label>` +
 		forumSelect("notify_timing", current.Config.NotifyTiming, timingOptions, t(lang, "（選択）", "(choose)")) +
@@ -376,7 +388,7 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<label class="field-label" for="handoff-fallback-user">` + esc(t(lang, "指定ユーザーID", "Chosen user ID")) + `</label>` +
 		`<input id="handoff-fallback-user" name="fallback_user" value="` + esc(current.Config.FallbackUserID) + `" autocomplete="off">` +
 		`</section>` +
-		`<div class="button-row"><button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button> <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a></div></form>`
+		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a> <button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
 
 	headline := `<section class="section-card glass"><h2>` + esc(project.Name) + `</h2>`
 	if presetsApplied > 0 {
@@ -396,38 +408,48 @@ func handoffUnclassifiedBadge(lang string) string {
 	return `<span class="status-pill warning">` + esc(t(lang, "未分類", "Unclassified")) + `</span>`
 }
 
-func handoffRouteRow(lang string, taskType kitsu.TaskType, product string, route model.ProductionHandoffRoute, notifyOptions [][2]string, unclassified bool) string {
-	flowOptions := make([][2]string, 0, len(handoffFlowOptions))
-	for _, flow := range handoffFlowOptions {
-		flowOptions = append(flowOptions, [2]string{flow, handoffFlowLabel(lang, flow)})
+// handoffRouteCell is one matrix cell. It carries the same parallel fields the
+// save handler reads (row_task / row_task_name / row_product / row_flow and the
+// per-cell notify boxes), so saving works the same as before.
+func handoffRouteCell(lang string, taskType kitsu.TaskType, product string, route model.ProductionHandoffRoute, notifyOptions [][2]string) string {
+	label := taskType.Name + " × " + product
+	flow := `<select name="row_flow" aria-label="` + esc(label+" — "+t(lang, "流れ", "Flow")) + `">`
+	for _, option := range handoffFlowOptions {
+		flow += `<option value="` + esc(option) + `"` + selectedOptionAttr(option == route.Flow) + `>` + esc(handoffFlowLabel(lang, option)) + `</option>`
 	}
+	if !handoffContains(handoffFlowOptions, route.Flow) {
+		flow += `<option value="` + esc(route.Flow) + `" selected>` + esc(route.Flow) + `</option>`
+	}
+	flow += `</select>`
 	selectedNotify := model.SplitHandoffNotifyIDs(route.NotifyTaskTypeIDs)
-	var notify strings.Builder
-	notify.WriteString(`<div>`)
+	var boxes strings.Builder
+	var chosenNames []string
 	found := map[string]struct{}{}
+	name := "row_notify_" + taskType.ID + "|" + product
 	for _, option := range notifyOptions {
 		chosen := handoffContains(selectedNotify, option[0])
 		if chosen {
 			found[option[0]] = struct{}{}
+			chosenNames = append(chosenNames, option[1])
 		}
-		notify.WriteString(`<label class="checkbox-label"><input type="checkbox" name="row_notify_` + esc(taskType.ID+"|"+product) + `" value="` + esc(option[0]) + `"` + handoffChecked(chosen) + `> ` + esc(option[1]) + `</label>`)
+		boxes.WriteString(`<label class="checkbox-label"><input type="checkbox" name="` + esc(name) + `" value="` + esc(option[0]) + `"` + handoffChecked(chosen) + `> ` + esc(option[1]) + `</label>`)
 	}
 	for _, id := range selectedNotify { // saved but no longer listed by Kitsu
 		if _, ok := found[id]; ok {
 			continue
 		}
-		notify.WriteString(`<label class="checkbox-label"><input type="checkbox" checked name="row_notify_` + esc(taskType.ID+"|"+product) + `" value="` + esc(id) + `> ` + esc(id) + `</label>`)
+		chosenNames = append(chosenNames, id)
+		boxes.WriteString(`<label class="checkbox-label"><input type="checkbox" checked name="` + esc(name) + `" value="` + esc(id) + `"> ` + esc(id) + `</label>`)
 	}
-	notify.WriteString(`</div>`)
-	badge := ""
-	if unclassified {
-		badge = ` ` + handoffUnclassifiedBadge(lang)
+	summary := t(lang, "通知先なし", "No notification")
+	if len(chosenNames) > 0 {
+		summary = t(lang, "通知先: ", "Notify: ") + strings.Join(chosenNames, ", ")
 	}
-	return `<tr><td>` + esc(taskType.Name) + ` × ` + esc(product) + badge +
+	return `<td class="handoff-cell" data-handoff-cell="` + esc(taskType.ID+"|"+product) + `" data-flow="` + esc(route.Flow) + `">` +
 		`<input type="hidden" name="row_task" value="` + esc(taskType.ID) + `">` +
 		`<input type="hidden" name="row_task_name" value="` + esc(taskType.Name) + `">` +
-		`<input type="hidden" name="row_product" value="` + esc(product) + `"></td><td>` +
-		forumSelect("row_flow", route.Flow, flowOptions, t(lang, "（選択）", "(choose)")) + `</td><td>` + notify.String() + `</td></tr>`
+		`<input type="hidden" name="row_product" value="` + esc(product) + `">` +
+		flow + `<details class="handoff-notify"><summary title="` + esc(summary) + `">` + esc(summary) + `</summary><div>` + boxes.String() + `</div></details></td>`
 }
 
 func handoffContains(list []string, want string) bool {

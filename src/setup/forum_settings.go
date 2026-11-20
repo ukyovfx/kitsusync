@@ -416,10 +416,11 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		forumNames[forum.ID] = forum.Name
 	}
 	errorHTML := ""
+	createFailed := saveErr != nil && errors.Is(saveErr, errForumCreateAction)
 	if saveErr != nil {
-		if errors.Is(saveErr, errForumCreateAction) {
-			// Creation errors are already written for the operator in Japanese.
-			errorHTML = `<div class="notice notice-error" role="alert">` + esc(saveErr.Error()) + `</div>`
+		if createFailed {
+			// Creation errors are already written for the operator in Japanese;
+			// the result panel below shows them next to the current state.
 		} else {
 			errorHTML = `<div class="notice notice-error" role="alert"><strong>` + esc(t(lang, "保存できませんでした", "Could not save")) + `</strong>` + forumSaveErrorMarkup(lang, saveErr, forumNames) + `</div>`
 		}
@@ -509,10 +510,101 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<section class="section-card glass"><h2>` + esc(t(lang, "コメントの通知", "Comment notifications")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "コメントの通知で、現在の担当者にもメンションを送るかを選びます。オフのときは、コメントでメンションされた人だけに届きます。", "Choose whether a comment notification also mentions the current assignees. When off, only the people mentioned in the comment are notified.")) + `</p>` +
 		`<label class="checkbox-label"><input type="checkbox" name="comment_notify_assignee" value="on"` + handoffChecked(commentNotify) + `> ` + esc(t(lang, "担当者にも通知する", "Also notify the current assignees")) + `</label></section>` +
-		`<div class="button-row"><button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button>` + refetchButton + ` <a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a> <button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button></div></form>`
+		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a>` + refetchButton + ` <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button> <button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button></div></form>`
 
-	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + form + `</div>`
+	// The result panel appears after the create button ran (done or failed) and
+	// whenever the connection's automatic creation left a failure mark.
+	autoCheck := model.GetSetting(db, forumAutoCreateCheckKey(productionID))
+	result := ""
+	if r.FormValue("msg") == "forums_created" || createFailed || autoCheck != "" {
+		failure := ""
+		if createFailed {
+			failure = saveErr.Error()
+		} else if autoCheck != "" {
+			failure = autoCheck
+		}
+		result = renderForumResultPanel(lang, current, taskTypes, forumNames, failure, r.FormValue("msg") == "forums_created")
+	}
+
+	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + result + form + `</div>`
 	return adminPage(lang, t(lang, "フォーラム通知の設定", "Forum notification settings"), r, body)
+}
+
+// renderForumResultPanel shows what the forum creation produced and the current
+// state: for each Task Type the forum it posts to and which of the four role
+// tags exist, plus the failure (if any) in the operator's words. failure is
+// shown as is; it is already written for the operator.
+func renderForumResultPanel(lang string, current model.ProductionForumSettings, taskTypes []kitsu.TaskType, forumNames map[string]string, failure string, justCreated bool) string {
+	tagRoles := map[string]struct{}{}
+	for _, tag := range current.Tags {
+		tagRoles[tag.ForumChannelID+"|"+tag.Role] = struct{}{}
+	}
+	routeByTaskType := map[string]model.ProductionForumRoute{}
+	for _, route := range current.Routes {
+		routeByTaskType[route.TaskTypeID] = route
+	}
+	type stateRow struct{ id, name string }
+	var rows []stateRow
+	seen := map[string]struct{}{}
+	for _, taskType := range taskTypes {
+		rows = append(rows, stateRow{taskType.ID, taskType.Name})
+		seen[taskType.ID] = struct{}{}
+	}
+	for _, route := range current.Routes {
+		if _, ok := seen[route.TaskTypeID]; !ok {
+			rows = append(rows, stateRow{route.TaskTypeID, route.TaskTypeName})
+		}
+	}
+	pill := func(ok bool, yes, no string) string {
+		if ok {
+			return `<span class="status-pill success">` + esc(yes) + `</span>`
+		}
+		return `<span class="status-pill warning">` + esc(no) + `</span>`
+	}
+	var head strings.Builder
+	head.WriteString(`<th scope="col">` + esc(t(lang, "タスクタイプ", "Task Type")) + `</th><th scope="col">` + esc(t(lang, "フォーラム", "Forum")) + `</th>`)
+	for _, role := range forumRoleOptions {
+		head.WriteString(`<th scope="col">` + esc(strings.ToUpper(role)) + `</th>`)
+	}
+	var body strings.Builder
+	created, missing := 0, 0
+	for _, row := range rows {
+		route, routed := routeByTaskType[row.id]
+		forumCell := pill(false, "", t(lang, "未作成", "Not created"))
+		if routed && strings.TrimSpace(route.ForumChannelID) != "" {
+			created++
+			name := strings.TrimSpace(route.ForumChannelName)
+			if name == "" {
+				name = forumNames[route.ForumChannelID]
+			}
+			if name == "" {
+				name = route.ForumChannelID
+			}
+			forumCell = `<strong>#` + esc(strings.TrimPrefix(name, "#")) + `</strong>`
+		} else {
+			missing++
+		}
+		body.WriteString(`<tr><th scope="row">` + esc(row.name) + `</th><td>` + forumCell + `</td>`)
+		for _, role := range forumRoleOptions {
+			_, has := tagRoles[route.ForumChannelID+"|"+role]
+			has = has && routed
+			body.WriteString(`<td>` + pill(has, t(lang, "あり", "Yes"), t(lang, "なし", "No")) + `</td>`)
+		}
+		body.WriteString(`</tr>`)
+	}
+	headline := t(lang, "現在の状態", "Current state")
+	summary := fmt.Sprintf(t(lang, "フォーラムが作成済みのタスクタイプ: %d、未作成: %d", "Task Types with a forum: %d, not created: %d"), created, missing)
+	var failureHTML string
+	switch {
+	case failure != "":
+		headline = t(lang, "作成結果: 失敗あり", "Result: failed")
+		failureHTML = `<div class="notice notice-error" role="alert"><strong>` + esc(t(lang, "失敗した内容", "What failed")) + `</strong><p>` + esc(failure) + `</p></div>`
+	case justCreated:
+		headline = t(lang, "作成結果: 成功", "Result: created")
+	}
+	return `<section class="section-card glass forum-result" id="forum-result"><h2>` + esc(t(lang, "作成結果と現在の状態", "Creation result and current state")) + `</h2>` +
+		`<p class="field-help" role="status">` + esc(headline+" — "+summary) + `</p>` + failureHTML +
+		`<div class="table-wrap"><table class="data-table"><thead><tr>` + head.String() + `</tr></thead><tbody>` + body.String() + `</tbody></table></div></section>`
 }
 
 func forumTaskTypeRow(lang, id, name, selected string, forumOptions [][2]string) string {

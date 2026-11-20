@@ -83,13 +83,16 @@ func TestProductionTeamCompactRows(t *testing.T) {
 	if strings.Count(body, `class="production-team-row"`) != 2 || !strings.Contains(body, longDepartment) || !strings.Contains(body, longScope) {
 		t.Fatalf("Team did not render comparative member rows with Department and derived Supervisor scope: %s", body)
 	}
-	for _, marker := range []string{`class="production-team-table"`, `<th scope="col">Member</th>`, `<th scope="col">Kitsu role</th>`, `<th scope="col">Department</th>`, `<th scope="col">Discord</th>`, `<th scope="col">Status</th>`, `<th scope="col">Action</th>`, `href="/bot/admin/users?lang=en"`} {
+	for _, marker := range []string{`class="production-team-table"`, `<th scope="col">Member</th>`, `<th scope="col">Kitsu role</th>`, `<th scope="col">Department</th>`, `<th scope="col">Discord</th>`, `<th scope="col">Status</th>`} {
 		if !strings.Contains(body, marker) {
 			t.Errorf("Team is missing the Gemini-derived table/navigation structure %q: %s", marker, body)
 		}
 	}
 	if !strings.Contains(body, `<colgroup><col class="production-team-col-member"><col class="production-team-col-role"><col class="production-team-col-department"><col class="production-team-col-discord"><col class="production-team-col-status">`) {
 		t.Fatal("Team table is missing its stable five-column width contract")
+	}
+	if strings.Contains(body, `<th scope="col">Action</th>`) || strings.Contains(body, "production-team-actions") {
+		t.Fatal("Team table regained a per-member action column; linking lives in User Linking only")
 	}
 	if strings.Contains(body, `class="section-card`) || strings.Contains(body, `class="glass`) {
 		t.Fatal("Production Team regressed to per-person cards")
