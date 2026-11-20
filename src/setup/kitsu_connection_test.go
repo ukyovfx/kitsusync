@@ -413,7 +413,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	model.SetSetting(db, KitsuAPIBaseURLSettingKey, "https://api.kitsu.example.test")
 
 	body := renderConnectionsEditFormWithIdentityRows("en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil), db, "", "warn", "Needs review", "https://kitsu.example.test", false, false, "Test Bot")
-	for _, want := range []string{"Needs review", "Recheck connection", "Change token", `placeholder="••••••••••••••••••••"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
+	for _, want := range []string{"Needs review", "Check connection", "Change token", `placeholder="••••••••••••••••••••"`, `name="action" value="save_kitsu"`, `name="action" value="save_discord"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("saved-secret form missing %q", want)
 		}

@@ -1789,7 +1789,7 @@ func TestCurrentProductionUsersUseKitsuTeamInsteadOfManualAssociations(t *testin
 	t.Cleanup(func() { reviewerProductionTeamReader, reviewerGuildMembersForGuild = oldReader, oldMembers })
 
 	body := renderCurrentProductionTeam(db, httptest.NewRequest("GET", "/bot/admin/projects?project=kitsu-team-production&tab=users&lang=en", nil), project, "en", "synthetic-token")
-	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Needs review", "/bot/admin/users", "Kitsu role"} {
+	for _, want := range []string{"Team", "Linked Person", "@ukyo", "Linked", "Unlinked Person", "Needs review", "Kitsu role"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Kitsu-driven Production Users view missing %q: %s", want, body)
 		}

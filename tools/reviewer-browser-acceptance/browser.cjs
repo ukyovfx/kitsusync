@@ -86,6 +86,31 @@ async function gotoWFARecipients(page, locale, extra = '') {
   await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=notifications&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
 
+// Keyboard focus must show a ring on every visible input, select and textarea:
+// computed outline and, for text-like controls, box-shadow.
+async function assertFocusRing(page, label) {
+  const controls = page.locator('main input:not([type="hidden"]), main select, main textarea');
+  const total = await controls.count();
+  let checked = 0;
+  for (let index = 0; index < total; index += 1) {
+    const control = controls.nth(index);
+    if (!(await control.isVisible())) continue;
+    await control.focus();
+    await page.waitForTimeout(300);
+    const style = await control.evaluate(node => {
+      const computed = getComputedStyle(node);
+      return { type: node.type || node.tagName, outlineStyle: computed.outlineStyle, outlineWidth: parseFloat(computed.outlineWidth), shadow: computed.boxShadow, name: node.getAttribute('name') || node.id || '' };
+    });
+    const textLike = !['checkbox', 'radio'].includes(style.type);
+    if (style.outlineStyle === 'none' || style.outlineWidth < 2 || (textLike && (style.shadow === 'none' || /^rgba\(0, 0, 0, 0\) 0px 0px 0px 0px/.test(style.shadow)))) {
+      throw new Error(`Focus ring is not visible on ${label} control ${style.name} (${style.type}): ${JSON.stringify(style)}`);
+    }
+    checked += 1;
+  }
+  if (!checked) throw new Error(`No visible form control to check the focus ring on ${label}`);
+  return checked;
+}
+
 async function gotoProduction(page, locale, tab, extra = '') {
   await page.goto(`${base}/bot/admin/projects?project=reviewer-production&tab=${tab}&lang=${locale.lang}${extra}`, { waitUntil: 'networkidle' });
 }
@@ -1152,27 +1177,40 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         }
         const teamHeaders = (await page.locator('.production-team-table thead th').allTextContents()).map(text => text.trim());
         const expectedTeamHeaders = locale.lang === 'ja'
-          ? ['メンバー', 'Kitsuロール', 'Department', 'Discord', '状態', '操作']
-          : ['Member', 'Kitsu role', 'Department', 'Discord', 'Status', 'Action'];
+          ? ['メンバー', 'Kitsuロール', 'Department', 'Discord', '状態']
+          : ['Member', 'Kitsu role', 'Department', 'Discord', 'Status'];
         if (JSON.stringify(teamHeaders) !== JSON.stringify(expectedTeamHeaders)) {
-          throw new Error(`Team table does not match the six-column structure (status and action are separate columns) in ${locale.lang}: ${JSON.stringify(teamHeaders)}`);
+          throw new Error(`Team table does not match the five-column structure (no per-member action column) in ${locale.lang}: ${JSON.stringify(teamHeaders)}`);
         }
-        const userLinkingHref = await page.locator('.production-team-user-link').first().getAttribute('href');
-        if (!userLinkingHref || !userLinkingHref.startsWith(`/bot/admin/users?lang=${locale.lang}`)) {
-          throw new Error(`Unlinked Team member has no localized User Linking route in ${locale.lang}`);
+        // Linking lives only in the top-right User Linking page.
+        if (await page.locator('.production-team-user-link,[data-open-team-link],[data-team-link-modal],.production-team-actions').count()) {
+          throw new Error(`Team still has a per-member linking control in ${locale.lang}`);
         }
-        const userLinkingLabel = (await page.locator('.production-team-user-link').first().innerText()).trim();
-        if (userLinkingLabel !== (locale.lang === 'ja' ? 'ユーザー紐づけ' : 'User Linking')) throw new Error(`Team User Linking action is not localized in ${locale.lang}: ${userLinkingLabel}`);
+        const navLinking = await page.locator('nav a[href^="/bot/admin/users"]').count();
+        if (navLinking < 1) throw new Error(`Top navigation has no User Linking entry in ${locale.lang}`);
         if (viewport.name === 'desktop') {
-          const statusAction = await page.locator('.production-team-status-actions:has(.production-team-user-link)').first().evaluate(node => {
-            // Status and Action are separate columns of the same row; the action rail stays on one row.
-            const row = node.closest('tr');
-            const status = row.querySelector('.production-team-status .status-pill');
-            const action = node.querySelector('.production-team-user-link');
-            const statusBox = status?.getBoundingClientRect(), actionBox = action?.getBoundingClientRect();
-            return { display: getComputedStyle(node).display, wrap: getComputedStyle(node).flexWrap, statusMid: statusBox && statusBox.y + statusBox.height / 2, actionMid: actionBox && actionBox.y + actionBox.height / 2 };
-          });
-          if (statusAction.display !== 'flex' || !Number.isFinite(statusAction.statusMid) || Math.abs(statusAction.statusMid - statusAction.actionMid) > 8) throw new Error(`Team status and User Linking action are not on one line at 1440px in ${locale.lang}: ${JSON.stringify(statusAction)}`);
+          // 761 / 880 / 1024: the Discord column keeps room for the @name, and nothing is clipped at the right edge.
+          for (const width of [761, 880, 1024]) {
+            await page.setViewportSize({ width, height: 900 });
+            const band = await page.locator('.production-team-table').evaluate(table => {
+              const wrap = table.closest('.production-team-table-wrap').getBoundingClientRect();
+              const discord = table.querySelector('tbody .production-team-discord');
+              const name = table.querySelector('tbody .production-team-discord-name');
+              const cells = [...table.querySelectorAll('tbody tr:first-child > *')].map(cell => cell.getBoundingClientRect());
+              return {
+                tableRight: Math.round(table.getBoundingClientRect().right), wrapRight: Math.round(wrap.right),
+                scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                discordWidth: Math.round(discord.getBoundingClientRect().width),
+                nameVisible: name ? name.scrollWidth <= name.clientWidth + 1 : null,
+                narrowest: Math.round(Math.min(...cells.map(rect => rect.width))), widths: cells.map(rect => Math.round(rect.width)), roleWraps: (() => { const role = table.querySelector('tbody tr:first-child > td:nth-child(2)'); if (!role) return false; const range = document.createRange(); range.selectNodeContents(role); return range.getClientRects().length > 1; })(),
+              };
+            });
+            if (band.tableRight > band.wrapRight + 1 || band.scroll > 0 || band.discordWidth < 110 || band.nameVisible === false || band.narrowest < 60 || band.roleWraps) {
+              throw new Error(`Team table is not readable at ${width}px in ${locale.lang}: ${JSON.stringify(band)}`);
+            }
+            await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${width}.png`), fullPage: true });
+          }
+          await page.setViewportSize({ width: viewport.width, height: viewport.height });
         }
         if (viewport.name === 'mobile') {
           const teamControls = await page.locator('.production-team-discord,.production-team-status').evaluateAll(cells => cells.flatMap(cell => {
@@ -1196,24 +1234,14 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Production Team is not a compact responsive table in ${locale.lang}: ${JSON.stringify(teamRows)}`);
         }
         const teamColumnWidths = await page.locator('.production-team-table col').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).width));
-        if (teamColumnWidths.length !== 6 || (viewport.name === 'desktop' && teamColumnWidths.some(width => parseFloat(width) <= 0)) || (viewport.name === 'mobile' && teamRows.some(row => row.cells !== 6))) throw new Error(`Team lost stable six-column structure in ${locale.lang}/${viewport.name}: ${JSON.stringify({ teamColumnWidths, teamRows })}`);
-        const teamLinkButton = page.locator('[data-open-team-link]').first();
-        if (!(await teamLinkButton.count())) throw new Error(`Team has no verified in-place global User Linking action in ${locale.lang}`);
-        const teamLinkModal = page.locator('[data-team-link-modal]');
-        const teamUrlBeforeLink = page.url();
-        await teamLinkButton.click();
-        if (!(await teamLinkModal.isVisible()) || !(await teamLinkModal.locator('select[name="discord_user_id"] option:not([value=""])').count())) {
-          throw new Error(`Team global User Linking modal did not open with verified Guild choices in ${locale.lang}`);
-        }
-        await teamLinkModal.locator('[data-team-link-cancel]').click();
-        if (await teamLinkModal.isVisible() || page.url() !== teamUrlBeforeLink) {
-          throw new Error(`Cancel did not close the Team User Linking modal without navigation in ${locale.lang}`);
-        }
+        if (teamColumnWidths.length !== 5 || (viewport.name === 'desktop' && teamColumnWidths.some(width => parseFloat(width) <= 0)) || (viewport.name === 'mobile' && teamRows.some(row => row.cells !== 5))) throw new Error(`Team lost stable five-column structure in ${locale.lang}/${viewport.name}: ${JSON.stringify({ teamColumnWidths, teamRows })}`);
         await page.screenshot({ path: path.join(output, `production-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await page.screenshot({ path: path.join(output, `production-rich-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'live Production Team', 'Kitsu Team, effective role, derived Supervisor scope, and global User Linking state; no local membership editor');
 
         await gotoProduction(page, locale, 'settings');
+        const settingsFocusChecked = await assertFocusRing(page, `Production settings in ${locale.lang}/${viewport.name}`);
+        await record(page, '/bot/admin/projects?tab=settings', locale.lang, viewport.name, 'focus ring', `${settingsFocusChecked} controls show a computed outline and shadow on focus`);
         const configuredShellWidth = await page.locator('.production-context').evaluate(node => node.getBoundingClientRect().width);
         const settings = await page.locator('#panel-settings').innerText();
         const settingsPositions = [locale.lang === 'ja' ? 'ストレージ' : 'Storage', locale.lang === 'ja' ? '技術情報' : 'Technical details', locale.lang === 'ja' ? '診断' : 'Diagnostics', locale.lang === 'ja' ? '危険な操作' : 'Danger Zone'].map(label => settings.indexOf(label));
@@ -1836,7 +1864,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'sparse Production', 'one route retains the three-column table with a compact effective-recipient summary');
 
         await gotoProduction(page, locale, 'team');
-        if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 6 || await page.locator('.production-team-table col').count() !== 6) throw new Error(`Sparse Team lost its single row/six-column table structure in ${locale.lang}`);
+        if (await page.locator('.production-team-row').count() !== 1 || await page.locator('.production-team-table thead th').count() !== 5 || await page.locator('.production-team-table col').count() !== 5) throw new Error(`Sparse Team lost its single row/five-column table structure in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `production-sparse-team-${locale.lang}-${viewport.name}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?tab=team', locale.lang, viewport.name, 'sparse Production', 'one member retains a stable five-column Team table');
 
@@ -2224,7 +2252,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           };
         });
         if (!failure) throw new Error(`team failure notice missing at ${width}px (${locale.lang})`);
-        if (failure.tag !== 'DIV' || failure.display === 'table-cell' || failure.colspan !== '6') throw new Error(`team failure notice is still a bare table cell at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
+        if (failure.tag !== 'DIV' || failure.display === 'table-cell' || failure.colspan !== '5') throw new Error(`team failure notice is still a bare table cell at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
         if (failure.width < Math.min(failure.tableWidth, 320) - 40 || failure.right > failure.tableRight + 1) throw new Error(`team failure notice is squeezed at ${width}px (${locale.lang}): ${JSON.stringify(failure)}`);
         await page.screenshot({ path: path.join(output, `batch3-team-failure-${locale.lang}-${width}.png`), fullPage: true });
         await record(page, '/bot/admin/projects?project=reviewer-production&tab=team', locale.lang, 'band-' + width, 'team load failure', 'block notice spans the full ' + failure.colspan + '-column row at ' + failure.width + 'px');

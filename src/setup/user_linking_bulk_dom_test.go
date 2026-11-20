@@ -23,7 +23,7 @@ func TestUserLinkingBulkFormTargetsSaveButtonAndConfirmsUnlink(t *testing.T) {
 		t.Fatal("bulk form still grabs the first submit button, which is Unlink when a mapping exists")
 	}
 	// The unlink path must ask for confirmation before submitting.
-	if !strings.Contains(body, "window.confirm(unlink.dataset.confirm)") || !strings.Contains(body, "field.name='unlink_user_id'") {
+	if strings.Contains(body, "window.confirm") || !strings.Contains(body, "window.kitsusyncConfirm(unlink.dataset.confirm") || !strings.Contains(body, "field.name='unlink_user_id'") {
 		t.Fatal("unlink submits without asking for confirmation")
 	}
 	if !strings.Contains(body, `name="unlink_user_id"`) {

@@ -413,7 +413,7 @@ func buildProjectDiscordResourceCheck(lang string, db *gorm.DB) diagCheck {
 	projects := model.ListProjects(db)
 	label := t(lang, "Production フォーラムリソース", "Production forum resources")
 	if len(projects) == 0 {
-		return diagCheck{Label: label, Status: "warn", Detail: t(lang, "接続済みProductionがないため確認できません。", "No connected Production is available to inspect."), Fix: t(lang, "Productionを接続してから再確認してください。", "Connect a Production, then rerun Diagnostics.")}
+		return diagCheck{Label: label, Status: "warn", Detail: t(lang, "接続済みProductionがないため確認できません。", "No connected Production is available to inspect."), Fix: t(lang, "Productionを接続してから、もう一度診断を実行してください。", "Connect a Production, then rerun Diagnostics.")}
 	}
 	for _, project := range projects {
 		report := inspectProjectDiscordResources(project, db)
@@ -459,7 +459,7 @@ func buildForumSettingsCheck(
 			Label:  label,
 			Status: "warn",
 			Detail: t(lang, "project がまだないため、フォーラム設定の準備状態は確認できません。", "Forum settings readiness cannot be confirmed yet because no project is configured."),
-			Fix:    t(lang, "Productionを接続してから再確認してください。", "Connect a Production, then rerun Diagnostics."),
+			Fix:    t(lang, "Productionを接続してから、もう一度診断を実行してください。", "Connect a Production, then rerun Diagnostics."),
 		}
 	}
 

@@ -804,7 +804,7 @@ func safeDeleteOperationMessage(lang, stage string, err error) string {
 		return t(lang, "対象のDiscordリソースはすでに存在しません。", "The Discord resource was already missing.")
 	}
 	if stage == "database_cleanup" {
-		return t(lang, "KitsuSyncの連携状態の整理に失敗しました。再確認してください。", "KitsuSync connection cleanup failed. Review the connection state.")
+		return t(lang, "KitsuSyncの連携状態の整理に失敗しました。要確認です。接続状態を見直してください。", "KitsuSync connection cleanup failed. Review the connection state.")
 	}
 	return t(lang, "Discordリソースの削除に失敗しました。権限と接続状態を確認してください。", "Discord resource deletion failed. Check the Bot permissions and connection state.")
 }
@@ -1243,13 +1243,13 @@ func renderConnectedProductionCompletionAction(lang string, project model.Projec
 		blockers = append(blockers, fmt.Sprintf(t(lang, "まだ整理が必要な連携先が %d 件あります", "There are still %d connection rows to clean up."), result.RemainingWebhooks))
 	}
 	if len(result.CleanupWarnings) > 0 {
-		blockers = append(blockers, fmt.Sprintf(t(lang, "削除後に確認が必要な項目が %d 件あります", "There are %d items that still need follow-up."), len(result.CleanupWarnings)))
+		blockers = append(blockers, fmt.Sprintf(t(lang, "削除後に要確認の項目が %d 件あります", "There are %d items that still need follow-up."), len(result.CleanupWarnings)))
 	}
 	if len(blockers) == 0 {
 		blockers = append(blockers, t(lang, "一部の削除が完了していません。", "Some parts of the delete did not complete."))
 	}
 	var out strings.Builder
-	out.WriteString(`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "削除は実行しましたが、まだ確認が必要な項目があります。", "The delete was attempted, but some follow-up is still needed.")) + `</p>`)
+	out.WriteString(`<p class="field-help" style="margin:0 0 12px">` + esc(t(lang, "削除は実行しましたが、まだ要確認の項目があります。", "The delete was attempted, but some follow-up is still needed.")) + `</p>`)
 	out.WriteString(`<ul class="list-tight" style="margin:0;padding-left:18px">`)
 	for _, blocker := range blockers {
 		out.WriteString(`<li>` + esc(blocker) + `</li>`)
@@ -1446,7 +1446,7 @@ func HealthHandler(db *gorm.DB) http.HandlerFunc {
 				`</tr></thead><tbody>` + forumRowsHTML.String() + `</tbody></table></div>`
 			if forumIssueCount > 0 {
 				forumTableHTML += `<p class="hint" style="color:#ff6a50;margin-top:10px">` +
-					esc(t(lang, "確認が必要なフォーラム設定があります。Productionのフォーラム設定を確認して保存してください。",
+					esc(t(lang, "要確認のフォーラム設定があります。Productionのフォーラム設定を確認して保存してください。",
 						"Some forum settings need attention. Review and save them in the Production forum settings.")) + `</p>`
 			}
 		}
@@ -1758,7 +1758,7 @@ func UsersHandler(db *gorm.DB, kitsuHostname string) http.HandlerFunc {
 			}
 			selectorCard = `<div class="section-card glass"><h3>` + t(lang, "編集対象のプロダクション", "Editing production") + `</h3><p class="hint">` + t(lang, "ユーザー割り当てと reviewer / checker 設定はプロダクションごとに切り替えて編集します。", "Switch the production here to edit user assignments and reviewer/checker settings per production.") + `</p><form method="GET" action="/bot/admin/users"><input type="hidden" name="lang" value="` + esc(lang) + `"><div class="form-grid"><div><label>` + t(lang, "プロダクション", "Production") + `</label><select name="project">` + projectOptions.String() + `</select></div></div><div class="button-row"><button type="submit" class="btn">` + t(lang, "表示を切り替え", "Switch production") + `</button></div></form></div>`
 		}
-		assignmentActionRow := `<div class="button-row"><button type="submit" class="btn">` + t(lang, "保存", "Save") + `</button><a class="btn-ghost" href="` + esc(usersPageURL) + `">` + t(lang, "キャンセル", "Cancel") + `</a></div>`
+		assignmentActionRow := `<div class="button-row"><a class="btn-ghost" href="` + esc(usersPageURL) + `">` + t(lang, "キャンセル", "Cancel") + `</a><button type="submit" class="btn">` + t(lang, "保存", "Save") + `</button></div>`
 		body := fmt.Sprintf(`
 <div class="section-stack">
   %s
@@ -1883,7 +1883,7 @@ func connectionHealthStatus(lang string, configured, healthy bool) connectionSta
 
 func connectionSaveLabel(lang string, service string, configured bool) string {
 	if configured {
-		return t(lang, "接続を再確認", "Recheck connection")
+		return t(lang, "接続を確認", "Check connection")
 	}
 	return t(lang, service+"接続を保存", "Save "+service+" connection")
 }
@@ -2472,10 +2472,10 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
       <div><label>%s</label><input type="email" name="kitsu_runtime_email" value="%s" placeholder="kitsusync-bot@local.invalid"></div>
       <div><label>%s</label><input type="password" name="kitsu_runtime_password" autocomplete="new-password" placeholder="%s"></div>
     </div></div>
-    <div class="button-row"><button type="submit" class="btn">%s</button><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a></div>
+    <div class="button-row"><a class="btn-ghost" href="%s">%s</a><a class="btn-ghost" href="%s">%s</a><button type="submit" class="btn">%s</button></div>
   </form>
 </div>`,
-			authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスに即時反映され、アプリ設定にも保存されます。", "Token changes take effect immediately for the running process and are also saved in app settings."), t(lang, "再起動後は保存済み token が優先されます。.env.local / 環境変数は fallback としてのみ使われます。", "After restart, the saved token is used first. .env.local / environment variables remain fallback sources only."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), t(lang, "保存", "Save"), withLang("/bot/setup", r), t(lang, "新規連携セットアップへ戻る", "Back to New Connection Setup"), withLang("/bot/admin/projects", r), t(lang, "連携済みプロダクション管理を開く", "Open Connected Productions"))
+			authNoticeHTML(lang, t(lang, "再認証済み", "Re-authenticated"), t(lang, "編集モードは一時的に有効です。", "Edit mode is temporarily enabled.")), t(lang, "Discord 設定", "Discord settings"), esc(effectiveHost), t(lang, "必要な時だけ新しい Token を入力してください。", "Only paste a new token when rotating it."), t(lang, "このトークン変更は現在実行中のプロセスに即時反映され、アプリ設定にも保存されます。", "Token changes take effect immediately for the running process and are also saved in app settings."), t(lang, "再起動後は保存済み token が優先されます。.env.local / 環境変数は fallback としてのみ使われます。", "After restart, the saved token is used first. .env.local / environment variables remain fallback sources only."), t(lang, "Kitsu Runtime 接続", "Kitsu runtime connection"), t(lang, "Runtime メール", "Runtime email"), esc(kitsuEmail), t(lang, "Runtime パスワード", "Runtime password"), t(lang, "必要な時だけ専用 Runtime パスワードを入力してください。", "Only paste a new dedicated runtime password when rotating it."), withLang("/bot/setup", r), t(lang, "新規連携セットアップへ戻る", "Back to New Connection Setup"), withLang("/bot/admin/projects", r), t(lang, "連携済みプロダクション管理を開く", "Open Connected Productions"), t(lang, "保存", "Save"))
 		fmt.Fprint(w, adminPage(lang, t(lang, "Bot設定", "Bot Settings"), r, edit))
 	}
 }
@@ -2816,7 +2816,7 @@ func adminPage(lang, title string, r *http.Request, body string) string {
 	}
 	content := `<div class="page-card glass editorial-workbench">` + pageHeading +
 		message + body + `</div>` +
-		`<div id="deleteModal" class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle"><div class="delete-box glass"><h2 id="deleteModalTitle" class="delete-title">` + esc(t(lang, "操作の確認", "Confirm action")) + `</h2><p id="deleteModalText" class="delete-text"></p><p id="deleteModalHelper" class="field-help hidden"></p><div id="deleteModalInputWrap" class="delete-input hidden"><label for="deleteModalInput"><span class="sr-only">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `</span><input id="deleteModalInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label><div class="field-help">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `: <code id="deleteModalExpected"></code></div></div><div class="button-row"><button id="deleteConfirmBtn" type="button" class="btn-danger">` + esc(t(lang, "実行する", "Continue")) + `</button><button id="deleteCancelBtn" type="button" class="btn-ghost">` + esc(t(lang, "キャンセル", "Cancel")) + `</button></div></div></div>` +
+		`<div id="deleteModal" class="delete-modal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle"><div class="delete-box glass"><h2 id="deleteModalTitle" class="delete-title">` + esc(t(lang, "操作の確認", "Confirm action")) + `</h2><p id="deleteModalText" class="delete-text"></p><p id="deleteModalHelper" class="field-help hidden"></p><div id="deleteModalInputWrap" class="delete-input hidden"><label for="deleteModalInput"><span class="sr-only">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `</span><input id="deleteModalInput" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label><div class="field-help">` + esc(t(lang, "確認ワード", "Confirmation phrase")) + `: <code id="deleteModalExpected"></code></div></div><div class="button-row"><button id="deleteCancelBtn" type="button" class="btn-ghost">` + esc(t(lang, "キャンセル", "Cancel")) + `</button><button id="deleteConfirmBtn" type="button" class="btn-danger">` + esc(t(lang, "実行する", "Continue")) + `</button></div></div></div>` +
 		baseAdminJS(lang)
 	return appShell("KitsuSync", "", lang, r, nav, content)
 }
