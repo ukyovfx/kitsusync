@@ -31,7 +31,11 @@ type Executor struct {
 	// AssigneeNames maps the task's Kitsu assignee IDs to display names for
 	// the embed footer.
 	AssigneeNames func(projectID string, personIDs []string) []string
-	Now           func() time.Time
+	// RecordSend observes one send reaching its final outcome (delivered or
+	// definitively undeliverable) so runtime stats reflect real counts.
+	// Intermediate retries and by-design cancels never reach it.
+	RecordSend func(sentCount, failedCount int, webhookURL, errSummary string)
+	Now        func() time.Time
 	// Sleep is injectable so tests do not wait for real backoff.
 	Sleep func(time.Duration)
 	// recipientCache reuses reviewer resolution within one drain pass, keyed
@@ -55,6 +59,15 @@ type resolvedRecipients struct {
 // ErrForumRateLimited ends a drain pass: Discord reported a rate limit, so the
 // rest of the outbox must wait instead of being claimed and retried now.
 var ErrForumRateLimited = errors.New("forum outbox drain paused by a discord rate limit")
+
+// recordSend reports one definitive send outcome. Sync rows maintain thread
+// metadata, not message delivery, so they never count.
+func (e Executor) recordSend(row model.ForumOutbox, sent, failed int, summary string) {
+	if e.RecordSend == nil || row.Kind == model.ForumOutboxSyncThread {
+		return
+	}
+	e.RecordSend(sent, failed, "", summary)
+}
 
 // Drain processes due rows until none remain runnable or the budget is spent.
 func (e Executor) Drain(maxRows int) (int, error) {
@@ -134,6 +147,7 @@ func (e Executor) executeCreateThread(row model.ForumOutbox, token string) error
 	// existing thread instead of opening a duplicate.
 	if row.Attempts > 1 {
 		if existingID, found := e.findExistingThread(token, payload.ForumID, payload.Name); found {
+			e.recordSend(row, 1, 0, "")
 			return model.SetForumTaskThread(e.DB, row.TaskID, payload.ForumID, existingID, row.ID)
 		}
 	}
@@ -141,6 +155,7 @@ func (e Executor) executeCreateThread(row model.ForumOutbox, token string) error
 	if err != nil {
 		return e.handleFailure(row, err)
 	}
+	e.recordSend(row, 1, 0, "")
 	return model.SetForumTaskThread(e.DB, row.TaskID, payload.ForumID, thread.ID, row.ID)
 }
 
@@ -343,6 +358,7 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 	if err != nil {
 		return e.handleFailure(row, err)
 	}
+	e.recordSend(row, 1, 0, "")
 	return model.FinishForumOutboxRow(e.DB, row.ID, "message="+msg.ID)
 }
 
@@ -396,6 +412,7 @@ func (e Executor) executeWarnMessage(row model.ForumOutbox, token string) error 
 	if err != nil {
 		return e.handleFailure(row, err)
 	}
+	e.recordSend(row, 1, 0, "")
 	return model.FinishForumOutboxRow(e.DB, row.ID, "message="+msg.ID)
 }
 
@@ -418,6 +435,7 @@ func (e Executor) handleFailure(row model.ForumOutbox, err error) error {
 			return ErrForumRateLimited
 		case "missing_destination":
 			if row.Kind == model.ForumOutboxCreateThread {
+				e.recordSend(row, 0, 1, "missing_destination")
 				return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", apiErr.Error())
 			}
 			return e.recreateThread(row, apiErr)
@@ -432,6 +450,7 @@ func (e Executor) handleFailure(row model.ForumOutbox, err error) error {
 			}
 			return e.retryLater(row, "missing_permission", 10*time.Minute)
 		case "invalid_request":
+			e.recordSend(row, 0, 1, "invalid_request")
 			return model.FailForumOutboxRow(e.DB, row.ID, "invalid_request", apiErr.Error())
 		default:
 			return e.retryLater(row, apiErr.ErrorClass(), backoffFor(row.Attempts))
@@ -447,9 +466,11 @@ func (e Executor) handleFailure(row model.ForumOutbox, err error) error {
 func (e Executor) recreateThread(row model.ForumOutbox, apiErr *discord.ForumAPIError) error {
 	generation, err := model.ClearForumTaskThread(e.DB, row.TaskID)
 	if err != nil {
+		e.recordSend(row, 0, 1, "missing_destination")
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", apiErr.Error())
 	}
 	if generation > 3 {
+		e.recordSend(row, 0, 1, "missing_destination")
 		return model.FailForumOutboxRow(e.DB, row.ID, "missing_destination", "thread lost repeatedly")
 	}
 	// A sync row whose thread is gone needs a replacement too: without it the
@@ -461,6 +482,7 @@ func (e Executor) recreateThread(row model.ForumOutbox, apiErr *discord.ForumAPI
 	if err := e.queueReplacementThread(row, forumID, role, generation); err != nil {
 		return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
 	}
+	e.recordSend(row, 0, 1, "thread_lost")
 	return model.CancelForumOutboxRow(e.DB, row.ID, "thread_lost")
 }
 
@@ -526,6 +548,7 @@ func (e Executor) retryLater(row model.ForumOutbox, class string, wait time.Dura
 			"kind", row.Kind,
 			"attempts", row.Attempts,
 		)
+		e.recordSend(row, 0, 1, class)
 		return model.FailForumOutboxRow(e.DB, row.ID, class, "retry budget exhausted")
 	}
 	slog.Error("Forum outbox delivery retrying later",

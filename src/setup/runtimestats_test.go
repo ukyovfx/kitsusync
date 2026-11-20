@@ -56,3 +56,20 @@ func TestRuntimeStatsBoundsAPIObservationsAndKeepsSecretsOut(t *testing.T) {
 		t.Fatal("observation classification was not retained")
 	}
 }
+
+func TestRecordSendTotalsReachSnapshot(t *testing.T) {
+	stats := &RuntimeStats{StartTime: time.Now()}
+	before := stats.Snapshot()
+	stats.RecordSend(2, 0, "", "")
+	stats.RecordSend(0, 1, "", "boom")
+	after := stats.Snapshot()
+	if got := after.SendSuccessTotal - before.SendSuccessTotal; got != 2 {
+		t.Fatalf("SendSuccessTotal delta = %d, want 2", got)
+	}
+	if got := after.SendFailureTotal - before.SendFailureTotal; got != 1 {
+		t.Fatalf("SendFailureTotal delta = %d, want 1", got)
+	}
+	if after.LastSendTime.IsZero() {
+		t.Fatal("LastSendTime was not set")
+	}
+}

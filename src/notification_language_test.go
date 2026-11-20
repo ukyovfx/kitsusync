@@ -21,7 +21,8 @@ func TestForumDigestFollowsEnglishProduction(t *testing.T) {
 		}},
 		HandoffsMore: 2,
 	}
-	card := renderForumDigestCard("Forest", recipient, "https://kitsu.example/t/1", discord.NotificationLanguage("en"))
+	card := renderForumDigestCard("Forest", "p1", recipient, "https://kitsu.example/t/1", discord.NotificationLanguage("en"))
+	text := card.Title + "\n" + card.Description
 	for _, want := range []string{
 		"📋 Morning digest — Forest",
 		"- Awaiting review (WFA): 1",
@@ -30,13 +31,13 @@ func TestForumDigestFollowsEnglishProduction(t *testing.T) {
 		"sq010: camera v003 ← from Layout Artist's Layout",
 		"2 more awaiting a reply",
 	} {
-		if !strings.Contains(card, want) {
-			t.Errorf("digest %q missing %q", card, want)
+		if !strings.Contains(text, want) {
+			t.Errorf("digest %q missing %q", text, want)
 		}
 	}
 	for _, gone := range []string{"朝のダイジェスト", "チェック待ち", "素材の受け渡し"} {
-		if strings.Contains(card, gone) {
-			t.Errorf("digest %q still has %q", card, gone)
+		if strings.Contains(text, gone) {
+			t.Errorf("digest %q still has %q", text, gone)
 		}
 	}
 }

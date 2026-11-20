@@ -1109,7 +1109,13 @@ func NotificationCardTemplate(conf config.Config, elem kitsu.MessagePayload, web
 	if KitsuPublicURLResolver != nil {
 		host = safeNotificationURL(KitsuPublicURLResolver())
 	}
-	placeholders.TaskURL = KitsuTaskURL(host, elem.Project.ID, placeholders.EntityType, elem.Task.ID)
+	// Asset tasks carry a concrete asset-type name ("Character"), not "Asset",
+	// so map the entity type onto the verified route kind before linking.
+	routeKind := placeholders.EntityType
+	if !strings.EqualFold(strings.TrimSpace(routeKind), "shot") {
+		routeKind = "asset"
+	}
+	placeholders.TaskURL = KitsuTaskURL(host, elem.Project.ID, routeKind, elem.Task.ID)
 
 	// Kitsu プレビュー画像 URL を組み立て
 	// Entity.PreviewFileID は interface{} なので string にキャストする

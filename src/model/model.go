@@ -517,6 +517,11 @@ func DeleteProductionOperationalState(db *gorm.DB, productionID string) error {
 		return gorm.ErrInvalidData
 	}
 	productionID = strings.TrimSpace(productionID)
+	// Forum ledger rows survive keyed by project/task, not production_id, so
+	// they must be removed explicitly with the routing state.
+	if err := deleteProductionForumLedger(db, productionID); err != nil {
+		return err
+	}
 	for _, table := range []interface{}{
 		&ProductionNotificationRoute{},
 		&ProductionNotificationConfig{},

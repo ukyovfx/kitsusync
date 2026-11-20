@@ -110,9 +110,8 @@ func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
 			continue
 		}
 		for _, recipient := range recipients {
-			content := renderHandoffCard(publicURL, event, language)
-			if err := sendDigestDirectMessage(botToken, recipient, content, handoffReplyRows([]model.HandoffEvent{event}, language)); err != nil {
-				errs = append(errs, fmt.Sprintf("%d/%s: %v", event.ID, recipient, err))
+			payload := discord.Payload{Content: renderHandoffCard(publicURL, event, language), Components: handoffReplyRows([]model.HandoffEvent{event}, language)}
+			if err := sendDigestDirectMessage(botToken, recipient, payload); err != nil {				errs = append(errs, fmt.Sprintf("%d/%s: %v", event.ID, recipient, err))
 			}
 		}
 		sent++

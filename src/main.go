@@ -454,6 +454,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 			return recipients.ForTask(taskID, payload)
 		},
 		AssigneeNames: forumAssigneeNames,
+		RecordSend:    setup.Stats.RecordSend,
 	}
 	if _, err := executor.Drain(forumOutboxDrainLimit); err != nil {
 		// A rate-limited drain is a pause, not a failure: the rows stay due and
@@ -1371,6 +1372,11 @@ func main() {
 		runOnePollContext(pollCtx, conf, db)
 	})
 	c.AddFunc("@every 1h", func() { redactExpiredNotificationPayloads(conf, db, time.Now()) })
+	c.AddFunc("@every 1h", func() {
+		if deleted := model.PurgeOldForumOutbox(db, model.ForumOutboxRetentionDays); deleted > 0 {
+			slog.Info("forum outbox purge", "deleted_rows", deleted)
+		}
+	})
 	c.AddFunc("0 3 * * *", func() {
 		deleted := model.PurgeOldAuditLogs(db, 90)
 		if deleted > 0 {

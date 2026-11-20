@@ -34,8 +34,11 @@ const (
 type forumDigestItem struct {
 	TaskID string
 	Title  string
-	Role   string
-	Since  time.Time
+	// EntityKind routes the Kitsu task link ("shot", "asset"); unknown
+	// kinds get no link (KitsuTaskURL fails closed).
+	EntityKind string
+	Role       string
+	Since      time.Time
 }
 
 // forumDigestRecipient is one person's digest for one Production.
@@ -96,9 +99,8 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 			if model.GetSetting(db, marker) == today {
 				continue
 			}
-			content := renderForumDigestCard(project.Name, recipient, publicURL, language)
-			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, content, handoffReplyRows(recipient.Handoffs, language)); err != nil {
-				projectErrs++
+			card := renderForumDigestCard(project.Name, project.KitsuProjectID, recipient, publicURL, language)
+			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, discord.Payload{Embeds: []discord.Embed{card}, Components: handoffReplyRows(recipient.Handoffs, language)}); err != nil {				projectErrs++
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient.DiscordID, err))
 				continue
 			}
@@ -200,7 +202,7 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 		if !task.StatusSince.Before(startOfToday) {
 			continue
 		}
-		item := forumDigestItem{TaskID: task.TaskID, Title: task.Title, Role: role, Since: task.StatusSince}
+		item := forumDigestItem{TaskID: task.TaskID, Title: task.Title, EntityKind: task.EntityKind, Role: role, Since: task.StatusSince}
 		if role == model.ForumRoleWFA {
 			for _, id := range reviewersFor(task.TaskTypeID) {
 				ensure(id).Waiting = append(ensure(id).Waiting, item)
@@ -301,32 +303,34 @@ func forumDigestReviewerIDs(db *gorm.DB, projectID uint) []string {
 }
 
 // renderForumDigestCard lists the person's own queue. Titles are the forum
-// thread titles, so the DM reads the same as the post. lang is the
-// Production's notification language.
-func renderForumDigestCard(productionName string, recipient forumDigestRecipient, publicURL, lang string) string {
+// renderForumDigestCard lists the person's own queue. Titles are the forum
+// thread titles, so the DM reads the same as the post, and every item links
+// its task in Kitsu. The sections ride in one embed: with per-item task
+// routes, full queues exceed the 2000-character message limit but fit the
+// 4096-character embed description. lang is the Production's notification
+// language.
+func renderForumDigestCard(productionName, productionID string, recipient forumDigestRecipient, publicURL, lang string) discord.Embed {
 	en := discord.NotificationLanguage(lang) == "en"
-	digestTitle := "📋 朝のダイジェスト — %s\n"
+	digestTitle := "📋 朝のダイジェスト — %s"
 	waitingLabel := "・チェック待ち (WFA): %d件"
 	retakeLabel := "・差し戻し (RETAKE): %d件"
 	handoffLabel := "・素材の受け渡し: %d件"
 	moreLabel := "他に未返事が %d 件あります"
 	if en {
-		digestTitle = "📋 Morning digest — %s\n"
+		digestTitle = "📋 Morning digest — %s"
 		waitingLabel = "- Awaiting review (WFA): %d"
 		retakeLabel = "- Retakes (RETAKE): %d"
 		handoffLabel = "- Asset handoffs: %d"
 		moreLabel = "%d more awaiting a reply"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, digestTitle, productionName)
 	fmt.Fprintf(&b, waitingLabel, len(recipient.Waiting))
-	if items := forumDigestLines(recipient.Waiting); len(items) > 0 {
+	if items := forumDigestLines(recipient.Waiting, productionID, publicURL); len(items) > 0 {
 		b.WriteString("  " + strings.Join(items, ", "))
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, retakeLabel, len(recipient.Retakes))
-	if items := forumDigestLines(recipient.Retakes); len(items) > 0 {
-		b.WriteString("  " + strings.Join(items, ", "))
+	if items := forumDigestLines(recipient.Retakes, productionID, publicURL); len(items) > 0 {		b.WriteString("  " + strings.Join(items, ", "))
 	}
 	b.WriteString("\n")
 	// Both lists are always rendered, so the person sees a real 0件 rather
@@ -344,16 +348,24 @@ func renderForumDigestCard(productionName string, recipient forumDigestRecipient
 	} else {
 		b.WriteString("\n")
 	}
-	return b.String()
+	card := discord.Embed{Title: fmt.Sprintf(digestTitle, productionName), Description: b.String()}
+	discord.FitEmbedTextLimits(&card)
+	return card
 }
 
-func forumDigestLines(items []forumDigestItem) []string {
-	if len(items) > digestMaxTasksPerSection {
-		items = items[:digestMaxTasksPerSection]
-	}
+func forumDigestLines(items []forumDigestItem, productionID, publicURL string) []string {
+	// prefixItems caps the count and trims every title by runes.
 	titles := make([]string, 0, len(items))
 	for _, item := range items {
 		titles = append(titles, item.Title)
 	}
-	return prefixItems(titles, digestMaxTasksPerSection)
+	titles = prefixItems(titles, digestMaxTasksPerSection)
+	for i := range titles {
+		if url := discord.KitsuTaskURL(publicURL, productionID, items[i].EntityKind, items[i].TaskID); url != "" {
+			// A markdown link keeps the raw length near plain text while the
+			// task name itself becomes the path to Kitsu.
+			titles[i] = "[" + titles[i] + "](" + url + ")"
+		}
+	}
+	return titles
 }
