@@ -174,7 +174,6 @@ func TestNewProductionStartsWithHandoffTemplate(t *testing.T) {
 		"Compositing|matchmove": {model.HandoffFlowHand, "Layout,Animation"},
 		"Compositing|render":    {model.HandoffFlowSubmit, ""},
 		"Compositing|workfile":  {model.HandoffFlowShelve, ""},
-		"Rendering|render":      {model.HandoffFlowHand, "Compositing"},
 		"Rendering|renderPass":  {model.HandoffFlowHand, "Compositing"},
 		"Lighting|lighting":     {model.HandoffFlowHand, "Rendering"},
 		"Animation|pointcache":  {model.HandoffFlowHand, "Lighting,Rendering"}, // FX is not in this Production

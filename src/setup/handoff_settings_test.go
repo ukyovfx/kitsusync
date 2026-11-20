@@ -101,10 +101,9 @@ func TestHandoffPageAppliesPresetsToMatchingRowsOnly(t *testing.T) {
 	}
 }
 
-// Rendering hands off both render and renderPass to Compositing, while
-// Compositing's own render is a submission (owner decision 2026-11-20, which
-// supersedes the 2026-11-19 shelved Rendering × render row).
-func TestHandoffPresetRenderingHandsOffRenderAndRenderPass(t *testing.T) {
+// Rendering hands off renderPass to Compositing; Compositing's own render
+// submission stays the only "render" preset row (owner decision 2026-11-19).
+func TestHandoffPresetRenderingUsesRenderPass(t *testing.T) {
 	stubHandoffTaskTypes(t, []kitsu.TaskType{
 		{ID: "tt-comp", Name: "Compositing"},
 		{ID: "tt-render", Name: "Rendering"},
@@ -126,10 +125,7 @@ func TestHandoffPresetRenderingHandsOffRenderAndRenderPass(t *testing.T) {
 			`name="row_notify_tt-render|renderPass" value="tt-comp" checked`,
 		},
 		`Compositing × render<input type="hidden"`: {`<option value="submit" selected>`},
-		`Rendering × render<input type="hidden"`: {
-			`<option value="hand" selected>`,
-			`name="row_notify_tt-render|render" value="tt-comp" checked`,
-		},
+		`Rendering × render<input type="hidden"`:   {`<option value="shelve" selected>`},
 	} {
 		start := strings.Index(body, label)
 		if start < 0 {

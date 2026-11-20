@@ -44,7 +44,6 @@ var handoffPresets = []handoffPreset{
 	{"Animation", "pointcache", model.HandoffFlowHand, []string{"Lighting", "FX", "Rendering"}},
 	{"FX", "fxcache", model.HandoffFlowHand, []string{"Lighting", "Compositing"}},
 	{"Lighting", "lighting", model.HandoffFlowHand, []string{"Rendering"}},
-	{"Rendering", "render", model.HandoffFlowHand, []string{"Compositing"}},
 	{"Rendering", "renderPass", model.HandoffFlowHand, []string{"Compositing"}},
 	{"Compositing", "render", model.HandoffFlowSubmit, nil},
 	{"Storyboard", "storyboard", model.HandoffFlowShelve, nil},
