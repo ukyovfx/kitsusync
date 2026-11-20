@@ -87,6 +87,7 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 		// Unanswered handoffs are listed every morning until they are
 		// answered, so they are merged into the per-person queue.
 		recipients = mergeHandoffDigestItems(db, project, recipients)
+		language := discord.NotificationLanguage(project.Language)
 		projectErrs := 0
 		projectSent := 0
 		publicURL := setup.PublicKitsuURL(db)
@@ -95,8 +96,8 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 			if model.GetSetting(db, marker) == today {
 				continue
 			}
-			content := renderForumDigestCard(project.Name, recipient, publicURL)
-			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, content, handoffReplyRows(recipient.Handoffs)); err != nil {
+			content := renderForumDigestCard(project.Name, recipient, publicURL, language)
+			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, content, handoffReplyRows(recipient.Handoffs, language)); err != nil {
 				projectErrs++
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient.DiscordID, err))
 				continue
@@ -300,31 +301,45 @@ func forumDigestReviewerIDs(db *gorm.DB, projectID uint) []string {
 }
 
 // renderForumDigestCard lists the person's own queue. Titles are the forum
-// thread titles, so the DM reads the same as the post.
-func renderForumDigestCard(productionName string, recipient forumDigestRecipient, publicURL string) string {
+// thread titles, so the DM reads the same as the post. lang is the
+// Production's notification language.
+func renderForumDigestCard(productionName string, recipient forumDigestRecipient, publicURL, lang string) string {
+	en := discord.NotificationLanguage(lang) == "en"
+	digestTitle := "📋 朝のダイジェスト — %s\n"
+	waitingLabel := "・チェック待ち (WFA): %d件"
+	retakeLabel := "・差し戻し (RETAKE): %d件"
+	handoffLabel := "・素材の受け渡し: %d件"
+	moreLabel := "他に未返事が %d 件あります"
+	if en {
+		digestTitle = "📋 Morning digest — %s\n"
+		waitingLabel = "- Awaiting review (WFA): %d"
+		retakeLabel = "- Retakes (RETAKE): %d"
+		handoffLabel = "- Asset handoffs: %d"
+		moreLabel = "%d more awaiting a reply"
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "📋 朝のダイジェスト — %s\n", productionName)
-	fmt.Fprintf(&b, "・チェック待ち (WFA): %d件", len(recipient.Waiting))
+	fmt.Fprintf(&b, digestTitle, productionName)
+	fmt.Fprintf(&b, waitingLabel, len(recipient.Waiting))
 	if items := forumDigestLines(recipient.Waiting); len(items) > 0 {
 		b.WriteString("  " + strings.Join(items, ", "))
 	}
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "・差し戻し (RETAKE): %d件", len(recipient.Retakes))
+	fmt.Fprintf(&b, retakeLabel, len(recipient.Retakes))
 	if items := forumDigestLines(recipient.Retakes); len(items) > 0 {
 		b.WriteString("  " + strings.Join(items, ", "))
 	}
 	b.WriteString("\n")
 	// Both lists are always rendered, so the person sees a real 0件 rather
 	// than a missing section.
-	fmt.Fprintf(&b, "・素材の受け渡し: %d件", len(recipient.Handoffs))
+	fmt.Fprintf(&b, handoffLabel, len(recipient.Handoffs))
 	if len(recipient.Handoffs) > 0 {
 		lines := make([]string, 0, len(recipient.Handoffs))
 		for _, event := range recipient.Handoffs {
-			lines = append(lines, handoffCardLine(event, publicURL))
+			lines = append(lines, handoffCardLine(event, publicURL, lang))
 		}
 		b.WriteString("\n  " + strings.Join(lines, "\n  "))
 		if recipient.HandoffsMore > 0 {
-			fmt.Fprintf(&b, "\n  他に未返事が %d 件あります", recipient.HandoffsMore)
+			fmt.Fprintf(&b, "\n  "+moreLabel, recipient.HandoffsMore)
 		}
 	} else {
 		b.WriteString("\n")

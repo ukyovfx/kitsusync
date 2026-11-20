@@ -41,6 +41,15 @@ func handoffTiming(db *gorm.DB, productionID string) string {
 	return settings.Config.NotifyTiming
 }
 
+// productionLanguage resolves the Production's notification language
+// ("ja"/"en"); unknown productions fall back to Japanese.
+func productionLanguage(db *gorm.DB, kitsuProjectID string) string {
+	if project := model.FindProjectByKitsuID(db, kitsuProjectID); project != nil {
+		return discord.NotificationLanguage(project.Language)
+	}
+	return "ja"
+}
+
 // handoffImmediate reports whether a handoff with these recipients is sent now
 // rather than kept for the morning digest.
 func handoffImmediate(timing string, fallbackUsed string, recipientIDs []string) bool {
@@ -72,6 +81,7 @@ func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
 	}
 	publicURL := setup.PublicKitsuURL(db)
 	timings := map[string]string{}
+	languages := map[string]string{}
 	sent := 0
 	var errs []string
 	for _, event := range pending {
@@ -79,6 +89,11 @@ func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
 		if !known {
 			timing = handoffTiming(db, event.ProductionID)
 			timings[event.ProductionID] = timing
+		}
+		language, known := languages[event.ProductionID]
+		if !known {
+			language = productionLanguage(db, event.ProductionID)
+			languages[event.ProductionID] = language
 		}
 		recipients := handoffRecipients(db, event)
 		if !handoffImmediate(timing, event.FallbackUsed, recipients) {
@@ -95,8 +110,8 @@ func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
 			continue
 		}
 		for _, recipient := range recipients {
-			content := renderHandoffCard(publicURL, event)
-			if err := sendDigestDirectMessage(botToken, recipient, content, handoffReplyRows([]model.HandoffEvent{event})); err != nil {
+			content := renderHandoffCard(publicURL, event, language)
+			if err := sendDigestDirectMessage(botToken, recipient, content, handoffReplyRows([]model.HandoffEvent{event}, language)); err != nil {
 				errs = append(errs, fmt.Sprintf("%d/%s: %v", event.ID, recipient, err))
 			}
 		}
@@ -114,9 +129,14 @@ func handoffRecipients(db *gorm.DB, event model.HandoffEvent) []string {
 }
 
 // handoffCardLine reads as one row of the DM and, with a task route, links the
-// receiving task in Kitsu.
-func handoffCardLine(event model.HandoffEvent, taskURL string) string {
-	line := fmt.Sprintf("%s: %s ← %s の %s", event.EntityName, handoffProduct(event), event.SourceAuthorName, event.SourceTaskTypeName)
+// receiving task in Kitsu. lang is the Production's notification language.
+func handoffCardLine(event model.HandoffEvent, taskURL, lang string) string {
+	var line string
+	if discord.NotificationLanguage(lang) == "en" {
+		line = fmt.Sprintf("%s: %s ← from %s's %s", event.EntityName, handoffProduct(event), event.SourceAuthorName, event.SourceTaskTypeName)
+	} else {
+		line = fmt.Sprintf("%s: %s ← %s の %s", event.EntityName, handoffProduct(event), event.SourceAuthorName, event.SourceTaskTypeName)
+	}
 	if taskURL != "" {
 		line += " " + handoffTaskURL(taskURL, event)
 	}
@@ -128,14 +148,27 @@ func handoffProduct(event model.HandoffEvent) string {
 }
 
 // renderHandoffCard is the immediate DM for one handoff, with the receiver's
-// reply buttons under it.
-func renderHandoffCard(taskURL string, event model.HandoffEvent) string {
+// reply buttons under it. lang is the Production's notification language.
+func renderHandoffCard(taskURL string, event model.HandoffEvent, lang string) string {
+	en := discord.NotificationLanguage(lang) == "en"
 	var b strings.Builder
-	fmt.Fprintf(&b, "🔁 素材の受け渡し — %s / %s\n", strings.TrimSpace(event.EntityName), event.ProductName)
-	if version := strings.TrimSpace(event.ProductVersion); version != "" {
-		fmt.Fprintf(&b, "版: %s\n", version)
+	if en {
+		fmt.Fprintf(&b, "🔁 Asset handoff — %s / %s\n", strings.TrimSpace(event.EntityName), event.ProductName)
+	} else {
+		fmt.Fprintf(&b, "🔁 素材の受け渡し — %s / %s\n", strings.TrimSpace(event.EntityName), event.ProductName)
 	}
-	fmt.Fprintf(&b, "%s の %s から届きました。\n", event.SourceAuthorName, event.SourceTaskTypeName)
+	if version := strings.TrimSpace(event.ProductVersion); version != "" {
+		if en {
+			fmt.Fprintf(&b, "Version: %s\n", version)
+		} else {
+			fmt.Fprintf(&b, "版: %s\n", version)
+		}
+	}
+	if en {
+		fmt.Fprintf(&b, "Received from %s's %s.\n", event.SourceAuthorName, event.SourceTaskTypeName)
+	} else {
+		fmt.Fprintf(&b, "%s の %s から届きました。\n", event.SourceAuthorName, event.SourceTaskTypeName)
+	}
 	if taskURL != "" {
 		fmt.Fprintf(&b, "Kitsu: %s\n", handoffTaskURL(taskURL, event))
 	}
@@ -143,16 +176,21 @@ func renderHandoffCard(taskURL string, event model.HandoffEvent) string {
 }
 
 // handoffReplyRows is the receiver's reply for one handoff: one row with OK and
-// リテイク. Discords' five-rows-per-message limit therefore caps a digest card
+// Retake. Discords' five-rows-per-message limit therefore caps a digest card
 // at handoffDigestMaxItems handoffs. Without a CustomID the buttons are inert,
 // which is what the bot sends while nothing listens for button presses yet.
-func handoffReplyRows(events []model.HandoffEvent) []discord.ActionRow {
+// lang localizes the Retake label.
+func handoffReplyRows(events []model.HandoffEvent, lang string) []discord.ActionRow {
+	retake := "リテイク"
+	if discord.NotificationLanguage(lang) == "en" {
+		retake = "Retake"
+	}
 	rows := make([]discord.ActionRow, 0, len(events))
 	for _, event := range events {
 		id := event.CommentID
 		rows = append(rows, discord.ActionRow{Type: 1, Components: []discord.Button{
 			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id)},
-			{Type: 2, Style: discord.ButtonStyleDanger, Label: "リテイク", CustomID: handoffReplyCustomID("retake", id)},
+			{Type: 2, Style: discord.ButtonStyleDanger, Label: retake, CustomID: handoffReplyCustomID("retake", id)},
 		}})
 	}
 	return rows

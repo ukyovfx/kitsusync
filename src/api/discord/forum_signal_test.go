@@ -120,7 +120,7 @@ func TestRenderForumSignalCardFallsBackToLegacyTitle(t *testing.T) {
 }
 
 func TestForumFlapWarningHasNoMentions(t *testing.T) {
-	signal := ForumFlapWarning("https://kitsu.example/t/1", 4, 12*time.Minute)
+	signal := ForumFlapWarning("https://kitsu.example/t/1", 4, 12*time.Minute, "ja")
 	for _, want := range []string{"⚠️", "4 回", "12分", "タグは最新の状態を表しています。", "https://kitsu.example/t/1"} {
 		if !strings.Contains(signal.Content, want) {
 			t.Errorf("content %q missing %q", signal.Content, want)
