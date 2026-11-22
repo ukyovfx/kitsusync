@@ -247,7 +247,8 @@ func ForumFirstMessage(card Payload) ForumThreadMessage {
 	}
 }
 
-// ForumSignalMessage builds the request body for a signal message.
+// ForumSignalMessage builds the request body for a signal message. No flags:
+// SUPPRESS_EMBEDS would hide the whole signal, which lives in the embed.
 func ForumSignalMessage(signal ForumSignal, nonce string) ForumMessageCreate {
 	return ForumMessageCreate{
 		Content: signal.Content,
@@ -257,7 +258,6 @@ func ForumSignalMessage(signal ForumSignal, nonce string) ForumMessageCreate {
 			Users: signal.AllowedUserIDs,
 			Roles: signal.AllowedRoleIDs,
 		},
-		Flags:        4,
 		Nonce:        nonce,
 		EnforceNonce: nonce != "",
 	}

@@ -133,3 +133,28 @@ func TestForumFlapWarningHasNoMentions(t *testing.T) {
 		t.Errorf("warning content must not contain mentions: %q", signal.Content)
 	}
 }
+
+func TestForumSignalMessageDoesNotSuppressEmbeds(t *testing.T) {
+	// Regression: ForumSignalMessage used to send Flags: 4, Discord's
+	// SUPPRESS_EMBEDS, which hid the whole signal (it lives in the embed)
+	// and left publish traces completely blank.
+	signal := RenderForumSignalCard(ForumCardInput{
+		Intent:      "publish",
+		TaskType:    "Compositing",
+		EntityType:  "Shot",
+		ParentName:  "sq01",
+		EntityName:  "sh002",
+		PublishLine: "📦 imageReference（image）3 が publish されました",
+		StatusName:  "waiting for approval",
+	})
+	body := ForumSignalMessage(signal, "kitsusync-1")
+	if body.Flags&4 != 0 {
+		t.Errorf("flags = %d, SUPPRESS_EMBEDS (4) must not be set", body.Flags)
+	}
+	if len(body.Embeds) != 1 {
+		t.Fatalf("embeds = %d, want 1", len(body.Embeds))
+	}
+	if !strings.Contains(body.Embeds[0].Description, "📦 imageReference（image）3 が publish されました") {
+		t.Errorf("publish line missing from embed description: %q", body.Embeds[0].Description)
+	}
+}
