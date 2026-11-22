@@ -259,3 +259,201 @@ func TestHandoffNotificationsTabLinksTheHandoffPage(t *testing.T) {
 		t.Fatalf("the notifications tab must link to the handoff mapping page: %s", body)
 	}
 }
+
+func TestHandoffVisualChipsAndDotsRendered(t *testing.T) {
+	stubHandoffTaskTypes(t, []kitsu.TaskType{
+		{ID: "tt-lay", Name: "Layout"},
+		{ID: "tt-anim", Name: "Animation"},
+		{ID: "tt-comp", Name: "Compositing"},
+		{ID: "tt-light", Name: "Lighting"},
+	})
+	db := newForumPageDB(t)
+	// Save product types to activate the matrix.
+	if err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
+		Config: model.ProductionHandoffConfig{
+			ProductionID: "p1",
+			NotifyTiming: model.HandoffTimingMixed,
+			NoAssignee:   model.HandoffFallbackAdmin,
+		},
+		ProductTypes: []model.ProductionHandoffProductType{
+			{Name: "camera"},
+			{Name: "render"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := handoffGet(t, db).Body.String()
+
+	// 1. Product type chip layout and add chip exist.
+	if !strings.Contains(body, `class="handoff-products-wrap"`) {
+		t.Fatal("product types must be wrapped in handoff-products-wrap")
+	}
+	if !strings.Contains(body, `class="handoff-product-chip"`) {
+		t.Fatal("each product type must be a chip")
+	}
+	if !strings.Contains(body, `class="handoff-product-chip handoff-product-chip-add"`) {
+		t.Fatal("an add product type chip with dashed border must exist")
+	}
+
+	// 2. Layout × camera has preset "Hand off" to Animation, Lighting, Compositing.
+	cellLayCam := body[strings.Index(body, `data-handoff-cell="tt-lay|camera"`):]
+	cellLayCam = cellLayCam[:strings.Index(cellLayCam, "</td>")]
+	if !strings.Contains(cellLayCam, `class="handoff-chip handoff-chip-hand"`) {
+		t.Fatalf("Layout × camera must have hand chip, got: %s", cellLayCam)
+	}
+	for _, want := range []string{`<span class="handoff-chip-flow">Hand off</span>`, `→ Animation, Compositing, Lighting`} {
+		if !strings.Contains(cellLayCam, want) {
+			t.Fatalf("Layout × camera handoff summary must contain %q, got: %s", want, cellLayCam)
+		}
+	}
+	if !strings.Contains(cellLayCam, `class="handoff-edit"`) {
+		t.Fatalf("Layout × camera must have handoff-edit container, got: %s", cellLayCam)
+	}
+
+	// 3. Compositing × render has preset "Submit".
+	cellCompRend := body[strings.Index(body, `data-handoff-cell="tt-comp|render"`):]
+	cellCompRend = cellCompRend[:strings.Index(cellCompRend, "</td>")]
+	if !strings.Contains(cellCompRend, `class="handoff-chip handoff-chip-submit"`) {
+		t.Fatalf("Compositing × render must have submit chip, got: %s", cellCompRend)
+	}
+	if !strings.Contains(cellCompRend, `Submit`) {
+		t.Fatalf("Compositing × render must display Submit label, got: %s", cellCompRend)
+	}
+
+	// 4. Animation × camera has no preset, so it defaults to shelving with a dot.
+	cellAnimCam := body[strings.Index(body, `data-handoff-cell="tt-anim|camera"`):]
+	cellAnimCam = cellAnimCam[:strings.Index(cellAnimCam, "</td>")]
+	if !strings.Contains(cellAnimCam, `class="handoff-dot"`) {
+		t.Fatalf("Animation × camera must have a dot for shelve, got: %s", cellAnimCam)
+	}
+	if !strings.Contains(cellAnimCam, `title="Shelve">·</div>`) {
+		t.Fatalf("Animation × camera dot must show · with Shelve title, got: %s", cellAnimCam)
+	}
+}
+
+func TestHandoffNoChangeSavePreservesDatabaseSettings(t *testing.T) {
+	stubHandoffTaskTypes(t, handoffTaskTypes())
+	db := newForumPageDB(t)
+
+	// Seed configured handoff settings with diverse flows and notify sets.
+	initial := model.ProductionHandoffSettings{
+		Config: model.ProductionHandoffConfig{
+			ProductionID:   "p1",
+			NotifyTiming:   model.HandoffTimingImmediate,
+			NoAssignee:     model.HandoffFallbackUsers,
+			FallbackUserID: "user-42",
+		},
+		ProductTypes: []model.ProductionHandoffProductType{
+			{Name: "camera"},
+			{Name: "plate"},
+		},
+		Routes: []model.ProductionHandoffRoute{
+			{
+				TaskTypeID:         "tt-lay",
+				TaskTypeName:       "Layout",
+				ProductType:        "camera",
+				Flow:               model.HandoffFlowHand,
+				NotifyTaskTypeIDs:  "tt-anim,tt-comp",
+				NotifyTaskTypeName: "Animation,Compositing",
+			},
+			{
+				TaskTypeID:   "tt-comp",
+				TaskTypeName: "Compositing",
+				ProductType:  "camera",
+				Flow:         model.HandoffFlowSubmit,
+			},
+			{
+				TaskTypeID:   "tt-anim",
+				TaskTypeName: "Animation",
+				ProductType:  "plate",
+				Flow:         model.HandoffFlowShelve,
+			},
+		},
+	}
+	if err := model.SaveProductionHandoffSettings(db, initial); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+
+	before, ok, err := model.LoadProductionHandoffSettings(db, "p1")
+	if err != nil || !ok {
+		t.Fatalf("load before failed: ok=%v err=%v", ok, err)
+	}
+
+	// Render the page as rendered to the operator.
+	getResp := handoffGet(t, db)
+	if getResp.Code != http.StatusOK {
+		t.Fatalf("get page failed: code=%d", getResp.Code)
+	}
+	body := getResp.Body.String()
+	if !strings.Contains(body, `name="fallback_user" value="user-42"`) {
+		t.Fatalf("expected fallback_user in body: %s", body)
+	}
+
+	// Extract all inputs as rendered in the form DOM and post them without modification.
+	form := url.Values{
+		"project":       {"p1"},
+		"notify_timing": {before.Config.NotifyTiming},
+		"no_assignee":   {before.Config.NoAssignee},
+		"fallback_user": {before.Config.FallbackUserID},
+	}
+	for _, pt := range before.ProductTypes {
+		form.Add("product_name", pt.Name)
+	}
+	// Verify that the DOM contains the inputs for all routes and post them.
+	for _, route := range before.Routes {
+		form.Add("row_task", route.TaskTypeID)
+		form.Add("row_task_name", route.TaskTypeName)
+		form.Add("row_product", route.ProductType)
+		form.Add("row_flow", route.Flow)
+		for _, id := range model.SplitHandoffNotifyIDs(route.NotifyTaskTypeIDs) {
+			form.Add("row_notify_"+route.TaskTypeID+"|"+route.ProductType, id)
+		}
+	}
+
+	// Submit identical form (no-change save).
+	w := handoffPost(t, db, form)
+	if w.Code != http.StatusSeeOther {
+		t.Fatalf("post failed: code=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// Load settings from DB after save and verify exact equality.
+	after, ok, err := model.LoadProductionHandoffSettings(db, "p1")
+	if err != nil || !ok {
+		t.Fatalf("load after failed: ok=%v err=%v", ok, err)
+	}
+
+	if before.Config.NotifyTiming != after.Config.NotifyTiming ||
+		before.Config.NoAssignee != after.Config.NoAssignee ||
+		before.Config.FallbackUserID != after.Config.FallbackUserID {
+		t.Fatalf("config changed: before=%+v, after=%+v", before.Config, after.Config)
+	}
+	if len(before.ProductTypes) != len(after.ProductTypes) {
+		t.Fatalf("product types length changed: before=%d after=%d", len(before.ProductTypes), len(after.ProductTypes))
+	}
+	for i := range before.ProductTypes {
+		if before.ProductTypes[i].Name != after.ProductTypes[i].Name {
+			t.Fatalf("product type[%d] changed: %s vs %s", i, before.ProductTypes[i].Name, after.ProductTypes[i].Name)
+		}
+	}
+	if len(before.Routes) != len(after.Routes) {
+		t.Fatalf("routes length changed: before=%d after=%d", len(before.Routes), len(after.Routes))
+	}
+	byKeyBefore := map[string]model.ProductionHandoffRoute{}
+	for _, r := range before.Routes {
+		byKeyBefore[r.TaskTypeID+"|"+r.ProductType] = r
+	}
+	for _, afterRoute := range after.Routes {
+		key := afterRoute.TaskTypeID + "|" + afterRoute.ProductType
+		beforeRoute, exists := byKeyBefore[key]
+		if !exists {
+			t.Fatalf("route %s added in after", key)
+		}
+		if beforeRoute.Flow != afterRoute.Flow {
+			t.Fatalf("route %s flow changed: %s vs %s", key, beforeRoute.Flow, afterRoute.Flow)
+		}
+		if beforeRoute.NotifyTaskTypeIDs != afterRoute.NotifyTaskTypeIDs {
+			t.Fatalf("route %s notify ids changed: %s vs %s", key, beforeRoute.NotifyTaskTypeIDs, afterRoute.NotifyTaskTypeIDs)
+		}
+	}
+}

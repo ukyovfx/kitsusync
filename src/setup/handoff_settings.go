@@ -355,13 +355,13 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 
 	var productInputs strings.Builder
 	for _, product := range products {
-		productInputs.WriteString(`<li class="field-row"><input name="product_name" value="` + esc(product.name) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `">`)
+		productInputs.WriteString(`<div class="handoff-product-chip"><input class="handoff-product-input" name="product_name" value="` + esc(product.name) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `">`)
 		if unclassified[strings.ToLower(product.name)] {
 			productInputs.WriteString(` ` + handoffUnclassifiedBadge(lang) + `<input type="hidden" name="product_unclassified" value="` + esc(product.name) + `">`)
 		}
-		productInputs.WriteString(`</li>`)
+		productInputs.WriteString(`</div>`)
 	}
-	productInputs.WriteString(`<li class="field-row"><input name="product_name" value="" placeholder="` + esc(t(lang, "製品タイプ名を追加", "Add a product type")) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `"></li>`)
+	productInputs.WriteString(`<div class="handoff-product-chip handoff-product-chip-add"><input class="handoff-product-input handoff-product-input-add" name="product_name" value="" placeholder="` + esc(t(lang, "+ 製品タイプ名を追加", "+ Add a product type")) + `" aria-label="` + esc(t(lang, "製品タイプ名", "Product type name")) + `"></div>`)
 
 	timingOptions := make([][2]string, 0, 3)
 	for _, timing := range []string{model.HandoffTimingImmediate, model.HandoffTimingDigest, model.HandoffTimingMixed} {
@@ -376,7 +376,7 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "製品タイプ", "Product types")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "この製作で使う製品タイプの名前を登録します。行は「タスクタイプ × 製品タイプ」で自動的に並びます。", "Register the product type names this Production uses. The rows are arranged automatically as Task Type × product type.")) + `</p>` +
-		`<ul class="field-list">` + productInputs.String() + `</ul></section>` +
+		`<div class="handoff-products-wrap">` + productInputs.String() + `</div></section>` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "受け渡しの対応表", "Handoff mapping")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "行がタスクタイプ、列が製品タイプです。セルごとに、流れと通知先のタスクタイプを選びます。プリセットは一致する行にだけ入り、それ以外は棚置きです。", "Rows are Task Types and columns are product types. In each cell choose the flow and the Task Types to notify. The preset fills only matching rows; the rest default to shelving.")) + `</p>` +
 		matrixHTML + `</section>` +
@@ -394,7 +394,7 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 	if presetsApplied > 0 {
 		notices.WriteString(`<p class="field-help" role="status">` + esc(fmt.Sprintf(t(lang, "プリセットを%d行に適用しました。保存すると確定します。", "The preset is applied to %d rows. Save to keep it."), presetsApplied)) + `</p>`)
 	}
-	body := `<div class="section-stack">` + headline + `</section>` + errorHTML + notices.String() + form + `</div>`
+	body := `<div class="section-stack">` + headline + `</section>` + errorHTML + notices.String() + form + handoffMatrixScript + `</div>`
 	return adminPage(lang, t(lang, "受け渡しの対応表", "Handoff mapping"), r, body)
 }
 
@@ -441,16 +441,198 @@ func handoffRouteCell(lang string, taskType kitsu.TaskType, product string, rout
 		chosenNames = append(chosenNames, id)
 		boxes.WriteString(`<label class="checkbox-label"><input type="checkbox" checked name="` + esc(name) + `" value="` + esc(id) + `"> ` + esc(id) + `</label>`)
 	}
-	summary := t(lang, "通知先なし", "No notification")
-	if len(chosenNames) > 0 {
-		summary = t(lang, "通知先: ", "Notify: ") + strings.Join(chosenNames, ", ")
-	}
-	return `<td class="handoff-cell" data-handoff-cell="` + esc(taskType.ID+"|"+product) + `" data-flow="` + esc(route.Flow) + `">` +
+	viewHTML, viewTitle := handoffCellView(lang, route.Flow, chosenNames)
+
+	editHTML := `<div class="handoff-edit" role="dialog" aria-modal="false" aria-label="` + esc(label) + `">` +
+		`<div class="handoff-edit-header">` +
+		`<span class="handoff-edit-title">` + esc(label) + `</span>` +
+		`<button type="button" class="handoff-edit-close" aria-label="` + esc(t(lang, "閉じる", "Close")) + `">×</button>` +
+		`</div>` +
+		`<div class="handoff-edit-field">` +
+		`<label class="field-label-sm">` + esc(t(lang, "流れ", "Flow")) + `</label>` +
+		flow +
+		`</div>` +
+		`<div class="handoff-edit-field handoff-notify-group">` +
+		`<label class="field-label-sm">` + esc(t(lang, "通知先", "Notify")) + `</label>` +
+		`<div class="handoff-notify-list">` + boxes.String() + `</div>` +
+		`</div>` +
+		`<div class="handoff-edit-footer">` +
+		`<button type="button" class="btn btn-sm handoff-edit-done">` + esc(t(lang, "完了", "Done")) + `</button>` +
+		`</div>` +
+		`</div>`
+
+	return `<td class="handoff-cell" data-handoff-cell="` + esc(taskType.ID+"|"+product) + `" data-cell-label="` + esc(label) + `" data-flow="` + esc(route.Flow) + `">` +
 		`<input type="hidden" name="row_task" value="` + esc(taskType.ID) + `">` +
 		`<input type="hidden" name="row_task_name" value="` + esc(taskType.Name) + `">` +
 		`<input type="hidden" name="row_product" value="` + esc(product) + `">` +
-		flow + `<details class="handoff-notify"><summary title="` + esc(summary) + `">` + esc(summary) + `</summary><div>` + boxes.String() + `</div></details></td>`
+		`<div class="handoff-view" role="button" tabindex="0" aria-haspopup="dialog" aria-expanded="false" aria-label="` + esc(label+" — "+viewTitle) + `">` +
+		viewHTML +
+		`</div>` +
+		editHTML +
+		`</td>`
 }
+
+func handoffCellView(lang string, flow string, chosenNames []string) (string, string) {
+	switch flow {
+	case model.HandoffFlowHand:
+		flowLabel := t(lang, "受け渡し", "Hand off")
+		title := flowLabel
+		targets := ""
+		if len(chosenNames) > 0 {
+			targets = " → " + strings.Join(chosenNames, ", ")
+			title += targets
+		}
+		// The flow word never truncates; the destination list ellipsizes when the
+		// column is narrow, and the title always carries the full list.
+		return `<div class="handoff-chip handoff-chip-hand" title="` + esc(title) + `">` +
+			`<span class="handoff-chip-flow">` + esc(flowLabel) + `</span>` +
+			`<span class="handoff-chip-targets">` + esc(targets) + `</span></div>`, title
+	case model.HandoffFlowSubmit:
+		text := t(lang, "提出", "Submit")
+		return `<div class="handoff-chip handoff-chip-submit" title="` + esc(text) + `"><span class="handoff-chip-flow">` + esc(text) + `</span></div>`, text
+	case model.HandoffFlowShelve:
+		fallthrough
+	default:
+		title := t(lang, "棚置き", "Shelve")
+		return `<div class="handoff-dot" title="` + esc(title) + `">·</div>`, title
+	}
+}
+
+const handoffMatrixScript = `<script>
+(function() {
+  var matrix = document.querySelector('.handoff-matrix');
+  if (!matrix) return;
+
+  var currentCell = null;
+
+  function closeEditing() {
+    if (!currentCell) return;
+    currentCell.classList.remove('is-editing');
+    var view = currentCell.querySelector('.handoff-view');
+    if (view) view.setAttribute('aria-expanded', 'false');
+    currentCell = null;
+  }
+
+  function openEditing(cell) {
+    if (currentCell === cell) return;
+    closeEditing();
+    cell.classList.add('is-editing');
+    currentCell = cell;
+    var view = cell.querySelector('.handoff-view');
+    if (view) view.setAttribute('aria-expanded', 'true');
+    var select = cell.querySelector('select[name="row_flow"]');
+    if (select) select.focus();
+  }
+
+  function updateCellView(cell) {
+    var select = cell.querySelector('select[name="row_flow"]');
+    if (!select) return;
+    var flow = select.value;
+    cell.setAttribute('data-flow', flow);
+
+    var checkboxes = cell.querySelectorAll('input[type="checkbox"]:checked');
+    var names = [];
+    checkboxes.forEach(function(cb) {
+      var label = cb.closest('label');
+      if (label) {
+        names.push(label.textContent.trim());
+      }
+    });
+
+    var view = cell.querySelector('.handoff-view');
+    if (!view) return;
+
+    var lang = document.documentElement.lang || 'ja';
+    var isJa = !lang.startsWith('en');
+
+    var title = '';
+    var html = '';
+    var esc = function(value) {
+      return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    };
+
+    if (flow === 'hand') {
+      var flowLabel = isJa ? '受け渡し' : 'Hand off';
+      var targets = names.length > 0 ? ' → ' + names.join(', ') : '';
+      title = flowLabel + targets;
+      html = '<div class="handoff-chip handoff-chip-hand" title="' + esc(title) + '">' +
+        '<span class="handoff-chip-flow">' + esc(flowLabel) + '</span>' +
+        '<span class="handoff-chip-targets">' + esc(targets) + '</span></div>';
+    } else if (flow === 'submit') {
+      title = isJa ? '提出' : 'Submit';
+      html = '<div class="handoff-chip handoff-chip-submit" title="' + esc(title) + '"><span class="handoff-chip-flow">' + esc(title) + '</span></div>';
+    } else {
+      title = isJa ? '棚置き' : 'Shelve';
+      html = '<div class="handoff-dot" title="' + esc(title) + '">·</div>';
+    }
+
+    view.innerHTML = html;
+    var cellLabel = cell.getAttribute('data-cell-label') || '';
+    view.setAttribute('aria-label', cellLabel + ' — ' + title);
+  }
+
+  matrix.addEventListener('click', function(e) {
+    var closeBtn = e.target.closest('.handoff-edit-close');
+    var doneBtn = e.target.closest('.handoff-edit-done');
+    if (closeBtn || doneBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      var cell = e.target.closest('.handoff-cell');
+      closeEditing();
+      if (cell) {
+        var view = cell.querySelector('.handoff-view');
+        if (view) view.focus();
+      }
+      return;
+    }
+
+    var editBox = e.target.closest('.handoff-edit');
+    if (editBox) {
+      return;
+    }
+
+    var cell = e.target.closest('.handoff-cell');
+    if (cell) {
+      e.preventDefault();
+      openEditing(cell);
+    }
+  });
+
+  matrix.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      if (currentCell) {
+        var cell = currentCell;
+        closeEditing();
+        var view = cell.querySelector('.handoff-view');
+        if (view) view.focus();
+      }
+      return;
+    }
+    if (e.key === 'Enter' || e.key === ' ') {
+      var view = e.target.closest('.handoff-view');
+      if (view && !e.target.closest('.handoff-edit')) {
+        e.preventDefault();
+        var cell = view.closest('.handoff-cell');
+        if (cell) openEditing(cell);
+      }
+    }
+  });
+
+  matrix.addEventListener('change', function(e) {
+    var cell = e.target.closest('.handoff-cell');
+    if (cell) {
+      updateCellView(cell);
+    }
+  });
+
+  document.addEventListener('click', function(e) {
+    if (!currentCell) return;
+    if (!currentCell.contains(e.target)) {
+      closeEditing();
+    }
+  });
+})();
+</script>`
 
 func handoffContains(list []string, want string) bool {
 	for _, item := range list {
