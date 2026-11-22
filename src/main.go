@@ -1319,7 +1319,7 @@ func main() {
 			return botToken
 		})))
 		mux.HandleFunc(prefix+"/admin/audit", setup.RequireSession(setup.AuditLogHandler(db)))
-		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db)))
+		mux.HandleFunc(prefix+"/admin/health", setup.RequireSession(setup.HealthHandler(db, conf.PollInterval())))
 	}
 	registerAdminRoutes("")
 	registerAdminRoutes("/bot")

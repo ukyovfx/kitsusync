@@ -1712,7 +1712,7 @@ type pipelineHealthItem struct {
 	label, value, class, explanation, details, detailsLabel, action, actionLabel string
 }
 
-func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
+func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInterval time.Duration) {
 	lang := currentLang(r)
 	readiness := sharedBotRuntimeReadiness(db, model.GetSetting(db, "kitsu.hostname"), storedRuntimeDiscordBotToken(db))
 	readinessView := readinessViewFor(lang, r, readiness)
@@ -1748,7 +1748,9 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		issuesSection = `<section class="section-card glass system-issues" aria-labelledby="system-issues-title"><div class="page-heading"><div><h2 id="system-issues-title">` + esc(t(lang, "最近のシステム問題", "Recent system issues")) + `</h2><p class="hint">` + esc(t(lang, "直近の失敗と復旧記録を表示します。", "Recent failure and recovery records.")) + `</p></div></div>` + issues + `</section>`
 	}
 	visibilitySection := renderProductionVisibilitySection(lang, r, db)
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + issuesSection + visibilitySection + `</div>`
+	livenessSection := renderLivenessSection(lang, stats, pollInterval)
+	handoffSection := renderHandoffAttentionSection(lang, db)
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + issuesSection + visibilitySection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)

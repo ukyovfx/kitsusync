@@ -275,7 +275,7 @@ func TestSystemStatusUsesOneAlignedReadinessGrid(t *testing.T) {
 	t.Setenv("KITSUSYNC_LOCAL_PROFILE", "")
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
+	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db, time.Minute)
 	body := w.Body.String()
 	for _, label := range []string{"Kitsu API", "Event monitoring", "Connection / routing integrity", "Notification processing", "Internal data", "Discord API"} {
 		if !strings.Contains(body, ">"+label+"<") {
@@ -308,7 +308,7 @@ func TestSystemStatusUsesOneAlignedReadinessGrid(t *testing.T) {
 func TestSystemStatusPipelineHealthUsesSafeUnavailableMetrics(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=ja", nil), db)
+	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=ja", nil), db, time.Minute)
 	body := w.Body.String()
 	for _, want := range []string{"Kitsu API", "イベント監視", "接続・ルーティング整合性", "Discord API", "通知処理", "内部データ", "未確認"} {
 		if !strings.Contains(body, want) {
@@ -976,7 +976,7 @@ func TestSystemStatusRendersRecentIssuesOnlyWhenPresent(t *testing.T) {
 	db := newIAViewDB(t)
 	model.WriteAuditLog(db, model.AuditLog{EntityName: "notification", Success: false, ErrorMessage: "safe failure summary"})
 	w := httptest.NewRecorder()
-	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
+	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db, time.Minute)
 	body := w.Body.String()
 	if !strings.Contains(body, "Recent system issues") || !strings.Contains(body, "safe failure summary") {
 		t.Fatal("non-empty Recent system issues section was not rendered")
@@ -1556,7 +1556,7 @@ func TestMobileNavigationUsesOnePanelAndRestrainedRows(t *testing.T) {
 func TestSystemStatusUsesSelectiveSafeDetailsAndRefreshSnapshot(t *testing.T) {
 	db := newIAViewDB(t)
 	w := httptest.NewRecorder()
-	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db)
+	renderIAHealth(w, httptest.NewRequest("GET", "/bot/admin/health?lang=en", nil), db, time.Minute)
 	body := w.Body.String()
 	if strings.Count(body, `<details class="pipeline-health-diagnostic">`) < 3 || strings.Contains(body, `class="pipeline-health-details-toggle"`) || strings.Contains(body, `>Details<`) {
 		t.Fatalf("system status operational details are not selectively disclosed")

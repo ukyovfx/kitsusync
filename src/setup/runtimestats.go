@@ -32,6 +32,9 @@ type RuntimeStats struct {
 	SendSuccessTotal int64
 	SendFailureTotal int64
 	LastSendTime     time.Time
+	// LastSendSuccessTime ignores failed attempts, so the system status can
+	// show the last time Discord actually accepted a message.
+	LastSendSuccessTime time.Time
 
 	webhookFailures map[string]int64
 	webhookLastErr  map[string]string
@@ -184,6 +187,9 @@ func (s *RuntimeStats) RecordSend(sentCount, failedCount int, webhookURL, errSum
 	if sentCount > 0 || failedCount > 0 {
 		s.LastSendTime = time.Now()
 	}
+	if sentCount > 0 {
+		s.LastSendSuccessTime = time.Now()
+	}
 	if webhookURL == "" {
 		return
 	}
@@ -258,7 +264,9 @@ type RuntimeSnapshot struct {
 	SendSuccessTotal  int64
 	SendFailureTotal  int64
 	LastSendTime      time.Time
-	APIObservations   map[string][]APIObservation
+	// LastSendSuccessTime is the last send Discord accepted.
+	LastSendSuccessTime time.Time
+	APIObservations     map[string][]APIObservation
 }
 
 // Snapshot returns a safe copy of current metrics.
@@ -279,6 +287,7 @@ func (s *RuntimeStats) Snapshot() RuntimeSnapshot {
 		SendSuccessTotal:  s.SendSuccessTotal,
 		SendFailureTotal:  s.SendFailureTotal,
 		LastSendTime:      s.LastSendTime,
+		LastSendSuccessTime: s.LastSendSuccessTime,
 		APIObservations:   observations,
 	}
 }
