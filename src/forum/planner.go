@@ -240,6 +240,10 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 	if statusChanged {
 		p.afterStatusChange(input, existing)
 	}
+	// The stale-review check runs on every poll, not only on transitions:
+	// a task that sits in WIP and never changes again is exactly the case
+	// it exists for.
+	p.checkReviewStale(input, existing)
 	return result, nil
 }
 
@@ -274,26 +278,33 @@ func mentionsExcept(mentions, excluded []string) []string {
 }
 
 // afterStatusChange runs the episode side effects of a transition: a
-// receiving task that starts work acknowledges its open handoffs (fix C-6),
-// and a task sitting in WIP with fresh activity is surfaced as possibly
-// review-forgotten (fix C-2).
+// receiving task that starts work acknowledges its open handoffs (fix C-6).
 func (p Planner) afterStatusChange(input TaskInput, existing model.ForumTask) {
 	if p.NatureForStatus(input.StatusID) == model.StatusNatureWIP {
 		if _, err := model.ResolveHandoffEpisodesForReceiverTask(p.DB, input.TaskID); err != nil {
 			slog.Warn("forum: could not auto-resolve handoffs for the working task", "error_class", "forum_handoff_auto_resolve_failed", "task_id", input.TaskID, "err", err)
 		}
 	}
-	p.checkReviewStale(input, existing)
 }
 
-// reviewStaleDays is the C-2 threshold: a task in a WIP status for at least
-// this many days whose newest comment is newer than the moment it entered
-// WIP looks like work (or a publish) happened without the review step.
+// reviewStaleDays is the C-2 threshold: a task sitting in a WIP status for
+// at least this many days whose newest comment is newer than the moment it
+// entered WIP looks like work (or a publish) happened without the review
+// step.
 const reviewStaleDays = 3
 
+// checkReviewStale evaluates the C-2 stale-review rule for one task on
+// every poll: the dwell is the CURRENT status's, measured from the
+// ledger's status_since, so a task that entered WIP and simply stayed
+// there crosses the threshold on a later poll even though nothing changed
+// (measuring the previous status's dwell at transition time, as the first
+// implementation did, never fired for exactly those tasks). The exception
+// is raised once per episode and auto-resolves when the task leaves WIP.
 func (p Planner) checkReviewStale(input TaskInput, existing model.ForumTask) {
-	if p.NatureForStatus(input.StatusID) != model.StatusNatureWIP {
-		// Leaving WIP clears the information row by itself.
+	if p.NatureForStatus(input.StatusID) != model.StatusNatureWIP || existing.StatusID != input.StatusID {
+		// Not sitting in WIP — or it only just arrived, so the dwell of
+		// the current status has not started yet. Either way the
+		// information row clears by itself.
 		_ = model.AutoResolveAdminExceptions(p.DB, model.ExceptionReviewStale, input.TaskID)
 		return
 	}
@@ -303,6 +314,16 @@ func (p Planner) checkReviewStale(input TaskInput, existing model.ForumTask) {
 	}
 	commentAt, ok := commentCreatedAt(input.CommentDate)
 	if !ok || !commentAt.After(since) {
+		return
+	}
+	var open int64
+	if err := p.DB.Model(&model.AdminException{}).
+		Where("kind = ? AND subject_id = ? AND state = ?", model.ExceptionReviewStale, input.TaskID, model.ExceptionStateOpen).
+		Count(&open).Error; err != nil {
+		slog.Warn("forum: could not check the stale-review exception", "error_class", "forum_exception_lookup_failed", "task_id", input.TaskID, "err", err)
+		return
+	}
+	if open > 0 {
 		return
 	}
 	detail := "WIPのまま" + fmt.Sprint(reviewStaleDays) + "日以上経過し、その間にコメント（publish等）の動きがあります。レビュー出し忘れの可能性があります。"
@@ -388,7 +409,7 @@ func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, ro
 	result.Synced = true
 	// Flapping is a property of the transition, not of the role: a round trip
 	// that ends in WIP still flapped, so the check runs before the role gate.
-	if err := p.maybeWarnFlap(input, existing); err != nil {
+	if err := p.recordFlap(input, existing); err != nil {
 		return err
 	}
 	if !IsTriggerRole(input.StatusRole) {
@@ -458,9 +479,13 @@ func (p Planner) enqueueCommentPayload(input TaskInput, payload model.ForumPostM
 	return err
 }
 
-// maybeWarnFlap queues one warning per flap episode. The signal messages are
-// not suppressed: the warning only adds context.
-func (p Planner) maybeWarnFlap(input TaskInput, existing model.ForumTask) error {
+// recordFlap notes one detected flap episode in the decision log. The
+// visible warning message was abolished by the owner (2026-11-24): flap
+// detection stays, and the executor's round-trip and coalescing rules
+// still keep a flapping task from pinging repeatedly, but nothing is
+// posted to the thread for flapping alone — the record lives in the
+// decision log instead.
+func (p Planner) recordFlap(input TaskInput, existing model.ForumTask) error {
 	episode, transitions, span, flapping, err := p.flapEpisode(input.TaskID, existing.StatusID, input.StatusID)
 	if err != nil || !flapping {
 		return err
@@ -470,19 +495,18 @@ func (p Planner) maybeWarnFlap(input TaskInput, existing model.ForumTask) error 
 	if err != nil || warned {
 		return err
 	}
-	now := p.Now
-	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
-		TaskID:    taskID,
-		Kind:      model.ForumOutboxWarnMessage,
-		DedupeKey: model.ForumWarnDedupeKey(taskID, episode),
-		Payload:   fmt.Sprintf(`{"transitions":%d,"span_seconds":%d}`, transitions, int(span.Seconds())),
-		State:     model.ForumOutboxPending,
-		NotBefore: now,
-		CreatedAt: now,
+	_ = model.RecordNotificationDecision(p.DB, model.NotificationDecision{
+		ProductionID:   p.Production,
+		TaskID:         taskID,
+		TaskTypeName:   input.TaskTypeName,
+		EntityName:     input.EntityName,
+		SignalKind:     "status",
+		RuleID:         "status.flap",
+		Facts:          model.DecisionFactsJSON(map[string]interface{}{"transitions": transitions, "span_seconds": int(span.Seconds())}),
+		Outcome:        model.DecisionOutcomeSuppressed,
+		SuppressReason: "flap_detected",
+		RefID:          input.StatusID,
 	})
-	if err != nil && !errors.Is(err, model.ErrForumOutboxDuplicate) {
-		return err
-	}
 	return model.MarkForumFlapWarned(p.DB, taskID, episode)
 }
 

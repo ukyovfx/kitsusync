@@ -10,9 +10,10 @@ import (
 	"testing"
 )
 
-// A written comment goes to the task's comments endpoint with the bot
-// bearer token, carrying the text and the task status it was written
-// against.
+// A written comment goes to the task's actions comment endpoint with the
+// bot bearer token, carrying the text (as the "comment" field) and the
+// task status it was written against. Zou 1.1.x rejects writes on the
+// data comments route with 405.
 func TestPostTaskCommentWithContextWritesTextAndStatus(t *testing.T) {
 	var gotMethod, gotPath, gotAuth string
 	var gotBody commentWriteRequest
@@ -38,13 +39,13 @@ func TestPostTaskCommentWithContextWritesTextAndStatus(t *testing.T) {
 	if comment.ID != "comment-new" {
 		t.Fatalf("comment = %+v", comment)
 	}
-	if gotMethod != http.MethodPost || gotPath != "/api/data/tasks/task-1/comments" {
+	if gotMethod != http.MethodPost || gotPath != "/api/actions/tasks/task-1/comment" {
 		t.Fatalf("request = %s %s", gotMethod, gotPath)
 	}
 	if gotAuth != "Bearer write-token" {
 		t.Fatalf("auth = %q", gotAuth)
 	}
-	if gotBody.Text != "OK — received." || gotBody.TaskStatusID != "status-1" {
+	if gotBody.Comment != "OK — received." || gotBody.TaskStatusID != "status-1" {
 		t.Fatalf("body = %+v", gotBody)
 	}
 }

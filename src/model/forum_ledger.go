@@ -29,7 +29,9 @@ const (
 	ForumOutboxCreateThread = "create_thread"
 	ForumOutboxSyncThread   = "sync_thread"
 	ForumOutboxPostMessage  = "post_message"
-	ForumOutboxWarnMessage  = "warn_message"
+	// ForumOutboxWarnMessage is the retired flap-warning kind: rows are no
+	// longer queued, and queued rows are finished without posting.
+	ForumOutboxWarnMessage = "warn_message"
 
 	// ForumArchiveDoneMinutes / ForumArchiveOtherMinutes follow the design
 	// tuning values; they are not user-configurable yet.
@@ -221,7 +223,9 @@ const (
 	ForumCommentQuoteLookback = 10 * time.Minute
 )
 
-// ForumFlapState remembers the last flap episode that was warned about.
+// ForumFlapState remembers the last flap episode that was recorded. (The
+// visible warning message was abolished in 2026-11; the record now lives
+// in the decision log.)
 type ForumFlapState struct {
 	TaskID    string `gorm:"primaryKey;size:64"`
 	EpisodeAt time.Time
@@ -659,7 +663,9 @@ func ForumCommentCoalesceKey(commentID, taskID string) string {
 	return fmt.Sprintf("msg:comment:%s:%s", commentID, taskID)
 }
 
-// ForumWarnDedupeKey builds the dedupe key for a flap warning of one episode.
+// ForumWarnDedupeKey builds the dedupe key for a flap warning of one
+// episode. Rows are no longer queued (the warning was abolished); the key
+// remains for rows written by older versions.
 func ForumWarnDedupeKey(taskID string, episode time.Time) string {
 	return fmt.Sprintf("warn:%s:%d", taskID, episode.Unix())
 }
