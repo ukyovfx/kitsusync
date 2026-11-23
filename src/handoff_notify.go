@@ -111,7 +111,8 @@ func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
 		}
 		for _, recipient := range recipients {
 			payload := discord.Payload{Content: renderHandoffCard(publicURL, event, language), Components: handoffReplyRows([]model.HandoffEvent{event}, language)}
-			if err := sendDigestDirectMessage(botToken, recipient, payload); err != nil {				errs = append(errs, fmt.Sprintf("%d/%s: %v", event.ID, recipient, err))
+			if err := sendDigestDirectMessage(botToken, recipient, payload); err != nil {
+				errs = append(errs, fmt.Sprintf("%d/%s: %v", event.ID, recipient, err))
 			}
 		}
 		sent++
@@ -176,8 +177,9 @@ func renderHandoffCard(taskURL string, event model.HandoffEvent, lang string) st
 
 // handoffReplyRows is the receiver's reply for one handoff: one row with OK and
 // Retake. Discords' five-rows-per-message limit therefore caps a digest card
-// at handoffDigestMaxItems handoffs. Without a CustomID the buttons are inert,
-// which is what the bot sends while nothing listens for button presses yet.
+// at handoffDigestMaxItems handoffs. While nothing listens for presses the
+// buttons are sent disabled: Discord rejects a non-link button that has no
+// custom_id, so inert has to mean disabled, not ID-less.
 // lang localizes the Retake label.
 func handoffReplyRows(events []model.HandoffEvent, lang string) []discord.ActionRow {
 	retake := "リテイク"
@@ -188,20 +190,20 @@ func handoffReplyRows(events []model.HandoffEvent, lang string) []discord.Action
 	for _, event := range events {
 		id := event.CommentID
 		rows = append(rows, discord.ActionRow{Type: 1, Components: []discord.Button{
-			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id)},
-			{Type: 2, Style: discord.ButtonStyleDanger, Label: retake, CustomID: handoffReplyCustomID("retake", id)},
+			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id), Disabled: !handoffRepliesWired()},
+			{Type: 2, Style: discord.ButtonStyleDanger, Label: retake, CustomID: handoffReplyCustomID("retake", id), Disabled: !handoffRepliesWired()},
 		}})
 	}
 	return rows
 }
 
-// handoffReplyCustomID names the reply of one handoff. It is empty while the
-// runtime has no Discord interaction endpoint to receive the press, so the
-// button still tells the receiver what the options are without pretending the
-// press does something. Flip handoffRepliesWired when that endpoint exists.
+// handoffReplyCustomID names the reply of one handoff. The ID is always
+// carried, even while handoffRepliesWired is false: Discord requires a
+// custom_id on every non-link button, so an unwired button is disabled
+// instead of ID-less. Flip handoffRepliesWired when the endpoint exists.
 func handoffReplyCustomID(action, commentID string) string {
-	if !handoffRepliesWired() || strings.TrimSpace(commentID) == "" {
-		return ""
+	if strings.TrimSpace(commentID) == "" {
+		commentID = "pending"
 	}
 	return "handoff:" + action + ":" + commentID
 }
