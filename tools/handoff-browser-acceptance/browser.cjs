@@ -71,6 +71,16 @@ const shot = name => path.join(outDir, name);
   if (await page.locator('input[name="st_notify_tt-render"][value="tt-render"]').count() !== 0) fail('studio Rendering offers itself as a target');
   await page.screenshot({ path: shot('01_studio_editor_seeded.png'), fullPage: true });
 
+  // The no-handoff checkbox is exclusive: checking a target clears it,
+  // and checking it clears the row's targets.
+  await openDetails(studioRow('tt-comp'));
+  const compNone = studioRow('tt-comp').locator('input[name="st_none_tt-comp"]');
+  await compNone.check();
+  if (await checked(studioRow('tt-comp'), 'st_notify_tt-comp', 'tt-anim')) fail('checking no-handoff did not clear the row targets');
+  await studioRow('tt-comp').locator('input[name="st_notify_tt-comp"][value="tt-anim"]').check();
+  if (await compNone.isChecked()) fail('checking a target did not clear the no-handoff checkbox');
+  await studioRow('tt-comp').locator('input[name="st_notify_tt-comp"][value="tt-anim"]').uncheck();
+
   // Edit the studio layer: add Animation to the Rendering route, save,
   // and wait for the saved redirect back to the connection settings page.
   await openDetails(studioRow('tt-render'));
@@ -99,10 +109,19 @@ const shot = name => path.join(outDir, name);
   // Layout inherits the studio wiring.
   const renderMode = overrideRow('tt-render').locator('select[name="ov_mode_tt-render"]');
   if ((await renderMode.inputValue()) !== 'none') fail(`override Rendering mode should be "none", got "${await renderMode.inputValue()}"`);
-  const renderHelp = (await overrideRow('tt-render').locator('.field-help').innerText()).trim();
-  console.log(`override Rendering help: "${renderHelp}"`);
+  const renderHelp = (await overrideRow('tt-render').locator('[data-handoff-summary="inherit"]').textContent()).trim();
+  console.log(`override Rendering inherited summary: "${renderHelp}"`);
   if (!renderHelp.includes('継承') || !renderHelp.includes('Compositing')) fail(`override Rendering does not show the inherited wiring: "${renderHelp}"`);
   if ((await overrideRow('tt-lay').locator('select[name="ov_mode_tt-lay"]').inputValue()) !== 'inherit') fail('override Layout mode should start as "inherit"');
+  // An inherit row is a single line: its target editor stays hidden with
+  // no expandable toggle until the mode switches to custom.
+  const layDetails = overrideRow('tt-lay').locator('details.handoff-route-details');
+  if (!(await layDetails.evaluate(el => el.hidden))) fail('inherit Layout row shows an expandable editor toggle');
+  // The fallback user ID field shows only for the chosen-user handling.
+  if (await page.locator('#handoff-fallback-user-field').isVisible()) fail('fallback user field should start hidden for the admin handling');
+  await page.locator('select[name="no_assignee"]').selectOption('users');
+  if (!(await page.locator('#handoff-fallback-user-field').isVisible())) fail('fallback user field did not appear for the chosen-user handling');
+  await page.locator('select[name="no_assignee"]').selectOption('admin');
   if (await page.locator('input[name="ov_notify_tt-lay"][value="tt-lay"]').count() !== 0) fail('override Layout offers itself as a target');
   await page.screenshot({ path: shot('02_overrides_seeded.png'), fullPage: true });
 

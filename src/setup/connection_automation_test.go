@@ -236,7 +236,9 @@ func TestHandoffPageShowsSeededStudioRoutes(t *testing.T) {
 		t.Fatalf("seeded studio wiring not shown: %s", section)
 	}
 	body := handoffGet(t, db).Body.String()
-	if !strings.Contains(body, "Animation, Lighting, Compositing") {
+	// The summary lists targets in the fixed Task Type order (the order
+	// of the editor's own rows), not the stored selection order.
+	if !strings.Contains(body, "Animation, Compositing, Lighting") {
 		t.Fatalf("inherited wiring not shown in the production section: %s", body)
 	}
 }

@@ -250,21 +250,49 @@ func saveProductionHandoffForm(db *gorm.DB, r *http.Request, productionID string
 }
 
 // routeSelectionSummary renders a stored wiring value as one compact line:
-// the no-handoff mark, the receiving Task Type names, or "no wiring".
-func routeSelectionSummary(joined string, namesByID map[string]string, lang string) string {
+// the no-handoff mark, the receiving Task Type names, or "no wiring". The
+// names follow the canonical Task Type order (the order of taskTypes), not
+// the order they were selected or stored in.
+func routeSelectionSummary(joined string, taskTypes []kitsu.TaskType, namesByID map[string]string, lang string) string {
 	if joined == model.TaskRouteNone {
 		return t(lang, "受け渡しなし", "No handoff")
 	}
-	var names []string
+	selected := map[string]struct{}{}
 	for _, id := range model.SplitHandoffNotifyIDs(joined) {
-		if name := namesByID[id]; name != "" {
-			names = append(names, name)
+		selected[id] = struct{}{}
+	}
+	var names []string
+	seen := map[string]struct{}{}
+	for _, taskType := range taskTypes {
+		if _, ok := selected[taskType.ID]; ok {
+			if name := namesByID[taskType.ID]; name != "" {
+				names = append(names, name)
+				seen[taskType.ID] = struct{}{}
+			}
+		}
+	}
+	for _, id := range model.SplitHandoffNotifyIDs(joined) {
+		if _, ok := seen[id]; !ok {
+			if name := namesByID[id]; name != "" {
+				names = append(names, name)
+				seen[id] = struct{}{}
+			}
 		}
 	}
 	if len(names) == 0 {
 		return t(lang, "配線なし", "No wiring")
 	}
 	return strings.Join(names, ", ")
+}
+
+// routeSummaryClass marks a wiring summary line as wired or unwired so the
+// stylesheet can keep unwired rows muted and reserve the accent color for
+// the open/interactive state.
+func routeSummaryClass(joined string) string {
+	if joined == "" || joined == model.TaskRouteNone {
+		return "handoff-route-summary is-unwired"
+	}
+	return "handoff-route-summary is-wired"
 }
 
 // routeTargetCheckboxes renders one row's notify checkboxes, folded by the
@@ -323,17 +351,24 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 			noneChecked = " checked"
 		}
 		rows.WriteString(`<tr><th scope="row">` + esc(taskType.Name) + `</th><td>` +
-			`<details class="handoff-route-details"><summary>` + esc(routeSelectionSummary(studio.NotifyTaskTypeIDs, namesByID, lang)) + `</summary>` +
+			`<details class="handoff-route-details"><summary class="` + routeSummaryClass(studio.NotifyTaskTypeIDs) + `">` + esc(routeSelectionSummary(studio.NotifyTaskTypeIDs, taskTypes, namesByID, lang)) + `</summary>` +
 			`<div class="handoff-route-options">` + routeTargetCheckboxes("st_notify_", taskType.ID, taskTypes, studioSelected) +
-			`<label class="checkbox-label"><input type="checkbox" name="st_none_` + esc(taskType.ID) + `" value="1"` + noneChecked + `> ` + esc(t(lang, "受け渡しなし", "No handoff")) + `</label></div></details></td></tr>`)
+			`<div class="handoff-route-none"><label class="checkbox-label"><input type="checkbox" name="st_none_` + esc(taskType.ID) + `" value="1"` + noneChecked + `> ` + esc(t(lang, "受け渡しなし", "No handoff")) + `</label></div></div></details></td></tr>`)
 	}
 	return `<form method="post" action="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="action" value="save_studio_routes">` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)")) + `</h2>` +
+		`<section class="section-card glass" id="studio-routes"><h2>` + esc(t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)")) + `</h2>` +
 		`<p class="field-help">` + esc(t(lang, "タスクが完了（Done系）になったとき、同じショット/アセットのどのタスクに「揃った、進めていい」と伝えるかです。全製作の既定になります。", "When a task finishes (Done nature), which tasks on the same shot/asset are told they can proceed. This is the default for every Production.")) + `</p>` +
 		`<table class="data-table handoff-routes"><tbody>` + rows.String() + `</tbody></table>` +
-		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>`
+		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "配線を保存", "Save wiring")) + `</button></div></section></form>` + handoffNoneExclusiveScript
 }
+
+// handoffNoneExclusiveScript makes the 「受け渡しなし」 checkbox exclusive
+// in the studio wiring editor: checking it clears the row's target checks,
+// and checking any target clears it. The stored semantics (explicit none
+// vs unset) are unchanged; this only keeps the two states from being
+// submitted together.
+const handoffNoneExclusiveScript = `<script data-handoff-none-exclusive>(function(){document.querySelectorAll(".handoff-route-options").forEach(function(box){var none=box.querySelector("input[type=checkbox][name^=\"st_none_\"]");if(!none)return;var targets=box.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");none.addEventListener("change",function(){if(none.checked){targets.forEach(function(target){target.checked=false})}});targets.forEach(function(target){target.addEventListener("change",function(){if(target.checked){none.checked=false}})})})})();</script>`
 
 func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, project model.Project, saveErr error) string {
 	productionID := project.KitsuProjectID
@@ -378,32 +413,37 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 				overrideSelected = model.SplitHandoffNotifyIDs(override.NotifyTaskTypeIDs)
 			}
 		}
-		inherited := t(lang, "（継承：", "(inherited: ")
+		inheritedSummary := t(lang, "配線なし", "no wiring")
 		if route, ok := studioByFrom[taskType.ID]; ok {
-			inherited += routeSelectionSummary(route.NotifyTaskTypeIDs, namesByID, lang)
-		} else {
-			inherited += t(lang, "配線なし", "no wiring")
+			inheritedSummary = routeSelectionSummary(route.NotifyTaskTypeIDs, taskTypes, namesByID, lang)
 		}
-		inherited += ")"
 		modeOptions := [][2]string{
 			{"inherit", t(lang, "スタジオ共通を継承", "Inherit the studio default")},
 			{"none", t(lang, "この製作では受け渡しなし", "No handoff in this Production")},
 			{"custom", t(lang, "この製作だけ指定", "Override for this Production")},
 		}
-		// The target editor is folded away unless this row overrides: in
-		// inherit and none modes there is nothing to pick.
-		detailsOpen := ""
+		// Inherit and none rows collapse to a single line: the mode select
+		// plus a one-line summary, with no expandable editor toggle. The
+		// target editor exists in the row (hidden) so switching the mode
+		// to custom can reveal it without a reload; it is only visible —
+		// and open — for rows whose mode is custom.
+		inheritHidden, noneHidden, detailsHidden, detailsOpen := "", "", " hidden", ""
 		summary := t(lang, "指定なし", "Not set")
+		summaryJoined := ""
 		if mode == "custom" {
-			detailsOpen = " open"
-			summary = routeSelectionSummary(override.NotifyTaskTypeIDs, namesByID, lang)
+			detailsHidden, detailsOpen = "", " open"
+			summary = routeSelectionSummary(override.NotifyTaskTypeIDs, taskTypes, namesByID, lang)
+			summaryJoined = override.NotifyTaskTypeIDs
 		} else if mode == "none" {
-			summary = routeSelectionSummary(model.TaskRouteNone, namesByID, lang)
+			inheritHidden = " hidden"
+		} else {
+			noneHidden = " hidden"
 		}
 		overrideRows.WriteString(`<tr><th scope="row">` + esc(taskType.Name) + `</th><td>` +
 			forumSelect("ov_mode_"+taskType.ID, mode, modeOptions, "") +
-			`<p class="field-help">` + esc(inherited) + `</p>` +
-			`<details class="handoff-route-details"` + detailsOpen + `><summary>` + esc(summary) + `</summary>` +
+			` <span class="handoff-mode-summary" data-handoff-summary="inherit"` + inheritHidden + `>` + esc(t(lang, "スタジオ共通を継承（", "Inheriting the studio default (")) + esc(inheritedSummary) + esc(t(lang, "）", ")")) + `</span>` +
+			` <span class="handoff-mode-summary" data-handoff-summary="none"` + noneHidden + `>` + esc(t(lang, "受け渡しなし", "No handoff")) + `</span>` +
+			`<details class="handoff-route-details"` + detailsOpen + detailsHidden + `><summary class="` + routeSummaryClass(summaryJoined) + `">` + esc(summary) + `</summary>` +
 			`<div class="handoff-route-options">` + routeTargetCheckboxes("ov_notify_", taskType.ID, taskTypes, overrideSelected) + `</div></details></td></tr>`)
 	}
 
@@ -412,10 +452,14 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		fallbackOptionsList = append(fallbackOptionsList, [2]string{fallback, handoffFallbackLabel(lang, fallback)})
 	}
 
-	studioNote := `<section class="section-card glass"><h2>` + esc(t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "スタジオ共通の配線は接続設定で編集します。このページでは、この製作だけの上書きと担当者なしの扱いを設定します。", "The studio-default wiring is edited in Connection settings. This page sets only this Production's overrides and the no-assignee handling.")) + `</p>` +
+	studioNote := `<section class="section-card glass"><h2>` + esc(t(lang, "スタジオ共通の配線は接続設定で編集します", "Studio-default wiring is edited in connection settings")) + `</h2>` +
+		`<p class="field-help">` + esc(t(lang, "このページでは、この製作だけの上書きと担当者なしの扱いを設定します。", "This page sets only this Production's overrides and the no-assignee handling.")) + `</p>` +
 		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `">` + esc(t(lang, "接続設定を開く", "Open connection settings")) + `</a></div></section>`
 
+	fallbackUserHidden := ""
+	if config.NoAssignee != model.HandoffFallbackUsers {
+		fallbackUserHidden = " hidden"
+	}
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/handoff", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "この製作の上書き", "Overrides for this Production")) + `</h2>` +
@@ -424,14 +468,26 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 		`<section class="section-card glass"><h2>` + esc(t(lang, "担当者なしの扱い", "When nobody is assigned")) + `</h2>` +
 		`<label class="field-label" for="handoff-noassignee">` + esc(t(lang, "担当者なしの通知先", "Recipient when nobody is assigned")) + `</label>` +
 		forumSelect("no_assignee", config.NoAssignee, fallbackOptionsList, t(lang, "（選択）", "(choose)")) +
-		`<label class="field-label" for="handoff-fallback-user">` + esc(t(lang, "指定ユーザーID", "Chosen user ID")) + `</label>` +
+		`<div id="handoff-fallback-user-field"` + fallbackUserHidden + `>` +
+		`<label class="field-label" for="handoff-fallback-user">` + esc(t(lang, "指定する人の Discord ユーザーID", "Discord user ID of the person to notify")) + `</label>` +
 		`<input id="handoff-fallback-user" name="fallback_user" value="` + esc(config.FallbackUserID) + `" autocomplete="off">` +
+		`<p class="field-help">` + esc(t(lang, "Discord で対象ユーザーを右クリック →「ユーザーIDをコピー」で取得できます（先に Discord の設定 → 詳細設定で開発者モードをオンにしてください）。", "In Discord, right-click the person and choose \"Copy User ID\" (turn on Developer Mode first under Settings → Advanced).")) + `</p>` +
+		`</div>` +
 		`</section>` +
 		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a> <button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></form>`
 
-	body := `<div class="section-stack"><section class="section-card glass"><h2>` + esc(project.Name) + `</h2></section>` + errorHTML + notices.String() + studioNote + form + `</div>`
+	breadcrumb := `<p class="breadcrumb">` + esc(t(lang, "プロダクション", "Production")) + `: ` + esc(project.Name) + `</p>`
+	body := `<div class="section-stack">` + breadcrumb + errorHTML + notices.String() + studioNote + form + `</div>` + handoffPageScript
 	return adminPage(lang, t(lang, "受け渡しの配線", "Handoff wiring"), r, body)
 }
+
+// handoffPageScript drives the Production handoff page's presentation
+// toggles: a row's target editor and one-line summary follow its mode
+// select (the editor shows only in custom mode; switching to the
+// no-handoff mode clears the row's target checks so the two states are
+// never submitted together), and the fallback user ID field shows only
+// while the no-assignee handling targets a chosen user.
+const handoffPageScript = `<script data-handoff-page>(function(){document.querySelectorAll("select[name^=\"ov_mode_\"]").forEach(function(select){var row=select.closest("tr");if(!row)return;var details=row.querySelector("details.handoff-route-details");function apply(){var mode=select.value;row.querySelectorAll("[data-handoff-summary]").forEach(function(span){span.hidden=span.getAttribute("data-handoff-summary")!==mode});if(details){details.hidden=mode!=="custom";if(mode==="custom"){details.open=true}}if(mode==="none"){row.querySelectorAll("input[type=checkbox][name^=\"ov_notify_\"]").forEach(function(box){box.checked=false})}}select.addEventListener("change",apply);apply()});var fallback=document.querySelector("select[name=\"no_assignee\"]"),field=document.getElementById("handoff-fallback-user-field");if(fallback&&field){var applyFallback=function(){field.hidden=fallback.value!=="users"};fallback.addEventListener("change",applyFallback);applyFallback()}})();</script>`
 
 // renderHandoffSettingsLink is the production page's entry to the wiring
 // editor.

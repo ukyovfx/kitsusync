@@ -349,7 +349,7 @@ function graph(items,asOf){
 }
 function updateCard(service,items,asOf){
  var card=root.querySelector("[data-telemetry-card=\""+service+"\"]"),status=card&&card.querySelector("[data-telemetry-status]"),details=card&&card.querySelector("[data-telemetry-details]");if(!status||!details)return;
- if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("未確認","Not checked")+"</div>"+graph([],asOf);return}
+ if(!items.length){status.className="status-pill neutral";status.textContent=text("未確認","Not checked");details.innerHTML="<div class=\"api-observation-not-checked\">"+text("まだ計測データがありません","No measurements yet")+"</div>";return}
  var last=items[items.length-1],stale=asOf-Date.parse(last.at)>45000,value=last.success?Number(last.duration_ms)+" ms":text("リクエスト失敗","Request failed");
  status.className="status-pill "+(stale?"warning":last.success?"ok":"bad");
  status.textContent=stale?text("古いデータ","Stale"):last.success?text("正常","Healthy"):text("要確認","Needs review");
@@ -1718,7 +1718,7 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInt
 	readinessView := readinessViewFor(lang, r, readiness)
 	stats := Stats.Snapshot()
 	windowName := telemetryWindow60Seconds
-	issues := recentSystemIssues(lang, db)
+	issues := recentSystemIssues(lang, r, db)
 	eventAction, eventActionLabel := "", ""
 	if stats.LastPollErr != "" && readiness.PrerequisitesReady {
 		eventAction, eventActionLabel = withLang("/bot/admin/audit", r), t(lang, "監査ログを確認", "Review audit log")
@@ -1753,6 +1753,9 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInt
 	exceptionsSection := renderAdminExceptionsSection(lang, db)
 	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + exceptionsSection + issuesSection + visibilitySection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
+	if card := currentProblemCard(lang, items); card != "" {
+		body = strings.Replace(body, `<div class="section-stack system-status-sections">`, `<div class="section-stack system-status-sections">`+card, 1)
+	}
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
 	body = stripSystemStatusRedundantCopy(body)
@@ -1885,6 +1888,29 @@ func renderRuntimeObservabilitySummaryRawAt(lang string, stats RuntimeSnapshot, 
 	return `<section class="section-card glass system-observability" aria-labelledby="system-observability-title"><div class="page-heading"><div><h2 id="system-observability-title">` + esc(t(lang, "外部APIの健全性", "External API health")) + `</h2><p class="hint">` + esc(t(lang, "実測できた応答時間を時間順に表示します。", "Shows real response times in chronological order.")) + `</p></div><div class="telemetry-window-actions"><span class="system-live-indicator" role="status"><i aria-hidden="true"></i><span data-system-live-label>` + esc(t(lang, "自動更新", "Auto-refresh")) + `</span></span></div></div><div class="system-observability-grid"><article class="api-observation-card" data-telemetry-card="kitsu"><div class="api-observation-summary"><h3>Kitsu API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "kitsu", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "kitsu", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="kitsu">` + apiObservationDetailsAt(lang, stats, "kitsu", windowName, asOf) + `</div></article><article class="api-observation-card" data-telemetry-card="discord"><div class="api-observation-summary"><h3>Discord API</h3><span class="status-pill ` + apiObservationStatusClassAt(stats, "discord", asOf) + `" role="status" data-telemetry-status>` + esc(apiObservationStatusAt(lang, stats, "discord", asOf)) + `</span></div><div class="api-observation-details" data-telemetry-details="discord">` + apiObservationDetailsAt(lang, stats, "discord", windowName, asOf) + `</div></article></div></section>` + body
 }
 
+// currentProblemCard summarizes the first non-OK pipeline row as one
+// compact card at the top of the system status page: what the problem is,
+// why (the row's own explanation, when it carries one), and the row's
+// next-action link. It derives only from the rows already computed for
+// the page; when every row is OK it renders nothing.
+func currentProblemCard(lang string, items []pipelineHealthItem) string {
+	for _, item := range items {
+		if normalizeStatusClass(item.class) == "success" {
+			continue
+		}
+		line := esc(item.label) + `: ` + esc(item.value)
+		if strings.TrimSpace(item.explanation) != "" {
+			line += ` — ` + esc(item.explanation)
+		}
+		action := ""
+		if item.action != "" && item.actionLabel != "" {
+			action = `<div class="button-row"><a class="btn" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a></div>`
+		}
+		return `<section class="section-card glass current-problem" aria-labelledby="current-problem-title"><div class="page-heading"><div><h2 id="current-problem-title">` + esc(t(lang, "いまの問題", "Current problem")) + `</h2><p class="hint">` + line + `</p></div></div>` + action + `</section>`
+	}
+	return ""
+}
+
 func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) string {
 	_ = index
 	action := ""
@@ -1906,7 +1932,9 @@ func apiObservationDetailsAt(lang string, stats RuntimeSnapshot, service, window
 	windowName = telemetryWindow60Seconds
 	items := filterAPIObservations(stats.APIObservations[service], asOf, time.Minute)
 	if len(items) == 0 {
-		return `<div class="api-observation-not-checked">` + esc(t(lang, "未確認", "Not checked")) + `</div>` + apiObservationLineGraphAt(nil, lang, asOf, observationYDomain{Lower: 0, Upper: 10})
+		// No measurement history yet: one line says so, instead of an
+		// empty graph frame pretending to be a chart.
+		return `<div class="api-observation-not-checked">` + esc(t(lang, "まだ計測データがありません", "No measurements yet")) + `</div>`
 	}
 	last := items[len(items)-1]
 	value := t(lang, "リクエスト失敗", "Request failed")
@@ -2267,7 +2295,13 @@ func pipelineRoutingDetails(lang string, readiness SharedBotRuntimeReadiness, db
 	return `<dl class="pipeline-detail-list"><div><dt>` + esc(t(lang, "プロダクション接続", "Production connection")) + `</dt><dd>` + esc(connection) + `</dd></div><div><dt>` + esc(t(lang, "接続済みProduction", "Connected Productions")) + `</dt><dd>` + strconv.Itoa(connected) + `</dd></div><div><dt>` + esc(t(lang, "設定済みルート", "Configured routes")) + `</dt><dd>` + strconv.Itoa(routeCount) + `</dd></div><div><dt>` + esc(t(lang, "通知設定", "Notification configurations")) + `</dt><dd>` + strconv.Itoa(configCount) + `</dd></div><div><dt>` + esc(t(lang, "ルート設定", "Route configuration")) + `</dt><dd>` + esc(routing) + `</dd></div></dl>`
 }
 
-func recentSystemIssues(lang string, db *gorm.DB) string {
+// recentSystemIssues renders the newest failed audit rows as a small
+// table (time / content / state). The state chip is the same status-pill
+// the audit log itself uses for a failure, so one word keeps one style
+// across the page. Audit rows carry no aggregate count, so the table
+// shows one row per failure; a row that names a Production links to the
+// audit log filtered to it.
+func recentSystemIssues(lang string, r *http.Request, db *gorm.DB) string {
 	logs := model.ListAuditLogs(db, 20)
 	var rows strings.Builder
 	count := 0
@@ -2276,7 +2310,11 @@ func recentSystemIssues(lang string, db *gorm.DB) string {
 			continue
 		}
 		count++
-		rows.WriteString(`<li><strong>` + esc(t(lang, "要確認", "Needs review")) + `</strong><span>` + esc(log.ErrorMessage) + `</span></li>`)
+		content := esc(log.ErrorMessage)
+		if name := strings.TrimSpace(log.ProjectName); name != "" {
+			content += ` <a href="` + esc(withLang("/bot/admin/audit?production="+url.QueryEscape(name), r)) + `">` + esc(t(lang, "監査ログで見る", "View in audit log")) + `</a>`
+		}
+		rows.WriteString(`<tr><td>` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td>` + content + `</td><td><span class="status-pill bad" role="status">` + esc(t(lang, "失敗", "Failed")) + `</span></td></tr>`)
 		if count >= 5 {
 			break
 		}
@@ -2284,7 +2322,7 @@ func recentSystemIssues(lang string, db *gorm.DB) string {
 	if count == 0 {
 		return ""
 	}
-	return `<ul class="list-tight pipeline-issues" role="log">` + rows.String() + `</ul>`
+	return `<table class="data-table system-issues-table"><thead><tr><th scope="col">` + esc(t(lang, "時刻", "Time")) + `</th><th scope="col">` + esc(t(lang, "内容", "Content")) + `</th><th scope="col">` + esc(t(lang, "状態", "State")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table>`
 }
 
 func normalizeStatusClass(class string) string {
@@ -2374,12 +2412,12 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 		if !log.Success {
 			result = t(lang, "失敗", "Failed")
 		}
-		rows.WriteString(`<tr><td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td data-label="Production">` + esc(log.ProjectName) + `</td><td data-label="` + esc(t(lang, "操作内容", "Action")) + `">` + esc(iaActivityAction(lang, log)) + `</td><td data-label="` + esc(t(lang, "操作ユーザー", "Acting user")) + `">` + esc(auditActorLabel(lang, log)) + `</td><td data-label="` + esc(t(lang, "結果", "Result")) + `"><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[log.Success] + `">` + esc(result) + `</span></td></tr>`)
+		rows.WriteString(`<tr><td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td><td data-label="` + esc(t(lang, "プロダクション", "Production")) + `">` + esc(log.ProjectName) + `</td><td data-label="` + esc(t(lang, "操作内容", "Action")) + `">` + esc(iaActivityAction(lang, log)) + `</td><td data-label="` + esc(t(lang, "操作ユーザー", "Acting user")) + `">` + esc(auditActorLabel(lang, log)) + `</td><td data-label="` + esc(t(lang, "結果", "Result")) + `"><span class="status-pill ` + map[bool]string{true: "ok", false: "bad"}[log.Success] + `">` + esc(result) + `</span></td></tr>`)
 	}
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません", "No audit log entries")) + `</td></tr>`)
 	}
-	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p>` + filter + `<div class="table-wrap audit-log-table"><table class="mobile-card-table"><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
+	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p>` + filter + `<div class="table-wrap audit-log-table"><table class="mobile-card-table"><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>` + esc(t(lang, "プロダクション", "Production")) + `</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
 	for _, log := range shown {
 		oldTime := `<td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td>`
 		newTime := `<td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `"><time class="audit-time" datetime="` + esc(log.CreatedAt.UTC().Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time></td>`
