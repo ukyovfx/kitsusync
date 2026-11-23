@@ -58,6 +58,7 @@ type ForumMessageCreate struct {
 	Content         string           `json:"content"`
 	Embeds          []Embed          `json:"embeds,omitempty"`
 	AllowedMentions *AllowedMentions `json:"allowed_mentions,omitempty"`
+	Components      []ActionRow      `json:"components,omitempty"`
 	Flags           int              `json:"flags,omitempty"`
 	Nonce           string           `json:"nonce,omitempty"`
 	EnforceNonce    bool             `json:"enforce_nonce,omitempty"`

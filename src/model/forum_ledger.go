@@ -176,6 +176,18 @@ type ForumPostMessagePayload struct {
 	// for the footer ステータス line. Status signals re-derive it at send time
 	// from the ledger; comment and publish rows keep the plan-time value.
 	StatusName string `json:"status_name,omitempty"`
+	// Handoff carries the delivery facts of a handoff signal (intent
+	// ForumIntentHandoff): the product that arrived and where it came from.
+	// For handoff rows, Mentions holds the recipient Kitsu person IDs the
+	// dispatcher pinned (e.g. fallback admins); empty means the receiving
+	// task's current assignees.
+	HandoffProductName    string `json:"handoff_product_name,omitempty"`
+	HandoffProductVersion string `json:"handoff_product_version,omitempty"`
+	HandoffSourceTaskType string `json:"handoff_source_task_type,omitempty"`
+	HandoffSourceAuthor   string `json:"handoff_source_author,omitempty"`
+	// Components is the pre-built action-row JSON (reply buttons) the
+	// executor attaches to a handoff signal unchanged.
+	Components json.RawMessage `json:"components,omitempty"`
 }
 
 // ForumPostIntent values.
@@ -186,6 +198,7 @@ const (
 	ForumIntentAssign       = "assign"
 	ForumIntentComment      = "comment"
 	ForumIntentPublish      = "publish"
+	ForumIntentHandoff      = "handoff"
 )
 
 // Stage E tuning values, fixed by the design.
@@ -601,7 +614,7 @@ func ClearForumTaskThread(db *gorm.DB, taskID string) (int, error) {
 
 // MigrateLegacyEmptyForumThreadIDs moves legacy empty thread ids to NULL once
 // at startup. ClearForumTaskThread used to write "" into the nullable
-// thread_id column; SQLite treats '' as a real value, so every later task with
+// thread_id column; SQLite treats ” as a real value, so every later task with
 // a thread collided on the unique index until the id was cleared again.
 func MigrateLegacyEmptyForumThreadIDs(db *gorm.DB) error {
 	if err := db.Exec("UPDATE forum_tasks SET thread_id = NULL WHERE thread_id = ''").Error; err != nil {

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"app/src/api/discord"
+	"app/src/api/kitsu"
+	"app/src/forum"
 	"app/src/model"
 
 	"gorm.io/driver/sqlite"
@@ -51,6 +54,49 @@ func handoffNotifyDB(t *testing.T, timing string) *gorm.DB {
 	return db
 }
 
+// handoffTestPoller builds the forum poller the immediate path dispatches
+// through, with a stub card renderer.
+func handoffTestPoller(db *gorm.DB) forum.Poller {
+	return forum.Poller{DB: db, RenderCard: func(kitsu.MessagePayload) (json.RawMessage, error) {
+		return json.RawMessage(`{"embeds":[{"description":"card"}]}`), nil
+	}}
+}
+
+// handoffPayloads is the poll payload set the immediate path dispatches
+// with: the receiving task of the test events.
+func handoffPayloads() []kitsu.MessagePayload {
+	return []kitsu.MessagePayload{handoffReceiverPayload("person-comp")}
+}
+
+// seedHandoffForumTask records the receiving task in the forum ledger, with
+// a thread when threadID is set.
+func seedHandoffForumTask(t *testing.T, db *gorm.DB, threadID string) {
+	t.Helper()
+	var thread *string
+	if threadID != "" {
+		thread = &threadID
+	}
+	now := time.Now()
+	row := model.ForumTask{
+		TaskID: "task-comp-1", ProjectID: "p1", TaskTypeID: "tt-comp",
+		EntityID: "shot-1", EntityKind: model.ForumEntityKindShot,
+		Title: "Compositing sq010", StatusID: "s-wip", StatusSince: now,
+		ForumID: "forum-1", ThreadID: thread, FirstSeenAt: now, LastSeenAt: now,
+	}
+	if err := db.Create(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// handoffOutboxRows returns every queued forum row, oldest first.
+func handoffOutboxRows(t *testing.T, db *gorm.DB) []model.ForumOutbox {
+	t.Helper()
+	var rows []model.ForumOutbox
+	if err := db.Order("id asc").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
 func seedHandoffTiming(t *testing.T, db *gorm.DB, timing string) {
 	t.Helper()
 	settings := model.ProductionHandoffSettings{
@@ -122,13 +168,17 @@ func TestHandoffAssignedIsSentImmediatelyOnce(t *testing.T) {
 	fixture := newDMFixture(t)
 	stubHandoffIdentity(t, map[string]string{"person-comp": "222222222222222222"})
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackNone, "person-comp")
+	seedHandoffForumTask(t, db, "thread-1")
 
-	sent, err := sendImmediateHandoffs(digestTestConfig(), db)
+	sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads())
 	if err != nil || sent != 1 {
 		t.Fatalf("sent=%d err=%v", sent, err)
 	}
-	if fixture.sendsFor("222222222222222222") != 1 {
-		t.Fatalf("sends = %d", fixture.sendsFor("222222222222222222"))
+	if fixture.sendsFor("222222222222222222") != 0 {
+		t.Fatalf("immediate handoff must not DM anymore: sends = %d", fixture.sendsFor("222222222222222222"))
+	}
+	if rows := handoffOutboxRows(t, db); len(rows) != 1 || rows[0].Kind != model.ForumOutboxPostMessage {
+		t.Fatalf("outbox = %+v", rows)
 	}
 	if state := handoffState(t, db, "comment-1"); state != model.HandoffEventNotified {
 		t.Fatalf("state = %q", state)
@@ -137,10 +187,10 @@ func TestHandoffAssignedIsSentImmediatelyOnce(t *testing.T) {
 	if _, err := sendForumMorningDigests(digestTestConfig(), db, time.Date(2026, 11, 17, 9, 0, 0, 0, jst), "2026-11-17"); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.sendsFor("222222222222222222") != 2 {
+	if fixture.sendsFor("222222222222222222") != 1 {
 		t.Fatalf("unanswered handoff not repeated: sends = %d", fixture.sendsFor("222222222222222222"))
 	}
-	if sent, err := sendImmediateHandoffs(digestTestConfig(), db); err != nil || sent != 0 {
+	if sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads()); err != nil || sent != 0 {
 		t.Fatalf("resent: sent=%d err=%v", sent, err)
 	}
 }
@@ -163,8 +213,11 @@ func TestHandoffFallbackWaitsForTheMorningDigest(t *testing.T) {
 	}
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackAdmin)
 
-	if sent, err := sendImmediateHandoffs(digestTestConfig(), db); err != nil || sent != 0 {
+	if sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads()); err != nil || sent != 0 {
 		t.Fatalf("fallback sent immediately: sent=%d err=%v", sent, err)
+	}
+	if rows := handoffOutboxRows(t, db); len(rows) != 0 {
+		t.Fatalf("fallback queued a forum signal: %+v", rows)
 	}
 	if sent, err := sendForumMorningDigests(digestTestConfig(), db, time.Date(2026, 11, 16, 9, 0, 0, 0, jst), "2026-11-16"); err != nil || sent != 1 {
 		t.Fatalf("digest sent=%d err=%v", sent, err)
@@ -214,7 +267,8 @@ func TestHandoffTimingSettingBiasesTheRule(t *testing.T) {
 				t.Fatal(err)
 			}
 			handoffEvent(t, db, "comment-1", tc.fallb, tc.ids...)
-			sent, err := sendImmediateHandoffs(digestTestConfig(), db)
+			seedHandoffForumTask(t, db, "thread-1")
+			sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads())
 			if err != nil || sent != tc.sent {
 				t.Fatalf("sent=%d err=%v, want %d", sent, err, tc.sent)
 			}
@@ -247,15 +301,26 @@ func TestHandoffAdminFallbackReachesOnlyGuildAdministrators(t *testing.T) {
 	t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
 
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackAdmin)
-	sent, err := sendImmediateHandoffs(digestTestConfig(), db)
+	seedHandoffForumTask(t, db, "thread-1")
+	sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads())
 	if err != nil || sent != 1 {
 		t.Fatalf("sent=%d err=%v", sent, err)
 	}
-	if fixture.sendsFor("111111111111111111") != 1 {
-		t.Fatalf("administrator sends = %d", fixture.sendsFor("111111111111111111"))
+	// The narrowing now shows as the signal's pinned mentions: only the
+	// administrator is named, never the non-admin linked user.
+	rows := handoffOutboxRows(t, db)
+	if len(rows) != 1 || rows[0].Kind != model.ForumOutboxPostMessage {
+		t.Fatalf("outbox = %+v", rows)
 	}
-	if fixture.sendsFor("222222222222222222") != 0 {
-		t.Fatalf("non-admin linked user fell through: sends = %d", fixture.sendsFor("222222222222222222"))
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(rows[0].Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Mentions) != 1 || payload.Mentions[0] != "person-admin" {
+		t.Fatalf("mentions = %v, want only the administrator", payload.Mentions)
+	}
+	if fixture.sendsFor("111111111111111111") != 0 || fixture.sendsFor("222222222222222222") != 0 {
+		t.Fatalf("immediate handoff must not DM anymore")
 	}
 	if state := handoffState(t, db, "comment-1"); state != model.HandoffEventNotified {
 		t.Fatalf("state = %q", state)
@@ -278,7 +343,7 @@ func TestHandoffNoAdministratorResolvesToNoDestination(t *testing.T) {
 	t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
 
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackAdmin)
-	sent, err := sendImmediateHandoffs(digestTestConfig(), db)
+	sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads())
 	if err != nil || sent != 0 {
 		t.Fatalf("zero administrators must end normally: sent=%d err=%v", sent, err)
 	}

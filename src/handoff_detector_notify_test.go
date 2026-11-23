@@ -31,12 +31,17 @@ func TestDetectedAssignedHandoffIsSentImmediatelyUnderMixed(t *testing.T) {
 		t.Fatalf("detected fallback = %q, want none", event.FallbackUsed)
 	}
 
-	sent, err := sendImmediateHandoffs(digestTestConfig(), db)
+	seedHandoffForumTask(t, db, "")
+	sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), payloads)
 	if err != nil || sent != 1 {
 		t.Fatalf("sent=%d err=%v, want the assigned handoff sent now", sent, err)
 	}
-	if fixture.sendsFor("222222222222222222") != 1 {
-		t.Fatalf("sends = %d", fixture.sendsFor("222222222222222222"))
+	if fixture.sendsFor("222222222222222222") != 0 {
+		t.Fatalf("immediate handoff must not DM anymore: sends = %d", fixture.sendsFor("222222222222222222"))
+	}
+	rows := handoffOutboxRows(t, db)
+	if len(rows) != 2 || rows[0].Kind != model.ForumOutboxCreateThread || rows[1].Kind != model.ForumOutboxPostMessage {
+		t.Fatalf("outbox = %+v, want the receiving post opened and the signal queued", rows)
 	}
 	if state := handoffState(t, db, "comment-real-1"); state != model.HandoffEventNotified {
 		t.Fatalf("state = %q, want notified", state)

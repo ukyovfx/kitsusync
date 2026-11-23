@@ -795,3 +795,74 @@ func EntityKindFor(entityTypeName string) string {
 
 // KitsuTask mirrors the payload fields the planner needs.
 type KitsuTask = kitsu.MessagePayload
+
+// PlanHandoff queues the forum signal for one recorded handoff event on the
+// RECEIVING task: the signal lives in that task's post, opening the thread
+// first when the task has none (a delivery is a thread-opening event, like a
+// review transition). It reports false when the task type is not routed or
+// the task is not recorded in the forum ledger yet, so the caller can leave
+// the event pending for a later poll (or the morning digest).
+func (p Planner) PlanHandoff(input TaskInput, card func() (json.RawMessage, error), event model.HandoffEvent, mentions []string, components json.RawMessage) (bool, error) {
+	route, routed := p.ForumForTaskType(input.TaskTypeID)
+	if !routed {
+		return false, nil
+	}
+	existing, err := model.FindForumTaskWithError(p.DB, input.TaskID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	pendingCreate, err := model.ForumTaskHasPendingCreate(p.DB, input.TaskID)
+	if err != nil {
+		return false, err
+	}
+	hasPost := (existing.ThreadID != nil && *existing.ThreadID != "") || pendingCreate
+	if !hasPost {
+		failed, err := model.ForumCreateThreadFailed(p.DB, input.TaskID, existing.ThreadGeneration)
+		if err != nil {
+			return false, err
+		}
+		if failed {
+			return false, nil
+		}
+		result := PlanResult{}
+		if err := p.queueCreateThread(input, route, input.StatusRole, existing.ThreadGeneration, card, &result); err != nil {
+			return false, err
+		}
+	}
+	fields := forumTaskCardFields(input)
+	payload, err := json.Marshal(model.ForumPostMessagePayload{
+		Intent:                model.ForumIntentHandoff,
+		WindowOpenedAt:        p.Now,
+		Mentions:              model.NormalizeForumAssigneeIDs(mentions),
+		StatusName:            strings.ToLower(strings.TrimSpace(input.StatusName)),
+		EntityType:            fields.EntityType,
+		ParentName:            fields.ParentName,
+		EntityName:            fields.EntityName,
+		TaskType:              fields.TaskType,
+		HandoffProductName:    event.ProductName,
+		HandoffProductVersion: event.ProductVersion,
+		HandoffSourceTaskType: event.SourceTaskTypeName,
+		HandoffSourceAuthor:   event.SourceAuthorName,
+		Components:            components,
+	})
+	if err != nil {
+		return false, err
+	}
+	now := p.Now
+	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
+		TaskID:    input.TaskID,
+		Kind:      model.ForumOutboxPostMessage,
+		DedupeKey: "handoff:" + event.CommentID,
+		Payload:   string(payload),
+		State:     model.ForumOutboxPending,
+		NotBefore: now,
+		CreatedAt: now,
+	})
+	if err != nil && !errors.Is(err, model.ErrForumOutboxDuplicate) {
+		return false, err
+	}
+	return true, nil
+}

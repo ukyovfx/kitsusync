@@ -56,6 +56,15 @@ func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload
 			users = append(users, assigneeUsers...)
 		}
 		return uniqueIDs(users), nil, nil
+	case model.ForumIntentHandoff:
+		// A handoff pings the people the dispatcher pinned (the receiving
+		// task's assignees at detection, or the fallback admins); without a
+		// pinned set it falls back to the task's current assignees.
+		if len(payload.Mentions) > 0 {
+			return r.mapAssignees(task.ProjectID, payload.Mentions), nil, nil
+		}
+		users, roles := r.assignees(task)
+		return users, roles, nil
 	case model.ForumIntentPublish:
 		// The publish trace informs the thread; it pings nobody (spec).
 		return nil, nil, nil
