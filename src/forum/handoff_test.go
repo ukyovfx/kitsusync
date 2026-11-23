@@ -26,7 +26,7 @@ func newHandoffDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&model.ProductionHandoffConfig{}, &model.ProductionHandoffProductType{},
-		&model.ProductionHandoffRoute{}, &model.HandoffEvent{}, &model.Setting{}, &model.AuditLog{},
+		&model.ProductionHandoffRoute{}, &model.HandoffEvent{}, &model.Setting{}, &model.AuditLog{}, &model.ForumTask{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -125,11 +125,16 @@ func TestHandoffDetectRecordsDelivery(t *testing.T) {
 }
 
 // A comment that accompanies a status change belongs to the submit flow.
+// The move is read from the forum ledger: the status it last observed for
+// the task differs from the status the task carries now.
 func TestHandoffDetectIgnoresStatusChange(t *testing.T) {
 	db := newHandoffDB(t)
 	seedHandoffRoutes(t, db, model.HandoffFlowHand, model.HandoffFallbackAdmin)
+	if err := db.Create(&model.ForumTask{TaskID: "task-src", StatusID: "status-wip"}).Error; err != nil {
+		t.Fatalf("seed forum task: %v", err)
+	}
 	delivery := deliveryPayload("task-src", "tt-mm", "comment-1", deliverTable)
-	delivery.PreviousStatusName = "WIP"
+	delivery.Task.Task.TaskStatusID = "status-wfa"
 	delivery.StatusChangeAuthor.Person.ID = "person-artist"
 	payloads := []kitsu.MessagePayload{delivery, receiverPayload("tt-comp", "person-comp")}
 	result, err := (HandoffDetector{DB: db}).Detect(payloads)
@@ -141,6 +146,30 @@ func TestHandoffDetectIgnoresStatusChange(t *testing.T) {
 	}
 	if _, err := model.FindHandoffEvent(db, "comment-1"); err == nil {
 		t.Fatal("no event row expected")
+	}
+}
+
+// The Kitsu comment form attaches the task's current status to every
+// comment posted through it, so the payload builder marks any latest UI
+// comment with a StatusChangeAuthor. That alone is not a status change:
+// with the ledger still showing the same status, a publish comment must
+// be detected.
+func TestHandoffDetectRecordsCommentCarryingCurrentStatus(t *testing.T) {
+	db := newHandoffDB(t)
+	seedHandoffRoutes(t, db, model.HandoffFlowHand, model.HandoffFallbackAdmin)
+	if err := db.Create(&model.ForumTask{TaskID: "task-src", StatusID: "status-wip"}).Error; err != nil {
+		t.Fatalf("seed forum task: %v", err)
+	}
+	delivery := deliveryPayload("task-src", "tt-mm", "comment-1", deliverTable)
+	delivery.Task.Task.TaskStatusID = "status-wip"
+	delivery.StatusChangeAuthor.Person.ID = "person-artist"
+	payloads := []kitsu.MessagePayload{delivery, receiverPayload("tt-comp", "person-comp")}
+	result, err := (HandoffDetector{DB: db}).Detect(payloads)
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	if result.Events != 1 {
+		t.Fatalf("events = %d, want 1", result.Events)
 	}
 }
 
