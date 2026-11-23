@@ -3,13 +3,12 @@ package discord
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"app/src/model"
 )
 
-// An en Production must get English signal cards and warnings; an empty
-// language keeps the Japanese fallback the pre-existing tests rely on.
+// An en Production must get English signal cards; an empty language
+// keeps the Japanese fallback the pre-existing tests rely on.
 
 func TestForumSignalCardFollowsEnglishProduction(t *testing.T) {
 	signal := RenderForumSignalCard(ForumCardInput{
@@ -24,7 +23,7 @@ func TestForumSignalCardFollowsEnglishProduction(t *testing.T) {
 		Language:   "en",
 	})
 	description := signal.Embeds[0].Description
-	for _, want := range []string{"👀 WFA Please review", "Submitted by: Jane Doe", "Status: wfa", "Assignees: John Smith"} {
+	for _, want := range []string{"### 👀 WFA", "Please review", "Submitted by: Jane Doe", "Status: wfa", "Assignees: John Smith"} {
 		if !strings.Contains(description, want) {
 			t.Errorf("description %q missing %q", description, want)
 		}
@@ -48,17 +47,5 @@ func TestForumSignalAssignLineFollowsEnglishProduction(t *testing.T) {
 	}
 	if strings.Contains(description, "このタスクの担当になりました。") {
 		t.Errorf("description = %q, want no Japanese", description)
-	}
-}
-
-func TestForumFlapWarningFollowsEnglishProduction(t *testing.T) {
-	signal := ForumFlapWarning("https://kitsu.example/t/1", 4, 12*time.Minute, "en")
-	for _, want := range []string{"⚠️ The status changed 4 times in 12m.", "The tag shows the latest status.", "https://kitsu.example/t/1"} {
-		if !strings.Contains(signal.Content, want) {
-			t.Errorf("content %q missing %q", signal.Content, want)
-		}
-	}
-	if short := ForumFlapWarning("", 2, 30*time.Second, "en").Content; !strings.Contains(short, "in under a minute") {
-		t.Errorf("short span content = %q", short)
 	}
 }

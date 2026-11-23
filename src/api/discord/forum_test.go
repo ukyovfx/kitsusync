@@ -265,9 +265,9 @@ func TestRenderForumSignalTemplates(t *testing.T) {
 		quote  string
 		want   []string
 	}{
-		{"wfa", "", []string{"👀 WFA チェックをお願いします", url}},
-		{"retake", "直してください", []string{"🔄 RETAKE 修正をお願いします", "> 直してください", url}},
-		{"done", "", []string{"✅ DONE 完了しました。必要に応じてご確認ください。", url}},
+		{"wfa", "", []string{"### 👀 WFA", "チェックをお願いします", url}},
+		{"retake", "直してください", []string{"### 🔄 RETAKE", "修正をお願いします", "> 直してください", url}},
+		{"done", "", []string{"### ✅ DONE", "完了しました。", url}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.intent, func(t *testing.T) {

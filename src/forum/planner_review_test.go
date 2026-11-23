@@ -78,9 +78,9 @@ func TestPlannerAnnouncesCommentWithNewerDate(t *testing.T) {
 	}
 }
 
-// PR #283 の指摘: flapping must be checked on every status transition, not only
-// on trigger roles. A round trip that ends in WIP still flaps.
-func TestPlannerWarnsWhenFlapEndsInWIP(t *testing.T) {
+// Flapping must be checked on every status transition, not only on
+// trigger roles. A round trip that ends in WIP still flaps.
+func TestPlannerRecordsFlapWhenFlapEndsInWIP(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -110,12 +110,11 @@ func TestPlannerWarnsWhenFlapEndsInWIP(t *testing.T) {
 		}
 	}
 
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
+	if count := flapDecisionCount(t, db); count != 1 {
+		t.Fatalf("flap records = %d, want 1 for a round trip through WIP", count)
 	}
-	if count != 1 {
-		t.Fatalf("warnings = %d, want 1 for a round trip through WIP", count)
+	if count := warnRowCount(t, db); count != 0 {
+		t.Fatalf("warn rows = %d, want none", count)
 	}
 }
 
@@ -149,7 +148,7 @@ func TestPlannerDropsStaleRetakeQuote(t *testing.T) {
 
 // PR #283 の指摘: a round trip needs a return to the original status. A→B then
 // B→C is a normal progression, not a flap.
-func TestPlannerDoesNotWarnForProgressionThroughStatuses(t *testing.T) {
+func TestPlannerDoesNotRecordFlapForProgressionThroughStatuses(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -164,19 +163,15 @@ func TestPlannerDoesNotWarnForProgressionThroughStatuses(t *testing.T) {
 		t.Fatalf("done: %v", err)
 	}
 
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("warnings = %d, want 0 for a straight progression", count)
+	if count := flapDecisionCount(t, db); count != 0 {
+		t.Fatalf("flap records = %d, want 0 for a straight progression", count)
 	}
 }
 
-// PR #283 の指摘: one warning per continuous flap episode. Transitions that keep
+// One flap record per continuous flap episode. Transitions that keep
 // coming for longer than the flap period are still one episode as long as no
 // quiet period separates them.
-func TestPlannerWarnsOnceAcrossALongFlapEpisode(t *testing.T) {
+func TestPlannerRecordsFlapOnceAcrossALongFlapEpisode(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -201,18 +196,14 @@ func TestPlannerWarnsOnceAcrossALongFlapEpisode(t *testing.T) {
 		}
 	}
 
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("warnings = %d, want 1 for one continuous flap episode", count)
+	if count := flapDecisionCount(t, db); count != 1 {
+		t.Fatalf("flap records = %d, want 1 for one continuous flap episode", count)
 	}
 }
 
 // The round-trip rule only sees transitions inside the round-trip window: a
 // normal WFA -> RETAKE (+10 min) -> WFA (+50 min) round trip is not a flap.
-func TestPlannerDoesNotWarnForSlowRoundTrip(t *testing.T) {
+func TestPlannerDoesNotRecordFlapForSlowRoundTrip(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -227,17 +218,13 @@ func TestPlannerDoesNotWarnForSlowRoundTrip(t *testing.T) {
 		t.Fatalf("wfa: %v", err)
 	}
 
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("warnings = %d, want 0 for a round trip slower than the window", count)
+	if count := flapDecisionCount(t, db); count != 0 {
+		t.Fatalf("flap records = %d, want 0 for a round trip slower than the window", count)
 	}
 }
 
-// A genuine quiet period starts a new episode, which may warn again.
-func TestPlannerWarnsAgainAfterAQuietPeriod(t *testing.T) {
+// A genuine quiet period starts a new episode, which is recorded again.
+func TestPlannerRecordsFlapAgainAfterAQuietPeriod(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -262,12 +249,8 @@ func TestPlannerWarnsAgainAfterAQuietPeriod(t *testing.T) {
 	flap(now)
 	flap(now.Add(3 * time.Hour))
 
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 2 {
-		t.Fatalf("warnings = %d, want one per episode", count)
+	if count := flapDecisionCount(t, db); count != 2 {
+		t.Fatalf("flap records = %d, want one per episode", count)
 	}
 }
 

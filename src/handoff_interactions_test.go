@@ -319,8 +319,9 @@ func TestHandoffInteractionsWriteFailureReturnsTheClaim(t *testing.T) {
 }
 
 // The real write path, against a fake Kitsu: the reply lands on the source
-// task's comments, carrying the task's current status so the comment alone
-// never moves the task.
+// task's comments through the actions endpoint (Zou 1.1.1 rejects comment
+// writes on the data route with 405), carrying the task's current status
+// so the comment alone never moves the task.
 func TestHandoffReplyWritePostsToTheSourceTaskWithItsStatus(t *testing.T) {
 	var postedPath string
 	var postedBody map[string]interface{}
@@ -329,7 +330,7 @@ func TestHandoffReplyWritePostsToTheSourceTaskWithItsStatus(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/data/tasks/task-lay-1":
 			_, _ = w.Write([]byte(`{"id":"task-lay-1","task_status_id":"status-current"}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/data/tasks/task-lay-1/comments":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/actions/tasks/task-lay-1/comment":
 			postedPath = r.URL.Path
 			raw, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(raw, &postedBody); err != nil {
@@ -353,10 +354,10 @@ func TestHandoffReplyWritePostsToTheSourceTaskWithItsStatus(t *testing.T) {
 	if err := writeHandoffReplyComment(context.Background(), event, "OK（受け取りを確認しました）"); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if postedPath != "/api/data/tasks/task-lay-1/comments" {
+	if postedPath != "/api/actions/tasks/task-lay-1/comment" {
 		t.Fatalf("posted path = %q", postedPath)
 	}
-	if postedBody["task_status_id"] != "status-current" || postedBody["text"] != "OK（受け取りを確認しました）" {
+	if postedBody["task_status_id"] != "status-current" || postedBody["comment"] != "OK（受け取りを確認しました）" {
 		t.Fatalf("posted body = %+v", postedBody)
 	}
 }

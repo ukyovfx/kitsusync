@@ -470,6 +470,13 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
 		},
+		ResolveAdmins: func(projectID string) ([]string, error) {
+			project := model.FindProjectByKitsuID(db, projectID)
+			if project == nil || strings.TrimSpace(project.DiscordGuildID) == "" {
+				return nil, nil
+			}
+			return setup.GuildAdministratorDiscordIDs(project.DiscordGuildID, botToken), nil
+		},
 	}
 	executor := forum.Executor{
 		DB:       db,
