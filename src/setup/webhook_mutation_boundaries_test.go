@@ -69,7 +69,7 @@ func TestHealthReconnectWebhookFailsClosedOutsideProductionApply(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/bot/admin/health?legacy=1", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	response := httptest.NewRecorder()
-	HealthHandler(db)(response, request)
+	HealthHandler(db, time.Minute)(response, request)
 	if response.Code != http.StatusConflict {
 		t.Fatalf("legacy webhook repair should direct the operator to Apply, status=%d body=%q", response.Code, response.Body.String())
 	}

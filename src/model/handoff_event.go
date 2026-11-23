@@ -125,6 +125,22 @@ func UnansweredHandoffEvents(db *gorm.DB) ([]HandoffEvent, error) {
 	return events, err
 }
 
+// FallbackHandoffEvents lists the handoffs that had no assignee on the
+// receiving task and went to the Production's admin fallback, newest first.
+func FallbackHandoffEvents(db *gorm.DB, limit int) ([]HandoffEvent, error) {
+	var events []HandoffEvent
+	err := db.Where("fallback_used = ?", HandoffFallbackAdmin).
+		Order("detected_at desc, id desc").Limit(limit).Find(&events).Error
+	return events, err
+}
+
+// CountFallbackHandoffEvents counts every recorded admin fallback.
+func CountFallbackHandoffEvents(db *gorm.DB) (int64, error) {
+	var count int64
+	err := db.Model(&HandoffEvent{}).Where("fallback_used = ?", HandoffFallbackAdmin).Count(&count).Error
+	return count, err
+}
+
 // MarkHandoffNotified moves a pending event to sent. It reports false when the
 // event was already sent, so two pollers never report the same delivery twice.
 func MarkHandoffNotified(db *gorm.DB, id uint) (bool, error) {

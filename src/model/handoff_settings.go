@@ -293,7 +293,7 @@ func SaveProductionHandoffSettings(db *gorm.DB, settings ProductionHandoffSettin
 		return &HandoffSettingsError{Problems: problems}
 	}
 	productionID := settings.Config.ProductionID
-	return db.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		var existing ProductionHandoffConfig
 		if err := tx.Where("production_id = ?", productionID).First(&existing).Error; err == nil {
 			settings.Config.ID = existing.ID
@@ -325,7 +325,10 @@ func SaveProductionHandoffSettings(db *gorm.DB, settings ProductionHandoffSettin
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	return ReconcileSuspiciousShelves(db, settings)
 }
 
 // RegisterUnclassifiedHandoffProductType adds a product type the detector met
