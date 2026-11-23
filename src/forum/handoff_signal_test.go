@@ -93,7 +93,7 @@ func TestExecutorPostsHandoffSignalWithButtons(t *testing.T) {
 	db := newForumDB(t)
 	seedForumSettings(t, db)
 	seedForumTask(t, db, "thread-1", "s-wip")
-	components := `[{"type":1,"components":[{"type":2,"style":3,"label":"OK","custom_id":"handoff:ok:comment-1","disabled":true}]}]`
+	components := `[{"type":1,"components":[{"type":2,"style":3,"label":"OK","custom_id":"handoff:ok:1","disabled":true}]}]`
 	payload, err := json.Marshal(model.ForumPostMessagePayload{
 		Intent:                model.ForumIntentHandoff,
 		Mentions:              []string{"person-1"},
@@ -152,7 +152,7 @@ func TestExecutorPostsHandoffSignalWithButtons(t *testing.T) {
 func TestRecipientsHandoffIntent(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-1", "person-2")
-	recipients := commentRecipients(db, false)
+	recipients := commentRecipients(db)
 
 	users, _, err := recipients.ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentHandoff,

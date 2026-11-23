@@ -34,9 +34,9 @@ func TestImmediateHandoffSignalFollowsEnglishProduction(t *testing.T) {
 			t.Errorf("signal %q missing %q", text, want)
 		}
 	}
-	event := model.HandoffEvent{CommentID: "comment-1"}
-	rows := handoffReplyRows([]model.HandoffEvent{event}, discord.NotificationLanguage("en"))
-	if labels := []string{rows[0].Components[0].Label, rows[0].Components[1].Label}; labels[0] != "OK" || labels[1] != "Retake" {
-		t.Errorf("reply buttons = %v, want OK/Retake", labels)
+	event := model.HandoffEvent{ID: 3}
+	rows := handoffReplyRows(nil, []model.HandoffEvent{event}, discord.NotificationLanguage("en"))
+	if len(rows) != 1 || len(rows[0].Components) != 1 || rows[0].Components[0].Label != "OK" {
+		t.Errorf("reply buttons = %+v, want a single OK button", rows)
 	}
 }

@@ -26,9 +26,7 @@ type TaskTypeWebhook struct {
 
 // NotificationConfig は通知機能の設定
 type NotificationConfig struct {
-	DeliveryPayloadRetentionDays int  `toml:"deliveryPayloadRetentionDays"`
-	// CommentNotifyAssignee は true のとき、コメント通知の宛先に現在の担当者も加える（既定 false）。
-	CommentNotifyAssignee bool `toml:"commentNotifyAssignee"`
+	DeliveryPayloadRetentionDays int `toml:"deliveryPayloadRetentionDays"`
 }
 
 type Config struct {
@@ -130,7 +128,6 @@ func ReadFromPath(path string) (Config, error) {
 
 	config := Config{Notification: NotificationConfig{
 		DeliveryPayloadRetentionDays: defaultDeliveryPayloadRetentionDays,
-		CommentNotifyAssignee:        false,
 	}}
 	// 未知のキーは無視する。構造体から削除した設定項目が残る conf.toml でも起動できるようにするため。
 	tomlCfg := toml.DefaultConfig

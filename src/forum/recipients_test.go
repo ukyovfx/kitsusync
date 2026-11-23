@@ -11,7 +11,7 @@ import (
 
 // commentRecipients builds a Recipients with fixed resolvers so the comment
 // intent can be checked without the Discord wiring.
-func commentRecipients(db *gorm.DB, notifyAssignees bool) Recipients {
+func commentRecipients(db *gorm.DB) Recipients {
 	return Recipients{
 		DB: db,
 		ResolveAssignees: func(projectID string, kitsuPersonIDs []string) []string {
@@ -24,7 +24,6 @@ func commentRecipients(db *gorm.DB, notifyAssignees bool) Recipients {
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return []discord.ReviewerTarget{{Kind: model.ReviewerTargetUser, ID: "d-reviewer"}}, nil
 		},
-		NotifyAssigneesOnComment: notifyAssignees,
 	}
 }
 
@@ -45,11 +44,11 @@ func seedRecipientTask(t *testing.T, db *gorm.DB, assignees ...string) {
 	}
 }
 
-func TestRecipientsCommentIntentMentionsAndAssignees(t *testing.T) {
+func TestRecipientsCommentIntentMentionsOnly(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-1", "person-2")
 
-	users, roles, err := commentRecipients(db, true).ForTask("task-1", model.ForumPostMessagePayload{
+	users, roles, err := commentRecipients(db).ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentComment,
 		Mentions: []string{"person-9"},
 	})
@@ -59,7 +58,7 @@ func TestRecipientsCommentIntentMentionsAndAssignees(t *testing.T) {
 	if len(roles) != 0 {
 		t.Errorf("comment intent must not mention roles: %v", roles)
 	}
-	want := []string{"d-person-9", "d-person-1", "d-person-2"}
+	want := []string{"d-person-9"}
 	if len(users) != len(want) {
 		t.Fatalf("users = %v, want %v", users, want)
 	}
@@ -74,7 +73,7 @@ func TestRecipientsCommentIntentSkipsAssigneesWhenDisabled(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-1")
 
-	users, _, err := commentRecipients(db, false).ForTask("task-1", model.ForumPostMessagePayload{
+	users, _, err := commentRecipients(db).ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentComment,
 		Mentions: []string{"person-9"},
 	})
@@ -90,7 +89,7 @@ func TestRecipientsCommentIntentDeduplicatesOverlap(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-9")
 
-	users, _, err := commentRecipients(db, true).ForTask("task-1", model.ForumPostMessagePayload{
+	users, _, err := commentRecipients(db).ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentComment,
 		Mentions: []string{"person-9"},
 	})

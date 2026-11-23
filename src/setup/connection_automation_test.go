@@ -2,9 +2,7 @@ package setup
 
 import (
 	"errors"
-	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -157,51 +155,50 @@ func TestNewProductionStartsWithHandoffTemplate(t *testing.T) {
 
 	connectNewProduction(t, db, "p2")
 
+	// The seed writes the studio-wide wiring from the folding table
+	// (ui-redesign-core-draft-v2 §3.6), restricted to Task Types that exist,
+	// plus the Production's no-assignee default. No per-Production matrix
+	// rows or product types are seeded anymore.
+	routes, err := model.LoadStudioTaskRoutes(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]string{}
+	for _, route := range routes {
+		byName[route.FromTaskTypeName] = route.NotifyTaskTypeIDs
+	}
+	idByName := map[string]string{}
+	for _, tt := range handoffTaskTypeLister(db, "p2") {
+		idByName[tt.Name] = tt.ID
+	}
+	wantNames := map[string][]string{
+		"Layout":      {"Animation", "Lighting", "Compositing"},
+		"Animation":   {"Lighting", "Rendering"}, // FX is not in this Production
+		"Lighting":    {"Rendering"},
+		"Rendering":   {"Compositing"},
+		"Compositing": {"Layout", "Animation"},
+	}
+	if len(byName) != len(wantNames) {
+		t.Fatalf("studio routes = %v, want sources %v", byName, wantNames)
+	}
+	for source, targets := range wantNames {
+		var wantIDs []string
+		for _, name := range targets {
+			wantIDs = append(wantIDs, idByName[name])
+		}
+		if got := byName[source]; got != strings.Join(wantIDs, ",") {
+			t.Fatalf("studio route %s = %q, want %q", source, got, strings.Join(wantIDs, ","))
+		}
+	}
 	settings, ok, err := model.LoadProductionHandoffSettings(db, "p2")
 	if err != nil || !ok {
 		t.Fatalf("handoff settings: ok=%v err=%v", ok, err)
 	}
-	rows := map[string]model.ProductionHandoffRoute{}
-	for _, route := range settings.Routes {
-		rows[route.TaskTypeName+"|"+route.ProductType] = route
+	if settings.Config.NoAssignee != model.HandoffFallbackAdmin {
+		t.Fatalf("no-assignee default = %q, want admin", settings.Config.NoAssignee)
 	}
-	// Rows whose source Task Type is missing (素材取り込み, Modeling, ...) are skipped.
-	if _, found := rows["Modeling|model"]; found {
-		t.Fatal("a row for a missing Task Type was seeded")
-	}
-	want := map[string][2]string{
-		"Layout|camera":         {model.HandoffFlowHand, "Animation,Lighting,Compositing"},
-		"Layout|layout":         {model.HandoffFlowHand, "Animation,Lighting"},
-		"Compositing|matchmove": {model.HandoffFlowHand, "Layout,Animation"},
-		"Compositing|render":    {model.HandoffFlowSubmit, ""},
-		"Compositing|workfile":  {model.HandoffFlowShelve, ""},
-		"Rendering|renderPass":  {model.HandoffFlowHand, "Compositing"},
-		"Lighting|lighting":     {model.HandoffFlowHand, "Rendering"},
-		"Animation|pointcache":  {model.HandoffFlowHand, "Lighting,Rendering"}, // FX is not in this Production
-	}
-	for key, expect := range want {
-		route, found := rows[key]
-		if !found {
-			t.Fatalf("row %s missing; have %v", key, rows)
-		}
-		if route.Flow != expect[0] || route.NotifyTaskTypeName != expect[1] {
-			t.Fatalf("row %s = %s / %q, want %s / %q", key, route.Flow, route.NotifyTaskTypeName, expect[0], expect[1])
-		}
-	}
-	if len(settings.Routes) != len(want) {
-		t.Fatalf("routes = %d, want %d", len(settings.Routes), len(want))
-	}
-	products := map[string]bool{}
-	for _, product := range settings.ProductTypes {
-		products[product.Name] = true
-		if product.Unclassified {
-			t.Fatalf("template product %s is marked unclassified", product.Name)
-		}
-	}
-	for _, name := range []string{"camera", "layout", "matchmove", "render", "workfile", "renderPass", "lighting", "pointcache"} {
-		if !products[name] {
-			t.Fatalf("product type %s not registered: %v", name, products)
-		}
+	if len(settings.Routes) != 0 || len(settings.ProductTypes) != 0 {
+		t.Fatalf("per-Production seed rows remain: routes=%d products=%d", len(settings.Routes), len(settings.ProductTypes))
 	}
 }
 
@@ -224,41 +221,20 @@ func TestHandoffTemplateLeavesExistingSettingsAlone(t *testing.T) {
 	}
 }
 
-// An unclassified product type shows as such on the mapping page, starts
-// shelved, and keeps its mark through a save that does not classify it.
-func TestHandoffPageShowsUnclassifiedAndKeepsMarkUntilClassified(t *testing.T) {
+// The handoff page renders the studio wiring the seed wrote, with the
+// Production inheriting it until an override says otherwise.
+func TestHandoffPageShowsSeededStudioRoutes(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
-	if err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
-		Config:       model.ProductionHandoffConfig{ProductionID: "p1", NotifyTiming: model.HandoffTimingMixed, NoAssignee: model.HandoffFallbackAdmin},
-		ProductTypes: []model.ProductionHandoffProductType{{Name: "vdb", Unclassified: true}},
-	}); err != nil {
+	if err := seedHandoffTemplate(db, "p1"); err != nil {
 		t.Fatal(err)
 	}
 	body := handoffGet(t, db).Body.String()
-	if !strings.Contains(body, "Unclassified") || !strings.Contains(body, `name="product_unclassified" value="vdb"`) {
-		t.Fatalf("unclassified product not shown: %s", body)
+	// Layout -> Animation, Lighting, Compositing per the folding table.
+	if !strings.Contains(body, `name="st_notify_tt-lay" value="tt-anim" checked`) {
+		t.Fatalf("seeded studio wiring not shown: %s", body)
 	}
-
-	// Saving the page as it stands (all rows still shelved) keeps the mark.
-	form := url.Values{"project": {"p1"}, "notify_timing": {model.HandoffTimingMixed}, "no_assignee": {model.HandoffFallbackAdmin}, "product_name": {"vdb"}, "product_unclassified": {"vdb"}}
-	form["row_task"], form["row_task_name"], form["row_product"], form["row_flow"] = []string{"tt-lay"}, []string{"Layout"}, []string{"vdb"}, []string{model.HandoffFlowShelve}
-	if w := handoffPost(t, db, form); w.Code != http.StatusSeeOther {
-		t.Fatalf("save status = %d: %s", w.Code, w.Body.String())
-	}
-	saved, _, _ := model.LoadProductionHandoffSettings(db, "p1")
-	if len(saved.ProductTypes) != 1 || !saved.ProductTypes[0].Unclassified {
-		t.Fatalf("mark lost on an unrelated save: %+v", saved.ProductTypes)
-	}
-
-	// Choosing a flow for one of its rows classifies it.
-	form["row_flow"] = []string{model.HandoffFlowHand}
-	form["row_notify_tt-lay|vdb"] = []string{"tt-anim"}
-	if w := handoffPost(t, db, form); w.Code != http.StatusSeeOther {
-		t.Fatalf("save status = %d: %s", w.Code, w.Body.String())
-	}
-	saved, _, _ = model.LoadProductionHandoffSettings(db, "p1")
-	if saved.ProductTypes[0].Unclassified {
-		t.Fatal("a classified product type is still marked unclassified")
+	if !strings.Contains(body, "Animation, Lighting, Compositing") {
+		t.Fatalf("inherited wiring not shown in the production section: %s", body)
 	}
 }

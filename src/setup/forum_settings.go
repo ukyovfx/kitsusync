@@ -165,7 +165,7 @@ func forumTemplateRoleForStatus(name string) string {
 		return model.ForumRoleRetake
 	case "done", "approved":
 		return model.ForumRoleDone
-	case "work in progress":
+	case "work in progress", "wip":
 		return model.ForumRoleWIP
 	}
 	return ""
@@ -187,10 +187,11 @@ func forumTemplateStatusRolesFrom(statuses []kitsu.TaskStatus) []model.Productio
 	return rows
 }
 
-// ForumSettingsHandler serves /admin/forum?project=<Kitsu project ID>. The
-// commentNotifyAssignee default is the conf.toml seed the checkbox shows until
-// the operator saves a value of its own.
-func ForumSettingsHandler(db *gorm.DB, commentNotifyDefault bool, discordSettings func() (botToken, fallbackGuildID string)) http.HandlerFunc {
+// ForumSettingsHandler serves /admin/forum?project=<Kitsu project ID>. It
+// configures only the task type -> forum routing; the status -> role mapping
+// lives on the bot settings page, and comment notifications always relay
+// @mentions only.
+func ForumSettingsHandler(db *gorm.DB, discordSettings func() (botToken, fallbackGuildID string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
@@ -206,13 +207,8 @@ func ForumSettingsHandler(db *gorm.DB, commentNotifyDefault bool, discordSetting
 				http.Error(w, "validation-only Production is read-only", http.StatusForbidden)
 				return
 			}
-			if err := saveCommentNotifyAssignee(db, r); err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, nil, err))
-				return
-			}
 			if strings.TrimSpace(r.FormValue("action")) == "create_forums" {
-				submitted := parseForumSettingsForm(r, projectID)
+				submitted := withCarriedStatusRoles(db, parseForumSettingsForm(r, projectID))
 				created, err := createForumsForTaskTypes(db, projectID, botToken, fallbackGuildID, submitted)
 				if err == nil {
 					http.Redirect(w, r, withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)+"&msg=forums_created", http.StatusSeeOther)
@@ -220,10 +216,18 @@ func ForumSettingsHandler(db *gorm.DB, commentNotifyDefault bool, discordSetting
 				}
 				// The forums may already exist, so show what was made and what is left.
 				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, &created, err))
+				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &created, err))
 				return
 			}
-			settings := parseForumSettingsForm(r, projectID)
+			settings := withCarriedStatusRoles(db, parseForumSettingsForm(r, projectID))
+			if len(settings.StatusRoles) == 0 {
+				// First save of a Production whose roles were never set: the
+				// name template fills them, the same way the create action
+				// does, so one save still finishes the setup.
+				if statuses, statusErr := forumStatusLister(db); statusErr == nil {
+					settings.StatusRoles = forumTemplateStatusRolesFrom(statuses)
+				}
+			}
 			// The tag mapping is derived from each routed forum's own tag names,
 			// so the save needs the live forum list. While Discord is unreachable
 			// the saved mapping is kept, and a save with nothing to derive from is
@@ -257,31 +261,20 @@ func ForumSettingsHandler(db *gorm.DB, commentNotifyDefault bool, discordSetting
 				if len(settings.Tags) == 0 {
 					err := &model.ForumSettingsError{Problems: []model.ForumSettingsProblem{{Code: model.ProblemForumListUnavailable}}}
 					w.WriteHeader(http.StatusBadRequest)
-					fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, &settings, err))
+					fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
 					return
 				}
 			}
 			if err := model.SaveProductionForumSettings(db, settings); err != nil {
 				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, &settings, err))
+				fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, &settings, err))
 				return
 			}
 			http.Redirect(w, r, withLang("/bot/admin/forum?project="+url.QueryEscape(projectID), r)+"&msg=saved", http.StatusSeeOther)
 			return
 		}
-		fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, commentNotifyDefault, nil, nil))
+		fmt.Fprint(w, renderForumSettingsPage(db, r, lang, *project, botToken, fallbackGuildID, nil, nil))
 	}
-}
-
-// saveCommentNotifyAssignee stores the global comment-assignee toggle. An
-// explicit false is stored too, so a saved OFF stays OFF regardless of the
-// conf.toml seed.
-func saveCommentNotifyAssignee(db *gorm.DB, r *http.Request) error {
-	value := "false"
-	if r.FormValue("comment_notify_assignee") != "" {
-		value = "true"
-	}
-	return model.SetSettingWithError(db, CommentNotifyAssigneeSettingKey, value)
 }
 
 // parseForumSettingsForm reads the page's parallel-array fields. It needs no
@@ -303,16 +296,15 @@ func parseForumSettingsForm(r *http.Request, productionID string) model.Producti
 		}
 		settings.Routes = append(settings.Routes, route)
 	}
-	stIDs, stNames, stRoles := r.Form["st_id"], r.Form["st_name"], r.Form["st_role"]
-	for i := range stIDs {
-		if i >= len(stRoles) || strings.TrimSpace(stRoles[i]) == "" {
-			continue
-		}
-		row := model.ProductionForumStatusRole{StatusID: strings.TrimSpace(stIDs[i]), Role: strings.TrimSpace(stRoles[i])}
-		if i < len(stNames) {
-			row.StatusName = strings.TrimSpace(stNames[i])
-		}
-		settings.StatusRoles = append(settings.StatusRoles, row)
+	return settings
+}
+
+// withCarriedStatusRoles loads the saved status -> role rows for the
+// Production so a forum-settings save (which replaces the whole settings
+// bundle) preserves the mapping that is edited on the bot settings page.
+func withCarriedStatusRoles(db *gorm.DB, settings model.ProductionForumSettings) model.ProductionForumSettings {
+	if saved, ok, err := model.LoadProductionForumSettings(db, settings.Config.ProductionID); err == nil && ok {
+		settings.StatusRoles = saved.StatusRoles
 	}
 	return settings
 }
@@ -335,11 +327,7 @@ func forumSelect(name, selected string, options [][2]string, emptyLabel string) 
 	return b.String()
 }
 
-// CommentNotifyAssigneeSettingKey stores the comment-assignee toggle in the
-// settings table; conf.toml only seeds it until the first admin save.
-const CommentNotifyAssigneeSettingKey = "notification.comment_notify_assignee"
-
-func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project model.Project, botToken, fallbackGuildID string, commentNotifyDefault bool, submitted *model.ProductionForumSettings, saveErr error) string {
+func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project model.Project, botToken, fallbackGuildID string, submitted *model.ProductionForumSettings, saveErr error) string {
 	productionID := project.KitsuProjectID
 	var current model.ProductionForumSettings
 	if submitted != nil {
@@ -365,7 +353,7 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		notices.WriteString(`<div class="notice" role="status">` + esc(t(lang, "設定を保存しました。", "Settings saved.")) + `</div>`)
 	}
 	taskTypes := forumTaskTypeLister(db, productionID)
-	statuses, statusErr := forumStatusLister(db)
+	_, statusErr := forumStatusLister(db)
 	var forums []forumChannelInfo
 	var forumErr error
 	var staleNotice string
@@ -442,74 +430,12 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		}
 	}
 
-	roleByStatus := map[string]string{}
-	for _, row := range current.StatusRoles {
-		roleByStatus[row.StatusID] = row.Role
-	}
-	if submitted == nil && len(current.StatusRoles) == 0 && statusErr == nil {
-		// First look at an unmapped Production: show the template defaults so the
-		// operator adjusts instead of typing. Saved values always win once they
-		// exist, and the create action saves the same template. The status list
-		// fetched above is reused, so the page does not ask Kitsu twice.
-		for _, row := range forumTemplateStatusRolesFrom(statuses) {
-			roleByStatus[row.StatusID] = row.Role
-		}
-	}
-	roleOptions := make([][2]string, 0, len(forumRoleOptions))
-	for _, role := range forumRoleOptions {
-		roleOptions = append(roleOptions, [2]string{role, forumRoleLabel(lang, role)})
-	}
-	// Every saved status stays a row, whether or not Kitsu lists it right now: a
-	// save replaces the whole mapping, so a status missing from the form (Kitsu
-	// unreachable, or the status deleted there) would silently lose its role.
-	type statusRow struct{ id, name string }
-	var statusList []statusRow
-	seenStatuses := map[string]struct{}{}
-	if statusErr == nil {
-		for _, status := range statuses {
-			name := strings.TrimSpace(status.Name)
-			if name == "" {
-				name = status.ShortName
-			}
-			statusList = append(statusList, statusRow{status.ID, name})
-			seenStatuses[status.ID] = struct{}{}
-		}
-	}
-	for _, saved := range current.StatusRoles {
-		if _, ok := seenStatuses[saved.StatusID]; !ok {
-			name := saved.StatusName
-			if name == "" {
-				name = saved.StatusID
-			}
-			statusList = append(statusList, statusRow{saved.StatusID, name})
-			seenStatuses[saved.StatusID] = struct{}{}
-		}
-	}
-	var statusRows strings.Builder
-	for _, status := range statusList {
-		statusRows.WriteString(`<tr><td>` + esc(status.name) + `<input type="hidden" name="st_id" value="` + esc(status.id) + `"><input type="hidden" name="st_name" value="` + esc(status.name) + `"></td><td>` +
-			forumSelect("st_role", roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</td></tr>`)
-	}
-
-	commentNotify := commentNotifyDefault
-	if v := model.GetSetting(db, CommentNotifyAssigneeSettingKey); v != "" {
-		commentNotify = v == "true"
-	}
-	if r.Method == http.MethodPost {
-		commentNotify = r.FormValue("comment_notify_assignee") != ""
-	}
-
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/forum", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="project" value="` + esc(productionID) + `">` +
 		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2>` +
 		`<label class="field-label" for="forum-guild">` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</label><input id="forum-guild" name="guild_id" value="` + esc(guildID) + `" autocomplete="off">` +
 		`<p class="field-help">` + esc(t(lang, "保存時に、フォーラムが持つ標準名のタグ（WFA / RETAKE / DONE / WIP）から役割の紐づけを自動で作ります。", "On save, the role mapping is derived automatically from each forum's standard tags (WFA / RETAKE / DONE / WIP).")) + `</p>` +
 		`<table class="data-table forum-map-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p><table class="data-table forum-map-table"><tbody>` + statusRows.String() + `</tbody></table></section>` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "コメントの通知", "Comment notifications")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "コメントの通知で、現在の担当者にもメンションを送るかを選びます。オフのときは、コメントでメンションされた人だけに届きます。", "Choose whether a comment notification also mentions the current assignees. When off, only the people mentioned in the comment are notified.")) + `</p>` +
-		`<label class="checkbox-label"><input type="checkbox" name="comment_notify_assignee" value="on"` + handoffChecked(commentNotify) + `> ` + esc(t(lang, "担当者にも通知する", "Also notify the current assignees")) + `</label></section>` +
 		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a>` + refetchButton + ` <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button> <button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button></div></form>`
 
 	// The result panel appears after the create button ran (done or failed) and

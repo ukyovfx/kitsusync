@@ -1280,6 +1280,9 @@ func HealthHandler(db *gorm.DB, pollInterval time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
+		if r.Method == http.MethodPost && handleAdminExceptionPost(db, w, r) {
+			return
+		}
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
 			renderIAHealth(w, r, db, pollInterval)
 			return
@@ -2166,6 +2169,15 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 			return
 		}
 		if r.Method == http.MethodPost {
+			if action == "save_status_roles" {
+				if err := saveStatusRoles(db, r); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, adminPage(lang, t(lang, "Kitsuのステータス → 役割", "Kitsu status → role"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong>`+forumSaveErrorMarkup(lang, err, nil)+`</div></div>`))
+					return
+				}
+				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
+				return
+			}
 			if action == "save_external_kitsu_url" {
 				draft, present := r.PostForm["kitsu_external_url"]
 				if !present || len(draft) != 1 {
@@ -2364,11 +2376,11 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続先を確認できませんでした。", "The Kitsu connection endpoint is invalid.")))
 					return
-					}
-					if kitsuEndpointChangeBlocked(hostForAuth) {
-						rejectPinnedKitsuEndpointChange(w, lang, "admin_legacy_save")
-						return
-					}
+				}
+				if kitsuEndpointChangeBlocked(hostForAuth) {
+					rejectPinnedKitsuEndpointChange(w, lang, "admin_legacy_save")
+					return
+				}
 				if err := RecoverRuntimeCredentials(db, hostForAuth, runtimeEmail, runtimePassword); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
@@ -2457,6 +2469,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		}
 		if editMode {
 			form := renderConnectionsEditFormWithHealth(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuHealthy, discordHealthy, discordStatus.BotName)
+			form += renderStatusRolesSection(db, lang, r)
 			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, form))
 			return
 		}
@@ -2742,7 +2755,6 @@ func buildUnifiedAssignments(projectUsers []model.ProjectUserMap, legacyUsers []
 	return out
 }
 
-
 func syncProjectCheckerAssignmentUserIdentity(db *gorm.DB, projectRowID uint, previousName, previousEmail, name, email, discordID string) {
 	previousIdentity := assignmentIdentityKey(previousName, previousEmail)
 	for _, row := range model.ListProjectCheckerMaps(db, projectRowID) {
@@ -2780,7 +2792,7 @@ func deleteLegacyCheckerAssignmentsForUser(db *gorm.DB, name, email string) {
 }
 
 func parseUint(value string) uint {
-	n, _ := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	n, _ := strconv.ParseUint(strings.TrimSpace(value), 10, 0)
 	return uint(n)
 }
 

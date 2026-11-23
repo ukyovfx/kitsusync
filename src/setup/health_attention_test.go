@@ -62,19 +62,14 @@ func newAttentionDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// The attention section shows the shelved pair and the admin fallback count,
-// and renders nothing when there is nothing to review.
+// The attention section shows the admin fallback count and renders nothing
+// when there is nothing to review.
 func TestRenderHandoffAttentionSection(t *testing.T) {
 	db := newAttentionDB(t)
 	if got := renderHandoffAttentionSection("ja", db); got != "" {
 		t.Fatalf("empty state must render nothing, got %q", got)
 	}
 	if err := model.CreateProject(db, "prod-1", "Prod One", "", "", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := model.RecordSuspiciousShelf(db, "prod-1", model.SuspiciousShelf{
-		TaskTypeID: "tt-layout", TaskTypeName: "Layout", ProductType: "matchmove", OtherTaskTypeName: "Matchmove",
-	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.HandoffEvent{
@@ -86,8 +81,8 @@ func TestRenderHandoffAttentionSection(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := renderHandoffAttentionSection("ja", db)
-	if !strings.Contains(got, "要確認") || !strings.Contains(got, "Layout × matchmove") {
-		t.Fatalf("section must show the shelved pair as needing review, got %q", got)
+	if !strings.Contains(got, "受け渡しの要確認") {
+		t.Fatalf("section must show the handoff review heading, got %q", got)
 	}
 	if !strings.Contains(got, "1 件") {
 		t.Fatalf("section must show the fallback count, got %q", got)

@@ -8,13 +8,15 @@ import (
 
 	"app/src/api/discord"
 	"app/src/model"
+	"app/src/setup"
 
 	"gorm.io/gorm"
 )
 
-// handoffReplyRowsFor is what the digest or the DM sends for these events.
+// handoffReplyRowsFor is what the digest or the DM sends for these events
+// while no interaction endpoint is configured.
 func handoffReplyRowsFor(events []model.HandoffEvent) []discord.ActionRow {
-	return handoffReplyRows(events, "ja")
+	return handoffReplyRows(nil, events, "ja")
 }
 
 // A digest keeps one reply row per handoff, so the configured cap is what
@@ -25,40 +27,58 @@ func TestHandoffDigestReplyRowsFitTheMessageLimit(t *testing.T) {
 	}
 	events := make([]model.HandoffEvent, 0, handoffDigestMaxItems)
 	for i := 0; i < handoffDigestMaxItems; i++ {
-		events = append(events, model.HandoffEvent{CommentID: "comment-" + string(rune('a'+i))})
+		events = append(events, model.HandoffEvent{ID: uint(i + 1)})
 	}
 	rows := handoffReplyRowsFor(events)
 	if len(rows) != handoffDigestMaxItems || len(rows) > 5 {
 		t.Fatalf("rows = %d", len(rows))
 	}
+	// Ruling I: one OK button per handoff, no Retake.
 	for _, row := range rows {
-		if len(row.Components) != 2 || row.Components[0].Label != "OK" || row.Components[1].Label != "リテイク" {
+		if len(row.Components) != 1 || row.Components[0].Label != "OK" {
 			t.Fatalf("row = %+v", row)
 		}
 	}
 }
 
-// Nothing receives a press yet, so the buttons are sent inert rather than
-// pretending to work: disabled, but still carrying their CustomID, because
-// Discord rejects a non-link button that has none.
+// Without the Discord application public key nothing can receive a press,
+// so the buttons are sent inert rather than pretending to work: disabled,
+// but still carrying their CustomID, because Discord rejects a non-link
+// button that has none. Configuring the key wires them.
 func TestHandoffButtonsAreInertUntilTheInteractionEndpointExists(t *testing.T) {
-	if handoffRepliesWired() {
-		t.Fatal("expected replies to be unwired without an interaction endpoint")
+	if handoffRepliesWired(nil) {
+		t.Fatal("expected replies to be unwired without a database")
 	}
-	rows := handoffReplyRowsFor([]model.HandoffEvent{{CommentID: "comment-1"}})
-	if len(rows) != 1 || len(rows[0].Components) != 2 {
+	db := handoffNotifyDB(t, model.HandoffTimingMixed)
+	if handoffRepliesWired(db) {
+		t.Fatal("expected replies to be unwired without an application public key")
+	}
+	rows := handoffReplyRowsFor([]model.HandoffEvent{{ID: 7}})
+	if len(rows) != 1 || len(rows[0].Components) != 1 {
 		t.Fatalf("rows = %+v", rows)
 	}
-	for _, button := range rows[0].Components {
-		if !button.Disabled {
-			t.Fatalf("unwired button must be disabled: %+v", button)
-		}
+	if !rows[0].Components[0].Disabled {
+		t.Fatalf("unwired button must be disabled: %+v", rows[0].Components[0])
 	}
-	if rows[0].Components[0].CustomID != "handoff:ok:comment-1" || rows[0].Components[1].CustomID != "handoff:retake:comment-1" {
+	if rows[0].Components[0].CustomID != "handoff:ok:7" {
 		t.Fatalf("rows = %+v", rows)
 	}
-	if got := handoffReplyCustomID("ok", "comment-1"); got != "handoff:ok:comment-1" {
+	if got := handoffReplyCustomID(7); got != "handoff:ok:7" {
 		t.Fatalf("custom id = %q", got)
+	}
+	if got := handoffReplyCustomID(0); got != "handoff:ok:pending" {
+		t.Fatalf("custom id for an unsaved event = %q", got)
+	}
+
+	model.SetSetting(db, setup.DiscordApplicationPublicKeySettingKey, "0123456789abcdef")
+	if !handoffRepliesWired(db) {
+		t.Fatal("expected replies to be wired once the public key is configured")
+	}
+	wired := handoffReplyRows(db, []model.HandoffEvent{{ID: 7}}, "ja")
+	for _, button := range wired[0].Components {
+		if button.Disabled {
+			t.Fatalf("wired button must be enabled: %+v", button)
+		}
 	}
 }
 
@@ -133,9 +153,16 @@ func TestHandoffReplyMovesTheEventOutOfTheDigestOnce(t *testing.T) {
 // The digest repeats an unanswered handoff every morning and drops it after
 // the reply, with one reply row per listed handoff.
 func TestHandoffDigestListsUntilRepliedAndDropsAfter(t *testing.T) {
-	db := handoffReplyDB(t, model.HandoffTimingDigest)
+	db := handoffReplyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackNone, "person-comp")
+	// The handoff was sent immediately when it fired; the digest repeats it
+	// while it is unanswered.
+	if event, err := model.FindHandoffEvent(db, "comment-1"); err != nil {
+		t.Fatal(err)
+	} else if ok, err := model.MarkHandoffNotified(db, event.ID); err != nil || !ok {
+		t.Fatalf("notify: ok=%v err=%v", ok, err)
+	}
 
 	morning := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)
 	if sent, err := sendForumMorningDigests(digestTestConfig(), db, morning, "2026-11-16"); err != nil || sent != 1 {
@@ -171,12 +198,19 @@ func TestHandoffDigestListsUntilRepliedAndDropsAfter(t *testing.T) {
 // A capped card counts what it left out, and keeps one reply row per listed
 // handoff only.
 func TestHandoffDigestCountsTheHandoffsItLeftOut(t *testing.T) {
-	db := handoffReplyDB(t, model.HandoffTimingDigest)
+	db := handoffReplyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	// Different products: the same product on the same receiving task would
 	// supersede the older one instead of queueing.
 	for _, product := range []string{"camera", "model", "rig", "clone", "anim", "fx", "light"} {
 		handoffEventNamed(t, db, "comment-"+product, product)
+		event, err := model.FindHandoffEvent(db, "comment-"+product)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := model.MarkHandoffNotified(db, event.ID); err != nil || !ok {
+			t.Fatalf("notify %s: ok=%v err=%v", product, ok, err)
+		}
 	}
 
 	morning := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)
@@ -248,10 +282,14 @@ func TestHandoffSignalCarriesReplyButtons(t *testing.T) {
 	if err := json.Unmarshal(payload.Components, &components); err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 1 || len(components[0].Components) != 2 {
+	if len(components) != 1 || len(components[0].Components) != 1 {
 		t.Fatalf("components = %+v", components)
 	}
-	if components[0].Components[0].CustomID != "handoff:ok:comment-1" || components[0].Components[1].CustomID != "handoff:retake:comment-1" {
-		t.Fatalf("components = %+v", components)
+	event, err := model.FindHandoffEvent(db, "comment-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := handoffReplyCustomID(event.ID); components[0].Components[0].CustomID != want {
+		t.Fatalf("components = %+v, want custom id %q", components, want)
 	}
 }

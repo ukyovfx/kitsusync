@@ -26,7 +26,15 @@ type HandoffEvent struct {
 	ID uint `gorm:"primaryKey"`
 	// CommentID is the Kitsu comment that carried the delivery table. It makes
 	// detection idempotent across re-polls and restarts.
-	CommentID    string `gorm:"uniqueIndex;size:64;not null"`
+	CommentID string `gorm:"uniqueIndex;size:64;not null"`
+	// EpisodeKey identifies one done-nature episode of the source task
+	// (redesign core v2, 2026-11-23): it is the forum transition ID that
+	// opened the episode. Episode events store a synthetic CommentID
+	// ("episode:<key>:<receiving task>") so the legacy unique column stays
+	// satisfied; the product columns stay empty for them (the shelf holds
+	// the version truth). The partial unique index on (episode_key,
+	// notify_task_id) is created at migration time.
+	EpisodeKey   string `gorm:"size:64"`
 	ProductionID string `gorm:"index:idx_handoff_event_production;size:64;not null"`
 	// Source side.
 	SourceTaskID       string `gorm:"size:64;not null"`
@@ -54,6 +62,9 @@ type HandoffEvent struct {
 	// SupersededAt marks an event replaced by a newer delivery of the same
 	// product to the same receiving task, so it is not reported twice.
 	SupersededAt *time.Time
+	// EpisodeLabel is a display-only marker for a refired episode handoff
+	// ("再確定（2回目）"); it is computed at dispatch time, never stored.
+	EpisodeLabel string `gorm:"-"`
 }
 
 func (HandoffEvent) TableName() string { return "handoff_events" }
@@ -101,10 +112,78 @@ func RecordHandoffEvent(db *gorm.DB, event HandoffEvent) (existing bool, err err
 	return false, db.Save(&stale).Error
 }
 
+// RecordHandoffEventForEpisode stores the handoff of one (episode,
+// receiving task) pair. An existing live event for the same pair is kept;
+// a previous episode's unanswered event for the same receiving task is
+// superseded (cancelled), mirroring the delivery supersede.
+func RecordHandoffEventForEpisode(db *gorm.DB, event HandoffEvent) (existing bool, err error) {
+	if db == nil || event.EpisodeKey == "" || event.NotifyTaskID == "" {
+		return false, nil
+	}
+	if event.CommentID == "" {
+		event.CommentID = "episode:" + event.EpisodeKey + ":" + event.NotifyTaskID
+	}
+	if event.State == "" {
+		event.State = HandoffEventPending
+	}
+	if event.DetectedAt.IsZero() {
+		event.DetectedAt = time.Now().UTC()
+	}
+	event.NotifyPersonIDs = JoinHandoffNotifyIDs(SplitHandoffNotifyIDs(event.NotifyPersonIDs))
+	err = db.Transaction(func(tx *gorm.DB) error {
+		var prior HandoffEvent
+		findErr := tx.Where("episode_key = ? AND notify_task_id = ?", event.EpisodeKey, event.NotifyTaskID).First(&prior).Error
+		if findErr == nil {
+			existing = true
+			return nil
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		if err := tx.Model(&HandoffEvent{}).
+			Where("notify_task_id = ? AND episode_key <> '' AND state IN ?", event.NotifyTaskID, []string{HandoffEventPending, HandoffEventNotified}).
+			Update("state", HandoffEventCancelled).Error; err != nil {
+			return err
+		}
+		return tx.Create(&event).Error
+	})
+	return existing, err
+}
+
+// CountHandoffEpisodes returns how many distinct episodes a source task has
+// produced, i.e. which firing number the newest one is (for the
+// "再確定（N回目）" label).
+func CountHandoffEpisodes(db *gorm.DB, sourceTaskID string) (int, error) {
+	var keys []string
+	err := db.Model(&HandoffEvent{}).Where("source_task_id = ? AND episode_key <> ''", sourceTaskID).Distinct("episode_key").Pluck("episode_key", &keys).Error
+	return len(keys), err
+}
+
+// ResolveHandoffEpisodesForReceiverTask closes the unanswered episode events
+// whose receiving task is the given one: the receiver started work, which is
+// the acknowledgement (interference fix C-6). The OK button stays the
+// explicit path; this only stops the digest from repeating a handoff the
+// receiver is already acting on.
+func ResolveHandoffEpisodesForReceiverTask(db *gorm.DB, receiverTaskID string) (int, error) {
+	result := db.Model(&HandoffEvent{}).
+		Where("notify_task_id = ? AND episode_key <> '' AND state IN ?", receiverTaskID, []string{HandoffEventPending, HandoffEventNotified}).
+		Update("state", HandoffEventAnswered)
+	return int(result.RowsAffected), result.Error
+}
+
 // FindHandoffEvent returns one event by comment ID.
 func FindHandoffEvent(db *gorm.DB, commentID string) (HandoffEvent, error) {
 	var event HandoffEvent
 	err := db.Where("comment_id = ?", strings.TrimSpace(commentID)).First(&event).Error
+	return event, err
+}
+
+// FindHandoffEventByID loads one event by its row ID. The reply buttons
+// carry the row ID (core v2 §5): episode-era events are keyed by their
+// episode, and the row ID is the stable handle a press resolves through.
+func FindHandoffEventByID(db *gorm.DB, id uint) (HandoffEvent, error) {
+	var event HandoffEvent
+	err := db.First(&event, id).Error
 	return event, err
 }
 

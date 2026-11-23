@@ -208,9 +208,6 @@ func HandoffSettingsProblems(settings ProductionHandoffSettings) []HandoffSettin
 	if strings.TrimSpace(settings.Config.ProductionID) == "" {
 		add(ProblemHandoffProductionRequired)
 	}
-	if !validHandoffTiming(settings.Config.NotifyTiming) {
-		add(ProblemHandoffTimingInvalid, settings.Config.NotifyTiming)
-	}
 	if !validHandoffFallback(settings.Config.NoAssignee) {
 		add(ProblemHandoffFallbackInvalid, settings.Config.NoAssignee)
 	}
@@ -328,31 +325,7 @@ func SaveProductionHandoffSettings(db *gorm.DB, settings ProductionHandoffSettin
 	}); err != nil {
 		return err
 	}
-	return ReconcileSuspiciousShelves(db, settings)
-}
-
-// RegisterUnclassifiedHandoffProductType adds a product type the detector met
-// for the first time to the Production's list as unclassified, and reports
-// whether it was new. A name already registered (case-insensitively) is left
-// alone, so a repeated publish never registers it twice.
-func RegisterUnclassifiedHandoffProductType(db *gorm.DB, productionID, name string) (bool, error) {
-	productionID, name = strings.TrimSpace(productionID), strings.TrimSpace(name)
-	if db == nil || productionID == "" || name == "" {
-		return false, gorm.ErrInvalidData
-	}
-	created := false
-	err := db.Transaction(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&ProductionHandoffProductType{}).Where("production_id = ? AND lower(name) = lower(?)", productionID, name).Count(&count).Error; err != nil || count > 0 {
-			return err
-		}
-		if err := tx.Create(&ProductionHandoffProductType{ProductionID: productionID, Name: name, Unclassified: true}).Error; err != nil {
-			return err
-		}
-		created = true
-		return nil
-	})
-	return created, err
+	return nil
 }
 
 // DeleteProductionHandoffSettings removes a Production's handoff configuration.

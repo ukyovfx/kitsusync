@@ -271,6 +271,35 @@ func GetTaskCommentsWithContext(ctx context.Context, taskID string) (Comments, e
 	return response, err
 }
 
+// GetTaskWithContext reads one task.
+func GetTaskWithContext(ctx context.Context, taskID string) (Task, error) {
+	path := kitsuBase() + "api/data/tasks/" + url.PathEscape(taskID)
+	response := Task{}
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodGet, path, nil, &response)
+
+	return response, err
+}
+
+// commentWriteRequest is the body Zou accepts for a new task comment. The
+// task status ID is the task's current one: a comment written by kitsusync
+// speaks on the task, it never moves it.
+type commentWriteRequest struct {
+	Text         string `json:"text"`
+	TaskStatusID string `json:"task_status_id,omitempty"`
+}
+
+// PostTaskCommentWithContext writes one comment on a task as the bot
+// account. Callers put the human attribution inside the text itself (the
+// kitsusync-replier marker), because Zou records the bot as the author.
+func PostTaskCommentWithContext(ctx context.Context, taskID, text, taskStatusID string) (Comment, error) {
+	path := kitsuBase() + "api/data/tasks/" + url.PathEscape(taskID) + "/comments"
+	response := Comment{}
+	payload := commentWriteRequest{Text: text, TaskStatusID: strings.TrimSpace(taskStatusID)}
+	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodPost, path, payload, &response)
+
+	return response, err
+}
+
 // GetProjectTasksWithError reads one project's tasks, with assignees.
 func GetProjectTasksWithError(projectID string) (Tasks, error) {
 	return GetProjectTasksWithContext(context.Background(), projectID)

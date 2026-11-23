@@ -283,9 +283,10 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 		payload.Intent = intentForRole(role)
 	}
 	var userIDs, roleIDs []string
-	// The publish trace pings nobody by design: it posts even though the
-	// recipient set is empty, unlike the other intents (D-06).
-	if payload.Intent != model.ForumIntentPublish && e.Recipients != nil {
+	// A row with SuppressMentions posts without pinging anyone (fixes C-8 /
+	// C-9): the timeline entry matters, the ping does not. The publish trace
+	// is abolished; legacy queued publish rows still post silently.
+	if payload.Intent != model.ForumIntentPublish && !payload.SuppressMentions && e.Recipients != nil {
 		users, roles, err := e.resolveRecipients(row, task, payload)
 		switch {
 		case err != nil:
@@ -353,6 +354,7 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 		HandoffProductVersion: payload.HandoffProductVersion,
 		HandoffSourceTaskType: payload.HandoffSourceTaskType,
 		HandoffSourceAuthor:   payload.HandoffSourceAuthor,
+		HandoffEpisodeLabel:   payload.HandoffEpisodeLabel,
 		Components:            handoffComponents(payload),
 	})
 	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))

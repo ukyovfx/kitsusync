@@ -21,9 +21,23 @@ const (
 	RuntimeKitsuPasswordSettingKey   = "kitsu.runtime_password_encrypted"
 	RuntimeKitsuTokenSettingKey      = "kitsu.runtime_token_encrypted"
 	RuntimeDiscordBotTokenSettingKey = "discord.runtime_bot_token_encrypted"
-	RuntimeSecretKeyFileEnv          = "KITSUSYNC_SECRET_KEY_FILE"
-	defaultRuntimeSecretKeyFile      = "data/runtime-secret.key"
+	// DiscordApplicationPublicKeySettingKey holds the Discord application's
+	// Ed25519 public key (hex), used to verify interaction callbacks. It is
+	// a public value by design, so unlike the bot token it is stored
+	// unencrypted, like discord.guildID.
+	DiscordApplicationPublicKeySettingKey = "discord.application_public_key"
+	RuntimeSecretKeyFileEnv               = "KITSUSYNC_SECRET_KEY_FILE"
+	defaultRuntimeSecretKeyFile           = "data/runtime-secret.key"
 )
+
+// DiscordApplicationPublicKey returns the configured Discord application
+// public key, or "" when interaction callbacks are not set up.
+func DiscordApplicationPublicKey(db *gorm.DB) string {
+	if db == nil {
+		return ""
+	}
+	return strings.TrimSpace(model.GetSetting(db, DiscordApplicationPublicKeySettingKey))
+}
 
 // StoredRuntimeDiscordBotToken reads the encrypted Discord token. The legacy
 // setting is consulted only when no encrypted value exists, allowing existing

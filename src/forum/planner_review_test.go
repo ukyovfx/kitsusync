@@ -64,6 +64,7 @@ func TestPlannerAnnouncesCommentWithNewerDate(t *testing.T) {
 	input := taskInput("s-wfa", model.ForumRoleWFA, "person-1")
 	input.CommentDate = "2026-11-15T09:04:00.000Z"
 	input.Comment = commentAt("comment-2", "新しいコメント", now.Add(4*time.Minute))
+	input.Comment.Mentions = []string{"person-9"}
 	if _, err := planner.PlanTask(input, stubCard()); err != nil {
 		t.Fatalf("PlanTask: %v", err)
 	}
@@ -236,7 +237,8 @@ func TestPlannerDoesNotWarnForSlowRoundTrip(t *testing.T) {
 }
 
 // A genuine quiet period starts a new episode, which may warn again.
-func TestPlannerWarnsAgainAfterAQuietPeriod(t *testing.T) {	db := newForumDB(t)
+func TestPlannerWarnsAgainAfterAQuietPeriod(t *testing.T) {
+	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
 	seedPostedTask(t, db, &planner)

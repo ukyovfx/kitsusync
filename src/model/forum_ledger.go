@@ -160,6 +160,14 @@ type ForumPostMessagePayload struct {
 	Quote          string    `json:"quote,omitempty"`
 	// Mentions are the Kitsu person IDs named in a comment.
 	Mentions []string `json:"mentions,omitempty"`
+	// SuppressMentions posts the signal without pinging anyone: the status
+	// changer is the only person the signal would name (interference fix
+	// C-9), or the same person is already named by a paired handoff signal
+	// (fix C-8). The executor skips recipient resolution for such rows.
+	SuppressMentions bool `json:"suppress_mentions,omitempty"`
+	// HandoffEpisodeLabel marks a refired handoff ("再確定（2回目）") so a
+	// re-delivery is distinguishable from the first one (fix C-5).
+	HandoffEpisodeLabel string `json:"handoff_episode_label,omitempty"`
 	// Submitter is the display name read from the submitter marker in the
 	// task's newest comment. Display only: it is never used as a mention.
 	Submitter string `json:"submitter,omitempty"`

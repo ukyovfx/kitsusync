@@ -37,80 +37,48 @@ func settingsSourceFiles(t *testing.T) map[string]string {
 	return files
 }
 
-// The matrix has Task Types down the side, product types across the top, and
-// one cell (flow + notified Task Types) at every crossing.
-func TestHandoffMatrixHasRowsColumnsAndCells(t *testing.T) {
+// The wiring page has task types down the side and one checkbox per
+// receiving task type, in a studio table and a per-Production table.
+func TestHandoffRoutesTableRendersBothLayers(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
-	if err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
-		Config:       model.ProductionHandoffConfig{ProductionID: "p1", NotifyTiming: model.HandoffTimingMixed, NoAssignee: model.HandoffFallbackAdmin},
-		ProductTypes: []model.ProductionHandoffProductType{{Name: "camera"}, {Name: "layout"}, {Name: "vdb", Unclassified: true}},
-	}); err != nil {
+	if err := model.SaveStudioTaskRoute(db, model.StudioTaskRoute{FromTaskTypeID: "tt-lay", FromTaskTypeName: "Layout", NotifyTaskTypeIDs: "tt-anim,tt-light"}); err != nil {
 		t.Fatal(err)
 	}
 	body := handoffGet(t, db).Body.String()
-	table := body[strings.Index(body, `<table class="data-table handoff-matrix">`):]
-	table = table[:strings.Index(table, "</table>")]
-
-	head := table[:strings.Index(table, "</thead>")]
-	if got := strings.Count(head, `<th scope="col">`); got != 3 {
-		t.Fatalf("product columns = %d, want 3: %s", got, head)
+	if got := strings.Count(body, `<table class="data-table handoff-routes">`); got != 2 {
+		t.Fatalf("routes tables = %d, want 2 (studio + production)", got)
 	}
-	for _, product := range []string{"camera", "layout", "vdb"} {
-		if !strings.Contains(head, `<th scope="col">`+product) {
-			t.Fatalf("column header %q missing: %s", product, head)
-		}
-	}
-	if !strings.Contains(head, "Task Type ↓") || !strings.Contains(head, "Product type →") {
-		t.Fatalf("corner cell must name both axes: %s", head)
-	}
-	if !strings.Contains(head, "Unclassified") {
-		t.Fatalf("an unclassified product type must stay marked in its column header: %s", head)
-	}
-
-	bodyRows := table[strings.Index(table, "<tbody>"):]
 	for _, taskType := range handoffTaskTypes() {
-		if !strings.Contains(bodyRows, `<th scope="row">`+taskType.Name+`</th>`) {
+		if !strings.Contains(body, `<th scope="row">`+taskType.Name+`</th>`) {
 			t.Fatalf("row header %q missing", taskType.Name)
 		}
 	}
-	if got := strings.Count(bodyRows, `<td class="handoff-cell"`); got != 12 {
-		t.Fatalf("cells = %d, want 4 Task Types × 3 product types = 12", got)
+	if !strings.Contains(body, `name="st_notify_tt-lay" value="tt-anim" checked`) || !strings.Contains(body, `name="st_notify_tt-lay" value="tt-light" checked`) {
+		t.Fatal("saved studio wiring did not render checked")
 	}
-	// Layout × camera is a preset (hand off to Animation, Lighting, Compositing).
-	cell := bodyRows[strings.Index(bodyRows, `data-handoff-cell="tt-lay|camera"`):]
-	cell = cell[:strings.Index(cell, "</td>")]
-	for _, want := range []string{`data-flow="hand"`, `<option value="hand" selected>`, `<span class="handoff-chip-flow">Hand off</span>`, `→ Animation, Compositing, Lighting`} {
-		if !strings.Contains(cell, want) {
-			t.Fatalf("Layout × camera cell missing %q: %s", want, cell)
-		}
+	if strings.Contains(body, `name="st_notify_tt-lay" value="tt-comp" checked`) {
+		t.Fatal("an unwired receiver rendered checked")
 	}
-	// Animation × vdb has no preset, so it shows the shelved default with a dot.
-	cell = bodyRows[strings.Index(bodyRows, `data-handoff-cell="tt-anim|vdb"`):]
-	cell = cell[:strings.Index(cell, "</td>")]
-	for _, want := range []string{`data-flow="shelve"`, `<option value="shelve" selected>`, `class="handoff-dot"`} {
-		if !strings.Contains(cell, want) {
-			t.Fatalf("Animation × vdb cell missing %q: %s", want, cell)
-		}
+	// The production table shows what it inherits.
+	if !strings.Contains(body, "Animation, Lighting") {
+		t.Fatal("the production table must show the inherited wiring")
 	}
 }
 
-// The matrix cells carry the same fields the save handler already reads, so a
-// round trip through the page keeps its mapping.
-func TestHandoffMatrixSaveRoundTrip(t *testing.T) {
+func TestHandoffRoutesSaveRoundTrip(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
-	form := url.Values{"project": {"p1"}, "notify_timing": {model.HandoffTimingMixed}, "no_assignee": {model.HandoffFallbackAdmin}, "product_name": {"camera"}}
-	form["row_task"], form["row_task_name"], form["row_product"], form["row_flow"] = []string{"tt-lay"}, []string{"Layout"}, []string{"camera"}, []string{model.HandoffFlowHand}
-	form["row_notify_tt-lay|camera"] = []string{"tt-anim"}
+	form := url.Values{"project": {"p1"}, "no_assignee": {"admin"}}
+	form["st_task"] = []string{"tt-lay"}
+	form["st_name"] = []string{"Layout"}
+	form["st_notify_tt-lay"] = []string{"tt-anim"}
 	if w := handoffPost(t, db, form); w.Code != http.StatusSeeOther {
 		t.Fatalf("save status = %d: %s", w.Code, w.Body.String())
 	}
 	body := handoffGet(t, db).Body.String()
-	cell := body[strings.Index(body, `data-handoff-cell="tt-lay|camera"`):]
-	cell = cell[:strings.Index(cell, "</td>")]
-	if !strings.Contains(cell, `<option value="hand" selected>`) || !strings.Contains(cell, `value="tt-anim" checked`) || strings.Contains(cell, `value="tt-comp" checked`) {
-		t.Fatalf("saved cell did not reload as saved: %s", cell)
+	if !strings.Contains(body, `name="st_notify_tt-lay" value="tt-anim" checked`) || strings.Contains(body, `name="st_notify_tt-lay" value="tt-comp" checked`) {
+		t.Fatalf("saved wiring did not reload as saved: %s", body)
 	}
 }
 
@@ -259,10 +227,10 @@ func TestButtonOrderIsBackThenPrimary(t *testing.T) {
 
 	files := settingsSourceFiles(t)
 	for _, check := range []struct{ file, pattern string }{
-		{"admin.go", `Cancel"\) \+ `+"`"+`</a><button type="submit" class="btn">`},
-		{"ia_views.go", `Cancel"\)\) \+ `+"`"+`</a><button class="btn" type="submit"`},
-		{"current_routing.go", `Cancel"\)\) \+ `+"`"+`</a><button type="submit" class="btn" data-apply-submit`},
-		{"handler.go", `Cancel"\)\) \+ `+"`"+`</a>`+"`"+` \+\s*`+"`"+`<button type="submit" class="btn-danger">`},
+		{"admin.go", `Cancel"\) \+ ` + "`" + `</a><button type="submit" class="btn">`},
+		{"ia_views.go", `Cancel"\)\) \+ ` + "`" + `</a><button class="btn" type="submit"`},
+		{"current_routing.go", `Cancel"\)\) \+ ` + "`" + `</a><button type="submit" class="btn" data-apply-submit`},
+		{"handler.go", `Cancel"\)\) \+ ` + "`" + `</a>` + "`" + ` \+\s*` + "`" + `<button type="submit" class="btn-danger">`},
 	} {
 		if !regexp.MustCompile(check.pattern).MatchString(files[check.file]) {
 			t.Errorf("%s: the cancel link must come before the primary button", check.file)

@@ -1750,7 +1750,8 @@ func renderIAHealth(w http.ResponseWriter, r *http.Request, db *gorm.DB, pollInt
 	visibilitySection := renderProductionVisibilitySection(lang, r, db)
 	livenessSection := renderLivenessSection(lang, stats, pollInterval)
 	handoffSection := renderHandoffAttentionSection(lang, db)
-	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + issuesSection + visibilitySection + `</div>`
+	exceptionsSection := renderAdminExceptionsSection(lang, db)
+	body := `<div class="section-stack"><section class="section-card glass pipeline-health" aria-labelledby="pipeline-health-title"><div class="page-heading"><div><h2 id="pipeline-health-title">` + esc(t(lang, "通知パイプラインの状態", "Notification pipeline health")) + `</h2><p class="hint">` + esc(t(lang, "通知に関わる各段階の状態を確認できます。取得できないメトリクスは未確認として表示します。", "Review each notification stage. Metrics that are not available are shown as unconfirmed.")) + `</p></div><span class="status-pill ` + esc(readinessView.Class) + `" role="status">` + esc(readinessView.Label) + `</span></div><div class="pipeline-health-grid">` + healthRows.String() + `</div></section>` + livenessSection + handoffSection + exceptionsSection + issuesSection + visibilitySection + `</div>`
 	body = renderRuntimeObservabilitySummary(lang, stats, readiness, windowName, body)
 	body += `<script data-system-status-refresh></script>`
 	body = replaceSystemStatusRefreshScript(body)
@@ -2071,6 +2072,7 @@ var observationScaleStates = struct {
 	sync.Mutex
 	values map[string]observationScaleState
 }{values: make(map[string]observationScaleState)}
+
 func stableObservationScale(service, windowName string, items []APIObservation) float64 {
 	key := service + ":" + windowName
 	required := observationScaleForItems(items)
@@ -2908,7 +2910,8 @@ func notificationLanguageLabel(lang, code string) string {
 	return "English"
 }
 
-func renderWizardFrame(lang string, step int, body string) string {	return `<div class="section-stack"><section class="section-card glass">` + renderSetupSteps(lang, step, false) + `</section>` + body + `</div>`
+func renderWizardFrame(lang string, step int, body string) string {
+	return `<div class="section-stack"><section class="section-card glass">` + renderSetupSteps(lang, step, false) + `</section>` + body + `</div>`
 }
 
 func renderSetupSteps(lang string, step int, blockFuture bool) string {

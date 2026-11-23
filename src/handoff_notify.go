@@ -16,8 +16,9 @@ import (
 
 // A handoff is reported immediately when the receiving task has a concrete
 // assignee. A handoff that fell back to the admin role, or one nobody has
-// answered yet, is only listed in the morning digest: the mixed rule the
-// owner chose. The Production's notification timing biases the whole rule.
+// answered yet, is only listed in the morning digest. The timing is derived
+// from the signal kind (redesign ruling G, 2026-11-23): there is no timing
+// setting anymore.
 const handoffDigestMaxItems = 5
 
 // handoffAssignees lists the person IDs of a handoff's receiving task. The
@@ -33,16 +34,6 @@ func handoffAssignees(db *gorm.DB, event model.HandoffEvent) []string {
 	return nil
 }
 
-// handoffTiming returns the Production's notification timing, defaulting to the
-// mixed rule when the Production is not configured yet.
-func handoffTiming(db *gorm.DB, productionID string) string {
-	settings, ok, err := model.LoadProductionHandoffSettings(db, productionID)
-	if err != nil || !ok || !model.ValidHandoffTiming(settings.Config.NotifyTiming) {
-		return model.HandoffTimingMixed
-	}
-	return settings.Config.NotifyTiming
-}
-
 // productionLanguage resolves the Production's notification language
 // ("ja"/"en"); unknown productions fall back to Japanese.
 func productionLanguage(db *gorm.DB, kitsuProjectID string) string {
@@ -53,15 +44,10 @@ func productionLanguage(db *gorm.DB, kitsuProjectID string) string {
 }
 
 // handoffImmediate reports whether a handoff with these recipients is sent now
-// rather than kept for the morning digest.
-func handoffImmediate(timing string, fallbackUsed string, recipientIDs []string) bool {
+// rather than kept for the morning digest: named recipients are immediate, a
+// handoff with nobody named (admin fallback) waits for the digest.
+func handoffImmediate(fallbackUsed string, recipientIDs []string) bool {
 	if len(recipientIDs) == 0 {
-		return false
-	}
-	switch timing {
-	case model.HandoffTimingImmediate:
-		return true
-	case model.HandoffTimingDigest:
 		return false
 	}
 	return strings.TrimSpace(fallbackUsed) == model.HandoffFallbackNone
@@ -81,17 +67,11 @@ func sendImmediateHandoffs(db *gorm.DB, poller forum.Poller, payloads []kitsu.Me
 	if err != nil || len(pending) == 0 {
 		return 0, err
 	}
-	timings := map[string]string{}
 	languages := map[string]string{}
 	var items []forum.HandoffDispatch
 	for _, event := range pending {
-		timing, known := timings[event.ProductionID]
-		if !known {
-			timing = handoffTiming(db, event.ProductionID)
-			timings[event.ProductionID] = timing
-		}
 		recipients := handoffAssignees(db, event)
-		if !handoffImmediate(timing, event.FallbackUsed, recipients) {
+		if !handoffImmediate(event.FallbackUsed, recipients) {
 			continue
 		}
 		language, known := languages[event.ProductionID]
@@ -99,7 +79,14 @@ func sendImmediateHandoffs(db *gorm.DB, poller forum.Poller, payloads []kitsu.Me
 			language = productionLanguage(db, event.ProductionID)
 			languages[event.ProductionID] = language
 		}
-		components, err := json.Marshal(handoffReplyRows([]model.HandoffEvent{event}, language))
+		if event.EpisodeKey != "" {
+			// A refired episode says so on the card (fix C-5): the count
+			// includes this episode, so the second completion reads 2回目.
+			if count, err := model.CountHandoffEpisodes(db, event.SourceTaskID); err == nil && count >= 2 {
+				event.EpisodeLabel = fmt.Sprintf("再確定（%d回目）", count)
+			}
+		}
+		components, err := json.Marshal(handoffReplyRows(db, []model.HandoffEvent{event}, language))
 		if err != nil {
 			return 0, err
 		}
@@ -158,43 +145,53 @@ func handoffProduct(event model.HandoffEvent) string {
 	return strings.TrimSpace(event.ProductName + " " + event.ProductVersion)
 }
 
-// handoffReplyRows is the receiver's reply for one handoff: one row with OK and
-// Retake. Discords' five-rows-per-message limit therefore caps a digest card
-// at handoffDigestMaxItems handoffs. While nothing listens for presses the
-// buttons are sent disabled: Discord rejects a non-link button that has no
-// custom_id, so inert has to mean disabled, not ID-less.
-// lang localizes the Retake label.
-func handoffReplyRows(events []model.HandoffEvent, lang string) []discord.ActionRow {
-	retake := "リテイク"
-	if discord.NotificationLanguage(lang) == "en" {
-		retake = "Retake"
-	}
+// handoffReplyRows is the receiver's reply for one handoff: a single OK
+// （受け取り確認） button (ruling I, 2026-11-23 — no Retake button, no
+// modal). The button's custom ID carries the event's row ID, the episode
+// era's idempotency key. Discord's five-rows-per-message limit therefore
+// caps a digest card at handoffDigestMaxItems handoffs. While nothing
+// listens for presses the button is sent disabled: Discord rejects a
+// non-link button that has no custom_id, so inert has to mean disabled,
+// not ID-less. An already-answered event renders disabled and marked.
+func handoffReplyRows(db *gorm.DB, events []model.HandoffEvent, lang string) []discord.ActionRow {
+	wired := handoffRepliesWired(db)
 	rows := make([]discord.ActionRow, 0, len(events))
 	for _, event := range events {
-		id := event.CommentID
+		label := "OK"
+		disabled := !wired
+		if event.State == model.HandoffEventAnswered || event.State == model.HandoffEventRetaken {
+			label = "OK（回答済み）"
+			if discord.NotificationLanguage(lang) == "en" {
+				label = "OK (answered)"
+			}
+			disabled = true
+		}
 		rows = append(rows, discord.ActionRow{Type: 1, Components: []discord.Button{
-			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id), Disabled: !handoffRepliesWired()},
-			{Type: 2, Style: discord.ButtonStyleDanger, Label: retake, CustomID: handoffReplyCustomID("retake", id), Disabled: !handoffRepliesWired()},
+			{Type: 2, Style: discord.ButtonStyleSuccess, Label: label, CustomID: handoffReplyCustomID(event.ID), Disabled: disabled},
 		}})
 	}
 	return rows
 }
 
-// handoffReplyCustomID names the reply of one handoff. The ID is always
-// carried, even while handoffRepliesWired is false: Discord requires a
-// custom_id on every non-link button, so an unwired button is disabled
-// instead of ID-less. Flip handoffRepliesWired when the endpoint exists.
-func handoffReplyCustomID(action, commentID string) string {
-	if strings.TrimSpace(commentID) == "" {
-		commentID = "pending"
+// handoffReplyCustomID names the reply button of one handoff event:
+// handoff:ok:<event row ID>. The ID is always carried, even while replies
+// are unwired: Discord requires a custom_id on every non-link button, so
+// an unwired button is disabled instead of ID-less.
+func handoffReplyCustomID(eventID uint) string {
+	if eventID == 0 {
+		return "handoff:ok:pending"
 	}
-	return "handoff:" + action + ":" + commentID
+	return fmt.Sprintf("handoff:ok:%d", eventID)
 }
 
-// handoffRepliesWired reports whether button presses are received. KitsuSync
-// has no Discord gateway and no public interaction endpoint, so today it is
-// always false: replies are written by hand in Kitsu.
-func handoffRepliesWired() bool { return false }
+// handoffRepliesWired reports whether button presses are received. The
+// /interactions endpoint verifies callbacks with the Discord application's
+// public key, so replies are wired exactly when that key is configured:
+// without it the endpoint rejects every callback and an enabled button
+// would be a dead button.
+func handoffRepliesWired(db *gorm.DB) bool {
+	return setup.DiscordApplicationPublicKey(db) != ""
+}
 
 // handoffTaskURL links the receiving task of a handoff in Kitsu.
 func handoffTaskURL(publicURL string, event model.HandoffEvent) string {

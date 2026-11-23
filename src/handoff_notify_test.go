@@ -68,6 +68,29 @@ func handoffPayloads() []kitsu.MessagePayload {
 	return []kitsu.MessagePayload{handoffReceiverPayload("person-comp")}
 }
 
+// handoffReceiverPayload builds the receiving (Compositing) task's payload
+// with the given assignee.
+func handoffReceiverPayload(personID string) kitsu.MessagePayload {
+	payload := kitsu.MessagePayload{}
+	payload.Project.Project.ID = "p1"
+	payload.Task.Task.ID = "task-comp-1"
+	payload.Task.Task.TaskTypeID = "tt-comp"
+	payload.Task.Task.EntityID = "shot-1"
+	payload.Task.Task.TaskStatusID = "s-wip"
+	payload.Entity.Entity.ID = "shot-1"
+	payload.Entity.Entity.Name = "sq010_sh001"
+	payload.Parent.Entity.Name = "sq010"
+	payload.EntityType.EntityType.Name = "Shot"
+	payload.TaskType.TaskType.ID = "tt-comp"
+	payload.TaskType.TaskType.Name = "Compositing"
+	payload.TaskStatus.TaskStatus.ID = "s-wip"
+	payload.TaskStatus.TaskStatus.Name = "Work In Progress"
+	if personID != "" {
+		payload.Assignees = []kitsu.Person{{ID: personID}}
+	}
+	return payload
+}
+
 // seedHandoffForumTask records the receiving task in the forum ledger, with
 // a thread when threadID is set.
 func seedHandoffForumTask(t *testing.T, db *gorm.DB, threadID string) {
@@ -237,50 +260,11 @@ func TestHandoffFallbackWaitsForTheMorningDigest(t *testing.T) {
 	}
 }
 
-// The timing setting biases the whole rule: immediate sends the fallback now,
-// digest keeps even an assigned handoff for the morning.
-func TestHandoffTimingSettingBiasesTheRule(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		timing string
-		fallb  string
-		ids    []string
-		sent   int
-	}{
-		{"immediate-fallback", model.HandoffTimingImmediate, model.HandoffFallbackAdmin, nil, 1},
-		{"digest-assigned", model.HandoffTimingDigest, model.HandoffFallbackNone, []string{"person-comp"}, 0},
-		{"mixed-assigned", model.HandoffTimingMixed, model.HandoffFallbackNone, []string{"person-comp"}, 1},
-		{"mixed-fallback", model.HandoffTimingMixed, model.HandoffFallbackAdmin, nil, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			db := handoffNotifyDB(t, tc.timing)
-			newDMFixture(t)
-			stubHandoffIdentity(t, map[string]string{"person-comp": "222222222222222222", "person-admin": "111111111111111111"})
-			// Subtests that exercise the fallback only depend on the resolver
-			// seam; assigned personIDs never reach it.
-			old := resolveHandoffAdminKitsuPersonIDs
-			resolveHandoffAdminKitsuPersonIDs = func(db *gorm.DB, productionID string) []string {
-				return []string{"person-admin"}
-			}
-			t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
-			if err := db.Create(&model.UserMap{KitsuID: "person-admin", DiscordGuildID: "guild-1", DiscordID: "111111111111111111"}).Error; err != nil {
-				t.Fatal(err)
-			}
-			handoffEvent(t, db, "comment-1", tc.fallb, tc.ids...)
-			seedHandoffForumTask(t, db, "thread-1")
-			sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads())
-			if err != nil || sent != tc.sent {
-				t.Fatalf("sent=%d err=%v, want %d", sent, err, tc.sent)
-			}
-		})
-	}
-}
-
 // The fallback destination narrows to the Guild's members holding a role with
 // the Discord Administrator permission (2026-11-19 owner decision): the
 // non-admin linked user falls off, and every linked administrator resolves.
 func TestHandoffAdminFallbackReachesOnlyGuildAdministrators(t *testing.T) {
-	db := handoffNotifyDB(t, model.HandoffTimingImmediate)
+	db := handoffNotifyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	stubHandoffIdentity(t, map[string]string{"person-admin": "111111111111111111"})
 	// person-comp stays a linked UserMap member but holds no Administrator role.
@@ -301,36 +285,24 @@ func TestHandoffAdminFallbackReachesOnlyGuildAdministrators(t *testing.T) {
 	t.Cleanup(func() { resolveHandoffAdminKitsuPersonIDs = old })
 
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackAdmin)
-	seedHandoffForumTask(t, db, "thread-1")
-	sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads())
-	if err != nil || sent != 1 {
-		t.Fatalf("sent=%d err=%v", sent, err)
+	// The fallback waits for the morning digest, and the narrowing shows in
+	// who the digest reaches: only the administrator, never the non-admin
+	// linked user.
+	if sent, err := sendForumMorningDigests(digestTestConfig(), db, time.Date(2026, 11, 16, 9, 0, 0, 0, jst), "2026-11-16"); err != nil || sent != 1 {
+		t.Fatalf("digest sent=%d err=%v", sent, err)
 	}
-	// The narrowing now shows as the signal's pinned mentions: only the
-	// administrator is named, never the non-admin linked user.
-	rows := handoffOutboxRows(t, db)
-	if len(rows) != 1 || rows[0].Kind != model.ForumOutboxPostMessage {
-		t.Fatalf("outbox = %+v", rows)
+	if fixture.sendsFor("111111111111111111") != 1 || fixture.sendsFor("222222222222222222") != 0 {
+		t.Fatalf("admin sends = %d, non-admin sends = %d", fixture.sendsFor("111111111111111111"), fixture.sendsFor("222222222222222222"))
 	}
-	var payload model.ForumPostMessagePayload
-	if err := json.Unmarshal([]byte(rows[0].Payload), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Mentions) != 1 || payload.Mentions[0] != "person-admin" {
-		t.Fatalf("mentions = %v, want only the administrator", payload.Mentions)
-	}
-	if fixture.sendsFor("111111111111111111") != 0 || fixture.sendsFor("222222222222222222") != 0 {
-		t.Fatalf("immediate handoff must not DM anymore")
-	}
-	if state := handoffState(t, db, "comment-1"); state != model.HandoffEventNotified {
-		t.Fatalf("state = %q", state)
+	if state := handoffState(t, db, "comment-1"); state != model.HandoffEventPending {
+		t.Fatalf("state = %q, want pending until answered", state)
 	}
 }
 
 // Zero administrators resolve to no destination: the poll ends normally
 // without an error instead of falling back to every linked user.
 func TestHandoffNoAdministratorResolvesToNoDestination(t *testing.T) {
-	db := handoffNotifyDB(t, model.HandoffTimingImmediate)
+	db := handoffNotifyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	stubHandoffIdentity(t, map[string]string{"person-comp": "222222222222222222"})
 	if err := db.Create(&model.UserMap{KitsuID: "person-comp", DiscordGuildID: "guild-1", DiscordID: "222222222222222222"}).Error; err != nil {
@@ -355,12 +327,20 @@ func TestHandoffNoAdministratorResolvesToNoDestination(t *testing.T) {
 	}
 }
 
-// A digest-timing handoff of an assigned person reaches them in the morning.
-func TestHandoffDigestTimingListsAssignedHandoff(t *testing.T) {
-	db := handoffNotifyDB(t, model.HandoffTimingDigest)
+// An assigned handoff that was already sent immediately is listed again in
+// the morning while it stays unanswered.
+func TestHandoffDigestListsUnansweredNotifiedHandoff(t *testing.T) {
+	db := handoffNotifyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	stubHandoffIdentity(t, map[string]string{"person-comp": "222222222222222222"})
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackNone, "person-comp")
+	event, err := model.FindHandoffEvent(db, "comment-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := model.MarkHandoffNotified(db, event.ID); err != nil || !ok {
+		t.Fatalf("notify: ok=%v err=%v", ok, err)
+	}
 
 	if sent, err := sendForumMorningDigests(digestTestConfig(), db, time.Date(2026, 11, 16, 9, 0, 0, 0, jst), "2026-11-16"); err != nil || sent != 1 {
 		t.Fatalf("sent=%d err=%v", sent, err)
@@ -370,24 +350,23 @@ func TestHandoffDigestTimingListsAssignedHandoff(t *testing.T) {
 	}
 }
 
+// The timing is fixed by the signal kind (ruling G): named recipients are
+// immediate, a fallback destination waits for the digest.
 func TestHandoffImmediateRule(t *testing.T) {
 	ids := []string{"9"}
 	cases := []struct {
-		timing  string
 		fallb   string
 		ids     []string
 		want    bool
 		comment string
 	}{
-		{model.HandoffTimingMixed, model.HandoffFallbackNone, ids, true, "mixed assigned without a fallback flag"},
-		{model.HandoffTimingMixed, model.HandoffFallbackAdmin, ids, false, "mixed fallback"},
-		{model.HandoffTimingMixed, model.HandoffFallbackUsers, ids, false, "mixed chosen user"},
-		{model.HandoffTimingImmediate, model.HandoffFallbackAdmin, ids, true, "immediate biases everything"},
-		{model.HandoffTimingDigest, model.HandoffFallbackNone, ids, false, "digest biases everything"},
-		{model.HandoffTimingMixed, "", nil, false, "nobody resolved"},
+		{model.HandoffFallbackNone, ids, true, "assigned without a fallback flag"},
+		{model.HandoffFallbackAdmin, ids, false, "admin fallback"},
+		{model.HandoffFallbackUsers, ids, false, "chosen user fallback"},
+		{"", nil, false, "nobody resolved"},
 	}
 	for _, tc := range cases {
-		if got := handoffImmediate(tc.timing, tc.fallb, tc.ids); got != tc.want {
+		if got := handoffImmediate(tc.fallb, tc.ids); got != tc.want {
 			t.Fatalf("%s: got %v", tc.comment, got)
 		}
 	}
