@@ -161,7 +161,7 @@ func parseHandoffButtonCustomID(customID string) (uint, bool) {
 	if len(parts) != 3 || parts[0] != "handoff" || parts[1] != "ok" {
 		return 0, false
 	}
-	id, err := strconv.ParseUint(strings.TrimSpace(parts[2]), 10, 64)
+	id, err := strconv.ParseUint(strings.TrimSpace(parts[2]), 10, 0)
 	if err != nil || id == 0 {
 		return 0, false
 	}

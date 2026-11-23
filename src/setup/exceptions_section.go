@@ -101,7 +101,7 @@ func handleAdminExceptionPost(db *gorm.DB, w http.ResponseWriter, r *http.Reques
 	if action != "exception_resolve" && action != "exception_dismiss" && action != "exception_classify" {
 		return false
 	}
-	id, err := strconv.ParseUint(strings.TrimSpace(r.FormValue("exception_id")), 10, 64)
+	id, err := strconv.ParseUint(strings.TrimSpace(r.FormValue("exception_id")), 10, 0)
 	if err != nil || id == 0 {
 		http.Error(w, "invalid exception id", http.StatusBadRequest)
 		return true

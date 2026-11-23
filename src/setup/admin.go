@@ -2792,7 +2792,7 @@ func deleteLegacyCheckerAssignmentsForUser(db *gorm.DB, name, email string) {
 }
 
 func parseUint(value string) uint {
-	n, _ := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	n, _ := strconv.ParseUint(strings.TrimSpace(value), 10, 0)
 	return uint(n)
 }
 
