@@ -2178,6 +2178,15 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
 				return
 			}
+			if action == "save_studio_routes" {
+				if err := saveStudioRoutes(db, r); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong><p>`+esc(err.Error())+`</p></div></div>`))
+					return
+				}
+				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
+				return
+			}
 			if action == "save_external_kitsu_url" {
 				draft, present := r.PostForm["kitsu_external_url"]
 				if !present || len(draft) != 1 {
@@ -2470,6 +2479,7 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		if editMode {
 			form := renderConnectionsEditFormWithHealth(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuHealthy, discordHealthy, discordStatus.BotName)
 			form += renderStatusRolesSection(db, lang, r)
+			form += renderStudioRoutesSection(db, lang, r)
 			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, form))
 			return
 		}

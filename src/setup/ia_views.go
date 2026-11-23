@@ -2319,8 +2319,57 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	logs := model.ListAuditLogs(db, 200)
 	sort.SliceStable(logs, func(i, j int) bool { return logs[i].CreatedAt.After(logs[j].CreatedAt) })
-	var rows strings.Builder
+	// Production filter: a view-only narrowing of the rows below. The
+	// choices are the display names the rows themselves carry, in first
+	// seen order; an unknown value falls back to showing everything.
+	displayName := func(log model.AuditLog) string {
+		return fallbackText(log.ProjectName, t(lang, "未割り当て", "Unassigned"))
+	}
+	selected := strings.TrimSpace(r.URL.Query().Get("production"))
+	seenNames := map[string]bool{}
+	var productionNames []string
 	for _, log := range logs {
+		name := displayName(log)
+		if !seenNames[name] {
+			seenNames[name] = true
+			productionNames = append(productionNames, name)
+		}
+	}
+	if selected != "" && !seenNames[selected] {
+		selected = ""
+	}
+	filter := ""
+	if len(productionNames) > 1 {
+		var chips strings.Builder
+		chips.WriteString(`<div class="audit-filter" role="navigation" aria-label="` + esc(t(lang, "プロダクションで絞り込む", "Filter by production")) + `">`)
+		allClass, allCurrent := "nav-chip", ""
+		if selected == "" {
+			allClass += " active"
+			allCurrent = ` aria-current="page"`
+		}
+		chips.WriteString(`<a class="` + allClass + `"` + allCurrent + ` href="` + esc(withLang("/bot/admin/audit", r)) + `">` + esc(t(lang, "全体", "All")) + `</a>`)
+		for _, name := range productionNames {
+			class, current := "nav-chip", ""
+			if name == selected {
+				class += " active"
+				current = ` aria-current="page"`
+			}
+			chips.WriteString(`<a class="` + class + `"` + current + ` href="` + esc(withLang("/bot/admin/audit?production="+url.QueryEscape(name), r)) + `">` + esc(name) + `</a>`)
+		}
+		chips.WriteString(`</div>`)
+		filter = chips.String()
+	}
+	shown := logs
+	if selected != "" {
+		shown = make([]model.AuditLog, 0, len(logs))
+		for _, log := range logs {
+			if displayName(log) == selected {
+				shown = append(shown, log)
+			}
+		}
+	}
+	var rows strings.Builder
+	for _, log := range shown {
 		result := t(lang, "成功", "Success")
 		if !log.Success {
 			result = t(lang, "失敗", "Failed")
@@ -2330,8 +2379,8 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if rows.Len() == 0 {
 		rows.WriteString(`<tr><td colspan="5" class="muted">` + esc(t(lang, "監査ログはありません", "No audit log entries")) + `</td></tr>`)
 	}
-	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p><div class="table-wrap audit-log-table"><table class="mobile-card-table"><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
-	for _, log := range logs {
+	body := `<div class="audit-log-content"><p class="hint">` + esc(t(lang, "設定変更、通知、失敗、復旧の履歴を確認できます。技術的な識別子は詳細表示に限定します。", "Review configuration, notification, failure, and recovery history. Technical identifiers remain in details.")) + `</p>` + filter + `<div class="table-wrap audit-log-table"><table class="mobile-card-table"><thead><tr><th>` + esc(t(lang, "日時", "Date and time")) + `</th><th>Production</th><th>` + esc(t(lang, "操作内容", "Action")) + `</th><th>` + esc(t(lang, "操作ユーザー", "Acting user")) + `</th><th>` + esc(t(lang, "結果", "Result")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div></div>`
+	for _, log := range shown {
 		oldTime := `<td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</td>`
 		newTime := `<td class="mobile-card-lead" data-label="` + esc(t(lang, "日時", "Date and time")) + `"><time class="audit-time" datetime="` + esc(log.CreatedAt.UTC().Format(time.RFC3339)) + `">` + esc(log.CreatedAt.Format("2006-01-02 15:04")) + `</time></td>`
 		body = strings.Replace(body, oldTime, newTime, 1)

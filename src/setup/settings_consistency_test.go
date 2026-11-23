@@ -37,8 +37,9 @@ func settingsSourceFiles(t *testing.T) map[string]string {
 	return files
 }
 
-// The wiring page has task types down the side and one checkbox per
-// receiving task type, in a studio table and a per-Production table.
+// The wiring editors have task types down the side and one checkbox per
+// receiving task type: the studio table on the connection settings page,
+// the override table on the Production page.
 func TestHandoffRoutesTableRendersBothLayers(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
@@ -46,18 +47,25 @@ func TestHandoffRoutesTableRendersBothLayers(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := handoffGet(t, db).Body.String()
-	if got := strings.Count(body, `<table class="data-table handoff-routes">`); got != 2 {
-		t.Fatalf("routes tables = %d, want 2 (studio + production)", got)
+	if got := strings.Count(body, `<table class="data-table handoff-routes">`); got != 1 {
+		t.Fatalf("production page routes tables = %d, want 1 (overrides only)", got)
+	}
+	section := studioRoutesSection(t, db)
+	if got := strings.Count(section, `<table class="data-table handoff-routes">`); got != 1 {
+		t.Fatalf("studio section routes tables = %d, want 1", got)
 	}
 	for _, taskType := range handoffTaskTypes() {
 		if !strings.Contains(body, `<th scope="row">`+taskType.Name+`</th>`) {
-			t.Fatalf("row header %q missing", taskType.Name)
+			t.Fatalf("production row header %q missing", taskType.Name)
+		}
+		if !strings.Contains(section, `<th scope="row">`+taskType.Name+`</th>`) {
+			t.Fatalf("studio row header %q missing", taskType.Name)
 		}
 	}
-	if !strings.Contains(body, `name="st_notify_tt-lay" value="tt-anim" checked`) || !strings.Contains(body, `name="st_notify_tt-lay" value="tt-light" checked`) {
+	if !strings.Contains(section, `name="st_notify_tt-lay" value="tt-anim" checked`) || !strings.Contains(section, `name="st_notify_tt-lay" value="tt-light" checked`) {
 		t.Fatal("saved studio wiring did not render checked")
 	}
-	if strings.Contains(body, `name="st_notify_tt-lay" value="tt-comp" checked`) {
+	if strings.Contains(section, `name="st_notify_tt-lay" value="tt-comp" checked`) {
 		t.Fatal("an unwired receiver rendered checked")
 	}
 	// The production table shows what it inherits.
@@ -69,14 +77,12 @@ func TestHandoffRoutesTableRendersBothLayers(t *testing.T) {
 func TestHandoffRoutesSaveRoundTrip(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
-	form := url.Values{"project": {"p1"}, "no_assignee": {"admin"}}
-	form["st_task"] = []string{"tt-lay"}
-	form["st_name"] = []string{"Layout"}
+	form := url.Values{}
 	form["st_notify_tt-lay"] = []string{"tt-anim"}
-	if w := handoffPost(t, db, form); w.Code != http.StatusSeeOther {
-		t.Fatalf("save status = %d: %s", w.Code, w.Body.String())
+	if err := saveStudioRoutesRequest(t, db, form); err != nil {
+		t.Fatalf("save studio routes: %v", err)
 	}
-	body := handoffGet(t, db).Body.String()
+	body := studioRoutesSection(t, db)
 	if !strings.Contains(body, `name="st_notify_tt-lay" value="tt-anim" checked`) || strings.Contains(body, `name="st_notify_tt-lay" value="tt-comp" checked`) {
 		t.Fatalf("saved wiring did not reload as saved: %s", body)
 	}
@@ -269,6 +275,34 @@ func TestAuditLogTimeHasNoZoneSuffix(t *testing.T) {
 	for _, forbidden := range []string{"resolvedOptions", `+" "+zone`, "Asia/Tokyo"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("audit time script still adds the zone name (%q)", forbidden)
+		}
+	}
+}
+
+// On the system status page, a health row's action button sits on the same
+// line as its status badge (the rail is a row, not a column), and the lower
+// sections share the upper sections' flat divider pattern.
+func TestSystemStatusRailAndLowerSectionsShareUpperPattern(t *testing.T) {
+	railStart := strings.Index(adminThemeCSS, ".system-status-sections .pipeline-health-rail{grid-area:rail;")
+	if railStart < 0 {
+		t.Fatal("pipeline health rail rule missing")
+	}
+	railRule := adminThemeCSS[railStart:]
+	if end := strings.Index(railRule, "}"); end >= 0 {
+		railRule = railRule[:end]
+	}
+	if !strings.Contains(railRule, "flex-direction:row") || !strings.Contains(railRule, "align-items:center") || strings.Contains(railRule, "flex-direction:column") {
+		t.Fatalf("health action must share the status badge's line: %s", railRule)
+	}
+	for _, want := range []string{
+		".system-status-sections>.section-stack>.admin-exceptions{border:0;",
+		".system-status-sections>.section-stack>.liveness>.page-heading",
+		".system-status-sections>.section-stack>.production-visibility>.data-table",
+		".system-status-sections .handoff-attention ul li{padding:10px 0;border-bottom:1px solid var(--line)}",
+		".audit-filter{display:flex;",
+	} {
+		if !strings.Contains(adminThemeCSS, want) {
+			t.Fatalf("system status lower-section pattern missing %q", want)
 		}
 	}
 }

@@ -51,13 +51,13 @@ func renderAdminExceptionsSection(lang string, db *gorm.DB) string {
 	}
 	var rows strings.Builder
 	for _, item := range open {
-		rows.WriteString(`<tr><th scope="row" class="mobile-card-lead"><span class="mobile-card-lead-label">` + esc(exceptionKindLabel(lang, item.Kind)) + `</span></th>`)
-		rows.WriteString(`<td>` + esc(item.SubjectName) + `</td>`)
+		rows.WriteString(`<tr><th scope="row" class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="` + esc(t(lang, "種類", "Kind")) + `">` + esc(exceptionKindLabel(lang, item.Kind)) + `</span></th>`)
+		rows.WriteString(`<td data-label="` + esc(t(lang, "対象", "Subject")) + `">` + esc(item.SubjectName) + `</td>`)
 		detail := item.Detail
 		if item.SeenCount > 1 {
 			detail += fmt.Sprintf(t(lang, "（%d回検出）", " (seen %d times)"), item.SeenCount)
 		}
-		rows.WriteString(`<td>` + esc(detail) + `</td><td>`)
+		rows.WriteString(`<td data-label="` + esc(t(lang, "詳細", "Detail")) + `">` + esc(detail) + `</td><td data-label="` + esc(t(lang, "操作", "Action")) + `">`)
 		if item.Kind == model.ExceptionStatusAmbiguous || item.Kind == model.ExceptionStatusRenamed {
 			rows.WriteString(`<form method="post" action="/bot/admin/health" class="inline-form">` +
 				`<input type="hidden" name="action" value="exception_classify">` +

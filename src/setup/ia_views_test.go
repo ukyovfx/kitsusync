@@ -635,6 +635,39 @@ func TestAuditLogRendersPersistedActorInJapaneseAndEnglish(t *testing.T) {
 	}
 }
 
+// The audit log can be narrowed to one production; the filter is a view
+// option only and an unknown value falls back to the full list.
+func TestAuditLogProductionFilterNarrowsRows(t *testing.T) {
+	db := newIAViewDB(t)
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: "alpha", ProjectName: "Alpha Production", Success: true, ActorKind: model.AuditActorSystem})
+	model.WriteAuditLog(db, model.AuditLog{ProjectID: "beta", ProjectName: "Beta Production", Success: false, ActorKind: model.AuditActorSystem})
+	render := func(target string) string {
+		w := httptest.NewRecorder()
+		renderIAAudit(w, httptest.NewRequest("GET", target, nil), db)
+		return w.Body.String()
+	}
+	all := render("/bot/admin/audit?lang=en")
+	for _, want := range []string{`class="audit-filter"`, ">All</a>", "production=Alpha+Production", "production=Beta+Production", `data-label="Production">Alpha Production`, `data-label="Production">Beta Production`} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("unfiltered audit page missing %q", want)
+		}
+	}
+	filtered := render("/bot/admin/audit?lang=en&production=Beta+Production")
+	if !strings.Contains(filtered, `data-label="Production">Beta Production`) {
+		t.Fatal("filtered audit page lost the selected production's rows")
+	}
+	if strings.Contains(filtered, `data-label="Production">Alpha Production`) {
+		t.Fatal("filtered audit page kept the other production's rows")
+	}
+	if !strings.Contains(filtered, "production=Alpha+Production") {
+		t.Fatal("filtered audit page lost the filter choices")
+	}
+	unknown := render("/bot/admin/audit?lang=en&production=Missing")
+	if !strings.Contains(unknown, `data-label="Production">Alpha Production`) || !strings.Contains(unknown, `data-label="Production">Beta Production`) {
+		t.Fatal("an unknown production filter must fall back to all rows")
+	}
+}
+
 func TestSelectedProductionKeepsIdentifiersAdvancedAndUsesUserCopy(t *testing.T) {
 	db := newIAViewDB(t)
 	p := model.Project{KitsuProjectID: "selected-advanced-p", Name: "Selected Advanced P", DiscordGuildID: "synthetic-guild", DiscordCategoryID: "synthetic-category"}
