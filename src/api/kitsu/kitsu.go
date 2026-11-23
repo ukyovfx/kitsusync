@@ -280,11 +280,13 @@ func GetTaskWithContext(ctx context.Context, taskID string) (Task, error) {
 	return response, err
 }
 
-// commentWriteRequest is the body Zou accepts for a new task comment. The
-// task status ID is the task's current one: a comment written by kitsusync
+// commentWriteRequest is the body Zou accepts for a new task comment. Zou
+// 1.1.x only accepts comment writes on the actions route (the data route
+// answers 405), and the text field there is named "comment". The task
+// status ID is the task's current one: a comment written by kitsusync
 // speaks on the task, it never moves it.
 type commentWriteRequest struct {
-	Text         string `json:"text"`
+	Comment      string `json:"comment"`
 	TaskStatusID string `json:"task_status_id,omitempty"`
 }
 
@@ -292,9 +294,9 @@ type commentWriteRequest struct {
 // account. Callers put the human attribution inside the text itself (the
 // kitsusync-replier marker), because Zou records the bot as the author.
 func PostTaskCommentWithContext(ctx context.Context, taskID, text, taskStatusID string) (Comment, error) {
-	path := kitsuBase() + "api/data/tasks/" + url.PathEscape(taskID) + "/comments"
+	path := kitsuBase() + "api/actions/tasks/" + url.PathEscape(taskID) + "/comment"
 	response := Comment{}
-	payload := commentWriteRequest{Text: text, TaskStatusID: strings.TrimSpace(taskStatusID)}
+	payload := commentWriteRequest{Comment: text, TaskStatusID: strings.TrimSpace(taskStatusID)}
 	_, err := request.DoWithError(ctx, os.Getenv("KitsuJWTToken"), http.MethodPost, path, payload, &response)
 
 	return response, err
