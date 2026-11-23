@@ -80,15 +80,15 @@ func TestHandoffMatrixHasRowsColumnsAndCells(t *testing.T) {
 	// Layout × camera is a preset (hand off to Animation, Lighting, Compositing).
 	cell := bodyRows[strings.Index(bodyRows, `data-handoff-cell="tt-lay|camera"`):]
 	cell = cell[:strings.Index(cell, "</td>")]
-	for _, want := range []string{`data-flow="hand"`, `<option value="hand" selected>`, "Notify: Animation, Compositing, Lighting"} {
+	for _, want := range []string{`data-flow="hand"`, `<option value="hand" selected>`, `<span class="handoff-chip-flow">Hand off</span>`, `→ Animation, Compositing, Lighting`} {
 		if !strings.Contains(cell, want) {
 			t.Fatalf("Layout × camera cell missing %q: %s", want, cell)
 		}
 	}
-	// Animation × vdb has no preset, so it shows the shelved default with no recipients.
+	// Animation × vdb has no preset, so it shows the shelved default with a dot.
 	cell = bodyRows[strings.Index(bodyRows, `data-handoff-cell="tt-anim|vdb"`):]
 	cell = cell[:strings.Index(cell, "</td>")]
-	for _, want := range []string{`data-flow="shelve"`, `<option value="shelve" selected>`, "No notification"} {
+	for _, want := range []string{`data-flow="shelve"`, `<option value="shelve" selected>`, `class="handoff-dot"`} {
 		if !strings.Contains(cell, want) {
 			t.Fatalf("Animation × vdb cell missing %q: %s", want, cell)
 		}

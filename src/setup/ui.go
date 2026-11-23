@@ -1127,20 +1127,55 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   @media(max-width:760px){.production-context .production-routing-editor .wizard-plan-table th:first-child,.production-context .production-routing-editor .wizard-plan-table td:first-child,.production-context .production-routing-editor .wizard-plan-table th:last-child,.production-context .production-routing-editor .wizard-plan-table td:last-child{width:auto!important}.production-context .production-routing-editor .wizard-plan-table [data-routing-row]>th{display:block;padding:0}.production-context .production-routing-editor .wizard-plan-table [data-routing-row]>td{padding:0 0 0 var(--space-5)!important}}
   @media(min-width:761px){.editorial-workbench .production-team-supervisor-scope{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}}
   /* Handoff matrix: Task Types down the side, product types across the top. */
-  .handoff-matrix-wrap{overflow-x:auto;max-width:100%}
-  .handoff-matrix{width:max-content;min-width:100%;table-layout:auto}
-  .handoff-matrix th,.handoff-matrix td{vertical-align:top;text-align:left}
-  .handoff-matrix thead th{white-space:nowrap}
-  .handoff-matrix tbody th[scope="row"]{position:sticky;left:0;z-index:1;background:var(--surface-page,#111);white-space:nowrap}
+  .handoff-matrix-wrap{overflow-x:auto;max-width:100%;position:relative}
+  .handoff-matrix{width:100%;table-layout:fixed;border-collapse:collapse}
+  .handoff-matrix th,.handoff-matrix td{vertical-align:middle;text-align:center;padding:4px 2px}
+  .handoff-matrix thead th{white-space:nowrap;font-size:12px;font-weight:600;padding:8px 4px;overflow:hidden;text-overflow:ellipsis}
+  .handoff-matrix thead th.handoff-matrix-corner{text-align:left;width:120px;min-width:100px}
+  .handoff-matrix tbody th[scope="row"]{position:sticky;left:0;z-index:2;background:var(--surface-page,#111);white-space:nowrap;text-align:left;padding:4px 8px;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;width:120px;min-width:100px}
   .handoff-matrix-corner{font-weight:500}
-  .handoff-axis-task,.handoff-axis-product{display:inline-block;color:var(--muted-2)}
-  .handoff-cell{min-width:9.5rem;max-width:12rem}
-  .handoff-cell select{width:100%;max-width:none}
-  .handoff-cell[data-flow="hand"]{box-shadow:inset 3px 0 0 var(--accent,#e85a1a)}
-  .handoff-cell[data-flow="submit"]{box-shadow:inset 3px 0 0 #6dc3ff}
-  .handoff-notify{margin-top:6px;font-size:.85rem}
-  .handoff-notify summary{cursor:pointer;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .handoff-notify .checkbox-label{display:flex;gap:6px;align-items:center;margin:4px 0;text-transform:none;letter-spacing:normal;font-family:inherit;font-size:.85rem}
+  .handoff-axis-task,.handoff-axis-product{display:inline-block;color:var(--muted-2);font-size:11px}
+  .handoff-cell{position:relative;height:44px;padding:2px;cursor:pointer;background:transparent;transition:background .15s ease}
+  .handoff-matrix td.handoff-cell{padding:2px}
+  .handoff-cell:hover{background:rgba(255,255,255,.04)}
+  .handoff-cell:focus-within{outline:none}
+  .handoff-cell.is-editing{z-index:20;background:rgba(255,255,255,.08)}
+  .handoff-view{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-height:36px;border-radius:4px;outline:none}
+  .handoff-view:focus-visible{outline:2px solid var(--border-focus,#fc8742)!important;outline-offset:1px!important}
+  .handoff-chip{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:0;max-width:100%;padding:2px 5px;border-radius:4px;font-size:10.5px;font-weight:500;line-height:1.2;box-sizing:border-box;overflow:hidden}
+  .handoff-chip-flow{max-width:100%;white-space:nowrap}
+  .handoff-chip-targets{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.9}
+  .handoff-chip-hand{background:rgba(252,135,66,.16);border:1px solid rgba(252,135,66,.5);color:#fc8742}
+  .handoff-chip-submit{flex-direction:row;background:rgba(109,195,255,.16);border:1px solid rgba(109,195,255,.5);color:#6dc3ff;font-size:11px;padding:2px 6px}
+  .handoff-dot{display:inline-block;color:rgba(255,255,255,.25);font-size:18px;line-height:1;user-select:none}
+  .handoff-edit{display:none;position:absolute;top:100%;left:0;z-index:100;width:240px;background:var(--surface-overlay,#1c1d22);border:1px solid rgba(252,135,66,.5);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.7);padding:10px 12px;text-align:left;color:var(--text-primary,#fff);cursor:default}
+  .handoff-cell.is-editing .handoff-edit{display:block}
+  .handoff-matrix td:nth-last-child(-n+4) .handoff-edit{left:auto;right:0}
+  .handoff-matrix tr:nth-last-child(-n+3) .handoff-edit{top:auto;bottom:100%}
+  .handoff-edit-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--divider-color,rgba(255,255,255,.1))}
+  .handoff-edit-title{font-size:12px;font-weight:600;color:var(--muted-2,#aaa);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .handoff-edit-close{background:transparent;border:none;color:var(--muted,#888);font-size:16px;cursor:pointer;padding:0 4px;line-height:1;border-radius:4px}
+  .handoff-edit-close:hover{color:#fff}
+  .handoff-edit-field{margin-bottom:8px}
+  .handoff-edit-field select{width:100%;font-size:12px;min-height:30px;height:30px;padding:2px 6px}
+  .handoff-notify-list{max-height:110px;overflow-y:auto;padding:4px;background:rgba(0,0,0,.25);border-radius:4px;margin-top:4px}
+  .handoff-notify-list .checkbox-label{display:flex;align-items:center;gap:6px;font-size:11px;margin:3px 0;cursor:pointer;text-transform:none;letter-spacing:normal;font-family:inherit}
+  .handoff-edit-footer{display:flex;justify-content:flex-end;margin-top:6px}
+  .handoff-edit-done{padding:3px 10px;font-size:12px;min-height:26px;border-radius:6px}
+  /* Products chips */
+  .handoff-products-wrap{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+  .handoff-product-chip{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.05);border:1px solid var(--border-default,rgba(255,255,255,.15));border-radius:9999px;padding:3px 10px;transition:border-color .15s ease,background .15s ease}
+  .handoff-product-chip:hover{border-color:rgba(255,255,255,.3);background:rgba(255,255,255,.08)}
+  .handoff-product-chip:focus-within{border-color:var(--accent,#fc8742);background:rgba(255,255,255,.08)}
+  .handoff-product-chip-add{border-style:dashed;border-color:var(--border-subtle,rgba(255,255,255,.25));background:transparent}
+  .handoff-product-chip-add:hover{border-color:var(--accent,#fc8742)}
+  .handoff-product-chip-add:focus-within{border-style:solid;border-color:var(--accent,#fc8742)}
+  .handoff-products-wrap .handoff-product-chip input.handoff-product-input{background:transparent;border:none;width:auto;min-height:0;height:auto;color:var(--text-primary,#fff);font-family:inherit;font-size:13px;padding:0 2px;margin:0;box-shadow:none!important;outline:none;min-width:3.5rem;max-width:14rem;field-sizing:content;box-sizing:content-box}
+  .handoff-product-input:focus-visible{outline:2px solid var(--border-focus,#fc8742)!important;outline-offset:2px!important;border-radius:4px}
+  .handoff-products-wrap .handoff-product-chip-add input.handoff-product-input{min-width:8rem;color:var(--muted,#999)}
+  .handoff-products-wrap .handoff-product-chip-add input.handoff-product-input:focus{color:var(--text-primary,#fff)}
+  /* Narrow viewports scroll the matrix instead of crushing 13 columns to nothing. */
+  @media(max-width:1024px){.handoff-matrix{min-width:820px}}
   /* Keyboard focus is always visible on every input, select and textarea; local rules that flatten a control's border or shadow must not hide it. */
   input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--border-focus)!important;outline-offset:2px!important}
   input:not([type="checkbox"]):not([type="radio"]):focus-visible,select:focus-visible,textarea:focus-visible{box-shadow:0 0 0 3px rgba(109,195,255,.35)!important}
