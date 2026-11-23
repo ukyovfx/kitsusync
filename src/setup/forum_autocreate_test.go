@@ -115,7 +115,7 @@ func TestForumAutoCreateWithoutStatusRolesAppliesTemplateRoles(t *testing.T) {
 	for _, row := range loaded.StatusRoles {
 		roles[row.StatusID] = row.Role
 	}
-	if len(roles) != 3 || roles["s-wfa"] != "wfa" || roles["s-retake"] != "retake" || roles["s-done"] != "done" {
+	if len(roles) != 4 || roles["s-wfa"] != "wfa" || roles["s-retake"] != "retake" || roles["s-done"] != "done" || roles["s-wip"] != "wip" {
 		t.Fatalf("template status roles = %v", roles)
 	}
 	if len(loaded.Tags) != 8 {
