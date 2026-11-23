@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"gorm.io/gorm"
@@ -22,6 +23,10 @@ type Recipients struct {
 	ResolveAssignees func(projectID string, kitsuPersonIDs []string) []string
 	// ResolveReviewers returns the reviewer targets for a task type.
 	ResolveReviewers func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error)
+	// ResolveAdmins returns the Discord user IDs of the Production's guild
+	// administrators, the WFA fallback when the reviewer chain (reviewer,
+	// then department supervisor) resolves to nobody (core v2 §2.3).
+	ResolveAdmins func(projectID string) ([]string, error)
 	// TaskTypeName resolves a display name for the reviewer lookup.
 	TaskTypeName func(taskTypeID string) string
 	// Comment signals relay @mentions only (redesign ruling B, 2026-11-23):
@@ -37,7 +42,11 @@ func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload
 	}
 	switch payload.Intent {
 	case model.ForumIntentStatusWFA:
-		return r.reviewers(task.ProjectID, task.TaskTypeID)
+		users, roles, err := r.reviewers(task.ProjectID, task.TaskTypeID)
+		if err != nil || len(users)+len(roles) > 0 {
+			return users, roles, err
+		}
+		return r.adminFallback(task)
 	case model.ForumIntentStatusRetake, model.ForumIntentStatusDone:
 		users, roles := r.assignees(task)
 		return users, roles, nil
@@ -105,6 +114,50 @@ func (r Recipients) reviewers(projectID, taskTypeID string) ([]string, []string,
 		}
 	}
 	return users, roles, nil
+}
+
+// adminFallback delivers a WFA signal whose reviewer chain resolved to
+// nobody: the guild administrators are mentioned instead, the fallback is
+// written to the decision log, and the miss is queued for a human as a
+// recipient_unresolved exception (core v2 §2.3, §8.3 condition 1). The
+// exception aggregates per task type, like no_route, so a Production whose
+// reviewer data is simply unregistered raises it once, not once per task.
+// When no administrator can be resolved either, the signal stays
+// recipient-less and the executor cancels it as before — but the exception
+// is still raised, because that is exactly what an admin must see.
+func (r Recipients) adminFallback(task model.ForumTask) ([]string, []string, error) {
+	if r.ResolveAdmins == nil {
+		return nil, nil, nil
+	}
+	admins, err := r.ResolveAdmins(task.ProjectID)
+	if err != nil {
+		return nil, nil, err
+	}
+	admins = uniqueIDs(admins)
+	if r.DB != nil {
+		name := ""
+		if r.TaskTypeName != nil {
+			name = r.TaskTypeName(task.TaskTypeID)
+		}
+		detail := "WFAの宛先（レビュアー／部門スーパーバイザー）が導けなかったため、管理者へフォールバックしました。"
+		if raiseErr := model.RaiseAdminException(r.DB, model.ExceptionRecipientUnresolved, task.TaskTypeID, name, task.ProjectID, detail); raiseErr != nil {
+			slog.Warn("forum: could not raise the recipient-unresolved exception", "error_class", "forum_exception_raise_failed", "task_id", task.TaskID, "err", raiseErr)
+		}
+		_ = model.RecordNotificationDecision(r.DB, model.NotificationDecision{
+			ProductionID: task.ProjectID,
+			TaskID:       task.TaskID,
+			TaskTypeName: name,
+			SignalKind:   "status",
+			RuleID:       "status.review.admin_fallback",
+			Facts: model.DecisionFactsJSON(map[string]interface{}{
+				"admin_discord_ids": admins,
+				"task_title":        task.Title,
+			}),
+			Outcome: model.DecisionOutcomeQueued,
+			RefID:   task.StatusID,
+		})
+	}
+	return admins, nil, nil
 }
 
 func (r Recipients) assignees(task model.ForumTask) ([]string, []string) {
