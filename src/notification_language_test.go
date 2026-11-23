@@ -35,7 +35,7 @@ func TestImmediateHandoffSignalFollowsEnglishProduction(t *testing.T) {
 		}
 	}
 	event := model.HandoffEvent{CommentID: "comment-1"}
-	rows := handoffReplyRows([]model.HandoffEvent{event}, discord.NotificationLanguage("en"))
+	rows := handoffReplyRows(nil, []model.HandoffEvent{event}, discord.NotificationLanguage("en"))
 	if labels := []string{rows[0].Components[0].Label, rows[0].Components[1].Label}; labels[0] != "OK" || labels[1] != "Retake" {
 		t.Errorf("reply buttons = %v, want OK/Retake", labels)
 	}

@@ -8,13 +8,15 @@ import (
 
 	"app/src/api/discord"
 	"app/src/model"
+	"app/src/setup"
 
 	"gorm.io/gorm"
 )
 
-// handoffReplyRowsFor is what the digest or the DM sends for these events.
+// handoffReplyRowsFor is what the digest or the DM sends for these events
+// while no interaction endpoint is configured.
 func handoffReplyRowsFor(events []model.HandoffEvent) []discord.ActionRow {
-	return handoffReplyRows(events, "ja")
+	return handoffReplyRows(nil, events, "ja")
 }
 
 // A digest keeps one reply row per handoff, so the configured cap is what
@@ -38,12 +40,17 @@ func TestHandoffDigestReplyRowsFitTheMessageLimit(t *testing.T) {
 	}
 }
 
-// Nothing receives a press yet, so the buttons are sent inert rather than
-// pretending to work: disabled, but still carrying their CustomID, because
-// Discord rejects a non-link button that has none.
+// Without the Discord application public key nothing can receive a press,
+// so the buttons are sent inert rather than pretending to work: disabled,
+// but still carrying their CustomID, because Discord rejects a non-link
+// button that has none. Configuring the key wires them.
 func TestHandoffButtonsAreInertUntilTheInteractionEndpointExists(t *testing.T) {
-	if handoffRepliesWired() {
-		t.Fatal("expected replies to be unwired without an interaction endpoint")
+	if handoffRepliesWired(nil) {
+		t.Fatal("expected replies to be unwired without a database")
+	}
+	db := handoffNotifyDB(t, model.HandoffTimingMixed)
+	if handoffRepliesWired(db) {
+		t.Fatal("expected replies to be unwired without an application public key")
 	}
 	rows := handoffReplyRowsFor([]model.HandoffEvent{{CommentID: "comment-1"}})
 	if len(rows) != 1 || len(rows[0].Components) != 2 {
@@ -59,6 +66,17 @@ func TestHandoffButtonsAreInertUntilTheInteractionEndpointExists(t *testing.T) {
 	}
 	if got := handoffReplyCustomID("ok", "comment-1"); got != "handoff:ok:comment-1" {
 		t.Fatalf("custom id = %q", got)
+	}
+
+	model.SetSetting(db, setup.DiscordApplicationPublicKeySettingKey, "0123456789abcdef")
+	if !handoffRepliesWired(db) {
+		t.Fatal("expected replies to be wired once the public key is configured")
+	}
+	wired := handoffReplyRows(db, []model.HandoffEvent{{CommentID: "comment-1"}}, "ja")
+	for _, button := range wired[0].Components {
+		if button.Disabled {
+			t.Fatalf("wired button must be enabled: %+v", button)
+		}
 	}
 }
 

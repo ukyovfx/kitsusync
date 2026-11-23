@@ -86,7 +86,7 @@ func sendImmediateHandoffs(db *gorm.DB, poller forum.Poller, payloads []kitsu.Me
 				event.EpisodeLabel = fmt.Sprintf("再確定（%d回目）", count)
 			}
 		}
-		components, err := json.Marshal(handoffReplyRows([]model.HandoffEvent{event}, language))
+		components, err := json.Marshal(handoffReplyRows(db, []model.HandoffEvent{event}, language))
 		if err != nil {
 			return 0, err
 		}
@@ -151,26 +151,26 @@ func handoffProduct(event model.HandoffEvent) string {
 // buttons are sent disabled: Discord rejects a non-link button that has no
 // custom_id, so inert has to mean disabled, not ID-less.
 // lang localizes the Retake label.
-func handoffReplyRows(events []model.HandoffEvent, lang string) []discord.ActionRow {
+func handoffReplyRows(db *gorm.DB, events []model.HandoffEvent, lang string) []discord.ActionRow {
 	retake := "リテイク"
 	if discord.NotificationLanguage(lang) == "en" {
 		retake = "Retake"
 	}
+	wired := handoffRepliesWired(db)
 	rows := make([]discord.ActionRow, 0, len(events))
 	for _, event := range events {
 		id := event.CommentID
 		rows = append(rows, discord.ActionRow{Type: 1, Components: []discord.Button{
-			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id), Disabled: !handoffRepliesWired()},
-			{Type: 2, Style: discord.ButtonStyleDanger, Label: retake, CustomID: handoffReplyCustomID("retake", id), Disabled: !handoffRepliesWired()},
+			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id), Disabled: !wired},
+			{Type: 2, Style: discord.ButtonStyleDanger, Label: retake, CustomID: handoffReplyCustomID("retake", id), Disabled: !wired},
 		}})
 	}
 	return rows
 }
 
 // handoffReplyCustomID names the reply of one handoff. The ID is always
-// carried, even while handoffRepliesWired is false: Discord requires a
-// custom_id on every non-link button, so an unwired button is disabled
-// instead of ID-less. Flip handoffRepliesWired when the endpoint exists.
+// carried, even while replies are unwired: Discord requires a custom_id on
+// every non-link button, so an unwired button is disabled instead of ID-less.
 func handoffReplyCustomID(action, commentID string) string {
 	if strings.TrimSpace(commentID) == "" {
 		commentID = "pending"
@@ -178,10 +178,14 @@ func handoffReplyCustomID(action, commentID string) string {
 	return "handoff:" + action + ":" + commentID
 }
 
-// handoffRepliesWired reports whether button presses are received. KitsuSync
-// has no Discord gateway and no public interaction endpoint, so today it is
-// always false: replies are written by hand in Kitsu.
-func handoffRepliesWired() bool { return false }
+// handoffRepliesWired reports whether button presses are received. The
+// /interactions endpoint verifies callbacks with the Discord application's
+// public key, so replies are wired exactly when that key is configured:
+// without it the endpoint rejects every callback and an enabled button
+// would be a dead button.
+func handoffRepliesWired(db *gorm.DB) bool {
+	return setup.DiscordApplicationPublicKey(db) != ""
+}
 
 // handoffTaskURL links the receiving task of a handoff in Kitsu.
 func handoffTaskURL(publicURL string, event model.HandoffEvent) string {

@@ -100,8 +100,7 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 				continue
 			}
 			card := renderForumDigestCard(project.Name, project.KitsuProjectID, recipient, publicURL, language)
-			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, discord.Payload{Embeds: []discord.Embed{card}, Components: handoffReplyRows(recipient.Handoffs, language)}); err != nil {
-				projectErrs++
+			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, discord.Payload{Embeds: []discord.Embed{card}, Components: handoffReplyRows(db, recipient.Handoffs, language)}); err != nil {				projectErrs++
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient.DiscordID, err))
 				continue
 			}
