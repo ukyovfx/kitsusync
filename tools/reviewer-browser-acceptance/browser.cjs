@@ -21,11 +21,11 @@ function isNotificationsApplyRequest(request) {
 const locales = [
   {
     lang: 'en', automatic: 'Automatic', overrides: 'Additional', tabs: ['Overview', 'Notifications', 'Team', 'Settings'],
-    forumHeadings: ['Task Type → forum', 'Kitsu status → role', 'Comment notifications'],
+    forumHeadings: ['Task Type → forum'],
   },
   {
     lang: 'ja', automatic: '自動', overrides: '追加', tabs: ['概要', '通知', 'チーム', '設定'],
-    forumHeadings: ['タスクタイプ → フォーラム', 'Kitsuのステータス → 役割', 'コメントの通知'],
+    forumHeadings: ['タスクタイプ → フォーラム'],
   },
 ];
 const compositingAutomatic = ['@Guild Nick Supervisor', '@Global Name Fallback', '@username-fallback'];
@@ -743,8 +743,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?tab=notifications', locale.lang, viewport.name, 'routing and WFA recipients', 'one compact Task Type → Forum → effective-recipient summary row; no synthetic Notification Preview');
 
         // Forum settings page: the notifications tab links to it, it saves the
-        // Task Type → forum mapping and the WFA destination, and it offers the
-        // Bot auto-create action.
+        // Task Type → forum mapping, and it offers the Bot auto-create action.
+        // The status → role mapping (and with it the WFA destination) moved to
+        // the Bot settings page in the redesign and is verified there below.
         await fixture(page, 'forum-settings');
         const forumLink = page.getByRole('link', { name: locale.lang === 'ja' ? 'フォーラム設定を開く' : 'Open forum settings', exact: true });
         if (await forumLink.count() !== 1) throw new Error(`Notifications tab should expose one forum settings entry in ${locale.lang}`);
@@ -763,10 +764,9 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
           throw new Error(`Forum settings still renders tag assignment inputs in ${locale.lang}`);
         }
         if (await page.locator('#forum-guild').inputValue() !== guildID) throw new Error(`Forum settings did not load the Production Discord server in ${locale.lang}`);
-        // status-wip exists only in the live Kitsu status list, never in the
-        // saved-status fallback, so its row proves the status lister used the
-        // runtime token against the synthetic Kitsu service.
-        if (!(await page.locator('form.section-stack input[name="st_id"][value="status-wip"]').count())) throw new Error(`Forum settings fell back to saved statuses instead of the live Kitsu status list in ${locale.lang}`);
+        // The status -> role mapping moved to the Bot settings page in the
+        // redesign; the forum page must not render status rows any more.
+        if (await page.locator('form.section-stack input[name="st_id"], form.section-stack select[name="st_role"]').count()) throw new Error(`Forum settings still renders the moved status role rows in ${locale.lang}`);
         const forumTaskTypeRows = forumForm.locator('tbody tr').filter({ has: page.locator('select[name="tt_forum"]') });
         if (await forumTaskTypeRows.count() !== 5) throw new Error(`Forum settings Task Type rows are not the five Kitsu Task Types in ${locale.lang}`);
         const forumRow = label => forumTaskTypeRows.filter({ has: page.locator('td', { hasText: new RegExp(`^${label}$`) }) });
@@ -785,7 +785,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const forumSaveButton = forumForm.locator('button[type="submit"]:not([name="action"])');
         if (await forumSaveButton.count() !== 1 || !(await forumSaveButton.isVisible())) throw new Error(`Forum settings Save action is missing in ${locale.lang}`);
         await page.screenshot({ path: path.join(output, `forum-settings-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'Task Type → forum and Kitsu status → role sections with the server field, the Comment notifications checkbox, Save and Bot auto-create; the tag mapping is derived from the forum tag names on save');
+        await record(page, '/bot/admin/forum?project=reviewer-production', locale.lang, viewport.name, 'forum settings', 'Task Type → forum section only, with the server field, Save and Bot auto-create; the status → role mapping lives on the Bot settings page; the tag mapping is derived from the forum tag names on save');
 
         // Assign the unrouted Animation row to the storyboard forum, whose
         // tags do not use the standard names. The save is refused, naming the
@@ -837,10 +837,22 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         if (await forumRow('Animation').locator('select[name="tt_forum"]').inputValue() !== '66666666666666662') {
           throw new Error(`Forum settings did not persist the Animation forum mapping in ${locale.lang}`);
         }
-        const wfaStatusSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: /^Waiting For Approval$/ }) }).locator('select[name="st_role"]');
-        if (await wfaStatusSelect.inputValue() !== 'wfa') throw new Error(`Forum settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
+        // The WFA destination is a status role, and the redesign moved the
+        // status -> role section to the Bot settings page. The forum save
+        // above must have carried the saved roles over untouched, and the
+        // section there must list the live Kitsu statuses: status-wip exists
+        // only in the live list, never in the saved-status fallback, so its
+        // row proves the status lister used the runtime token against the
+        // synthetic Kitsu service.
+        const forumSavedHref = page.url();
+        await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        const wfaRoleSelect = page.locator('tr').filter({ has: page.locator('input[name="srole_id"][value="status-wfa"]') }).locator('select[name="srole_role"]');
+        if (await wfaRoleSelect.count() !== 1) throw new Error(`Bot settings did not render the Waiting For Approval role row in ${locale.lang}`);
+        if (await wfaRoleSelect.inputValue() !== 'wfa') throw new Error(`Bot settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
+        if (!(await page.locator('input[name="srole_id"][value="status-wip"]').count())) throw new Error(`Bot settings fell back to saved statuses instead of the live Kitsu status list in ${locale.lang}`);
+        await page.goto(forumSavedHref, { waitUntil: 'networkidle' });
         await page.screenshot({ path: path.join(output, `forum-settings-saved-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'the Animation → storyboard assignment was refused because the storyboard forum lacks the standard trigger tags, then Animation → animation saved the derived tag mapping and the WFA status destination; both survived a reload');
+        await record(page, '/bot/admin/forum?project=reviewer-production&msg=saved', locale.lang, viewport.name, 'saved Task Type → forum and WFA destination', 'the Animation → storyboard assignment was refused because the storyboard forum lacks the standard trigger tags, then Animation → animation saved the derived tag mapping; the WFA status destination survived on the Bot settings page, where the status → role section now lives');
         // Zero-touch setup: from an untouched forum setup, one press of the Bot
         // auto-create button seeds one route per Kitsu Task Type, creates a
         // forum with the role tags under the Production's Discord category and
@@ -849,10 +861,6 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const zeroTouchURL = new URL(page.url());
         zeroTouchURL.searchParams.delete('msg');
         await page.goto(zeroTouchURL.href, { waitUntil: 'networkidle' });
-        for (const [statusName, role] of [['Waiting For Approval', 'wfa'], ['Retake', 'retake'], ['Done', 'done']]) {
-          const templateSelect = page.locator('form.section-stack tr').filter({ has: page.locator('select[name="st_role"]') }).filter({ has: page.locator('td', { hasText: new RegExp(`^${statusName}$`) }) }).locator('select[name="st_role"]');
-          if (await templateSelect.inputValue() !== role) throw new Error(`Forum settings did not pre-fill the ${statusName} template role in ${locale.lang}`);
-        }
         const zeroTouchNavigation = page.waitForURL(url => url.pathname === '/bot/admin/forum' && url.searchParams.get('msg') === 'forums_created', { waitUntil: 'load', timeout: 15000 });
         await page.locator('form.section-stack').locator('button[name="action"][value="create_forums"]').click({ noWaitAfter: true });
         try {
@@ -868,7 +876,16 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         const persistedSelects = await page.locator('select[name="tt_forum"]').evaluateAll(nodes => nodes.map(node => node.value));
         if (JSON.stringify(persistedSelects) !== JSON.stringify(routedSelects)) throw new Error(`zero-touch state did not survive a reload in ${locale.lang}: ${JSON.stringify(persistedSelects)}`);
         await page.screenshot({ path: path.join(output, `forum-zero-touch-${locale.lang}-${viewport.name}.png`), fullPage: true });
-        await record(page, '/bot/admin/forum?project=reviewer-production&msg=forums_created', locale.lang, viewport.name, 'zero-touch forum setup', 'one press of the Bot auto-create button created a forum with tags per Task Type, applied the template status roles and saved');
+        // The auto-create also fills the template status roles; since the
+        // redesign they are edited on the Bot settings page, so that is
+        // where the pre-fill is verified.
+        await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
+        for (const [statusID, role] of [['status-wfa', 'wfa'], ['status-retake', 'retake'], ['status-done', 'done']]) {
+          const templateSelect = page.locator('tr').filter({ has: page.locator(`input[name="srole_id"][value="${statusID}"]`) }).locator('select[name="srole_role"]');
+          if (await templateSelect.count() !== 1) throw new Error(`Bot settings did not render the ${statusID} role row after zero-touch setup in ${locale.lang}`);
+          if (await templateSelect.inputValue() !== role) throw new Error(`Bot settings did not pre-fill the ${statusID} template role in ${locale.lang}`);
+        }
+        await record(page, '/bot/admin/forum?project=reviewer-production&msg=forums_created', locale.lang, viewport.name, 'zero-touch forum setup', 'one press of the Bot auto-create button created a forum with tags per Task Type, applied the template status roles (verified on the Bot settings page) and saved');
         // Put the seeded routing back for the Notifications checks that follow.
         await fixture(page, 'restore-routing');
 
