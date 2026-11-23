@@ -13,9 +13,10 @@ import (
 	"app/src/model"
 )
 
-// TestHandoffBrowserAcceptance renders the handoff mapping page with 13
-// product types and drives it in real Chromium: no horizontal scroll at
-// 1280px, recipient summaries on the hand-off chips, per-cell editing, and a
+// TestHandoffBrowserAcceptance renders the redesign's handoff wiring editor
+// and drives it in real Chromium: the studio routes and the Production
+// overrides render as seeded (inheritance included), the page does not
+// scroll horizontally at 1280px, and an edit of both layers survives a
 // save/reload round trip. It shares the dedicated browser job's gate and
 // pinned SHA so it never runs in the normal test suite.
 func TestHandoffBrowserAcceptance(t *testing.T) {
@@ -38,7 +39,7 @@ func TestHandoffBrowserAcceptance(t *testing.T) {
 	if outputDir == "" {
 		outputDir = filepath.Join(t.TempDir(), "evidence")
 	}
-	if err := os.MkdirAll(outputDir, 0700); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		t.Fatal("create private browser evidence directory")
 	}
 
@@ -47,6 +48,7 @@ func TestHandoffBrowserAcceptance(t *testing.T) {
 		{ID: "tt-lay", Name: "Layout"},
 		{ID: "tt-model", Name: "Modeling"},
 		{ID: "tt-rig", Name: "Rigging"},
+		{ID: "tt-shading", Name: "Shading"},
 		{ID: "tt-anim", Name: "Animation"},
 		{ID: "tt-fx", Name: "FX"},
 		{ID: "tt-light", Name: "Lighting"},
@@ -56,17 +58,31 @@ func TestHandoffBrowserAcceptance(t *testing.T) {
 		{ID: "tt-concept", Name: "Concept"},
 	})
 	db := newForumPageDB(t)
+	// Studio defaults: Rendering -> Compositing, Layout -> Animation +
+	// Lighting. This Production overrides Rendering to "no handoff" and
+	// inherits everything else.
+	if err := model.SaveStudioTaskRoute(db, model.StudioTaskRoute{
+		FromTaskTypeID: "tt-render", FromTaskTypeName: "Rendering",
+		NotifyTaskTypeIDs: model.JoinHandoffNotifyIDs([]string{"tt-comp"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SaveStudioTaskRoute(db, model.StudioTaskRoute{
+		FromTaskTypeID: "tt-lay", FromTaskTypeName: "Layout",
+		NotifyTaskTypeIDs: model.JoinHandoffNotifyIDs([]string{"tt-anim", "tt-light"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.SaveProductionTaskRoute(db, model.ProductionTaskRoute{
+		ProductionID: "p1", FromTaskTypeID: "tt-render", FromTaskTypeName: "Rendering",
+		NotifyTaskTypeIDs: model.TaskRouteNone,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := model.SaveProductionHandoffSettings(db, model.ProductionHandoffSettings{
 		Config: model.ProductionHandoffConfig{
 			ProductionID: "p1",
-			NotifyTiming: model.HandoffTimingMixed,
 			NoAssignee:   model.HandoffFallbackAdmin,
-		},
-		ProductTypes: []model.ProductionHandoffProductType{
-			{Name: "plate"}, {Name: "matchmove"}, {Name: "camera"}, {Name: "layout"},
-			{Name: "model"}, {Name: "rig"}, {Name: "pointcache"}, {Name: "fxcache"},
-			{Name: "lighting"}, {Name: "renderPass"}, {Name: "render"},
-			{Name: "storyboard"}, {Name: "concept"},
 		},
 	}); err != nil {
 		t.Fatal(err)
