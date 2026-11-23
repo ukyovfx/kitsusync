@@ -334,21 +334,26 @@ func (e Executor) executePostMessage(row model.ForumOutbox, token string) error 
 		assignees = e.AssigneeNames(task.ProjectID, model.ForumAssigneeIDs(task))
 	}
 	signal := discord.RenderForumSignalCard(discord.ForumCardInput{
-		Intent:      payload.Intent,
-		TaskType:    payload.TaskType,
-		EntityType:  payload.EntityType,
-		ParentName:  payload.ParentName,
-		EntityName:  payload.EntityName,
-		LegacyTitle: task.Title,
-		Quote:       payload.Quote,
-		Submitter:   payload.Submitter,
-		PublishLine: payload.PublishLine,
-		TaskURL:     url,
-		StatusName:  statusValue,
-		Assignees:   assignees,
-		UserIDs:     userIDs,
-		RoleIDs:     roleIDs,
-		Language:    language,
+		Intent:                payload.Intent,
+		TaskType:              payload.TaskType,
+		EntityType:            payload.EntityType,
+		ParentName:            payload.ParentName,
+		EntityName:            payload.EntityName,
+		LegacyTitle:           task.Title,
+		Quote:                 payload.Quote,
+		Submitter:             payload.Submitter,
+		PublishLine:           payload.PublishLine,
+		TaskURL:               url,
+		StatusName:            statusValue,
+		Assignees:             assignees,
+		UserIDs:               userIDs,
+		RoleIDs:               roleIDs,
+		Language:              language,
+		HandoffProductName:    payload.HandoffProductName,
+		HandoffProductVersion: payload.HandoffProductVersion,
+		HandoffSourceTaskType: payload.HandoffSourceTaskType,
+		HandoffSourceAuthor:   payload.HandoffSourceAuthor,
+		Components:            handoffComponents(payload),
 	})
 	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
 	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
@@ -659,4 +664,18 @@ func ReconcileSendingRows(db *gorm.DB) error {
 // StatusIsRetryable reports whether an HTTP status is worth retrying.
 func StatusIsRetryable(status int) bool {
 	return status == http.StatusTooManyRequests || status >= 500
+}
+
+// handoffComponents decodes the pre-built action rows of a handoff payload;
+// other intents carry none, and a broken payload degrades to no buttons
+// instead of failing the signal itself.
+func handoffComponents(payload model.ForumPostMessagePayload) []discord.ActionRow {
+	if payload.Intent != model.ForumIntentHandoff || len(payload.Components) == 0 {
+		return nil
+	}
+	var rows []discord.ActionRow
+	if err := json.Unmarshal(payload.Components, &rows); err != nil {
+		return nil
+	}
+	return rows
 }

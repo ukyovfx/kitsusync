@@ -1,15 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"gorm.io/gorm"
 
 	"app/src/api/discord"
+	"app/src/api/kitsu"
+	"app/src/forum"
 	"app/src/model"
 	"app/src/setup"
-	"app/src/utils/config"
 )
 
 // A handoff is reported immediately when the receiving task has a concrete
@@ -65,9 +67,13 @@ func handoffImmediate(timing string, fallbackUsed string, recipientIDs []string)
 	return strings.TrimSpace(fallbackUsed) == model.HandoffFallbackNone
 }
 
-// sendImmediateHandoffs DMs every pending handoff whose recipient is a concrete
-// assignee, and marks it notified so the same delivery is never sent twice.
-func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
+// sendImmediateHandoffs places a forum signal for every pending handoff
+// whose recipient is a concrete assignee, in the receiving task's own post,
+// and marks it notified once the signal is queued. Delivery itself is the
+// forum outbox's job, so a queued signal is retried there instead of being
+// lost with a failed send. Handoffs that do not qualify stay pending for
+// the morning digest.
+func sendImmediateHandoffs(db *gorm.DB, poller forum.Poller, payloads []kitsu.MessagePayload) (int, error) {
 	if db == nil {
 		return 0, nil
 	}
@@ -75,47 +81,52 @@ func sendImmediateHandoffs(conf config.Config, db *gorm.DB) (int, error) {
 	if err != nil || len(pending) == 0 {
 		return 0, err
 	}
-	botToken, _, _ := getDiscordSettings(db, conf)
-	if strings.TrimSpace(botToken) == "" {
-		return 0, nil
-	}
-	publicURL := setup.PublicKitsuURL(db)
 	timings := map[string]string{}
 	languages := map[string]string{}
-	sent := 0
-	var errs []string
+	var items []forum.HandoffDispatch
 	for _, event := range pending {
 		timing, known := timings[event.ProductionID]
 		if !known {
 			timing = handoffTiming(db, event.ProductionID)
 			timings[event.ProductionID] = timing
 		}
+		recipients := handoffAssignees(db, event)
+		if !handoffImmediate(timing, event.FallbackUsed, recipients) {
+			continue
+		}
 		language, known := languages[event.ProductionID]
 		if !known {
 			language = productionLanguage(db, event.ProductionID)
 			languages[event.ProductionID] = language
 		}
-		recipients := handoffRecipients(db, event)
-		if !handoffImmediate(timing, event.FallbackUsed, recipients) {
-			continue
+		components, err := json.Marshal(handoffReplyRows([]model.HandoffEvent{event}, language))
+		if err != nil {
+			return 0, err
 		}
-		// Claim before sending: another poll or instance may have reported the
-		// same delivery already, and the event must not be sent twice.
-		claimed, claimErr := model.MarkHandoffNotified(db, event.ID)
+		items = append(items, forum.HandoffDispatch{Event: event, Mentions: recipients, Components: components})
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
+	queued, err := poller.DispatchHandoffs(payloads, items)
+	if err != nil {
+		return 0, err
+	}
+	sent := 0
+	var errs []string
+	for id := range queued {
+		// Claim after queueing: the outbox row is dedupe-keyed by the
+		// delivery's comment, so a racing poll cannot place it twice, and
+		// claiming only once queued means a failed queue never marks a
+		// handoff notified that nobody will deliver.
+		claimed, claimErr := model.MarkHandoffNotified(db, id)
 		if claimErr != nil {
-			errs = append(errs, fmt.Sprintf("%d: %v", event.ID, claimErr))
+			errs = append(errs, fmt.Sprintf("%d: %v", id, claimErr))
 			continue
 		}
-		if !claimed {
-			continue
+		if claimed {
+			sent++
 		}
-		for _, recipient := range recipients {
-			payload := discord.Payload{Content: renderHandoffCard(publicURL, event, language), Components: handoffReplyRows([]model.HandoffEvent{event}, language)}
-			if err := sendDigestDirectMessage(botToken, recipient, payload); err != nil {
-				errs = append(errs, fmt.Sprintf("%d/%s: %v", event.ID, recipient, err))
-			}
-		}
-		sent++
 	}
 	if len(errs) > 0 {
 		return sent, fmt.Errorf("%s", strings.Join(errs, "; "))
@@ -145,34 +156,6 @@ func handoffCardLine(event model.HandoffEvent, taskURL, lang string) string {
 
 func handoffProduct(event model.HandoffEvent) string {
 	return strings.TrimSpace(event.ProductName + " " + event.ProductVersion)
-}
-
-// renderHandoffCard is the immediate DM for one handoff, with the receiver's
-// reply buttons under it. lang is the Production's notification language.
-func renderHandoffCard(taskURL string, event model.HandoffEvent, lang string) string {
-	en := discord.NotificationLanguage(lang) == "en"
-	var b strings.Builder
-	if en {
-		fmt.Fprintf(&b, "🔁 Asset handoff — %s / %s\n", strings.TrimSpace(event.EntityName), event.ProductName)
-	} else {
-		fmt.Fprintf(&b, "🔁 素材の受け渡し — %s / %s\n", strings.TrimSpace(event.EntityName), event.ProductName)
-	}
-	if version := strings.TrimSpace(event.ProductVersion); version != "" {
-		if en {
-			fmt.Fprintf(&b, "Version: %s\n", version)
-		} else {
-			fmt.Fprintf(&b, "版: %s\n", version)
-		}
-	}
-	if en {
-		fmt.Fprintf(&b, "Received from %s's %s.\n", event.SourceAuthorName, event.SourceTaskTypeName)
-	} else {
-		fmt.Fprintf(&b, "%s の %s から届きました。\n", event.SourceAuthorName, event.SourceTaskTypeName)
-	}
-	if taskURL != "" {
-		fmt.Fprintf(&b, "Kitsu: %s\n", handoffTaskURL(taskURL, event))
-	}
-	return b.String()
 }
 
 // handoffReplyRows is the receiver's reply for one handoff: one row with OK and

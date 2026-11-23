@@ -413,7 +413,7 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 	}
 	// A handoff addressed to a concrete assignee is reported now; the rest
 	// wait for the morning digest, which lists them until they are answered.
-	if sent, err := sendImmediateHandoffs(conf, db); err != nil {
+	if sent, err := sendImmediateHandoffs(db, poller, data); err != nil {
 		slog.Error("Handoff notification failed", "error_class", "handoff_notify_failed", "err", err)
 	} else if sent > 0 {
 		slog.Info("Handoff notification summary", "event", "handoff_notify_summary", "sent", sent)
