@@ -91,8 +91,12 @@ func (d HandoffDetector) Detect(payloads []kitsu.MessagePayload) (HandoffResult,
 			continue
 		}
 		// A publish comment carries no status change. A task that just moved
-		// belongs to the submit flow (WFA and later) and must stay there.
-		if strings.TrimSpace(payload.StatusChangeAuthor.Person.ID) != "" || payload.PreviousStatusName != "" {
+		// belongs to the submit flow (WFA and later) and must stay there. The
+		// move is judged against the forum ledger's last observed status:
+		// the Kitsu comment form attaches the task's current status to every
+		// comment posted through it, so a latest comment carrying a status
+		// (StatusChangeAuthor set) is not by itself a move.
+		if payload.PreviousStatusName != "" || d.taskStatusMoved(payload) {
 			continue
 		}
 		comment, ok := d.deliverComment(payload)
@@ -180,6 +184,24 @@ func (d HandoffDetector) Detect(payloads []kitsu.MessagePayload) (HandoffResult,
 		}
 	}
 	return result, nil
+}
+
+// taskStatusMoved reports whether the task's current status differs from
+// the status the forum ledger last observed for it. Detect runs before this
+// poll's forum sync updates the ledger, so the ledger holds the previous
+// observation. No ledger row (or no status on either side) means the task
+// was never observed: nothing can be said to have moved.
+func (d HandoffDetector) taskStatusMoved(payload kitsu.MessagePayload) bool {
+	current := strings.TrimSpace(payload.Task.Task.TaskStatusID)
+	taskID := strings.TrimSpace(payload.Task.Task.ID)
+	if current == "" || taskID == "" {
+		return false
+	}
+	row, err := model.FindForumTaskWithError(d.DB, taskID)
+	if err != nil || strings.TrimSpace(row.StatusID) == "" {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(row.StatusID), current)
 }
 
 // recordSuspiciousShelf stores a silent pair once and leaves one audit entry
