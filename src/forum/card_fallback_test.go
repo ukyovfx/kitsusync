@@ -56,8 +56,8 @@ func TestRenderCardFallsBackWhenRenderedCardIsEmpty(t *testing.T) {
 	if embed.Author.Name != "Compositing" {
 		t.Errorf("author = %q, want the task type", embed.Author.Name)
 	}
-	if embed.Title != "Shot / sq010 - sh002" {
-		t.Errorf("title = %q, want the shot heading", embed.Title)
+	if !strings.Contains(embed.Description, "## Shot / sq010 - sh002") {
+		t.Errorf("description %q missing the shot heading", embed.Description)
 	}
 	for _, want := range []string{"ステータス：work in progress", "担当：山田 太郎"} {
 		if !strings.Contains(embed.Description, want) {
@@ -124,7 +124,7 @@ func TestPlannerMentionRelayQueuesValidCardForWIPTask(t *testing.T) {
 		t.Fatalf("queued card is empty and Discord would reject the creation: %s", createPayload.Card)
 	}
 	embed := queued.Embeds[0]
-	if embed.Author.Name != "Compositing" || embed.Title != "Shot / sq010 - sh002" {
+	if embed.Author.Name != "Compositing" || !strings.Contains(embed.Description, "## Shot / sq010 - sh002") {
 		t.Errorf("queued card = %+v, want the fallback card for the task", embed)
 	}
 }

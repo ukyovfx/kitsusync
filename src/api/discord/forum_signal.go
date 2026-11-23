@@ -3,7 +3,6 @@ package discord
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"app/src/model"
 	"app/src/utils/truncate"
@@ -94,12 +93,19 @@ func forumCardHeading(entityType, parent, task, legacyTitle string) string {
 	}
 }
 
-// forumStatusLine renders the 状態行: emoji + STATUS + action.
-func forumStatusLine(intent, lang string) string {
+// forumStatusBlock renders the status block of a status signal in the
+// notification card's shape — a "### <emoji> <STATUS>" line followed by
+// the action line — so forum signals and lane notifications carry the
+// same structure and text sizes (owner ruling, 2026-11-24).
+func forumStatusBlock(intent, lang string) string {
 	switch intent {
 	case model.ForumIntentStatusWFA, model.ForumIntentStatusRetake, model.ForumIntentStatusDone:
 		message, emoji := localizedStatusMessageInfo(strings.ToUpper(intent), lang)
-		return emoji + " " + strings.ToUpper(intent) + " " + message
+		block := "### " + emoji + " " + strings.ToUpper(intent)
+		if message != "" {
+			block += "\n" + message
+		}
+		return block
 	case model.ForumIntentAssign:
 		_, emoji := localizedStatusMessageInfo("TODO", lang)
 		if normalizeNotificationLang(lang) == "en" {
@@ -111,9 +117,15 @@ func forumStatusLine(intent, lang string) string {
 	}
 }
 
-// forumCardDescription assembles the embed description lines.
+// forumCardDescription assembles the embed description in the unified
+// card layout: the shot heading as a markdown H2 (the large line), then
+// the status block or signal lines, the Kitsu link, and the
+// status/assignee footer block.
 func forumCardDescription(in ForumCardInput) string {
 	var parts []string
+	if heading := forumCardHeading(in.EntityType, in.ParentName, in.EntityName, in.LegacyTitle); heading != "" {
+		parts = append(parts, "## "+heading)
+	}
 	switch in.Intent {
 	case model.ForumIntentComment:
 		if in.Quote != "" {
@@ -126,8 +138,8 @@ func forumCardDescription(in ForumCardInput) string {
 			parts = append(parts, sanitizeDiscordText(in.PublishLine))
 		}
 	default:
-		if line := forumStatusLine(in.Intent, in.Language); line != "" {
-			parts = append(parts, line)
+		if block := forumStatusBlock(in.Intent, in.Language); block != "" {
+			parts = append(parts, block)
 		}
 	}
 	if in.Intent == model.ForumIntentStatusWFA {
@@ -231,14 +243,12 @@ func sanitizeAssigneeNames(names []string) []string {
 // footer live in the embed. Comment and publish signals are neutral: only
 // WFA / RETAKE / DONE use the status colors.
 func RenderForumSignalCard(in ForumCardInput) ForumSignal {
-	title := truncate.TruncateString(forumCardHeading(in.EntityType, in.ParentName, in.EntityName, in.LegacyTitle), 256)
 	color := neutralEmbedColor
 	if in.Intent == model.ForumIntentStatusWFA || in.Intent == model.ForumIntentStatusRetake || in.Intent == model.ForumIntentStatusDone {
 		color = notificationStatusColor(in.Intent)
 	}
 	embed := Embed{
 		Description: truncate.TruncateString(forumCardDescription(in), 4096),
-		Title:       title,
 		Color:       color,
 		Author:      EmbedAuthor{Name: truncate.TruncateString(strings.TrimSpace(in.TaskType), 256)},
 	}
@@ -249,44 +259,6 @@ func RenderForumSignalCard(in ForumCardInput) ForumSignal {
 		AllowedRoleIDs: uniqueDiscordRoleIDs(in.RoleIDs),
 		Components:     in.Components,
 	}
-}
-
-// ForumFlapWarning renders the "state is flapping" warning. It carries no
-// mentions on purpose: the signal messages still ping, the warning only
-// informs. lang is the Production's notification language; empty means "ja".
-func ForumFlapWarning(taskURL string, transitions int, span time.Duration, lang string) ForumSignal {
-	var line string
-	if normalizeNotificationLang(lang) == "en" {
-		line = fmt.Sprintf("⚠️ The status changed %d times in %s. The tag shows the latest status.", transitions, forumSpanText(span, lang))
-	} else {
-		line = fmt.Sprintf("⚠️ 状態が短時間に何度も変わっています（%d 回 / %s）。タグは最新の状態を表しています。", transitions, forumSpanText(span, lang))
-	}
-	parts := []string{line}
-	if taskURL != "" {
-		parts = append(parts, taskURL)
-	}
-	return ForumSignal{Content: strings.Join(parts, "\n")}
-}
-
-func forumSpanText(span time.Duration, lang string) string {
-	if normalizeNotificationLang(lang) == "en" {
-		if span < time.Minute {
-			return "under a minute"
-		}
-		minutes := int(span.Round(time.Minute) / time.Minute)
-		if minutes >= 60 {
-			return fmt.Sprintf("%dh", minutes/60)
-		}
-		return fmt.Sprintf("%dm", minutes)
-	}
-	if span < time.Minute {
-		return "1分以内"
-	}
-	minutes := int(span.Round(time.Minute) / time.Minute)
-	if minutes >= 60 {
-		return fmt.Sprintf("%d時間", minutes/60)
-	}
-	return fmt.Sprintf("%d分", minutes)
 }
 
 // forumMentionText builds the leading mention text for a signal.

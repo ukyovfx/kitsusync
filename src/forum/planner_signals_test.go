@@ -409,7 +409,29 @@ func TestPlannerIgnoresMalformedSubmitterMarker(t *testing.T) {
 	}
 }
 
-func TestPlannerWarnsOncePerFlapEpisode(t *testing.T) {
+// flapDecisionCount counts the flap records in the decision log. The
+// visible warning message was abolished (owner ruling, 2026-11-24): flap
+// detection is recorded here instead, once per episode, and no warn row
+// is ever queued.
+func flapDecisionCount(t *testing.T, db *gorm.DB) int64 {
+	t.Helper()
+	var count int64
+	if err := db.Model(&model.NotificationDecision{}).Where("rule_id = ?", "status.flap").Count(&count).Error; err != nil {
+		t.Fatalf("count flap decisions: %v", err)
+	}
+	return count
+}
+
+func warnRowCount(t *testing.T, db *gorm.DB) int64 {
+	t.Helper()
+	var count int64
+	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
+		t.Fatalf("count warn rows: %v", err)
+	}
+	return count
+}
+
+func TestPlannerRecordsFlapOncePerEpisode(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -425,24 +447,27 @@ func TestPlannerWarnsOncePerFlapEpisode(t *testing.T) {
 		t.Fatalf("wfa: %v", err)
 	}
 
-	var warnings []model.ForumOutbox
-	if err := db.Where("kind = ?", model.ForumOutboxWarnMessage).Order("id asc").Find(&warnings).Error; err != nil {
-		t.Fatalf("load warnings: %v", err)
+	if got := flapDecisionCount(t, db); got != 1 {
+		t.Fatalf("flap records = %d, want exactly one per episode", got)
 	}
-	if len(warnings) != 1 {
-		t.Fatalf("warnings = %d, want exactly one per episode", len(warnings))
+	if got := warnRowCount(t, db); got != 0 {
+		t.Fatalf("warn rows = %d, want none: the warning is abolished", got)
 	}
-	var payload struct {
+	var decision model.NotificationDecision
+	if err := db.Where("rule_id = ?", "status.flap").First(&decision).Error; err != nil {
+		t.Fatalf("load flap decision: %v", err)
+	}
+	var facts struct {
 		Transitions int `json:"transitions"`
 	}
-	if err := json.Unmarshal([]byte(warnings[0].Payload), &payload); err != nil {
-		t.Fatalf("decode warning payload: %v", err)
+	if err := json.Unmarshal([]byte(decision.Facts), &facts); err != nil {
+		t.Fatalf("decode flap facts: %v", err)
 	}
-	if payload.Transitions < 2 {
-		t.Errorf("warning transitions = %d", payload.Transitions)
+	if facts.Transitions < 2 {
+		t.Errorf("flap transitions = %d", facts.Transitions)
 	}
 
-	// Another round trip in the same episode must not warn again.
+	// Another round trip in the same episode must not record again.
 	planner.Now = now.Add(3 * time.Minute)
 	if _, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake, "person-1"), stubCard()); err != nil {
 		t.Fatalf("retake again: %v", err)
@@ -451,16 +476,12 @@ func TestPlannerWarnsOncePerFlapEpisode(t *testing.T) {
 	if _, err := planner.PlanTask(taskInput("s-wfa", model.ForumRoleWFA, "person-1"), stubCard()); err != nil {
 		t.Fatalf("wfa again: %v", err)
 	}
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("warnings = %d, want 1 for the whole episode", count)
+	if got := flapDecisionCount(t, db); got != 1 {
+		t.Fatalf("flap records = %d, want 1 for the whole episode", got)
 	}
 }
 
-func TestPlannerWarnsOnFourTransitionsInAnHour(t *testing.T) {
+func TestPlannerRecordsFlapOnFourTransitionsInAnHour(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -488,16 +509,15 @@ func TestPlannerWarnsOnFourTransitionsInAnHour(t *testing.T) {
 		t.Fatalf("final step: %v", err)
 	}
 
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
+	if count := flapDecisionCount(t, db); count != 1 {
+		t.Fatalf("flap records = %d, want 1 after four transitions in an hour", count)
 	}
-	if count != 1 {
-		t.Fatalf("warnings = %d, want 1 after four transitions in an hour", count)
+	if count := warnRowCount(t, db); count != 0 {
+		t.Fatalf("warn rows = %d, want none", count)
 	}
 }
 
-func TestPlannerDoesNotWarnForASingleChange(t *testing.T) {
+func TestPlannerDoesNotRecordFlapForASingleChange(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -507,12 +527,8 @@ func TestPlannerDoesNotWarnForASingleChange(t *testing.T) {
 	if _, err := planner.PlanTask(taskInput("s-retake", model.ForumRoleRetake, "person-1"), stubCard()); err != nil {
 		t.Fatalf("retake: %v", err)
 	}
-	var count int64
-	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxWarnMessage).Count(&count).Error; err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("warnings = %d, want 0 for a single transition", count)
+	if count := flapDecisionCount(t, db); count != 0 {
+		t.Fatalf("flap records = %d, want 0 for a single transition", count)
 	}
 }
 

@@ -115,7 +115,10 @@ func (e Executor) execute(row model.ForumOutbox) error {
 	case model.ForumOutboxPostMessage:
 		return e.executePostMessage(row, token)
 	case model.ForumOutboxWarnMessage:
-		return e.executeWarnMessage(row, token)
+		// The flap warning message was abolished (owner ruling,
+		// 2026-11-24); rows queued before the change are finished
+		// without posting anything.
+		return model.FinishForumOutboxRow(e.DB, row.ID, "flap_warning_abolished")
 	default:
 		return model.FailForumOutboxRow(e.DB, row.ID, "unsupported_kind", row.Kind)
 	}
@@ -390,44 +393,6 @@ func (e Executor) resolveRecipients(row model.ForumOutbox, task model.ForumTask,
 	users, roles, err := e.Recipients(row.TaskID, payload)
 	e.recipientCache[key] = resolvedRecipients{users: users, roles: roles, err: err}
 	return users, roles, err
-}
-
-// executeWarnMessage posts the flap warning. It never mentions anyone.
-func (e Executor) executeWarnMessage(row model.ForumOutbox, token string) error {
-	task, err := model.FindForumTaskWithError(e.DB, row.TaskID)
-	if err != nil {
-		// Only a task that is really gone is missing_task: a transient error
-		// (SQLITE_BUSY and friends) must be retried, not failed forever.
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return model.FailForumOutboxRow(e.DB, row.ID, "missing_task", row.TaskID)
-		}
-		return model.RetryForumOutboxRow(e.DB, row.ID, "transient", e.Now().Add(backoffFor(row.Attempts)))
-	}
-	if task.ThreadID == nil || *task.ThreadID == "" {
-		return model.CancelForumOutboxRow(e.DB, row.ID, "no_thread")
-	}
-	var payload struct {
-		Transitions int `json:"transitions"`
-		SpanSeconds int `json:"span_seconds"`
-	}
-	if err := json.Unmarshal([]byte(row.Payload), &payload); err != nil {
-		return model.FailForumOutboxRow(e.DB, row.ID, "invalid_payload", err.Error())
-	}
-	url := ""
-	if e.TaskURL != nil {
-		url = e.TaskURL(row.TaskID)
-	}
-	signal := discord.ForumFlapWarning(url, payload.Transitions, time.Duration(payload.SpanSeconds)*time.Second, productionLanguage(e.DB, task.ProjectID))
-	body := discord.ForumSignalMessage(signal, discord.ForumNonce(row.TaskID, row.ID))
-	if err := model.StoreForumOutboxRendered(e.DB, row.ID, signal.Content); err != nil {
-		return err
-	}
-	msg, err := discord.PostForumMessage(token, *task.ThreadID, body)
-	if err != nil {
-		return e.handleFailure(row, err)
-	}
-	e.recordSend(row, 1, 0, "")
-	return model.FinishForumOutboxRow(e.DB, row.ID, "message="+msg.ID)
 }
 
 // handleFailure classifies an API error and schedules the row accordingly.

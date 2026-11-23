@@ -409,7 +409,7 @@ func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, ro
 	result.Synced = true
 	// Flapping is a property of the transition, not of the role: a round trip
 	// that ends in WIP still flapped, so the check runs before the role gate.
-	if err := p.maybeWarnFlap(input, existing); err != nil {
+	if err := p.recordFlap(input, existing); err != nil {
 		return err
 	}
 	if !IsTriggerRole(input.StatusRole) {
@@ -479,9 +479,13 @@ func (p Planner) enqueueCommentPayload(input TaskInput, payload model.ForumPostM
 	return err
 }
 
-// maybeWarnFlap queues one warning per flap episode. The signal messages are
-// not suppressed: the warning only adds context.
-func (p Planner) maybeWarnFlap(input TaskInput, existing model.ForumTask) error {
+// recordFlap notes one detected flap episode in the decision log. The
+// visible warning message was abolished by the owner (2026-11-24): flap
+// detection stays, and the executor's round-trip and coalescing rules
+// still keep a flapping task from pinging repeatedly, but nothing is
+// posted to the thread for flapping alone — the record lives in the
+// decision log instead.
+func (p Planner) recordFlap(input TaskInput, existing model.ForumTask) error {
 	episode, transitions, span, flapping, err := p.flapEpisode(input.TaskID, existing.StatusID, input.StatusID)
 	if err != nil || !flapping {
 		return err
@@ -491,19 +495,18 @@ func (p Planner) maybeWarnFlap(input TaskInput, existing model.ForumTask) error 
 	if err != nil || warned {
 		return err
 	}
-	now := p.Now
-	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
-		TaskID:    taskID,
-		Kind:      model.ForumOutboxWarnMessage,
-		DedupeKey: model.ForumWarnDedupeKey(taskID, episode),
-		Payload:   fmt.Sprintf(`{"transitions":%d,"span_seconds":%d}`, transitions, int(span.Seconds())),
-		State:     model.ForumOutboxPending,
-		NotBefore: now,
-		CreatedAt: now,
+	_ = model.RecordNotificationDecision(p.DB, model.NotificationDecision{
+		ProductionID:   p.Production,
+		TaskID:         taskID,
+		TaskTypeName:   input.TaskTypeName,
+		EntityName:     input.EntityName,
+		SignalKind:     "status",
+		RuleID:         "status.flap",
+		Facts:          model.DecisionFactsJSON(map[string]interface{}{"transitions": transitions, "span_seconds": int(span.Seconds())}),
+		Outcome:        model.DecisionOutcomeSuppressed,
+		SuppressReason: "flap_detected",
+		RefID:          input.StatusID,
 	})
-	if err != nil && !errors.Is(err, model.ErrForumOutboxDuplicate) {
-		return err
-	}
 	return model.MarkForumFlapWarned(p.DB, taskID, episode)
 }
 

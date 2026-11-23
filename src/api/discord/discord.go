@@ -266,9 +266,9 @@ func localizedStatusMessageInfo(status, lang string) (string, string) {
 		return "修正をお願いします", "🔄"
 	case "DONE":
 		if normalizeNotificationLang(lang) == "en" {
-			return "Completed. Please check if needed.", "✅"
+			return "Completed.", "✅"
 		}
-		return "完了しました。必要に応じてご確認ください。", "✅"
+		return "完了しました。", "✅"
 	case "READY":
 		if normalizeNotificationLang(lang) == "en" {
 			return "Ready for the next step", "🟢"
