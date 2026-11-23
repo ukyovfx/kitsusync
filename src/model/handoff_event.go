@@ -178,6 +178,15 @@ func FindHandoffEvent(db *gorm.DB, commentID string) (HandoffEvent, error) {
 	return event, err
 }
 
+// FindHandoffEventByID loads one event by its row ID. The reply buttons
+// carry the row ID (core v2 §5): episode-era events are keyed by their
+// episode, and the row ID is the stable handle a press resolves through.
+func FindHandoffEventByID(db *gorm.DB, id uint) (HandoffEvent, error) {
+	var event HandoffEvent
+	err := db.First(&event, id).Error
+	return event, err
+}
+
 // PendingHandoffEvents lists unsent events, oldest first.
 func PendingHandoffEvents(db *gorm.DB) ([]HandoffEvent, error) {
 	var events []HandoffEvent

@@ -1224,6 +1224,11 @@ func main() {
 		return sqlDB.PingContext(ctx)
 	}))
 	mux.HandleFunc("/ready", readinessHandler(runtime))
+	// Discord interaction callbacks (the handoff OK button). No admin
+	// session: Discord's servers call this, and the Ed25519 signature on
+	// each callback is the authentication.
+	mux.HandleFunc("POST /interactions", handoffInteractionsHandler(db))
+	mux.HandleFunc("POST /bot/interactions", handoffInteractionsHandler(db))
 
 	onRuntimeConfigured := func() {
 		slog.Debug("Kitsu reconnect attempted", "attempted", true)

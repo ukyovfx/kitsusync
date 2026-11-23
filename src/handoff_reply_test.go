@@ -27,14 +27,15 @@ func TestHandoffDigestReplyRowsFitTheMessageLimit(t *testing.T) {
 	}
 	events := make([]model.HandoffEvent, 0, handoffDigestMaxItems)
 	for i := 0; i < handoffDigestMaxItems; i++ {
-		events = append(events, model.HandoffEvent{CommentID: "comment-" + string(rune('a'+i))})
+		events = append(events, model.HandoffEvent{ID: uint(i + 1)})
 	}
 	rows := handoffReplyRowsFor(events)
 	if len(rows) != handoffDigestMaxItems || len(rows) > 5 {
 		t.Fatalf("rows = %d", len(rows))
 	}
+	// Ruling I: one OK button per handoff, no Retake.
 	for _, row := range rows {
-		if len(row.Components) != 2 || row.Components[0].Label != "OK" || row.Components[1].Label != "リテイク" {
+		if len(row.Components) != 1 || row.Components[0].Label != "OK" {
 			t.Fatalf("row = %+v", row)
 		}
 	}
@@ -52,27 +53,28 @@ func TestHandoffButtonsAreInertUntilTheInteractionEndpointExists(t *testing.T) {
 	if handoffRepliesWired(db) {
 		t.Fatal("expected replies to be unwired without an application public key")
 	}
-	rows := handoffReplyRowsFor([]model.HandoffEvent{{CommentID: "comment-1"}})
-	if len(rows) != 1 || len(rows[0].Components) != 2 {
+	rows := handoffReplyRowsFor([]model.HandoffEvent{{ID: 7}})
+	if len(rows) != 1 || len(rows[0].Components) != 1 {
 		t.Fatalf("rows = %+v", rows)
 	}
-	for _, button := range rows[0].Components {
-		if !button.Disabled {
-			t.Fatalf("unwired button must be disabled: %+v", button)
-		}
+	if !rows[0].Components[0].Disabled {
+		t.Fatalf("unwired button must be disabled: %+v", rows[0].Components[0])
 	}
-	if rows[0].Components[0].CustomID != "handoff:ok:comment-1" || rows[0].Components[1].CustomID != "handoff:retake:comment-1" {
+	if rows[0].Components[0].CustomID != "handoff:ok:7" {
 		t.Fatalf("rows = %+v", rows)
 	}
-	if got := handoffReplyCustomID("ok", "comment-1"); got != "handoff:ok:comment-1" {
+	if got := handoffReplyCustomID(7); got != "handoff:ok:7" {
 		t.Fatalf("custom id = %q", got)
+	}
+	if got := handoffReplyCustomID(0); got != "handoff:ok:pending" {
+		t.Fatalf("custom id for an unsaved event = %q", got)
 	}
 
 	model.SetSetting(db, setup.DiscordApplicationPublicKeySettingKey, "0123456789abcdef")
 	if !handoffRepliesWired(db) {
 		t.Fatal("expected replies to be wired once the public key is configured")
 	}
-	wired := handoffReplyRows(db, []model.HandoffEvent{{CommentID: "comment-1"}}, "ja")
+	wired := handoffReplyRows(db, []model.HandoffEvent{{ID: 7}}, "ja")
 	for _, button := range wired[0].Components {
 		if button.Disabled {
 			t.Fatalf("wired button must be enabled: %+v", button)
@@ -280,10 +282,14 @@ func TestHandoffSignalCarriesReplyButtons(t *testing.T) {
 	if err := json.Unmarshal(payload.Components, &components); err != nil {
 		t.Fatal(err)
 	}
-	if len(components) != 1 || len(components[0].Components) != 2 {
+	if len(components) != 1 || len(components[0].Components) != 1 {
 		t.Fatalf("components = %+v", components)
 	}
-	if components[0].Components[0].CustomID != "handoff:ok:comment-1" || components[0].Components[1].CustomID != "handoff:retake:comment-1" {
-		t.Fatalf("components = %+v", components)
+	event, err := model.FindHandoffEvent(db, "comment-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := handoffReplyCustomID(event.ID); components[0].Components[0].CustomID != want {
+		t.Fatalf("components = %+v, want custom id %q", components, want)
 	}
 }

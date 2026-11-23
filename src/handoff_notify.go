@@ -145,37 +145,43 @@ func handoffProduct(event model.HandoffEvent) string {
 	return strings.TrimSpace(event.ProductName + " " + event.ProductVersion)
 }
 
-// handoffReplyRows is the receiver's reply for one handoff: one row with OK and
-// Retake. Discords' five-rows-per-message limit therefore caps a digest card
-// at handoffDigestMaxItems handoffs. While nothing listens for presses the
-// buttons are sent disabled: Discord rejects a non-link button that has no
-// custom_id, so inert has to mean disabled, not ID-less.
-// lang localizes the Retake label.
+// handoffReplyRows is the receiver's reply for one handoff: a single OK
+// （受け取り確認） button (ruling I, 2026-11-23 — no Retake button, no
+// modal). The button's custom ID carries the event's row ID, the episode
+// era's idempotency key. Discord's five-rows-per-message limit therefore
+// caps a digest card at handoffDigestMaxItems handoffs. While nothing
+// listens for presses the button is sent disabled: Discord rejects a
+// non-link button that has no custom_id, so inert has to mean disabled,
+// not ID-less. An already-answered event renders disabled and marked.
 func handoffReplyRows(db *gorm.DB, events []model.HandoffEvent, lang string) []discord.ActionRow {
-	retake := "リテイク"
-	if discord.NotificationLanguage(lang) == "en" {
-		retake = "Retake"
-	}
 	wired := handoffRepliesWired(db)
 	rows := make([]discord.ActionRow, 0, len(events))
 	for _, event := range events {
-		id := event.CommentID
+		label := "OK"
+		disabled := !wired
+		if event.State == model.HandoffEventAnswered || event.State == model.HandoffEventRetaken {
+			label = "OK（回答済み）"
+			if discord.NotificationLanguage(lang) == "en" {
+				label = "OK (answered)"
+			}
+			disabled = true
+		}
 		rows = append(rows, discord.ActionRow{Type: 1, Components: []discord.Button{
-			{Type: 2, Style: discord.ButtonStyleSuccess, Label: "OK", CustomID: handoffReplyCustomID("ok", id), Disabled: !wired},
-			{Type: 2, Style: discord.ButtonStyleDanger, Label: retake, CustomID: handoffReplyCustomID("retake", id), Disabled: !wired},
+			{Type: 2, Style: discord.ButtonStyleSuccess, Label: label, CustomID: handoffReplyCustomID(event.ID), Disabled: disabled},
 		}})
 	}
 	return rows
 }
 
-// handoffReplyCustomID names the reply of one handoff. The ID is always
-// carried, even while replies are unwired: Discord requires a custom_id on
-// every non-link button, so an unwired button is disabled instead of ID-less.
-func handoffReplyCustomID(action, commentID string) string {
-	if strings.TrimSpace(commentID) == "" {
-		commentID = "pending"
+// handoffReplyCustomID names the reply button of one handoff event:
+// handoff:ok:<event row ID>. The ID is always carried, even while replies
+// are unwired: Discord requires a custom_id on every non-link button, so
+// an unwired button is disabled instead of ID-less.
+func handoffReplyCustomID(eventID uint) string {
+	if eventID == 0 {
+		return "handoff:ok:pending"
 	}
-	return "handoff:" + action + ":" + commentID
+	return fmt.Sprintf("handoff:ok:%d", eventID)
 }
 
 // handoffRepliesWired reports whether button presses are received. The

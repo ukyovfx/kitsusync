@@ -23,7 +23,7 @@ func handoffCardInput(lang string) ForumCardInput {
 		HandoffSourceTaskType: "Layout",
 		HandoffSourceAuthor:   "Layout Artist",
 		Components: []ActionRow{{Type: 1, Components: []Button{
-			{Type: 2, Style: ButtonStyleSuccess, Label: "OK", CustomID: "handoff:ok:comment-1", Disabled: true},
+			{Type: 2, Style: ButtonStyleSuccess, Label: "OK", CustomID: "handoff:ok:1", Disabled: true},
 		}}},
 	}
 }
@@ -43,7 +43,7 @@ func TestHandoffSignalCardJapanese(t *testing.T) {
 		t.Fatalf("components = %+v", signal.Components)
 	}
 	body := ForumSignalMessage(signal, "nonce-1")
-	if len(body.Components) != 1 || body.Components[0].Components[0].CustomID != "handoff:ok:comment-1" {
+	if len(body.Components) != 1 || body.Components[0].Components[0].CustomID != "handoff:ok:1" {
 		t.Fatalf("message components = %+v", body.Components)
 	}
 }
