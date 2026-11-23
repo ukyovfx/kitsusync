@@ -122,7 +122,7 @@ func (d HandoffDetector) Detect(payloads []kitsu.MessagePayload) (HandoffResult,
 			settingsByProduction[productionID] = settings
 		}
 		route, routed := handoffRoute(settings, payload.TaskType.TaskType.ID, table.Family)
-		if !routed {
+		if !routed || route.Flow == model.HandoffFlowShelve {
 			// A product type the table has never heard of is shelved and
 			// listed as unclassified, so the operator sees it without anyone
 			// typing it in first. Nothing is notified for it.
@@ -133,6 +133,13 @@ func (d HandoffDetector) Detect(payloads []kitsu.MessagePayload) (HandoffResult,
 				settings.ProductTypes = append(settings.ProductTypes, model.ProductionHandoffProductType{ProductionID: productionID, Name: strings.TrimSpace(table.Family), Unclassified: true})
 				settingsByProduction[productionID] = settings
 				result.Unclassified++
+			} else if other, ok := handedOffElsewhere(settings, payload.TaskType.TaskType.ID, table.Family); ok {
+				// The same product is handed off from another Task Type, so
+				// this silent shelve is more likely a mapping mistake. It is
+				// recorded for the admin; the shelve itself stays silent.
+				if err := recordSuspiciousShelf(d.DB, payload, table, other); err != nil {
+					return result, err
+				}
 			}
 			continue
 		}
@@ -155,8 +162,52 @@ func (d HandoffDetector) Detect(payloads []kitsu.MessagePayload) (HandoffResult,
 			continue
 		}
 		result.Events++
+		if event.FallbackUsed == model.HandoffFallbackAdmin {
+			// The receiving task had no assignee and the Production sends to
+			// its admins. The event already carries fallback_used; the audit
+			// entry names the same comment so both can be matched.
+			model.WriteAuditLog(d.DB, model.AuditLog{
+				TaskID:      event.SourceTaskID,
+				ProjectID:   productionID,
+				ProjectName: payload.Project.Project.Name,
+				EntityName:  event.EntityName,
+				TaskType:    event.SourceTaskTypeName,
+				NewStatus:   "handoff fallback to admins: comment " + event.CommentID,
+				Success:     true,
+				ActorKind:   model.AuditActorSystem,
+				ActorName:   "handoff-detection",
+			})
+		}
 	}
 	return result, nil
+}
+
+// recordSuspiciousShelf stores a silent pair once and leaves one audit entry
+// the first time it is seen.
+func recordSuspiciousShelf(db *gorm.DB, payload kitsu.MessagePayload, table DeliverTable, otherTaskTypeName string) error {
+	productionID := payload.Project.Project.ID
+	productType := strings.TrimSpace(table.Family)
+	added, err := model.RecordSuspiciousShelf(db, productionID, model.SuspiciousShelf{
+		TaskTypeID:        strings.TrimSpace(payload.TaskType.TaskType.ID),
+		TaskTypeName:      payload.TaskType.TaskType.Name,
+		ProductType:       productType,
+		OtherTaskTypeName: otherTaskTypeName,
+	})
+	if err != nil || !added {
+		return err
+	}
+	model.WriteAuditLog(db, model.AuditLog{
+		TaskID:      "handoff-shelve-check",
+		ProjectID:   productionID,
+		ProjectName: payload.Project.Project.Name,
+		EntityName:  table.Name,
+		TaskType:    payload.TaskType.TaskType.Name,
+		NewStatus:   "shelved handoff needs review: " + payload.TaskType.TaskType.Name + " × " + productType + " (handed off for " + otherTaskTypeName + ")",
+		Success:     true,
+		ActorKind:   model.AuditActorSystem,
+		ActorName:   "handoff-detection",
+	})
+	return nil
 }
 
 // deliverComment returns the delivery comment. The payload's newest comment
@@ -194,6 +245,25 @@ func handoffRoute(settings model.ProductionHandoffSettings, taskTypeID, family s
 		}
 	}
 	return model.ProductionHandoffRoute{}, false
+}
+
+// handedOffElsewhere reports the first other Task Type that hands the same
+// product off. It is the second condition for a suspicious shelve.
+func handedOffElsewhere(settings model.ProductionHandoffSettings, taskTypeID, family string) (string, bool) {
+	family = strings.TrimSpace(family)
+	for _, route := range settings.Routes {
+		if strings.TrimSpace(route.TaskTypeID) == strings.TrimSpace(taskTypeID) {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(route.ProductType), family) {
+			continue
+		}
+		if route.Flow != model.HandoffFlowHand {
+			continue
+		}
+		return route.TaskTypeName, true
+	}
+	return "", false
 }
 
 // hasProductType reports whether the family is already in the Production's

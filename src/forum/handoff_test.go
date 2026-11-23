@@ -26,7 +26,7 @@ func newHandoffDB(t *testing.T) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&model.ProductionHandoffConfig{}, &model.ProductionHandoffProductType{},
-		&model.ProductionHandoffRoute{}, &model.HandoffEvent{},
+		&model.ProductionHandoffRoute{}, &model.HandoffEvent{}, &model.Setting{}, &model.AuditLog{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

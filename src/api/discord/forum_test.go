@@ -221,8 +221,8 @@ func TestPostForumMessageCarriesNonceAndSuppressedMentions(t *testing.T) {
 	if got["enforce_nonce"] != true {
 		t.Errorf("enforce_nonce = %v", got["enforce_nonce"])
 	}
-	if got["flags"] != float64(4) {
-		t.Errorf("flags = %v", got["flags"])
+	if got["flags"] != nil {
+		t.Errorf("flags = %v, want absent (no SUPPRESS_EMBEDS)", got["flags"])
 	}
 	mentions, _ := got["allowed_mentions"].(map[string]any)
 	users, _ := mentions["users"].([]any)

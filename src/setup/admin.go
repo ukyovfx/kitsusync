@@ -1276,12 +1276,12 @@ func compactSortedStrings(values []string) []string {
 // Level 2 (details accordion): polling, sends, forum settings table, resource usage.
 // Forum settings issues auto-expand the details accordion.
 // Legacy POST action=reconnect_webhook is rejected so repairs stay inside Notifications Apply.
-func HealthHandler(db *gorm.DB) http.HandlerFunc {
+func HealthHandler(db *gorm.DB, pollInterval time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		lang := currentLang(r)
 		if r.Method == http.MethodGet && r.URL.Query().Get("legacy") != "1" {
-			renderIAHealth(w, r, db)
+			renderIAHealth(w, r, db, pollInterval)
 			return
 		}
 

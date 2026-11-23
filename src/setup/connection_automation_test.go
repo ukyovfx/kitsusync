@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -108,7 +109,7 @@ func TestConnectingNewProductionSurvivesDiscordFailureAndMarksNeedsCheck(t *test
 
 	// The health page lists it as needing attention, with the reason.
 	w := httptest.NewRecorder()
-	HealthHandler(db)(w, httptest.NewRequest("GET", "/bot/admin/health?legacy=1", nil))
+	HealthHandler(db, time.Minute)(w, httptest.NewRequest("GET", "/bot/admin/health?legacy=1", nil))
 	body := w.Body.String()
 	if !strings.Contains(body, "Production p2") || !strings.Contains(body, "discord down") {
 		t.Fatalf("health page does not show the needs-check reason: %s", body)

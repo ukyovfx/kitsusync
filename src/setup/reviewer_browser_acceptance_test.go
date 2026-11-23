@@ -349,7 +349,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.HandleFunc("GET /bot/admin/refresh-discord-channels", RequireSession(RefreshDiscordChannelsHandler(func() string {
 		return reviewerBrowserBot
 	})))
-	health := HealthHandler(db)
+	health := HealthHandler(db, time.Minute)
 	mux.HandleFunc("/bot/admin/health", RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The browser suite visits several pages before System Status; reseed
 		// nearby shared monitoring cycles at route time so chart assertions
