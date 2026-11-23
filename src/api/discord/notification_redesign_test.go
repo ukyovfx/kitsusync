@@ -160,7 +160,7 @@ func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 		TaskType:             "Color Grading",
 		StatusUpper:          "DONE",
 		StatusEmoji:          "✅",
-		StatusMessage:        "完了しました。必要に応じてご確認ください。",
+		StatusMessage:        "完了しました。",
 		CommentLabel:         "コメント",
 		CommentContent:       "確認をお願いします。",
 		CommentAuthorLabel:   "コメント投稿者",
@@ -180,7 +180,7 @@ func TestNotificationCardUsesReferenceHierarchyInJapanese(t *testing.T) {
 	if embed.Footer.Text != "テスト通知" {
 		t.Fatalf("test marker is not footer-only: %q", embed.Footer.Text)
 	}
-	if !strings.Contains(embed.Description, "完了しました。必要に応じてご確認ください。\n\n**コメント**\n> 確認をお願いします。\nby USER A") {
+	if !strings.Contains(embed.Description, "完了しました。\n\n**コメント**\n> 確認をお願いします。\nby USER A") {
 		t.Fatalf("comment block is not grouped correctly: %q", embed.Description)
 	}
 	if embed.Url != "" {
@@ -304,10 +304,10 @@ func TestNotificationCardFixturesCoverStatusCommentsLinksAndPreview(t *testing.T
 	}{
 		{"WFA", "WFA", "Please review", false, true, true},
 		{"RETAKE", "RETAKE", "A revision is needed", false, false, false},
-		{"DONE", "DONE", "Completed. Please check if needed.", false, true, false},
+		{"DONE", "DONE", "Completed.", false, true, false},
 		{"comment-only-WFA", "WFA", "Please review", true, false, false},
 		{"comment-only-RETAKE", "RETAKE", "A revision is needed", true, false, false},
-		{"comment-only-DONE", "DONE", "Completed. Please check if needed.", true, false, false},
+		{"comment-only-DONE", "DONE", "Completed.", true, false, false},
 	}
 	for _, tc := range cases {
 		data := Template{

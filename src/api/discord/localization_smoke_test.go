@@ -97,7 +97,7 @@ func TestRichDescription_CompactStatusAndActionLines(t *testing.T) {
 			status:     "DONE",
 			prev:       "WFA",
 			statusLine: "✅ DONE",
-			actionLine: "完了しました。必要に応じてご確認ください。",
+			actionLine: "完了しました。",
 			transLine:  "レビューが完了しました",
 		},
 	}

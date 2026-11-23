@@ -550,7 +550,7 @@ func TestExecutorPostsSignalWithNonce(t *testing.T) {
 	}
 	bodyEmbed, _ := bodyEmbeds[0].(map[string]any)
 	description, _ := bodyEmbed["description"].(string)
-	for _, want := range []string{"👀 WFA チェックをお願いします", "https://kitsu.example/tasks/task-1", "ステータス：wfa"} {
+	for _, want := range []string{"### 👀 WFA", "チェックをお願いします", "https://kitsu.example/tasks/task-1", "ステータス：wfa"} {
 		if !strings.Contains(description, want) {
 			t.Errorf("description %q missing %q", description, want)
 		}
@@ -654,7 +654,7 @@ func TestExecutorSendsWithoutMentionsAfterRepeatedResolutionFailures(t *testing.
 			description, _ = bodyEmbed["description"].(string)
 		}
 	}
-	if !strings.Contains(description, "👀 WFA チェックをお願いします") {
+	if !strings.Contains(description, "### 👀 WFA") || !strings.Contains(description, "チェックをお願いします") {
 		t.Errorf("description %q, want the WFA signal", description)
 	}
 	got, err := loadOutbox(db, row.ID)
@@ -1187,7 +1187,7 @@ func TestExecutorSendsOnlyFinalSignalAfterConsecutiveTransitions(t *testing.T) {
 			description, _ = bodyEmbed["description"].(string)
 		}
 	}
-	if !strings.Contains(description, "✅ DONE 完了しました。") {
+	if !strings.Contains(description, "### ✅ DONE") || !strings.Contains(description, "完了しました。") {
 		t.Errorf("description = %q, want the DONE signal of the window's last state", description)
 	}
 	for _, stale := range []string{"WFA", "RETAKE"} {
@@ -1198,9 +1198,10 @@ func TestExecutorSendsOnlyFinalSignalAfterConsecutiveTransitions(t *testing.T) {
 }
 
 // The audit's P2: a round trip inside the window returns the task to the
-// status it already had, so the mention is cancelled and only the flap
-// warning goes out.
-func TestExecutorRoundTripSendsWarningWithoutMention(t *testing.T) {
+// status it already had, so the mention is cancelled. The flap warning
+// that used to go out instead was abolished (owner ruling, 2026-11-24),
+// so nothing is posted at all.
+func TestExecutorRoundTripPostsNothingAndCancelsMention(t *testing.T) {
 	db := newForumDB(t)
 	seedForumSettings(t, db)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
@@ -1227,15 +1228,8 @@ func TestExecutorRoundTripSendsWarningWithoutMention(t *testing.T) {
 			posts = append(posts, request)
 		}
 	}
-	if len(posts) != 1 {
-		t.Fatalf("messages posted = %d, want the warning only", len(posts))
-	}
-	content, _ := posts[0].Body["content"].(string)
-	if !strings.Contains(content, "⚠️") {
-		t.Errorf("content = %q, want the flap warning", content)
-	}
-	if strings.Contains(content, "<@") {
-		t.Errorf("content = %q, want no mention on a round trip", content)
+	if len(posts) != 0 {
+		t.Fatalf("messages posted = %d, want none: the mention is cancelled and no warning replaces it", len(posts))
 	}
 	var signal model.ForumOutbox
 	if err := db.Where("kind = ? AND dedupe_key LIKE ?", model.ForumOutboxPostMessage, "msg:status:%").
@@ -1526,17 +1520,17 @@ func TestExecutorOldPayloadFallsBackToLegacyTitle(t *testing.T) {
 	if _, err := executor.Drain(10); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
-	var title string
+	var description string
 	for _, request := range fake.snapshot() {
 		if request.Method == http.MethodPost && strings.HasSuffix(request.Path, "/messages") {
 			if embeds, ok := request.Body["embeds"].([]any); ok && len(embeds) == 1 {
 				if bodyEmbed, ok := embeds[0].(map[string]any); ok {
-					title, _ = bodyEmbed["title"].(string)
+					description, _ = bodyEmbed["description"].(string)
 				}
 			}
 		}
 	}
-	if title != "Compositing sq010 sh002" {
-		t.Errorf("embed title = %q, want the legacy task title", title)
+	if !strings.Contains(description, "## Compositing sq010 sh002") {
+		t.Errorf("embed description = %q, want the legacy task title as the heading", description)
 	}
 }
