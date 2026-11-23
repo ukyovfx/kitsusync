@@ -93,51 +93,32 @@ func renderLivenessSection(lang string, stats RuntimeSnapshot, pollInterval time
 }
 
 // renderHandoffAttentionSection lists the handoff outcomes an operator
-// should look at: shelved pairs that another Task Type hands off (a likely
-// mapping mistake, recorded by the detector) and handoffs that fell back to
-// the Production's admins because the receiving task had no assignee.
+// should look at: handoffs that fell back to the Production's admins because
+// the receiving task had no assignee. (The suspicious-shelf check was
+// abolished with the publish detector, redesign core v2: route mistakes are
+// now caught by the save-time validation and the decision log.)
 // It renders nothing when there is nothing to review.
 func renderHandoffAttentionSection(lang string, db *gorm.DB) string {
 	if db == nil {
 		return ""
 	}
-	var shelfRows []string
-	for _, project := range model.ListProjects(db) {
-		name := project.Name
-		if strings.TrimSpace(name) == "" {
-			name = project.KitsuProjectID
-		}
-		for _, mark := range model.ListSuspiciousShelves(db, project.KitsuProjectID) {
-			pair := mark.TaskTypeName + " × " + mark.ProductType
-			detail := t(lang, mark.OtherTaskTypeName+" では受け渡しになっています", "Handed off for "+mark.OtherTaskTypeName)
-			shelfRows = append(shelfRows, fmt.Sprintf(`<tr><th scope="row" class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="%s">%s</span></th><td data-label="%s">%s</td><td data-label="%s">%s</td><td data-label="%s"><span class="status-pill bad" role="status">%s</span></td></tr>`,
-				esc(t(lang, "プロダクション", "Production")), esc(name), esc(t(lang, "棚置きの組み合わせ", "Shelved pair")), esc(pair), esc(t(lang, "理由", "Reason")), esc(detail), esc(t(lang, "状態", "State")), esc(t(lang, "要確認", "Needs review"))))
-		}
-	}
 	fallbackCount, err := model.CountFallbackHandoffEvents(db)
-	if err != nil {
-		fallbackCount = 0
-	}
-	if len(shelfRows) == 0 && fallbackCount == 0 {
+	if err != nil || fallbackCount == 0 {
 		return ""
 	}
 	var body strings.Builder
-	if len(shelfRows) > 0 {
-		body.WriteString(`<table class="data-table mobile-card-table" aria-label="` + esc(t(lang, "棚置きの要確認", "Shelved pairs to review")) + `"><thead><tr><th scope="col">` + esc(t(lang, "プロダクション", "Production")) + `</th><th scope="col">` + esc(t(lang, "棚置きの組み合わせ", "Shelved pair")) + `</th><th scope="col">` + esc(t(lang, "理由", "Reason")) + `</th><th scope="col">` + esc(t(lang, "状態", "State")) + `</th></tr></thead><tbody>` + strings.Join(shelfRows, "") + `</tbody></table>`)
-	}
-	if fallbackCount > 0 {
-		body.WriteString(`<p class="hint">` + esc(fmt.Sprintf(t(lang, "受け側に担当者がおらず管理者へ送られた受け渡し: %d 件", "Handoffs sent to the admins because the receiving task had no assignee: %d"), fallbackCount)) + `</p>`)
-		if recent, err := model.FallbackHandoffEvents(db, 5); err == nil && len(recent) > 0 {
-			var items []string
-			for _, event := range recent {
-				items = append(items, `<li>`+esc(event.EntityName+" ("+event.SourceTaskTypeName+" × "+event.ProductType+" → "+event.NotifyTaskTypeName+")")+`</li>`)
+	body.WriteString(`<p class="hint">` + esc(fmt.Sprintf(t(lang, "受け側に担当者がおらず管理者へ送られた受け渡し: %d 件", "Handoffs sent to the admins because the receiving task had no assignee: %d"), fallbackCount)) + `</p>`)
+	if recent, err := model.FallbackHandoffEvents(db, 5); err == nil && len(recent) > 0 {
+		var items []string
+		for _, event := range recent {
+			label := event.EntityName + " (" + event.SourceTaskTypeName
+			if strings.TrimSpace(event.ProductType) != "" {
+				label += " × " + event.ProductType
 			}
-			body.WriteString(`<ul class="handoff-fallback-list">` + strings.Join(items, "") + `</ul>`)
+			label += " → " + event.NotifyTaskTypeName + ")"
+			items = append(items, `<li>`+esc(label)+`</li>`)
 		}
+		body.WriteString(`<ul class="handoff-fallback-list">` + strings.Join(items, "") + `</ul>`)
 	}
-	headerPill := ""
-	if len(shelfRows) > 0 {
-		headerPill = `<span class="status-pill bad">` + esc(fmt.Sprint(len(shelfRows))) + `</span>`
-	}
-	return `<section class="section-card glass handoff-attention" aria-labelledby="handoff-attention-title"><div class="page-heading"><div><h2 id="handoff-attention-title">` + esc(t(lang, "受け渡しの要確認", "Handoff items to review")) + `</h2><p class="hint">` + esc(t(lang, "通知はされていません。対応表の誤りの可能性がある棚置きと、担当者不在で管理者に送られた受け渡しを表示します。", "Nothing here was notified. Shelved pairs that may be mapping mistakes and handoffs that fell back to the admins.")) + `</p></div>` + headerPill + `</div>` + body.String() + `</section>`
+	return `<section class="section-card glass handoff-attention" aria-labelledby="handoff-attention-title"><div class="page-heading"><div><h2 id="handoff-attention-title">` + esc(t(lang, "受け渡しの要確認", "Handoff items to review")) + `</h2><p class="hint">` + esc(t(lang, "担当者不在で管理者に送られた受け渡しを表示します。", "Handoffs that fell back to the admins because nobody was assigned.")) + `</p></div></div>` + body.String() + `</section>`
 }

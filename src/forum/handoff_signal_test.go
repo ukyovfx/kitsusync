@@ -152,7 +152,7 @@ func TestExecutorPostsHandoffSignalWithButtons(t *testing.T) {
 func TestRecipientsHandoffIntent(t *testing.T) {
 	db := newForumDB(t)
 	seedRecipientTask(t, db, "person-1", "person-2")
-	recipients := commentRecipients(db, false)
+	recipients := commentRecipients(db)
 
 	users, _, err := recipients.ForTask("task-1", model.ForumPostMessagePayload{
 		Intent:   model.ForumIntentHandoff,

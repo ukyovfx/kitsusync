@@ -74,11 +74,43 @@ type Planner struct {
 	DB         *gorm.DB
 	Production string
 	Settings   model.ProductionForumSettings
-	Now        time.Time
+	// Policies is the studio status classification (redesign core v2). When
+	// present it decides roles and signal gating; the per-Production
+	// StatusRoles remain as the fallback for statuses the studio has not
+	// classified yet.
+	Policies map[string]model.StudioStatusPolicy
+	Now      time.Time
 }
 
-// RoleForStatus returns the forum role configured for a Kitsu status.
+// NatureForStatus returns the classified nature of a Kitsu status, or "" when
+// neither the studio policies nor the saved role mapping know it.
+func (p Planner) NatureForStatus(statusID string) string {
+	if policy, ok := p.Policies[statusID]; ok {
+		return policy.Nature
+	}
+	switch p.roleFromSettings(statusID) {
+	case model.ForumRoleWFA:
+		return model.StatusNatureReview
+	case model.ForumRoleRetake:
+		return model.StatusNatureRetake
+	case model.ForumRoleDone:
+		return model.StatusNatureDone
+	case model.ForumRoleWIP:
+		return model.StatusNatureWIP
+	}
+	return ""
+}
+
+// RoleForStatus returns the forum role of a Kitsu status: the studio policy's
+// nature decides first, the saved per-Production mapping is the fallback.
 func (p Planner) RoleForStatus(statusID string) string {
+	if policy, ok := p.Policies[statusID]; ok {
+		return model.StatusNatureRole(policy.Nature)
+	}
+	return p.roleFromSettings(statusID)
+}
+
+func (p Planner) roleFromSettings(statusID string) string {
 	for _, row := range p.Settings.StatusRoles {
 		if row.StatusID == statusID {
 			return row.Role
@@ -152,7 +184,6 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 
 	statusChanged := existing.StatusID != input.StatusID
 	assignees := model.NormalizeForumAssigneeIDs(input.Assignees)
-	assigneesChanged := !sameIDs(model.ForumAssigneeIDs(existing), assignees)
 
 	result := PlanResult{}
 	// A status change must reach the thread. A task whose thread was lost
@@ -165,26 +196,119 @@ func (p Planner) planChange(input TaskInput, route model.ProductionForumRoute, c
 			return result, err
 		}
 	}
-	if assigneesChanged && hasPost {
-		if err := p.queueAssigneeSignal(input, existing, assignees); err != nil {
-			return result, err
-		}
-	}
+	// Assignee changes no longer signal (redesign core v2): the thread's
+	// assignee display follows the ledger, nobody is pinged for a roster
+	// change. The mention relay below is the only comment path.
 	// A comment attached to a trigger transition (WFA/retake/done) belongs to
-	// the status signal — the retake quote carries the text — so its own
-	// comment notification would only repeat it, empty text included.
-	commentWithTriggerChange := statusChanged && IsTriggerRole(input.StatusRole)
+	// the status signal — the retake quote carries the text — so mentions
+	// that merely repeat the signal's own recipients are suppressed with it.
+	// Mentions of anyone else still relay (interference fix C-7): a reviewer
+	// naming a third person in the retake comment must reach that person.
 	// The stored marker is the Kitsu last_comment_date, so a first poll after
 	// the baseline does not announce a comment the row already recorded.
-	if hasPost && !commentWithTriggerChange && !input.Comment.Unavailable && input.Comment.ID != "" && input.CommentDate != existing.LastCommentAt {
-		if err := p.queueCommentSignal(input, existing); err != nil {
-			return result, err
+	if !input.Comment.Unavailable && input.Comment.ID != "" && input.CommentDate != existing.LastCommentAt {
+		mentions := model.NormalizeForumAssigneeIDs(input.Comment.Mentions)
+		if statusChanged && IsTriggerRole(input.StatusRole) {
+			mentions = mentionsExcept(mentions, p.statusSignalRecipients(input))
+		}
+		if len(mentions) > 0 {
+			if !hasPost {
+				// A mention must reach its person even when the task has no
+				// post yet (fix C-1): open the post the way a handoff
+				// delivery does, then relay into it.
+				failed, err := model.ForumCreateThreadFailed(p.DB, input.TaskID, existing.ThreadGeneration)
+				if err != nil {
+					return result, err
+				}
+				if !failed {
+					if err := p.queueCreateThread(input, route, input.StatusRole, existing.ThreadGeneration, card, &result); err != nil {
+						return result, err
+					}
+					hasPost = true
+				}
+			}
+			if hasPost {
+				if err := p.queueCommentSignal(input, mentions); err != nil {
+					return result, err
+				}
+			}
 		}
 	}
 	if err := p.updateTaskRow(input, existing.StatusID, assignees); err != nil {
 		return result, err
 	}
+	if statusChanged {
+		p.afterStatusChange(input, existing)
+	}
 	return result, nil
+}
+
+// statusSignalRecipients returns the Kitsu person IDs the status signal of
+// this transition will name, for the C-7 mention filter. RETAKE and DONE name
+// the task's assignees; WFA names the reviewer chain, which the planner does
+// not resolve, so no mention is filtered for it.
+func (p Planner) statusSignalRecipients(input TaskInput) []string {
+	switch input.StatusRole {
+	case model.ForumRoleRetake, model.ForumRoleDone:
+		return model.NormalizeForumAssigneeIDs(input.Assignees)
+	}
+	return nil
+}
+
+// mentionsExcept returns mentions minus the excluded person IDs.
+func mentionsExcept(mentions, excluded []string) []string {
+	if len(excluded) == 0 {
+		return mentions
+	}
+	skip := map[string]struct{}{}
+	for _, id := range excluded {
+		skip[id] = struct{}{}
+	}
+	out := make([]string, 0, len(mentions))
+	for _, id := range mentions {
+		if _, ok := skip[id]; !ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// afterStatusChange runs the episode side effects of a transition: a
+// receiving task that starts work acknowledges its open handoffs (fix C-6),
+// and a task sitting in WIP with fresh activity is surfaced as possibly
+// review-forgotten (fix C-2).
+func (p Planner) afterStatusChange(input TaskInput, existing model.ForumTask) {
+	if p.NatureForStatus(input.StatusID) == model.StatusNatureWIP {
+		if _, err := model.ResolveHandoffEpisodesForReceiverTask(p.DB, input.TaskID); err != nil {
+			slog.Warn("forum: could not auto-resolve handoffs for the working task", "error_class", "forum_handoff_auto_resolve_failed", "task_id", input.TaskID, "err", err)
+		}
+	}
+	p.checkReviewStale(input, existing)
+}
+
+// reviewStaleDays is the C-2 threshold: a task in a WIP status for at least
+// this many days whose newest comment is newer than the moment it entered
+// WIP looks like work (or a publish) happened without the review step.
+const reviewStaleDays = 3
+
+func (p Planner) checkReviewStale(input TaskInput, existing model.ForumTask) {
+	if p.NatureForStatus(input.StatusID) != model.StatusNatureWIP {
+		// Leaving WIP clears the information row by itself.
+		_ = model.AutoResolveAdminExceptions(p.DB, model.ExceptionReviewStale, input.TaskID)
+		return
+	}
+	since := existing.StatusSince
+	if since.IsZero() || p.Now.Sub(since) < reviewStaleDays*24*time.Hour {
+		return
+	}
+	commentAt, ok := commentCreatedAt(input.CommentDate)
+	if !ok || !commentAt.After(since) {
+		return
+	}
+	detail := "WIPのまま" + fmt.Sprint(reviewStaleDays) + "日以上経過し、その間にコメント（publish等）の動きがあります。レビュー出し忘れの可能性があります。"
+	if err := model.RaiseAdminException(p.DB, model.ExceptionReviewStale, input.TaskID, input.Title, p.Production, detail); err != nil {
+		slog.Warn("forum: could not raise the stale-review exception", "error_class", "forum_exception_raise_failed", "task_id", input.TaskID, "err", err)
+	}
 }
 
 // createTask handles the first observation of a task after the baseline: the
@@ -205,6 +329,13 @@ func (p Planner) createTask(input TaskInput, route model.ProductionForumRoute, c
 			return fmt.Errorf("render forum card: %w", err)
 		}
 		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+		// The opening transition gives every episode a starting row: the
+		// handoff watcher keys episodes by the transition that entered the
+		// done nature, and a task first observed inside a trigger status has
+		// no other transition to key on (core v2 §3.2).
+		if err := tx.Create(&model.ForumTransition{TaskID: input.TaskID, At: p.Now, FromStatusID: "", ToStatusID: input.StatusID}).Error; err != nil {
 			return err
 		}
 		if err := p.queueCreateThreadIn(tx, input, route, input.StatusRole, 0, rendered, &result); err != nil {
@@ -266,34 +397,35 @@ func (p Planner) applyStatusChange(input TaskInput, existing model.ForumTask, ro
 	return p.queueStatusSignal(input, existing, result)
 }
 
-// queueCommentSignal announces a new comment on a task that already has a post.
-// A task without a post is ignored, which keeps WIP chatter out of the forum.
-// An AYON publish comment becomes a publish trace: it shows the 📦 line and
-// mentions nobody.
-func (p Planner) queueCommentSignal(input TaskInput, existing model.ForumTask) error {
+// queueCommentSignal relays a comment's @mentions into the task's post.
+// Only the named people are recipients (ruling B); publish comments carry no
+// special form anymore — the publish trace line was abolished with the
+// publish trigger (ruling H), so a publish comment with mentions relays like
+// any other comment, and one without mentions stays silent.
+func (p Planner) queueCommentSignal(input TaskInput, mentions []string) error {
 	payload := model.ForumPostMessagePayload{
 		Intent:         model.ForumIntentComment,
 		WindowOpenedAt: p.Now,
 		Quote:          commentQuote(input.Comment.Text),
-		Mentions:       model.NormalizeForumAssigneeIDs(input.Comment.Mentions),
-	}
-	if table, ok := ParseDeliverTable(input.Comment.Text); ok {
-		payload.Intent = model.ForumIntentPublish
-		payload.PublishLine = forumPublishLine(table, productionLanguage(p.DB, input.ProjectID))
-		payload.Quote = ""
-		payload.Mentions = nil
+		Mentions:       mentions,
 	}
 	payload.StatusName = strings.ToLower(strings.TrimSpace(input.StatusName))
-	return p.enqueueCommentPayload(input, payload)
-}
-
-// forumPublishLine renders the publish trace line of a delivery comment. The
-// language is the Production's; unknown projects fall back to Japanese.
-func forumPublishLine(table DeliverTable, lang string) string {
-	if lang == "en" {
-		return "📦 " + table.Name + " (" + table.Family + ") " + table.Version + " was published"
+	if err := p.enqueueCommentPayload(input, payload); err != nil {
+		return err
 	}
-	return "📦 " + table.Name + "（" + table.Family + "）" + table.Version + " が publish されました"
+	_ = model.RecordNotificationDecision(p.DB, model.NotificationDecision{
+		ProductionID: p.Production,
+		TaskID:       input.TaskID,
+		TaskTypeName: input.TaskTypeName,
+		EntityName:   input.EntityName,
+		SignalKind:   "comment_mention",
+		RuleID:       "comment.mention",
+		Facts:        model.DecisionFactsJSON(map[string]interface{}{"comment_id": input.Comment.ID}),
+		Recipients:   model.DecisionRecipientsJSON(mentions),
+		Outcome:      model.DecisionOutcomeQueued,
+		RefID:        input.Comment.ID,
+	})
+	return nil
 }
 
 // productionLanguage resolves the Production's normalized notification
@@ -525,16 +657,27 @@ func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing mode
 		return nil
 	}
 	fields := forumTaskCardFields(input)
+	// C-9: when the person who changed the status is the only one the signal
+	// would name, the signal still posts (the timeline matters) but pings
+	// nobody. The newest comment's author is the observable proxy for the
+	// changer. WFA names the reviewer chain, which the planner does not
+	// resolve, so the check covers RETAKE and DONE (assignee-addressed).
+	suppressMentions := false
+	if (intent == model.ForumIntentStatusRetake || intent == model.ForumIntentStatusDone) && input.Comment.AuthorID != "" {
+		assignees := model.NormalizeForumAssigneeIDs(input.Assignees)
+		suppressMentions = len(assignees) == 1 && assignees[0] == input.Comment.AuthorID
+	}
 	payload, err := json.Marshal(model.ForumPostMessagePayload{
-		Intent:         intent,
-		WindowOpenedAt: p.Now,
-		BaseStatusID:   existing.StatusID,
-		Quote:          p.signalQuote(input.TaskID, intent, input.Comment),
-		Submitter:      submitterMarker(intent, input.Comment, p.Now),
-		EntityType:     fields.EntityType,
-		ParentName:     fields.ParentName,
-		EntityName:     fields.EntityName,
-		TaskType:       fields.TaskType,
+		Intent:           intent,
+		WindowOpenedAt:   p.Now,
+		BaseStatusID:     existing.StatusID,
+		Quote:            p.signalQuote(input.TaskID, intent, input.Comment),
+		Submitter:        submitterMarker(intent, input.Comment, p.Now),
+		SuppressMentions: suppressMentions,
+		EntityType:       fields.EntityType,
+		ParentName:       fields.ParentName,
+		EntityName:       fields.EntityName,
+		TaskType:         fields.TaskType,
 	})
 	if err != nil {
 		return err
@@ -555,36 +698,30 @@ func (p Planner) queueStatusSignalIn(db *gorm.DB, input TaskInput, existing mode
 		return err
 	}
 	result.Signalled = intent
-	return nil
-}
-
-func (p Planner) queueAssigneeSignal(input TaskInput, existing model.ForumTask, assignees []string) error {
-	fields := forumTaskCardFields(input)
-	payload, err := json.Marshal(model.ForumPostMessagePayload{
-		Intent:         model.ForumIntentAssign,
-		WindowOpenedAt: p.Now,
-		BaseAssignees:  model.ForumAssigneeIDs(existing),
-		StatusName:     strings.ToLower(strings.TrimSpace(input.StatusName)),
-		EntityType:     fields.EntityType,
-		ParentName:     fields.ParentName,
-		EntityName:     fields.EntityName,
-		TaskType:       fields.TaskType,
-	})
-	if err != nil {
-		return err
+	nature := p.NatureForStatus(input.StatusID)
+	chain := "assignee"
+	recipients := model.NormalizeForumAssigneeIDs(input.Assignees)
+	if nature == model.StatusNatureReview {
+		chain = "reviewer_chain"
+		recipients = nil
 	}
-	now := p.Now
-	_, err = model.CoalesceForumPostMessage(p.DB, model.ForumOutbox{
-		TaskID:      input.TaskID,
-		Kind:        model.ForumOutboxPostMessage,
-		DedupeKey:   model.ForumPostMessageCoalesceKey(model.ForumIntentAssign, input.TaskID) + ":" + now.UTC().Format(time.RFC3339Nano),
-		CoalesceKey: model.ForumPostMessageCoalesceKey(model.ForumIntentAssign, input.TaskID),
-		Payload:     string(payload),
-		State:       model.ForumOutboxPending,
-		NotBefore:   now.Add(model.ForumMentionWindow),
-		CreatedAt:   now,
+	_ = model.RecordNotificationDecision(db, model.NotificationDecision{
+		ProductionID: p.Production,
+		TaskID:       input.TaskID,
+		TaskTypeName: input.TaskTypeName,
+		EntityName:   input.EntityName,
+		SignalKind:   "status",
+		RuleID:       "status." + nature + "." + chain,
+		Facts: model.DecisionFactsJSON(map[string]interface{}{
+			"from_status_id": existing.StatusID,
+			"to_status_id":   input.StatusID,
+			"nature":         nature,
+		}),
+		Recipients: model.DecisionRecipientsJSON(recipients),
+		Outcome:    model.DecisionOutcomeQueued,
+		RefID:      input.StatusID,
 	})
-	return err
+	return nil
 }
 
 func (p Planner) updateTaskRow(input TaskInput, fromStatusID string, assignees []string) error {
@@ -846,16 +983,21 @@ func (p Planner) PlanHandoff(input TaskInput, card func() (json.RawMessage, erro
 		HandoffProductVersion: event.ProductVersion,
 		HandoffSourceTaskType: event.SourceTaskTypeName,
 		HandoffSourceAuthor:   event.SourceAuthorName,
+		HandoffEpisodeLabel:   event.EpisodeLabel,
 		Components:            components,
 	})
 	if err != nil {
 		return false, err
 	}
 	now := p.Now
+	dedupeKey := "handoff:" + event.CommentID
+	if event.EpisodeKey != "" {
+		dedupeKey = "handoff:ep:" + event.EpisodeKey
+	}
 	_, err = model.EnqueueForumOutbox(p.DB, model.ForumOutbox{
 		TaskID:    input.TaskID,
 		Kind:      model.ForumOutboxPostMessage,
-		DedupeKey: "handoff:" + event.CommentID,
+		DedupeKey: dedupeKey,
 		Payload:   string(payload),
 		State:     model.ForumOutboxPending,
 		NotBefore: now,

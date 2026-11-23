@@ -23,10 +23,8 @@ type Recipients struct {
 	ResolveReviewers func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error)
 	// TaskTypeName resolves a display name for the reviewer lookup.
 	TaskTypeName func(taskTypeID string) string
-	// NotifyAssigneesOnComment includes the current assignees in a comment
-	// signal (settings key notification.comment_notify_assignee, conf.toml
-	// fallback, default false).
-	NotifyAssigneesOnComment bool
+	// Comment signals relay @mentions only (redesign ruling B, 2026-11-23):
+	// the people named in the comment are the recipients, unconditionally.
 }
 
 // ForTask returns the user and role IDs to mention. A resolution error is
@@ -49,13 +47,8 @@ func (r Recipients) ForTask(taskID string, payload model.ForumPostMessagePayload
 		}
 		return r.mapAssignees(task.ProjectID, added), nil, nil
 	case model.ForumIntentComment:
-		// Q-01: the comment's mentions plus the current assignees.
-		users := r.mapAssignees(task.ProjectID, payload.Mentions)
-		if r.NotifyAssigneesOnComment {
-			assigneeUsers, _ := r.assignees(task)
-			users = append(users, assigneeUsers...)
-		}
-		return uniqueIDs(users), nil, nil
+		// Ruling B: mentions only, no assignee broadcast.
+		return uniqueIDs(r.mapAssignees(task.ProjectID, payload.Mentions)), nil, nil
 	case model.ForumIntentHandoff:
 		// A handoff pings the people the dispatcher pinned (the receiving
 		// task's assignees at detection, or the fallback admins); without a

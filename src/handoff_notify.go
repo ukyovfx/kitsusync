@@ -16,8 +16,9 @@ import (
 
 // A handoff is reported immediately when the receiving task has a concrete
 // assignee. A handoff that fell back to the admin role, or one nobody has
-// answered yet, is only listed in the morning digest: the mixed rule the
-// owner chose. The Production's notification timing biases the whole rule.
+// answered yet, is only listed in the morning digest. The timing is derived
+// from the signal kind (redesign ruling G, 2026-11-23): there is no timing
+// setting anymore.
 const handoffDigestMaxItems = 5
 
 // handoffAssignees lists the person IDs of a handoff's receiving task. The
@@ -33,16 +34,6 @@ func handoffAssignees(db *gorm.DB, event model.HandoffEvent) []string {
 	return nil
 }
 
-// handoffTiming returns the Production's notification timing, defaulting to the
-// mixed rule when the Production is not configured yet.
-func handoffTiming(db *gorm.DB, productionID string) string {
-	settings, ok, err := model.LoadProductionHandoffSettings(db, productionID)
-	if err != nil || !ok || !model.ValidHandoffTiming(settings.Config.NotifyTiming) {
-		return model.HandoffTimingMixed
-	}
-	return settings.Config.NotifyTiming
-}
-
 // productionLanguage resolves the Production's notification language
 // ("ja"/"en"); unknown productions fall back to Japanese.
 func productionLanguage(db *gorm.DB, kitsuProjectID string) string {
@@ -53,15 +44,10 @@ func productionLanguage(db *gorm.DB, kitsuProjectID string) string {
 }
 
 // handoffImmediate reports whether a handoff with these recipients is sent now
-// rather than kept for the morning digest.
-func handoffImmediate(timing string, fallbackUsed string, recipientIDs []string) bool {
+// rather than kept for the morning digest: named recipients are immediate, a
+// handoff with nobody named (admin fallback) waits for the digest.
+func handoffImmediate(fallbackUsed string, recipientIDs []string) bool {
 	if len(recipientIDs) == 0 {
-		return false
-	}
-	switch timing {
-	case model.HandoffTimingImmediate:
-		return true
-	case model.HandoffTimingDigest:
 		return false
 	}
 	return strings.TrimSpace(fallbackUsed) == model.HandoffFallbackNone
@@ -81,23 +67,24 @@ func sendImmediateHandoffs(db *gorm.DB, poller forum.Poller, payloads []kitsu.Me
 	if err != nil || len(pending) == 0 {
 		return 0, err
 	}
-	timings := map[string]string{}
 	languages := map[string]string{}
 	var items []forum.HandoffDispatch
 	for _, event := range pending {
-		timing, known := timings[event.ProductionID]
-		if !known {
-			timing = handoffTiming(db, event.ProductionID)
-			timings[event.ProductionID] = timing
-		}
 		recipients := handoffAssignees(db, event)
-		if !handoffImmediate(timing, event.FallbackUsed, recipients) {
+		if !handoffImmediate(event.FallbackUsed, recipients) {
 			continue
 		}
 		language, known := languages[event.ProductionID]
 		if !known {
 			language = productionLanguage(db, event.ProductionID)
 			languages[event.ProductionID] = language
+		}
+		if event.EpisodeKey != "" {
+			// A refired episode says so on the card (fix C-5): the count
+			// includes this episode, so the second completion reads 2回目.
+			if count, err := model.CountHandoffEpisodes(db, event.SourceTaskID); err == nil && count >= 2 {
+				event.EpisodeLabel = fmt.Sprintf("再確定（%d回目）", count)
+			}
 		}
 		components, err := json.Marshal(handoffReplyRows([]model.HandoffEvent{event}, language))
 		if err != nil {

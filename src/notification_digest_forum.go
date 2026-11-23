@@ -100,7 +100,8 @@ func sendForumMorningDigests(conf config.Config, db *gorm.DB, now time.Time, tod
 				continue
 			}
 			card := renderForumDigestCard(project.Name, project.KitsuProjectID, recipient, publicURL, language)
-			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, discord.Payload{Embeds: []discord.Embed{card}, Components: handoffReplyRows(recipient.Handoffs, language)}); err != nil {				projectErrs++
+			if err := sendDigestDirectMessage(botToken, recipient.DiscordID, discord.Payload{Embeds: []discord.Embed{card}, Components: handoffReplyRows(recipient.Handoffs, language)}); err != nil {
+				projectErrs++
 				digestErrs = append(digestErrs, fmt.Sprintf("%s/%s: %v", project.KitsuProjectID, recipient.DiscordID, err))
 				continue
 			}
@@ -154,9 +155,17 @@ func forumDigestRecipients(db *gorm.DB, project model.Project, settings model.Pr
 		return nil, err
 	}
 	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, jst)
+	// The unresolved-turn roles come from the studio status policies
+	// (redesign core v2); the per-Production mapping is only the fallback
+	// for statuses the studio has not classified yet.
 	roleByStatus := map[string]string{}
+	if policies, err := model.LoadStudioStatusPolicies(db); err == nil {
+		roleByStatus = model.StatusPolicyRoles(policies)
+	}
 	for _, row := range settings.StatusRoles {
-		roleByStatus[row.StatusID] = row.Role
+		if _, ok := roleByStatus[row.StatusID]; !ok {
+			roleByStatus[row.StatusID] = row.Role
+		}
 	}
 	// Reviewers are resolved per Task Type: a person only reviews the Task
 	// Types they are a reviewer for, and the automatic supervisors of a Task
@@ -265,7 +274,7 @@ func handoffDigestItems(db *gorm.DB, project model.Project) (map[string][]model.
 			continue
 		}
 		recipients := handoffRecipients(db, event)
-		if event.State == model.HandoffEventPending && handoffImmediate(handoffTiming(db, event.ProductionID), event.FallbackUsed, recipients) {
+		if event.State == model.HandoffEventPending && handoffImmediate(event.FallbackUsed, recipients) {
 			continue
 		}
 		for _, recipient := range recipients {
@@ -330,7 +339,8 @@ func renderForumDigestCard(productionName, productionID string, recipient forumD
 	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, retakeLabel, len(recipient.Retakes))
-	if items := forumDigestLines(recipient.Retakes, productionID, publicURL); len(items) > 0 {		b.WriteString("  " + strings.Join(items, ", "))
+	if items := forumDigestLines(recipient.Retakes, productionID, publicURL); len(items) > 0 {
+		b.WriteString("  " + strings.Join(items, ", "))
 	}
 	b.WriteString("\n")
 	// Both lists are always rendered, so the person sees a real 0件 rather

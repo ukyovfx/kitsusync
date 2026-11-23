@@ -11,18 +11,8 @@ import (
 	"app/src/model"
 )
 
-// An en Production's signal cards, flap warnings and publish lines render in
-// English; the language comes from the Production row, not the admin UI.
-
-func TestForumPublishLineFollowsProductionLanguage(t *testing.T) {
-	table := DeliverTable{Name: "Env_A", Family: "mayaScene", Version: "v012"}
-	if line := forumPublishLine(table, "en"); line != "📦 Env_A (mayaScene) v012 was published" {
-		t.Errorf("en publish line = %q", line)
-	}
-	if line := forumPublishLine(table, ""); line != "📦 Env_A（mayaScene）v012 が publish されました" {
-		t.Errorf("ja publish line = %q", line)
-	}
-}
+// An en Production's signal cards and flap warnings render in English;
+// the language comes from the Production row, not the admin UI.
 
 func seedForumProjectLanguage(t *testing.T, db *gorm.DB, language string) {
 	t.Helper()

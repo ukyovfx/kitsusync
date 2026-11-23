@@ -133,9 +133,16 @@ func TestHandoffReplyMovesTheEventOutOfTheDigestOnce(t *testing.T) {
 // The digest repeats an unanswered handoff every morning and drops it after
 // the reply, with one reply row per listed handoff.
 func TestHandoffDigestListsUntilRepliedAndDropsAfter(t *testing.T) {
-	db := handoffReplyDB(t, model.HandoffTimingDigest)
+	db := handoffReplyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackNone, "person-comp")
+	// The handoff was sent immediately when it fired; the digest repeats it
+	// while it is unanswered.
+	if event, err := model.FindHandoffEvent(db, "comment-1"); err != nil {
+		t.Fatal(err)
+	} else if ok, err := model.MarkHandoffNotified(db, event.ID); err != nil || !ok {
+		t.Fatalf("notify: ok=%v err=%v", ok, err)
+	}
 
 	morning := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)
 	if sent, err := sendForumMorningDigests(digestTestConfig(), db, morning, "2026-11-16"); err != nil || sent != 1 {
@@ -171,12 +178,19 @@ func TestHandoffDigestListsUntilRepliedAndDropsAfter(t *testing.T) {
 // A capped card counts what it left out, and keeps one reply row per listed
 // handoff only.
 func TestHandoffDigestCountsTheHandoffsItLeftOut(t *testing.T) {
-	db := handoffReplyDB(t, model.HandoffTimingDigest)
+	db := handoffReplyDB(t, model.HandoffTimingMixed)
 	fixture := newDMFixture(t)
 	// Different products: the same product on the same receiving task would
 	// supersede the older one instead of queueing.
 	for _, product := range []string{"camera", "model", "rig", "clone", "anim", "fx", "light"} {
 		handoffEventNamed(t, db, "comment-"+product, product)
+		event, err := model.FindHandoffEvent(db, "comment-"+product)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := model.MarkHandoffNotified(db, event.ID); err != nil || !ok {
+			t.Fatalf("notify %s: ok=%v err=%v", product, ok, err)
+		}
 	}
 
 	morning := time.Date(2026, 11, 16, 9, 0, 0, 0, jst)

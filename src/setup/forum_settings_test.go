@@ -23,7 +23,7 @@ func newForumPageDB(t *testing.T) *gorm.DB {
 			_ = sqlDB.Close()
 		}
 	})
-	if err := db.AutoMigrate(&model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ProductionHandoffConfig{}, &model.ProductionHandoffProductType{}, &model.ProductionHandoffRoute{}, &model.ForumBaseline{}, &model.ForumTask{}); err != nil {
+	if err := db.AutoMigrate(&model.ProductionForumConfig{}, &model.ProductionForumRoute{}, &model.ProductionForumStatusRole{}, &model.ProductionForumTag{}, &model.ProductionHandoffConfig{}, &model.ProductionHandoffProductType{}, &model.ProductionHandoffRoute{}, &model.ForumBaseline{}, &model.ForumTask{}, &model.StudioStatusPolicy{}, &model.StudioTaskRoute{}, &model.ProductionTaskRoute{}, &model.AdminException{}, &model.NotificationDecision{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.Project{KitsuProjectID: "p1", Name: "Synthetic Production", DiscordGuildID: "g1"}).Error; err != nil {
@@ -38,7 +38,9 @@ func newForumPageDB(t *testing.T) *gorm.DB {
 func stubForumLookups(t *testing.T, discordErr error) {
 	t.Helper()
 	oldTypes, oldStatuses, oldForums, oldCache := forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache
-	t.Cleanup(func() { forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache = oldTypes, oldStatuses, oldForums, oldCache })
+	t.Cleanup(func() {
+		forumTaskTypeLister, forumStatusLister, forumChannelLister, guildChannelListCache = oldTypes, oldStatuses, oldForums, oldCache
+	})
 	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType {
 		return []kitsu.TaskType{{ID: "tt-anim", Name: "Animation"}, {ID: "tt-comp", Name: "Compositing"}}
 	}
@@ -74,7 +76,7 @@ func stubForumLookups(t *testing.T, discordErr error) {
 }
 
 func forumHandler(db *gorm.DB) http.HandlerFunc {
-	return ForumSettingsHandler(db, false, func() (string, string) { return "bot-token", "g-fallback" })
+	return ForumSettingsHandler(db, func() (string, string) { return "bot-token", "g-fallback" })
 }
 
 func forumPost(t *testing.T, db *gorm.DB, form url.Values) *httptest.ResponseRecorder {
@@ -95,6 +97,9 @@ func completeForumForm() url.Values {
 	return form
 }
 
+// The forum page keeps only the routing section: the status -> role mapping
+// moved to the Bot settings page and the comment notification toggle was
+// abolished (redesign front half, 2026-11-23).
 func TestForumSettingsPageRendersTwoSectionsWithoutTagAssignment(t *testing.T) {
 	stubForumLookups(t, nil)
 	db := newForumPageDB(t)
@@ -104,9 +109,12 @@ func TestForumSettingsPageRendersTwoSectionsWithoutTagAssignment(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	for _, heading := range []string{"Task Type → forum", "Kitsu status → role"} {
-		if !strings.Contains(body, "<h2>"+heading+"</h2>") {
-			t.Fatalf("page is missing the %q section", heading)
+	if !strings.Contains(body, "<h2>Task Type → forum</h2>") {
+		t.Fatal("page is missing the routing section")
+	}
+	for _, gone := range []string{"Kitsu status → role", "Comment notifications", `name="st_role"`, `name="comment_notify_assignee"`} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("page still carries the removed section %q", gone)
 		}
 	}
 	if strings.Contains(body, "Role → forum tag") || strings.Contains(body, `name="tag_id"`) || strings.Contains(body, `name="tag_forum"`) {
@@ -117,21 +125,8 @@ func TestForumSettingsPageRendersTwoSectionsWithoutTagAssignment(t *testing.T) {
 	}
 }
 
-func TestForumSettingsPagePreFillsTemplateStatusRoles(t *testing.T) {
-	stubForumLookups(t, nil)
-	db := newForumPageDB(t)
-	w := httptest.NewRecorder()
-	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d", w.Code)
-	}
-	body := w.Body.String()
-	for _, role := range []string{"wfa", "retake", "done"} {
-		if !strings.Contains(body, `<option value="`+role+`" selected>`) {
-			t.Fatalf("page does not pre-fill the template role %q", role)
-		}
-	}
-}
+// The template pre-fill of status roles now lives on the Bot settings page
+// section; see status_roles_section_test.go.
 
 func TestForumSettingsPageFetchesStatusesOnce(t *testing.T) {
 	stubForumLookups(t, nil)
@@ -150,9 +145,6 @@ func TestForumSettingsPageFetchesStatusesOnce(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("status list fetched %d times, want 1", calls)
-	}
-	if !strings.Contains(w.Body.String(), `<option value="wfa" selected>`) {
-		t.Fatalf("template defaults not applied from the fetched list: %s", w.Body.String())
 	}
 }
 
@@ -345,7 +337,6 @@ func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
 	}
 	db := newForumPageDB(t)
 	form := completeForumForm()
-	form["st_role"] = []string{"wfa", "retake", "", ""} // no status for Done
 	r := httptest.NewRequest(http.MethodPost, "/bot/admin/forum?lang=ja", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
@@ -354,7 +345,7 @@ func TestForumSettingsErrorsAreWordedInJapanese(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d", w.Code)
 	}
-	for _, want := range []string{"保存できませんでした", "notice notice-error", "役割「完了」に割り当てるステータスがありません。", "のタグがありません。", "フォーラム「compositing」に"} {
+	for _, want := range []string{"保存できませんでした", "notice notice-error", "のタグがありません。", "フォーラム「compositing」に"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Japanese message missing %q", want)
 		}
@@ -396,7 +387,8 @@ func TestForumSettingsStatusListFailureKeepsSavedStatusRoles(t *testing.T) {
 		t.Fatalf("seed save failed: %d", w.Code)
 	}
 	// Kitsu's status list is now unreachable. Re-saving the page exactly as it is
-	// rendered must not erase the saved status roles.
+	// rendered must not erase the saved status roles: the forum page carries
+	// them over, and the Bot page section keeps showing the saved rows.
 	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) { return nil, forumTestError("kitsu down") }
 	w := httptest.NewRecorder()
 	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
@@ -404,13 +396,14 @@ func TestForumSettingsStatusListFailureKeepsSavedStatusRoles(t *testing.T) {
 	if !strings.Contains(body, "Saved status settings are kept") {
 		t.Fatal("the page must say the saved status settings are kept")
 	}
+	section := renderStatusRolesSection(db, "en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil))
 	for _, id := range []string{"s-wfa", "s-retake", "s-done", "s-wip"} {
-		if !strings.Contains(body, `name="st_id" value="`+id+`"`) {
-			t.Fatalf("saved status %s must stay in the form while Kitsu is unreachable", id)
+		if !strings.Contains(section, `name="srole_id" value="`+id+`"`) {
+			t.Fatalf("saved status %s must stay in the Bot page section while Kitsu is unreachable", id)
 		}
 	}
-	if !strings.Contains(body, `<option value="done" selected>`) {
-		t.Fatal("saved roles must stay selected")
+	if !strings.Contains(section, `<option value="done" selected>`) {
+		t.Fatal("saved roles must stay selected in the Bot page section")
 	}
 
 	// Submit the same values the page rendered.
@@ -431,11 +424,10 @@ func TestForumSettingsKeepsSavedStatusMissingFromLiveList(t *testing.T) {
 	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) {
 		return []kitsu.TaskStatus{{ID: "s-wfa", Name: "Waiting For Approval"}}, nil // others vanished in Kitsu
 	}
-	w := httptest.NewRecorder()
-	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	section := renderStatusRolesSection(db, "en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot?edit=1&lang=en", nil))
 	for _, id := range []string{"s-retake", "s-done", "s-wip"} {
-		if !strings.Contains(w.Body.String(), `name="st_id" value="`+id+`"`) {
-			t.Fatalf("saved status %s missing from the live list must stay in the form", id)
+		if !strings.Contains(section, `name="srole_id" value="`+id+`"`) {
+			t.Fatalf("saved status %s missing from the live list must stay in the Bot page section", id)
 		}
 	}
 }
@@ -477,7 +469,7 @@ func TestForumSettingsSavesWithoutAnyKitsuOrDiscordLookup(t *testing.T) {
 	w := httptest.NewRecorder()
 	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
 	body := w.Body.String()
-	if w.Code != http.StatusOK || !strings.Contains(body, `name="tt_id" value="tt-anim"`) || !strings.Contains(body, `name="st_id" value="s-done"`) {
+	if w.Code != http.StatusOK || !strings.Contains(body, `name="tt_id" value="tt-anim"`) {
 		t.Fatalf("saved rows must render with every lookup down (status %d)", w.Code)
 	}
 	loaded, _, _ := model.LoadProductionForumSettings(db, "p1")

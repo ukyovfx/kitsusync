@@ -403,13 +403,46 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		return
 	}
 	poller := forum.Poller{DB: db, RenderCard: forumCardRenderer(conf, db)}
-	// Handoff detection reads the same payloads: a publish comment with no
-	// status change on a 受け渡し row becomes a handoff event for K3.
-	detector := forum.HandoffDetector{DB: db, Comments: kitsu.GetTaskCommentsWithError}
-	if hr, err := detector.Detect(data); err != nil {
-		slog.Error("Handoff detection failed", "error_class", "handoff_detect_failed", "err", err)
-	} else if hr.Events > 0 || hr.Known > 0 {
-		slog.Info("Handoff detection summary", "event", "handoff_detect_summary", "events", hr.Events, "known", hr.Known)
+	// The determination model (redesign core v2): the studio status policies
+	// are reconciled against the live Kitsu status list first, so this poll
+	// classifies with fresh names.
+	if statuses, err := kitsu.GetTaskStatusesWithError(); err != nil {
+		slog.Warn("Status policy reconcile skipped", "error_class", "status_policy_reconcile_failed", "err", err)
+	} else {
+		infos := make([]model.StatusInfo, 0, len(statuses.Each))
+		for _, status := range statuses.Each {
+			name := status.Name
+			if name == "" {
+				name = status.ShortName
+			}
+			infos = append(infos, model.StatusInfo{ID: status.ID, Name: name})
+		}
+		if err := model.ReconcileStudioStatusPolicies(db, infos); err != nil {
+			slog.Warn("Status policy reconcile failed", "error_class", "status_policy_reconcile_failed", "err", err)
+		}
+	}
+	// The handoff watcher reads only the transitions this poll's planning
+	// writes, so it needs the ledger's high-water mark from before the poll.
+	var transitionWatermark uint
+	{
+		var maxID *uint
+		if err := db.Model(&model.ForumTransition{}).Select("MAX(id)").Scan(&maxID).Error; err == nil && maxID != nil {
+			transitionWatermark = *maxID
+		}
+	}
+	result, err := poller.PollProjects(data)
+	if err != nil {
+		slog.Error("Forum poll failed", "error_class", "forum_poll_failed", "err", err)
+		return
+	}
+	// Handoffs fire from the status transitions the planner just wrote
+	// (ruling H): entering a done-nature status tells the wired downstream
+	// tasks. Publishes themselves no longer notify anyone.
+	watcher := forum.HandoffWatcher{DB: db}
+	if wr, err := watcher.WatchHandoffs(data, transitionWatermark); err != nil {
+		slog.Error("Handoff watch failed", "error_class", "handoff_watch_failed", "err", err)
+	} else if wr.Fired > 0 || wr.Suppressed > 0 {
+		slog.Info("Handoff watch summary", "event", "handoff_watch_summary", "fired", wr.Fired, "suppressed", wr.Suppressed)
 	}
 	// A handoff addressed to a concrete assignee is reported now; the rest
 	// wait for the morning digest, which lists them until they are answered.
@@ -417,11 +450,6 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		slog.Error("Handoff notification failed", "error_class", "handoff_notify_failed", "err", err)
 	} else if sent > 0 {
 		slog.Info("Handoff notification summary", "event", "handoff_notify_summary", "sent", sent)
-	}
-	result, err := poller.PollProjects(data)
-	if err != nil {
-		slog.Error("Forum poll failed", "error_class", "forum_poll_failed", "err", err)
-		return
 	}
 	if result.Productions > 0 {
 		slog.Info("Forum poll summary",
@@ -442,7 +470,6 @@ func runForumPoll(data []kitsu.MessagePayload, conf config.Config, db *gorm.DB) 
 		ResolveReviewers: func(projectID, taskTypeID, taskTypeName string) ([]discord.ReviewerTarget, error) {
 			return forumReviewerTargets(db, conf, botToken, projectID, taskTypeID)
 		},
-		NotifyAssigneesOnComment: commentNotifyAssignee(db, conf),
 	}
 	executor := forum.Executor{
 		DB:       db,
@@ -481,18 +508,6 @@ func forumReviewerTargets(db *gorm.DB, conf config.Config, botToken, projectID, 
 		resolved = append(resolved, discord.ReviewerTarget{Kind: target.TargetKind, ID: target.DiscordID})
 	}
 	return resolved, err
-}
-
-// commentNotifyAssignee prefers the admin-UI setting: a stored true/false wins,
-// and conf.toml only supplies the initial value while nothing is stored.
-func commentNotifyAssignee(db *gorm.DB, conf config.Config) bool {
-	switch model.GetSetting(db, setup.CommentNotifyAssigneeSettingKey) {
-	case "true":
-		return true
-	case "false":
-		return false
-	}
-	return conf.Notification.CommentNotifyAssignee
 }
 
 // forumOutboxDrainLimit bounds one poll's Discord calls.
@@ -941,6 +956,11 @@ func migrateApplicationSchema(db *gorm.DB) error {
 		&model.ForumOutbox{},
 		&model.ForumFlapState{},
 		&model.ForumDMChannel{},
+		&model.StudioStatusPolicy{},
+		&model.StudioTaskRoute{},
+		&model.ProductionTaskRoute{},
+		&model.AdminException{},
+		&model.NotificationDecision{},
 	); err != nil {
 		return fmt.Errorf("migrate application schema: %w", err)
 	}
@@ -953,6 +973,11 @@ func migrateApplicationSchema(db *gorm.DB) error {
 	// index; move them once at startup.
 	if err := model.MigrateLegacyEmptyForumThreadIDs(db); err != nil {
 		return fmt.Errorf("migrate forum thread ids: %w", err)
+	}
+	// Episode handoffs are unique per (episode, receiving task); a partial
+	// index keeps the empty legacy keys out of the constraint.
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_handoff_events_episode_receiver ON handoff_events (episode_key, notify_task_id) WHERE episode_key <> ''").Error; err != nil {
+		return fmt.Errorf("migrate handoff episode index: %w", err)
 	}
 	return nil
 }
@@ -1305,7 +1330,7 @@ func main() {
 		// A global validation-only profile still refuses writes.
 		mux.HandleFunc(prefix+"/admin/forum", setup.RequireSession(setup.RejectValidationMutation(func(w http.ResponseWriter, r *http.Request) {
 			botToken, fallbackGuildID, _ := getDiscordSettings(db, conf)
-			setup.ForumSettingsHandler(db, conf.Notification.CommentNotifyAssignee, func() (string, string) { return botToken, fallbackGuildID })(w, r)
+			setup.ForumSettingsHandler(db, func() (string, string) { return botToken, fallbackGuildID })(w, r)
 		})))
 		// The handoff mapping is local per-Production configuration as well: it is
 		// stored by KitsuSync and needs neither Kitsu nor Discord to save. An
@@ -1375,6 +1400,9 @@ func main() {
 	c.AddFunc("@every 1h", func() {
 		if deleted := model.PurgeOldForumOutbox(db, model.ForumOutboxRetentionDays); deleted > 0 {
 			slog.Info("forum outbox purge", "deleted_rows", deleted)
+		}
+		if deleted := model.PurgeOldNotificationDecisions(db, model.NotificationDecisionRetentionDays); deleted > 0 {
+			slog.Info("notification decision purge", "deleted_rows", deleted)
 		}
 	})
 	c.AddFunc("0 3 * * *", func() {

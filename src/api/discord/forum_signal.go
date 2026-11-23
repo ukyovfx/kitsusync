@@ -50,6 +50,8 @@ type ForumCardInput struct {
 	HandoffProductVersion string
 	HandoffSourceTaskType string
 	HandoffSourceAuthor   string
+	// HandoffEpisodeLabel marks a refired handoff ("再確定（2回目）").
+	HandoffEpisodeLabel string
 	// Components is attached to the signal message unchanged.
 	Components []ActionRow
 }
@@ -157,12 +159,16 @@ func handoffSignalLines(in ForumCardInput) []string {
 	sourceType := sanitizeDiscordText(strings.TrimSpace(in.HandoffSourceTaskType))
 	author := sanitizeDiscordText(strings.TrimSpace(in.HandoffSourceAuthor))
 	var lines []string
+	episodeLabel := sanitizeDiscordText(strings.TrimSpace(in.HandoffEpisodeLabel))
 	if normalizeNotificationLang(in.Language) == "en" {
 		head := "🔁 Handoff received"
 		if product != "" {
 			head += " — " + product
 		}
 		lines = append(lines, head)
+		if episodeLabel != "" {
+			lines = append(lines, episodeLabel)
+		}
 		if version != "" {
 			lines = append(lines, "Version: "+version)
 		}
@@ -180,6 +186,9 @@ func handoffSignalLines(in ForumCardInput) []string {
 		head += " — " + product
 	}
 	lines = append(lines, head)
+	if episodeLabel != "" {
+		lines = append(lines, episodeLabel)
+	}
 	if version != "" {
 		lines = append(lines, "版: "+version)
 	}

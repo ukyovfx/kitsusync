@@ -343,7 +343,7 @@ func TestReviewerBrowserAcceptance(t *testing.T) {
 	mux.Handle("/bot/admin/bot", RequireSession(BotHandlerWithRuntime(db, nil, func() bool { return true })))
 	mux.HandleFunc("/bot/admin/projects", RequireSession(ReadOnlyAuditRoute(ready, AdminProjectsHandler(db, reviewerBrowserGuild, reviewerBrowserBot))))
 	mux.HandleFunc("/bot/admin/audit", RequireSession(AuditLogHandler(db)))
-	mux.HandleFunc("/bot/admin/forum", RequireSession(ForumSettingsHandler(db, false, func() (string, string) {
+	mux.HandleFunc("/bot/admin/forum", RequireSession(ForumSettingsHandler(db, func() (string, string) {
 		return reviewerBrowserBot, reviewerBrowserGuild
 	})))
 	mux.HandleFunc("GET /bot/admin/refresh-discord-channels", RequireSession(RefreshDiscordChannelsHandler(func() string {

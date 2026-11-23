@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"app/src/api/kitsu"
 	"app/src/model"
 )
 
@@ -57,10 +58,12 @@ func autoCreateForums(db *gorm.DB, project model.Project, botToken string) {
 	model.WriteAuditLog(db, entry)
 }
 
-// seedHandoffTemplate starts a new Production's handoff mapping from the
-// standard template: the preset rows whose source Task Type exists in the
-// Production, with their product types registered. A Production that already
-// has handoff settings is left untouched.
+// seedHandoffTemplate starts a new Production's handoff handling from the
+// standard template: the folding table (core v2 §3.6) becomes studio-common
+// routes — shared by every Production, so it is only seeded while no studio
+// routes exist at all — and the Production gets the admin no-assignee
+// handling. A Production that already has handoff settings is left
+// untouched.
 func seedHandoffTemplate(db *gorm.DB, productionID string) error {
 	if _, ok, err := model.LoadProductionHandoffSettings(db, productionID); err != nil || ok {
 		return err
@@ -69,32 +72,45 @@ func seedHandoffTemplate(db *gorm.DB, productionID string) error {
 	if len(taskTypes) == 0 {
 		return errors.New("no Task Types to apply the handoff template to")
 	}
-	settings := model.ProductionHandoffSettings{Config: model.ProductionHandoffConfig{
-		ProductionID: productionID,
-		NotifyTiming: model.HandoffTimingMixed,
-		NoAssignee:   model.HandoffFallbackAdmin,
-	}}
-	seenProducts := map[string]struct{}{}
-	for _, preset := range handoffPresets {
-		for _, taskType := range taskTypes {
-			if !strings.EqualFold(strings.TrimSpace(taskType.Name), strings.TrimSpace(preset.TaskType)) {
-				continue
-			}
-			route, ok := handoffPresetRoute(taskType, preset.Product, taskTypes)
+	byName := map[string]kitsu.TaskType{}
+	for _, taskType := range taskTypes {
+		byName[strings.ToLower(strings.TrimSpace(taskType.Name))] = taskType
+	}
+	if existing, err := model.LoadStudioTaskRoutes(db); err != nil {
+		return err
+	} else if len(existing) == 0 {
+		seeded := 0
+		for _, template := range handoffTemplateRoutes {
+			from, ok := byName[strings.ToLower(template.From)]
 			if !ok {
 				continue
 			}
-			settings.Routes = append(settings.Routes, route)
-			if key := strings.ToLower(preset.Product); !productSeen(seenProducts, key) {
-				seenProducts[key] = struct{}{}
-				settings.ProductTypes = append(settings.ProductTypes, model.ProductionHandoffProductType{Name: preset.Product})
+			var notifyIDs []string
+			for _, name := range template.Notify {
+				if target, ok := byName[strings.ToLower(name)]; ok {
+					notifyIDs = append(notifyIDs, target.ID)
+				}
 			}
-			break
+			if len(notifyIDs) == 0 {
+				continue
+			}
+			if err := model.SaveStudioTaskRoute(db, model.StudioTaskRoute{
+				FromTaskTypeID:    from.ID,
+				FromTaskTypeName:  from.Name,
+				NotifyTaskTypeIDs: model.JoinHandoffNotifyIDs(notifyIDs),
+			}); err != nil {
+				return err
+			}
+			seeded++
+		}
+		if seeded == 0 {
+			return fmt.Errorf("none of the handoff template's Task Types exist in this Production")
 		}
 	}
-	if len(settings.Routes) == 0 {
-		return fmt.Errorf("none of the handoff template's Task Types exist in this Production")
-	}
+	settings := model.ProductionHandoffSettings{Config: model.ProductionHandoffConfig{
+		ProductionID: productionID,
+		NoAssignee:   model.HandoffFallbackAdmin,
+	}}
 	return model.SaveProductionHandoffSettings(db, settings)
 }
 

@@ -12,8 +12,10 @@ import (
 )
 
 // A comment attached to a retake belongs to the status signal (its quote
-// carries the text), so no separate comment notification may be queued.
-func TestPlannerSkipsCommentSignalOnTriggerChange(t *testing.T) {
+// carries the text): mentions that repeat the signal's own recipients are
+// suppressed with it, but a mention of a third person still relays
+// (interference fix C-7).
+func TestPlannerTriggerChangeRelaysOnlyThirdPartyMentions(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
 	planner := testPlanner(db, now)
@@ -31,8 +33,19 @@ func TestPlannerSkipsCommentSignalOnTriggerChange(t *testing.T) {
 	if err := db.Model(&model.ForumOutbox{}).Where("dedupe_key LIKE ?", "msg:comment:%").Count(&commentCount).Error; err != nil {
 		t.Fatalf("count comment signals: %v", err)
 	}
-	if commentCount != 0 {
-		t.Fatalf("comment signals = %d, want 0 when the comment rides a retake", commentCount)
+	if commentCount != 1 {
+		t.Fatalf("comment signals = %d, want 1 relaying the third-party mention", commentCount)
+	}
+	var commentRow model.ForumOutbox
+	if err := db.Where("dedupe_key LIKE ?", "msg:comment:%").First(&commentRow).Error; err != nil {
+		t.Fatalf("find comment signal: %v", err)
+	}
+	var commentPayload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(commentRow.Payload), &commentPayload); err != nil {
+		t.Fatalf("decode comment payload: %v", err)
+	}
+	if len(commentPayload.Mentions) != 1 || commentPayload.Mentions[0] != "person-2" {
+		t.Fatalf("relay mentions = %v, want only the third person", commentPayload.Mentions)
 	}
 	var statusCount int64
 	if err := db.Model(&model.ForumOutbox{}).Where("dedupe_key LIKE ?", "msg:status:%").Count(&statusCount).Error; err != nil {
@@ -144,9 +157,8 @@ func TestPlannerRetakeQuotesAnnouncedCommentOnlyOutsideWindow(t *testing.T) {
 	}
 }
 
-// A publish trace comment (table only, no mentions) resolves to zero
-// recipients and the existing D-06 cancel keeps it silent: assert the queued
-// payload carries no mentions.
+// A comment without mentions notifies nobody (ruling B): no comment signal
+// is queued at all, whatever the comment carries.
 func TestPlannerCommentSignalWithoutMentionsMentionsNobody(t *testing.T) {
 	db := newForumDB(t)
 	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
@@ -160,16 +172,12 @@ func TestPlannerCommentSignalWithoutMentionsMentionsNobody(t *testing.T) {
 	if _, err := planner.PlanTask(input, stubCard()); err != nil {
 		t.Fatalf("PlanTask: %v", err)
 	}
-	var row model.ForumOutbox
-	if err := db.Where("dedupe_key LIKE ?", "msg:comment:%").First(&row).Error; err != nil {
-		t.Fatalf("comment signal missing: %v", err)
+	var count int64
+	if err := db.Model(&model.ForumOutbox{}).Where("dedupe_key LIKE ?", "msg:comment:%").Count(&count).Error; err != nil {
+		t.Fatalf("count comment signals: %v", err)
 	}
-	var payload model.ForumPostMessagePayload
-	if err := json.Unmarshal([]byte(row.Payload), &payload); err != nil {
-		t.Fatalf("decode payload: %v", err)
-	}
-	if len(payload.Mentions) != 0 {
-		t.Fatalf("mentions = %v, want none for a mention-less comment", payload.Mentions)
+	if count != 0 {
+		t.Fatalf("comment signals = %d, want 0 for a mention-less comment", count)
 	}
 }
 
@@ -246,4 +254,64 @@ func latestStatusQuote(t *testing.T, db *gorm.DB) string {
 		t.Fatalf("decode payload: %v", err)
 	}
 	return payload.Quote
+}
+
+// Fix C-1: a mention on a task that has no post yet still reaches its person:
+// the post opens (like a handoff delivery does) and the mention relays into
+// it.
+func TestPlannerMentionOnPostlessTaskOpensPost(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	// Baseline only: the task row exists, no thread was ever opened.
+	if _, err := planner.PlanTask(taskInput("s-wip", model.ForumRoleWIP, "person-1"), stubCard()); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	planner.Now = now.Add(5 * time.Minute)
+	input := taskInput("s-wip", model.ForumRoleWIP, "person-1")
+	input.CommentDate = "2026-11-15T09:04:00.000Z"
+	input.Comment = commentInput("comment-1", "確認お願いします", "person-9")
+	if _, err := planner.PlanTask(input, stubCard()); err != nil {
+		t.Fatalf("PlanTask: %v", err)
+	}
+	var creates, comments int64
+	if err := db.Model(&model.ForumOutbox{}).Where("kind = ?", model.ForumOutboxCreateThread).Count(&creates).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.ForumOutbox{}).Where("dedupe_key LIKE ?", "msg:comment:%").Count(&comments).Error; err != nil {
+		t.Fatal(err)
+	}
+	if creates != 1 || comments != 1 {
+		t.Fatalf("creates=%d comments=%d, want the post opened and the mention relayed", creates, comments)
+	}
+}
+
+// Fix C-9: when the only assignee is the person who made the change (the
+// newest comment's author), the DONE signal is queued with mentions
+// suppressed: it posts, but pings nobody.
+func TestPlannerSuppressesMentionWhenChangerIsSoleRecipient(t *testing.T) {
+	db := newForumDB(t)
+	now := time.Date(2026, 11, 15, 9, 0, 0, 0, time.UTC)
+	planner := testPlanner(db, now)
+	seedPostedTask(t, db, &planner)
+
+	planner.Now = now.Add(5 * time.Minute)
+	input := taskInput("s-done", model.ForumRoleDone, "person-1")
+	input.CommentDate = "2026-11-15T09:04:00.000Z"
+	input.Comment = commentInput("comment-1", "完了しました")
+	input.Comment.AuthorID = "person-1"
+	if _, err := planner.PlanTask(input, stubCard()); err != nil {
+		t.Fatalf("PlanTask: %v", err)
+	}
+	var row model.ForumOutbox
+	if err := db.Where("dedupe_key LIKE ?", "msg:status:%").Order("id desc").First(&row).Error; err != nil {
+		t.Fatalf("status signal missing: %v", err)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(row.Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.SuppressMentions {
+		t.Fatalf("payload = %+v, want SuppressMentions", payload)
+	}
 }

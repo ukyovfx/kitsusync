@@ -31,6 +31,22 @@ type Poller struct {
 	Now func() time.Time
 	// RenderCard renders the first message for a task.
 	RenderCard func(kitsu.MessagePayload) (json.RawMessage, error)
+	// Policies is the studio status classification; nil loads it from the DB
+	// on first use.
+	Policies map[string]model.StudioStatusPolicy
+}
+
+// policies returns the studio status policies, loading them once.
+func (p *Poller) policies() map[string]model.StudioStatusPolicy {
+	if p.Policies != nil {
+		return p.Policies
+	}
+	loaded, err := model.LoadStudioStatusPolicies(p.DB)
+	if err != nil {
+		return nil
+	}
+	p.Policies = loaded
+	return p.Policies
 }
 
 // PollProjects processes the payloads of every forum-mode Production.
@@ -65,7 +81,7 @@ func (p Poller) PollProjects(payloads []kitsu.MessagePayload) (PollResult, error
 		}
 		routed := make(map[string]struct{}, len(settings.Routes))
 		result.Productions++
-		planner := Planner{DB: p.DB, Production: productionID, Settings: settings, Now: now}
+		planner := Planner{DB: p.DB, Production: productionID, Settings: settings, Policies: p.policies(), Now: now}
 		// Group by task type so a new task type is baselined in one transaction.
 		// Only routed Task Types are considered: an unrouted type's tasks do not
 		// change here, so baselining them would go stale and replay old work as
@@ -247,7 +263,7 @@ func (p Poller) DispatchHandoffs(payloads []kitsu.MessagePayload, items []Handof
 				planners[item.Event.ProductionID] = nil
 				continue
 			}
-			pl := Planner{DB: p.DB, Production: item.Event.ProductionID, Settings: settings, Now: now}
+			pl := Planner{DB: p.DB, Production: item.Event.ProductionID, Settings: settings, Policies: p.policies(), Now: now}
 			planners[item.Event.ProductionID] = &pl
 			planner = &pl
 		}
