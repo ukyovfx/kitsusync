@@ -38,17 +38,26 @@ func TestHandoffDigestReplyRowsFitTheMessageLimit(t *testing.T) {
 }
 
 // Nothing receives a press yet, so the buttons are sent inert rather than
-// pretending to work: no CustomID, but the receiver still sees the options.
+// pretending to work: disabled, but still carrying their CustomID, because
+// Discord rejects a non-link button that has none.
 func TestHandoffButtonsAreInertUntilTheInteractionEndpointExists(t *testing.T) {
 	if handoffRepliesWired() {
 		t.Fatal("expected replies to be unwired without an interaction endpoint")
 	}
 	rows := handoffReplyRowsFor([]model.HandoffEvent{{CommentID: "comment-1"}})
-	if len(rows) != 1 || rows[0].Components[0].CustomID != "" || rows[0].Components[1].CustomID != "" {
+	if len(rows) != 1 || len(rows[0].Components) != 2 {
 		t.Fatalf("rows = %+v", rows)
 	}
-	if got := handoffReplyCustomID("ok", "comment-1"); got != "" {
-		t.Fatalf("unwired custom id = %q", got)
+	for _, button := range rows[0].Components {
+		if !button.Disabled {
+			t.Fatalf("unwired button must be disabled: %+v", button)
+		}
+	}
+	if rows[0].Components[0].CustomID != "handoff:ok:comment-1" || rows[0].Components[1].CustomID != "handoff:retake:comment-1" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if got := handoffReplyCustomID("ok", "comment-1"); got != "handoff:ok:comment-1" {
+		t.Fatalf("custom id = %q", got)
 	}
 }
 
