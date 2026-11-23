@@ -2325,8 +2325,10 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/users', locale.lang, 'band-' + width, 'focus ring', focusResults.map(item => item.tag).join(' + ') + ' keep a visible solid outline under keyboard focus');
       }
 
-      // A10: forum mapping tables use a fixed layout with a 40% name column on
-      // desktop and stack into one column per row on phones.
+      // A10: the forum mapping table uses a fixed layout with a 40% name
+      // column on desktop and stacks into one column per row on phones.
+      // Since the redesign the forum page holds exactly one such table (the
+      // routing); the status -> role table moved to the Bot settings page.
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: 900 });
         await fixture(page, 'forum-settings');
@@ -2356,7 +2358,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
             overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           };
         }));
-        if (tables.length !== 2) throw new Error(`forum mapping tables missing at ${width}px (${locale.lang}): ${tables.length}`);
+        if (tables.length !== 1) throw new Error(`forum mapping tables missing at ${width}px (${locale.lang}): ${tables.length}`);
         for (const table of tables) {
           if (table.rows < 1) throw new Error(`forum mapping table is empty at ${width}px (${locale.lang})`);
           if (table.overflow > 1) throw new Error(`forum mapping table overflows at ${width}px (${locale.lang}): ${table.overflow}px`);
