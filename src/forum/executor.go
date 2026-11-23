@@ -135,6 +135,13 @@ func (e Executor) executeCreateThread(row model.ForumOutbox, token string) error
 			return model.FailForumOutboxRow(e.DB, row.ID, "invalid_payload", err.Error())
 		}
 	}
+	if CardEmbedEmpty(card) {
+		// A row queued with an empty embed (rendered while the template
+		// files were unreadable) can never be posted: Discord rejects it.
+		// Open the thread with a minimal valid card carrying the task's
+		// title instead of failing the creation for good.
+		card = discord.Payload{Embeds: []discord.Embed{{Title: payload.Name}}}
+	}
 	body := discord.ForumThreadCreate{
 		Name:                payload.Name,
 		AutoArchiveDuration: payload.ArchiveMinutes,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -140,6 +141,14 @@ func RenderCard(payload kitsu.MessagePayload, build func(kitsu.MessagePayload) (
 	if err != nil {
 		return nil, err
 	}
+	if CardEmbedEmpty(card) {
+		// Non-trigger statuses render through the preset template files;
+		// when those cannot be read the result is an embed with no content
+		// at all, and Discord rejects a thread opened with it (400 Invalid
+		// Form Body), losing the signal that opened the thread. Fall back
+		// to the standard card built from the task's current data.
+		card = FallbackCard(payload)
+	}
 	// The first message carries the card only; mentions are suppressed.
 	card.Content = ""
 	card.AllowedMentions = &discord.AllowedMentions{Parse: []string{}, Users: []string{}, Roles: []string{}}
@@ -148,6 +157,49 @@ func RenderCard(payload kitsu.MessagePayload, build func(kitsu.MessagePayload) (
 		return nil, err
 	}
 	return encoded, nil
+}
+
+// CardEmbedEmpty reports whether a card payload carries no renderable
+// embed content at all: no title, description, fields, image, author name
+// or footer text on any embed. Discord rejects a message whose only embed
+// is empty, so a thread must never be opened with one.
+func CardEmbedEmpty(card discord.Payload) bool {
+	for _, embed := range card.Embeds {
+		if embed.Title != "" || embed.Description != "" || len(embed.Fields) > 0 ||
+			embed.Image != nil || embed.Author.Name != "" || embed.Footer.Text != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// FallbackCard builds the standard signal-shaped card from the task's
+// current data — task type, shot name, status and assignees, the same
+// fields a rendered card shows — for the cases where the configured
+// renderer produced an empty embed.
+func FallbackCard(payload kitsu.MessagePayload) discord.Payload {
+	assignees := make([]string, 0, len(payload.Assignees))
+	for _, person := range payload.Assignees {
+		if person.IsBot {
+			continue
+		}
+		if name := strings.TrimSpace(person.FullName); name != "" {
+			assignees = append(assignees, name)
+		}
+	}
+	statusName := strings.TrimSpace(payload.TaskStatus.TaskStatus.Name)
+	if statusName == "" {
+		statusName = strings.TrimSpace(payload.TaskStatus.TaskStatus.ShortName)
+	}
+	signal := discord.RenderForumSignalCard(discord.ForumCardInput{
+		TaskType:   payload.TaskType.TaskType.Name,
+		EntityType: payload.EntityType.EntityType.Name,
+		ParentName: payload.Parent.Entity.Name,
+		EntityName: payload.Entity.Entity.Name,
+		StatusName: statusName,
+		Assignees:  assignees,
+	})
+	return discord.Payload{Embeds: signal.Embeds}
 }
 
 // ValidateForumTargets checks that the configured forum and tag IDs still exist
