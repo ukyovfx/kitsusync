@@ -19,6 +19,9 @@ type ForumSignal struct {
 	Embeds         []Embed
 	AllowedUserIDs []string
 	AllowedRoleIDs []string
+	// Components carries interactive rows (the handoff reply buttons);
+	// signals without interaction leave it empty.
+	Components []ActionRow
 }
 
 // ForumCardInput carries everything the card-shaped signal renderer needs.
@@ -42,6 +45,13 @@ type ForumCardInput struct {
 	UserIDs     []string
 	RoleIDs     []string
 	Language    string
+	// Handoff delivery facts (intent ForumIntentHandoff only).
+	HandoffProductName    string
+	HandoffProductVersion string
+	HandoffSourceTaskType string
+	HandoffSourceAuthor   string
+	// Components is attached to the signal message unchanged.
+	Components []ActionRow
 }
 
 // footerLabels returns the localized footer prefixes so the forum signal
@@ -107,6 +117,8 @@ func forumCardDescription(in ForumCardInput) string {
 		if in.Quote != "" {
 			parts = append(parts, "💬 "+in.Quote)
 		}
+	case model.ForumIntentHandoff:
+		parts = append(parts, handoffSignalLines(in)...)
 	case model.ForumIntentPublish:
 		if in.PublishLine != "" {
 			parts = append(parts, sanitizeDiscordText(in.PublishLine))
@@ -134,6 +146,51 @@ func forumCardDescription(in ForumCardInput) string {
 		parts = append(parts, footer)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// handoffSignalLines renders the delivery lines of a handoff signal: what
+// arrived, and whose task it came from. The wording mirrors the handoff
+// digest card so both surfaces read the same.
+func handoffSignalLines(in ForumCardInput) []string {
+	product := sanitizeDiscordText(strings.TrimSpace(in.HandoffProductName))
+	version := sanitizeDiscordText(strings.TrimSpace(in.HandoffProductVersion))
+	sourceType := sanitizeDiscordText(strings.TrimSpace(in.HandoffSourceTaskType))
+	author := sanitizeDiscordText(strings.TrimSpace(in.HandoffSourceAuthor))
+	var lines []string
+	if normalizeNotificationLang(in.Language) == "en" {
+		head := "🔁 Handoff received"
+		if product != "" {
+			head += " — " + product
+		}
+		lines = append(lines, head)
+		if version != "" {
+			lines = append(lines, "Version: "+version)
+		}
+		if sourceType != "" {
+			if author != "" {
+				lines = append(lines, "Delivered from "+author+"'s "+sourceType+" task.")
+			} else {
+				lines = append(lines, "Delivered from the "+sourceType+" task.")
+			}
+		}
+		return lines
+	}
+	head := "🔁 素材の受け渡し"
+	if product != "" {
+		head += " — " + product
+	}
+	lines = append(lines, head)
+	if version != "" {
+		lines = append(lines, "版: "+version)
+	}
+	if sourceType != "" {
+		if author != "" {
+			lines = append(lines, author+" の "+sourceType+" から届きました。")
+		} else {
+			lines = append(lines, sourceType+" から届きました。")
+		}
+	}
+	return lines
 }
 
 // forumCardFooter renders the footer block: status / assignees. Japanese keeps
@@ -181,6 +238,7 @@ func RenderForumSignalCard(in ForumCardInput) ForumSignal {
 		Embeds:         []Embed{embed},
 		AllowedUserIDs: uniqueDiscordIDs(in.UserIDs),
 		AllowedRoleIDs: uniqueDiscordRoleIDs(in.RoleIDs),
+		Components:     in.Components,
 	}
 }
 
@@ -258,6 +316,7 @@ func ForumSignalMessage(signal ForumSignal, nonce string) ForumMessageCreate {
 			Users: signal.AllowedUserIDs,
 			Roles: signal.AllowedRoleIDs,
 		},
+		Components:   signal.Components,
 		Nonce:        nonce,
 		EnforceNonce: nonce != "",
 	}

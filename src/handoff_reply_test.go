@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -200,26 +201,57 @@ func TestHandoffDigestCountsTheHandoffsItLeftOut(t *testing.T) {
 	}
 }
 
-// The immediate DM's first line names the shot or asset as well as the
-// product, so the receiver knows what arrived.
-func TestHandoffImmediateDMCardNamesTheEntity(t *testing.T) {
-	card := renderHandoffCard("", model.HandoffEvent{EntityName: "sq010_sh001", ProductName: "camera", ProductVersion: "v003"}, "ja")
-	if !strings.Contains(card, "🔁 素材の受け渡し — sq010_sh001 / camera") {
-		t.Fatalf("card = %q", card)
+// The queued forum signal carries the delivery facts (product, version,
+// source), so the receiving task's post says what arrived and where from.
+func TestHandoffSignalPayloadCarriesTheDelivery(t *testing.T) {
+	db := handoffReplyDB(t, model.HandoffTimingMixed)
+	handoffEvent(t, db, "comment-1", model.HandoffFallbackNone, "person-comp")
+	seedHandoffForumTask(t, db, "thread-1")
+
+	if sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads()); err != nil || sent != 1 {
+		t.Fatalf("sent=%d err=%v", sent, err)
+	}
+	rows := handoffOutboxRows(t, db)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(rows[0].Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.HandoffProductName != "camera" || payload.HandoffProductVersion != "v003" ||
+		payload.HandoffSourceTaskType != "Layout" || payload.HandoffSourceAuthor != "Layout Artist" ||
+		payload.EntityName != "sq010_sh001" {
+		t.Fatalf("payload = %+v", payload)
 	}
 }
 
-// The immediate DM carries its own reply row under the card.
-func TestHandoffImmediateDMCarriesReplyButtons(t *testing.T) {
+// The queued forum signal carries its own reply row, pre-built into the
+// payload for the executor to attach unchanged.
+func TestHandoffSignalCarriesReplyButtons(t *testing.T) {
 	db := handoffReplyDB(t, model.HandoffTimingMixed)
-	fixture := newDMFixture(t)
 	handoffEvent(t, db, "comment-1", model.HandoffFallbackNone, "person-comp")
+	seedHandoffForumTask(t, db, "thread-1")
 
-	if sent, err := sendImmediateHandoffs(digestTestConfig(), db); err != nil || sent != 1 {
+	if sent, err := sendImmediateHandoffs(db, handoffTestPoller(db), handoffPayloads()); err != nil || sent != 1 {
 		t.Fatalf("sent=%d err=%v", sent, err)
 	}
-	card, seen := fixture.body()
-	if !seen || len(card.Components) != 1 || len(card.Components[0].Components) != 2 {
-		t.Fatalf("components = %+v", card.Components)
+	rows := handoffOutboxRows(t, db)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	var payload model.ForumPostMessagePayload
+	if err := json.Unmarshal([]byte(rows[0].Payload), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var components []discord.ActionRow
+	if err := json.Unmarshal(payload.Components, &components); err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 || len(components[0].Components) != 2 {
+		t.Fatalf("components = %+v", components)
+	}
+	if components[0].Components[0].CustomID != "handoff:ok:comment-1" || components[0].Components[1].CustomID != "handoff:retake:comment-1" {
+		t.Fatalf("components = %+v", components)
 	}
 }

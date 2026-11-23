@@ -201,3 +201,74 @@ func TaskURLFor(db *gorm.DB, publicURL func() string, taskID string) string {
 	}
 	return base + "/productions/" + task.ProjectID + "/" + kind + "s/tasks/" + task.TaskID
 }
+
+// HandoffDispatch is one immediate handoff signal to place: the recorded
+// event, the recipient Kitsu person IDs to pin as mentions (empty = the
+// receiving task's current assignees), and the pre-built reply-button rows.
+type HandoffDispatch struct {
+	Event      model.HandoffEvent
+	Mentions   []string
+	Components json.RawMessage
+}
+
+// DispatchHandoffs places the immediate handoff signals of one poll into the
+// forum outbox and returns the IDs of the events that were queued. Events
+// whose Production is not in forum mode, whose receiving task type is not
+// routed, or whose receiving task is not in the ledger yet are skipped, so
+// the caller can leave them pending for a later poll or the morning digest.
+func (p Poller) DispatchHandoffs(payloads []kitsu.MessagePayload, items []HandoffDispatch) (map[uint]bool, error) {
+	queued := map[uint]bool{}
+	if p.DB == nil || len(items) == 0 {
+		return queued, nil
+	}
+	now := time.Now().UTC()
+	if p.Now != nil {
+		now = p.Now()
+	}
+	byTask := map[string]kitsu.MessagePayload{}
+	for _, payload := range payloads {
+		if payload.Task.ID != "" {
+			byTask[payload.Task.ID] = payload
+		}
+	}
+	planners := map[string]*Planner{}
+	for _, item := range items {
+		payload, ok := byTask[item.Event.NotifyTaskID]
+		if !ok {
+			continue
+		}
+		planner, cached := planners[item.Event.ProductionID]
+		if !cached {
+			settings, found, err := model.LoadProductionForumSettings(p.DB, item.Event.ProductionID)
+			if err != nil {
+				return queued, err
+			}
+			if !found || len(model.ForumSettingsProblems(settings)) > 0 {
+				planners[item.Event.ProductionID] = nil
+				continue
+			}
+			pl := Planner{DB: p.DB, Production: item.Event.ProductionID, Settings: settings, Now: now}
+			planners[item.Event.ProductionID] = &pl
+			planner = &pl
+		}
+		if planner == nil {
+			continue
+		}
+		input := taskInputFromPayload(payload)
+		input.StatusRole = planner.RoleForStatus(input.StatusID)
+		card := func() (json.RawMessage, error) {
+			if p.RenderCard == nil {
+				return nil, errors.New("no card renderer configured")
+			}
+			return p.RenderCard(payload)
+		}
+		done, err := planner.PlanHandoff(input, card, item.Event, item.Mentions, item.Components)
+		if err != nil {
+			return queued, err
+		}
+		if done {
+			queued[item.Event.ID] = true
+		}
+	}
+	return queued, nil
+}
