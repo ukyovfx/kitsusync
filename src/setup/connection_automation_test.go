@@ -221,20 +221,24 @@ func TestHandoffTemplateLeavesExistingSettingsAlone(t *testing.T) {
 	}
 }
 
-// The handoff page renders the studio wiring the seed wrote, with the
-// Production inheriting it until an override says otherwise.
+// The studio wiring the seed wrote renders in the connection settings
+// section, with the Production page showing it as inherited until an
+// override says otherwise.
 func TestHandoffPageShowsSeededStudioRoutes(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	if err := seedHandoffTemplate(db, "p1"); err != nil {
 		t.Fatal(err)
 	}
-	body := handoffGet(t, db).Body.String()
+	section := studioRoutesSection(t, db)
 	// Layout -> Animation, Lighting, Compositing per the folding table.
-	if !strings.Contains(body, `name="st_notify_tt-lay" value="tt-anim" checked`) {
-		t.Fatalf("seeded studio wiring not shown: %s", body)
+	if !strings.Contains(section, `name="st_notify_tt-lay" value="tt-anim" checked`) {
+		t.Fatalf("seeded studio wiring not shown: %s", section)
 	}
-	if !strings.Contains(body, "Animation, Lighting, Compositing") {
+	body := handoffGet(t, db).Body.String()
+	// The summary lists targets in the fixed Task Type order (the order
+	// of the editor's own rows), not the stored selection order.
+	if !strings.Contains(body, "Animation, Compositing, Lighting") {
 		t.Fatalf("inherited wiring not shown in the production section: %s", body)
 	}
 }

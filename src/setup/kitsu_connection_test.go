@@ -432,7 +432,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	if strings.Count(body, `placeholder="••••••••••••••••••••"`) < 1 || strings.Count(body, "Change token") < 1 || strings.Count(body, "Cancel") < 1 {
 		t.Fatal("saved token controls must remain visible with masked placeholders and change/cancel actions")
 	}
-	if strings.Count(body, `class="editorial-advanced-settings"`) != 1 || strings.Count(body, `class="connection-expert-network"`) != 1 {
+	if strings.Count(body, `class="section-card glass editorial-advanced-settings"`) != 1 || strings.Count(body, `class="connection-expert-network"`) != 1 {
 		t.Fatal("advanced connection settings must use one restrained expert disclosure")
 	}
 	if !strings.Contains(body, `class="connection-expert-network" data-expert-network-overrides open`) || !strings.Contains(body, `value="https://api.kitsu.example.test"`) {
@@ -441,7 +441,7 @@ func TestConnectionsEditFormShowsSavedSecretsSeparately(t *testing.T) {
 	if strings.Contains(body, "An internal route used only by KitsuSync") || strings.Contains(body, "KitsuSyncだけが使う内部経路です") {
 		t.Fatal("advanced settings retained redundant internal-route helper copy")
 	}
-	advanced := strings.Index(body, `class="editorial-advanced-settings"`)
+	advanced := strings.Index(body, `class="section-card glass editorial-advanced-settings"`)
 	if advanced < strings.Index(body, `class="connections-edit-grid"`) {
 		t.Fatal("advanced settings must follow the parallel service forms")
 	}

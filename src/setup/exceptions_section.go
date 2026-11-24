@@ -51,21 +51,23 @@ func renderAdminExceptionsSection(lang string, db *gorm.DB) string {
 	}
 	var rows strings.Builder
 	for _, item := range open {
-		rows.WriteString(`<tr><th scope="row" class="mobile-card-lead"><span class="mobile-card-lead-label">` + esc(exceptionKindLabel(lang, item.Kind)) + `</span></th>`)
-		rows.WriteString(`<td>` + esc(item.SubjectName) + `</td>`)
+		rows.WriteString(`<tr><th scope="row" class="mobile-card-lead"><span class="mobile-card-lead-label" data-label="` + esc(t(lang, "種類", "Kind")) + `">` + esc(exceptionKindLabel(lang, item.Kind)) + `</span></th>`)
+		rows.WriteString(`<td data-label="` + esc(t(lang, "対象", "Subject")) + `">` + esc(item.SubjectName) + `</td>`)
 		detail := item.Detail
 		if item.SeenCount > 1 {
-			detail += fmt.Sprintf(t(lang, "（%d回検出）", " (seen %d times)"), item.SeenCount)
+			// SeenCount aggregates repeat detections of this same queue
+			// item (same kind, subject and Production), not a task count.
+			detail += fmt.Sprintf(t(lang, "（同じ項目が%d回検出）", " (this item was detected %d times)"), item.SeenCount)
 		}
-		rows.WriteString(`<td>` + esc(detail) + `</td><td>`)
+		rows.WriteString(`<td data-label="` + esc(t(lang, "詳細", "Detail")) + `">` + esc(detail) + `</td><td data-label="` + esc(t(lang, "操作", "Action")) + `">`)
 		if item.Kind == model.ExceptionStatusAmbiguous || item.Kind == model.ExceptionStatusRenamed {
-			rows.WriteString(`<form method="post" action="/bot/admin/health" class="inline-form">` +
+			rows.WriteString(`<form method="post" action="/bot/admin/health" class="inline-form exception-classify-form">` +
 				`<input type="hidden" name="action" value="exception_classify">` +
 				`<input type="hidden" name="exception_id" value="` + fmt.Sprint(item.ID) + `">` +
 				`<input type="hidden" name="status_id" value="` + esc(item.SubjectID) + `">` +
 				`<input type="hidden" name="status_name" value="` + esc(item.SubjectName) + `">` +
-				forumSelect("nature", "", natureOptions, t(lang, "（選択）", "(choose)")) +
-				` <button type="submit" class="btn-ghost">` + esc(t(lang, "分類する", "Classify")) + `</button></form>`)
+				forumSelect("nature", "", natureOptions, t(lang, "性質を選ぶ", "Choose the nature")) +
+				`<button type="submit" class="btn-ghost">` + esc(t(lang, "分類する", "Classify")) + `</button></form>`)
 		} else {
 			rows.WriteString(`<form method="post" action="/bot/admin/health" class="inline-form">` +
 				`<input type="hidden" name="exception_id" value="` + fmt.Sprint(item.ID) + `">` +
@@ -74,22 +76,24 @@ func renderAdminExceptionsSection(lang string, db *gorm.DB) string {
 		}
 		rows.WriteString(`</td></tr>`)
 	}
-	return `<section class="section-card glass admin-exceptions" aria-labelledby="admin-exceptions-title"><div class="page-heading"><div><h2 id="admin-exceptions-title">` + esc(t(lang, "判断待ち（例外キュー）", "Waiting for judgment (exception queue)")) + `</h2><p class="hint">` + esc(t(lang, "自動で決められないものだけがここに残ります。分類したステータスは次回から自動で扱われます。", "Only what cannot be derived automatically stays here. A classified status is handled automatically from then on.")) + `</p></div><span class="status-pill bad">` + esc(fmt.Sprint(len(open))) + `</span></div>` +
+	return `<section class="section-card glass admin-exceptions" aria-labelledby="admin-exceptions-title"><div class="page-heading"><div><h2 id="admin-exceptions-title">` + esc(t(lang, "判断待ち（例外キュー）", "Waiting for judgment (exception queue)")) + `</h2><p class="hint">` + esc(t(lang, "自動で決められないものだけがここに残ります。分類では、そのステータスの性質（完了系／リテイク系／対象外など）を決めます。決めるとポリシーに反映され、次回から自動で適用されます。", "Only what cannot be derived automatically stays here. Classifying decides the status's nature (done / retake / excluded, and so on); the decision is written to the policy and applied automatically from then on.")) + `</p></div><span class="status-pill bad">` + esc(fmt.Sprint(len(open))) + `</span></div>` +
 		`<table class="data-table mobile-card-table"><thead><tr><th scope="col">` + esc(t(lang, "種類", "Kind")) + `</th><th scope="col">` + esc(t(lang, "対象", "Subject")) + `</th><th scope="col">` + esc(t(lang, "詳細", "Detail")) + `</th><th scope="col">` + esc(t(lang, "操作", "Action")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></section>`
 }
 
+// statusNatureLabel labels the classification options by their effect, so
+// choosing one states what will happen to that status's notifications.
 func statusNatureLabel(lang, nature string) string {
 	switch nature {
 	case model.StatusNatureReview:
-		return t(lang, "レビュー待ち", "Review")
+		return t(lang, "確認待ちとして扱う（レビュー依頼が通知されます）", "Treat as waiting for approval (review requests are notified)")
 	case model.StatusNatureRetake:
-		return t(lang, "リテイク", "Retake")
+		return t(lang, "リテイクとして扱う（担当者へ通知されます）", "Treat as retake (the assignee is notified)")
 	case model.StatusNatureDone:
-		return t(lang, "完了", "Done")
+		return t(lang, "完了として扱う（受け渡しが発火します）", "Treat as done (handoffs fire)")
 	case model.StatusNatureWIP:
-		return t(lang, "作業中", "In progress")
+		return t(lang, "作業中として扱う（タグだけ変わります）", "Treat as in progress (tag only)")
 	case model.StatusNatureNone:
-		return t(lang, "通知なし", "No notification")
+		return t(lang, "対象外として扱う（通知されません）", "Treat as excluded (never notified)")
 	}
 	return nature
 }

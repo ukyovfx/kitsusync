@@ -2008,7 +2008,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
     for (const locale of locales) {
       const prompts = [
         { route: '/bot/admin/health', table: '.production-visibility table', labels: locale.lang === 'ja' ? ['Bot から見えているか', 'タスク件数', '最終ポーリング成功'] : ['Visible to bot', 'Task count', 'Last polling success'] },
-        { route: '/bot/admin/audit', table: '.audit-log-table table', labels: locale.lang === 'ja' ? ['日時', 'Production', '操作内容', '操作ユーザー', '結果'] : ['Date and time', 'Production', 'Action', 'Acting user', 'Result'] },
+        { route: '/bot/admin/audit', table: '.audit-log-table table', labels: locale.lang === 'ja' ? ['日時', 'プロダクション', '操作内容', '操作ユーザー', '結果'] : ['Date and time', 'Production', 'Action', 'Acting user', 'Result'] },
       ];
       for (const prompt of prompts) {
         await page.goto(base + prompt.route + '?lang=' + locale.lang, { waitUntil: 'networkidle' });
@@ -2173,25 +2173,27 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         await record(page, '/bot/admin/projects?project=reviewer-production', locale.lang, 'band-' + width, 'overview activity', 'task column and end-aligned result badges hold across rows');
       }
       // A4: the Recent system issues long-URL failure wraps inside its card and
-      // never clips at any audited band.
+      // never clips at any audited band. The issues render as a small table
+      // now (EGM review fix 8), so the cells of that table are measured
+      // instead of the old .pipeline-issues list spans.
       for (const width of [320, 390, 760, 761, 880]) {
         await page.setViewportSize({ width, height: 900 });
         await page.goto(`${base}/bot/admin/health?lang=${locale.lang}`, { waitUntil: 'networkidle' });
         const issues = await page.evaluate(() => {
-          const spans = [...document.querySelectorAll('.pipeline-issues li>span')];
+          const cells = [...document.querySelectorAll('.system-issues-table tbody td')];
           return {
-            count: spans.length,
-            spans: spans.map(span => {
-              const card = span.closest('.section-card');
+            count: cells.length,
+            cells: cells.map(cell => {
+              const card = cell.closest('.section-card');
               return {
-                right: Math.round(span.getBoundingClientRect().right),
+                right: Math.round(cell.getBoundingClientRect().right),
                 cardRight: card ? Math.round(card.getBoundingClientRect().right) : 0,
               };
             }),
           };
         });
         if (issues.count < 1) throw new Error(`recent system issues missing at ${width}px in ${locale.lang}`);
-        if (issues.spans.some(span => span.right > span.cardRight + 1)) throw new Error(`recent system issue URL clips its card at ${width}px (${locale.lang}): ${JSON.stringify(issues.spans)}`);
+        if (issues.cells.some(cell => cell.right > cell.cardRight + 1)) throw new Error(`recent system issue URL clips its card at ${width}px (${locale.lang}): ${JSON.stringify(issues.cells)}`);
       }
     }
     // Batch 3 acceptance: A6-A12, the label/value alignment, chip, table and

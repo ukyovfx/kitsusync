@@ -8,11 +8,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// The Kitsu status -> forum role mapping is a Bot-wide setting: it moved here
-// from the per-Production forum settings page (redesign front half, 2026-11-23)
-// because operators think of it as part of the shared Bot configuration. The
-// data itself stays in production_forum_status_roles; this section edits the
-// saved rows of every Production in one form.
+// The Kitsu status -> forum role mapping section lives on the connection
+// settings page (redesign front half, 2026-11-23) because operators think
+// of it as part of the shared Bot configuration. The data it edits is NOT
+// studio-wide, though: the rows stay in production_forum_status_roles, one
+// set per Production, and this section edits every Production's set in one
+// form (the page says so, and a selector jumps to one Production's block).
+// The studio-wide layer is the separate nature classification
+// (studio_status_policies, keyed by Kitsu status ID alone), which the
+// exception queue on the system status page maintains.
 
 func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string {
 	projects := availableProjects(db)
@@ -22,6 +26,7 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 		roleOptions = append(roleOptions, [2]string{role, forumRoleLabel(lang, role)})
 	}
 	var blocks strings.Builder
+	var selectorLinks strings.Builder
 	for _, project := range projects {
 		productionID := project.KitsuProjectID
 		current, ok, err := model.LoadProductionForumSettings(db, productionID)
@@ -63,7 +68,8 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 		if len(statusList) == 0 {
 			continue
 		}
-		blocks.WriteString(`<h3>` + esc(project.Name) + `</h3><table class="data-table forum-map-table"><tbody>`)
+		selectorLinks.WriteString(`<a class="nav-chip" href="#srole-` + esc(productionID) + `">` + esc(project.Name) + `</a>`)
+		blocks.WriteString(`<h3 id="srole-` + esc(productionID) + `">` + esc(project.Name) + `</h3><table class="data-table forum-map-table"><tbody>`)
 		for _, status := range statusList {
 			blocks.WriteString(`<tr><td>` + esc(status.name) +
 				`<input type="hidden" name="srole_project" value="` + esc(productionID) + `">` +
@@ -72,6 +78,23 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 				forumSelect("srole_role", roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</td></tr>`)
 		}
 		blocks.WriteString(`</tbody></table>`)
+		// Role completeness for this Production: a speaking role with no
+		// status assigned can never fire, so it gets a warning chip
+		// instead of failing silently.
+		roleCounts := map[string]int{}
+		for _, status := range statusList {
+			roleCounts[roleByStatus[status.id]]++
+		}
+		var roleSummary strings.Builder
+		for _, role := range []string{model.ForumRoleWFA, model.ForumRoleRetake, model.ForumRoleDone} {
+			label := forumRoleLabel(lang, role)
+			if roleCounts[role] == 0 {
+				roleSummary.WriteString(`<span class="status-pill warning" role="status">` + esc(label) + `: ` + esc(t(lang, "未設定だと通知されません", "not assigned — nothing will be notified")) + `</span> `)
+			} else {
+				roleSummary.WriteString(`<span class="status-pill ok" role="status">` + esc(label) + `: ` + esc(t(lang, "設定済み", "assigned")) + `</span> `)
+			}
+		}
+		blocks.WriteString(`<p class="field-help srole-completeness">` + roleSummary.String() + `</p>`)
 	}
 	if blocks.Len() == 0 {
 		return ""
@@ -80,12 +103,16 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 	if statusErr != nil {
 		note = `<p class="field-help" role="status">` + esc(t(lang, "Kitsuのステータス一覧を取得できませんでした。保存済みのステータス設定だけを表示しています。", "Could not read the Kitsu status list. Only saved status settings are shown.")) + `</p>`
 	}
+	selector := ""
+	if selectorLinks.Len() > 0 {
+		selector = `<div class="audit-filter" role="navigation" aria-label="` + esc(t(lang, "プロダクションを選ぶ", "Choose a Production")) + `"><span class="field-help">` + esc(t(lang, "プロダクションを選ぶ", "Choose a Production")) + `</span>` + selectorLinks.String() + `</div>`
+	}
 	return `<form method="post" action="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="action" value="save_status_roles">` +
-		`<section class="section-card glass"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status.")) + `</p>` +
-		note + blocks.String() +
-		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button></div></section></form>`
+		`<section class="section-card glass" id="status-roles"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
+		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。この設定はプロダクションごとに保存されます（スタジオ共通ではありません）。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status. These settings are saved per Production (they are not studio-wide).")) + `</p>` +
+		note + selector + blocks.String() +
+		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "役割を保存", "Save roles")) + `</button></div></section></form>`
 }
 
 // saveStatusRoles applies one bot-page submit to every Production it carries

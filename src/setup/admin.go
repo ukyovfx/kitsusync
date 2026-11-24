@@ -2015,7 +2015,7 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 			return ` external-kitsu-url-error`
 		}
 		return ""
-	}() + `">` + checkLink + `<button id="save-external-kitsu-url" type="submit" class="btn"` + externalURLSaveDisabled + `>` + esc(t(lang, "保存", "Save")) + `</button></div><p id="external-kitsu-url-help" class="field-help">` + esc(t(lang, "空欄で保存すると通常のKitsu URLを使用します。確認リンクは現在保存済みのURLを開きます。", "Saving an empty value uses the normal Kitsu URL. Check link opens the currently saved URL.")) + `</p>` + func() string {
+	}() + `">` + checkLink + `<button id="save-external-kitsu-url" type="submit" class="btn"` + externalURLSaveDisabled + `>` + esc(t(lang, "外部URLを保存", "Save external URL")) + `</button></div><p id="external-kitsu-url-help" class="field-help">` + esc(t(lang, "空欄で保存すると通常のKitsu URLを使用します。確認リンクは現在保存済みのURLを開きます。", "Saving an empty value uses the normal Kitsu URL. Check link opens the currently saved URL.")) + `</p>` + func() string {
 		if externalURLSaveError == "" {
 			return ""
 		}
@@ -2030,7 +2030,7 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 		expertVisibility = ""
 	}
 	expertOverrides := `<details class="connection-expert-network" data-expert-network-overrides` + expertOpen + expertVisibility + `><summary>` + esc(t(lang, "専門ネットワーク設定", "Special network configuration")) + `</summary><div class="connection-expert-network-content"><div class="connection-form-field" data-kitsu-internal-endpoint hidden><label for="kitsu-internal-url">` + esc(t(lang, "内部 Kitsu URL", "Internal Kitsu URL")) + `</label><input id="kitsu-internal-url" type="url" name="kitsu_internal_url" form="kitsu-connection-form" autocomplete="url"><p class="field-help">` + esc(t(lang, "KitsuSyncの実行先を通常のKitsu URLと分ける場合だけ使用します。", "Use only when KitsuSync must reach a different internal endpoint than the normal Kitsu URL.")) + `</p></div><div class="connection-form-field"><label for="kitsu-api-base-url">` + esc(t(lang, "API Base URL", "API Base URL")) + `</label><input id="kitsu-api-base-url" type="url" name="kitsu_api_base_url" form="kitsu-connection-form" value="` + esc(apiBaseURL) + `" autocomplete="url"><p class="field-help">` + esc(t(lang, "Kitsu URLとAPIの起点が異なる特殊なリバースプロキシ用です。", "Only needed for unusual reverse proxy setups where the API is not under the Kitsu URL.")) + `</p></div></div></details>`
-	advancedSettings := `<section class="editorial-advanced-settings" aria-labelledby="connections-advanced-title"><div class="editorial-advanced-heading"><h2 id="connections-advanced-title">` + esc(t(lang, "詳細設定", "Advanced settings")) + `</h2></div><div class="editorial-advanced-explanation"><p class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに必要な外部URLだけを通常設定として表示します。未設定の場合はKitsu URLを使用します。", "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting. When empty, the Kitsu URL is used.")) + `</p></div>` + externalURLField + expertOverrides + `</section>`
+	advancedSettings := `<section class="section-card glass editorial-advanced-settings" id="connections-advanced" aria-labelledby="connections-advanced-title"><div class="editorial-advanced-heading"><h2 id="connections-advanced-title">` + esc(t(lang, "詳細設定", "Advanced settings")) + `</h2></div><div class="editorial-advanced-explanation"><p class="field-help">` + esc(t(lang, "Discord通知のKitsuリンクに必要な外部URLだけを通常設定として表示します。未設定の場合はKitsu URLを使用します。", "Only the External Kitsu URL needed for Kitsu links in Discord notifications is shown as a normal setting. When empty, the Kitsu URL is used.")) + `</p></div>` + externalURLField + expertOverrides + `</section>`
 	endpointControl := `<div class="connection-form-field connection-host-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><div data-kitsu-endpoint-auto><div class="connection-host-value-row"><code id="kitsu-hostname-resolved">` + esc(displayHost) + `</code><input type="hidden" id="kitsu-hostname-auto" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" data-kitsu-host-auto><button type="button" class="btn-ghost connection-endpoint-change" data-reveal-kitsu-endpoint>` + esc(t(lang, "手動設定", "Manual setup")) + `</button></div><p class="field-help" data-kitsu-host-auto-help>` + esc(t(lang, "自動検出または保存済み設定から使用しています。", "Detected automatically or loaded from the saved configuration.")) + `</p></div><div class="connection-host-manual" data-kitsu-endpoint-manual hidden style="display:none"><input id="kitsu-hostname" type="url" name="kitsu_hostname" form="kitsu-connection-form" value="` + esc(resolvedHost) + `" aria-describedby="kitsu-host-help" data-initial-value="` + esc(resolvedHost) + `" disabled><p id="kitsu-host-help" class="field-help">` + esc(tr(lang, "connections.host_help")) + `</p><button type="button" class="btn-ghost connection-endpoint-reset" data-reset-kitsu-endpoint>` + esc(t(lang, "自動設定", "Automatic")) + `</button></div></div>`
 	if resolvedHost == "" {
 		endpointControl = `<div class="connection-form-field connection-host-field"><label for="kitsu-hostname">` + esc(tr(lang, "connections.host")) + `</label><div class="connection-host-manual" data-kitsu-endpoint-manual><input id="kitsu-hostname" type="url" name="kitsu_hostname" form="kitsu-connection-form" value="" aria-describedby="kitsu-host-help" data-initial-value=""><p id="kitsu-host-help" class="field-help">` + esc(tr(lang, "connections.host_help")) + `</p><button type="button" class="btn-ghost connection-endpoint-reset" data-reset-kitsu-endpoint>` + esc(t(lang, "自動設定", "Automatic")) + `</button></div></div>`
@@ -2055,7 +2055,7 @@ func renderConnectionsEditFormWithExternalURLState(lang string, r *http.Request,
 	if discordConfigured {
 		discordTokenActions = `<button type="button" class="btn-ghost" data-token-change="discord-bot-token" data-token-cancel="discord-token-cancel" data-token-submit="discord-recheck">` + esc(t(lang, "トークンを変更", "Change token")) + `</button><button type="button" class="btn-ghost" data-token-cancel-button="discord-token-cancel" hidden>` + esc(t(lang, "キャンセル", "Cancel")) + `</button>`
 	}
-	body := `<div class="section-stack connections-edit-stack">` + notice +
+	body := `<div class="section-stack connections-edit-stack" id="connections-edit">` + notice +
 		`<div class="connections-edit-grid">` +
 		`<section class="section-card glass connections-card"><div class="page-heading connections-card-header"><h2>` + esc(tr(lang, "connections.kitsu")) + `</h2><span class="status-pill ` + esc(kitsuStatus.Class) + `" role="status">` + esc(kitsuStatus.Label) + `</span></div>` +
 		`<form method="POST" class="connection-save-form" id="kitsu-connection-form"><input type="hidden" name="action" value="save_kitsu"><div class="connection-form-field"><label for="kitsu-bot-token">` + esc(t(lang, "Kitsu Bot APIトークン", "Kitsu Bot API token")) + `</label>` + kitsuTokenInput + `<p id="kitsu-token-help" class="field-help">` + esc(t(lang, "必要な場合だけ、新しいTokenを入力してください。保存済みのTokenは表示されません。変更は保存後に反映されます。", "Enter a new token only when needed. Saved tokens are never displayed. Changes take effect after saving.")) + `</p></div>` + endpointControl + `<div class="button-row connections-actions"><button id="kitsu-recheck" type="submit" class="btn">` + esc(connectionSaveLabel(lang, "Kitsu", kitsuConfigured)) + `</button>` + kitsuTokenActions + `</div></form></section>` +
@@ -2173,6 +2173,15 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 				if err := saveStatusRoles(db, r); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, adminPage(lang, t(lang, "Kitsuのステータス → 役割", "Kitsu status → role"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong>`+forumSaveErrorMarkup(lang, err, nil)+`</div></div>`))
+					return
+				}
+				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
+				return
+			}
+			if action == "save_studio_routes" {
+				if err := saveStudioRoutes(db, r); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, adminPage(lang, t(lang, "受け渡しの配線（スタジオ共通）", "Handoff wiring (studio default)"), r, `<div class="section-stack"><div class="notice notice-error" role="alert"><strong>`+esc(t(lang, "保存できませんでした", "Could not save"))+`</strong><p>`+esc(err.Error())+`</p></div></div>`))
 					return
 				}
 				http.Redirect(w, r, withLang("/bot/admin/bot?edit=1", r)+"&msg=saved", http.StatusSeeOther)
@@ -2470,7 +2479,25 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 		if editMode {
 			form := renderConnectionsEditFormWithHealth(lang, r, db, statusHint, statusClass, statusLabel, effectiveHost, kitsuHealthy, discordHealthy, discordStatus.BotName)
 			form += renderStatusRolesSection(db, lang, r)
-			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, form))
+			form += renderStudioRoutesSection(db, lang, r)
+			// The connections form's back link sits mid-page once the
+			// sections below it are appended; move it to the very bottom
+			// so the page carries exactly one, in one place.
+			const backLinkStart = `<div class="button-row connections-navigation connections-footer">`
+			if start := strings.Index(form, backLinkStart); start >= 0 {
+				if relEnd := strings.Index(form[start:], `</a></div>`); relEnd >= 0 {
+					end := start + relEnd + len(`</a></div>`)
+					backLink := form[start:end]
+					form = form[:start] + form[end:] + backLink
+				}
+			}
+			// A small section index at the top of the page.
+			index := `<nav class="audit-filter connections-index" aria-label="` + esc(t(lang, "セクション一覧", "Sections")) + `">` +
+				`<a class="nav-chip" href="#connections-edit">` + esc(t(lang, "接続", "Connections")) + `</a>` +
+				`<a class="nav-chip" href="#connections-advanced">` + esc(t(lang, "詳細設定", "Advanced settings")) + `</a>` +
+				`<a class="nav-chip" href="#status-roles">` + esc(t(lang, "ステータス→役割", "Status → role")) + `</a>` +
+				`<a class="nav-chip" href="#studio-routes">` + esc(t(lang, "受け渡しの配線", "Handoff wiring")) + `</a></nav>`
+			fmt.Fprint(w, adminPage(lang, tr(lang, "connections.title"), r, index+form))
 			return
 		}
 		edit := fmt.Sprintf(`

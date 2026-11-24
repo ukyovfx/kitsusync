@@ -13,12 +13,13 @@ import (
 	"app/src/model"
 )
 
-// TestHandoffBrowserAcceptance renders the redesign's handoff wiring editor
-// and drives it in real Chromium: the studio routes and the Production
-// overrides render as seeded (inheritance included), the page does not
-// scroll horizontally at 1280px, and an edit of both layers survives a
-// save/reload round trip. It shares the dedicated browser job's gate and
-// pinned SHA so it never runs in the normal test suite.
+// TestHandoffBrowserAcceptance renders the handoff wiring editors and
+// drives them in real Chromium: the studio routes on the connection
+// settings page and the Production overrides on the handoff page render
+// as seeded (inheritance included), neither page scrolls horizontally at
+// 1280px, and an edit of both layers survives a save/reload round trip.
+// It shares the dedicated browser job's gate and pinned SHA so it never
+// runs in the normal test suite.
 func TestHandoffBrowserAcceptance(t *testing.T) {
 	if os.Getenv(reviewerBrowserRunEnv) != "1" {
 		t.Skip("dedicated authenticated browser acceptance job")
@@ -90,6 +91,7 @@ func TestHandoffBrowserAcceptance(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/bot/admin/handoff", HandoffSettingsHandler(db))
+	mux.HandleFunc("/bot/admin/bot", BotHandlerWithRuntime(db, nil, func() bool { return true }))
 	server := httptest.NewServer(mux)
 	defer server.Close()
 
@@ -97,6 +99,7 @@ func TestHandoffBrowserAcceptance(t *testing.T) {
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(),
 		"HANDOFF_TEST_URL="+server.URL+"/bot/admin/handoff?project=p1&lang=ja",
+		"HANDOFF_BOT_URL="+server.URL+"/bot/admin/bot?edit=1&lang=ja",
 		"HANDOFF_SCREENSHOTS_DIR="+outputDir,
 	)
 	output, err := cmd.CombinedOutput()
