@@ -46,6 +46,51 @@ func TestTestKitsuSuccessDoesNotChangeSavedHostname(t *testing.T) {
 	}
 }
 
+func TestTestKitsuRejectsNonManagerAndPersistsNothing(t *testing.T) {
+	db := newSetupStateTestDB(t)
+	t.Setenv(RuntimeKitsuEmailEnv, "")
+	t.Setenv(RuntimeKitsuPasswordEnv, "")
+	model.SetSetting(db, "kitsu.runtime_email", "existing-manager@example.test")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/status":
+			_, _ = w.Write([]byte(validZouStatus))
+		case "/api/auth/login":
+			_, _ = w.Write([]byte(`{"access_token":"artist-token","user":{"role":"user"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	pinTryKitsuLoginToLoopback(t, func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	})
+
+	configuredCalled := false
+	body := `{"hostname":"` + tryKitsuLoginHost(t, server.URL) + `","email":"artist@example.test","password":"pw"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/test-kitsu", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	TestKitsuHandler(db, func() { configuredCalled = true })(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	resp := rr.Body.String()
+	if strings.Contains(resp, `"authenticated":true`) || !strings.Contains(resp, "auth_failed") {
+		t.Fatalf("expected auth_failed rejection, got %s", resp)
+	}
+	if configuredCalled {
+		t.Fatal("onRuntimeConfigured should not be called for non-manager credentials")
+	}
+	if got := model.GetSetting(db, "kitsu.runtime_email"); got != "existing-manager@example.test" {
+		t.Fatalf("kitsu.runtime_email overwritten: %q", got)
+	}
+	if got := model.GetSetting(db, "kitsu.runtime_password_encrypted"); got != "" {
+		t.Fatalf("kitsu.runtime_password_encrypted should remain empty, got %q", got)
+	}
+}
+
 func TestSetupJSONWriteHandlersRejectGETWithBody(t *testing.T) {
 	db := newSetupStateTestDB(t)
 	model.SetSetting(db, "kitsu.hostname", "http://saved-kitsu.test:8080")

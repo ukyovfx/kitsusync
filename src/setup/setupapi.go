@@ -876,11 +876,14 @@ func tryKitsuLogin(hostname, email, password string) (bool, string) {
 	if err != nil {
 		return false, connectionErrorClass(err)
 	}
-	token, _, err := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
+	token, role, err := AuthenticateKitsuCredentials(context.Background(), connection, email, password)
 	if err != nil {
 		return false, connectionErrorClass(err)
 	}
-	return token != "", ""
+	if token == "" || !isStudioManagerOrHigher(role) {
+		return false, "auth_failed"
+	}
+	return true, ""
 }
 
 // --- Mapping API types ---
