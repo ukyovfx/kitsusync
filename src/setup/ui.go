@@ -1243,12 +1243,9 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .route-chip button{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;padding:0 3px;font-family:inherit}
   .route-chip-static{padding:0 10px;color:var(--muted-2)}
   .route-none-label{color:var(--muted);font-size:13px}
-  .route-editor{display:contents}
-  .route-seg{order:1}
-  .seg.route-seg button{height:26px;padding:0 12px;font-size:12.5px}
-  .route-row-body .route-chips{order:2}
-  .route-targets-editor{order:3;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:0}
-  .route-add-line{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:0}
+  .route-editor{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .route-targets-editor{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:0}
+  .route-add-line{display:inline-flex;gap:6px;align-items:center;flex-wrap:nowrap;margin-top:0}
   .route-add-line select,.handoff-override-row select{width:auto;min-width:150px;max-width:220px;height:30px;min-height:30px;font-size:12.5px;padding:0 26px 0 10px;flex:none}
   .route-add-line .btn.sm,.handoff-override-row .btn-ghost.sm{height:30px;min-height:30px;padding:0 12px;font-size:12.5px;flex:none}
   .audit-filter-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:16px 0 4px}
@@ -1266,11 +1263,11 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .handoff-override-row .src{width:150px;flex:none;font-size:13.5px;padding-top:4px}
   .handoff-override-row .inh{font-size:12.5px;color:var(--muted);min-width:0}
   .handoff-override-row .inh.is-override{color:var(--accent-2);font-weight:600}
-  .handoff-override-editor{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0}
+  .handoff-override-editor{flex:none;margin-left:auto;display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0}
   .route-item[hidden],.route-row[hidden],.route-editor[hidden],.route-targets-editor[hidden],.handoff-override-row select[hidden],.handoff-override-editor[hidden],.handoff-override-row [data-ov-reset][hidden],.handoff-override-row [data-handoff-summary][hidden],.route-edit-actions[hidden],[data-route-edit-start][hidden],[data-route-back][hidden],.editorial-workbench .btn[hidden],.editorial-workbench .btn-ghost[hidden]{display:none}
   .editorial-workbench .connection-external-url-controls .btn,.editorial-workbench .connection-external-url-controls .btn-ghost{flex:0 0 auto;width:auto;white-space:nowrap}
   .system-status-sections .system-observability-grid{margin-top:var(--system-status-heading-to-content)}
-  @media(max-width:760px){.role-boxes{grid-template-columns:1fr}.route-row,.handoff-override-row{flex-direction:column;gap:6px}.route-row .route-src,.handoff-override-row .src{width:auto;padding-top:0}.conn-kvrow{flex-direction:column;align-items:flex-start}.conn-kvrow .v{text-align:left}}
+  @media(max-width:760px){.role-boxes{grid-template-columns:1fr}.route-row,.handoff-override-row{flex-direction:column;gap:6px}.route-row .route-src,.handoff-override-row .src{width:auto;padding-top:0}.route-editor,.handoff-override-editor{margin-left:0}.conn-kvrow{flex-direction:column;align-items:flex-start}.conn-kvrow .v{text-align:left}}
 `
 
 func shellHeadExtras() string {

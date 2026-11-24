@@ -374,8 +374,8 @@ func routeChipsStatic(state studioRouteState, namesByID map[string]string, lang 
 // renderStudioRoutesSection is the studio-common wiring editor on the
 // wiring subpage. Every Task Type is listed as a row from the start;
 // normal mode is read-only and one page-level「配線を編集」button switches
-// the whole page into edit mode. The submitted form contract is unchanged
-// (st_notify_<id> checkboxes plus the st_none_<id> mark).
+// the whole page into edit mode. Rows with targets are wired; rows without
+// targets store nothing.
 func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string {
 	taskTypes := studioTaskTypes(db)
 	if len(taskTypes) == 0 {
@@ -386,10 +386,6 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 	var rows strings.Builder
 	for _, state := range states {
 		taskType := state.taskType
-		noneChecked := ""
-		if state.none {
-			noneChecked = " checked"
-		}
 		var addOptions strings.Builder
 		addOptions.WriteString(`<option value="">` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `</option>`)
 		selectedSet := map[string]struct{}{}
@@ -405,33 +401,20 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 			}
 			addOptions.WriteString(`<option value="` + esc(target.ID) + `">` + esc(target.Name) + `</option>`)
 		}
-		modeWired := !state.none
-		wiredSegClass := " on"
-		noneSegClass := ""
-		targetsEditorHidden := ""
-		if state.none {
-			wiredSegClass = ""
-			noneSegClass = " on"
-			targetsEditorHidden = " hidden"
-		}
 		rows.WriteString(`<div class="route-item" data-route-item="` + esc(taskType.ID) + `">` +
 			`<div class="route-row" data-route-row="` + esc(taskType.ID) + `">` +
 			`<span class="route-src">` + esc(taskType.Name) + `</span>` +
 			`<div class="route-row-body">` +
 			`<span class="route-chips" data-route-chips>` + routeChipsStatic(state, namesByID, lang) + `</span>` +
-			`<div class="route-editor" data-route-editor="` + esc(taskType.ID) + `" hidden>` +
-			`<div class="route-hidden-inputs" style="display:none">` + routeTargetCheckboxes("st_notify_", taskType.ID, taskTypes, state.selected) +
-			`<input type="checkbox" data-route-none name="st_none_` + esc(taskType.ID) + `" value="1"` + noneChecked + `></div>` +
-			`<div class="seg route-seg" role="group" aria-label="` + esc(t(lang, "受け渡しの状態", "Handoff mode")) + `">` +
-			`<button type="button" class="` + strings.TrimSpace(wiredSegClass) + `" data-route-mode="wired" aria-pressed="` + esc(fmt.Sprint(modeWired)) + `">` + esc(t(lang, "配線あり", "Wired")) + `</button>` +
-			`<button type="button" class="` + strings.TrimSpace(noneSegClass) + `" data-route-mode="none" aria-pressed="` + esc(fmt.Sprint(state.none)) + `">` + esc(t(lang, "受け渡しなし", "No handoff")) + `</button>` +
 			`</div>` +
-			`<div class="route-targets-editor" data-route-targets-editor` + targetsEditorHidden + `>` +
+			`<div class="route-editor" data-route-editor="` + esc(taskType.ID) + `" hidden>` +
+			`<div class="route-hidden-inputs" style="display:none">` + routeTargetCheckboxes("st_notify_", taskType.ID, taskTypes, state.selected) + `</div>` +
+			`<div class="route-targets-editor" data-route-targets-editor>` +
 			`<div class="route-add-line"><select data-route-add-select aria-label="` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `">` + addOptions.String() + `</select>` +
 			`<button type="button" class="btn sm" data-route-add>` + esc(t(lang, "追加", "Add")) + `</button></div></div>` +
-			`</div></div></div></div>`)
+			`</div></div></div>`)
 	}
-	return `<form method="post" action="` + esc(withLang("/bot/admin/bot/wiring", r)) + `" class="section-stack" data-route-editor-root data-none-label="` + esc(t(lang, "受け渡しなし", "No handoff")) + `" data-no-wiring-label="` + esc(t(lang, "配線なし", "No wiring")) + `">` +
+	return `<form method="post" action="` + esc(withLang("/bot/admin/bot/wiring", r)) + `" class="section-stack" data-route-editor-root data-no-wiring-label="` + esc(t(lang, "配線なし", "No wiring")) + `">` +
 		`<input type="hidden" name="action" value="save_studio_routes">` +
 		`<section class="flat-section" id="studio-routes">` +
 		`<p class="field-help">` + esc(t(lang, "タスクが完了したとき、同じショット/アセットの次工程へ「進めていい」と伝える配線です。", "Wiring that tells the next task types on the same shot or asset they may proceed when a task finishes.")) + `</p>` +
@@ -447,8 +430,8 @@ func renderStudioRoutesSection(db *gorm.DB, lang string, r *http.Request) string
 
 // studioRoutesEditorScript drives the wiring editor's single page-level edit
 // mode and chips: in normal mode rows stay read-only without × buttons; in
-// edit mode every row exposes its mode toggle, × chips, and destination adder.
-const studioRoutesEditorScript = `<script data-studio-routes-editor>(function(){var root=document.querySelector("[data-route-editor-root]");if(!root)return;var noneLabel=root.getAttribute("data-none-label")||"受け渡しなし",noWiringLabel=root.getAttribute("data-no-wiring-label")||"配線なし";var editing=root.classList.contains("is-editing");var editStart=root.querySelector("[data-route-edit-start]");var editCancel=root.querySelector("[data-route-edit-cancel]");var editActions=root.querySelector("[data-route-edit-actions]");var backLink=root.querySelector("[data-route-back]");function rebuild(item){var row=item.querySelector("[data-route-row]");var editor=item.querySelector("[data-route-editor]");if(!row||!editor)return;var chips=row.querySelector("[data-route-chips]");var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");var none=editor.querySelector("[data-route-none]");var targetsEditor=editor.querySelector("[data-route-targets-editor]");var wiredBtn=editor.querySelector("[data-route-mode=\"wired\"]");var noneBtn=editor.querySelector("[data-route-mode=\"none\"]");var select=editor.querySelector("[data-route-add-select]");var checked=[];boxes.forEach(function(box){if(box.checked){checked.push(box)}});var isNone=!!(none&&none.checked);if(wiredBtn){wiredBtn.classList.toggle("on",!isNone);wiredBtn.setAttribute("aria-pressed",String(!isNone))}if(noneBtn){noneBtn.classList.toggle("on",isNone);noneBtn.setAttribute("aria-pressed",String(isNone))}if(targetsEditor){targetsEditor.hidden=isNone}chips.innerHTML="";if(isNone){var mark=document.createElement("span");mark.className="route-chip route-chip-static";mark.textContent=noneLabel;chips.appendChild(mark)}else if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=noWiringLabel;chips.appendChild(empty)}else{checked.forEach(function(box){var chip=document.createElement("span");chip.className=editing?"route-chip":"route-chip route-chip-static";chip.textContent=box.getAttribute("data-route-name")||box.value;if(editing){var remove=document.createElement("button");remove.type="button";remove.textContent="×";remove.setAttribute("aria-label",chip.textContent);remove.addEventListener("click",function(){box.checked=false;rebuild(item)});chip.appendChild(remove)}chips.appendChild(chip)})}if(select){var current=select.value;var first=select.querySelector("option[value=\"\"]");select.innerHTML="";if(first)select.appendChild(first);boxes.forEach(function(box){if(box.checked)return;var option=document.createElement("option");option.value=box.value;option.textContent=box.getAttribute("data-route-name")||box.value;select.appendChild(option)});select.value=current}}function setEditing(next){editing=!!next;root.classList.toggle("is-editing",editing);if(editStart)editStart.hidden=editing;if(backLink)backLink.hidden=editing;if(editActions)editActions.hidden=!editing;root.querySelectorAll("[data-route-item]").forEach(function(item){var editor=item.querySelector("[data-route-editor]");item.classList.toggle("is-editing",editing);if(editor)editor.hidden=!editing;rebuild(item)})}root.querySelectorAll("[data-route-item]").forEach(function(item){var editor=item.querySelector("[data-route-editor]");if(!editor)return;var none=editor.querySelector("[data-route-none]");var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");var wiredBtn=editor.querySelector("[data-route-mode=\"wired\"]");var noneBtn=editor.querySelector("[data-route-mode=\"none\"]");if(wiredBtn){wiredBtn.addEventListener("click",function(){if(none)none.checked=false;rebuild(item)})}if(noneBtn){noneBtn.addEventListener("click",function(){if(none)none.checked=true;boxes.forEach(function(box){box.checked=false});rebuild(item)})}var add=editor.querySelector("[data-route-add]");var select=editor.querySelector("[data-route-add-select]");if(add&&select){add.addEventListener("click",function(){var value=select.value;if(!value)return;boxes.forEach(function(box){if(box.value===value){box.checked=true}});if(none)none.checked=false;rebuild(item)})}});if(editStart){editStart.addEventListener("click",function(){setEditing(true)})}if(editCancel){editCancel.addEventListener("click",function(){root.reset();setEditing(false)})}setEditing(editing)})();</script>`
+// edit mode every row exposes × chips and the right-pinned destination adder.
+const studioRoutesEditorScript = `<script data-studio-routes-editor>(function(){var root=document.querySelector("[data-route-editor-root]");if(!root)return;var noWiringLabel=root.getAttribute("data-no-wiring-label")||"配線なし";var editing=root.classList.contains("is-editing");var editStart=root.querySelector("[data-route-edit-start]");var editCancel=root.querySelector("[data-route-edit-cancel]");var editActions=root.querySelector("[data-route-edit-actions]");var backLink=root.querySelector("[data-route-back]");function rebuild(item){var row=item.querySelector("[data-route-row]");var editor=item.querySelector("[data-route-editor]");if(!row||!editor)return;var chips=row.querySelector("[data-route-chips]");var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");var select=editor.querySelector("[data-route-add-select]");var checked=[];boxes.forEach(function(box){if(box.checked){checked.push(box)}});chips.innerHTML="";if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=noWiringLabel;chips.appendChild(empty)}else{checked.forEach(function(box){var chip=document.createElement("span");chip.className=editing?"route-chip":"route-chip route-chip-static";chip.textContent=box.getAttribute("data-route-name")||box.value;if(editing){var remove=document.createElement("button");remove.type="button";remove.textContent="×";remove.setAttribute("aria-label",chip.textContent);remove.addEventListener("click",function(){box.checked=false;rebuild(item)});chip.appendChild(remove)}chips.appendChild(chip)})}if(select){var current=select.value;var first=select.querySelector("option[value=\"\"]");select.innerHTML="";if(first)select.appendChild(first);boxes.forEach(function(box){if(box.checked)return;var option=document.createElement("option");option.value=box.value;option.textContent=box.getAttribute("data-route-name")||box.value;select.appendChild(option)});select.value=current}}function setEditing(next){editing=!!next;root.classList.toggle("is-editing",editing);if(editStart)editStart.hidden=editing;if(backLink)backLink.hidden=editing;if(editActions)editActions.hidden=!editing;root.querySelectorAll("[data-route-item]").forEach(function(item){var editor=item.querySelector("[data-route-editor]");item.classList.toggle("is-editing",editing);if(editor)editor.hidden=!editing;if(editing)rebuild(item)})}root.querySelectorAll("[data-route-item]").forEach(function(item){var editor=item.querySelector("[data-route-editor]");if(!editor)return;var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"st_notify_\"]");var add=editor.querySelector("[data-route-add]");var select=editor.querySelector("[data-route-add-select]");if(add&&select){add.addEventListener("click",function(){var value=select.value;if(!value)return;boxes.forEach(function(box){if(box.value===value){box.checked=true}});rebuild(item)})}});if(editStart){editStart.addEventListener("click",function(){setEditing(true)})}if(editCancel){editCancel.addEventListener("click",function(){root.reset();setEditing(false);root.querySelectorAll("[data-route-item]").forEach(rebuild)})}if(editing){setEditing(true)}})();</script>`
 
 // renderStudioRoutesDisplay is the read-only wiring list on the connection
 // page's normal mode: every source with its targets as chips.
@@ -531,10 +514,13 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 			{"custom", t(lang, "この製作だけ指定", "Override for this Production")},
 		}
 		inheritHidden, noneHidden, customHidden, editorHidden, resetHidden := "", "", " hidden", " hidden", " hidden"
+		if editing {
+			editorHidden = ""
+		}
 		if mode == "custom" {
 			inheritHidden, customHidden = " hidden", ""
 			if editing {
-				editorHidden, resetHidden = "", ""
+				resetHidden = ""
 			}
 		} else if mode == "none" {
 			inheritHidden, noneHidden = " hidden", ""
@@ -557,10 +543,7 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 			}
 			addOptions.WriteString(`<option value="` + esc(target.ID) + `">` + esc(target.Name) + `</option>`)
 		}
-		modeSelect := forumSelect("ov_mode_"+taskType.ID, mode, modeOptions, "")
-		if !editing {
-			modeSelect = strings.Replace(modeSelect, "<select ", "<select hidden ", 1)
-		}
+		modeSelect := strings.Replace(forumSelect("ov_mode_"+taskType.ID, mode, modeOptions, ""), "<select ", "<select hidden ", 1)
 		overrideRows.WriteString(`<div class="handoff-override-row" data-ov-row="` + esc(taskType.ID) + `">` +
 			`<span class="src">` + esc(taskType.Name) + `</span>` +
 			`<div class="route-row-body">` +
@@ -568,12 +551,12 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 			`<span class="inh" data-handoff-summary="inherit"` + inheritHidden + `>` + esc(t(lang, "（継承：", "(Inheriting: ")) + esc(inheritedSummary) + esc(t(lang, "）", ")")) + `</span>` +
 			`<span class="inh is-override" data-handoff-summary="none"` + noneHidden + `>` + esc(t(lang, "受け渡しなし（継承：", "No handoff (inherited: ")) + esc(inheritedSummary) + esc(t(lang, "）", ")")) + `</span>` +
 			`<span class="inh is-override route-chips" data-handoff-summary="custom" data-ov-chips` + customHidden + `>` + routeChipsStatic(studioRouteState{selected: overrideSelected}, namesByID, lang) + `</span>` +
+			`<button type="button" class="btn-ghost sm" data-ov-reset` + resetHidden + `>` + esc(t(lang, "解除", "Reset")) + `</button>` +
+			`</div>` +
 			`<div class="handoff-override-editor" data-ov-editor="` + esc(taskType.ID) + `"` + editorHidden + `>` +
 			`<div class="route-hidden-inputs" style="display:none">` + routeTargetCheckboxes("ov_notify_", taskType.ID, taskTypes, overrideSelected) + `</div>` +
 			`<div class="route-add-line"><select data-ov-add-select aria-label="` + esc(t(lang, "行き先を選ぶ", "Choose a destination")) + `">` + addOptions.String() + `</select>` +
 			`<button type="button" class="btn sm" data-ov-add>` + esc(t(lang, "追加", "Add")) + `</button></div>` +
-			`</div>` +
-			`<button type="button" class="btn-ghost sm" data-ov-reset` + resetHidden + `>` + esc(t(lang, "解除", "Reset")) + `</button>` +
 			`</div></div>`)
 	}
 
@@ -620,9 +603,9 @@ func renderHandoffSettingsPage(db *gorm.DB, r *http.Request, lang string, projec
 
 // handoffPageScript drives the Production handoff page's single edit mode
 // and presentation toggles: in normal mode rows stay read-only without ×
-// chips; in edit mode each row exposes its mode select, target chip editor,
-// and reset button.
-const handoffPageScript = `<script data-handoff-page>(function(){var root=document.querySelector("[data-handoff-override-root]");var emptyLabel=(root&&root.getAttribute("data-empty-label"))||"行き先を追加してください";var editing=!!(root&&root.classList.contains("is-editing"));var editStart=root&&root.querySelector("[data-route-edit-start]");var editCancel=root&&root.querySelector("[data-route-edit-cancel]");var editActions=root&&root.querySelector("[data-route-edit-actions]");var backLink=root&&root.querySelector("[data-route-back]");var rows=[];document.querySelectorAll("[data-ov-row]").forEach(function(row){var id=row.getAttribute("data-ov-row");var select=row.querySelector("select[name=\"ov_mode_"+id+"\"]");var editor=document.querySelector("[data-ov-editor=\""+id+"\"]");var chips=row.querySelector("[data-ov-chips]");var resetBtn=row.querySelector("[data-ov-reset]");if(!select||!editor)return;var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"ov_notify_\"]");var addSelect=editor.querySelector("[data-ov-add-select]");var addBtn=editor.querySelector("[data-ov-add]");function rebuildChips(){if(!chips)return;var checked=[];boxes.forEach(function(b){if(b.checked)checked.push(b)});chips.innerHTML="";if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=emptyLabel;chips.appendChild(empty)}else{checked.forEach(function(b){var chip=document.createElement("span");chip.className=editing?"route-chip":"route-chip route-chip-static";chip.textContent=b.getAttribute("data-route-name")||b.value;if(editing){var rm=document.createElement("button");rm.type="button";rm.textContent="×";rm.setAttribute("aria-label",chip.textContent);rm.addEventListener("click",function(){b.checked=false;rebuildChips()});chip.appendChild(rm)}chips.appendChild(chip)})}if(addSelect){var cur=addSelect.value;var first=addSelect.querySelector("option[value=\"\"]");addSelect.innerHTML="";if(first)addSelect.appendChild(first);boxes.forEach(function(b){if(b.checked)return;var opt=document.createElement("option");opt.value=b.value;opt.textContent=b.getAttribute("data-route-name")||b.value;addSelect.appendChild(opt)});addSelect.value=cur}}function apply(){var mode=select.value;select.hidden=!editing;row.querySelectorAll("[data-handoff-summary]").forEach(function(span){span.hidden=span.getAttribute("data-handoff-summary")!==mode});editor.hidden=!editing||mode!=="custom";if(resetBtn)resetBtn.hidden=!editing||mode==="inherit";if(mode==="none"){boxes.forEach(function(b){b.checked=false})}rebuildChips()}select.addEventListener("change",apply);if(resetBtn){resetBtn.addEventListener("click",function(){select.value="inherit";apply()})}if(addBtn&&addSelect){addBtn.addEventListener("click",function(){var val=addSelect.value;if(!val)return;boxes.forEach(function(b){if(b.value===val)b.checked=true});rebuildChips()})}rows.push(apply)});var fallback=document.querySelector("select[name=\"no_assignee\"]"),field=document.getElementById("handoff-fallback-user-field");var applyFallback=function(){if(fallback&&field)field.hidden=fallback.value!=="users"};if(fallback&&field){fallback.addEventListener("change",applyFallback)}function setEditing(next){editing=!!next;if(root)root.classList.toggle("is-editing",editing);if(editStart)editStart.hidden=editing;if(backLink)backLink.hidden=editing;if(editActions)editActions.hidden=!editing;rows.forEach(function(apply){apply()});applyFallback()}if(editStart){editStart.addEventListener("click",function(){setEditing(true)})}if(editCancel){editCancel.addEventListener("click",function(){if(root)root.reset();setEditing(false)})}setEditing(editing)})();</script>`
+// chips; in edit mode each row exposes its target chips, reset button (when
+// overridden), and right-pinned destination adder.
+const handoffPageScript = `<script data-handoff-page>(function(){var root=document.querySelector("[data-handoff-override-root]");var emptyLabel=(root&&root.getAttribute("data-empty-label"))||"行き先を追加してください";var editing=!!(root&&root.classList.contains("is-editing"));var editStart=root&&root.querySelector("[data-route-edit-start]");var editCancel=root&&root.querySelector("[data-route-edit-cancel]");var editActions=root&&root.querySelector("[data-route-edit-actions]");var backLink=root&&root.querySelector("[data-route-back]");var rows=[];document.querySelectorAll("[data-ov-row]").forEach(function(row){var id=row.getAttribute("data-ov-row");var select=row.querySelector("select[name=\"ov_mode_"+id+"\"]");var editor=row.querySelector("[data-ov-editor=\""+id+"\"]");var chips=row.querySelector("[data-ov-chips]");var resetBtn=row.querySelector("[data-ov-reset]");if(!select||!editor)return;var boxes=editor.querySelectorAll("input[type=checkbox][name^=\"ov_notify_\"]");var addSelect=editor.querySelector("[data-ov-add-select]");var addBtn=editor.querySelector("[data-ov-add]");function rebuildChips(){if(!chips)return;var checked=[];boxes.forEach(function(b){if(b.checked)checked.push(b)});chips.innerHTML="";if(checked.length===0){var empty=document.createElement("span");empty.className="route-none-label";empty.textContent=emptyLabel;chips.appendChild(empty)}else{checked.forEach(function(b){var chip=document.createElement("span");chip.className=editing?"route-chip":"route-chip route-chip-static";chip.textContent=b.getAttribute("data-route-name")||b.value;if(editing){var rm=document.createElement("button");rm.type="button";rm.textContent="×";rm.setAttribute("aria-label",chip.textContent);rm.addEventListener("click",function(){b.checked=false;rebuildChips()});chip.appendChild(rm)}chips.appendChild(chip)})}if(addSelect){var cur=addSelect.value;var first=addSelect.querySelector("option[value=\"\"]");addSelect.innerHTML="";if(first)addSelect.appendChild(first);boxes.forEach(function(b){if(b.checked)return;var opt=document.createElement("option");opt.value=b.value;opt.textContent=b.getAttribute("data-route-name")||b.value;addSelect.appendChild(opt)});addSelect.value=cur}}function apply(){var mode=select.value;select.hidden=true;row.querySelectorAll("[data-handoff-summary]").forEach(function(span){span.hidden=span.getAttribute("data-handoff-summary")!==mode});editor.hidden=!editing;if(resetBtn)resetBtn.hidden=!editing||mode==="inherit";if(mode!=="custom"){boxes.forEach(function(b){b.checked=false})}rebuildChips()}if(resetBtn){resetBtn.addEventListener("click",function(){select.value="inherit";boxes.forEach(function(b){b.checked=false});apply()})}if(addBtn&&addSelect){addBtn.addEventListener("click",function(){var val=addSelect.value;if(!val)return;select.value="custom";boxes.forEach(function(b){if(b.value===val)b.checked=true});apply()})}rows.push(apply)});var fallback=document.querySelector("select[name=\"no_assignee\"]"),field=document.getElementById("handoff-fallback-user-field");var applyFallback=function(){if(fallback&&field)field.hidden=fallback.value!=="users"};if(fallback&&field){fallback.addEventListener("change",applyFallback)}function setEditing(next){editing=!!next;if(root)root.classList.toggle("is-editing",editing);if(editStart)editStart.hidden=editing;if(backLink)backLink.hidden=editing;if(editActions)editActions.hidden=!editing;rows.forEach(function(apply){apply()});applyFallback()}if(editStart){editStart.addEventListener("click",function(){setEditing(true)})}if(editCancel){editCancel.addEventListener("click",function(){if(root)root.reset();setEditing(false)})}setEditing(editing)})();</script>`
 
 func handoffFallbackMemberOptions(db *gorm.DB, guildID, current, lang string) string {
 	current = strings.TrimSpace(current)

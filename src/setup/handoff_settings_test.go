@@ -59,7 +59,6 @@ func handoffPost(t *testing.T, db *gorm.DB, form url.Values) *httptest.ResponseR
 func studioRoutesForm() url.Values {
 	form := url.Values{}
 	form["st_notify_tt-lay"] = []string{"tt-anim", "tt-light"}
-	form["st_none_tt-comp"] = []string{"1"}
 	return form
 }
 
@@ -112,7 +111,7 @@ func TestStudioRoutesSectionRendersOnConnectionSettings(t *testing.T) {
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	body := studioRoutesSection(t, db)
-	for _, want := range []string{`id="studio-routes"`, `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `name="st_none_tt-comp"`, `class="route-row"`, `data-route-row="tt-lay"`, `data-route-edit-start`, `Edit wiring`, `data-route-edit-cancel`, `data-route-edit-actions`, `data-route-mode="wired"`, `data-route-mode="none"`, `data-route-add-select`, `data-route-add`} {
+	for _, want := range []string{`id="studio-routes"`, `name="action" value="save_studio_routes"`, `name="st_notify_tt-lay"`, `class="route-row"`, `data-route-row="tt-lay"`, `data-route-edit-start`, `Edit wiring`, `data-route-edit-cancel`, `data-route-edit-actions`, `data-route-add-select`, `data-route-add`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("studio section is missing %q", want)
 		}
@@ -123,7 +122,7 @@ func TestStudioRoutesSectionRendersOnConnectionSettings(t *testing.T) {
 			t.Fatalf("studio section must render all task types visibly from the start, missing %q", wantItem)
 		}
 	}
-	for _, gone := range []string{`data-route-source-select`, `data-route-source-add`, `data-route-toggle`, "Add source task type"} {
+	for _, gone := range []string{`data-route-source-select`, `data-route-source-add`, `data-route-toggle`, `data-route-mode`, `route-seg`, `name="st_none_`, "Add source task type", "Handoff mode"} {
 		if strings.Contains(body, gone) {
 			t.Fatalf("studio section must omit removed control %q", gone)
 		}
@@ -173,15 +172,27 @@ func TestWiringEditRowsStayCompactWithoutCardBoxes(t *testing.T) {
 			t.Fatalf("wiring edit mode CSS must not style rows as indented cards (%q)", forbidden)
 		}
 	}
+	if !strings.Contains(css, `.route-editor{flex:none;margin-left:auto`) {
+		t.Fatal("studio wiring editor add-controls must be pinned right with flex:none;margin-left:auto")
+	}
+	if !strings.Contains(css, `.handoff-override-editor{flex:none;margin-left:auto`) {
+		t.Fatal("handoff override add-controls must be pinned right with flex:none;margin-left:auto")
+	}
 	stubHandoffTaskTypes(t, handoffTaskTypes())
 	db := newForumPageDB(t)
 	studioBody := studioRoutesSection(t, db)
 	if !strings.Contains(studioBody, `class="route-row-body"`) {
 		t.Fatal("studio wiring rows must use inline .route-row-body")
 	}
+	if strings.Contains(studioBody, `route-seg`) || strings.Contains(studioBody, `data-route-mode`) {
+		t.Fatal("studio wiring rows must not render per-row state toggle")
+	}
 	handoffBody := handoffGet(t, db).Body.String()
 	if !strings.Contains(handoffBody, `class="route-row-body"`) {
 		t.Fatal("handoff override rows must use inline .route-row-body")
+	}
+	if !strings.Contains(handoffBody, `<select hidden name="ov_mode_tt-lay"`) {
+		t.Fatal("handoff override mode select must remain hidden")
 	}
 }
 
@@ -202,16 +213,16 @@ func TestHandoffStudioRouteSaveStoresSelection(t *testing.T) {
 	if got := bySource["tt-lay"].NotifyTaskTypeIDs; got != "tt-anim,tt-light" {
 		t.Fatalf("Layout wiring = %q", got)
 	}
-	if got := bySource["tt-comp"].NotifyTaskTypeIDs; got != model.TaskRouteNone {
-		t.Fatalf("Compositing wiring = %q, want the no-handoff mark", got)
+	if _, ok := bySource["tt-comp"]; ok {
+		t.Fatalf("Compositing with no targets must store nothing, got %+v", bySource["tt-comp"])
 	}
-	// The reloaded section shows the saved wiring checked.
+	// The reloaded section shows the saved wiring checked and unwired rows as No wiring.
 	body := studioRoutesSection(t, db)
 	if !strings.Contains(body, `name="st_notify_tt-lay" value="tt-anim" checked`) {
 		t.Fatal("saved wiring did not reload as checked")
 	}
-	if !strings.Contains(body, `name="st_none_tt-comp" value="1" checked`) {
-		t.Fatal("saved no-handoff mark did not reload as checked")
+	if !strings.Contains(body, `No wiring`) {
+		t.Fatal("unwired row did not render No wiring")
 	}
 	// Target checkboxes must carry data-route-name so the client-side
 	// editor script renders task-type names instead of raw IDs.
@@ -232,7 +243,7 @@ func TestHandoffStudioRouteSaveStoresSelection(t *testing.T) {
 		t.Fatalf("production save status = %d, body: %s", w.Code, w.Body.String())
 	}
 	routes, err = model.LoadStudioTaskRoutes(db)
-	if err != nil || len(routes) != 2 {
+	if err != nil || len(routes) != 1 {
 		t.Fatalf("studio routes after a production save = %d rows, err=%v", len(routes), err)
 	}
 }
@@ -427,5 +438,35 @@ func TestHandoffFallbackDefaultsToDisabledAndRendersMemberDropdown(t *testing.T)
 	}
 	if strings.Contains(body, `<input id="handoff-fallback-user"`) {
 		t.Fatalf("fallback_user must not be a raw text input")
+	}
+}
+
+func TestHandoffStoredExplicitNonePreservedAcrossUnrelatedSave(t *testing.T) {
+	stubHandoffTaskTypes(t, handoffTaskTypes())
+	db := newForumPageDB(t)
+	if err := model.SaveProductionTaskRoute(db, model.ProductionTaskRoute{
+		ProductionID:      "p1",
+		FromTaskTypeID:    "tt-comp",
+		FromTaskTypeName:  "Compositing",
+		NotifyTaskTypeIDs: model.TaskRouteNone,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body := handoffGet(t, db).Body.String()
+	if !strings.Contains(body, `data-handoff-summary="none">No handoff (inherited:`) {
+		t.Fatalf("stored explicit-none override must display as No handoff in normal mode: %s", body)
+	}
+	if !strings.Contains(body, `select.value="custom"`) || !strings.Contains(body, `select.hidden=true`) {
+		t.Fatal("handoffPageScript must keep ov_mode hidden and switch to custom when adding a target")
+	}
+	// An unrelated save (changing no_assignee while ov_mode_tt-comp remains "none") preserves the override.
+	form := productionForm()
+	form["ov_mode_tt-comp"] = []string{"none"}
+	if w := handoffPost(t, db, form); w.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+	route, _, found, err := model.EffectiveTaskRoute(db, "p1", "tt-comp")
+	if err != nil || !found || len(route) != 0 {
+		t.Fatalf("stored explicit-none override was not preserved: route=%v found=%v err=%v", route, found, err)
 	}
 }
