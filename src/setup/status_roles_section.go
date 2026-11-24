@@ -3,6 +3,7 @@ package setup
 import (
 	"app/src/model"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -18,15 +19,21 @@ import (
 // (studio_status_policies, keyed by Kitsu status ID alone), which the
 // exception queue on the system status page maintains.
 
-func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string {
+// statusRoleBlock is one Production's status -> role assignment, shared by
+// the editable section and the read-only display on the connection page.
+type statusRoleBlock struct {
+	productionID string
+	name         string
+	statuses     []statusRoleEntry
+	roleByStatus map[string]string
+}
+
+type statusRoleEntry struct{ id, name string }
+
+func statusRoleBlocks(db *gorm.DB) ([]statusRoleBlock, error) {
 	projects := availableProjects(db)
 	statuses, statusErr := forumStatusLister(db)
-	roleOptions := make([][2]string, 0, len(forumRoleOptions))
-	for _, role := range forumRoleOptions {
-		roleOptions = append(roleOptions, [2]string{role, forumRoleLabel(lang, role)})
-	}
-	var blocks strings.Builder
-	var selectorLinks strings.Builder
+	var out []statusRoleBlock
 	for _, project := range projects {
 		productionID := project.KitsuProjectID
 		current, ok, err := model.LoadProductionForumSettings(db, productionID)
@@ -42,8 +49,7 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 				roleByStatus[row.StatusID] = row.Role
 			}
 		}
-		type statusRow struct{ id, name string }
-		var statusList []statusRow
+		var statusList []statusRoleEntry
 		seen := map[string]struct{}{}
 		if statusErr == nil {
 			for _, status := range statuses {
@@ -51,7 +57,7 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 				if name == "" {
 					name = status.ShortName
 				}
-				statusList = append(statusList, statusRow{status.ID, name})
+				statusList = append(statusList, statusRoleEntry{status.ID, name})
 				seen[status.ID] = struct{}{}
 			}
 		}
@@ -61,43 +67,144 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 				if name == "" {
 					name = saved.StatusID
 				}
-				statusList = append(statusList, statusRow{saved.StatusID, name})
+				statusList = append(statusList, statusRoleEntry{saved.StatusID, name})
 				seen[saved.StatusID] = struct{}{}
 			}
 		}
 		if len(statusList) == 0 {
 			continue
 		}
-		selectorLinks.WriteString(`<a class="nav-chip" href="#srole-` + esc(productionID) + `">` + esc(project.Name) + `</a>`)
-		blocks.WriteString(`<h3 id="srole-` + esc(productionID) + `">` + esc(project.Name) + `</h3><table class="data-table forum-map-table"><tbody>`)
-		for _, status := range statusList {
-			blocks.WriteString(`<tr><td>` + esc(status.name) +
-				`<input type="hidden" name="srole_project" value="` + esc(productionID) + `">` +
-				`<input type="hidden" name="srole_id" value="` + esc(status.id) + `">` +
-				`<input type="hidden" name="srole_name" value="` + esc(status.name) + `"></td><td>` +
-				forumSelect("srole_role", roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</td></tr>`)
-		}
-		blocks.WriteString(`</tbody></table>`)
-		// Role completeness for this Production: a speaking role with no
-		// status assigned can never fire, so it gets a warning chip
-		// instead of failing silently.
-		roleCounts := map[string]int{}
-		for _, status := range statusList {
-			roleCounts[roleByStatus[status.id]]++
-		}
-		var roleSummary strings.Builder
-		for _, role := range []string{model.ForumRoleWFA, model.ForumRoleRetake, model.ForumRoleDone} {
-			label := forumRoleLabel(lang, role)
-			if roleCounts[role] == 0 {
-				roleSummary.WriteString(`<span class="status-pill warning" role="status">` + esc(label) + `: ` + esc(t(lang, "未設定だと通知されません", "not assigned — nothing will be notified")) + `</span> `)
-			} else {
-				roleSummary.WriteString(`<span class="status-pill ok" role="status">` + esc(label) + `: ` + esc(t(lang, "設定済み", "assigned")) + `</span> `)
-			}
-		}
-		blocks.WriteString(`<p class="field-help srole-completeness">` + roleSummary.String() + `</p>`)
+		out = append(out, statusRoleBlock{productionID: productionID, name: project.Name, statuses: statusList, roleByStatus: roleByStatus})
 	}
-	if blocks.Len() == 0 {
+	return out, statusErr
+}
+
+// speakingRoles are the three roles that produce notifications, in display
+// order, with the dot color the mocks assign each role.
+var speakingRoles = []struct {
+	role string
+	dot  string
+}{
+	{model.ForumRoleWFA, "#D4A72C"},
+	{model.ForumRoleRetake, "#C45656"},
+	{model.ForumRoleDone, "#4FAF78"},
+}
+
+func roleCountsOf(block statusRoleBlock) map[string]int {
+	counts := map[string]int{}
+	for _, status := range block.statuses {
+		counts[block.roleByStatus[status.id]]++
+	}
+	return counts
+}
+
+// roleSummaryLine renders the per-Production completeness line: the counts
+// per speaking role, and whether the set is complete. A speaking role with
+// no status assigned can never fire, so a missing role is called out
+// instead of failing silently.
+func roleSummaryLine(lang string, block statusRoleBlock) string {
+	counts := roleCountsOf(block)
+	complete := true
+	var line strings.Builder
+	for i, speaking := range speakingRoles {
+		if i > 0 {
+			line.WriteString(` ・ `)
+		}
+		label := forumRoleLabel(lang, speaking.role)
+		// The mock's summary uses the short role names （確認待ち/リテイク/完了）.
+		switch speaking.role {
+		case model.ForumRoleWFA:
+			label = t(lang, "確認待ち", "Waiting")
+		case model.ForumRoleRetake:
+			label = t(lang, "リテイク", "Retake")
+		case model.ForumRoleDone:
+			label = t(lang, "完了", "Done")
+		}
+		line.WriteString(esc(label) + ` ` + esc(intLabel(counts[speaking.role], lang)))
+		if counts[speaking.role] == 0 {
+			complete = false
+		}
+	}
+	if complete {
+		line.WriteString(` — ` + esc(t(lang, "3つの役割が揃っています", "all three roles are assigned")))
+	} else {
+		line.WriteString(` — ` + esc(t(lang, "未設定の役割は通知されません", "a role with no status is never notified")))
+	}
+	return line.String()
+}
+
+func intLabel(n int, lang string) string {
+	return strings.TrimSpace(strconv.Itoa(n) + t(lang, "件", ""))
+}
+
+// renderRoleBoxes renders the three speaking-role boxes plus the
+// unassigned tray for one Production. In edit mode each status chip carries
+// its role select (the stored form contract is unchanged); in display mode
+// the chips are static.
+func renderRoleBoxes(lang string, block statusRoleBlock, roleOptions [][2]string, edit bool) string {
+	byRole := map[string][]statusRoleEntry{}
+	var tray []statusRoleEntry
+	for _, status := range block.statuses {
+		role := block.roleByStatus[status.id]
+		switch role {
+		case model.ForumRoleWFA, model.ForumRoleRetake, model.ForumRoleDone:
+			byRole[role] = append(byRole[role], status)
+		default:
+			tray = append(tray, status)
+		}
+	}
+	chip := func(status statusRoleEntry) string {
+		if !edit {
+			return `<span class="role-chip role-chip-static">` + esc(status.name) + `</span>`
+		}
+		return `<span class="role-chip">` + esc(status.name) +
+			`<input type="hidden" name="srole_project" value="` + esc(block.productionID) + `">` +
+			`<input type="hidden" name="srole_id" value="` + esc(status.id) + `">` +
+			`<input type="hidden" name="srole_name" value="` + esc(status.name) + `">` +
+			forumSelect("srole_role", block.roleByStatus[status.id], roleOptions, t(lang, "（使わない）", "(unused)")) + `</span>`
+	}
+	var b strings.Builder
+	b.WriteString(`<div class="role-boxes">`)
+	for _, speaking := range speakingRoles {
+		label := forumRoleLabel(lang, speaking.role)
+		switch speaking.role {
+		case model.ForumRoleWFA:
+			label = t(lang, "確認待ち", "Waiting")
+		case model.ForumRoleRetake:
+			label = t(lang, "リテイク", "Retake")
+		case model.ForumRoleDone:
+			label = t(lang, "完了", "Done")
+		}
+		b.WriteString(`<div class="role-box"><div class="role-box-head"><span class="dot" style="background:` + speaking.dot + `"></span>` + esc(label) + `<span class="cnt">` + esc(intLabel(len(byRole[speaking.role]), lang)) + `</span></div>`)
+		for _, status := range byRole[speaking.role] {
+			b.WriteString(chip(status))
+		}
+		b.WriteString(`</div>`)
+	}
+	b.WriteString(`</div><div class="role-tray"><div class="role-tray-head">` + esc(t(lang, "未割り当て", "Unassigned")) + `</div>`)
+	for _, status := range tray {
+		b.WriteString(chip(status))
+	}
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string {
+	blocks, statusErr := statusRoleBlocks(db)
+	if len(blocks) == 0 {
 		return ""
+	}
+	roleOptions := make([][2]string, 0, len(forumRoleOptions))
+	for _, role := range forumRoleOptions {
+		roleOptions = append(roleOptions, [2]string{role, forumRoleLabel(lang, role)})
+	}
+	var body strings.Builder
+	var selectorLinks strings.Builder
+	for _, block := range blocks {
+		selectorLinks.WriteString(`<a class="nav-chip" href="#srole-` + esc(block.productionID) + `">` + esc(block.name) + `</a>`)
+		body.WriteString(`<h3 id="srole-` + esc(block.productionID) + `">` + esc(block.name) + `</h3>`)
+		body.WriteString(`<p class="role-summary-line">` + roleSummaryLine(lang, block) + `</p>`)
+		body.WriteString(renderRoleBoxes(lang, block, roleOptions, true))
 	}
 	note := ""
 	if statusErr != nil {
@@ -109,10 +216,36 @@ func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string 
 	}
 	return `<form method="post" action="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `" class="section-stack">` +
 		`<input type="hidden" name="action" value="save_status_roles">` +
-		`<section class="section-card glass" id="status-roles"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2>` +
-		`<p class="field-help">` + esc(t(lang, "ステータス名から既定の役割を自動で割り当てています。確認待ち・リテイク・完了にそれぞれ1つ以上のステータスが必要です。この設定はプロダクションごとに保存されます（スタジオ共通ではありません）。", "Default roles are pre-assigned from the status names. Waiting, Retake and Done each need at least one status. These settings are saved per Production (they are not studio-wide).")) + `</p>` +
-		note + selector + blocks.String() +
-		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "役割を保存", "Save roles")) + `</button></div></section></form>`
+		`<section class="flat-section" id="status-roles"><div class="flat-section-head"><h2>` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2></div>` +
+		note + selector + body.String() +
+		`<div class="button-row"><button type="submit" class="btn">` + esc(t(lang, "保存", "Save")) + `</button><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "キャンセル", "Cancel")) + `</a></div></section></form>`
+}
+
+// renderStatusRolesDisplay is the read-only form of the same assignment on
+// the connection page's normal mode: the boxes are visible without entering
+// edit mode, with an edit link per the approved mock.
+func renderStatusRolesDisplay(db *gorm.DB, lang string, r *http.Request) string {
+	blocks, _ := statusRoleBlocks(db)
+	if len(blocks) == 0 {
+		return ""
+	}
+	var body strings.Builder
+	for _, block := range blocks {
+		body.WriteString(`<h3>` + esc(block.name) + `</h3>`)
+		complete := true
+		for _, speaking := range speakingRoles {
+			if roleCountsOf(block)[speaking.role] == 0 {
+				complete = false
+			}
+		}
+		dot := "#C45656"
+		if complete {
+			dot = "#4FAF78"
+		}
+		body.WriteString(`<p class="role-summary-line"><span style="color:` + dot + `">●</span> ` + roleSummaryLine(lang, block) + `</p>`)
+		body.WriteString(renderRoleBoxes(lang, block, nil, false))
+	}
+	return `<section class="flat-section" aria-labelledby="status-roles-display-title"><div class="flat-section-head"><h2 id="status-roles-display-title">` + esc(t(lang, "Kitsuのステータス → 役割", "Kitsu status → role")) + `</h2><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot?edit=1", r)) + `#status-roles">` + esc(t(lang, "編集", "Edit")) + `</a></div>` + body.String() + `</section>`
 }
 
 // saveStatusRoles applies one bot-page submit to every Production it carries

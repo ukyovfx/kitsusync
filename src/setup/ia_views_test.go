@@ -647,7 +647,7 @@ func TestAuditLogProductionFilterNarrowsRows(t *testing.T) {
 		return w.Body.String()
 	}
 	all := render("/bot/admin/audit?lang=en")
-	for _, want := range []string{`class="audit-filter"`, ">All</a>", "production=Alpha+Production", "production=Beta+Production", `data-label="Production">Alpha Production`, `data-label="Production">Beta Production`} {
+	for _, want := range []string{`class="audit-filter-form"`, `<option value="">All</option>`, `<option value="Alpha Production">Alpha Production</option>`, `<option value="Beta Production">Beta Production</option>`, `data-label="Production">Alpha Production`, `data-label="Production">Beta Production`} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("unfiltered audit page missing %q", want)
 		}
@@ -659,7 +659,7 @@ func TestAuditLogProductionFilterNarrowsRows(t *testing.T) {
 	if strings.Contains(filtered, `data-label="Production">Alpha Production`) {
 		t.Fatal("filtered audit page kept the other production's rows")
 	}
-	if !strings.Contains(filtered, "production=Alpha+Production") {
+	if !strings.Contains(filtered, `<option value="Alpha Production">Alpha Production</option>`) {
 		t.Fatal("filtered audit page lost the filter choices")
 	}
 	unknown := render("/bot/admin/audit?lang=en&production=Missing")

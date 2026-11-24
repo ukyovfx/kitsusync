@@ -1898,15 +1898,15 @@ func currentProblemCard(lang string, items []pipelineHealthItem) string {
 		if normalizeStatusClass(item.class) == "success" {
 			continue
 		}
-		line := esc(item.label) + `: ` + esc(item.value)
+		sub := ""
 		if strings.TrimSpace(item.explanation) != "" {
-			line += ` — ` + esc(item.explanation)
+			sub = `<div class="sub">` + esc(item.explanation) + `</div>`
 		}
 		action := ""
 		if item.action != "" && item.actionLabel != "" {
-			action = `<div class="button-row"><a class="btn" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a></div>`
+			action = `<a class="linkbtn" href="` + esc(item.action) + `">` + esc(item.actionLabel) + `</a>`
 		}
-		return `<section class="section-card glass current-problem" aria-labelledby="current-problem-title"><div class="page-heading"><div><h2 id="current-problem-title">` + esc(t(lang, "いまの問題", "Current problem")) + `</h2><p class="hint">` + line + `</p></div></div>` + action + `</section>`
+		return `<section class="section-card glass current-problem" aria-labelledby="current-problem-title"><h2 id="current-problem-title">` + esc(t(lang, "現在の問題", "Current problem")) + `</h2><div class="current-problem-row"><span class="dot" aria-hidden="true"></span><div class="body">` + esc(item.label) + `: ` + esc(item.value) + sub + `</div>` + action + `</div></section>`
 	}
 	return ""
 }
@@ -1925,7 +1925,7 @@ func renderPipelineHealthItem(lang string, item pipelineHealthItem, index int) s
 	if strings.TrimSpace(item.details) != "" && strings.TrimSpace(item.detailsLabel) != "" {
 		details = `<details class="pipeline-health-diagnostic"><summary>` + esc(item.detailsLabel) + `</summary><div class="pipeline-health-diagnostic-content">` + item.details + `</div></details>`
 	}
-	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + details + `</div><div class="pipeline-health-rail"><span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span>` + action + `</div></article>`
+	return `<article class="pipeline-health-item"><div class="pipeline-health-copy"><h3>` + esc(item.label) + `</h3>` + explanation + details + `</div><div class="pipeline-health-rail">` + action + `<span class="status-badge status-badge-` + esc(normalizeStatusClass(item.class)) + `" role="status">` + esc(item.value) + `</span></div></article>`
 }
 
 func apiObservationDetailsAt(lang string, stats RuntimeSnapshot, service, windowName string, asOf time.Time) string {
@@ -2357,55 +2357,92 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	lang := currentLang(r)
 	logs := model.ListAuditLogs(db, 200)
 	sort.SliceStable(logs, func(i, j int) bool { return logs[i].CreatedAt.After(logs[j].CreatedAt) })
-	// Production filter: a view-only narrowing of the rows below. The
-	// choices are the display names the rows themselves carry, in first
-	// seen order; an unknown value falls back to showing everything.
+	// Production, user, and result filters: view-only narrowing of the rows below.
+	// Unknown values fall back to showing everything.
 	displayName := func(log model.AuditLog) string {
 		return fallbackText(log.ProjectName, t(lang, "未割り当て", "Unassigned"))
 	}
 	selected := strings.TrimSpace(r.URL.Query().Get("production"))
+	selectedUser := strings.TrimSpace(r.URL.Query().Get("user"))
+	selectedResult := strings.TrimSpace(r.URL.Query().Get("result"))
 	seenNames := map[string]bool{}
 	var productionNames []string
+	seenActors := map[string]bool{}
+	var actorNames []string
 	for _, log := range logs {
 		name := displayName(log)
 		if !seenNames[name] {
 			seenNames[name] = true
 			productionNames = append(productionNames, name)
 		}
+		actor := auditActorLabel(lang, log)
+		if !seenActors[actor] {
+			seenActors[actor] = true
+			actorNames = append(actorNames, actor)
+		}
 	}
 	if selected != "" && !seenNames[selected] {
 		selected = ""
 	}
-	filter := ""
-	if len(productionNames) > 1 {
-		var chips strings.Builder
-		chips.WriteString(`<div class="audit-filter" role="navigation" aria-label="` + esc(t(lang, "プロダクションで絞り込む", "Filter by production")) + `">`)
-		allClass, allCurrent := "nav-chip", ""
-		if selected == "" {
-			allClass += " active"
-			allCurrent = ` aria-current="page"`
-		}
-		chips.WriteString(`<a class="` + allClass + `"` + allCurrent + ` href="` + esc(withLang("/bot/admin/audit", r)) + `">` + esc(t(lang, "全体", "All")) + `</a>`)
-		for _, name := range productionNames {
-			class, current := "nav-chip", ""
-			if name == selected {
-				class += " active"
-				current = ` aria-current="page"`
-			}
-			chips.WriteString(`<a class="` + class + `"` + current + ` href="` + esc(withLang("/bot/admin/audit?production="+url.QueryEscape(name), r)) + `">` + esc(name) + `</a>`)
-		}
-		chips.WriteString(`</div>`)
-		filter = chips.String()
+	if selectedUser != "" && !seenActors[selectedUser] {
+		selectedUser = ""
 	}
-	shown := logs
-	if selected != "" {
-		shown = make([]model.AuditLog, 0, len(logs))
-		for _, log := range logs {
-			if displayName(log) == selected {
-				shown = append(shown, log)
-			}
-		}
+	if selectedResult != "success" && selectedResult != "failed" {
+		selectedResult = ""
 	}
+	shown := make([]model.AuditLog, 0, len(logs))
+	for _, log := range logs {
+		if selected != "" && displayName(log) != selected {
+			continue
+		}
+		if selectedUser != "" && auditActorLabel(lang, log) != selectedUser {
+			continue
+		}
+		if selectedResult == "success" && !log.Success {
+			continue
+		}
+		if selectedResult == "failed" && log.Success {
+			continue
+		}
+		shown = append(shown, log)
+	}
+	var prodOptions strings.Builder
+	prodOptions.WriteString(`<option value="">` + esc(t(lang, "全体", "All")) + `</option>`)
+	for _, name := range productionNames {
+		sel := ""
+		if name == selected {
+			sel = " selected"
+		}
+		prodOptions.WriteString(`<option value="` + esc(name) + `"` + sel + `>` + esc(name) + `</option>`)
+	}
+	var userOptions strings.Builder
+	userOptions.WriteString(`<option value="">` + esc(t(lang, "全ユーザー", "All users")) + `</option>`)
+	for _, actor := range actorNames {
+		sel := ""
+		if actor == selectedUser {
+			sel = " selected"
+		}
+		userOptions.WriteString(`<option value="` + esc(actor) + `"` + sel + `>` + esc(actor) + `</option>`)
+	}
+	resultOptions := `<option value="">` + esc(t(lang, "全ての結果", "All results")) + `</option>` +
+		`<option value="success"` + map[bool]string{true: " selected"}[selectedResult == "success"] + `>` + esc(t(lang, "成功", "Success")) + `</option>` +
+		`<option value="failed"` + map[bool]string{true: " selected"}[selectedResult == "failed"] + `>` + esc(t(lang, "失敗", "Failed")) + `</option>`
+	langInput := ""
+	if qLang := strings.TrimSpace(r.URL.Query().Get("lang")); qLang != "" {
+		langInput = `<input type="hidden" name="lang" value="` + esc(qLang) + `">`
+	}
+	countLabel := fmt.Sprintf("%d%s", len(shown), t(lang, " 件", " entries"))
+	filter := `<form class="audit-filter-form" method="get" action="` + esc(withLang("/bot/admin/audit", r)) + `" aria-label="` + esc(t(lang, "プロダクションで絞り込む", "Filter audit log")) + `">` +
+		langInput +
+		`<label class="lbl" for="audit-filter-production">` + esc(t(lang, "プロダクション", "Production")) + `</label>` +
+		`<select id="audit-filter-production" name="production" onchange="this.form.submit()">` + prodOptions.String() + `</select>` +
+		`<div class="right">` +
+		`<label class="lbl" for="audit-filter-user">` + esc(t(lang, "ユーザー", "User")) + `</label>` +
+		`<select id="audit-filter-user" name="user" onchange="this.form.submit()">` + userOptions.String() + `</select>` +
+		`<label class="lbl" for="audit-filter-result">` + esc(t(lang, "状態", "Result")) + `</label>` +
+		`<select id="audit-filter-result" name="result" onchange="this.form.submit()">` + resultOptions + `</select>` +
+		`<span class="count">` + esc(countLabel) + `</span>` +
+		`</div></form>`
 	var rows strings.Builder
 	for _, log := range shown {
 		result := t(lang, "成功", "Success")

@@ -1193,6 +1193,69 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   input:not([type="checkbox"]):not([type="radio"]):focus-visible,select:focus-visible,textarea:focus-visible{box-shadow:0 0 0 3px rgba(109,195,255,.35)!important}
   /* Team table between 761px and 1024px: the Discord column keeps room for the @name. */
   @media(min-width:761px) and (max-width:1100px){.production-team-col-member{width:20%}.production-team-col-role{width:15%}.production-team-col-department{width:20%}.production-team-col-discord{width:28%}.production-team-col-status{width:17%}}
+  /* UI fix round 2 (2026-11-24, owner-approved mocks): connection settings,
+     status -> role boxes, handoff wiring editor, system status rows and the
+     audit log filters. Sections group by spacing and hairlines instead of
+     stacked cards; spacing follows a 4px grid. */
+  .conn-field-label{display:block;font-size:13px;color:var(--muted-2);margin:12px 0 6px}
+  .connections-card .conn-field-label:first-of-type{margin-top:0}
+  .conn-robox{display:flex;align-items:center;height:36px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:rgba(0,0,0,.25);color:var(--muted-2);font-size:11px;letter-spacing:3px;overflow:hidden;white-space:nowrap}
+  .conn-robox.is-unset{letter-spacing:0;font-size:13px}
+  .conn-note{font-size:12px;color:var(--muted);margin-top:6px}
+  .conn-kvrow{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  .conn-kvrow .k{font-size:13px;color:var(--muted-2);flex:none}
+  .conn-kvrow .v{font-size:13px;text-align:right}
+  .conn-card-actions{margin-top:auto;padding-top:16px}
+  .flat-section{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
+  .flat-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .flat-section-head h2{margin:0}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:16px;background:rgba(255,255,255,.03);padding:2px;gap:2px}
+  .seg button{height:28px;padding:0 16px;border:0;border-radius:14px;background:transparent;color:var(--muted);font-size:13px;cursor:pointer;font-family:inherit}
+  .seg button.on{background:var(--accent-2);color:#221503;font-weight:700}
+  .connection-advanced-details{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  .connection-advanced-details>summary{cursor:pointer;font-size:13.5px;font-weight:600;display:flex;align-items:center;justify-content:space-between;list-style:none}
+  .connection-advanced-details>summary::-webkit-details-marker{display:none}
+  .connection-advanced-details>summary .chev{color:var(--muted);font-weight:400}
+  .role-boxes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:12px}
+  .role-box{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.015);padding:12px;min-height:88px;min-width:0}
+  .role-box-head{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;margin-bottom:10px}
+  .role-box-head .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .role-box-head .cnt{margin-left:auto;color:var(--muted);font-size:12px;font-weight:400}
+  .role-chip{display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0;padding:3px 4px 3px 10px;border:1px solid var(--line);border-radius:6px;background:rgba(255,255,255,.03);font-size:12.5px;max-width:100%}
+  .role-chip select{height:24px;font-size:12px;padding:0 4px;width:auto}
+  .role-chip-static{padding:3px 10px}
+  .role-tray{border:1px dashed rgba(255,255,255,.18);border-radius:10px;padding:12px;margin-top:12px}
+  .role-tray-head{font-size:13px;font-weight:600;color:var(--muted-2);margin-bottom:10px}
+  .role-summary-line{font-size:12.5px;color:var(--muted);margin-top:8px}
+  .route-row{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .route-row .route-src{width:170px;flex:none;font-size:13.5px;padding-top:3px}
+  .route-chips{flex:1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:26px;min-width:0}
+  .route-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 4px 0 10px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.03);font-size:12.5px}
+  .route-chip button{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:13px;padding:0 3px;font-family:inherit}
+  .route-chip-static{padding:0 10px;color:var(--muted-2)}
+  .route-none-label{color:var(--muted);font-size:13px}
+  .route-editor{padding:4px 0 12px 182px}
+  .route-add-line{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .route-add-line select{width:260px;max-width:100%}
+  .route-none-toggle{margin-top:10px}
+  .audit-filter-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:16px 0 4px}
+  .audit-filter-form .lbl{font-size:12.5px;color:var(--muted)}
+  .audit-filter-form .right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .audit-filter-form .count{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;margin-left:8px}
+  .audit-filter-form select{height:32px;width:auto}
+  .current-problem-row{display:flex;gap:10px;align-items:flex-start;margin-top:10px}
+  .current-problem-row .dot{width:9px;height:9px;border-radius:50%;background:#c45656;margin-top:6px;flex:none}
+  .current-problem-row .body{flex:1;font-size:13.5px;min-width:0}
+  .current-problem-row .sub{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .current-problem-row .linkbtn{flex:none;background:none;border:0;color:var(--accent-2);font-size:12.5px;cursor:pointer;white-space:nowrap;text-decoration:none}
+  .system-status-sections .pipeline-health-action{height:32px;display:inline-flex;align-items:center}
+  .handoff-override-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  .handoff-override-row .src{width:150px;flex:none;font-size:13.5px}
+  .handoff-override-row select{width:330px;max-width:100%;flex:none}
+  .handoff-override-row .inh{flex:1;font-size:12.5px;color:var(--muted);min-width:120px}
+  .handoff-override-row .inh.is-override{color:var(--accent-2);font-weight:600}
+  .handoff-override-editor{padding:4px 0 12px 162px}
+  @media(max-width:760px){.role-boxes{grid-template-columns:1fr}.route-row{flex-direction:column;gap:6px}.route-row .route-src{width:auto}.route-editor{padding-left:0}.handoff-override-editor{padding-left:0}.conn-kvrow{flex-direction:column;align-items:flex-start}.conn-kvrow .v{text-align:left}}
 `
 
 func shellHeadExtras() string {

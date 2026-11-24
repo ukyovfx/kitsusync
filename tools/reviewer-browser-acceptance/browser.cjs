@@ -846,7 +846,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // synthetic Kitsu service.
         const forumSavedHref = page.url();
         await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
-        const wfaRoleSelect = page.locator('tr').filter({ has: page.locator('input[name="srole_id"][value="status-wfa"]') }).locator('select[name="srole_role"]');
+        const wfaRoleSelect = page.locator('.role-chip').filter({ has: page.locator('input[name="srole_id"][value="status-wfa"]') }).locator('select[name="srole_role"]');
         if (await wfaRoleSelect.count() !== 1) throw new Error(`Bot settings did not render the Waiting For Approval role row in ${locale.lang}`);
         if (await wfaRoleSelect.inputValue() !== 'wfa') throw new Error(`Bot settings did not keep the Waiting For Approval WFA destination in ${locale.lang}`);
         if (!(await page.locator('input[name="srole_id"][value="status-wip"]').count())) throw new Error(`Bot settings fell back to saved statuses instead of the live Kitsu status list in ${locale.lang}`);
@@ -881,7 +881,7 @@ async function assertLoginFabricGoldStandard(page, locale, viewport) {
         // where the pre-fill is verified.
         await page.goto(`${base}/bot/admin/bot?edit=1&lang=${locale.lang}`, { waitUntil: 'networkidle' });
         for (const [statusID, role] of [['status-wfa', 'wfa'], ['status-retake', 'retake'], ['status-done', 'done']]) {
-          const templateSelect = page.locator('tr').filter({ has: page.locator(`input[name="srole_id"][value="${statusID}"]`) }).locator('select[name="srole_role"]');
+          const templateSelect = page.locator('.role-chip').filter({ has: page.locator(`input[name="srole_id"][value="${statusID}"]`) }).locator('select[name="srole_role"]');
           if (await templateSelect.count() !== 1) throw new Error(`Bot settings did not render the ${statusID} role row after zero-touch setup in ${locale.lang}`);
           if (await templateSelect.inputValue() !== role) throw new Error(`Bot settings did not pre-fill the ${statusID} template role in ${locale.lang}`);
         }
