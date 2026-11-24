@@ -437,8 +437,15 @@ func TestCurrentIADiscordDeleteRequiresConfirmationAndRemovesProductionOnSuccess
 		t.Fatal(err)
 	}
 
+	tok, err := newRecentlyAuthenticatedSessionTokenChecked("admin@example.test", "kitsu-token", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = destroySession(tok) })
+
 	request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader("action=execute_current_ia_discord_delete&project_id=current-delete-p&confirm_text=wrong"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tok})
 	response := httptest.NewRecorder()
 	AdminProjectsHandler(db, "", "")(response, request)
 	if response.Code != http.StatusSeeOther {
@@ -453,6 +460,7 @@ func TestCurrentIADiscordDeleteRequiresConfirmationAndRemovesProductionOnSuccess
 
 	request = httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader("action=execute_current_ia_discord_delete&project_id=current-delete-p&confirm_text=DELETE"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tok})
 	response = httptest.NewRecorder()
 	AdminProjectsHandler(db, "", "")(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Deletion complete") {

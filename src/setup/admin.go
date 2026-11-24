@@ -471,6 +471,13 @@ func AdminProjectsHandler(db *gorm.DB, fallbackGuildID, botToken string) http.Ha
 				http.Redirect(w, r, redirectURL+"&tab=notifications&msg=error", http.StatusSeeOther)
 				return
 			}
+			switch action {
+			case "execute_current_ia_discord_delete", "execute_validated_channel_delete", "complete_connection_cleanup", "remove_connection":
+				if !botEditAllowed(r) {
+					http.Redirect(w, r, recentBotAuthenticationLoginURL(r, lang), http.StatusSeeOther)
+					return
+				}
+			}
 			if action == "execute_current_ia_discord_delete" {
 				expected := t(lang, "削除", "DELETE")
 				if projectID == "" || strings.TrimSpace(r.FormValue("confirm_text")) != expected {

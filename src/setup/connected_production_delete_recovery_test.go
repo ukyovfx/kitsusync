@@ -84,6 +84,12 @@ func TestConnectedProductionStrongDeleteHTTPStatusReflectsLocalCleanup(t *testin
 		form := url.Values{"action": {"execute_validated_channel_delete"}, "project_id": {project.KitsuProjectID}, "confirm_text": {"delete"}}
 		request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader(form.Encode()))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		tok, err := newRecentlyAuthenticatedSessionTokenChecked("admin@example.test", "kitsu-token", "admin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = destroySession(tok) })
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tok})
 		response := httptest.NewRecorder()
 		AdminProjectsHandler(db, "guild-1", "bot-token")(response, request)
 
@@ -102,6 +108,12 @@ func TestConnectedProductionStrongDeleteHTTPStatusReflectsLocalCleanup(t *testin
 		form := url.Values{"action": {"execute_validated_channel_delete"}, "project_id": {project.KitsuProjectID}, "confirm_text": {"delete"}}
 		request := httptest.NewRequest(http.MethodPost, "/bot/admin/projects?lang=en", strings.NewReader(form.Encode()))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		tok, err := newRecentlyAuthenticatedSessionTokenChecked("admin@example.test", "kitsu-token", "admin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = destroySession(tok) })
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: tok})
 		response := httptest.NewRecorder()
 		AdminProjectsHandler(db, "guild-1", "bot-token")(response, request)
 
