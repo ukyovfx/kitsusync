@@ -522,3 +522,59 @@ func TestForumSettingsOfflineReuseRefusedAfterGuildChange(t *testing.T) {
 		t.Fatalf("saved guild = %q, want g1: the refused save must not store the new guild with the old guild's tags", loaded.Config.GuildID)
 	}
 }
+
+func TestForumSettingsCreateButtonVisibility(t *testing.T) {
+	stubForumLookups(t, nil)
+	db := newForumPageDB(t)
+
+	getPage := func() string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+		return w.Body.String()
+	}
+
+	// 1. No routes assigned yet -> button must be present.
+	if body := getPage(); !strings.Contains(body, `value="create_forums"`) {
+		t.Fatal("create_forums button must be rendered when a task type has no forum assigned")
+	}
+
+	// 2. All task types assigned and no failure mark -> button must be omitted, Save kept.
+	if w := forumPost(t, db, completeForumForm()); w.Code != http.StatusSeeOther {
+		t.Fatalf("seed save failed: %d: %s", w.Code, w.Body.String())
+	}
+	body := getPage()
+	if strings.Contains(body, `value="create_forums"`) {
+		t.Fatal("create_forums button must be omitted when all task types have forums and there is no failure mark")
+	}
+	if !strings.Contains(body, `<button type="submit" class="btn-ghost">Save</button>`) {
+		t.Fatal("Save button must remain rendered")
+	}
+
+	// 3. Auto-create failure mark present -> button must be rendered even when all task types have forums.
+	model.SetSetting(db, forumAutoCreateCheckKey("p1"), "previous auto-create failed")
+	if body := getPage(); !strings.Contains(body, `value="create_forums"`) {
+		t.Fatal("create_forums button must be rendered when auto-create failure mark is present")
+	}
+}
+
+func TestForumSettingsEmptyTaskTypesHidesEmptyTable(t *testing.T) {
+	stubForumLookups(t, nil)
+	forumTaskTypeLister = func(*gorm.DB, string) []kitsu.TaskType { return nil }
+	db := newForumPageDB(t)
+	w := httptest.NewRecorder()
+	forumHandler(db)(w, httptest.NewRequest(http.MethodGet, "/bot/admin/forum?project=p1&lang=en", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, `class="data-table forum-map-table"`) {
+		t.Fatal("forum page must not render an empty mapping table when there are no task-type rows")
+	}
+	if !strings.Contains(body, "No task types were found for this Production") {
+		t.Fatal("forum page must render an empty-state message when there are no task-type rows")
+	}
+}

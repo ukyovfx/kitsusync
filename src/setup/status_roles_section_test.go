@@ -1,12 +1,16 @@
 package setup
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	"gorm.io/gorm"
+
+	"app/src/api/kitsu"
 	"app/src/model"
 )
 
@@ -222,5 +226,21 @@ func TestBotSubpagesOmitDuplicateHeadingAndSummaryLine(t *testing.T) {
 		if strings.Contains(body, "<h2>"+tc.title+"</h2>") {
 			t.Fatalf("wiring (%s) must omit duplicate inner heading", tc.lang)
 		}
+	}
+}
+
+func TestStatusRolesSectionShowsFetchFailureWhenEmptyAndFailed(t *testing.T) {
+	oldStatuses := forumStatusLister
+	t.Cleanup(func() { forumStatusLister = oldStatuses })
+	forumStatusLister = func(*gorm.DB) ([]kitsu.TaskStatus, error) {
+		return nil, errors.New("kitsu unreachable")
+	}
+	db := newForumPageDB(t)
+	body := renderStatusRolesSection(db, "en", httptest.NewRequest(http.MethodGet, "/bot/admin/bot/statuses?lang=en", nil))
+	if !strings.Contains(body, `role="alert"`) || !strings.Contains(body, "Could not load task statuses from Kitsu") {
+		t.Fatalf("expected fetch failure alert when status lookup fails with no saved statuses: %s", body)
+	}
+	if !strings.Contains(body, `href="/bot/admin/bot?lang=en"`) {
+		t.Fatalf("expected link to /bot/admin/bot on status fetch failure: %s", body)
 	}
 }

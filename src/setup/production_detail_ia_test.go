@@ -102,8 +102,12 @@ func TestProductionTeamCompactRows(t *testing.T) {
 		t.Fatal("successful empty Team read was not rendered as empty")
 	}
 	reviewerProductionTeamReader = func(*gorm.DB, string) ([]kitsu.Person, error) { return nil, errors.New("synthetic read failure") }
-	if failed := renderCurrentProductionTeam(db, request, project, "en"); !strings.Contains(failed, "Could not load the Kitsu Production Team") {
+	failed := renderCurrentProductionTeam(db, request, project, "en")
+	if !strings.Contains(failed, "Could not load the Kitsu Production Team") {
 		t.Fatal("failed Team read was not rendered distinctly from empty")
+	}
+	if !strings.Contains(failed, `href="/bot/admin/bot?lang=en"`) {
+		t.Fatal("failed Team read must include a recovery link to /bot/admin/bot")
 	}
 }
 
@@ -885,6 +889,19 @@ func TestProductionDetailTabsShareOpenCurrentIAGrammar(t *testing.T) {
 	routes := renderProductionNotificationsReadTableWithData(db, request, project, "en", "success", "Healthy", productionNotificationReviewerView{})
 	if !strings.Contains(routes, `production-notification-table production-detail-surface`) || !strings.Contains(routes, `data-label="Forum"`) || !strings.Contains(routes, `data-label="WFA recipients"`) || strings.Contains(routes, `<div class="production-notifications"><h2>Notifications</h2>`) {
 		t.Fatal("Notifications read mode must keep the shared responsive table semantics without a duplicate tab heading")
+	}
+
+	emptyRoutes := renderProductionNotificationsReadTableWithData(db, request, model.Project{KitsuProjectID: "no-routes-p", Name: "No Routes"}, "en", "warning", "Needs review", productionNotificationReviewerView{})
+	if strings.Contains(emptyRoutes, `edit_routing=1`) {
+		t.Fatal("Notifications read mode must hide the Edit link when routes are empty")
+	}
+
+	emptyIDs := renderCurrentProductionDetails(model.Project{KitsuProjectID: "p1"}, "en", true)
+	if got := strings.Count(emptyIDs, `<button type="button" class="btn-ghost production-copy-id"`); got != 1 {
+		t.Fatalf("empty IDs must not render copy buttons; got %d copy buttons", got)
+	}
+	if !strings.Contains(emptyIDs, "Not set") {
+		t.Fatal("empty IDs must render Not set text")
 	}
 }
 

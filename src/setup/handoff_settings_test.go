@@ -470,3 +470,20 @@ func TestHandoffStoredExplicitNonePreservedAcrossUnrelatedSave(t *testing.T) {
 		t.Fatalf("stored explicit-none override was not preserved: route=%v found=%v err=%v", route, found, err)
 	}
 }
+
+func TestHandoffFallbackFieldOmittedUnlessUsersAndEmptyTaskTypesMessage(t *testing.T) {
+	stubHandoffTaskTypes(t, nil)
+	db := newForumPageDB(t)
+	body := handoffGet(t, db).Body.String()
+	for _, unwanted := range []string{`id="handoff-fallback-user-field"`, `id="handoff-fallback-user"`} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("fallback user field %q must not be rendered in DOM when no_assignee != users", unwanted)
+		}
+	}
+	if !strings.Contains(body, "No task types were found for this Production") {
+		t.Fatal("handoff page must show an empty-state message when len(taskTypes) == 0")
+	}
+	if !strings.Contains(body, `href="/bot/admin/bot?lang=en"`) {
+		t.Fatal("handoff page must show a connection-check link when len(taskTypes) == 0")
+	}
+}

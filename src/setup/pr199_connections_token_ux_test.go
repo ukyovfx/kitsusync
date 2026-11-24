@@ -23,12 +23,15 @@ func TestPR199ConnectionsSavedTokenControlsAreMaskedAndReversible(t *testing.T) 
 		`id="kitsu-bot-token"`,
 		`id="discord-bot-token"`,
 		`placeholder="` + connectionSecretMask + `"`,
-		`data-token-change`,
-		"Change token",
 		"Cancel",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("configured-token edit view omitted %q", want)
+		}
+	}
+	for _, unwanted := range []string{`data-token-change`, `data-token-cancel`, "Change token", " disabled placeholder="} {
+		if strings.Contains(body, unwanted) {
+			t.Fatalf("configured-token edit view must not contain %q", unwanted)
 		}
 	}
 

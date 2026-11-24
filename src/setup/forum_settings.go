@@ -420,14 +420,33 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 	}
 	var taskTypeRows strings.Builder
 	seenTaskTypes := map[string]struct{}{}
+	hasUnassignedForum := false
 	for _, taskType := range taskTypes {
 		seenTaskTypes[taskType.ID] = struct{}{}
-		taskTypeRows.WriteString(forumTaskTypeRow(lang, taskType.ID, taskType.Name, routeByTaskType[taskType.ID].ForumChannelID, forumOptions))
+		forumID := routeByTaskType[taskType.ID].ForumChannelID
+		if strings.TrimSpace(forumID) == "" {
+			hasUnassignedForum = true
+		}
+		taskTypeRows.WriteString(forumTaskTypeRow(lang, taskType.ID, taskType.Name, forumID, forumOptions))
 	}
 	for _, route := range current.Routes { // saved but no longer listed by Kitsu
 		if _, ok := seenTaskTypes[route.TaskTypeID]; !ok {
+			if strings.TrimSpace(route.ForumChannelID) == "" {
+				hasUnassignedForum = true
+			}
 			taskTypeRows.WriteString(forumTaskTypeRow(lang, route.TaskTypeID, route.TaskTypeName, route.ForumChannelID, forumOptions))
 		}
+	}
+
+	autoCheck := model.GetSetting(db, forumAutoCreateCheckKey(productionID))
+	createButton := ""
+	if hasUnassignedForum || autoCheck != "" {
+		createButton = ` <button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button>`
+	}
+
+	taskTypeTable := `<p class="state-explanation" role="status">` + esc(t(lang, "このプロダクションに割り当て可能なタスクタイプが見つかりませんでした。Kitsu接続とタスクタイプ設定を確認してください。", "No task types were found for this Production. Check the Kitsu connection and task type settings.")) + `</p>`
+	if taskTypeRows.Len() > 0 {
+		taskTypeTable = `<table class="data-table forum-map-table"><tbody>` + taskTypeRows.String() + `</tbody></table>`
 	}
 
 	form := `<form method="post" action="` + esc(withLang("/bot/admin/forum", r)) + `" class="section-stack">` +
@@ -435,12 +454,11 @@ func renderForumSettingsPage(db *gorm.DB, r *http.Request, lang string, project 
 		`<section class="section-card glass"><h2>` + esc(t(lang, "タスクタイプ → フォーラム", "Task Type → forum")) + `</h2>` +
 		`<label class="field-label" for="forum-guild">` + esc(t(lang, "DiscordサーバーID", "Discord server ID")) + `</label><input id="forum-guild" name="guild_id" value="` + esc(guildID) + `" autocomplete="off">` +
 		`<p class="field-help">` + esc(t(lang, "保存時に、フォーラムが持つ標準名のタグ（WFA / RETAKE / DONE / WIP）から役割の紐づけを自動で作ります。", "On save, the role mapping is derived automatically from each forum's standard tags (WFA / RETAKE / DONE / WIP).")) + `</p>` +
-		`<table class="data-table forum-map-table"><tbody>` + taskTypeRows.String() + `</tbody></table></section>` +
-		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a>` + refetchButton + ` <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button> <button type="submit" name="action" value="create_forums" class="btn">` + esc(t(lang, "Botでフォーラムとタグを作成", "Create forums and tags with the Bot")) + `</button></div></form>`
+		taskTypeTable + `</section>` +
+		`<div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/projects?project="+url.QueryEscape(productionID)+"&tab=notifications", r)) + `">` + esc(t(lang, "通知設定に戻る", "Back to notifications")) + `</a>` + refetchButton + ` <button type="submit" class="btn-ghost">` + esc(t(lang, "保存", "Save")) + `</button>` + createButton + `</div></form>`
 
 	// The result panel appears after the create button ran (done or failed) and
 	// whenever the connection's automatic creation left a failure mark.
-	autoCheck := model.GetSetting(db, forumAutoCreateCheckKey(productionID))
 	result := ""
 	if r.FormValue("msg") == "forums_created" || createFailed || autoCheck != "" {
 		failure := ""

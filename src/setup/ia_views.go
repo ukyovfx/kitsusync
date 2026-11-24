@@ -832,6 +832,10 @@ func renderCurrentProductionDetails(p model.Project, lang string, expanded bool)
 		{t(lang, "DiscordサーバーID", "Discord server ID"), p.DiscordGuildID},
 		{t(lang, "カテゴリID", "Category ID"), p.DiscordCategoryID},
 	} {
+		if strings.TrimSpace(row.value) == "" {
+			rows.WriteString(`<dt>` + esc(row.label) + `</dt><dd class="production-technical-id"><span class="field-help">` + esc(t(lang, "未設定", "Not set")) + `</span></dd>`)
+			continue
+		}
 		copyLabel := t(lang, row.label+"をコピー", "Copy "+row.label)
 		copiedLabel := t(lang, "コピーしました", "Copied")
 		failedLabel := t(lang, "コピーできませんでした", "Copy unavailable")
@@ -915,7 +919,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 	}
 	var members strings.Builder
 	if teamErr != nil {
-		members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span></div></td></tr>`)
+		members.WriteString(`<tr><td colspan="5"><div class="empty-state" role="status"><strong>` + esc(userText("Kitsuのプロダクションチームを読み込めませんでした", "Could not load the Kitsu Production Team")) + `</strong><span class="field-help">` + esc(userText("Kitsu接続を確認してから再読み込みしてください。", "Check the Kitsu connection and reload this page.")) + `</span><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a></div></div></td></tr>`)
 	} else {
 		botEmail := botAccountEmail(db)
 		for _, person := range team {
@@ -944,7 +948,7 @@ func renderCurrentProductionTeam(db *gorm.DB, r *http.Request, p model.Project, 
 			if guildMembersPending {
 				discordCell += `<span class="field-help">` + esc(userText("Discord所属を取得中", "Guild membership is loading")) + `</span>`
 			} else if !guildReadOK {
-				discordCell += `<span class="field-help">` + esc(userText("Discord所属を確認できません", "Guild membership could not be verified")) + `</span>`
+				discordCell += `<span class="field-help">` + esc(userText("Discord所属を確認できません", "Guild membership could not be verified")) + `</span> <a class="field-help" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a>`
 			}
 			user := globalUserForKitsuPerson(globalUsers, person)
 			if user != nil && isDiscordSnowflake(user.DiscordID) {
@@ -1419,7 +1423,6 @@ func loadProductionNotificationReviewerView(db *gorm.DB, p model.Project, includ
 func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request, p model.Project, lang, class, statusLabel string, data productionNotificationReviewerView) string {
 	label := func(ja, en string) string { return t(lang, ja, en) }
 	channelLabel := label("フォーラム", "Forum")
-	editURL := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
 	forumSettings, _, _ := model.LoadProductionForumSettings(db, p.KitsuProjectID)
 	routes := forumSettings.Routes
 	taskTypes := data.TaskTypes
@@ -1477,7 +1480,12 @@ func renderProductionNotificationsReadTableWithData(db *gorm.DB, r *http.Request
 	pendingAutomatic := renderPendingAutomaticReviewerSource(taskTypes, data, lang)
 	directoryNotice := productionDirectoryNoticeMarkup(lang, p, data)
 	roleApplyNotice := `<p class="field-help guild-directory-notice">` + esc(label("ロールの送信可否は表示時に確認しません。適用時に確認します。", "Role send access is not verified for display; it is verified when applied.")) + `</p>`
-	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><h3 id="production-notifications-title">` + esc(label("WFA通知先", "WFA recipients")) + `</h3><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span><a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a></div></div>` + directoryNotice + roleApplyNotice + `<div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
+	editAction := ""
+	if len(routes) > 0 {
+		editURL := withLang("/bot/admin/projects?project="+url.QueryEscape(p.KitsuProjectID)+"&tab=notifications&edit_routing=1", r)
+		editAction = `<a class="btn-ghost" href="` + esc(editURL) + `">` + esc(label("編集", "Edit")) + `</a>`
+	}
+	return `<section id="wfa-recipients" tabindex="-1" class="production-settings-section production-notification-table-section"><div class="page-heading production-notification-heading"><h3 id="production-notifications-title">` + esc(label("WFA通知先", "WFA recipients")) + `</h3><div class="production-notification-actions"><span class="status-pill ` + esc(normalizeStatusClass(class)) + `" role="status">` + esc(statusLabel) + `</span>` + editAction + `</div></div>` + directoryNotice + roleApplyNotice + `<div class="table-wrap production-notification-table production-detail-surface"><table><colgroup><col class="production-notification-col-task"><col class="production-notification-col-channel"><col class="production-notification-col-wfa"></colgroup><thead><tr><th>Kitsu Task Type</th><th>` + esc(channelLabel) + `</th><th>` + esc(label("WFA通知先", "WFA recipients")) + `</th></tr></thead><tbody>` + rows.String() + `</tbody></table></div><div hidden data-wfa-pending-source>` + pendingAutomatic + `</div></section>`
 }
 
 func renderProductionWFATargetChips(values []string, emptyLabel, unavailableLabel string, automatic bool) string {
@@ -2426,18 +2434,21 @@ func renderIAAudit(w http.ResponseWriter, r *http.Request, db *gorm.DB) {
 	if qLang := strings.TrimSpace(r.URL.Query().Get("lang")); qLang != "" {
 		langInput = `<input type="hidden" name="lang" value="` + esc(qLang) + `">`
 	}
-	countLabel := fmt.Sprintf("%d%s", len(shown), t(lang, " 件", " entries"))
-	filter := `<form class="audit-filter-form" method="get" action="` + esc(withLang("/bot/admin/audit", r)) + `" aria-label="` + esc(t(lang, "プロダクションで絞り込む", "Filter audit log")) + `">` +
-		langInput +
-		`<label class="lbl" for="audit-filter-production">` + esc(t(lang, "プロダクション", "Production")) + `</label>` +
-		`<select id="audit-filter-production" name="production" onchange="this.form.submit()">` + prodOptions.String() + `</select>` +
-		`<div class="right">` +
-		`<label class="lbl" for="audit-filter-user">` + esc(t(lang, "ユーザー", "User")) + `</label>` +
-		`<select id="audit-filter-user" name="user" onchange="this.form.submit()">` + userOptions.String() + `</select>` +
-		`<label class="lbl" for="audit-filter-result">` + esc(t(lang, "状態", "Result")) + `</label>` +
-		`<select id="audit-filter-result" name="result" onchange="this.form.submit()">` + resultOptions + `</select>` +
-		`<span class="count">` + esc(countLabel) + `</span>` +
-		`</div></form>`
+	filter := ""
+	if len(logs) > 0 {
+		countLabel := fmt.Sprintf("%d%s", len(shown), t(lang, " 件", " entries"))
+		filter = `<form class="audit-filter-form" method="get" action="` + esc(withLang("/bot/admin/audit", r)) + `" aria-label="` + esc(t(lang, "プロダクションで絞り込む", "Filter audit log")) + `">` +
+			langInput +
+			`<label class="lbl" for="audit-filter-production">` + esc(t(lang, "プロダクション", "Production")) + `</label>` +
+			`<select id="audit-filter-production" name="production" onchange="this.form.submit()">` + prodOptions.String() + `</select>` +
+			`<div class="right">` +
+			`<label class="lbl" for="audit-filter-user">` + esc(t(lang, "ユーザー", "User")) + `</label>` +
+			`<select id="audit-filter-user" name="user" onchange="this.form.submit()">` + userOptions.String() + `</select>` +
+			`<label class="lbl" for="audit-filter-result">` + esc(t(lang, "状態", "Result")) + `</label>` +
+			`<select id="audit-filter-result" name="result" onchange="this.form.submit()">` + resultOptions + `</select>` +
+			`<span class="count">` + esc(countLabel) + `</span>` +
+			`</div></form>`
+	}
 	var rows strings.Builder
 	for _, log := range shown {
 		result := t(lang, "成功", "Success")
@@ -2858,7 +2869,18 @@ func renderWizardPrerequisitesShared(lang string, r *http.Request, readiness Sha
 	return body + `</section>`
 }
 
+var wizardGuildLister = ListBotGuilds
+
 func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, projects []KitsuProject, projectsErr error) string {
+	errorMessage := ""
+	if projectsErr != nil {
+		errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "KitsuからProductionリストを取得できませんでした。Kitsu接続を確認して再試行してください。", "Production list could not be loaded from Kitsu. Check the Kitsu connection and try again.")) + `</p>`
+	} else if len(projects) == 0 {
+		errorMessage = `<p class="state-explanation" role="status" aria-live="polite">` + esc(t(lang, "KitsuからProductionが返されませんでした。", "Kitsu returned no Productions.")) + `</p>`
+	}
+	if projectsErr != nil || len(projects) == 0 {
+		return `<section class="section-card glass" aria-labelledby="wizard-production-title"><h2 id="wizard-production-title">` + esc(tr(lang, "wizard.production_title")) + `</h2>` + errorMessage + `<div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 1, "", "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a></div></section>`
+	}
 	var options strings.Builder
 	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_production")) + `</option>`)
 	for _, p := range projects {
@@ -2870,12 +2892,6 @@ func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, 
 			label += " (" + tr(lang, "wizard.already_connected") + ")"
 		}
 		options.WriteString(`<option value="` + esc(p.ID) + `"` + disabled + `>` + esc(label) + `</option>`)
-	}
-	errorMessage := ""
-	if projectsErr != nil {
-		errorMessage = `<p class="state-explanation" role="alert">` + esc(t(lang, "KitsuからProductionリストを取得できませんでした。Kitsu接続を確認して再試行してください。", "Production list could not be loaded from Kitsu. Check the Kitsu connection and try again.")) + `</p>`
-	} else if len(projects) == 0 {
-		errorMessage = `<p class="state-explanation" role="status" aria-live="polite">` + esc(t(lang, "KitsuからProductionが返されませんでした。", "Kitsu returned no Productions.")) + `</p>`
 	}
 	if r.URL.Query().Get("wizard_step") == "3" {
 		projectID := strings.TrimSpace(r.URL.Query().Get("project"))
@@ -2901,14 +2917,28 @@ func renderWizardProductionLocalized(lang string, r *http.Request, db *gorm.DB, 
 }
 
 func renderWizardServer(lang string, r *http.Request, botToken, projectID string) string {
+	var guilds []DiscordGuild
+	var guildsErr error
+	tokenMissing := strings.TrimSpace(botToken) == ""
+	if !tokenMissing {
+		guilds, guildsErr = wizardGuildLister(botToken)
+	}
+	if tokenMissing || guildsErr != nil || len(guilds) == 0 {
+		var message string
+		switch {
+		case tokenMissing:
+			message = `<p class="state-explanation" role="alert">` + esc(t(lang, "Botトークンが設定されていません。接続設定を確認してください。", "Bot token is not configured. Check the connection settings.")) + `</p>`
+		case guildsErr != nil:
+			message = `<p class="state-explanation" role="alert">` + esc(t(lang, "Discordサーバーリストを取得できませんでした。Bot接続を確認して再試行してください。", "Discord server list could not be loaded. Check the Bot connection and try again.")) + `</p>`
+		default:
+			message = `<p class="state-explanation" role="status" aria-live="polite">` + esc(t(lang, "参加中のDiscordサーバーが見つかりませんでした。Botをサーバーに招待してから再試行してください。", "No Discord servers were found. Invite the Bot to a server and try again.")) + `</p>`
+		}
+		return `<section class="section-card glass" aria-labelledby="wizard-server-title"><h2 id="wizard-server-title">` + esc(tr(lang, "wizard.server_title")) + `</h2>` + message + `<div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 2, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><a class="btn" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(tr(lang, "ia.bot_connection")) + `</a></div></section>`
+	}
 	var options strings.Builder
 	options.WriteString(`<option value="">` + esc(tr(lang, "wizard.select_server")) + `</option>`)
-	if strings.TrimSpace(botToken) != "" {
-		if guilds, err := ListBotGuilds(botToken); err == nil {
-			for _, guild := range guilds {
-				options.WriteString(`<option value="` + esc(guild.ID) + `">` + esc(guild.Name) + `</option>`)
-			}
-		}
+	for _, guild := range guilds {
+		options.WriteString(`<option value="` + esc(guild.ID) + `">` + esc(guild.Name) + `</option>`)
 	}
 	return `<section class="section-card glass" aria-labelledby="wizard-server-title"><h2 id="wizard-server-title">` + esc(tr(lang, "wizard.server_title")) + `</h2><form method="GET" class="section-stack"><input type="hidden" name="wizard_step" value="4"><input type="hidden" name="project" value="` + esc(projectID) + `"><input type="hidden" name="lang" value="` + esc(lang) + `">` + repairInput(r) + `<label for="wizard-server">` + esc(tr(lang, "wizard.server_label")) + `</label><select id="wizard-server" name="plan_guild" required>` + options.String() + `</select><p class="field-help">` + esc(tr(lang, "wizard.server_help")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(setupWizardURL(r, 2, projectID, "", false)) + `">` + esc(tr(lang, "wizard.back")) + `</a><button class="btn" type="submit">` + esc(tr(lang, "wizard.next")) + `</button></div></form></section>`
 }

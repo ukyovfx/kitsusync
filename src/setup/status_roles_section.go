@@ -171,6 +171,9 @@ const statusRolesEditorScript = `<script data-status-roles-editor>(function(){do
 func renderStatusRolesSection(db *gorm.DB, lang string, r *http.Request) string {
 	block, statusErr := studioStatusRoleBlock(db)
 	if len(block.statuses) == 0 {
+		if statusErr != nil {
+			return `<section class="section-card glass"><p class="state-explanation" role="alert">` + esc(t(lang, "Kitsuからステータス一覧を取得できませんでした。Kitsu接続を確認して再試行してください。", "Could not load task statuses from Kitsu. Check the Kitsu connection and try again.")) + `</p><div class="button-row"><a class="btn-ghost" href="` + esc(withLang("/bot/admin/bot", r)) + `">` + esc(t(lang, "接続設定へ戻る", "Back to Connections")) + `</a></div></section>`
+		}
 		return ""
 	}
 	note := ""
