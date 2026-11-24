@@ -214,6 +214,11 @@ func Handler(kitsuHost, fallbackGuildID, botToken string, db *gorm.DB, runtimeRe
 				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "メールアドレスとパスワードを入力してください。", "Please enter email and password.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return
 			}
+			if !allowSetupProbe(r) {
+				w.WriteHeader(http.StatusTooManyRequests)
+				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "試行回数が多すぎます。1分ほど待ってから再試行してください。", "Too many attempts. Wait about a minute and try again.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
+				return
+			}
 			if err := authenticateDeleteAdmin(r.Context(), db, kitsuHost, adminEmail, adminPassword); err != nil {
 				fmt.Fprint(w, page(lang, t(lang, "管理者認証に失敗しました", "Admin authentication failed"), "#ff6a50", projectName, `<li>`+t(lang, "Kitsu 管理者のメールアドレスとパスワードを確認してください。", "Check the Kitsu admin email and password.")+`</li>`, `<a href="`+withLang("/bot/setup", r)+`">`+t(lang, "戻る", "Back")+`</a>`))
 				return

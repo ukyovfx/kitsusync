@@ -2530,6 +2530,11 @@ func BotHandlerWithRuntime(db *gorm.DB, kitsuReconnect func(), runtimeHealthy fu
 					rejectPinnedKitsuEndpointChange(w, lang, "admin_legacy_save")
 					return
 				}
+				if !allowSetupProbe(r) {
+					w.WriteHeader(http.StatusTooManyRequests)
+					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "試行回数が多すぎます。1分ほど待ってから再試行してください。", "Too many attempts. Wait about a minute and try again.")))
+					return
+				}
 				if err := RecoverRuntimeCredentials(db, hostForAuth, runtimeEmail, runtimePassword); err != nil {
 					w.WriteHeader(http.StatusBadRequest)
 					fmt.Fprint(w, renderKitsuConnectionError(lang, t(lang, "Kitsu接続を確認できませんでした。入力内容とKitsuの接続先を確認してください。", "Kitsu authentication could not be verified. Check the credentials and Kitsu endpoint.")+" ("+err.Error()+")"))
