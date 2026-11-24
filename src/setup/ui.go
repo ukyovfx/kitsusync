@@ -1255,6 +1255,9 @@ body.login-surface main:has(.login-card[style*="520px"]) .login-card{background:
   .handoff-override-row .inh{flex:1;font-size:12.5px;color:var(--muted);min-width:120px}
   .handoff-override-row .inh.is-override{color:var(--accent-2);font-weight:600}
   .handoff-override-editor{padding:4px 0 12px 162px}
+  .route-row[hidden],.route-editor[hidden],.editorial-workbench .btn[hidden],.editorial-workbench .btn-ghost[hidden]{display:none}
+  .editorial-workbench .connection-external-url-controls .btn,.editorial-workbench .connection-external-url-controls .btn-ghost{flex:0 0 auto;width:auto;white-space:nowrap}
+  .system-status-sections .system-observability-grid{margin-top:var(--system-status-heading-to-content)}
   @media(max-width:760px){.role-boxes{grid-template-columns:1fr}.route-row{flex-direction:column;gap:6px}.route-row .route-src{width:auto}.route-editor{padding-left:0}.handoff-override-editor{padding-left:0}.conn-kvrow{flex-direction:column;align-items:flex-start}.conn-kvrow .v{text-align:left}}
 `
 
