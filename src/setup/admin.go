@@ -670,7 +670,7 @@ func validateConnectedProductionChannelCandidates(lang string, project model.Pro
 		return nil, results, t(lang, "この runtime では Discord bot token が利用できないため、Discord 照合を実行できませんでした。", "Validation could not contact Discord because the bot token is unavailable in this runtime."), checks
 	}
 
-	body, status, err := botDo("GET", discordAPI+"/guilds/"+effectiveGuildID+"/channels", nil, trimmedToken)
+	body, status, err := botDo("GET", discordAPI+"/guilds/"+url.PathEscape(effectiveGuildID)+"/channels", nil, trimmedToken)
 	if err != nil {
 		for i := range results {
 			results[i].Reason = t(lang, "Skip: Discord から guild channel list を取得できませんでした。", "Skipped: failed to read the guild channel list from Discord.")
@@ -882,7 +882,7 @@ type managedDiscordChannelIdentity struct {
 
 func inspectManagedDiscordChannel(channelID, token string) (managedDiscordChannelIdentity, int, error) {
 	var identity managedDiscordChannelIdentity
-	body, status, err := botDo(http.MethodGet, discordAPI+"/channels/"+strings.TrimSpace(channelID), nil, token)
+	body, status, err := botDo(http.MethodGet, discordAPI+"/channels/"+url.PathEscape(strings.TrimSpace(channelID)), nil, token)
 	if err != nil {
 		return identity, status, err
 	}

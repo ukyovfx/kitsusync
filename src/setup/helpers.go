@@ -503,7 +503,12 @@ func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, 
 		}
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	const maxRetries = 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		var body io.Reader
@@ -523,7 +528,7 @@ func botDo(method, endpoint string, payload any, botToken string) ([]byte, int, 
 		if err != nil {
 			return nil, 0, err
 		}
-		respBody, readErr := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		resp.Body.Close()
 		if readErr != nil {
 			return nil, resp.StatusCode, readErr
